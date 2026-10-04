@@ -99,6 +99,14 @@ pub struct BaseFormatRunV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BasePropertyRunV1 {
+    pub start_scalar: u32,
+    pub end_scalar: u32,
+    pub property: FormatPropertyV1,
+    pub value: FormatValueV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextFormatOverrideRunV1 {
     pub start_scalar: u32,
     pub end_scalar: u32,
@@ -113,6 +121,8 @@ pub struct TextFormatOverlayStateV1 {
     pub base_revision_id: String,
     pub story_scalar_len: u32,
     pub base_runs: Vec<BaseFormatRunV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub base_property_runs: Vec<BasePropertyRunV1>,
     pub overrides: Vec<TextFormatOverrideRunV1>,
 }
 
@@ -280,23 +290,85 @@ fn validate_base_runs(
     Ok(out)
 }
 
+fn validate_base_property_runs(
+    story_len: u32,
+    base_property_runs: &[BasePropertyRunV1],
+) -> Result<Vec<BasePropertyRunV1>> {
+    if story_len == 0 {
+        if !base_property_runs.is_empty() {
+            return Err(TextFormatOverlayError::new(
+                "empty Story must not carry property-level base formatting",
+            ));
+        }
+        return Ok(Vec::new());
+    }
+    if base_property_runs.is_empty() {
+        return Err(TextFormatOverlayError::new(
+            "non-empty partial Story base requires at least one property run",
+        ));
+    }
+
+    let mut out = Vec::with_capacity(base_property_runs.len());
+    for run in base_property_runs {
+        validate_range(run.start_scalar, run.end_scalar, story_len)?;
+        out.push(BasePropertyRunV1 {
+            start_scalar: run.start_scalar,
+            end_scalar: run.end_scalar,
+            property: run.property,
+            value: validate_property_value(run.property, &run.value)?,
+        });
+    }
+    out.sort_by_key(|run| (run.property, run.start_scalar, run.end_scalar));
+
+    for property in FormatPropertyV1::ALL {
+        let mut previous_end = None;
+        for run in out.iter().filter(|run| run.property == property) {
+            if previous_end.is_some_and(|end| run.start_scalar < end) {
+                return Err(TextFormatOverlayError::new(
+                    "property-level base formatting for one property must not overlap",
+                ));
+            }
+            previous_end = Some(run.end_scalar);
+        }
+    }
+    Ok(out)
+}
+
 fn base_value_at(
     base_runs: &[BaseFormatRunV1],
+    base_property_runs: &[BasePropertyRunV1],
     property: FormatPropertyV1,
     scalar: u32,
 ) -> Result<FormatValueV1> {
-    let run = base_runs
-        .iter()
-        .find(|run| run.start_scalar <= scalar && scalar < run.end_scalar)
-        .ok_or_else(|| {
-            TextFormatOverlayError::new("base formatting does not cover requested scalar")
-        })?;
-    Ok(match property {
-        FormatPropertyV1::Bold => FormatValueV1::Bool(run.format.bold),
-        FormatPropertyV1::FontSizeEmu => FormatValueV1::Integer(run.format.font_size_emu),
-        FormatPropertyV1::Italic => FormatValueV1::Bool(run.format.italic),
-        FormatPropertyV1::TextColorRgb => FormatValueV1::String(run.format.text_color_rgb.clone()),
-    })
+    if !base_runs.is_empty() {
+        let run = base_runs
+            .iter()
+            .find(|run| run.start_scalar <= scalar && scalar < run.end_scalar)
+            .ok_or_else(|| {
+                TextFormatOverlayError::new("base formatting does not cover requested scalar")
+            })?;
+        return Ok(match property {
+            FormatPropertyV1::Bold => FormatValueV1::Bool(run.format.bold),
+            FormatPropertyV1::FontSizeEmu => FormatValueV1::Integer(run.format.font_size_emu),
+            FormatPropertyV1::Italic => FormatValueV1::Bool(run.format.italic),
+            FormatPropertyV1::TextColorRgb => {
+                FormatValueV1::String(run.format.text_color_rgb.clone())
+            }
+        });
+    }
+
+    let mut matching = base_property_runs.iter().filter(|run| {
+        run.property == property && run.start_scalar <= scalar && scalar < run.end_scalar
+    });
+    let run = matching.next().ok_or_else(|| {
+        TextFormatOverlayError::new("requested base property is unavailable at this scalar")
+    })?;
+    if matching.next().is_some() {
+        return Err(TextFormatOverlayError::new(
+            "property-level base formatting contains overlap",
+        ));
+    }
+    Ok(run.value.clone())
 }
 
 fn override_value_at(
@@ -322,6 +394,7 @@ fn override_value_at(
 fn normalize_overrides(
     story_len: u32,
     base_runs: &[BaseFormatRunV1],
+    base_property_runs: &[BasePropertyRunV1],
     overrides: &[TextFormatOverrideRunV1],
 ) -> Result<Vec<TextFormatOverrideRunV1>> {
     if story_len == 0 {
@@ -355,6 +428,10 @@ fn normalize_overrides(
             boundaries.insert(run.start_scalar);
             boundaries.insert(run.end_scalar);
         }
+        for run in base_property_runs.iter().filter(|run| run.property == property) {
+            boundaries.insert(run.start_scalar);
+            boundaries.insert(run.end_scalar);
+        }
         for run in &property_runs {
             boundaries.insert(run.start_scalar);
             boundaries.insert(run.end_scalar);
@@ -379,7 +456,7 @@ fn normalize_overrides(
                 continue;
             };
             let explicit = run.value.clone();
-            if explicit == base_value_at(base_runs, property, start)? {
+            if explicit == base_value_at(base_runs, base_property_runs, property, start)? {
                 continue;
             }
 
@@ -402,6 +479,51 @@ fn normalize_overrides(
     Ok(normalized)
 }
 
+fn build_text_format_overlay_state_internal_v1(
+    story_id: String,
+    base_revision_id: String,
+    story_scalar_len: u32,
+    base_runs: Vec<BaseFormatRunV1>,
+    base_property_runs: Vec<BasePropertyRunV1>,
+    overrides: Vec<TextFormatOverrideRunV1>,
+) -> Result<TextFormatOverlayStateV1> {
+    if story_id.is_empty() {
+        return Err(TextFormatOverlayError::new("story_id is required"));
+    }
+    if base_revision_id.is_empty() {
+        return Err(TextFormatOverlayError::new("base_revision_id is required"));
+    }
+    if !base_runs.is_empty() && !base_property_runs.is_empty() {
+        return Err(TextFormatOverlayError::new(
+            "complete and property-level base formatting must not be mixed",
+        ));
+    }
+
+    let (base_runs, base_property_runs) = if !base_property_runs.is_empty() {
+        (
+            Vec::new(),
+            validate_base_property_runs(story_scalar_len, &base_property_runs)?,
+        )
+    } else {
+        (validate_base_runs(story_scalar_len, &base_runs)?, Vec::new())
+    };
+    let overrides = normalize_overrides(
+        story_scalar_len,
+        &base_runs,
+        &base_property_runs,
+        &overrides,
+    )?;
+    Ok(TextFormatOverlayStateV1 {
+        protocol_version: OVERLAY_PROTOCOL_V1.to_owned(),
+        story_id,
+        base_revision_id,
+        story_scalar_len,
+        base_runs,
+        base_property_runs,
+        overrides,
+    })
+}
+
 pub fn build_text_format_overlay_state_v1(
     story_id: impl Into<String>,
     base_revision_id: impl Into<String>,
@@ -409,24 +531,31 @@ pub fn build_text_format_overlay_state_v1(
     base_runs: Vec<BaseFormatRunV1>,
     overrides: Vec<TextFormatOverrideRunV1>,
 ) -> Result<TextFormatOverlayStateV1> {
-    let story_id = story_id.into();
-    let base_revision_id = base_revision_id.into();
-    if story_id.is_empty() {
-        return Err(TextFormatOverlayError::new("story_id is required"));
-    }
-    if base_revision_id.is_empty() {
-        return Err(TextFormatOverlayError::new("base_revision_id is required"));
-    }
-    let base_runs = validate_base_runs(story_scalar_len, &base_runs)?;
-    let overrides = normalize_overrides(story_scalar_len, &base_runs, &overrides)?;
-    Ok(TextFormatOverlayStateV1 {
-        protocol_version: OVERLAY_PROTOCOL_V1.to_owned(),
-        story_id,
-        base_revision_id,
+    build_text_format_overlay_state_internal_v1(
+        story_id.into(),
+        base_revision_id.into(),
         story_scalar_len,
         base_runs,
+        Vec::new(),
         overrides,
-    })
+    )
+}
+
+pub fn build_property_text_format_overlay_state_v1(
+    story_id: impl Into<String>,
+    base_revision_id: impl Into<String>,
+    story_scalar_len: u32,
+    base_property_runs: Vec<BasePropertyRunV1>,
+    overrides: Vec<TextFormatOverrideRunV1>,
+) -> Result<TextFormatOverlayStateV1> {
+    build_text_format_overlay_state_internal_v1(
+        story_id.into(),
+        base_revision_id.into(),
+        story_scalar_len,
+        Vec::new(),
+        base_property_runs,
+        overrides,
+    )
 }
 
 pub fn effective_property_segments_v1(
@@ -438,6 +567,16 @@ pub fn effective_property_segments_v1(
     validate_range(start_scalar, end_scalar, state.story_scalar_len)?;
     let mut boundaries = BTreeSet::from([start_scalar, end_scalar]);
     for run in &state.base_runs {
+        if start_scalar < run.end_scalar && run.start_scalar < end_scalar {
+            boundaries.insert(start_scalar.max(run.start_scalar));
+            boundaries.insert(end_scalar.min(run.end_scalar));
+        }
+    }
+    for run in state
+        .base_property_runs
+        .iter()
+        .filter(|run| run.property == property)
+    {
         if start_scalar < run.end_scalar && run.start_scalar < end_scalar {
             boundaries.insert(start_scalar.max(run.start_scalar));
             boundaries.insert(end_scalar.min(run.end_scalar));
@@ -460,7 +599,12 @@ pub fn effective_property_segments_v1(
         let (value, source) = match override_value_at(&state.overrides, property, start)? {
             Some(value) => (value, EffectivePropertySourceV1::ChapteraOverride),
             None => (
-                base_value_at(&state.base_runs, property, start)?,
+                base_value_at(
+                    &state.base_runs,
+                    &state.base_property_runs,
+                    property,
+                    start,
+                )?,
                 EffectivePropertySourceV1::Base,
             ),
         };
@@ -611,11 +755,12 @@ fn apply_format_operation_v1(
         }
     };
 
-    let after_state = build_text_format_overlay_state_v1(
+    let after_state = build_text_format_overlay_state_internal_v1(
         state.story_id.clone(),
         state.base_revision_id.clone(),
         state.story_scalar_len,
         state.base_runs.clone(),
+        state.base_property_runs.clone(),
         provisional,
     )?;
     let after_effective =
@@ -762,6 +907,65 @@ mod tests {
         assert_eq!(
             state_hash_v1(&state).unwrap(),
             "affcae388b3f9aeb5c63fd3cdfc49a081ee148d9e98934f5d0cb91863b04448d"
+        );
+    }
+
+    #[test]
+    fn property_partial_base_does_not_require_unrelated_properties() {
+        let state = build_property_text_format_overlay_state_v1(
+            "story:partial",
+            "rev:partial",
+            6,
+            vec![BasePropertyRunV1 {
+                start_scalar: 0,
+                end_scalar: 6,
+                property: FormatPropertyV1::Bold,
+                value: FormatValueV1::Bool(false),
+            }],
+            vec![],
+        )
+        .expect("Bold-only base is valid");
+
+        assert!(state.base_runs.is_empty());
+        assert_eq!(state.base_property_runs.len(), 1);
+        assert_eq!(
+            effective_property_segments_v1(&state, FormatPropertyV1::Bold, 0, 6)
+                .expect("Bold base is available")[0]
+                .value,
+            FormatValueV1::Bool(false)
+        );
+        assert!(
+            effective_property_segments_v1(&state, FormatPropertyV1::TextColorRgb, 0, 6)
+                .is_err(),
+            "missing Color remains unavailable rather than invented"
+        );
+
+        let set = set_text_format_property_v1(
+            &state,
+            1,
+            5,
+            FormatPropertyV1::Bold,
+            FormatValueV1::Bool(true),
+            &state_hash_v1(&state).unwrap(),
+        )
+        .expect("Bold override must not depend on Color");
+        assert_eq!(set.after_state.base_property_runs, state.base_property_runs);
+        assert_eq!(set.after_state.overrides.len(), 1);
+
+        let clear = clear_text_format_property_override_v1(
+            &set.after_state,
+            1,
+            5,
+            FormatPropertyV1::Bold,
+            &set.command.after_state_hash,
+        )
+        .expect("Clear reveals known Bold base");
+        assert!(clear.after_state.overrides.is_empty());
+        assert_eq!(
+            effective_property_segments_v1(&clear.after_state, FormatPropertyV1::Bold, 1, 5)
+                .expect("Bold base remains available")[0]
+                .value,
+            FormatValueV1::Bool(false)
         );
     }
 
