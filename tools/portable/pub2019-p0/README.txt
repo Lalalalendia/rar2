@@ -23,6 +23,7 @@ Run:
 
 Validation:
 - bundle manifest verifies every carried file before COM
+- paragraph-metrics-probe.exe is built with static MSVC CRT; PE dependencies are audited to exclude VCRUNTIME/MSVCP/UCRT imports and rechecked before COM
 - 033 receipt is checked against the same verdict/arm/visibility/source fences as the direct launcher
 - 029 native receipt + classifier are checked fail-closed before success
 - paragraph native/blast/structural receipts + evidence manifest are cross-checked before success
