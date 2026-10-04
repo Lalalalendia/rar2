@@ -32,6 +32,8 @@ const COLOR_INDEX_ID: u16 = 0x0200;
 const PL_COLOR_REFERENCE_ID: u16 = 0x0201;
 const PARAGRAPH_ALIGNMENT_ID: u16 = 0x0204;
 const PARAGRAPH_DEFAULT_CHAR_STYLE_ID: u16 = 0x0219;
+const PARAGRAPH_LINE_SPACING_ID: u16 = 0x0234;
+const PARAGRAPH_LINE_SPACING_RAW_UNITS_PER_EMU: u32 = 8;
 
 pub const QUILL_TEXT_SIZE_EMU_PER_POINT: u32 = 12_700;
 
@@ -49,6 +51,8 @@ pub struct QuillTypographyCatalog {
     pub size_only_runs: Vec<QuillTextSizeRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_alignments: Vec<QuillParagraphAlignmentRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paragraph_line_spacings: Vec<QuillParagraphLineSpacingRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unknown_block_types_assumed_zero_length: Vec<u8>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -176,6 +180,30 @@ pub struct QuillParagraphAlignmentRun {
     pub story_end_utf16: u32,
     pub alignment: QuillParagraphAlignment,
     pub source_value: u16,
+    pub fdpp_descriptor_ordinal: u32,
+    pub fdpp_style_ordinal: u32,
+    pub fdpp_style_source: RawSpan,
+}
+
+/// Bounded explicit Publisher paragraph line-spacing semantics proven for
+/// mature FDPP packed property 0x234. Omission remains absence here because
+/// selected/default paragraph styles can supply additional semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum QuillParagraphLineSpacing {
+    Proportional { point_equivalent_emu: u32 },
+    Absolute { spacing_emu: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillParagraphLineSpacingRun {
+    pub story_index: u32,
+    pub story_syid: QuillSyid,
+    pub story_start_utf16: u32,
+    pub story_end_utf16: u32,
+    pub line_spacing: QuillParagraphLineSpacing,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_value: Option<u32>,
     pub fdpp_descriptor_ordinal: u32,
     pub fdpp_style_ordinal: u32,
     pub fdpp_style_source: RawSpan,
@@ -722,6 +750,7 @@ pub fn parse_bounded_typography(
     let mut effective_runs = Vec::new();
     let mut size_only_runs = Vec::new();
     let mut paragraph_alignments = Vec::new();
+    let mut paragraph_line_spacings = Vec::new();
     let mut inheritance_unknown_block_types = BTreeSet::new();
     let mut effective_inheritance_unavailable_reason = None;
 
@@ -758,6 +787,8 @@ pub fn parse_bounded_typography(
         if inheritance_unknown_block_types.is_empty() {
             paragraph_alignments =
                 build_paragraph_alignment_runs(&paragraph_ranges, &story_extents);
+            paragraph_line_spacings =
+                build_paragraph_line_spacing_runs(bytes, &paragraph_ranges, &story_extents)?;
         }
 
         if explicit_run_projection_allowed(&unknown_block_types)
@@ -799,6 +830,7 @@ pub fn parse_bounded_typography(
         effective_runs,
         size_only_runs,
         paragraph_alignments,
+        paragraph_line_spacings,
         unknown_block_types_assumed_zero_length: unknown_block_types.into_iter().collect(),
         inheritance_unknown_block_types_assumed_zero_length: inheritance_unknown_block_types
             .into_iter()
@@ -1068,6 +1100,102 @@ fn build_paragraph_alignment_runs(
         }
     }
     runs
+}
+
+fn decode_explicit_paragraph_line_spacing(raw_value: u32) -> Option<QuillParagraphLineSpacing> {
+    let mode = raw_value & 0x3;
+    let magnitude = raw_value & !0x3;
+    if magnitude == 0 || magnitude % PARAGRAPH_LINE_SPACING_RAW_UNITS_PER_EMU != 0 {
+        return None;
+    }
+    let point_equivalent_emu = magnitude / PARAGRAPH_LINE_SPACING_RAW_UNITS_PER_EMU;
+    match mode {
+        0x1 => Some(QuillParagraphLineSpacing::Absolute {
+            spacing_emu: point_equivalent_emu,
+        }),
+        0x2 => Some(QuillParagraphLineSpacing::Proportional {
+            point_equivalent_emu,
+        }),
+        _ => None,
+    }
+}
+
+fn explicit_line_spacing_value_for_range(
+    bytes: &[u8],
+    range: &ParagraphTypographyRange,
+) -> Result<Option<u32>, QuillTypographyReadError> {
+    let start = usize::try_from(range.style_source.offset)
+        .map_err(|_| QuillTypographyReadError::new("FDPP style offset exceeds usize"))?;
+    let len = usize::try_from(range.style_source.len)
+        .map_err(|_| QuillTypographyReadError::new("FDPP style length exceeds usize"))?;
+    let end = checked_end(start, len, bytes.len(), "FDPP line-spacing style")?;
+    if len < 4 {
+        return Err(QuillTypographyReadError::new(
+            "FDPP line-spacing style is shorter than header",
+        ));
+    }
+    let mut cursor = start + 4;
+    let mut unknown = BTreeSet::new();
+    let mut values = Vec::new();
+    while cursor < end {
+        let (block, next) = parse_block(bytes, cursor, end, &mut unknown)?;
+        if block.id == PARAGRAPH_LINE_SPACING_ID {
+            if block.block_type != 0x20 {
+                return Ok(None);
+            }
+            if let Some(value) = block.value {
+                values.push(value);
+            }
+        }
+        cursor = next;
+    }
+    if cursor != end || !unknown.is_empty() {
+        return Ok(None);
+    }
+    values.sort_unstable();
+    values.dedup();
+    match values.as_slice() {
+        [] => Ok(None),
+        [value] => Ok(Some(*value)),
+        _ => Ok(None),
+    }
+}
+
+fn build_paragraph_line_spacing_runs(
+    bytes: &[u8],
+    ranges: &[ParagraphTypographyRange],
+    stories: &[StoryExtent],
+) -> Result<Vec<QuillParagraphLineSpacingRun>, QuillTypographyReadError> {
+    let mut runs = Vec::new();
+    for range in ranges {
+        let source_value = explicit_line_spacing_value_for_range(bytes, range)?;
+        let Some(raw_value) = source_value else {
+            continue;
+        };
+        let Some(line_spacing) = decode_explicit_paragraph_line_spacing(raw_value) else {
+            continue;
+        };
+
+        for story in stories {
+            let start = range.global_start_utf16.max(story.global_start_utf16);
+            let end = range.global_end_utf16.min(story.global_end_utf16);
+            if start >= end {
+                continue;
+            }
+            runs.push(QuillParagraphLineSpacingRun {
+                story_index: story.story_index,
+                story_syid: story.story_syid,
+                story_start_utf16: start - story.global_start_utf16,
+                story_end_utf16: end - story.global_start_utf16,
+                line_spacing,
+                source_value,
+                fdpp_descriptor_ordinal: range.fdpp_descriptor_ordinal,
+                fdpp_style_ordinal: range.fdpp_style_ordinal,
+                fdpp_style_source: range.style_source.clone(),
+            });
+        }
+    }
+    Ok(runs)
 }
 
 fn parse_stsh1_paragraph_defaults(
@@ -3508,6 +3636,50 @@ mod tests {
         let mut non_exact = exact;
         non_exact.text_size_emu += 1;
         assert_eq!(non_exact.text_size_points_exact(), None);
+    }
+
+    #[test]
+    fn paragraph_line_spacing_tag_decodes_only_proven_modes() {
+        assert_eq!(
+            decode_explicit_paragraph_line_spacing(1_219_202),
+            Some(QuillParagraphLineSpacing::Proportional {
+                point_equivalent_emu: 152_400,
+            })
+        );
+        assert_eq!(
+            decode_explicit_paragraph_line_spacing(1_828_802),
+            Some(QuillParagraphLineSpacing::Proportional {
+                point_equivalent_emu: 228_600,
+            })
+        );
+        assert_eq!(
+            decode_explicit_paragraph_line_spacing(1_828_801),
+            Some(QuillParagraphLineSpacing::Absolute {
+                spacing_emu: 228_600,
+            })
+        );
+        assert_eq!(
+            decode_explicit_paragraph_line_spacing(2_438_401),
+            Some(QuillParagraphLineSpacing::Absolute {
+                spacing_emu: 304_800,
+            })
+        );
+        assert_eq!(decode_explicit_paragraph_line_spacing(1_219_200), None);
+        assert_eq!(decode_explicit_paragraph_line_spacing(1_219_203), None);
+    }
+
+    #[test]
+    fn packed_fdpp_line_spacing_uses_full_0x234_field_id() {
+        let raw = 1_828_801_u32.to_le_bytes();
+        let bytes = [0x34, 0x22, raw[0], raw[1], raw[2], raw[3]];
+        let mut unknown = BTreeSet::new();
+        let (block, end) =
+            parse_block(&bytes, 0, bytes.len(), &mut unknown).expect("parse line spacing");
+        assert_eq!(block.id, PARAGRAPH_LINE_SPACING_ID);
+        assert_eq!(block.block_type, 0x20);
+        assert_eq!(block.value, Some(1_828_801));
+        assert_eq!(end, bytes.len());
+        assert!(unknown.is_empty());
     }
 
     #[test]

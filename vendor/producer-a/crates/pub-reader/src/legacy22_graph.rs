@@ -363,6 +363,7 @@ pub fn build_legacy_0x22_quill_from_streams(
         typography_runs: Vec::new(),
         typography_size_runs: Vec::new(),
         paragraph_alignments: Vec::new(),
+        paragraph_line_spacings: Vec::new(),
         script_font_maps: Vec::new(),
     })
 }

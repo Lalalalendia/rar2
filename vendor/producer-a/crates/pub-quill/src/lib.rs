@@ -41,10 +41,10 @@ pub use tokn::{
 pub use typography::{
     QUILL_TEXT_SIZE_EMU_PER_POINT, QuillEffectiveBoolean, QuillEffectiveTypographyRun,
     QuillExplicitTypographyRun, QuillParagraphAlignment, QuillParagraphAlignmentRun,
-    QuillParagraphSelectorSource, QuillScriptFontEntry, QuillScriptFontEntryDisposition,
-    QuillScriptFontMapObservation, QuillTextSizeRun, QuillTypographyCatalog, QuillTypographyRange,
-    QuillTypographyReadError, QuillTypographyStoryIntersection, QuillTypographyValueSource,
-    parse_bounded_typography,
+    QuillParagraphLineSpacing, QuillParagraphLineSpacingRun, QuillParagraphSelectorSource,
+    QuillScriptFontEntry, QuillScriptFontEntryDisposition, QuillScriptFontMapObservation,
+    QuillTextSizeRun, QuillTypographyCatalog, QuillTypographyRange, QuillTypographyReadError,
+    QuillTypographyStoryIntersection, QuillTypographyValueSource, parse_bounded_typography,
 };
 
 #[cfg(feature = "research-inspection")]

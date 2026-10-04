@@ -81,15 +81,15 @@ use pub_reader::{
     FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
     LegacyOleCachedPresentationSelection, MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
     PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
-    PubExplicitImageCropSource, PubParagraphAlignment, PubResolveDiagnostic, PubResolvedGraph,
-    PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
-    PubSourceGraphBuild, PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
-    analyze_legacy_0x22_page_roles, analyze_mature_0x2c_page_roles, build_failure_envelope,
-    build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
-    build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
-    build_mature_0x2c_wmf_preview_bundle_from_bytes, derive_pub_page_id,
-    materialize_bounded_table_cells, rasterize_wmf_preview, read_legacy_0x22_image_wmfs,
-    resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
+    PubExplicitImageCropSource, PubParagraphAlignment, PubParagraphLineSpacing,
+    PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild, PubResolvedNodePayload,
+    PubScriptFontEntryDisposition, PubSourceGraphBuild, PubSourcePagePaintOrderV1,
+    PubTextFrameVerticalAlignment, WmfPreviewRgba, analyze_legacy_0x22_page_roles,
+    analyze_mature_0x2c_page_roles, build_failure_envelope, build_legacy_0x22_noquill_source_graph,
+    build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
+    build_mature_0x2c_source_graph, build_mature_0x2c_wmf_preview_bundle_from_bytes,
+    derive_pub_page_id, materialize_bounded_table_cells, rasterize_wmf_preview,
+    read_legacy_0x22_image_wmfs, resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
     select_unambiguous_legacy_ole_cached_presentation,
 };
 #[cfg(feature = "cmo-slot-compose")]
@@ -257,6 +257,8 @@ pub struct ViewerGeometryDocument {
     pub typography_runs: Vec<ViewerTypographyRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_alignments: Vec<ViewerParagraphAlignmentRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paragraph_line_spacings: Vec<ViewerParagraphLineSpacingRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub script_font_maps: Vec<ViewerScriptFontMap>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1004,6 +1006,29 @@ pub struct ViewerParagraphAlignmentRun {
 }
 
 impl ViewerParagraphAlignmentRun {
+    pub fn applies_to_story_text(&self, text: &str) -> bool {
+        self.source_story_text_sha256 == viewer_story_text_sha256(text)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ViewerParagraphLineSpacing {
+    Proportional { point_equivalent_emu: u32 },
+    Absolute { spacing_emu: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerParagraphLineSpacingRun {
+    pub story_id: StoryId,
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub line_spacing: ViewerParagraphLineSpacing,
+    pub source_value: Option<u32>,
+    pub source_story_text_sha256: Sha256Digest,
+}
+
+impl ViewerParagraphLineSpacingRun {
     pub fn applies_to_story_text(&self, text: &str) -> bool {
         self.source_story_text_sha256 == viewer_story_text_sha256(text)
     }
@@ -2189,6 +2214,7 @@ fn open_legacy_0x22_noquill_bundle(
         text_fragments,
         typography_runs: Vec::new(),
         paragraph_alignments: Vec::new(),
+        paragraph_line_spacings: Vec::new(),
         script_font_maps: Vec::new(),
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
@@ -2318,6 +2344,7 @@ fn open_legacy_0x22_quill_bundle(
         text_fragments,
         typography_runs: Vec::new(),
         paragraph_alignments: Vec::new(),
+        paragraph_line_spacings: Vec::new(),
         script_font_maps: Vec::new(),
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
@@ -2495,6 +2522,33 @@ fn open_mature_0x2c_bundle(
             ),
         });
     }
+
+    let paragraph_line_spacings = pipeline
+        .source
+        .paragraph_line_spacings
+        .iter()
+        .filter_map(|run| {
+            let story = pipeline.resolved.graph.stories.get(&run.story_id)?;
+            let line_spacing = match run.line_spacing {
+                PubParagraphLineSpacing::Proportional {
+                    point_equivalent_emu,
+                } => ViewerParagraphLineSpacing::Proportional {
+                    point_equivalent_emu,
+                },
+                PubParagraphLineSpacing::Absolute { spacing_emu } => {
+                    ViewerParagraphLineSpacing::Absolute { spacing_emu }
+                }
+            };
+            Some(ViewerParagraphLineSpacingRun {
+                story_id: run.story_id,
+                scalar_start: run.story_scalar_start,
+                scalar_end: run.story_scalar_end,
+                line_spacing,
+                source_value: run.source_value,
+                source_story_text_sha256: viewer_story_text_sha256(&story.text),
+            })
+        })
+        .collect::<Vec<_>>();
 
     let script_font_maps = pipeline
         .source
@@ -2872,6 +2926,7 @@ fn open_mature_0x2c_bundle(
         text_fragments,
         typography_runs,
         paragraph_alignments,
+        paragraph_line_spacings,
         script_font_maps,
         tables,
         #[cfg(feature = "cmo-slot-compose")]
@@ -5412,6 +5467,7 @@ mod tests {
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -5571,6 +5627,7 @@ mod tests {
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -6027,6 +6084,7 @@ mod tests {
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -6138,6 +6196,7 @@ mod tests {
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -6208,6 +6267,7 @@ mod tests {
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]

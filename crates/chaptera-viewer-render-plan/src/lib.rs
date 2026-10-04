@@ -10,7 +10,8 @@ use pub_layout::{
     BoundedBreakKind, BoundedLayoutEnvironment, BoundedLayoutProjection, BoundedShapedFlowRuntime,
     BoundedShapedGlyph, BoundedShapingDescriptor, BoundedShapingRuntime, ProjectedNodeGeometry,
     ProjectedPage, ProjectedStory, ProjectedStoryFrame, break_policy_for_shaped_text,
-    font_fingerprint_sha256, resolve_bounded_shaped_flow, shape_bounded_ltr_segment,
+    compatible_natural_line_height_emu_v1, font_fingerprint_sha256, resolve_bounded_shaped_flow,
+    shape_bounded_ltr_segment,
 };
 use pub_line_placement::{
     LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
@@ -25,7 +26,8 @@ use pub_model::{
 use pub_viewer::ViewerProjectedSceneInstanceV1;
 use pub_viewer::{
     ViewerDecorativeBorderSlotV1, ViewerGeometryDocument, ViewerParagraphAlignment,
-    ViewerScriptFontEntryDisposition, ViewerStoryFrame, ViewerTextVerticalAlignment,
+    ViewerParagraphLineSpacing, ViewerScriptFontEntryDisposition, ViewerStoryFrame,
+    ViewerTextVerticalAlignment,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -1541,11 +1543,18 @@ where
             fragment.layout = Some(layout);
             continue;
         }
+        let font_is_source_resolved = resolved_font.is_some();
         fragment.backend_font_resource_id = resolved_font
             .as_ref()
             .map(|font| font.resource_id.to_owned());
         let font = resolved_font.as_ref().unwrap_or(fallback_font);
-        fragment.layout = Some(resolve_text_layout_v1(visual, target, fragment, font));
+        fragment.layout = Some(resolve_text_layout_v1(
+            visual,
+            target,
+            fragment,
+            font,
+            font_is_source_resolved,
+        ));
     }
 
     Ok(plan)
@@ -1685,11 +1694,106 @@ fn projected_incomplete_layout_is_explicit_overset(
         && diagnostics[0].origin == story_id.into_canonical()
 }
 
+const PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1: u32 = 12 * 12_700;
+const PUBLISHER_ONE_POINT_FIVE_POINT_EQUIVALENT_EMU_V1: u32 = 18 * 12_700;
+
+fn source_paragraph_line_spacing_v1(
+    visual: &ViewerGeometryDocument,
+    fragment: &RenderTextFragmentV1,
+) -> Option<ViewerParagraphLineSpacing> {
+    let story = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == fragment.story_id)?;
+
+    let mut intersecting = visual
+        .paragraph_line_spacings
+        .iter()
+        .filter(|run| run.story_id == fragment.story_id)
+        .filter(|run| run.applies_to_story_text(&story.text))
+        .filter(|run| {
+            run.scalar_end > fragment.scalar_start && run.scalar_start < fragment.scalar_end
+        });
+
+    let run = intersecting.next()?;
+    if intersecting.next().is_some()
+        || run.scalar_start > fragment.scalar_start
+        || run.scalar_end < fragment.scalar_end
+    {
+        return None;
+    }
+    Some(run.line_spacing)
+}
+
+fn scale_proportional_line_height_emu_v1(
+    natural_line_height_emu: i64,
+    point_equivalent_emu: u32,
+) -> Option<i64> {
+    if natural_line_height_emu <= 0
+        || !matches!(
+            point_equivalent_emu,
+            PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1
+                | PUBLISHER_ONE_POINT_FIVE_POINT_EQUIVALENT_EMU_V1
+        )
+    {
+        return None;
+    }
+
+    let numerator = i128::from(natural_line_height_emu) * i128::from(point_equivalent_emu);
+    let denominator = i128::from(PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1);
+    let rounded = (numerator + denominator / 2) / denominator;
+    let line_height_emu = i64::try_from(rounded).ok()?;
+    (line_height_emu > 0).then_some(line_height_emu)
+}
+
+fn resolved_uniform_line_height_emu_v1(
+    visual: &ViewerGeometryDocument,
+    fragment: &RenderTextFragmentV1,
+    font_size_emu: i64,
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+    font_is_source_resolved: bool,
+) -> Option<i64> {
+    if let Some(line_spacing) = source_paragraph_line_spacing_v1(visual, fragment) {
+        match line_spacing {
+            ViewerParagraphLineSpacing::Absolute { spacing_emu } if spacing_emu > 0 => {
+                return Some(i64::from(spacing_emu));
+            }
+            ViewerParagraphLineSpacing::Proportional {
+                point_equivalent_emu,
+            } if font_is_source_resolved => {
+                if let Some(natural_line_height_emu) = compatible_natural_line_height_emu_v1(
+                    font.bytes,
+                    font.face_index,
+                    LengthEmu::new(font_size_emu),
+                )
+                .map(LengthEmu::get)
+                    && let Some(line_height_emu) = scale_proportional_line_height_emu_v1(
+                        natural_line_height_emu,
+                        point_equivalent_emu,
+                    )
+                {
+                    return Some(line_height_emu);
+                }
+            }
+            ViewerParagraphLineSpacing::Absolute { .. }
+            | ViewerParagraphLineSpacing::Proportional { .. } => {}
+        }
+    }
+
+    scaled_line_height_emu(
+        font_size_emu,
+        font.default_font_size_emu,
+        font.default_line_height_emu,
+    )
+}
+
 fn resolve_text_layout_v1(
     visual: &ViewerGeometryDocument,
     target: RenderTextLayoutTargetV1,
     fragment: &RenderTextFragmentV1,
     font: &ExplicitRenderTextFontResourceV1<'_>,
+    font_is_source_resolved: bool,
 ) -> RenderTextLayoutV1 {
     let RenderTextLayoutTargetV1 {
         page_id,
@@ -1761,10 +1865,12 @@ fn resolve_text_layout_v1(
         }
         Err(reason) => return fallback_layout(reason),
     };
-    let Some(line_height_emu) = scaled_line_height_emu(
+    let Some(line_height_emu) = resolved_uniform_line_height_emu_v1(
+        visual,
+        fragment,
         font_size_emu,
-        font.default_font_size_emu,
-        font.default_line_height_emu,
+        font,
+        font_is_source_resolved,
     ) else {
         return fallback_layout(RenderTextLayoutFallbackReasonV1::FontResourceInvalid);
     };
@@ -2732,9 +2838,9 @@ mod tests {
     };
     use pub_viewer::{
         ViewerDocument, ViewerEmbeddedImage, ViewerImagePlacementV1, ViewerImageSourceWindowV1,
-        ViewerNodePaint, ViewerPage, ViewerScriptFontEntry, ViewerScriptFontMap, ViewerSolidLine,
-        ViewerSource, ViewerTable, ViewerTableCell, ViewerTextFragment, ViewerTypographyRun,
-        viewer_story_text_sha256,
+        ViewerNodePaint, ViewerPage, ViewerParagraphLineSpacingRun, ViewerScriptFontEntry,
+        ViewerScriptFontMap, ViewerSolidLine, ViewerSource, ViewerTable, ViewerTableCell,
+        ViewerTextFragment, ViewerTypographyRun, viewer_story_text_sha256,
     };
 
     fn canonical(byte: u8) -> CanonicalId {
@@ -2963,6 +3069,7 @@ mod tests {
                 source_story_text_sha256: viewer_story_text_sha256("hello"),
             }],
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             images: vec![ViewerEmbeddedImage {
@@ -3139,6 +3246,101 @@ mod tests {
                     .is_some_and(|shaping| shaping.units_per_em > 0 && !shaping.glyphs.is_empty())
             }));
         }
+    }
+
+    #[test]
+    fn absolute_paragraph_line_spacing_overrides_only_one_complete_fresh_run() {
+        let mut visual = fixture();
+        let story_id = visual.document.stories[0].id;
+        let story_text = visual.document.stories[0].text.clone();
+        let fragment = render_fragment(story_id, &story_text, Vec::new());
+        let fallback = 15 * 12_700;
+        let absolute = 18 * 12_700;
+        let font = ExplicitRenderTextFontResourceV1 {
+            resource_id: "test:fallback",
+            expected_sha256: "",
+            face_index: 0,
+            default_font_size_emu: 12 * 12_700,
+            default_line_height_emu: fallback,
+            bytes: &[],
+        };
+
+        assert_eq!(
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
+            Some(fallback)
+        );
+
+        visual.paragraph_line_spacings = vec![ViewerParagraphLineSpacingRun {
+            story_id,
+            scalar_start: fragment.scalar_start,
+            scalar_end: fragment.scalar_end,
+            line_spacing: ViewerParagraphLineSpacing::Absolute {
+                spacing_emu: u32::try_from(absolute).expect("absolute spacing"),
+            },
+            source_value: Some(1_828_801),
+            source_story_text_sha256: viewer_story_text_sha256(&story_text),
+        }];
+        assert_eq!(
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
+            Some(absolute)
+        );
+
+        visual.paragraph_line_spacings[0].line_spacing = ViewerParagraphLineSpacing::Proportional {
+            point_equivalent_emu: 18 * 12_700,
+        };
+        assert_eq!(
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
+            Some(fallback)
+        );
+
+        visual.paragraph_line_spacings[0].line_spacing = ViewerParagraphLineSpacing::Absolute {
+            spacing_emu: u32::try_from(absolute).expect("absolute spacing"),
+        };
+        visual.paragraph_line_spacings[0].scalar_end = fragment.scalar_end - 1;
+        assert_eq!(
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
+            Some(fallback)
+        );
+
+        visual.paragraph_line_spacings[0].scalar_end = fragment.scalar_end;
+        visual
+            .paragraph_line_spacings
+            .push(visual.paragraph_line_spacings[0].clone());
+        assert_eq!(
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
+            Some(fallback)
+        );
+
+        visual.paragraph_line_spacings.truncate(1);
+        visual.paragraph_line_spacings[0].source_story_text_sha256 =
+            viewer_story_text_sha256("stale");
+        assert_eq!(
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
+            Some(fallback)
+        );
+    }
+
+    #[test]
+    fn proportional_line_height_scales_only_proven_single_and_one_point_five_modes() {
+        let natural = 198_636;
+        assert_eq!(
+            scale_proportional_line_height_emu_v1(
+                natural,
+                PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1,
+            ),
+            Some(natural)
+        );
+        assert_eq!(
+            scale_proportional_line_height_emu_v1(
+                natural,
+                PUBLISHER_ONE_POINT_FIVE_POINT_EQUIVALENT_EMU_V1,
+            ),
+            Some(297_954)
+        );
+        assert_eq!(
+            scale_proportional_line_height_emu_v1(natural, 24 * 12_700),
+            None
+        );
     }
 
     #[test]

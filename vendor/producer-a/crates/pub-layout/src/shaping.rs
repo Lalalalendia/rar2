@@ -1,6 +1,9 @@
 use crate::BoundedLayoutEnvironment;
 use harfrust::{Direction, FontRef, ShapeOptions, ShaperData, UnicodeBuffer};
 use pub_model::LengthEmu;
+use read_fonts::tables::os2::SelectionFlags;
+use read_fonts::types::Scalar as _;
+use read_fonts::{FontRef as ReadFontRef, TableProvider};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -89,6 +92,74 @@ pub fn font_fingerprint_sha256(font_bytes: &[u8]) -> String {
         out.push(HEX[usize::from(byte & 0x0f)] as char);
     }
     out
+}
+
+fn fword_to_i64(value: read_fonts::types::FWord) -> i64 {
+    i64::from(i16::from_be_bytes(value.to_raw()))
+}
+
+fn compatible_legacy_windows_line_metric_units_v1(
+    hhea_ascender: i64,
+    hhea_descender: i64,
+    win_ascent: u16,
+    win_descent: u16,
+) -> Option<i64> {
+    let hhea_units = hhea_ascender.checked_sub(hhea_descender)?;
+    let win_units = i64::from(win_ascent).checked_add(i64::from(win_descent))?;
+    (hhea_units > 0 && hhea_units == win_units).then_some(hhea_units)
+}
+
+/// Returns one bounded natural single-line font metric from exact font bytes.
+///
+/// Native Publisher2019 evidence for exact Arial Regular
+/// (SHA-256 c9b76220a5be42ead4733611e417cd65c5fd8aeaa33eb56576ac378a37d130a1)
+/// showed that Single/1.5 spacing tracks a 2288/2048-em natural metric.
+/// That font has identical hhea(no-gap) and OS/2 Windows ascent+descent values.
+///
+/// This helper deliberately does not choose between disagreeing OpenType metric
+/// families. It admits only static faces without USE_TYPO_METRICS where those
+/// two legacy-Windows candidates are numerically identical; every other face
+/// remains outside this bounded authority.
+pub fn compatible_natural_line_height_emu_v1(
+    font_bytes: &[u8],
+    face_index: u32,
+    font_size_emu: LengthEmu,
+) -> Option<LengthEmu> {
+    if font_size_emu.get() <= 0 {
+        return None;
+    }
+
+    let font = ReadFontRef::from_index(font_bytes, face_index).ok()?;
+    if font.fvar().is_ok() {
+        return None;
+    }
+
+    let head = font.head().ok()?;
+    let hhea = font.hhea().ok()?;
+    let os2 = font.os2().ok()?;
+    if os2
+        .fs_selection()
+        .contains(SelectionFlags::USE_TYPO_METRICS)
+    {
+        return None;
+    }
+
+    let units_per_em = i64::from(head.units_per_em());
+    if units_per_em <= 0 {
+        return None;
+    }
+    let metric_units = compatible_legacy_windows_line_metric_units_v1(
+        fword_to_i64(hhea.ascender()),
+        fword_to_i64(hhea.descender()),
+        os2.us_win_ascent(),
+        os2.us_win_descent(),
+    )?;
+
+    let numerator = i128::from(metric_units) * i128::from(font_size_emu.get());
+    let denominator = i128::from(units_per_em);
+    let rounded = (numerator + denominator / 2) / denominator;
+    let emu = i64::try_from(rounded).ok()?;
+    (emu > 0).then(|| LengthEmu::new(emu))
 }
 
 /// Shapes one LTR logical text run using explicit, fingerprint-fenced font bytes.
@@ -238,6 +309,18 @@ mod tests {
             font_size_emu: LengthEmu::new(12 * EMU_PER_POINT),
             font_bytes,
         }
+    }
+
+    #[test]
+    fn publisher_legacy_windows_metric_requires_candidate_agreement() {
+        assert_eq!(
+            compatible_legacy_windows_line_metric_units_v1(1854, -434, 1854, 434),
+            Some(2288)
+        );
+        assert_eq!(
+            compatible_legacy_windows_line_metric_units_v1(1854, -434, 1854, 500),
+            None
+        );
     }
 
     #[test]
