@@ -213,7 +213,8 @@ fn canonical_paragraphs<'a>(
                 story_id: placement.story_id,
             },
         )?;
-        if raw[..raw.len().saturating_sub(1)].contains('\r') {
+        let interior = raw.strip_suffix('\r').unwrap_or(raw.as_str());
+        if interior.contains('\r') {
             return Err(IdmlParagraphAlignmentErrorV1::InvalidParagraphTopology {
                 story_id: placement.story_id,
             });
