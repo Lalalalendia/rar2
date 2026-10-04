@@ -71,6 +71,13 @@ fn reader_only_mode() -> bool {
     cfg!(feature = "reader-only")
 }
 
+fn resize_modifier_mask_from_egui(modifiers: egui::Modifiers) -> ResizeModifierMaskV1 {
+    ResizeModifierMaskV1 {
+        centered: modifiers.ctrl || modifiers.command,
+        aspect_lock: modifiers.shift,
+    }
+}
+
 fn product_surface_label() -> &'static str {
     if reader_only_mode() {
         READER_PRODUCT_LABEL
@@ -5536,10 +5543,8 @@ impl ViewerApp {
                 let primary_released = ui
                     .ctx()
                     .input(|input| input.pointer.button_released(egui::PointerButton::Primary));
-                let resize_modifiers = ui.ctx().input(|input| ResizeModifierMaskV1 {
-                    centered: input.modifiers.ctrl || input.modifiers.command,
-                    aspect_lock: input.modifiers.shift,
-                });
+                let resize_modifiers =
+                    ui.ctx().input(|input| resize_modifier_mask_from_egui(input.modifiers));
 
                 if !reader_only_mode()
                     && self.text_mode.is_none()
