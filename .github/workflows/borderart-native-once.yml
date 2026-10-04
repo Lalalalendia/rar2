@@ -1,11 +1,7 @@
 name: BorderArt Native One-Shot
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/borderart-native-once.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,7 +16,7 @@ jobs:
     outputs:
       trusted_sha: ${{ steps.trust.outputs.trusted_sha }}
     steps:
-      - name: Trust exact main push
+      - name: Trust exact manual main dispatch
         id: trust
         shell: pwsh
         run: |
