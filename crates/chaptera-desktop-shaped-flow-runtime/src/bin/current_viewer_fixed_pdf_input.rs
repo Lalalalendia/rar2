@@ -56,6 +56,7 @@ struct CurrentViewerPlanCensusV1 {
     duplicate_node_id_count: usize,
     shared_resolved_text_node_count: usize,
     backend_fallback_text_node_count: usize,
+    backend_fallback_reason_counts: BTreeMap<String, usize>,
     shaped_line_count: usize,
     shaped_span_count: usize,
     missing_shaping_evidence_count: usize,
@@ -278,8 +279,11 @@ fn census(plans: &[PageRenderPlanV1]) -> CurrentViewerPlanCensusV1 {
                         }
                     }
                 }
-                RenderTextLayoutDispositionV1::BackendFallback { .. } => {
+                RenderTextLayoutDispositionV1::BackendFallback { reason } => {
                     out.backend_fallback_text_node_count += 1;
+                    *out.backend_fallback_reason_counts
+                        .entry(reason.code().to_owned())
+                        .or_default() += 1;
                 }
             }
         }
