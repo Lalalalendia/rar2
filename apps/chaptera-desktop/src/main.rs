@@ -11080,19 +11080,19 @@ mod tests {
                             projected.scene_instance.instance_id == instance.instance_id
                         })
                         .expect("render-plan projected instance must come from Viewer adapter");
+                    let target_frame_node_id = viewer_projected
+                        .target_frame_node_id
+                        .expect("Cmo projected instance must retain its target frame");
                     let target_frame = visual
                         .scene
                         .nodes
                         .iter()
-                        .find(|candidate| candidate.origin == viewer_projected.target_frame_node_id)
+                        .find(|candidate| candidate.origin == target_frame_node_id)
                         .expect("projected target frame remains in resolved customer scene");
                     Some(serde_json::json!({
                         "instance_id": instance.instance_id,
                         "origin_node_id": instance.origin_node_id,
-                        "target_frame_node_id": viewer_projected
-                            .target_frame_node_id
-                            .as_canonical()
-                            .to_string(),
+                        "target_frame_node_id": target_frame_node_id.as_canonical().to_string(),
                         "cmo_slot_index": instance.cmo_slot_index,
                         "cmo_scalar_index": instance.cmo_scalar_index,
                         "target_frame_paint_scalar_end": viewer_projected
