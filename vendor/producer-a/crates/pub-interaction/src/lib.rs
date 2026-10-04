@@ -6,6 +6,13 @@
 //! testing. It does not own authoring truth and does not mutate PUB source
 //! state directly.
 
+mod snap;
+
+pub use snap::{
+    SnapAnchorKind, SnapAxis, SnapError, SnapFeedback, SnapIndex, SnapObject, SnapResult,
+    SnapTargetKind,
+};
+
 use pub_model::{LengthEmu, NodeId, RectEmu};
 use std::collections::BTreeSet;
 
