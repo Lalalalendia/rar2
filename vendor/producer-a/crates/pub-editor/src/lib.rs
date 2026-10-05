@@ -3977,7 +3977,7 @@ impl EditorSession {
                 frame_ids.dedup();
                 paragraphs
                     .sort_by_key(|item| (item.range.start, item.range.end, item.paragraph_id));
-                (!frame_ids.is_empty()).then(|| OdgParagraphScopedAlignmentPlacement {
+                (!frame_ids.is_empty()).then_some(OdgParagraphScopedAlignmentPlacement {
                     story_id,
                     paragraphs,
                     frame_ids,
