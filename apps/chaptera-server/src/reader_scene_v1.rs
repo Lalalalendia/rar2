@@ -1788,13 +1788,25 @@ mod tests {
         env, fs,
     };
 
+    use chaptera_cdm_model::LengthEmu;
     use chaptera_scene_instance::SceneProjectionKindV1;
     use chaptera_viewer_render_plan::{
-        RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
+        ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, PageRenderPlanV1,
+        RenderTextFragmentV1, RenderTextLayoutDispositionV1, SHARED_TEXT_LAYOUT_REVISION_V1,
+        build_page_render_plan_with_text_layout_resolver_v1,
         build_page_render_plan_with_text_layout_v1, effective_source_font_family_v1,
         uniform_text_color_rgb_v1,
     };
-    use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
+    use pub_layout::{
+        BoundedBreakKind, BoundedLayoutEnvironment, BoundedLayoutProjection,
+        BoundedShapedFlowRuntime, BoundedShapingRuntime, ProjectedNodeGeometry, ProjectedPage,
+        ProjectedStory, ProjectedStoryFrame, break_policy_for_shaped_text,
+        resolve_bounded_shaped_flow, shape_bounded_ltr,
+    };
+    use pub_viewer::{
+        ViewerGeometryDocument, ViewerParagraphLineSpacing, open_pub_bundle,
+        viewer_geometry_environment_v0_1,
+    };
     use sha2::{Digest, Sha256};
 
     use super::{
@@ -1843,6 +1855,253 @@ mod tests {
         } else {
             ProbeImageInlineAdmission::Inline
         }
+    }
+
+    fn probe_uniform_fragment_font_size_emu(
+        fragment: &RenderTextFragmentV1,
+        default_font_size_emu: i64,
+    ) -> Option<i64> {
+        if fragment.typography.is_empty() {
+            return (default_font_size_emu > 0).then_some(default_font_size_emu);
+        }
+
+        let mut cursor = fragment.scalar_start;
+        let mut selected = None;
+        for run in &fragment.typography {
+            if run.scalar_start != cursor
+                || run.scalar_end <= run.scalar_start
+                || run.scalar_end > fragment.scalar_end
+                || run.text_size_emu == 0
+            {
+                return None;
+            }
+            let size = i64::from(run.text_size_emu);
+            match selected {
+                None => selected = Some(size),
+                Some(previous) if previous == size => {}
+                Some(_) => return None,
+            }
+            cursor = run.scalar_end;
+        }
+        (cursor == fragment.scalar_end).then_some(selected.unwrap_or(default_font_size_emu))
+    }
+
+    fn probe_scaled_line_height_emu(
+        font_size_emu: i64,
+        font: &ExplicitRenderTextFontResourceV1<'_>,
+    ) -> Option<i64> {
+        if font_size_emu <= 0 || font.default_font_size_emu <= 0 || font.default_line_height_emu <= 0
+        {
+            return None;
+        }
+        let numerator =
+            i128::from(font_size_emu).checked_mul(i128::from(font.default_line_height_emu))?;
+        let denominator = i128::from(font.default_font_size_emu);
+        let rounded = numerator
+            .checked_add(denominator / 2)?
+            .checked_div(denominator)?;
+        let value = i64::try_from(rounded).ok()?;
+        (value > 0).then_some(value)
+    }
+
+    fn probe_uniform_line_height_emu(
+        visual: &ViewerGeometryDocument,
+        fragment: &RenderTextFragmentV1,
+        font_size_emu: i64,
+        font: &ExplicitRenderTextFontResourceV1<'_>,
+    ) -> Option<i64> {
+        let story = visual
+            .document
+            .stories
+            .iter()
+            .find(|story| story.id == fragment.story_id)?;
+
+        let mut intersecting = visual
+            .paragraph_line_spacings
+            .iter()
+            .filter(|run| run.story_id == fragment.story_id)
+            .filter(|run| run.applies_to_story_text(&story.text))
+            .filter(|run| {
+                run.scalar_end > fragment.scalar_start && run.scalar_start < fragment.scalar_end
+            });
+
+        if let Some(run) = intersecting.next()
+            && intersecting.next().is_none()
+            && run.scalar_start <= fragment.scalar_start
+            && run.scalar_end >= fragment.scalar_end
+            && let ViewerParagraphLineSpacing::Absolute { spacing_emu } = run.line_spacing
+            && spacing_emu > 0
+        {
+            return Some(i64::from(spacing_emu));
+        }
+
+        probe_scaled_line_height_emu(font_size_emu, font)
+    }
+
+    fn probe_mandatory_boundary_after_cursor(
+        fragment: &RenderTextFragmentV1,
+        cursor: u32,
+        runtime: &BoundedShapingRuntime<'_>,
+    ) -> bool {
+        let Ok(shaped) = shape_bounded_ltr(&fragment.text, runtime) else {
+            return false;
+        };
+        let Ok(policy) = break_policy_for_shaped_text(&fragment.text, &shaped.glyphs) else {
+            return false;
+        };
+        policy
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.scalar_boundary > cursor)
+            .any(|candidate| candidate.kind == BoundedBreakKind::Mandatory)
+    }
+
+    fn probe_shared_layout_incomplete_cause(
+        visual: &ViewerGeometryDocument,
+        page: &PageRenderPlanV1,
+        node: &NodeRenderPlanV1,
+        fragment: &RenderTextFragmentV1,
+        font: &ExplicitRenderTextFontResourceV1<'_>,
+    ) -> (&'static str, &'static str, &'static str) {
+        if node.projected_scene_instance.is_some() {
+            return ("projected_path", "unknown", "projected_fail_closed");
+        }
+
+        let Some(font_size_emu) =
+            probe_uniform_fragment_font_size_emu(fragment, font.default_font_size_emu)
+        else {
+            return (
+                "mixed_size_or_span_path",
+                "unknown",
+                "mixed_size_or_span_fail_closed",
+            );
+        };
+
+        let Some(story) = visual
+            .document
+            .stories
+            .iter()
+            .find(|story| story.id == fragment.story_id)
+        else {
+            return ("uniform_path", "unknown", "story_missing");
+        };
+        let Ok(story_scalar_len) = u32::try_from(story.text.chars().count()) else {
+            return ("uniform_path", "unknown", "story_extent_overflow");
+        };
+        if fragment.scalar_start != 0 || fragment.scalar_end != story_scalar_len {
+            return ("uniform_path", "unknown", "story_extent_mismatch");
+        }
+
+        let mut frames = visual
+            .story_frames
+            .iter()
+            .filter(|frame| frame.story_id == fragment.story_id);
+        let Some(frame) = frames.next() else {
+            return ("uniform_path", "unknown", "frame_missing");
+        };
+        if frames.next().is_some() || frame.frame_id != node.node_id {
+            return ("uniform_path", "unknown", "multi_frame_fail_closed");
+        }
+
+        let bounds = node.text_bounds.unwrap_or(node.bounds);
+        let Some(line_height_emu) =
+            probe_uniform_line_height_emu(visual, fragment, font_size_emu, font)
+        else {
+            return ("uniform_path", "unknown", "line_height_unavailable");
+        };
+
+        let projection = BoundedLayoutProjection {
+            pages: vec![ProjectedPage {
+                origin: page.page_id,
+                size: page.page_size,
+                bleed: None,
+                margins: None,
+            }],
+            node_geometry: vec![ProjectedNodeGeometry {
+                origin: node.node_id,
+                parent_origin: page.page_id.into_canonical(),
+                bounds,
+                transform: node.transform,
+            }],
+            stories: vec![ProjectedStory {
+                origin: story.id,
+                text: fragment.text.clone(),
+                paragraph_origins: Vec::new(),
+                run_origins: Vec::new(),
+            }],
+            story_frames: vec![ProjectedStoryFrame {
+                story_origin: story.id,
+                frame_origin: node.node_id,
+                ordinal: frame.ordinal,
+                previous_frame_origin: None,
+                next_frame_origin: None,
+            }],
+            tables: Vec::new(),
+            guides: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let runtime = BoundedShapedFlowRuntime {
+            shaping: BoundedShapingRuntime {
+                layout: BoundedLayoutEnvironment {
+                    engine_revision: SHARED_TEXT_LAYOUT_REVISION_V1.to_owned(),
+                    font_set_fingerprint: font.expected_sha256.to_owned(),
+                    resource_fingerprint: font.resource_id.to_owned(),
+                },
+                face_index: font.face_index,
+                font_size_emu: LengthEmu::new(font_size_emu),
+                font_bytes: font.bytes,
+            },
+            line_height: LengthEmu::new(line_height_emu),
+        };
+        let Ok(scene) = resolve_bounded_shaped_flow(&projection, &runtime) else {
+            return ("uniform_path", "unknown", "shared_layout_error");
+        };
+
+        let mut source_lines = scene
+            .lines
+            .iter()
+            .filter(|line| line.story_origin == story.id && line.frame_origin == node.node_id)
+            .collect::<Vec<_>>();
+        source_lines.sort_by_key(|line| line.frame_line_index);
+        let consumption = if source_lines.is_empty() {
+            "zero_lines"
+        } else {
+            "partial_lines"
+        };
+        let has_no_capacity = scene
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "text_frame_has_no_capacity");
+        let has_unbreakable = scene
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "unbreakable_shaped_line");
+        let has_overset = scene
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "story_overset");
+        let cursor = source_lines
+            .last()
+            .map(|line| line.consumed_scalar_end)
+            .unwrap_or(fragment.scalar_start);
+
+        let cause = if has_no_capacity && source_lines.is_empty() {
+            "first_line_height_rejection"
+        } else if has_unbreakable
+            && probe_mandatory_boundary_after_cursor(fragment, cursor, &runtime.shaping)
+        {
+            "mandatory_boundary_no_fit"
+        } else if has_unbreakable {
+            "width_no_legal_break"
+        } else if has_overset && !source_lines.is_empty() {
+            "later_height_capacity_exhausted"
+        } else if has_overset {
+            "overset_without_lines"
+        } else {
+            "other_fail_closed"
+        };
+
+        ("uniform_path", consumption, cause)
     }
 
     #[test]
@@ -2430,6 +2689,10 @@ mod tests {
         let mut shared_nonempty_lines = 0_usize;
         let mut layout_none = 0_usize;
         let mut backend_fallbacks = BTreeMap::<&'static str, usize>::new();
+        let mut shared_layout_incomplete_path_counts = BTreeMap::<&'static str, usize>::new();
+        let mut shared_layout_incomplete_consumption_counts = BTreeMap::<&'static str, usize>::new();
+        let mut shared_layout_incomplete_cause_counts = BTreeMap::<&'static str, usize>::new();
+        let mut shared_layout_incomplete_cause_path_counts = BTreeMap::<String, usize>::new();
         let mut projected_text_nodes = 0_usize;
         let mut projected_typography_runs = 0_usize;
         let mut projected_complete_typography_nodes = 0_usize;
@@ -2451,14 +2714,14 @@ mod tests {
                 build_page_render_plan_with_text_layout_v1(&bundle.geometry, page_index, &font)
                     .expect("exact reference render plan must build");
 
-            for node in plan.nodes {
+            for node in &plan.nodes {
                 let projected = node
                     .projected_scene_instance
                     .as_ref()
                     .is_some_and(|instance| {
                         instance.projection_kind == SceneProjectionKindV1::CmoStorySlot
                     });
-                let Some(text) = node.text else {
+                let Some(text) = node.text.as_ref() else {
                     continue;
                 };
                 text_nodes += 1;
@@ -2466,7 +2729,7 @@ mod tests {
                 if projected {
                     projected_text_nodes += 1;
                     projected_typography_runs += text.typography.len();
-                    if let Some(text_bounds) = node.text_bounds {
+                    if let Some(text_bounds) = node.text_bounds.as_ref() {
                         projected_text_bounds_nodes += 1;
                         let left = text_bounds.x.get() - node.bounds.x.get();
                         let top = text_bounds.y.get() - node.bounds.y.get();
@@ -2517,11 +2780,11 @@ mod tests {
                     }
                 }
 
-                let Some(layout) = text.layout else {
+                let Some(layout) = text.layout.as_ref() else {
                     layout_none += 1;
                     continue;
                 };
-                match layout.disposition {
+                match &layout.disposition {
                     RenderTextLayoutDispositionV1::SharedResolved {
                         font_resource_id,
                         font_fingerprint_sha256,
@@ -2537,10 +2800,10 @@ mod tests {
 
                         if projected {
                             *projected_layout_resources
-                                .entry(font_resource_id)
+                                .entry(font_resource_id.clone())
                                 .or_default() += 1;
                             *projected_layout_fingerprints
-                                .entry(font_fingerprint_sha256)
+                                .entry(font_fingerprint_sha256.clone())
                                 .or_default() += 1;
                             *projected_line_counts.entry(layout.lines.len()).or_default() += 1;
                             for line in &layout.lines {
@@ -2553,7 +2816,25 @@ mod tests {
                         }
                     }
                     RenderTextLayoutDispositionV1::BackendFallback { reason } => {
-                        *backend_fallbacks.entry(reason.code()).or_default() += 1;
+                        let reason_code = reason.code();
+                        *backend_fallbacks.entry(reason_code).or_default() += 1;
+                        if reason_code == "shared_layout_incomplete" {
+                            let (path, consumption, cause) = probe_shared_layout_incomplete_cause(
+                                &bundle.geometry,
+                                &plan,
+                                node,
+                                text,
+                                &font,
+                            );
+                            *shared_layout_incomplete_path_counts.entry(path).or_default() += 1;
+                            *shared_layout_incomplete_consumption_counts
+                                .entry(consumption)
+                                .or_default() += 1;
+                            *shared_layout_incomplete_cause_counts.entry(cause).or_default() += 1;
+                            *shared_layout_incomplete_cause_path_counts
+                                .entry(format!("{cause}@{path}"))
+                                .or_default() += 1;
+                        }
                     }
                 }
             }
@@ -2561,6 +2842,18 @@ mod tests {
 
         let backend_fallbacks_json =
             serde_json::to_string(&backend_fallbacks).expect("serialize fallback census");
+        let shared_layout_incomplete_path_json =
+            serde_json::to_string(&shared_layout_incomplete_path_counts)
+                .expect("serialize SLI path census");
+        let shared_layout_incomplete_consumption_json =
+            serde_json::to_string(&shared_layout_incomplete_consumption_counts)
+                .expect("serialize SLI consumption census");
+        let shared_layout_incomplete_cause_json =
+            serde_json::to_string(&shared_layout_incomplete_cause_counts)
+                .expect("serialize SLI cause census");
+        let shared_layout_incomplete_cause_path_json =
+            serde_json::to_string(&shared_layout_incomplete_cause_path_counts)
+                .expect("serialize SLI cause/path census");
         let projected_source_family_fingerprints_json =
             serde_json::to_string(&projected_source_family_fingerprints)
                 .expect("serialize projected family fingerprints");
@@ -2582,6 +2875,32 @@ mod tests {
 
         match actual_sha256.as_str() {
             "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" => {
+                assert_eq!(
+                    backend_fallbacks,
+                    BTreeMap::from([
+                        ("shared_layout_incomplete", 3_usize),
+                        ("story_extent_mismatch", 1_usize),
+                    ]),
+                    "exact post-marker Carlton fallback frontier drift"
+                );
+                for (name, values) in [
+                    ("path", &shared_layout_incomplete_path_counts),
+                    ("consumption", &shared_layout_incomplete_consumption_counts),
+                    ("cause", &shared_layout_incomplete_cause_counts),
+                ] {
+                    assert_eq!(
+                        values.values().sum::<usize>(),
+                        3,
+                        "exact Carlton SLI {name} census must cover all three residuals"
+                    );
+                }
+                assert_eq!(
+                    shared_layout_incomplete_cause_path_counts
+                        .values()
+                        .sum::<usize>(),
+                    3,
+                    "exact Carlton SLI cause/path cross-tab must cover all three residuals"
+                );
                 assert_eq!(
                     projected_text_nodes, 4,
                     "exact Carlton projected carrier count drift"
@@ -2606,6 +2925,18 @@ mod tests {
             }
             "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e" => {
                 assert_eq!(
+                    backend_fallbacks,
+                    BTreeMap::from([("shared_layout_incomplete", 1_usize)]),
+                    "Virginia Devinettes fallback frontier must remain unchanged"
+                );
+                assert_eq!(
+                    shared_layout_incomplete_cause_counts
+                        .values()
+                        .sum::<usize>(),
+                    1,
+                    "Virginia SLI cause census must cover its single control residual"
+                );
+                assert_eq!(
                     projected_text_nodes, 0,
                     "Virginia Devinettes must remain a zero-projected control"
                 );
@@ -2622,7 +2953,7 @@ mod tests {
         }
 
         println!(
-            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={}",
+            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} sli_path={} sli_consumption={} sli_cause={} sli_cause_path={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={}",
             actual_sha256,
             bundle.geometry.document.pages.len(),
             text_nodes,
@@ -2631,6 +2962,10 @@ mod tests {
             shared_nonempty_lines,
             layout_none,
             backend_fallbacks_json,
+            shared_layout_incomplete_path_json,
+            shared_layout_incomplete_consumption_json,
+            shared_layout_incomplete_cause_json,
+            shared_layout_incomplete_cause_path_json,
             projected_text_nodes,
             projected_typography_runs,
             projected_complete_typography_nodes,
