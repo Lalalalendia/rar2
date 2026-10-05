@@ -5943,6 +5943,50 @@ mod tests {
         assert_eq!(bounded_officeart_rgb(0x1000_0000, Some(&scheme)), None);
     }
 
+    #[test]
+    fn quill_scheme_text_color_resolves_only_through_publication_scheme() {
+        let scheme = MatureColorScheme {
+            source: crop_test_span(200, 28),
+            declared_count: 2,
+            declared_count_source: crop_test_span(206, 4),
+            slots: vec![
+                pub_contents::MatureColorSchemeSlot {
+                    ordinal: 0,
+                    rgb: Some([0, 0, 0]),
+                    source: crop_test_span(210, 2),
+                    rgb_source: None,
+                },
+                pub_contents::MatureColorSchemeSlot {
+                    ordinal: 1,
+                    rgb: Some([0x11, 0x22, 0x33]),
+                    source: crop_test_span(212, 12),
+                    rgb_source: Some(crop_test_span(220, 4)),
+                },
+            ],
+            name: Some("fixture".into()),
+            name_source: Some(crop_test_span(224, 14)),
+        };
+
+        assert_eq!(
+            bounded_quill_text_rgb(Some([0xAA, 0xBB, 0xCC]), None, None),
+            Some([0xAA, 0xBB, 0xCC])
+        );
+        assert_eq!(
+            bounded_quill_text_rgb(None, Some(0), Some(&scheme)),
+            Some([0, 0, 0])
+        );
+        assert_eq!(
+            bounded_quill_text_rgb(None, Some(1), Some(&scheme)),
+            Some([0x11, 0x22, 0x33])
+        );
+        assert_eq!(bounded_quill_text_rgb(None, Some(2), Some(&scheme)), None);
+        assert_eq!(bounded_quill_text_rgb(None, Some(0), None), None);
+        assert_eq!(
+            bounded_quill_text_rgb(Some([1, 2, 3]), Some(0), Some(&scheme)),
+            None
+        );
+    }
+
     fn dgg_test_defaults(
         primary: Vec<pub_escher::Fopte>,
         tertiary: Vec<pub_escher::Fopte>,
