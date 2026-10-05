@@ -162,7 +162,9 @@ pub fn boolean_format_selection_state_v1(
     }
 
     if cursor != end {
-        return Err("canonical scoped text-format query did not cover the full selection".to_owned());
+        return Err(
+            "canonical scoped text-format query did not cover the full selection".to_owned(),
+        );
     }
 
     Ok(DesktopBooleanSelectionStateV1 {
@@ -776,9 +778,8 @@ mod tests {
 
         let mut editor =
             open_mature_0x2c_editor(&original, source_hash).expect("open pinned 51318.pub");
-        let story_id: StoryId =
-            serde_json::from_str("\"125f3d05-d21c-56f7-b122-d402107a7a3c\"")
-                .expect("canonical scoped-format witness StoryId");
+        let story_id: StoryId = serde_json::from_str("\"125f3d05-d21c-56f7-b122-d402107a7a3c\"")
+            .expect("canonical scoped-format witness StoryId");
         let complete_error = editor
             .source_text_format_overlay_v1(story_id)
             .expect_err("witness complete overlay must remain blocked by unrelated color");
