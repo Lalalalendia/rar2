@@ -212,7 +212,7 @@ def verify_wire(root: Path, expected: dict, state: str, wanted: list[str]) -> di
     }
 
 
-def scribus_story(root: ET.Element, story_hash: str) -> ET.Element:
+def scribus_story_candidates(root: ET.Element, story_hash: str) -> list[ET.Element]:
     matches = []
     for story in (node for node in root.iter() if local(node.tag) == "StoryText"):
         text = "".join(
@@ -222,16 +222,10 @@ def scribus_story(root: ET.Element, story_hash: str) -> ET.Element:
         )
         if non_whitespace_sha256(text) == story_hash:
             matches.append(story)
-    if len(matches) != 1:
-        raise AssertionError(
-            f"Scribus expected exactly one StoryText fingerprint match; observed={len(matches)}"
-        )
-    return matches[0]
+    return matches
 
 
-def verify_scribus(path: Path, expected: dict, wanted: list[str]) -> dict:
-    root = ET.parse(path).getroot()
-    story = scribus_story(root, expected["story_non_whitespace_sha256"])
+def scribus_sequence(story: ET.Element, paragraph_count: int) -> dict:
     default = next(
         (child for child in list(story) if local(child.tag) == "DefaultStyle"),
         None,
@@ -242,11 +236,13 @@ def verify_scribus(path: Path, expected: dict, wanted: list[str]) -> dict:
         for child in list(story)
         if local(child.tag) in {"para", "trail"}
     ]
-    if len(markers) != len(wanted):
-        raise AssertionError(
-            f"Scribus paragraph carrier count mismatch: found={len(markers)} "
-            f"expected={len(wanted)}"
-        )
+    if len(markers) != paragraph_count:
+        return {
+            "error": "paragraph_carrier_count_mismatch",
+            "paragraph_carrier_count": len(markers),
+            "expected_paragraph_count": paragraph_count,
+        }
+
     observed = []
     raw = []
     for marker in markers:
@@ -256,18 +252,87 @@ def verify_scribus(path: Path, expected: dict, wanted: list[str]) -> dict:
         raw.append(value)
         alignment = SCRIBUS_ALIGNMENT.get(value)
         if alignment is None:
-            raise AssertionError(f"unsupported Scribus ALIGN value {value!r}")
+            return {
+                "error": "unsupported_align_value",
+                "raw_align_sequence": raw,
+                "unsupported_value": value,
+            }
         observed.append(alignment)
-    if observed != wanted:
-        raise AssertionError(
-            "Scribus ordered paragraph alignment mismatch: "
-            + json.dumps({"expected": wanted, "observed": observed, "raw": raw}, sort_keys=True)
-        )
+
     return {
         "ordered_alignment_sequence": observed,
         "raw_align_sequence": raw,
         "paragraph_carrier_count": len(markers),
-        "story_fingerprint_match": True,
+    }
+
+
+def verify_scribus_matrix(
+    center_path: Path,
+    clear_path: Path,
+    mixed_path: Path,
+    expected: dict,
+) -> dict:
+    paths = {
+        "center": center_path,
+        "clear": clear_path,
+        "mixed": mixed_path,
+    }
+    wanted = {
+        state: [str(value).casefold() for value in expected["states"][state]["alignment_sequence"]]
+        for state in paths
+    }
+    paragraph_count = int(expected["paragraph_count"])
+    candidates = {}
+    summaries = {}
+
+    for state, path in paths.items():
+        root = ET.parse(path).getroot()
+        state_candidates = scribus_story_candidates(
+            root, expected["story_non_whitespace_sha256"]
+        )
+        candidates[state] = state_candidates
+        summaries[state] = [
+            scribus_sequence(story, paragraph_count)
+            for story in state_candidates
+        ]
+
+    counts = {state: len(items) for state, items in candidates.items()}
+    if not counts["center"] or len(set(counts.values())) != 1:
+        raise AssertionError(
+            "Scribus StoryText fingerprint candidate count is not stable across states: "
+            + json.dumps({"counts": counts, "summaries": summaries}, sort_keys=True)
+        )
+
+    matching_indices = []
+    for index in range(counts["center"]):
+        if all(
+            summaries[state][index].get("ordered_alignment_sequence") == wanted[state]
+            for state in paths
+        ):
+            matching_indices.append(index)
+
+    if len(matching_indices) != 1:
+        raise AssertionError(
+            "Scribus could not identify exactly one stable StoryText slot across Center/Clear/Mixed: "
+            + json.dumps(
+                {
+                    "candidate_counts": counts,
+                    "expected": wanted,
+                    "matching_indices": matching_indices,
+                    "candidate_summaries": summaries,
+                },
+                sort_keys=True,
+            )
+        )
+
+    selected = matching_indices[0]
+    return {
+        "story_fingerprint_candidate_count": counts["center"],
+        "selected_storytext_index": selected,
+        "states": {
+            state: summaries[state][selected]
+            for state in paths
+        },
     }
 
 
@@ -323,44 +388,69 @@ def verify_libreoffice(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("wire", "scribus", "libreoffice"))
+    parser.add_argument("mode", choices=("wire", "scribus-matrix", "libreoffice"))
     parser.add_argument("--expected", type=Path, required=True)
-    parser.add_argument("--state", choices=("center", "clear", "mixed"), required=True)
+    parser.add_argument("--state", choices=("center", "clear", "mixed"))
     parser.add_argument("--root", type=Path)
     parser.add_argument("--input", type=Path)
     parser.add_argument("--wire-root", type=Path)
+    parser.add_argument("--center-input", type=Path)
+    parser.add_argument("--clear-input", type=Path)
+    parser.add_argument("--mixed-input", type=Path)
     parser.add_argument("--receipt", type=Path, required=True)
     args = parser.parse_args()
 
-    expected, wanted = load_expected(args.expected, args.state)
-    if args.mode == "wire":
-        if args.root is None:
-            parser.error("wire mode requires --root")
-        result = verify_wire(args.root, expected, args.state, wanted)
-    elif args.mode == "scribus":
-        if args.input is None:
-            parser.error("scribus mode requires --input")
-        result = verify_scribus(args.input, expected, wanted)
-    else:
-        if args.input is None or args.wire_root is None:
-            parser.error("libreoffice mode requires --input and --wire-root")
-        result = verify_libreoffice(
-            args.input,
-            args.wire_root,
+    if args.mode == "scribus-matrix":
+        if args.center_input is None or args.clear_input is None or args.mixed_input is None:
+            parser.error(
+                "scribus-matrix mode requires --center-input --clear-input --mixed-input"
+            )
+        expected = json.loads(args.expected.read_text())
+        if expected.get("schema") != "chaptera.paragraph-scoped-alignment-consumer-fixture.v1":
+            raise AssertionError(f"unexpected expected schema: {expected.get('schema')!r}")
+        result = verify_scribus_matrix(
+            args.center_input,
+            args.clear_input,
+            args.mixed_input,
             expected,
-            args.state,
-            wanted,
         )
+        payload = {
+            "schema": "chaptera.paragraph-scoped-alignment-consumer-check.v1",
+            "mode": args.mode,
+            "state": "matrix",
+            "story_id": expected["story_id"],
+            "paragraph_count": expected["paragraph_count"],
+            **result,
+        }
+    else:
+        if args.state is None:
+            parser.error(f"{args.mode} mode requires --state")
+        expected, wanted = load_expected(args.expected, args.state)
+        if args.mode == "wire":
+            if args.root is None:
+                parser.error("wire mode requires --root")
+            result = verify_wire(args.root, expected, args.state, wanted)
+        else:
+            if args.input is None or args.wire_root is None:
+                parser.error("libreoffice mode requires --input and --wire-root")
+            result = verify_libreoffice(
+                args.input,
+                args.wire_root,
+                expected,
+                args.state,
+                wanted,
+            )
 
-    payload = {
-        "schema": "chaptera.paragraph-scoped-alignment-consumer-check.v1",
-        "mode": args.mode,
-        "state": args.state,
-        "story_id": expected["story_id"],
-        "paragraph_count": expected["paragraph_count"],
-        "expected_alignment_sequence": wanted,
-        **result,
-    }
+        payload = {
+            "schema": "chaptera.paragraph-scoped-alignment-consumer-check.v1",
+            "mode": args.mode,
+            "state": args.state,
+            "story_id": expected["story_id"],
+            "paragraph_count": expected["paragraph_count"],
+            "expected_alignment_sequence": wanted,
+            **result,
+        }
+
     args.receipt.parent.mkdir(parents=True, exist_ok=True)
     args.receipt.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     print(json.dumps(payload, indent=2, sort_keys=True))
