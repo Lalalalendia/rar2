@@ -26,7 +26,7 @@ pub use report::{
     ExportReportItem, ExportReportSource, build_export_report, render_human_summary,
 };
 
-use pub_model::{CanonicalId, LengthEmu, StoryId};
+use pub_model::{CanonicalId, LengthEmu, ParagraphId, StoryId, TextRange};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -109,6 +109,110 @@ pub enum ParagraphAlignmentV1 {
 pub struct FullStoryParagraphAlignmentV1 {
     pub story_id: StoryId,
     pub alignment: ParagraphAlignmentV1,
+}
+
+pub const PARAGRAPH_SCOPED_ALIGNMENT_SCHEMA_V1: &str =
+    "chaptera.paragraph-scoped-alignment.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParagraphScopedAlignmentValueV1 {
+    Left,
+    Center,
+    Right,
+}
+
+/// Target-neutral physical-writer input for one canonical ParagraphId.
+///
+/// The range is the exact Story-global Unicode-scalar range owned by the
+/// current canonical paragraph. Source-format byte/UTF-16 offsets and visual
+/// line fragments are not valid substitutes.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ParagraphScopedAlignmentV1 {
+    pub paragraph_id: ParagraphId,
+    pub story_id: StoryId,
+    pub range: TextRange,
+    pub alignment: ParagraphScopedAlignmentValueV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParagraphScopedAlignmentErrorV1 {
+    DuplicateParagraph {
+        paragraph_id: ParagraphId,
+    },
+    OverlappingRanges {
+        story_id: StoryId,
+        left_paragraph_id: ParagraphId,
+        left_range: TextRange,
+        right_paragraph_id: ParagraphId,
+        right_range: TextRange,
+    },
+}
+
+impl std::fmt::Display for ParagraphScopedAlignmentErrorV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DuplicateParagraph { paragraph_id } => write!(
+                formatter,
+                "duplicate paragraph-scoped alignment for {}",
+                paragraph_id.as_canonical()
+            ),
+            Self::OverlappingRanges {
+                story_id,
+                left_paragraph_id,
+                left_range,
+                right_paragraph_id,
+                right_range,
+            } => write!(
+                formatter,
+                "overlapping paragraph-scoped alignment ranges in Story {}: {} {:?} overlaps {} {:?}",
+                story_id.as_canonical(),
+                left_paragraph_id.as_canonical(),
+                left_range,
+                right_paragraph_id.as_canonical(),
+                right_range
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ParagraphScopedAlignmentErrorV1 {}
+
+pub fn validate_paragraph_scoped_alignments_v1(
+    alignments: &[ParagraphScopedAlignmentV1],
+) -> Result<(), ParagraphScopedAlignmentErrorV1> {
+    let mut seen = BTreeSet::new();
+    for item in alignments {
+        if !seen.insert(item.paragraph_id) {
+            return Err(ParagraphScopedAlignmentErrorV1::DuplicateParagraph {
+                paragraph_id: item.paragraph_id,
+            });
+        }
+    }
+
+    let mut by_story = BTreeMap::<StoryId, Vec<&ParagraphScopedAlignmentV1>>::new();
+    for item in alignments {
+        by_story.entry(item.story_id).or_default().push(item);
+    }
+
+    for (story_id, items) in &mut by_story {
+        items.sort_by_key(|item| (item.range.start, item.range.end, item.paragraph_id));
+        for pair in items.windows(2) {
+            let left = pair[0];
+            let right = pair[1];
+            if right.range.start < left.range.end {
+                return Err(ParagraphScopedAlignmentErrorV1::OverlappingRanges {
+                    story_id: *story_id,
+                    left_paragraph_id: left.paragraph_id,
+                    left_range: left.range,
+                    right_paragraph_id: right.paragraph_id,
+                    right_range: right.range,
+                });
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -419,6 +523,99 @@ mod tests {
             profile: "bounded-editable".into(),
             schema_fence: Some("legacy-spec-8.02".into()),
         }
+    }
+
+    fn paragraph(byte: u8) -> ParagraphId {
+        ParagraphId::from_canonical(CanonicalId::from_bytes([byte; 16]))
+    }
+
+    fn story(byte: u8) -> StoryId {
+        StoryId::from_canonical(CanonicalId::from_bytes([byte; 16]))
+    }
+
+    #[test]
+    fn paragraph_scoped_alignment_model_keeps_left_center_right_distinct() {
+        let values = [
+            ParagraphScopedAlignmentValueV1::Left,
+            ParagraphScopedAlignmentValueV1::Center,
+            ParagraphScopedAlignmentValueV1::Right,
+        ];
+        assert_eq!(
+            serde_json::to_value(values).expect("serialize scoped alignment values"),
+            serde_json::json!(["left", "center", "right"])
+        );
+    }
+
+    #[test]
+    fn paragraph_scoped_alignment_accepts_ordered_non_overlapping_ranges() {
+        let items = vec![
+            ParagraphScopedAlignmentV1 {
+                paragraph_id: paragraph(1),
+                story_id: story(9),
+                range: TextRange::new(0, 3).expect("range"),
+                alignment: ParagraphScopedAlignmentValueV1::Left,
+            },
+            ParagraphScopedAlignmentV1 {
+                paragraph_id: paragraph(2),
+                story_id: story(9),
+                range: TextRange::new(3, 7).expect("range"),
+                alignment: ParagraphScopedAlignmentValueV1::Center,
+            },
+            ParagraphScopedAlignmentV1 {
+                paragraph_id: paragraph(3),
+                story_id: story(9),
+                range: TextRange::new(7, 9).expect("range"),
+                alignment: ParagraphScopedAlignmentValueV1::Right,
+            },
+        ];
+        validate_paragraph_scoped_alignments_v1(&items).expect("valid paragraph-scoped input");
+    }
+
+    #[test]
+    fn paragraph_scoped_alignment_rejects_duplicate_identity() {
+        let paragraph_id = paragraph(1);
+        let items = vec![
+            ParagraphScopedAlignmentV1 {
+                paragraph_id,
+                story_id: story(9),
+                range: TextRange::new(0, 3).expect("range"),
+                alignment: ParagraphScopedAlignmentValueV1::Left,
+            },
+            ParagraphScopedAlignmentV1 {
+                paragraph_id,
+                story_id: story(9),
+                range: TextRange::new(3, 7).expect("range"),
+                alignment: ParagraphScopedAlignmentValueV1::Center,
+            },
+        ];
+        assert!(matches!(
+            validate_paragraph_scoped_alignments_v1(&items),
+            Err(ParagraphScopedAlignmentErrorV1::DuplicateParagraph {
+                paragraph_id: duplicate,
+            }) if duplicate == paragraph_id
+        ));
+    }
+
+    #[test]
+    fn paragraph_scoped_alignment_rejects_overlapping_ranges() {
+        let items = vec![
+            ParagraphScopedAlignmentV1 {
+                paragraph_id: paragraph(1),
+                story_id: story(9),
+                range: TextRange::new(0, 4).expect("range"),
+                alignment: ParagraphScopedAlignmentValueV1::Left,
+            },
+            ParagraphScopedAlignmentV1 {
+                paragraph_id: paragraph(2),
+                story_id: story(9),
+                range: TextRange::new(3, 7).expect("range"),
+                alignment: ParagraphScopedAlignmentValueV1::Center,
+            },
+        ];
+        assert!(matches!(
+            validate_paragraph_scoped_alignments_v1(&items),
+            Err(ParagraphScopedAlignmentErrorV1::OverlappingRanges { .. })
+        ));
     }
 
     #[test]
