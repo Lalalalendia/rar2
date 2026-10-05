@@ -1,3 +1,4 @@
+// CI control: Desktop rustfmt positive path.
 //! Reader visual/typography golden acceptance owners.
 //!
 //! These tests are intentionally isolated from the monolithic Desktop shell so
