@@ -26,6 +26,7 @@ HUNK_HEADER = re.compile(
 
 SCOPES = (
     "tier_a",
+    "desktop_rustfmt",
     "reader_windows_smoke",
     "reader_windows",
     "editor_windows",
@@ -242,6 +243,10 @@ TIER_A = READER_SHARED + (
     "tools/ci/test_reader_pr_fanout.py",
     ".github/workflows/reader-pr-ci.yml",
     ".github/workflows/reader-consumer-preflight.yml",
+)
+
+DESKTOP_RUSTFMT = (
+    "apps/chaptera-desktop/**",
 )
 
 READER_DESKTOP = (
@@ -525,6 +530,7 @@ def classify(
     semantic_paths = [path for path in paths if path not in evidence_only]
     mapping = {
         "tier_a": TIER_A,
+        "desktop_rustfmt": DESKTOP_RUSTFMT,
         "reader_windows_smoke": READER_WINDOWS_SMOKE,
         "reader_windows": READER_WINDOWS,
         "editor_windows": EDITOR_WINDOWS,
