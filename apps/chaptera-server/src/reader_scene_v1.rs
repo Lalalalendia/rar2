@@ -2636,6 +2636,10 @@ mod tests {
         match actual_sha256.as_str() {
             "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" => {
                 assert_eq!(
+                    shared_frames, 41,
+                    "exact Carlton must recover exactly one independently measured pure Story overset frame"
+                );
+                assert_eq!(
                     projected_text_nodes, 4,
                     "exact Carlton projected carrier count drift"
                 );
@@ -2658,14 +2662,20 @@ mod tests {
                 );
                 assert_eq!(
                     configured_backend_fallbacks,
-                    BTreeMap::from([
-                        ("shared_layout_incomplete", 1_usize),
-                        ("story_extent_mismatch", 1_usize),
-                    ]),
-                    "exact Carlton configured-font fallback frontier must retain only the pure overset and true partial Story residuals"
+                    BTreeMap::from([("story_extent_mismatch", 1_usize)]),
+                    "exact Carlton configured-font fallback frontier must retain only the true partial Story residual after default spacing and pure overset are consumed"
                 );
             }
             "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e" => {
+                assert_eq!(
+                    shared_frames, 24,
+                    "Virginia Devinettes shared-layout population must remain unchanged"
+                );
+                assert_eq!(
+                    backend_fallbacks,
+                    BTreeMap::from([("shared_layout_incomplete", 1_usize)]),
+                    "Virginia mixed-size fail-closed control must remain one SharedLayoutIncomplete"
+                );
                 assert_eq!(
                     projected_text_nodes, 0,
                     "Virginia Devinettes must remain a zero-projected control"
