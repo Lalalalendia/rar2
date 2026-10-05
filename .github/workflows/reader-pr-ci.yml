@@ -2,7 +2,7 @@ name: Reader PR selective CI
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, closed]
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
@@ -117,6 +117,7 @@ permissions:
 jobs:
   classify:
     name: Classify PR CI scope
+    if: ${{ github.event_name != 'pull_request' || github.event.action != 'closed' }}
     runs-on: ubuntu-latest
     outputs:
       tier_a: ${{ steps.scope.outputs.tier_a }}
