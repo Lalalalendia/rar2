@@ -1,10 +1,11 @@
 use pub_editor::{
-    AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1,
-    AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
-    AuthoredStackLifecycleErrorV1, AuthoredStackLifecycleKindV1, AuthoredStackV1, LengthEmu,
-    NodeId, PageId, RectEmu, Srgb8V1, apply_authored_stack_transition_forward_v1,
-    apply_authored_stack_transition_inverse_v1, authored_stack_state_id_v1,
-    plan_create_shape_append_v1, plan_delete_shape_remove_v1,
+    AuthoredEntityProvenanceV1, AuthoredLineRuntimeV1, AuthoredShapeKindV1, AuthoredShapePaintV1,
+    AuthoredShapeRuntimeV1, AuthoredShapeTransformV1, AuthoredSolidFillV1,
+    AuthoredSolidStrokeV1, AuthoredStackLifecycleErrorV1, AuthoredStackLifecycleKindV1,
+    AuthoredStackV1, LengthEmu, LineGeometryV1, NodeId, PageId, PointEmuV1, RectEmu, Srgb8V1,
+    apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
+    authored_stack_state_id_v1, plan_create_line_append_v1, plan_create_shape_append_v1,
+    plan_delete_shape_remove_v1,
 };
 
 fn canonical_id<T: serde::de::DeserializeOwned>(value: &str) -> T {
@@ -58,6 +59,48 @@ fn shape(node_id: NodeId, page_id: PageId) -> AuthoredShapeRuntimeV1 {
         },
         provenance: AuthoredEntityProvenanceV1::AuthorCreated,
     }
+}
+
+fn line(node_id: NodeId, page_id: PageId) -> AuthoredLineRuntimeV1 {
+    AuthoredLineRuntimeV1 {
+        node_id,
+        page_id,
+        parent_id: page_id,
+        geometry: LineGeometryV1 {
+            begin: PointEmuV1 { x: 300, y: 400 },
+            end: PointEmuV1 { x: 300, y: 400 },
+        },
+        stroke: AuthoredSolidStrokeV1 {
+            visible: true,
+            color: Srgb8V1 { r: 4, g: 5, b: 6 },
+            width_emu: 12_700,
+        },
+        provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+    }
+}
+
+
+#[test]
+fn primitive_line_uses_the_same_authored_stack_lane_without_rectangle_coercion() {
+    let empty = AuthoredStackV1::empty(page_id());
+    let append = plan_create_line_append_v1(&empty, &line(node_a(), page_id()))
+        .expect("append zero-length primitive Line");
+    assert_eq!(append.kind, AuthoredStackLifecycleKindV1::AppendCreated);
+    assert_eq!(append.after.members, vec![node_a()]);
+
+    let after =
+        apply_authored_stack_transition_forward_v1(&empty, &append).expect("apply Line append");
+    assert_eq!(after.members, vec![node_a()]);
+    assert_eq!(
+        apply_authored_stack_transition_inverse_v1(&after, &append).expect("undo Line append"),
+        empty
+    );
+
+    let wrong_page = line(node_b(), other_page_id());
+    assert!(matches!(
+        plan_create_line_append_v1(&after, &wrong_page),
+        Err(AuthoredStackLifecycleErrorV1::StackPageMismatch { .. })
+    ));
 }
 
 #[test]
