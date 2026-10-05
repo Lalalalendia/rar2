@@ -50,12 +50,10 @@ MAX_PROJECT_BYTES = 64 * 1024 * 1024
 MAX_EXPORT_BYTES = 512 * 1024 * 1024
 
 SUPPORTED_EDITOR_PROJECT_SCHEMA_VERSIONS = {
-    f"pub-editor-v0.{version}" for version in range(2, 14)
+    f"pub-editor-v0.{version}" for version in range(2, 17)
 }
 IDENTITY_REQUIRED_EDITOR_PROJECT_SCHEMA_VERSIONS = {
-    "pub-editor-v0.11",
-    "pub-editor-v0.12",
-    "pub-editor-v0.13",
+    f"pub-editor-v0.{version}" for version in range(11, 17)
 }
 
 
@@ -289,7 +287,7 @@ def load_and_verify_project(
     if schema_version in IDENTITY_REQUIRED_EDITOR_PROJECT_SCHEMA_VERSIONS:
         identity = project.get("identity")
         if not isinstance(identity, dict):
-            raise DesktopVerticalError("pub-editor-v0.11 EditorProject must carry durable identity")
+            raise DesktopVerticalError(f"{schema_version} EditorProject must carry durable identity")
         for field in ("project_id", "document_id", "history_id", "genesis_revision_id"):
             value = identity.get(field)
             if not isinstance(value, str) or not value:
