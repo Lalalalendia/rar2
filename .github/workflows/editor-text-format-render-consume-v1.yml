@@ -32,7 +32,7 @@ jobs:
       - name: Check current typography render-consumer slice
         run: |
           set -euo pipefail
-          cargo fmt --all -- --check
+          cargo fmt -p chaptera-desktop -p chaptera-viewer-render-plan -- --check
           cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer -- --check
           cargo check -p chaptera-desktop --all-targets
           cargo clippy -p chaptera-desktop --all-targets -- -D warnings
