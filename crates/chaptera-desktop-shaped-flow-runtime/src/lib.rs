@@ -170,12 +170,7 @@ fn current_boolean_property_segments_v1(
     story_scalar_len: u32,
     property: FormatPropertyV1,
 ) -> Result<Option<Vec<pub_editor::EffectivePropertySegmentV1>>, DesktopShapedFlowRuntimeError> {
-    match editor.current_text_format_property_segments_v1(
-        story_id,
-        property,
-        0,
-        story_scalar_len,
-    ) {
+    match editor.current_text_format_property_segments_v1(story_id, property, 0, story_scalar_len) {
         Ok(segments) => Ok(Some(segments)),
         Err(_error) if !has_scoped_property_history_v1(editor, story_id, property) => {
             // This projection is additive to the established shaped-flow path. A source Story
@@ -515,8 +510,8 @@ mod tests {
             })
             .expect("51318.pub must expose a color-blocked Story with bounded Bold authority");
 
-        let before =
-            current_story_boolean_typography_v1(&editor, story_id).expect("source boolean typography");
+        let before = current_story_boolean_typography_v1(&editor, story_id)
+            .expect("source boolean typography");
         let first = before
             .iter()
             .find(|run| run.bold.is_some())
@@ -537,8 +532,8 @@ mod tests {
             )
             .expect("set scoped Bold");
 
-        let after =
-            current_story_boolean_typography_v1(&editor, story_id).expect("edited boolean typography");
+        let after = current_story_boolean_typography_v1(&editor, story_id)
+            .expect("edited boolean typography");
         let changed = after
             .iter()
             .find(|run| {
@@ -555,13 +550,9 @@ mod tests {
                 .contains("bounded effective direct-RGB text color is unavailable")
         );
 
-        let layout = build_current_story_layout_v1(
-            &editor,
-            story_id,
-            "layout:scoped-bold",
-            &test_font(),
-        )
-        .expect("current shaped-flow layout consumes scoped boolean typography");
+        let layout =
+            build_current_story_layout_v1(&editor, story_id, "layout:scoped-bold", &test_font())
+                .expect("current shaped-flow layout consumes scoped boolean typography");
         assert_eq!(layout.current_boolean_typography, after);
 
         editor.undo().expect("undo scoped Bold");
