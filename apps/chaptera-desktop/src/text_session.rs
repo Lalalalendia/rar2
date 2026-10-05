@@ -1000,6 +1000,27 @@ mod tests {
     }
 
     #[test]
+    fn paragraph_ui_state_keeps_unsupported_read_only() {
+        let unsupported = DesktopParagraphAlignmentSelectionStateV1 {
+            paragraph_ids: Vec::new(),
+            effective: DesktopParagraphAlignmentEffectiveStateV1::Unsupported,
+            provenance: DesktopParagraphAlignmentProvenanceStateV1::Unsupported,
+            has_chaptera_override: false,
+        };
+        assert!(!unsupported.is_editable());
+        assert!(!unsupported.is_uniform(AuthoredParagraphAlignmentValueV1::Left));
+
+        let mixed = DesktopParagraphAlignmentSelectionStateV1 {
+            paragraph_ids: Vec::new(),
+            effective: DesktopParagraphAlignmentEffectiveStateV1::Mixed,
+            provenance: DesktopParagraphAlignmentProvenanceStateV1::Mixed,
+            has_chaptera_override: true,
+        };
+        assert!(mixed.is_editable());
+        assert!(!mixed.is_uniform(AuthoredParagraphAlignmentValueV1::Center));
+    }
+
+    #[test]
     fn boolean_selection_state_next_click_matches_ui_law() {
         use DesktopBooleanEffectiveStateV1::{Mixed, Uniform};
         use DesktopBooleanProvenanceStateV1::{Base, ChapteraOverride, Mixed as MixedSource};
