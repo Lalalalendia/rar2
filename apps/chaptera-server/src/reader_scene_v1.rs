@@ -2430,6 +2430,7 @@ mod tests {
         let mut shared_nonempty_lines = 0_usize;
         let mut layout_none = 0_usize;
         let mut backend_fallbacks = BTreeMap::<&'static str, usize>::new();
+        let mut full_extent_story_mismatch_profiles = BTreeMap::<String, usize>::new();
         let mut projected_text_nodes = 0_usize;
         let mut projected_typography_runs = 0_usize;
         let mut projected_complete_typography_nodes = 0_usize;
@@ -2554,6 +2555,72 @@ mod tests {
                     }
                     RenderTextLayoutDispositionV1::BackendFallback { reason } => {
                         *backend_fallbacks.entry(reason.code()).or_default() += 1;
+
+                        if reason.code() == "story_extent_mismatch" {
+                            if let Some(story) = bundle
+                                .geometry
+                                .document
+                                .stories
+                                .iter()
+                                .find(|story| story.id == text.story_id)
+                            {
+                                let story_scalars = story.text.chars().collect::<Vec<_>>();
+                                let fragment_scalars = text.text.chars().collect::<Vec<_>>();
+                                let Ok(story_len) = u32::try_from(story_scalars.len()) else {
+                                    continue;
+                                };
+                                let Ok(fragment_len) = u32::try_from(fragment_scalars.len()) else {
+                                    continue;
+                                };
+
+                                let profile = if text.scalar_start == 0
+                                    && text.scalar_end == story_len
+                                    && fragment_len == story_len
+                                    && text.text != story.text
+                                {
+                                    let mut differences = 0_usize;
+                                    let mut marker_suppressions = 0_usize;
+                                    let mut other_differences = 0_usize;
+                                    for (source, rendered) in
+                                        story_scalars.iter().zip(fragment_scalars.iter())
+                                    {
+                                        if source == rendered {
+                                            continue;
+                                        }
+                                        differences += 1;
+                                        if *source == '\u{FFFC}' && *rendered == '\u{200B}' {
+                                            marker_suppressions += 1;
+                                        } else {
+                                            other_differences += 1;
+                                        }
+                                    }
+
+                                    if differences > 0
+                                        && marker_suppressions == differences
+                                        && other_differences == 0
+                                    {
+                                        format!(
+                                            "page{}:full_extent:object_marker_to_zero_width_only:diffs={differences}",
+                                            page_index + 1
+                                        )
+                                    } else {
+                                        format!(
+                                            "page{}:full_extent:same_extent_other:diffs={differences}:other={other_differences}",
+                                            page_index + 1
+                                        )
+                                    }
+                                } else {
+                                    format!(
+                                        "page{}:partial_or_other:start={}:end_delta={}:len_delta={}",
+                                        page_index + 1,
+                                        text.scalar_start,
+                                        i64::from(text.scalar_end) - i64::from(story_len),
+                                        i64::from(fragment_len) - i64::from(story_len),
+                                    )
+                                };
+                                *full_extent_story_mismatch_profiles.entry(profile).or_default() += 1;
+                            }
+                        }
                     }
                 }
             }
@@ -2561,6 +2628,9 @@ mod tests {
 
         let backend_fallbacks_json =
             serde_json::to_string(&backend_fallbacks).expect("serialize fallback census");
+        let full_extent_story_mismatch_profiles_json =
+            serde_json::to_string(&full_extent_story_mismatch_profiles)
+                .expect("serialize full-extent Story mismatch profiles");
         let projected_source_family_fingerprints_json =
             serde_json::to_string(&projected_source_family_fingerprints)
                 .expect("serialize projected family fingerprints");
@@ -2622,7 +2692,7 @@ mod tests {
         }
 
         println!(
-            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={}",
+            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} full_extent_story_mismatch_profiles={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={}",
             actual_sha256,
             bundle.geometry.document.pages.len(),
             text_nodes,
@@ -2631,6 +2701,7 @@ mod tests {
             shared_nonempty_lines,
             layout_none,
             backend_fallbacks_json,
+            full_extent_story_mismatch_profiles_json,
             projected_text_nodes,
             projected_typography_runs,
             projected_complete_typography_nodes,
