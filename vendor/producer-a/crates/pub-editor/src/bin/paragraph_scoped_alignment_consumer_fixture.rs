@@ -1,8 +1,8 @@
 use pub_editor::{
-    AuthoredParagraphAlignmentValueV1, EditorEditableTarget, Sha256Digest, open_mature_0x2c_editor,
+    open_mature_0x2c_editor, AuthoredParagraphAlignmentValueV1, EditorEditableTarget, Sha256Digest,
 };
 use pub_export::ParagraphAlignmentV1;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     env,
