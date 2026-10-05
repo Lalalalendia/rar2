@@ -1,0 +1,11 @@
+# Rar2 live branch GC wave 8 — 2026-10-05
+# Explicitly superseded / completed execution-only refs only.
+# 6 refs: each live tip was re-read and exactly matched the corresponding closed PR head.
+# Runtime branch-GC must recheck open heads + exact expected SHA before deletion.
+# Format: <branch> <expected_sha>
+validation/migration-1050-corpus-01 168293eadcd4ae25fa2e400d4d02c254742d25fc
+validation/migration-corpus-expanded-01 c544acd10a5e33e261a85ebaaf7f325a8df168cf
+corpus/migration-core65-01 6fa9e20294252735a3f640eb68943283ea619a9b
+conversion/export-vocab-01 09a7be4cdf5163f2f49ca08ad746e306fc215ffc
+ops/branch-gc-20261005-live-wave7-prepared 41cfef29dee11d8d014fbd6e4fc2d16dbbab39fc
+ops/branch-gc-20261002-live-wave6 ce409a582dcc90b6e25956127cb1f1dcbde8687c
