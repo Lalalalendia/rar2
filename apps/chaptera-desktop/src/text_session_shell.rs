@@ -515,10 +515,11 @@ impl ViewerApp {
                         ] {
                             let selected =
                                 paragraph.as_ref().is_some_and(|state| state.is_uniform(value));
-                            let response = ui.add_enabled(
-                                paragraph_editable,
-                                egui::SelectableLabel::new(selected, label),
-                            );
+                            let response = ui
+                                .add_enabled_ui(paragraph_editable, |ui| {
+                                    ui.selectable_label(selected, label)
+                                })
+                                .inner;
                             response.clone().on_hover_text(format!(
                                 "{label} paragraph alignment. {shortcut}. Commands target canonical ParagraphIds, never visual lines."
                             ));
