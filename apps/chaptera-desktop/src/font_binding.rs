@@ -108,7 +108,7 @@ fn current_edited_boolean_segments_v1(
                 "current {property:?} property state is not contiguous over render range {scalar_start}..{scalar_end}"
             ));
         }
-        if !matches!(segment.value, FormatValueV1::Bool(_)) {
+        if !matches!(&segment.value, FormatValueV1::Bool(_)) {
             return Err(format!(
                 "current {property:?} property state is not boolean over render range {scalar_start}..{scalar_end}"
             ));
@@ -141,8 +141,8 @@ fn boolean_value_for_subrange_v1(
                 "current boolean text-format state has no segment for render subrange {scalar_start}..{scalar_end}"
             )
         })?;
-    match segment.value {
-        FormatValueV1::Bool(value) => Ok(Some(value)),
+    match &segment.value {
+        FormatValueV1::Bool(value) => Ok(Some(*value)),
         _ => Err("current boolean text-format segment carries a non-boolean value".to_owned()),
     }
 }
@@ -279,8 +279,8 @@ mod tests {
     use std::{env, fs, path::PathBuf};
 
     fn bool_value(segment: &EffectivePropertySegmentV1) -> bool {
-        match segment.value {
-            FormatValueV1::Bool(value) => value,
+        match &segment.value {
+            FormatValueV1::Bool(value) => *value,
             _ => panic!("boolean property segment must carry a boolean value"),
         }
     }
@@ -345,6 +345,7 @@ mod tests {
                     fragment.story_id,
                     fragment.scalar_start,
                     fragment.scalar_end,
+                    fragment.text.clone(),
                     fragment.typography.clone(),
                     segments,
                     full_error,
@@ -359,6 +360,7 @@ mod tests {
             story_id,
             scalar_start,
             scalar_end,
+            source_fragment_text,
             source_typography,
             before_segments,
             full_error,
@@ -410,16 +412,7 @@ mod tests {
             edited_runs.iter().all(|run| run.bold == Some(expected)),
             "current scoped Bold must reach every source-neutral render-typography subrun in the edited range"
         );
-        assert_eq!(
-            edited_fragment.text,
-            visual
-                .document
-                .stories
-                .iter()
-                .find(|story| story.id == story_id)
-                .expect("witness Story")
-                .text
-        );
+        assert_eq!(edited_fragment.text, source_fragment_text);
 
         editor.undo().expect("undo scoped Bold");
         let mut undone =
