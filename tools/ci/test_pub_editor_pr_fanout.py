@@ -52,6 +52,14 @@ def classify_authored_stack(paths, base=None, head=None):
     )
 
 
+def classify_authored_lifecycle(paths, base=None, head=None):
+    return mod.classify_authored_stack_lifecycle(
+        paths,
+        base_lib_source=base,
+        head_lib_source=head,
+    )
+
+
 def assert_continuity_consumer_wiring() -> None:
     workflow_path = Path(".github/workflows/editor-desktop-continuity-v2-windows.yml")
     workflow = workflow_path.read_text(encoding="utf-8")
@@ -193,12 +201,43 @@ def assert_authored_stack_consumer_wiring() -> None:
     ), "cheap contract must run when AuthoredStack Runtime consumer wiring changes"
 
 
+def assert_authored_lifecycle_consumer_wiring() -> None:
+    workflow_path = Path(".github/workflows/authoring-authored-stack-lifecycle-v1.yml")
+    workflow = workflow_path.read_text(encoding="utf-8")
+
+    required = (
+        "Classify pub-editor AuthoredStack Lifecycle scope",
+        "ref: ${{ github.event.pull_request.base.ref || github.sha }}",
+        "if: ${{ github.event_name == 'pull_request' }}",
+        "non_pr_event_fail_closed",
+        "vendor/producer-a/crates/pub-editor/**",
+        "python tools/ci/pub_editor_pr_fanout.py",
+        "needs: classify",
+        "needs.classify.result != 'success'",
+        "needs.classify.outputs.authored_stack_lifecycle == 'true'",
+        "base_classifier_missing_authored_stack_lifecycle_output",
+    )
+    missing = [marker for marker in required if marker not in workflow]
+    assert not missing, (
+        "AuthoredStack Lifecycle selective consumer lost required wiring: "
+        + ", ".join(missing)
+    )
+
+    contract = Path(
+        ".github/workflows/pub-editor-selective-fanout-contract.yml"
+    ).read_text(encoding="utf-8")
+    assert (
+        ".github/workflows/authoring-authored-stack-lifecycle-v1.yml" in contract
+    ), "cheap contract must run when AuthoredStack Lifecycle wiring changes"
+
+
 def main() -> None:
     assert_continuity_consumer_wiring()
     assert_textbox_consumer_wiring()
     assert_fixed_pdf_consumer_wiring()
     assert_duplicate_consumer_wiring()
     assert_authored_stack_consumer_wiring()
+    assert_authored_lifecycle_consumer_wiring()
 
     base = """mod duplicate_authored_rectangle_v1;
 mod imported_paragraphs_v1;
@@ -465,6 +504,50 @@ pub fn shared_core() {}
 
     run, reason = classify_authored_stack(["README.md"])
     assert run is False and reason == "no_authored_stack_runtime_owner_changed"
+
+    assert mod.facade_change_is_safe(
+        base,
+        head_facade,
+        safe_modules=mod.SAFE_AUTHORED_STACK_LIFECYCLE_MODULES,
+    )
+    run, reason = classify_authored_lifecycle(
+        [
+            mod.PUB_EDITOR_LIB,
+            mod.SAFE_AUTHORED_STACK_LIFECYCLE_MODULES[
+                "imported_paragraph_alignment_v1"
+            ],
+        ],
+        base,
+        head_facade,
+    )
+    assert run is False and reason == "proven_non_authored_stack_lifecycle_pub_editor_slice"
+
+    run, reason = classify_authored_lifecycle([mod.PUB_EDITOR_LIB], base, core_head)
+    assert run is True and reason == "pub_editor_lib_core_change"
+
+    for path in (
+        "vendor/producer-a/crates/pub-editor/src/authored_stack_lifecycle_v1.rs",
+        "vendor/producer-a/crates/pub-editor/src/create_shape_runtime_v1.rs",
+        "vendor/producer-a/crates/pub-editor/tests/authored_stack_lifecycle_v1.rs",
+        "vendor/producer-a/crates/pub-editor/tests/create_shape_runtime_v1.rs",
+        "vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs",
+        ".github/workflows/authoring-authored-stack-lifecycle-v1.yml",
+        "tools/ci/pub_editor_pr_fanout.py",
+        "tools/ci/test_pub_editor_pr_fanout.py",
+    ):
+        run, reason = classify_authored_lifecycle([path])
+        assert run is True and reason == "direct_authored_stack_lifecycle_owner_changed", (
+            path,
+            reason,
+        )
+
+    run, reason = classify_authored_lifecycle(
+        ["vendor/producer-a/crates/pub-editor/src/text_format_property_base_v1.rs"]
+    )
+    assert run is True and reason == "unknown_or_core_pub_editor_path"
+
+    run, reason = classify_authored_lifecycle(["README.md"])
+    assert run is False and reason == "no_authored_stack_lifecycle_owner_changed"
 
     print("pub-editor PR fanout classifier self-test: ok")
 
