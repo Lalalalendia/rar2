@@ -1791,6 +1791,7 @@ mod tests {
     use chaptera_scene_instance::SceneProjectionKindV1;
     use chaptera_viewer_render_plan::{
         RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
+        build_page_render_plan_with_text_layout_resolvers_v1,
         build_page_render_plan_with_text_layout_v1, effective_source_font_family_v1,
         uniform_text_color_rgb_v1,
     };
@@ -2445,11 +2446,63 @@ mod tests {
         let mut projected_text_bounds_nodes = 0_usize;
         let mut projected_uniform_insets_emu = BTreeMap::<i64, usize>::new();
         let mut projected_measured_width_total_emu = 0_i128;
+        let mut configured_backend_fallbacks = BTreeMap::<&'static str, usize>::new();
+
+        let configured_probe = (actual_sha256
+            == "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3")
+            .then(|| ReaderConfiguredFontResourceV1 {
+                source_family: "Arial".to_owned(),
+                resource_id: format!(
+                    "chaptera.cloud.configured-font.{}.face0",
+                    chaptera_desktop_fallback_font_resource::EXPECTED_SHA256
+                ),
+                expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256
+                    .to_owned(),
+                face_index: 0,
+                mime: SHARED_FALLBACK_FONT_MIME.to_owned(),
+                bytes: chaptera_desktop_fallback_font_resource::bytes().to_vec(),
+            });
 
         for page_index in 0..bundle.geometry.document.pages.len() {
             let plan =
                 build_page_render_plan_with_text_layout_v1(&bundle.geometry, page_index, &font)
                     .expect("exact reference render plan must build");
+
+            if let Some(configured) = configured_probe.as_ref() {
+                let configured_plan = build_page_render_plan_with_text_layout_resolvers_v1(
+                    &bundle.geometry,
+                    page_index,
+                    &font,
+                    |fragment| {
+                        let source_family =
+                            effective_source_font_family_v1(&bundle.geometry, fragment)?;
+                        source_family
+                            .trim()
+                            .eq_ignore_ascii_case(configured.source_family.as_str())
+                            .then(|| configured.explicit_resource())
+                    },
+                    |_, run| {
+                        run.source_font_name
+                            .trim()
+                            .eq_ignore_ascii_case(configured.source_family.as_str())
+                            .then(|| configured.explicit_resource())
+                    },
+                )
+                .expect("exact configured-font diagnostic render plan must build");
+                for node in configured_plan.nodes {
+                    let Some(text) = node.text else {
+                        continue;
+                    };
+                    let Some(layout) = text.layout else {
+                        continue;
+                    };
+                    if let RenderTextLayoutDispositionV1::BackendFallback { reason } =
+                        layout.disposition
+                    {
+                        *configured_backend_fallbacks.entry(reason.code()).or_default() += 1;
+                    }
+                }
+            }
 
             for node in plan.nodes {
                 let projected = node
@@ -2602,6 +2655,14 @@ mod tests {
                 assert_eq!(
                     projected_line_total, 31,
                     "exact Carlton projected source-backed line count drift"
+                );
+                assert_eq!(
+                    configured_backend_fallbacks,
+                    BTreeMap::from([
+                        ("shared_layout_incomplete", 1_usize),
+                        ("story_extent_mismatch", 1_usize),
+                    ]),
+                    "exact Carlton configured-font fallback frontier must retain only the pure overset and true partial Story residuals"
                 );
             }
             "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e" => {
