@@ -615,6 +615,140 @@ mod tests {
     }
 
     #[test]
+    fn real_sample_newsletter_linked_story_session_hands_off_between_frames_without_topology_mutation() {
+        let Some(path) = env::var_os("CHAPTERA_SAMPLE_NEWSLETTER") else {
+            eprintln!(
+                "CHAPTERA_SAMPLE_NEWSLETTER not set; dedicated direct-text gate owns real evidence"
+            );
+            return;
+        };
+
+        let original = fs::read(&path).expect("read pinned SampleNewsletter");
+        let digest = Sha256::digest(&original);
+        let mut digest_bytes = [0_u8; 32];
+        digest_bytes.copy_from_slice(&digest);
+        let source_hash = Sha256Digest::from_bytes(digest_bytes);
+        let editor =
+            open_mature_0x2c_editor(&original, source_hash).expect("open real SampleNewsletter");
+
+        let topology_before = editor
+            .graph()
+            .nodes
+            .iter()
+            .filter_map(|(node_id, node)| {
+                let frame = node.payload.story_frame.as_ref()?;
+                Some((
+                    *node_id,
+                    frame.story_id?,
+                    frame.ordinal,
+                    frame.previous_frame,
+                    frame.next_frame,
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        let mut frames_by_story =
+            std::collections::BTreeMap::<StoryId, Vec<NodeId>>::new();
+        for (node_id, node) in &editor.graph().nodes {
+            let Some(frame) = node.payload.story_frame.as_ref() else {
+                continue;
+            };
+            let Some(story_id) = frame.story_id else {
+                continue;
+            };
+            frames_by_story.entry(story_id).or_default().push(*node_id);
+        }
+
+        let mut witness = None;
+        'stories: for (story_id, frames) in frames_by_story {
+            if frames.len() < 2 || editor.can_replace_story_text(story_id).is_err() {
+                continue;
+            }
+            for frame_id in frames {
+                let Ok(mode) = enter_explicit_text_mode(&editor, story_id, frame_id) else {
+                    continue;
+                };
+                let current_frame = frame_id.as_canonical().to_string();
+                if let Some(target_stop) = mode
+                    .layout
+                    .caret_map
+                    .caret_stops
+                    .iter()
+                    .find(|stop| stop.frame_id != current_frame)
+                    .cloned()
+                {
+                    witness = Some((mode, target_stop));
+                    break 'stories;
+                }
+            }
+        }
+
+        let (mut mode, target_stop) =
+            witness.expect("SampleNewsletter must expose one editable linked multi-frame Story");
+        let original_story_id = mode.story_id;
+        let original_frame_id = mode.frame_id;
+        let target_frame_id = node_id_from_caret_frame(&target_stop.frame_id)
+            .expect("target caret stop must carry a canonical TextFrame id");
+        assert_ne!(
+            target_frame_id, original_frame_id,
+            "witness must require a real same-Story frame handoff"
+        );
+
+        let operation_count_before = editor.operations().len();
+        let target_y = target_stop.page_y_top_emu
+            + (target_stop.page_y_bottom_emu - target_stop.page_y_top_emu) / 2;
+        reposition_pointer(
+            &mut mode,
+            &target_stop.page_id,
+            target_stop.page_x_emu,
+            target_y,
+        )
+        .expect("same-Story pointer handoff must admit another linked TextFrame");
+
+        assert_eq!(mode.story_id, original_story_id);
+        assert_eq!(mode.frame_id, target_frame_id);
+        assert_eq!(
+            mode.session.story_id,
+            original_story_id.as_canonical().to_string()
+        );
+        assert_eq!(
+            mode.session.current_frame_id.as_deref(),
+            Some(target_stop.frame_id.as_str())
+        );
+        assert_eq!(
+            editor.operations().len(),
+            operation_count_before,
+            "same-Story frame handoff is transient interaction state"
+        );
+
+        let topology_after = editor
+            .graph()
+            .nodes
+            .iter()
+            .filter_map(|(node_id, node)| {
+                let frame = node.payload.story_frame.as_ref()?;
+                Some((
+                    *node_id,
+                    frame.story_id?,
+                    frame.ordinal,
+                    frame.previous_frame,
+                    frame.next_frame,
+                ))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            topology_after, topology_before,
+            "linked Story frame topology must remain unchanged"
+        );
+        assert_eq!(editor.source_hash(), source_hash);
+        assert_eq!(
+            fs::read(path).expect("re-read source PUB"),
+            original,
+            "linked Story interaction must not mutate source PUB bytes"
+        );
+    }
+
+    #[test]
     fn real_sample_newsletter_created_empty_story_enters_at_zero_and_accepts_first_typing() {
         let Some(path) = env::var_os("CHAPTERA_SAMPLE_NEWSLETTER") else {
             eprintln!(
