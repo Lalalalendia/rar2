@@ -3760,7 +3760,7 @@ mod tests {
                 default_line_height_emu: 190_500,
                 bytes,
             },
-            font_fingerprint_sha256: sha,
+            font_fingerprint_sha256: sha.clone(),
         }];
 
         assert_ne!(
