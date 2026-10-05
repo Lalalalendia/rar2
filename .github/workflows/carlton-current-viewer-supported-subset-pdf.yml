@@ -321,19 +321,31 @@ jobs:
           mapping = mapping_receipt["mapping"]
           viewer_census = packet["census"]
 
-          if viewer_census["backend_fallback_reason_counts"].get("shared_layout_incomplete") != 9:
+          if viewer_census["backend_fallback_reason_counts"].get("shared_layout_incomplete") != 4:
               raise SystemExit(f"SharedLayoutIncomplete census drift: {viewer_census['backend_fallback_reason_counts']!r}")
-          if sum(viewer_census["shared_layout_incomplete_spacing_authority_counts"].values()) != 9:
+          if sum(viewer_census["shared_layout_incomplete_spacing_authority_counts"].values()) != 4:
               raise SystemExit("spacing-authority partition does not cover every SharedLayoutIncomplete node")
-          if sum(viewer_census["shared_layout_incomplete_family_authority_counts"].values()) != 9:
+          if sum(viewer_census["shared_layout_incomplete_family_authority_counts"].values()) != 4:
               raise SystemExit("family-authority partition does not cover every SharedLayoutIncomplete node")
-          if sum(viewer_census["shared_layout_incomplete_font_binding_counts"].values()) != 9:
+          if sum(viewer_census["shared_layout_incomplete_font_binding_counts"].values()) != 4:
               raise SystemExit("font-binding partition does not cover every SharedLayoutIncomplete node")
-          if sum(viewer_census["shared_layout_incomplete_spacing_family_binding_counts"].values()) != 9:
+          if sum(viewer_census["shared_layout_incomplete_spacing_family_binding_counts"].values()) != 4:
               raise SystemExit("spacing/family/binding cross-tab does not cover every SharedLayoutIncomplete node")
 
+          first_line_recoveries = viewer_census["first_line_capacity_recovery_count"]
+          first_line_signatures = viewer_census["first_line_capacity_recovery_signature_counts"]
+          if first_line_recoveries != 8:
+              raise SystemExit(
+                  f"first-line capacity recovery census drift: {first_line_recoveries!r} "
+                  f"{first_line_signatures!r}"
+              )
+          if sum(first_line_signatures.values()) != first_line_recoveries:
+              raise SystemExit("first-line capacity recovery signatures do not partition recoveries")
+          if 12 - viewer_census["backend_fallback_reason_counts"]["shared_layout_incomplete"] != first_line_recoveries:
+              raise SystemExit("SharedLayoutIncomplete reduction is not fully explained by first-line capacity")
+
           expected_fallback = {
-              "shared_layout_incomplete": 9,
+              "shared_layout_incomplete": 4,
               "story_extent_mismatch": 7,
           }
           if mapping["backend_fallback_reason_counts"] != expected_fallback:
