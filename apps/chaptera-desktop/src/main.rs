@@ -5235,7 +5235,8 @@ fn paint_page_thumbnail(
         return;
     };
     if let Some(editor) = editor {
-        if font_binding::apply_editor_current_boolean_typography_v1(&mut render_plan, editor).is_err()
+        if font_binding::apply_editor_current_boolean_typography_v1(&mut render_plan, editor)
+            .is_err()
             || authored_stack::apply_editor_authored_page_lane(&mut render_plan, editor).is_err()
         {
             return;
