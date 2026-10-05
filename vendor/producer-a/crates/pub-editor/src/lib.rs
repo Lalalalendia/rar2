@@ -62,7 +62,8 @@ use chaptera_text_format_overlay::{
 use pub_export::{
     CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
     FormatRepresentability, FullStoryParagraphAlignmentV1, FullStoryTypographyV1, LossItem,
-    LossKind, LossSeverity, ParagraphAlignmentV1, PersistenceCompatibilityAssessment,
+    LossKind, LossSeverity, ParagraphAlignmentV1, ParagraphScopedAlignmentV1,
+    ParagraphScopedAlignmentValueV1, PersistenceCompatibilityAssessment,
     PersistenceCompatibilityError, PersistenceRequirement, PersistenceRequirements,
     PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE,
     STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE, ScopedCapabilityError,
@@ -2200,6 +2201,27 @@ impl fmt::Display for EditorEditableTarget {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParagraphScopedAlignmentUnmaterializableReasonV1 {
+    Unknown,
+    InterWord,
+    Distribute,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParagraphScopedAlignmentUnmaterializableV1 {
+    pub paragraph_id: ParagraphId,
+    pub story_id: StoryId,
+    pub range: pub_model::TextRange,
+    pub reason: ParagraphScopedAlignmentUnmaterializableReasonV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParagraphScopedEffectiveAlignmentProjectionV1 {
+    pub materializable: Vec<ParagraphScopedAlignmentV1>,
+    pub unmaterializable: Vec<ParagraphScopedAlignmentUnmaterializableV1>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorEditableExportPreview {
     pub target: EditorEditableTarget,
@@ -3792,6 +3814,110 @@ impl EditorSession {
 
         result.sort_by_key(|item| item.story_id);
         result
+    }
+
+    pub fn effective_paragraph_scoped_alignments_v1(
+        &self,
+    ) -> Result<ParagraphScopedEffectiveAlignmentProjectionV1, EditorError> {
+        self.validate_source_identity()?;
+
+        let table_story_ids = self
+            .graph
+            .nodes
+            .values()
+            .flat_map(|node| {
+                [
+                    node.payload
+                        .table_story
+                        .as_ref()
+                        .and_then(|owner| owner.story_id),
+                    node.payload.table.as_ref().and_then(|table| table.story_id),
+                ]
+            })
+            .flatten()
+            .collect::<BTreeSet<_>>();
+        let ordinary_story_ids = self
+            .graph
+            .nodes
+            .iter()
+            .filter_map(|(node_id, node)| frame_from_payload(*node_id, &node.payload))
+            .map(|frame| frame.story_id)
+            .filter(|story_id| !table_story_ids.contains(story_id))
+            .collect::<BTreeSet<_>>();
+
+        let mut paragraphs = self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .into_iter()
+            .filter(|paragraph| ordinary_story_ids.contains(&paragraph.story_id))
+            .collect::<Vec<_>>();
+        paragraphs.sort_by_key(|paragraph| {
+            (
+                paragraph.story_id,
+                paragraph.range.start,
+                paragraph.range.end,
+                paragraph.paragraph_id,
+            )
+        });
+
+        let mut materializable = Vec::new();
+        let mut unmaterializable = Vec::new();
+
+        for paragraph in paragraphs {
+            let effective = self.effective_paragraph_alignment_v1(paragraph.paragraph_id)?;
+            let alignment = match effective.effective {
+                Some(EffectiveParagraphAlignmentValueV1::Left) => {
+                    Some(ParagraphScopedAlignmentValueV1::Left)
+                }
+                Some(EffectiveParagraphAlignmentValueV1::Center) => {
+                    Some(ParagraphScopedAlignmentValueV1::Center)
+                }
+                Some(EffectiveParagraphAlignmentValueV1::Right) => {
+                    Some(ParagraphScopedAlignmentValueV1::Right)
+                }
+                Some(EffectiveParagraphAlignmentValueV1::InterWord) => {
+                    unmaterializable.push(ParagraphScopedAlignmentUnmaterializableV1 {
+                        paragraph_id: paragraph.paragraph_id,
+                        story_id: paragraph.story_id,
+                        range: paragraph.range,
+                        reason: ParagraphScopedAlignmentUnmaterializableReasonV1::InterWord,
+                    });
+                    None
+                }
+                Some(EffectiveParagraphAlignmentValueV1::Distribute) => {
+                    unmaterializable.push(ParagraphScopedAlignmentUnmaterializableV1 {
+                        paragraph_id: paragraph.paragraph_id,
+                        story_id: paragraph.story_id,
+                        range: paragraph.range,
+                        reason: ParagraphScopedAlignmentUnmaterializableReasonV1::Distribute,
+                    });
+                    None
+                }
+                None => {
+                    unmaterializable.push(ParagraphScopedAlignmentUnmaterializableV1 {
+                        paragraph_id: paragraph.paragraph_id,
+                        story_id: paragraph.story_id,
+                        range: paragraph.range,
+                        reason: ParagraphScopedAlignmentUnmaterializableReasonV1::Unknown,
+                    });
+                    None
+                }
+            };
+
+            if let Some(alignment) = alignment {
+                materializable.push(ParagraphScopedAlignmentV1 {
+                    paragraph_id: paragraph.paragraph_id,
+                    story_id: paragraph.story_id,
+                    range: paragraph.range,
+                    alignment,
+                });
+            }
+        }
+
+        Ok(ParagraphScopedEffectiveAlignmentProjectionV1 {
+            materializable,
+            unmaterializable,
+        })
     }
 
     pub fn effective_full_story_paragraph_alignment_v1(
