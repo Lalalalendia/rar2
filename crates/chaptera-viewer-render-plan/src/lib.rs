@@ -492,6 +492,10 @@ pub struct RenderTypographyRunV1 {
     pub color_rgb: Option<[u8; 3]>,
     #[serde(default)]
     pub color_inherited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1023,6 +1027,8 @@ fn projected_text(
                 size_inherited: run.size_inherited,
                 color_rgb: run.color_rgb,
                 color_inherited: run.color_inherited,
+                bold: run.bold.map(|value| value.effective_value),
+                italic: run.italic.map(|value| value.effective_value),
             })
         })
         .collect();
@@ -1206,6 +1212,8 @@ pub fn build_page_render_plan_v1(
                                 size_inherited: run.size_inherited,
                                 color_rgb: run.color_rgb,
                                 color_inherited: run.color_inherited,
+                bold: run.bold.map(|value| value.effective_value),
+                italic: run.italic.map(|value| value.effective_value),
                             })
                         })
                         .collect(),
@@ -2518,8 +2526,6 @@ where
     }
 
     let mut cursor = fragment.scalar_start;
-    let mut first_family: Option<String> = None;
-    let mut mixed_family = false;
     let mut admitted = Vec::with_capacity(fragment.typography.len());
 
     for run in &fragment.typography {
@@ -2534,13 +2540,6 @@ where
         if display_family.is_empty() {
             return None;
         }
-        let normalized_family = normalize_source_font_family_v1(display_family);
-        match first_family.as_ref() {
-            None => first_family = Some(normalized_family),
-            Some(first) if *first == normalized_family => {}
-            Some(_) => mixed_family = true,
-        }
-
         let font = resolve_span_font(fragment, run)?;
         if font.resource_id.is_empty()
             || font.bytes.is_empty()
@@ -2564,7 +2563,7 @@ where
         cursor = run.scalar_end;
     }
 
-    if cursor != fragment.scalar_end || !mixed_family {
+    if cursor != fragment.scalar_end {
         return None;
     }
     Some(admitted)
@@ -3487,6 +3486,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: Some([255, 204, 0]),
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
@@ -3497,6 +3498,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: Some([255, 204, 0]),
                     color_inherited: true,
+                    bold: None,
+                    italic: None,
                 },
             ],
         );
@@ -3533,6 +3536,8 @@ mod tests {
                 size_inherited: false,
                 color_rgb: None,
                 color_inherited: false,
+                bold: None,
+                italic: None,
             }],
         );
 
@@ -3632,6 +3637,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
@@ -3642,6 +3649,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
             ],
         );
@@ -3718,6 +3727,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
@@ -3728,6 +3739,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
             ],
         );
@@ -3835,6 +3848,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
@@ -3845,6 +3860,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
             ],
         );
@@ -3885,6 +3902,72 @@ mod tests {
         assert_eq!(runs[1].scalar_start..runs[1].scalar_end, 2..4);
         assert_eq!(runs[1].font.resource_id, "font-times");
         assert_eq!(runs[1].font_fingerprint_sha256, times_sha);
+    }
+
+    #[test]
+    fn same_family_style_runs_admit_distinct_exact_resources() {
+        let story_id = fixture().document.stories[0].id;
+        let fragment = render_fragment(
+            story_id,
+            "ABCD",
+            vec![
+                RenderTypographyRunV1 {
+                    scalar_start: 0,
+                    scalar_end: 2,
+                    source_font_name: "Arial".to_owned(),
+                    text_size_emu: 152_400,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
+                    bold: Some(false),
+                    italic: Some(false),
+                },
+                RenderTypographyRunV1 {
+                    scalar_start: 2,
+                    scalar_end: 4,
+                    source_font_name: "Arial".to_owned(),
+                    text_size_emu: 152_400,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
+                    bold: Some(true),
+                    italic: Some(false),
+                },
+            ],
+        );
+        let regular_bytes: &[u8] = b"source-free-arial-regular-test-font";
+        let bold_bytes: &[u8] = b"source-free-arial-bold-test-font";
+        let regular_sha = font_fingerprint_sha256(regular_bytes);
+        let bold_sha = font_fingerprint_sha256(bold_bytes);
+
+        let mut resolver = |_: &RenderTextFragmentV1, run: &RenderTypographyRunV1| match run.bold {
+            Some(false) => Some(ExplicitRenderTextFontResourceV1 {
+                resource_id: "font-arial-regular",
+                expected_sha256: &regular_sha,
+                face_index: 0,
+                default_font_size_emu: 152_400,
+                default_line_height_emu: 190_500,
+                bytes: regular_bytes,
+            }),
+            Some(true) => Some(ExplicitRenderTextFontResourceV1 {
+                resource_id: "font-arial-bold",
+                expected_sha256: &bold_sha,
+                face_index: 0,
+                default_font_size_emu: 152_400,
+                default_line_height_emu: 190_500,
+                bytes: bold_bytes,
+            }),
+            None => None,
+        };
+
+        let runs = admitted_mixed_family_typography_runs_v1(&fragment, &mut resolver)
+            .expect("same-family distinct physical resources must be admitted");
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].font.resource_id, "font-arial-regular");
+        assert_eq!(runs[1].font.resource_id, "font-arial-bold");
+        assert_ne!(runs[0].font_fingerprint_sha256, runs[1].font_fingerprint_sha256);
     }
 
     #[test]
