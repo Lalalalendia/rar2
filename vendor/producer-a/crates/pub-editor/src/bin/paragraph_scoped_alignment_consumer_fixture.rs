@@ -1,8 +1,5 @@
-use pub_editor::{
-    open_mature_0x2c_editor, AuthoredParagraphAlignmentValueV1, EditorEditableTarget, Sha256Digest,
-};
+use pub_editor as editor;
 use pub_export::ParagraphAlignmentV1;
-use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     env,
@@ -13,11 +10,11 @@ use std::{
 
 const SCHEMA: &str = "chaptera.paragraph-scoped-alignment-consumer-fixture.v1";
 
-fn source_hash(bytes: &[u8]) -> Sha256Digest {
+fn source_hash(bytes: &[u8]) -> editor::Sha256Digest {
     let digest = Sha256::digest(bytes);
     let mut raw = [0_u8; 32];
     raw.copy_from_slice(&digest);
-    Sha256Digest::from_bytes(raw)
+    editor::Sha256Digest::from_bytes(raw)
 }
 
 fn non_whitespace_sha256(text: &str) -> String {
@@ -45,7 +42,7 @@ fn scalar_slice(text: &str, start: u64, end: u64) -> Result<String, Box<dyn Erro
 
 fn write_target(
     session: &pub_editor::EditorSession,
-    target: EditorEditableTarget,
+    target: editor::EditorEditableTarget,
     state_root: &Path,
     label: &str,
 ) -> Result<(), Box<dyn Error>> {
@@ -66,13 +63,13 @@ fn write_state(
     fs::create_dir_all(&state_root)?;
     write_target(
         session,
-        EditorEditableTarget::Idml,
+        editor::EditorEditableTarget::Idml,
         &state_root,
         &format!("carlton-paragraph-scoped-{state}"),
     )?;
     write_target(
         session,
-        EditorEditableTarget::Odg,
+        editor::EditorEditableTarget::Odg,
         &state_root,
         &format!("carlton-paragraph-scoped-{state}"),
     )?;
@@ -92,7 +89,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let bytes = fs::read(&input)?;
     let hash = source_hash(&bytes);
-    let mut session = open_mature_0x2c_editor(&bytes, hash)?;
+    let mut session = editor::open_mature_0x2c_editor(&bytes, hash)?;
 
     let source_alignments = session.effective_full_story_paragraph_alignment_v1()?;
     let imported = session.imported_paragraphs_v1()?;
@@ -149,7 +146,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     session.set_paragraph_alignment_override_v1(
         paragraph_ids.clone(),
-        AuthoredParagraphAlignmentValueV1::Center,
+        editor::AuthoredParagraphAlignmentValueV1::Center,
     )?;
     write_state(&session, &output, "center")?;
 
@@ -158,11 +155,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     session.set_paragraph_alignment_override_v1(
         vec![paragraph_ids[0]],
-        AuthoredParagraphAlignmentValueV1::Left,
+        editor::AuthoredParagraphAlignmentValueV1::Left,
     )?;
     session.set_paragraph_alignment_override_v1(
         vec![paragraph_ids[1]],
-        AuthoredParagraphAlignmentValueV1::Center,
+        editor::AuthoredParagraphAlignmentValueV1::Center,
     )?;
     write_state(&session, &output, "mixed")?;
 
@@ -171,7 +168,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .enumerate()
         .map(|(index, paragraph)| {
             let text = scalar_slice(&story.text, paragraph.range.start, paragraph.range.end)?;
-            Ok::<Value, Box<dyn Error>>(json!({
+            Ok::<serde_json::Value, Box<dyn Error>>(serde_json::json!({
                 "ordinal": index,
                 "paragraph_id": paragraph.paragraph_id.as_canonical().to_string(),
                 "range": {
@@ -193,7 +190,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     mixed[0] = "left";
     mixed[1] = "center";
 
-    let expected = json!({
+    let expected = serde_json::json!({
         "schema": SCHEMA,
         "source_sha256": hash.to_string(),
         "story_id": story_id.as_canonical().to_string(),
