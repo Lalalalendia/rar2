@@ -69,6 +69,7 @@ struct CurrentViewerPlanCensusV1 {
     story_prefix_whole_story_candidate_count: usize,
     story_prefix_whole_story_candidate_signature_counts: BTreeMap<String, usize>,
     story_prefix_whole_story_candidate_outcome_counts: BTreeMap<String, usize>,
+    story_extent_mismatch_profile_counts: BTreeMap<String, usize>,
     configured_fallback_font_size_emu: i64,
     configured_fallback_line_height_emu: i64,
     shaped_line_count: usize,
@@ -512,6 +513,67 @@ fn census(
                         .entry(reason.code().to_owned())
                         .or_default() += 1;
 
+                    if reason.code() == "story_extent_mismatch"
+                        && let Some(story) = visual
+                            .document
+                            .stories
+                            .iter()
+                            .find(|story| story.id == text.story_id)
+                    {
+                        let story_scalars = story.text.chars().collect::<Vec<_>>();
+                        let fragment_scalars = text.text.chars().collect::<Vec<_>>();
+                        if let (Ok(story_len), Ok(fragment_len)) = (
+                            u32::try_from(story_scalars.len()),
+                            u32::try_from(fragment_scalars.len()),
+                        ) {
+                            let profile = if text.scalar_start == 0
+                                && text.scalar_end == story_len
+                                && fragment_len == story_len
+                                && text.text != story.text
+                            {
+                                let mut differences = 0_usize;
+                                let mut marker_suppressions = 0_usize;
+                                let mut other_differences = 0_usize;
+                                for (source, rendered) in
+                                    story_scalars.iter().zip(fragment_scalars.iter())
+                                {
+                                    if source == rendered {
+                                        continue;
+                                    }
+                                    differences += 1;
+                                    if *source == '\u{FFFC}' && *rendered == '\u{200B}' {
+                                        marker_suppressions += 1;
+                                    } else {
+                                        other_differences += 1;
+                                    }
+                                }
+
+                                if differences > 0
+                                    && marker_suppressions == differences
+                                    && other_differences == 0
+                                {
+                                    format!(
+                                        "full_extent:object_marker_to_zero_width_only:diffs={differences}"
+                                    )
+                                } else {
+                                    format!(
+                                        "full_extent:same_extent_other:diffs={differences}:other={other_differences}"
+                                    )
+                                }
+                            } else {
+                                format!(
+                                    "partial_or_other:start={}:end_delta={}:len_delta={}",
+                                    text.scalar_start,
+                                    i64::from(text.scalar_end) - i64::from(story_len),
+                                    i64::from(fragment_len) - i64::from(story_len),
+                                )
+                            };
+                            *out.story_extent_mismatch_profile_counts
+                                .entry(profile)
+                                .or_default() += 1;
+                        }
+                    }
+
                     if reason.code() == "shared_layout_incomplete" {
                         let spacing = paragraph_spacing_authority_class(visual, text);
                         let family = source_family_authority_class(visual, text);
@@ -666,7 +728,7 @@ fn run(
     .map_err(|error| format!("write {}: {error}", output_path.display()))?;
 
     eprintln!(
-        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={} text_font_bindings={:?} shared_layout_incomplete_spacing={:?} shared_layout_incomplete_family={:?} shared_layout_incomplete_binding={:?} first_line_capacity_recoveries={} first_line_capacity_recovery_signatures={:?} fallback_font_size_emu={} fallback_line_height_emu={}",
+        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={} text_font_bindings={:?} shared_layout_incomplete_spacing={:?} shared_layout_incomplete_family={:?} shared_layout_incomplete_binding={:?} first_line_capacity_recoveries={} first_line_capacity_recovery_signatures={:?} story_extent_mismatch_profiles={:?} fallback_font_size_emu={} fallback_line_height_emu={}",
         packet.census.page_count,
         packet.census.node_count,
         packet.census.projected_instance_count,
@@ -697,6 +759,7 @@ fn run(
         packet.census.shared_layout_incomplete_font_binding_counts,
         packet.census.first_line_capacity_recovery_count,
         packet.census.first_line_capacity_recovery_signature_counts,
+        packet.census.story_extent_mismatch_profile_counts,
         packet.census.configured_fallback_font_size_emu,
         packet.census.configured_fallback_line_height_emu,
     );
