@@ -4024,17 +4024,16 @@ mod tests {
         );
         let bytes: &[u8] = b"source-free-arial-single-resource";
         let sha = font_fingerprint_sha256(bytes);
-        let mut resolver =
-            |_: &RenderTextFragmentV1, _: &RenderTypographyRunV1| {
-                Some(ExplicitRenderTextFontResourceV1 {
-                    resource_id: "font-arial-one-resource",
-                    expected_sha256: &sha,
-                    face_index: 0,
-                    default_font_size_emu: 152_400,
-                    default_line_height_emu: 190_500,
-                    bytes,
-                })
-            };
+        let mut resolver = |_: &RenderTextFragmentV1, _: &RenderTypographyRunV1| {
+            Some(ExplicitRenderTextFontResourceV1 {
+                resource_id: "font-arial-one-resource",
+                expected_sha256: &sha,
+                face_index: 0,
+                default_font_size_emu: 152_400,
+                default_line_height_emu: 190_500,
+                bytes,
+            })
+        };
 
         assert!(
             admitted_mixed_family_typography_runs_v1(&fragment, &mut resolver).is_none(),
