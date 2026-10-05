@@ -1,0 +1,101 @@
+name: Carlton scheme-color authority
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/carlton-scheme-color-authority.yml"
+      - "tools/acquire_carlton_march_pair.py"
+      - "vendor/producer-a/crates/pub-reader/src/bin/scheme_color_oracle_receipt.rs"
+      - "vendor/producer-a/crates/pub-contents/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: carlton-scheme-color-authority-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  authority:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Acquire exact public Carlton March PUB
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/carlton-scheme-authority"
+          mkdir -p "$root"
+          python tools/acquire_carlton_march_pair.py "$root"
+          pub="$root/March-2026.pub"
+          test "$(sha256sum "$pub" | cut -d' ' -f1)" = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+          echo "CHAPTERA_CARLTON_PUB=$pub" >> "$GITHUB_ENV"
+          echo "CHAPTERA_SCHEME_ROOT=$root" >> "$GITHUB_ENV"
+
+      - name: Parse persisted OplSccm authority with current product parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --quiet             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin scheme_color_oracle_receipt             -- "$CHAPTERA_CARLTON_PUB" "$CHAPTERA_SCHEME_ROOT/raw.private.json"
+
+      - name: Prove native fingerprint matches persisted source authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          raw = json.loads(Path(os.environ["CHAPTERA_SCHEME_ROOT"], "raw.private.json").read_text())
+          slots = raw["oplsccm"]["slots"]
+          if raw["source_sha256"] != "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3":
+              raise SystemExit("Carlton source identity drift")
+          if raw["oplsccm"]["declared_count"] != 8 or len(slots) != 8:
+              raise SystemExit(f"expected exact 8-slot OplSccm authority, got {len(slots)}")
+          if [slot["ordinal"] for slot in slots] != list(range(8)):
+              raise SystemExit("OplSccm slot identity drift")
+          if any(slot["rgb"] is None for slot in slots):
+              raise SystemExit("OplSccm has unresolved slot RGB")
+          native_fingerprint = "b03bd58c04ef9fb81cf5873b601a67dc24be8d2dcd266fd92f1946cf977be838"
+          canonical = json.dumps([slot["rgb"] for slot in slots], separators=(",", ":")).encode()
+          fingerprint = hashlib.sha256(canonical).hexdigest()
+          # Native packet hashes the same ordered 8-role RGB tuple. Do not retain raw RGB values.
+          if fingerprint != native_fingerprint:
+              raise SystemExit(f"persisted/native scheme fingerprint mismatch: {fingerprint}")
+          receipt = {
+              "schema": "chaptera.carlton-scheme-color-authority.v1",
+              "source_sha256": raw["source_sha256"],
+              "oplsccm_name": raw["oplsccm"]["name"],
+              "declared_count": raw["oplsccm"]["declared_count"],
+              "slot_ordinals": [slot["ordinal"] for slot in slots],
+              "ordered_scheme_fingerprint_sha256": fingerprint,
+              "native_publisher_fingerprint_sha256": native_fingerprint,
+              "match": True,
+          }
+          Path(os.environ["CHAPTERA_SCHEME_ROOT"], "receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: carlton-scheme-color-authority-${{ github.sha }}
+          path: ${{ env.CHAPTERA_SCHEME_ROOT }}/receipt.json
+          if-no-files-found: error
