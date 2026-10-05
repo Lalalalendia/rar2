@@ -38,21 +38,38 @@ pub(super) fn build_desktop_page_render_plan_with_source_fonts(
     })
 }
 
-fn story_has_scoped_boolean_history(editor: &EditorSession, story_id: StoryId) -> bool {
-    editor.operations().iter().any(|operation| {
-        matches!(
-            operation,
+#[derive(Debug, Clone, Copy, Default)]
+struct ScopedBooleanHistoryV1 {
+    bold: bool,
+    italic: bool,
+}
+
+fn scoped_boolean_history(editor: &EditorSession, story_id: StoryId) -> ScopedBooleanHistoryV1 {
+    let mut out = ScopedBooleanHistoryV1::default();
+    for operation in editor.operations() {
+        let (operation_story_id, property) = match operation {
             EditOperation::SetTextFormatPropertyScopedV1 {
-                story_id: operation_story_id,
-                property: FormatPropertyV1::Bold | FormatPropertyV1::Italic,
+                story_id,
+                property,
                 ..
-            } | EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
-                story_id: operation_story_id,
-                property: FormatPropertyV1::Bold | FormatPropertyV1::Italic,
+            }
+            | EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
+                story_id,
+                property,
                 ..
-            } if *operation_story_id == story_id
-        )
-    })
+            } => (*story_id, *property),
+            _ => continue,
+        };
+        if operation_story_id != story_id {
+            continue;
+        }
+        match property {
+            FormatPropertyV1::Bold => out.bold = true,
+            FormatPropertyV1::Italic => out.italic = true,
+            _ => {}
+        }
+    }
+    out
 }
 
 fn effective_boolean_at(
@@ -86,6 +103,7 @@ fn current_boolean_typography_runs(
     fragment_start: u32,
     fragment_end: u32,
     source: &[RenderTypographyRunV1],
+    history: ScopedBooleanHistoryV1,
 ) -> Result<Vec<RenderTypographyRunV1>, String> {
     if fragment_start >= fragment_end {
         return Ok(Vec::new());
@@ -94,22 +112,34 @@ fn current_boolean_typography_runs(
         return Err("current scoped Bold/Italic has no source typography carrier".to_owned());
     }
 
-    let bold = editor
-        .current_text_format_property_segments_v1(
-            story_id,
-            FormatPropertyV1::Bold,
-            fragment_start,
-            fragment_end,
+    let bold = if history.bold {
+        Some(
+            editor
+                .current_text_format_property_segments_v1(
+                    story_id,
+                    FormatPropertyV1::Bold,
+                    fragment_start,
+                    fragment_end,
+                )
+                .map_err(|error| format!("current scoped Bold unavailable: {error}"))?,
         )
-        .map_err(|error| format!("current scoped Bold unavailable: {error}"))?;
-    let italic = editor
-        .current_text_format_property_segments_v1(
-            story_id,
-            FormatPropertyV1::Italic,
-            fragment_start,
-            fragment_end,
+    } else {
+        None
+    };
+    let italic = if history.italic {
+        Some(
+            editor
+                .current_text_format_property_segments_v1(
+                    story_id,
+                    FormatPropertyV1::Italic,
+                    fragment_start,
+                    fragment_end,
+                )
+                .map_err(|error| format!("current scoped Italic unavailable: {error}"))?,
         )
-        .map_err(|error| format!("current scoped Italic unavailable: {error}"))?;
+    } else {
+        None
+    };
 
     let mut boundaries = vec![fragment_start, fragment_end];
     for run in source {
@@ -120,12 +150,14 @@ fn current_boolean_typography_runs(
             boundaries.push(end);
         }
     }
-    for segment in bold.iter().chain(italic.iter()) {
-        let start = segment.start_scalar.max(fragment_start);
-        let end = segment.end_scalar.min(fragment_end);
-        if start < end {
-            boundaries.push(start);
-            boundaries.push(end);
+    for segments in [bold.as_deref(), italic.as_deref()].into_iter().flatten() {
+        for segment in segments {
+            let start = segment.start_scalar.max(fragment_start);
+            let end = segment.end_scalar.min(fragment_end);
+            if start < end {
+                boundaries.push(start);
+                boundaries.push(end);
+            }
         }
     }
     boundaries.sort_unstable();
@@ -153,8 +185,12 @@ fn current_boolean_typography_runs(
         let mut run = source_run.clone();
         run.scalar_start = start;
         run.scalar_end = end;
-        run.bold = Some(effective_boolean_at(&bold, start, end, "Bold")?);
-        run.italic = Some(effective_boolean_at(&italic, start, end, "Italic")?);
+        if let Some(segments) = bold.as_deref() {
+            run.bold = Some(effective_boolean_at(segments, start, end, "Bold")?);
+        }
+        if let Some(segments) = italic.as_deref() {
+            run.italic = Some(effective_boolean_at(segments, start, end, "Italic")?);
+        }
         out.push(run);
     }
 
@@ -174,7 +210,8 @@ pub(super) fn apply_current_scoped_boolean_typography(
 ) -> Result<usize, String> {
     let mut changed = 0_usize;
     for fragment in plan.nodes.iter_mut().filter_map(|node| node.text.as_mut()) {
-        if !story_has_scoped_boolean_history(editor, fragment.story_id) {
+        let history = scoped_boolean_history(editor, fragment.story_id);
+        if !history.bold && !history.italic {
             continue;
         }
         fragment.typography = current_boolean_typography_runs(
@@ -183,6 +220,7 @@ pub(super) fn apply_current_scoped_boolean_typography(
             fragment.scalar_start,
             fragment.scalar_end,
             &fragment.typography,
+            history,
         )?;
         // The existing shared layout was resolved before current Chaptera
         // Bold/Italic entered the render input. Do not claim it is current.
