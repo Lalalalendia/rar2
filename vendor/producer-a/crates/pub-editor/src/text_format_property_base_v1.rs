@@ -580,6 +580,49 @@ mod tests {
     }
 
     #[test]
+    fn scoped_operation_hashes_replay_without_unrelated_property_authority() {
+        let source = build_source_text_format_property_state_v1(
+            story_id(),
+            "sha256:source-story",
+            4,
+            &[run(0, 4, Some(false), Some(false), None)],
+            FormatPropertyV1::Bold,
+        )
+        .expect("source Bold state");
+        let before_state_hash =
+            text_format_property_state_hash_v1(&source).expect("source property hash");
+        let after = set_text_format_property_state_v1(
+            &source,
+            0,
+            4,
+            FormatValueV1::Bool(true),
+        )
+        .expect("set scoped Bold");
+        let after_state_hash =
+            text_format_property_state_hash_v1(&after).expect("edited property hash");
+        let operation = EditOperation::SetTextFormatProperty {
+            story_id: story_id(),
+            start_scalar: 0,
+            end_scalar: 4,
+            property: FormatPropertyV1::Bold,
+            value: FormatValueV1::Bool(true),
+            before_state_hash,
+            after_state_hash,
+        };
+
+        assert_eq!(
+            apply_text_format_property_operation_checked_v1(&source, &operation)
+                .expect("checked scoped replay"),
+            after
+        );
+        assert_eq!(
+            fold_text_format_property_history_v1(source, &[operation])
+                .expect("history-derived scoped state"),
+            after
+        );
+    }
+
+    #[test]
     fn scoped_set_clear_normalizes_against_only_the_target_property_base() {
         let source = build_source_text_format_property_state_v1(
             story_id(),
