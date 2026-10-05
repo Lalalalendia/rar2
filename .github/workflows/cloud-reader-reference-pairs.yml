@@ -3,10 +3,6 @@ name: Cloud Reader reference PUB-PDF pairs
 on:
   workflow_call:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - "apps/chaptera-server/src/reader_scene_v1.rs"
-      - ".github/workflows/cloud-reader-reference-pairs.yml"
   push:
     branches: [main]
     paths:
