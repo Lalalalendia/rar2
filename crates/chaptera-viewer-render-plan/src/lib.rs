@@ -1212,8 +1212,8 @@ pub fn build_page_render_plan_v1(
                                 size_inherited: run.size_inherited,
                                 color_rgb: run.color_rgb,
                                 color_inherited: run.color_inherited,
-                bold: run.bold.map(|value| value.effective_value),
-                italic: run.italic.map(|value| value.effective_value),
+                                bold: run.bold.map(|value| value.effective_value),
+                                italic: run.italic.map(|value| value.effective_value),
                             })
                         })
                         .collect(),
@@ -3967,7 +3967,10 @@ mod tests {
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].font.resource_id, "font-arial-regular");
         assert_eq!(runs[1].font.resource_id, "font-arial-bold");
-        assert_ne!(runs[0].font_fingerprint_sha256, runs[1].font_fingerprint_sha256);
+        assert_ne!(
+            runs[0].font_fingerprint_sha256,
+            runs[1].font_fingerprint_sha256
+        );
     }
 
     #[test]
