@@ -309,7 +309,6 @@ impl DesktopSourceFontRegistry {
             .insert((normalize_family(family), bold, italic));
         false
     }
-
 }
 
 fn normalize_family(name: &str) -> String {
@@ -337,42 +336,27 @@ mod tests {
         let source_family = ["Arial", "Times New Roman", "Calibri", "Segoe UI"]
             .into_iter()
             .find(|family| {
-                for (bold, italic) in [
-                    (false, false),
-                    (true, false),
-                    (false, true),
-                    (true, true),
-                ] {
+                for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
                     registry.ensure_family_style(family, bold, italic);
                 }
-                [
-                    (false, false),
-                    (true, false),
-                    (false, true),
-                    (true, true),
-                ]
-                .into_iter()
-                .all(|(bold, italic)| {
-                    registry
-                        .resolved
-                        .contains_key(&(normalize_family(family), bold, italic))
-                })
+                [(false, false), (true, false), (false, true), (true, true)]
+                    .into_iter()
+                    .all(|(bold, italic)| {
+                        registry
+                            .resolved
+                            .contains_key(&(normalize_family(family), bold, italic))
+                    })
             })
             .expect("windows-latest should expose one bounded family with four unique style faces");
 
-        let resources = [
-            (false, false),
-            (true, false),
-            (false, true),
-            (true, true),
-        ]
-        .into_iter()
-        .map(|(bold, italic)| {
-            registry
-                .resource_for_family_style(source_family, bold, italic)
-                .expect("exact style tuple resource")
-        })
-        .collect::<Vec<_>>();
+        let resources = [(false, false), (true, false), (false, true), (true, true)]
+            .into_iter()
+            .map(|(bold, italic)| {
+                registry
+                    .resource_for_family_style(source_family, bold, italic)
+                    .expect("exact style tuple resource")
+            })
+            .collect::<Vec<_>>();
 
         let identities = resources
             .iter()

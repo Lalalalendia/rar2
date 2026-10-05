@@ -108,8 +108,12 @@ fn compose_current_fragment_typography_v1(
         resolved.push(run);
     }
 
-    if resolved.first().is_none_or(|run| run.scalar_start != fragment.scalar_start)
-        || resolved.last().is_none_or(|run| run.scalar_end != fragment.scalar_end)
+    if resolved
+        .first()
+        .is_none_or(|run| run.scalar_start != fragment.scalar_start)
+        || resolved
+            .last()
+            .is_none_or(|run| run.scalar_end != fragment.scalar_end)
     {
         return Err(format!(
             "current typography composition is incomplete for {:?} {}..{}",
@@ -341,7 +345,8 @@ mod tests {
                     let Some(fragment) = node.text.as_ref() else {
                         continue;
                     };
-                    if !fragment.text.is_ascii() || fragment.scalar_end <= fragment.scalar_start + 1 {
+                    if !fragment.text.is_ascii() || fragment.scalar_end <= fragment.scalar_start + 1
+                    {
                         continue;
                     }
                     let Some(story) = editor.graph().stories.get(&fragment.story_id) else {
@@ -369,7 +374,8 @@ mod tests {
                         {
                             continue;
                         }
-                        let (Some(source_bold), Some(source_italic)) = (run.bold, run.italic) else {
+                        let (Some(source_bold), Some(source_italic)) = (run.bold, run.italic)
+                        else {
                             continue;
                         };
                         let Some(before_font) = registry.resource_for_typography_run(&run) else {
@@ -574,7 +580,10 @@ mod tests {
             Some(witness.before_resource_id.as_str())
         );
 
-        assert_eq!(reopened.graph().stories[&witness.story_id].text, source_text);
+        assert_eq!(
+            reopened.graph().stories[&witness.story_id].text,
+            source_text
+        );
         assert_eq!(reopened.source_hash(), source_hash);
         assert_eq!(
             fs::read(&witness.path).expect("re-read source PUB"),
