@@ -430,6 +430,34 @@ try {
     $carlton = Read-CarltonScheme $carltonPath
     Assert-NoPublisherProcess
 
+    $probe = Join-Path $Root "runtime\quill-scheme-color-probe.exe"
+    if (-not (Test-Path -LiteralPath $probe -PathType Leaf)) {
+        throw "quill-scheme-color-probe.exe missing from portable bundle."
+    }
+    $carrierPath = Join-Path $Private "quill-carrier-map.json"
+    & $probe $synthetic $switched $carltonPath $carrierPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Quill scheme-color carrier probe failed with exit code $LASTEXITCODE"
+    }
+    $carrier = Get-Content -LiteralPath $carrierPath -Raw | ConvertFrom-Json
+    if ([string]$carrier.schema -ne "chaptera.quill-scheme-color-carrier-map.v1") {
+        throw "Unexpected Quill carrier-map schema."
+    }
+    if (-not [bool]$carrier.scheme_slot_mapping_stable_across_switch) {
+        throw "Quill persisted scheme-slot mapping changed across ColorScheme switch."
+    }
+    $roleMap = @($carrier.role_to_persisted_scheme_slot)
+    if ($roleMap.Count -ne 8) {
+        throw "Quill carrier map must bind all eight Publisher SchemeColor roles."
+    }
+    foreach ($row in $roleMap) {
+        $role = [int]$row.com_scheme_role
+        $slot = [int]$row.persisted_scheme_slot
+        if ($role -lt 1 -or $role -gt 8 -or $slot -lt 0 -or $slot -gt 7) {
+            throw "Quill carrier map contains out-of-range role/slot."
+        }
+    }
+
     $privateReceipt = [ordered]@{
         schema = "chaptera.quill-scheme-color-native.private.v1"
         publisher = $publisher
@@ -449,6 +477,7 @@ try {
             scheme_name = $carlton.scheme_name
             source_unchanged = $true
         }
+        quill_carrier_map = $carrier
         claims = [ordered]@{
             save_close_fresh_reopen_initial = $true
             save_close_fresh_reopen_switch = $true
@@ -475,11 +504,15 @@ try {
             scheme_roles_stable_after_scheme_switch = $true
             generated_initial_pub_sha256 = Get-Sha256 $synthetic
             generated_switched_pub_sha256 = Get-Sha256 $switched
+            role_to_persisted_scheme_slot = $roleMap
+            scheme_slot_mapping_stable_across_switch = $true
         }
         carlton = [ordered]@{
             source_sha256 = $ExpectedCarltonSha256
             ordered_scheme_fingerprint_sha256 = [string]$carlton.public_fingerprint
             source_unchanged = $true
+            persisted_scheme_slot_counts = $carrier.carlton.scheme_slot_counts
+            persisted_scheme_source_counts = $carrier.carlton.scheme_source_counts
         }
         boundary = "COM proves native scheme-binding persistence and scheme-switch effective RGB causality. Persisted Quill PL slot mapping is not granted until the returned synthetic PUBs are parsed."
     }
@@ -499,6 +532,7 @@ try {
     $summary.generated_switched_pub_sha256 = Get-Sha256 $switched
     $summary.carlton_scheme_fingerprint_sha256 = [string]$carlton.public_fingerprint
     $summary.effective_rgb_changed_slot_count = $changedSlots
+    $summary.role_to_persisted_scheme_slot = $roleMap
 } catch {
     $summary.final_status = "failed"
     $summary.error = $_.Exception.Message
