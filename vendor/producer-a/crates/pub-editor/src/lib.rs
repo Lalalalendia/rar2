@@ -3022,6 +3022,17 @@ impl EditorSession {
         &self,
         story_id: StoryId,
     ) -> Result<bool, EditorError> {
+        let has_paragraph_history = self.undo.iter().any(|operation| {
+            matches!(
+                operation,
+                EditOperation::SetParagraphAlignmentOverride { .. }
+                    | EditOperation::ClearParagraphAlignmentOverride { .. }
+            )
+        });
+        if !has_paragraph_history {
+            return Ok(false);
+        }
+
         let paragraph_ids = self
             .imported_paragraphs_v1()
             .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
