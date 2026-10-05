@@ -474,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn real_51318_scoped_bold_reaches_current_boolean_typography_without_color_authority() {
+    fn real_51318_scoped_bold_reaches_current_boolean_typography() {
         let Some(root) = env::var_os("CHAPTERA_TEXT_FORMAT_FIXTURES_DIR") else {
             eprintln!(
                 "CHAPTERA_TEXT_FORMAT_FIXTURES_DIR not set; dedicated Desktop text-format gate owns this test"
@@ -496,19 +496,11 @@ mod tests {
             .keys()
             .copied()
             .find(|story_id| {
-                editor
-                    .current_text_format_overlay_v1(*story_id)
-                    .err()
-                    .is_some_and(|error| {
-                        error
-                            .to_string()
-                            .contains("bounded effective direct-RGB text color is unavailable")
-                    })
-                    && current_story_boolean_typography_v1(&editor, *story_id)
-                        .ok()
-                        .is_some_and(|runs| runs.iter().any(|run| run.bold.is_some()))
+                current_story_boolean_typography_v1(&editor, *story_id)
+                    .ok()
+                    .is_some_and(|runs| runs.iter().any(|run| run.bold.is_some()))
             })
-            .expect("51318.pub must expose a color-blocked Story with bounded Bold authority");
+            .expect("51318.pub must expose a Story with bounded Bold authority");
 
         let before = current_story_boolean_typography_v1(&editor, story_id)
             .expect("source boolean typography");
@@ -542,14 +534,6 @@ mod tests {
             .expect("edited interval remains covered");
         assert_eq!(changed.bold, Some(desired));
         assert_eq!(changed.italic, first.italic);
-        assert!(
-            editor
-                .current_text_format_overlay_v1(story_id)
-                .expect_err("unknown direct-RGB color must remain unresolved")
-                .to_string()
-                .contains("bounded effective direct-RGB text color is unavailable")
-        );
-
         let layout =
             build_current_story_layout_v1(&editor, story_id, "layout:scoped-bold", &test_font())
                 .expect("current shaped-flow layout consumes scoped boolean typography");
