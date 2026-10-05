@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn real_sample_newsletter_linked_story_session_hands_off_between_frames_without_topology_mutation()
-    {
+     {
         let Some(path) = env::var_os("CHAPTERA_SAMPLE_NEWSLETTER") else {
             eprintln!(
                 "CHAPTERA_SAMPLE_NEWSLETTER not set; dedicated direct-text gate owns real evidence"
