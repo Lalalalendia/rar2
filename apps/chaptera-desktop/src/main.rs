@@ -66,7 +66,8 @@ use chaptera_viewer_render_plan::{
 };
 use eframe::egui;
 use font_binding::{
-    build_desktop_page_render_plan, build_desktop_page_render_plan_with_source_fonts,
+    build_desktop_page_render_plan, build_desktop_page_render_plan_with_current_source_fonts,
+    build_desktop_page_render_plan_with_source_fonts,
 };
 use pub_interaction::{
     DocumentPoint, MoveTransaction, ResizeCommit, ResizeHandle, ResizePointerDown,
@@ -3765,7 +3766,20 @@ impl ViewerApp {
             .get(page_index)
             .ok_or_else(|| "Selected page is unavailable.".to_owned())?;
         let mut render_plan = if self.source_fonts_active {
-            build_desktop_page_render_plan_with_source_fonts(visual, page_index, &self.source_fonts)
+            if let Some(editor) = self.editor.as_ref() {
+                build_desktop_page_render_plan_with_current_source_fonts(
+                    visual,
+                    page_index,
+                    &self.source_fonts,
+                    editor,
+                )
+            } else {
+                build_desktop_page_render_plan_with_source_fonts(
+                    visual,
+                    page_index,
+                    &self.source_fonts,
+                )
+            }
         } else {
             build_desktop_page_render_plan(visual, page_index)
         }
