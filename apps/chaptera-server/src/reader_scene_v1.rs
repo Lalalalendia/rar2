@@ -2500,8 +2500,7 @@ mod tests {
                 let Some(layout) = text.layout.as_ref() else {
                     continue;
                 };
-                let RenderTextLayoutDispositionV1::BackendFallback { reason } =
-                    &layout.disposition
+                let RenderTextLayoutDispositionV1::BackendFallback { reason } = &layout.disposition
                 else {
                     continue;
                 };
@@ -2510,8 +2509,7 @@ mod tests {
                 }
 
                 let resolved_font = configured_probe.as_ref().and_then(|configured| {
-                    let source_family =
-                        effective_source_font_family_v1(&bundle.geometry, text)?;
+                    let source_family = effective_source_font_family_v1(&bundle.geometry, text)?;
                     source_family
                         .trim()
                         .eq_ignore_ascii_case(configured.source_family.as_str())
