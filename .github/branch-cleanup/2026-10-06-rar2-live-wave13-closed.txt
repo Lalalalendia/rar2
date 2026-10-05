@@ -1,0 +1,14 @@
+# Rar2 live branch GC wave 13 — 2026-10-06
+# Closed evidence-complete / superseded owner refs only.
+# Prepared but intentionally not opened as a PR until Wave 12 drains.
+# Runtime branch-GC must recheck open heads + exact expected SHA before deletion.
+# Format: <branch> <expected_sha>
+product/migration-editable-route-matrix-02 aa2dd71ee55e8d24b4ffff2b99d0b1ad2f3d9afe
+research/publisher11-borderart-fopt-01 c60dce6b20598584b60bc801eb64014e21d037cc
+research/c2r-symbol-census-2208-rar2 fbef82d2c9258152d297b070417677196cfa4922
+research/current-semantic-prevalence-v1 487ebaf447e167d05454251f2a9c4278fc1fffbc
+research/publisher-symbol-archive-probes 7c3c49ef15a4eb57f4d46a2ce2e7ee08a0dc4feb
+ci/cancel-obsolete-fixed-layout-runs-v2 0751314339e05d86deb4679d8c1c654b5125377b
+ci/decouple-agent-feature-fanout 613bd6e57dd483a3ae8bf76a56275e81f3da060e
+ci/editor-project-schema-v014-compat-01 3e2797aeac8b2769b30e53bd1eee0a3ba61f1f8d
+fix/paragraph-progress-race-v2 8eae24b645480f005c474a8252be2a4b7078f5bd
