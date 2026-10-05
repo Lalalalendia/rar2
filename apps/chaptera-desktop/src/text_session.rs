@@ -416,7 +416,7 @@ fn rebind_after_commit(
 }
 
 fn scalar_selection_for_current_authority(
-    mode: &DesktopTextMode,
+    _mode: &DesktopTextMode,
     revision: &str,
     domain: &StoryEditDomainV1,
     layout: &DesktopStoryLayoutV1,
