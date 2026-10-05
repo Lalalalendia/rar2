@@ -177,7 +177,7 @@ fn current_boolean_property_segments_v1(
         story_scalar_len,
     ) {
         Ok(segments) => Ok(Some(segments)),
-        Err(error) if !has_scoped_property_history_v1(editor, story_id, property) => {
+        Err(_error) if !has_scoped_property_history_v1(editor, story_id, property) => {
             // This projection is additive to the established shaped-flow path. A source Story
             // may not yet expose bounded authority for a particular boolean property, and plain
             // text edits can invalidate source-relative ranges. In either case, absence remains
@@ -210,8 +210,8 @@ fn boolean_value_covering_v1(
                 "effective property segments do not cover one current typography interval",
             )
         })?;
-    match segment.value {
-        FormatValueV1::Bool(value) => Ok(Some(value)),
+    match &segment.value {
+        FormatValueV1::Bool(value) => Ok(Some(*value)),
         _ => Err(DesktopShapedFlowRuntimeError::new(
             "current_boolean_typography_invalid",
             "Bold/Italic effective property value is not boolean",
