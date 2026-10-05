@@ -279,7 +279,9 @@ mod tests {
         registry: &source_font::DesktopSourceFontRegistry,
         scalar: u32,
     ) -> Option<String> {
-        let typography = current_fragment_typography_v1(editor, fragment).ok().flatten()?;
+        let typography = current_fragment_typography_v1(editor, fragment)
+            .ok()
+            .flatten()?;
         let run = typography
             .iter()
             .find(|run| run.scalar_start <= scalar && scalar < run.scalar_end)?;
@@ -466,13 +468,8 @@ mod tests {
             .expect("source/base text node")
             .clone();
         assert_eq!(
-            current_resource_for_scalar(
-                &editor,
-                &source_fragment,
-                &registry,
-                witness.edit_start,
-            )
-            .as_deref(),
+            current_resource_for_scalar(&editor, &source_fragment, &registry, witness.edit_start,)
+                .as_deref(),
             Some(witness.before_resource_id.as_str())
         );
 
@@ -491,13 +488,8 @@ mod tests {
             .expect("commit scoped style");
 
         assert_eq!(
-            current_resource_for_scalar(
-                &editor,
-                &source_fragment,
-                &registry,
-                witness.edit_start,
-            )
-            .as_deref(),
+            current_resource_for_scalar(&editor, &source_fragment, &registry, witness.edit_start,)
+                .as_deref(),
             Some(witness.after_resource_id.as_str())
         );
         assert_eq!(
@@ -514,25 +506,15 @@ mod tests {
 
         editor.undo().expect("undo scoped style");
         assert_eq!(
-            current_resource_for_scalar(
-                &editor,
-                &source_fragment,
-                &registry,
-                witness.edit_start,
-            )
-            .as_deref(),
+            current_resource_for_scalar(&editor, &source_fragment, &registry, witness.edit_start,)
+                .as_deref(),
             Some(witness.before_resource_id.as_str())
         );
 
         editor.redo().expect("redo scoped style");
         assert_eq!(
-            current_resource_for_scalar(
-                &editor,
-                &source_fragment,
-                &registry,
-                witness.edit_start,
-            )
-            .as_deref(),
+            current_resource_for_scalar(&editor, &source_fragment, &registry, witness.edit_start,)
+                .as_deref(),
             Some(witness.after_resource_id.as_str())
         );
 
@@ -546,13 +528,8 @@ mod tests {
             .apply_project(&project_roundtrip)
             .expect("replay scoped styled project");
         assert_eq!(
-            current_resource_for_scalar(
-                &reopened,
-                &source_fragment,
-                &registry,
-                witness.edit_start,
-            )
-            .as_deref(),
+            current_resource_for_scalar(&reopened, &source_fragment, &registry, witness.edit_start,)
+                .as_deref(),
             Some(witness.after_resource_id.as_str())
         );
 
@@ -569,13 +546,8 @@ mod tests {
             )
             .expect("clear scoped style");
         assert_eq!(
-            current_resource_for_scalar(
-                &reopened,
-                &source_fragment,
-                &registry,
-                witness.edit_start,
-            )
-            .as_deref(),
+            current_resource_for_scalar(&reopened, &source_fragment, &registry, witness.edit_start,)
+                .as_deref(),
             Some(witness.before_resource_id.as_str())
         );
 
