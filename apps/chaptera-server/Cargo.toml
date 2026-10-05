@@ -45,4 +45,5 @@ zeroize = "=1.9.0"
 zip = { workspace = true, features = ["flate2", "deflate-flate2"] }
 
 [dev-dependencies]
+pub-layout = { path = "../../vendor/producer-a/crates/pub-layout" }
 tower = { version = "=0.5.3", features = ["util"] }
