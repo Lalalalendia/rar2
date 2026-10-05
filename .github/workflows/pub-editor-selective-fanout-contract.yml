@@ -9,6 +9,7 @@ on:
       - ".github/workflows/editor-fixed-pdf-current-revision.yml"
       - ".github/workflows/editor-duplicate-rectangle-v1.yml"
       - ".github/workflows/authoring-authored-stack-runtime-v1.yml"
+      - ".github/workflows/authoring-authored-stack-lifecycle-v1.yml"
       - "tools/ci/pub_editor_pr_fanout.py"
       - "tools/ci/test_pub_editor_pr_fanout.py"
   workflow_dispatch:
