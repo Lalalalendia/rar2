@@ -1545,8 +1545,12 @@ where
             transform: node.transform.clone(),
         };
         let resolved_font = resolve_font(fragment);
-        if resolved_font.is_none()
-            && projected_target_frame_node_id.is_none()
+        // Try the exact per-span resource path before the uniform-family path.
+        // A same-family fragment can still require distinct physical resources
+        // (Regular/Bold/Italic/BoldItalic). The per-span admission itself
+        // rejects uniform-resource input, so ordinary single-resource Stories
+        // continue through the established resolver below.
+        if projected_target_frame_node_id.is_none()
             && let Some(layout) = resolve_mixed_resource_text_layout_v1(
                 visual,
                 target.clone(),
