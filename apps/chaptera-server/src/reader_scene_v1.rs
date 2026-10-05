@@ -2515,16 +2515,26 @@ mod tests {
                         .eq_ignore_ascii_case(configured.source_family.as_str())
                         .then(|| configured.explicit_resource())
                 });
-                let font_is_source_resolved = resolved_font.is_some();
-                let selected_font = resolved_font.unwrap_or_else(shared_text_font_resource);
-                let cause = classify_shared_layout_incomplete_cause_v1(
-                    &bundle.geometry,
-                    &diagnostic_plan,
-                    node,
-                    text,
-                    &selected_font,
-                    font_is_source_resolved,
-                );
+                let cause = if let Some(resolved_font) = resolved_font.as_ref() {
+                    classify_shared_layout_incomplete_cause_v1(
+                        &bundle.geometry,
+                        &diagnostic_plan,
+                        node,
+                        text,
+                        resolved_font,
+                        true,
+                    )
+                } else {
+                    let fallback_font = shared_text_font_resource();
+                    classify_shared_layout_incomplete_cause_v1(
+                        &bundle.geometry,
+                        &diagnostic_plan,
+                        node,
+                        text,
+                        &fallback_font,
+                        false,
+                    )
+                };
                 *sli_probe_path_counts.entry(cause.path).or_default() += 1;
                 *sli_probe_consumption_counts
                     .entry(cause.consumption)
