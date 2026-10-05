@@ -12,3 +12,4 @@ serde.workspace=true
 
 [dev-dependencies]
 pub-cfb={path="../pub-cfb"}
+serde_json.workspace=true
