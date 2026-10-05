@@ -173,6 +173,33 @@ pub(super) fn install_startup_font(ctx: &egui::Context) {
     fallback_font::install(ctx).expect("pinned Chaptera fallback font resource must validate");
 }
 
+impl ViewerApp {
+    pub(super) fn prepare_canvas_fonts(&mut self, ui: &egui::Ui) -> bool {
+        if self.source_fonts_install_attempted {
+            return false;
+        }
+
+        self.source_fonts_install_attempted = true;
+        let additional = self.source_fonts.egui_fonts();
+        match fallback_font::install_with_additional(ui.ctx(), &additional) {
+            Ok(()) => {
+                self.source_fonts_active = true;
+            }
+            Err(_) => {
+                self.source_fonts_active = false;
+                let _ = fallback_font::install(ui.ctx());
+            }
+        }
+        self.page_frame_cache.clear();
+
+        // egui applies FontDefinitions at the next pass boundary. Do not
+        // build or paint a render plan that names a newly registered
+        // source-font family in the same pass that calls set_fonts.
+        ui.ctx().request_repaint();
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,32 +615,5 @@ mod tests {
             .expect("write styled-font receipt");
         }
         println!("{}", serde_json::to_string(&receipt).expect("receipt json"));
-    }
-}
-
-impl ViewerApp {
-    pub(super) fn prepare_canvas_fonts(&mut self, ui: &egui::Ui) -> bool {
-        if self.source_fonts_install_attempted {
-            return false;
-        }
-
-        self.source_fonts_install_attempted = true;
-        let additional = self.source_fonts.egui_fonts();
-        match fallback_font::install_with_additional(ui.ctx(), &additional) {
-            Ok(()) => {
-                self.source_fonts_active = true;
-            }
-            Err(_) => {
-                self.source_fonts_active = false;
-                let _ = fallback_font::install(ui.ctx());
-            }
-        }
-        self.page_frame_cache.clear();
-
-        // egui applies FontDefinitions at the next pass boundary. Do not
-        // build or paint a render plan that names a newly registered
-        // source-font family in the same pass that calls set_fonts.
-        ui.ctx().request_repaint();
-        true
     }
 }
