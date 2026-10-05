@@ -1901,14 +1901,25 @@ fn incomplete_layout_is_explicit_story_overset(
         && diagnostics[0].origin == story_id.into_canonical()
 }
 
-fn incomplete_layout_is_admitted_partial_story_overset(
+fn projected_incomplete_layout_is_explicit_overset(
+    projected_target_frame_node_id: Option<NodeId>,
+    diagnostics: &[pub_layout::ResolveDiagnostic],
+    story_id: StoryId,
+) -> bool {
+    projected_target_frame_node_id.is_some()
+        && incomplete_layout_is_explicit_story_overset(diagnostics, story_id)
+}
+
+fn ordinary_incomplete_layout_is_admitted_partial_story_overset(
+    projected_target_frame_node_id: Option<NodeId>,
     diagnostics: &[pub_layout::ResolveDiagnostic],
     story_id: StoryId,
     has_visible_resolved_line: bool,
     last_consumed_scalar_end: Option<u32>,
     story_scalar_len: u32,
 ) -> bool {
-    has_visible_resolved_line
+    projected_target_frame_node_id.is_none()
+        && has_visible_resolved_line
         && last_consumed_scalar_end.is_some_and(|end| end < story_scalar_len)
         && incomplete_layout_is_explicit_story_overset(diagnostics, story_id)
 }
@@ -2157,19 +2168,27 @@ fn resolve_text_layout_v1(
         .collect::<Vec<_>>();
     source_lines.sort_by_key(|line| line.frame_line_index);
 
-    let admitted_partial_story_overset = incomplete_layout_is_admitted_partial_story_overset(
+    let projected_explicit_overset = projected_incomplete_layout_is_explicit_overset(
+        projected_target_frame_node_id,
         &scene.diagnostics,
         story.id,
-        source_lines.iter().any(|line| {
-            line.scalar_end > line.scalar_start && line.measured_width.get() > 0
-        }),
-        source_lines.last().map(|line| line.consumed_scalar_end),
-        story_scalar_len,
     );
+    let ordinary_partial_story_overset =
+        ordinary_incomplete_layout_is_admitted_partial_story_overset(
+            projected_target_frame_node_id,
+            &scene.diagnostics,
+            story.id,
+            source_lines.iter().any(|line| {
+                line.scalar_end > line.scalar_start && line.measured_width.get() > 0
+            }),
+            source_lines.last().map(|line| line.consumed_scalar_end),
+            story_scalar_len,
+        );
 
     if story_scalar_len > 0
         && source_lines.last().map(|line| line.consumed_scalar_end) != Some(story_scalar_len)
-        && !admitted_partial_story_overset
+        && !projected_explicit_overset
+        && !ordinary_partial_story_overset
     {
         return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
     }
@@ -4779,8 +4798,9 @@ mod tests {
     }
 
     #[test]
-    fn partial_story_overset_requires_visible_incomplete_lines() {
+    fn ordinary_partial_story_overset_requires_non_projected_visible_incomplete_lines() {
         let story_id = StoryId::from_canonical(canonical(3));
+        let frame_id = NodeId::from_canonical(canonical(9));
         let overset = pub_layout::ResolveDiagnostic {
             code: "story_overset".into(),
             severity: pub_layout::ResolveSeverity::FidelityWarning,
@@ -4788,26 +4808,48 @@ mod tests {
             message: "bounded fixture".into(),
         };
 
-        assert!(incomplete_layout_is_admitted_partial_story_overset(
+        assert!(ordinary_incomplete_layout_is_admitted_partial_story_overset(
+            None,
             std::slice::from_ref(&overset),
             story_id,
             true,
             Some(7),
             10,
         ));
-        assert!(!incomplete_layout_is_admitted_partial_story_overset(
+        assert!(!ordinary_incomplete_layout_is_admitted_partial_story_overset(
+            Some(frame_id),
+            std::slice::from_ref(&overset),
+            story_id,
+            true,
+            Some(7),
+            10,
+        ));
+        assert!(!ordinary_incomplete_layout_is_admitted_partial_story_overset(
+            None,
             std::slice::from_ref(&overset),
             story_id,
             false,
             None,
             10,
         ));
-        assert!(!incomplete_layout_is_admitted_partial_story_overset(
+        assert!(!ordinary_incomplete_layout_is_admitted_partial_story_overset(
+            None,
             std::slice::from_ref(&overset),
             story_id,
             true,
             Some(10),
             10,
+        ));
+
+        assert!(projected_incomplete_layout_is_explicit_overset(
+            Some(frame_id),
+            std::slice::from_ref(&overset),
+            story_id,
+        ));
+        assert!(!projected_incomplete_layout_is_explicit_overset(
+            None,
+            std::slice::from_ref(&overset),
+            story_id,
         ));
     }
 
