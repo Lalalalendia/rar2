@@ -4127,8 +4127,7 @@ mod tests {
 
         let fragment = plan.nodes[0].text.as_ref().expect("text fragment");
         assert_eq!(
-            fragment.backend_font_resource_id,
-            None,
+            fragment.backend_font_resource_id, None,
             "styled per-span route must win over the uniform family resource"
         );
         let layout = fragment.layout.as_ref().expect("resolved layout");
