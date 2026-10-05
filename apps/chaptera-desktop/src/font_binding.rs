@@ -177,9 +177,7 @@ pub(super) fn install_startup_font(ctx: &egui::Context) {
 mod tests {
     use super::*;
     #[cfg(target_os = "windows")]
-    use chaptera_viewer_render_plan::{
-        RenderTextLayoutDispositionV1, build_page_render_plan_v1,
-    };
+    use chaptera_viewer_render_plan::{RenderTextLayoutDispositionV1, build_page_render_plan_v1};
     #[cfg(target_os = "windows")]
     use pub_editor::{
         EDITOR_PROJECT_VERSION_V0_16, FormatPropertyV1, FormatValueV1, NodeId, Sha256Digest,
