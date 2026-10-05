@@ -1893,15 +1893,36 @@ fn admitted_layout_frame_ordinal(
     Ok(0)
 }
 
+fn incomplete_layout_is_explicit_story_overset(
+    diagnostics: &[pub_layout::ResolveDiagnostic],
+    story_id: StoryId,
+) -> bool {
+    diagnostics.len() == 1
+        && diagnostics[0].code == "story_overset"
+        && diagnostics[0].origin == story_id.into_canonical()
+}
+
 fn projected_incomplete_layout_is_explicit_overset(
     projected_target_frame_node_id: Option<NodeId>,
     diagnostics: &[pub_layout::ResolveDiagnostic],
     story_id: StoryId,
 ) -> bool {
     projected_target_frame_node_id.is_some()
-        && diagnostics.len() == 1
-        && diagnostics[0].code == "story_overset"
-        && diagnostics[0].origin == story_id.into_canonical()
+        && incomplete_layout_is_explicit_story_overset(diagnostics, story_id)
+}
+
+fn ordinary_incomplete_layout_is_admitted_partial_story_overset(
+    projected_target_frame_node_id: Option<NodeId>,
+    diagnostics: &[pub_layout::ResolveDiagnostic],
+    story_id: StoryId,
+    has_visible_resolved_line: bool,
+    last_consumed_scalar_end: Option<u32>,
+    story_scalar_len: u32,
+) -> bool {
+    projected_target_frame_node_id.is_none()
+        && has_visible_resolved_line
+        && last_consumed_scalar_end.is_some_and(|end| end < story_scalar_len)
+        && incomplete_layout_is_explicit_story_overset(diagnostics, story_id)
 }
 
 const PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1: u32 = 12 * 12_700;
@@ -2144,11 +2165,6 @@ fn resolve_text_layout_v1(
     let Ok(scene) = resolve_bounded_shaped_flow(&projection, &runtime) else {
         return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed);
     };
-    let projected_explicit_overset = projected_incomplete_layout_is_explicit_overset(
-        projected_target_frame_node_id,
-        &scene.diagnostics,
-        story.id,
-    );
     let shaping_environment = scene.environment.shaping.clone();
     let mut source_lines = scene
         .lines
@@ -2157,9 +2173,27 @@ fn resolve_text_layout_v1(
         .collect::<Vec<_>>();
     source_lines.sort_by_key(|line| line.frame_line_index);
 
+    let projected_explicit_overset = projected_incomplete_layout_is_explicit_overset(
+        projected_target_frame_node_id,
+        &scene.diagnostics,
+        story.id,
+    );
+    let ordinary_partial_story_overset =
+        ordinary_incomplete_layout_is_admitted_partial_story_overset(
+            projected_target_frame_node_id,
+            &scene.diagnostics,
+            story.id,
+            source_lines.iter().any(|line| {
+                line.scalar_end > line.scalar_start && line.measured_width.get() > 0
+            }),
+            source_lines.last().map(|line| line.consumed_scalar_end),
+            story_scalar_len,
+        );
+
     if story_scalar_len > 0
         && source_lines.last().map(|line| line.consumed_scalar_end) != Some(story_scalar_len)
         && !projected_explicit_overset
+        && !ordinary_partial_story_overset
     {
         return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
     }
@@ -4812,9 +4846,8 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "projected-scene-instances")]
     #[test]
-    fn projected_cmo_admits_only_explicit_story_overset_as_partial_shared_layout() {
+    fn partial_shared_layout_requires_one_story_local_overset_diagnostic() {
         let story_id = StoryId::from_canonical(canonical(3));
         let frame_id = NodeId::from_canonical(canonical(9));
         let overset = pub_layout::ResolveDiagnostic {
@@ -4823,14 +4856,17 @@ mod tests {
             origin: story_id.into_canonical(),
             message: "bounded fixture".into(),
         };
-        assert!(projected_incomplete_layout_is_explicit_overset(
-            Some(frame_id),
+        assert!(incomplete_layout_is_explicit_story_overset(
             std::slice::from_ref(&overset),
             story_id,
         ));
-        assert!(!projected_incomplete_layout_is_explicit_overset(
-            None,
-            std::slice::from_ref(&overset),
+
+        let wrong_origin = pub_layout::ResolveDiagnostic {
+            origin: frame_id.into_canonical(),
+            ..overset.clone()
+        };
+        assert!(!incomplete_layout_is_explicit_story_overset(
+            std::slice::from_ref(&wrong_origin),
             story_id,
         ));
 
@@ -4840,9 +4876,64 @@ mod tests {
             origin: frame_id.into_canonical(),
             message: "bounded fixture".into(),
         };
-        assert!(!projected_incomplete_layout_is_explicit_overset(
-            Some(frame_id),
+        assert!(!incomplete_layout_is_explicit_story_overset(
             &[overset, unbreakable],
+            story_id,
+        ));
+    }
+
+    #[test]
+    fn ordinary_partial_story_overset_requires_non_projected_visible_incomplete_lines() {
+        let story_id = StoryId::from_canonical(canonical(3));
+        let frame_id = NodeId::from_canonical(canonical(9));
+        let overset = pub_layout::ResolveDiagnostic {
+            code: "story_overset".into(),
+            severity: pub_layout::ResolveSeverity::FidelityWarning,
+            origin: story_id.into_canonical(),
+            message: "bounded fixture".into(),
+        };
+
+        assert!(ordinary_incomplete_layout_is_admitted_partial_story_overset(
+            None,
+            std::slice::from_ref(&overset),
+            story_id,
+            true,
+            Some(7),
+            10,
+        ));
+        assert!(!ordinary_incomplete_layout_is_admitted_partial_story_overset(
+            Some(frame_id),
+            std::slice::from_ref(&overset),
+            story_id,
+            true,
+            Some(7),
+            10,
+        ));
+        assert!(!ordinary_incomplete_layout_is_admitted_partial_story_overset(
+            None,
+            std::slice::from_ref(&overset),
+            story_id,
+            false,
+            None,
+            10,
+        ));
+        assert!(!ordinary_incomplete_layout_is_admitted_partial_story_overset(
+            None,
+            std::slice::from_ref(&overset),
+            story_id,
+            true,
+            Some(10),
+            10,
+        ));
+
+        assert!(projected_incomplete_layout_is_explicit_overset(
+            Some(frame_id),
+            std::slice::from_ref(&overset),
+            story_id,
+        ));
+        assert!(!projected_incomplete_layout_is_explicit_overset(
+            None,
+            std::slice::from_ref(&overset),
             story_id,
         ));
     }
