@@ -492,6 +492,10 @@ pub struct RenderTypographyRunV1 {
     pub color_rgb: Option<[u8; 3]>,
     #[serde(default)]
     pub color_inherited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1023,6 +1027,8 @@ fn projected_text(
                 size_inherited: run.size_inherited,
                 color_rgb: run.color_rgb,
                 color_inherited: run.color_inherited,
+            bold: None,
+            italic: None,
             })
         })
         .collect();
@@ -1206,6 +1212,8 @@ pub fn build_page_render_plan_v1(
                                 size_inherited: run.size_inherited,
                                 color_rgb: run.color_rgb,
                                 color_inherited: run.color_inherited,
+                            bold: None,
+                            italic: None,
                             })
                         })
                         .collect(),
@@ -1493,8 +1501,8 @@ pub fn build_page_render_plan_with_text_layout_resolvers_v1<'a, F, G>(
     visual: &ViewerGeometryDocument,
     page_index: usize,
     fallback_font: &ExplicitRenderTextFontResourceV1<'a>,
-    mut resolve_font: F,
-    mut resolve_span_font: G,
+    resolve_font: F,
+    resolve_span_font: G,
 ) -> Result<PageRenderPlanV1, RenderPlanErrorV1>
 where
     F: FnMut(&RenderTextFragmentV1) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
@@ -1502,6 +1510,32 @@ where
         &RenderTextFragmentV1,
         &RenderTypographyRunV1,
     ) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
+{
+    build_page_render_plan_with_text_layout_and_typography_resolvers_v1(
+        visual,
+        page_index,
+        fallback_font,
+        resolve_font,
+        resolve_span_font,
+        |_| None,
+    )
+}
+
+pub fn build_page_render_plan_with_text_layout_and_typography_resolvers_v1<'a, F, G, H>(
+    visual: &ViewerGeometryDocument,
+    page_index: usize,
+    fallback_font: &ExplicitRenderTextFontResourceV1<'a>,
+    mut resolve_font: F,
+    mut resolve_span_font: G,
+    mut resolve_typography: H,
+) -> Result<PageRenderPlanV1, RenderPlanErrorV1>
+where
+    F: FnMut(&RenderTextFragmentV1) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
+    G: FnMut(
+        &RenderTextFragmentV1,
+        &RenderTypographyRunV1,
+    ) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
+    H: FnMut(&RenderTextFragmentV1) -> Option<Vec<RenderTypographyRunV1>>,
 {
     let mut plan = build_page_render_plan_v1(visual, page_index)?;
     let page_id = plan.page_id;
@@ -1511,6 +1545,10 @@ where
         let Some(fragment) = node.text.as_mut() else {
             continue;
         };
+        if let Some(typography) = resolve_typography(fragment) {
+            fragment.typography = typography;
+        }
+
         let projected_target_frame_node_id = {
             #[cfg(feature = "projected-scene-instances")]
             {
@@ -1545,8 +1583,7 @@ where
             transform: node.transform.clone(),
         };
         let resolved_font = resolve_font(fragment);
-        if resolved_font.is_none()
-            && projected_target_frame_node_id.is_none()
+        if projected_target_frame_node_id.is_none()
             && let Some(layout) = resolve_mixed_family_text_layout_v1(
                 visual,
                 target.clone(),
@@ -2518,8 +2555,8 @@ where
     }
 
     let mut cursor = fragment.scalar_start;
-    let mut first_family: Option<String> = None;
-    let mut mixed_family = false;
+    let mut first_resource: Option<(String, String, u32)> = None;
+    let mut mixed_resource = false;
     let mut admitted = Vec::with_capacity(fragment.typography.len());
 
     for run in &fragment.typography {
@@ -2534,13 +2571,6 @@ where
         if display_family.is_empty() {
             return None;
         }
-        let normalized_family = normalize_source_font_family_v1(display_family);
-        match first_family.as_ref() {
-            None => first_family = Some(normalized_family),
-            Some(first) if *first == normalized_family => {}
-            Some(_) => mixed_family = true,
-        }
-
         let font = resolve_span_font(fragment, run)?;
         if font.resource_id.is_empty()
             || font.bytes.is_empty()
@@ -2553,6 +2583,16 @@ where
         if font.expected_sha256.is_empty() || fingerprint != font.expected_sha256 {
             return None;
         }
+        let resource_identity = (
+            font.resource_id.to_owned(),
+            fingerprint.clone(),
+            font.face_index,
+        );
+        match first_resource.as_ref() {
+            None => first_resource = Some(resource_identity),
+            Some(first) if *first == resource_identity => {}
+            Some(_) => mixed_resource = true,
+        }
 
         admitted.push(ResolvedFamilyTypographyRunV1 {
             scalar_start: run.scalar_start,
@@ -2564,7 +2604,7 @@ where
         cursor = run.scalar_end;
     }
 
-    if cursor != fragment.scalar_end || !mixed_family {
+    if cursor != fragment.scalar_end || !mixed_resource {
         return None;
     }
     Some(admitted)
@@ -3487,6 +3527,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: Some([255, 204, 0]),
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
@@ -3497,6 +3539,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: Some([255, 204, 0]),
                     color_inherited: true,
+                    bold: None,
+                    italic: None,
                 },
             ],
         );
@@ -3533,6 +3577,8 @@ mod tests {
                 size_inherited: false,
                 color_rgb: None,
                 color_inherited: false,
+                bold: None,
+                italic: None,
             }],
         );
 
@@ -3632,6 +3678,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
@@ -3642,6 +3690,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
             ],
         );
@@ -3718,6 +3768,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
@@ -3728,6 +3780,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
             ],
         );
@@ -3820,6 +3874,77 @@ mod tests {
     }
 
     #[test]
+    fn same_family_style_runs_admit_distinct_exact_resources() {
+        let (visual, _) = simple_visual_with_typography(
+            "abcd",
+            vec![
+                RenderTypographyRunV1 {
+                    scalar_start: 0,
+                    scalar_end: 2,
+                    source_font_name: "Family A".to_owned(),
+                    text_size_emu: 152_400,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
+                    bold: Some(false),
+                    italic: Some(false),
+                },
+                RenderTypographyRunV1 {
+                    scalar_start: 2,
+                    scalar_end: 4,
+                    source_font_name: "Family A".to_owned(),
+                    text_size_emu: 152_400,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
+                    bold: Some(true),
+                    italic: Some(false),
+                },
+            ],
+        );
+        let fragment = build_page_render_plan_v1(&visual, 0)
+            .expect("render plan")
+            .nodes
+            .into_iter()
+            .find_map(|node| node.text)
+            .expect("text fragment");
+
+        let regular_bytes: &[u8] = b"same-family-regular";
+        let bold_bytes: &[u8] = b"same-family-bold";
+        let regular_sha = font_fingerprint_sha256(regular_bytes);
+        let bold_sha = font_fingerprint_sha256(bold_bytes);
+        let mut resolver = |_: &RenderTextFragmentV1, run: &RenderTypographyRunV1| {
+            match (run.bold, run.italic) {
+                (Some(false), Some(false)) => Some(ExplicitRenderTextFontResourceV1 {
+                    resource_id: "family-a-regular",
+                    expected_sha256: &regular_sha,
+                    face_index: 0,
+                    default_font_size_emu: 152_400,
+                    default_line_height_emu: 190_500,
+                    bytes: regular_bytes,
+                }),
+                (Some(true), Some(false)) => Some(ExplicitRenderTextFontResourceV1 {
+                    resource_id: "family-a-bold",
+                    expected_sha256: &bold_sha,
+                    face_index: 0,
+                    default_font_size_emu: 152_400,
+                    default_line_height_emu: 190_500,
+                    bytes: bold_bytes,
+                }),
+                _ => None,
+            }
+        };
+
+        let runs = admitted_mixed_family_typography_runs_v1(&fragment, &mut resolver)
+            .expect("same-family style change must admit mixed exact resources");
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].font.resource_id, "family-a-regular");
+        assert_eq!(runs[1].font.resource_id, "family-a-bold");
+    }
+
+    #[test]
     fn mixed_family_admission_binds_exact_resource_per_typography_run() {
         let story_id = fixture().document.stories[0].id;
         let fragment = render_fragment(
@@ -3835,6 +3960,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
@@ -3845,6 +3972,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
             ],
         );
