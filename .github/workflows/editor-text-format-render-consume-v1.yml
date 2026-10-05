@@ -1,0 +1,58 @@
+name: Editor Text Format Render Consume V1
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/editor-text-format-render-consume-v1.yml"
+      - "apps/chaptera-desktop/src/font_binding.rs"
+      - "apps/chaptera-desktop/src/main.rs"
+      - "crates/chaptera-viewer-render-plan/src/lib.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/lib.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: editor-text-format-render-consume-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-pub:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Check current typography render-consumer slice
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer -- --check
+          cargo check -p chaptera-desktop --all-targets
+          cargo clippy -p chaptera-desktop --all-targets -- -D warnings
+
+      - name: Acquire pinned 51318 render-consume witness
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="${RUNNER_TEMP}/51318.pub"
+          curl --fail --location --silent --show-error \
+            "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/51318.pub" \
+            --output "${fixture}"
+          actual_sha="$(sha256sum "${fixture}" | cut -d' ' -f1)"
+          actual_bytes="$(wc -c < "${fixture}" | tr -d ' ')"
+          test "${actual_sha}" = "3ab75a6a9196e0a51fc9b0aa759459501c71d313030c06652aabffbae0a2ab09"
+          test "${actual_bytes}" = "88576"
+          echo "CHAPTERA_TEXT_FORMAT_51318=${fixture}" >> "${GITHUB_ENV}"
+
+      - name: Prove scoped Bold reaches current render-plan typography
+        run: >-
+          cargo test -p chaptera-desktop
+          real_51318_scoped_bold_reaches_current_render_typography_input
+          -- --nocapture
