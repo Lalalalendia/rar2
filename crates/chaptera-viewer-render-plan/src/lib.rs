@@ -1462,6 +1462,90 @@ pub fn build_page_render_plan_v1(
     })
 }
 
+fn promote_direct_single_frame_prefix_to_whole_story_v1(
+    visual: &ViewerGeometryDocument,
+    node_id: NodeId,
+    fragment: &mut RenderTextFragmentV1,
+) -> bool {
+    let Some(story) = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == fragment.story_id)
+    else {
+        return false;
+    };
+    let Ok(story_scalar_len) = u32::try_from(story.text.chars().count()) else {
+        return false;
+    };
+    if fragment.scalar_start != 0
+        || fragment.scalar_end >= story_scalar_len
+        || u32::try_from(fragment.text.chars().count()).ok() != Some(fragment.scalar_end)
+    {
+        return false;
+    }
+
+    let story_scalars = story.text.chars().collect::<Vec<_>>();
+    let Ok(prefix_end) = usize::try_from(fragment.scalar_end) else {
+        return false;
+    };
+    if story_scalars
+        .get(..prefix_end)
+        .map(|scalars| scalars.iter().collect::<String>())
+        .as_deref()
+        != Some(fragment.text.as_str())
+    {
+        return false;
+    }
+
+    let mut frames = visual
+        .story_frames
+        .iter()
+        .filter(|frame| frame.story_id == fragment.story_id);
+    let Some(frame) = frames.next() else {
+        return false;
+    };
+    if frames.next().is_some() || frame.frame_id != node_id {
+        return false;
+    }
+
+    fragment.scalar_end = story_scalar_len;
+    fragment.text = story.text.clone();
+    fragment.line_count = 0;
+    fragment.typography = visual
+        .typography_runs
+        .iter()
+        .filter(|run| run.story_id == fragment.story_id)
+        .filter(|run| run.applies_to_story_text(&story.text))
+        .filter_map(|run| {
+            let scalar_start = run.scalar_start.min(story_scalar_len);
+            let scalar_end = run.scalar_end.min(story_scalar_len);
+            (scalar_start < scalar_end).then(|| RenderTypographyRunV1 {
+                scalar_start,
+                scalar_end,
+                source_font_name: run.source_font_name.clone(),
+                text_size_emu: run.text_size_emu,
+                font_inherited: run.font_inherited,
+                size_inherited: run.size_inherited,
+                color_rgb: run.color_rgb,
+                color_inherited: run.color_inherited,
+                bold: run.bold.map(|value| value.effective_value),
+                italic: run.italic.map(|value| value.effective_value),
+            })
+        })
+        .collect();
+    fragment.paragraph_alignments = render_paragraph_alignment_runs_v1(
+        visual,
+        fragment.story_id,
+        &story.text,
+        0,
+        story_scalar_len,
+    );
+    fragment.backend_font_resource_id = None;
+    fragment.layout = None;
+    true
+}
+
 #[derive(Clone)]
 struct RenderTextLayoutTargetV1 {
     page_id: PageId,
@@ -1521,6 +1605,23 @@ where
         let Some(fragment) = node.text.as_mut() else {
             continue;
         };
+
+        #[cfg(feature = "projected-scene-instances")]
+        let is_projected_target_frame = visual.projected_instances.iter().any(|projected| {
+            projected.target_frame_node_id == Some(node.node_id)
+                && projected.scene_instance.target_page_id == page_id.as_canonical().to_string()
+        });
+        #[cfg(not(feature = "projected-scene-instances"))]
+        let is_projected_target_frame = false;
+        #[cfg(feature = "projected-scene-instances")]
+        let is_projected_instance = node.projected_scene_instance.is_some();
+        #[cfg(not(feature = "projected-scene-instances"))]
+        let is_projected_instance = false;
+
+        if !is_projected_instance && !is_projected_target_frame {
+            promote_direct_single_frame_prefix_to_whole_story_v1(visual, node.node_id, fragment);
+        }
+
         let projected_target_frame_node_id = {
             #[cfg(feature = "projected-scene-instances")]
             {
@@ -4724,6 +4825,159 @@ mod tests {
             visual.document.stories[0].text, source,
             "paint clipping must not mutate canonical Viewer Story text"
         );
+    }
+
+    #[test]
+    fn direct_single_frame_prefix_promotes_to_authoritative_whole_story() {
+        let mut visual = fixture();
+        let node_id = visual.scene.nodes[0].origin;
+        let story_id = visual.document.stories[0].id;
+        let story_text = "hello world";
+        visual.document.stories[0].text = story_text.to_owned();
+        visual.story_frames.push(pub_viewer::ViewerStoryFrame {
+            story_id,
+            frame_id: node_id,
+            ordinal: 0,
+            text_content_bounds: None,
+            vertical_alignment: None,
+        });
+        visual.typography_runs = vec![ViewerTypographyRun {
+            story_id,
+            scalar_start: 0,
+            scalar_end: 11,
+            source_font_name: "Source Font".into(),
+            text_size_emu: 12 * 12_700,
+            font_inherited: false,
+            size_inherited: false,
+            color_rgb: None,
+            color_inherited: false,
+            bold: Some(pub_viewer::ViewerTypographyBooleanV1 {
+                local_toggle: true,
+                inherited_value: false,
+                effective_value: true,
+            }),
+            italic: Some(pub_viewer::ViewerTypographyBooleanV1 {
+                local_toggle: false,
+                inherited_value: false,
+                effective_value: false,
+            }),
+            source_story_text_sha256: viewer_story_text_sha256(story_text),
+        }];
+
+        let mut fragment = RenderTextFragmentV1 {
+            story_id,
+            scalar_start: 0,
+            scalar_end: 5,
+            text: "hello".into(),
+            line_count: 1,
+            typography: vec![RenderTypographyRunV1 {
+                scalar_start: 0,
+                scalar_end: 5,
+                source_font_name: "Source Font".into(),
+                text_size_emu: 12 * 12_700,
+                font_inherited: false,
+                size_inherited: false,
+                color_rgb: None,
+                color_inherited: false,
+                bold: Some(true),
+                italic: Some(false),
+            }],
+            paragraph_alignments: Vec::new(),
+            backend_font_resource_id: None,
+            layout: None,
+        };
+
+        assert!(promote_direct_single_frame_prefix_to_whole_story_v1(
+            &visual,
+            node_id,
+            &mut fragment
+        ));
+        assert_eq!(fragment.scalar_start, 0);
+        assert_eq!(fragment.scalar_end, 11);
+        assert_eq!(fragment.text, story_text);
+        assert_eq!(fragment.line_count, 0);
+        assert_eq!(fragment.typography.len(), 1);
+        assert_eq!(fragment.typography[0].scalar_end, 11);
+        assert_eq!(fragment.typography[0].bold, Some(true));
+        assert_eq!(fragment.typography[0].italic, Some(false));
+    }
+
+    #[test]
+    fn multi_frame_prefix_does_not_promote_to_whole_story() {
+        let mut visual = fixture();
+        let node_id = visual.scene.nodes[0].origin;
+        let story_id = visual.document.stories[0].id;
+        visual.document.stories[0].text = "hello world".into();
+        visual.story_frames.extend([
+            pub_viewer::ViewerStoryFrame {
+                story_id,
+                frame_id: node_id,
+                ordinal: 0,
+                text_content_bounds: None,
+                vertical_alignment: None,
+            },
+            pub_viewer::ViewerStoryFrame {
+                story_id,
+                frame_id: NodeId::from_canonical(canonical(10)),
+                ordinal: 1,
+                text_content_bounds: None,
+                vertical_alignment: None,
+            },
+        ]);
+
+        let mut fragment = RenderTextFragmentV1 {
+            story_id,
+            scalar_start: 0,
+            scalar_end: 5,
+            text: "hello".into(),
+            line_count: 1,
+            typography: Vec::new(),
+            paragraph_alignments: Vec::new(),
+            backend_font_resource_id: None,
+            layout: None,
+        };
+
+        assert!(!promote_direct_single_frame_prefix_to_whole_story_v1(
+            &visual,
+            node_id,
+            &mut fragment
+        ));
+        assert_eq!(fragment.scalar_end, 5);
+        assert_eq!(fragment.text, "hello");
+    }
+
+    #[test]
+    fn full_extent_modified_text_stays_fail_closed() {
+        let mut visual = fixture();
+        let node_id = visual.scene.nodes[0].origin;
+        let story_id = visual.document.stories[0].id;
+        visual.document.stories[0].text = "hello".into();
+        visual.story_frames.push(pub_viewer::ViewerStoryFrame {
+            story_id,
+            frame_id: node_id,
+            ordinal: 0,
+            text_content_bounds: None,
+            vertical_alignment: None,
+        });
+
+        let mut fragment = RenderTextFragmentV1 {
+            story_id,
+            scalar_start: 0,
+            scalar_end: 5,
+            text: "he\u{200B}lo".into(),
+            line_count: 1,
+            typography: Vec::new(),
+            paragraph_alignments: Vec::new(),
+            backend_font_resource_id: None,
+            layout: None,
+        };
+
+        assert!(!promote_direct_single_frame_prefix_to_whole_story_v1(
+            &visual,
+            node_id,
+            &mut fragment
+        ));
+        assert_eq!(fragment.text, "he\u{200B}lo");
     }
 
     #[test]
