@@ -2563,64 +2563,64 @@ mod tests {
                                 .stories
                                 .iter()
                                 .find(|story| story.id == text.story_id)
+                        {
+                            let story_scalars = story.text.chars().collect::<Vec<_>>();
+                            let fragment_scalars = text.text.chars().collect::<Vec<_>>();
+                            let Ok(story_len) = u32::try_from(story_scalars.len()) else {
+                                continue;
+                            };
+                            let Ok(fragment_len) = u32::try_from(fragment_scalars.len()) else {
+                                continue;
+                            };
+
+                            let profile = if text.scalar_start == 0
+                                && text.scalar_end == story_len
+                                && fragment_len == story_len
+                                && text.text != story.text
                             {
-                                let story_scalars = story.text.chars().collect::<Vec<_>>();
-                                let fragment_scalars = text.text.chars().collect::<Vec<_>>();
-                                let Ok(story_len) = u32::try_from(story_scalars.len()) else {
-                                    continue;
-                                };
-                                let Ok(fragment_len) = u32::try_from(fragment_scalars.len()) else {
-                                    continue;
-                                };
-
-                                let profile = if text.scalar_start == 0
-                                    && text.scalar_end == story_len
-                                    && fragment_len == story_len
-                                    && text.text != story.text
+                                let mut differences = 0_usize;
+                                let mut marker_suppressions = 0_usize;
+                                let mut other_differences = 0_usize;
+                                for (source, rendered) in
+                                    story_scalars.iter().zip(fragment_scalars.iter())
                                 {
-                                    let mut differences = 0_usize;
-                                    let mut marker_suppressions = 0_usize;
-                                    let mut other_differences = 0_usize;
-                                    for (source, rendered) in
-                                        story_scalars.iter().zip(fragment_scalars.iter())
-                                    {
-                                        if source == rendered {
-                                            continue;
-                                        }
-                                        differences += 1;
-                                        if *source == '\u{FFFC}' && *rendered == '\u{200B}' {
-                                            marker_suppressions += 1;
-                                        } else {
-                                            other_differences += 1;
-                                        }
+                                    if source == rendered {
+                                        continue;
                                     }
-
-                                    if differences > 0
-                                        && marker_suppressions == differences
-                                        && other_differences == 0
-                                    {
-                                        format!(
-                                            "page{}:full_extent:object_marker_to_zero_width_only:diffs={differences}",
-                                            page_index + 1
-                                        )
+                                    differences += 1;
+                                    if *source == '\u{FFFC}' && *rendered == '\u{200B}' {
+                                        marker_suppressions += 1;
                                     } else {
-                                        format!(
-                                            "page{}:full_extent:same_extent_other:diffs={differences}:other={other_differences}",
-                                            page_index + 1
-                                        )
+                                        other_differences += 1;
                                     }
+                                }
+
+                                if differences > 0
+                                    && marker_suppressions == differences
+                                    && other_differences == 0
+                                {
+                                    format!(
+                                        "page{}:full_extent:object_marker_to_zero_width_only:diffs={differences}",
+                                        page_index + 1
+                                    )
                                 } else {
                                     format!(
-                                        "page{}:partial_or_other:start={}:end_delta={}:len_delta={}",
-                                        page_index + 1,
-                                        text.scalar_start,
-                                        i64::from(text.scalar_end) - i64::from(story_len),
-                                        i64::from(fragment_len) - i64::from(story_len),
+                                        "page{}:full_extent:same_extent_other:diffs={differences}:other={other_differences}",
+                                        page_index + 1
                                     )
-                                };
-                                *full_extent_story_mismatch_profiles
-                                    .entry(profile)
-                                    .or_default() += 1;
+                                }
+                            } else {
+                                format!(
+                                    "page{}:partial_or_other:start={}:end_delta={}:len_delta={}",
+                                    page_index + 1,
+                                    text.scalar_start,
+                                    i64::from(text.scalar_end) - i64::from(story_len),
+                                    i64::from(fragment_len) - i64::from(story_len),
+                                )
+                            };
+                            *full_extent_story_mismatch_profiles
+                                .entry(profile)
+                                .or_default() += 1;
                         }
                     }
                 }
