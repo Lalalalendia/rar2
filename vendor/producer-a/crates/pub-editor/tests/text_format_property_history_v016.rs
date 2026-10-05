@@ -176,7 +176,7 @@ fn real_pub_color_blocked_story_persists_scoped_bold_history_v016() {
     assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_16);
     assert_eq!(project.operations.len(), 1);
     assert!(matches!(
-        project.operations[0],
+        &project.operations[0],
         EditOperation::SetTextFormatPropertyScopedV1 { .. }
     ));
 
