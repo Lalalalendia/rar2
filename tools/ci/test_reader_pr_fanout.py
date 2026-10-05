@@ -1,3 +1,4 @@
+# CI control: Reader close lifecycle cancellation proof.
 #!/usr/bin/env python3
 from __future__ import annotations
 
