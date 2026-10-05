@@ -1,7 +1,5 @@
 use chaptera_viewer_render_plan::{PageRenderPlanV1, RenderTextLayoutDispositionV1};
-use pub_editor::{
-    EditorSession, EffectiveParagraphAlignmentValueV1, ImportedParagraphV1, StoryId,
-};
+use pub_editor::{EditorSession, EffectiveParagraphAlignmentValueV1, ImportedParagraphV1, StoryId};
 use pub_line_placement::{
     LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
     ResolvedLineInputV1, resolve_paragraph_line_placement_v1,
@@ -139,8 +137,8 @@ pub(super) fn apply_editor_paragraph_alignment_layout_v1(
             let placement = resolve_paragraph_line_placement_v1(&ParagraphLinePlacementInputV1 {
                 context: LayoutPlacementContextV1 {
                     authoring_revision: revision.clone(),
-                    layout_environment_fingerprint:
-                        "chaptera.desktop.current-paragraph-layout.v1".to_owned(),
+                    layout_environment_fingerprint: "chaptera.desktop.current-paragraph-layout.v1"
+                        .to_owned(),
                 },
                 alignment,
                 story_overset: false,
