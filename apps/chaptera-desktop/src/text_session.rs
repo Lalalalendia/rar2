@@ -16,8 +16,7 @@ use chaptera_text_input_adapter::{
 use chaptera_text_interaction_adapter::{
     SELECTION_VERSION_V1, TextEditSessionV1, TextEntryCandidateV1, TextPointerTargetV1,
     TextSelectionStateV1, activate_explicit_edit_text_v1, activate_pointer_text_v1,
-    exit_desktop_text_mode_v1, handoff_same_story_frame_v1,
-    rebind_text_edit_session_authority_v1,
+    exit_desktop_text_mode_v1, handoff_same_story_frame_v1, rebind_text_edit_session_authority_v1,
 };
 use pub_editor::{EditorSession, NodeId, StoryId};
 use pub_model::CanonicalId;
@@ -522,12 +521,10 @@ mod tests {
 
     #[test]
     fn authoritative_caret_frame_accepts_same_story_handoff_to_another_frame() {
-        let frame_a: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
-                .expect("canonical frame A");
-        let frame_b: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000002\"")
-                .expect("canonical frame B");
+        let frame_a: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+            .expect("canonical frame A");
+        let frame_b: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000002\"")
+            .expect("canonical frame B");
 
         assert_ne!(frame_a, frame_b);
         assert_eq!(
