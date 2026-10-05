@@ -92,8 +92,8 @@ jobs:
       - name: Prove linked Story same-session frame handoff on real PUB
         run: cargo test -p chaptera-desktop real_sample_newsletter_linked_story_session_hands_off_between_frames_without_topology_mutation -- --nocapture
 
-      - name: Prove scoped Bold history on color-blocked real PUB
-        run: cargo test -p chaptera-desktop real_pub_color_blocked_story_uses_scoped_desktop_bold_history_v016 -- --nocapture
+      - name: Prove scoped Bold Italic history on color-blocked real PUB
+        run: cargo test -p chaptera-desktop real_pub_color_blocked_story_uses_scoped_desktop_bold_italic_history_v016 -- --nocapture
 
   gui-direct-text:
     needs: format-preflight
