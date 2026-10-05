@@ -557,8 +557,8 @@ pub(super) fn show_canvas_edit_text_button(
             .iter()
             .find(|fragment| fragment.frame_id == selected_node_id)
         && editor.is_some_and(|editor| {
-                text_session::can_enter_text_mode(editor, fragment.story_id).is_ok()
-            })
+            text_session::can_enter_text_mode(editor, fragment.story_id).is_ok()
+        })
     {
         let button_width = 76.0_f32;
         let button_height = 22.0_f32;
