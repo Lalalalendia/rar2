@@ -436,7 +436,7 @@ pub fn shared_core() {}
     assert run is True and reason == "pub_editor_lib_core_change"
 
     run, reason = classify_authored_stack(
-        ["vendor/producer-a/crates/pub-editor/src/create_shape_runtime_v1.rs"]
+        ["vendor/producer-a/crates/pub-editor/src/text_format_property_base_v1.rs"]
     )
     assert run is True and reason == "unknown_or_core_pub_editor_path"
 
