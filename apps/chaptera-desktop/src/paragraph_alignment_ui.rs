@@ -159,8 +159,7 @@ pub(super) fn paragraph_alignment_selection_state_v1(
                 }) {
                     provenance_mixed = true;
                 } else if provenance.is_none() {
-                    provenance =
-                        Some(DesktopParagraphAlignmentProvenanceStateV1::ChapteraOverride);
+                    provenance = Some(DesktopParagraphAlignmentProvenanceStateV1::ChapteraOverride);
                 }
             }
             None => {
@@ -244,14 +243,11 @@ mod tests {
     #[test]
     fn paragraph_target_mapping_uses_canonical_ranges_not_visual_lines() {
         let story_id: StoryId =
-            serde_json::from_str("\"33000000-0000-4000-8000-000000000001\"")
-                .expect("story id");
+            serde_json::from_str("\"33000000-0000-4000-8000-000000000001\"").expect("story id");
         let first: ParagraphId =
-            serde_json::from_str("\"33000000-0000-4000-8000-000000000002\"")
-                .expect("paragraph 1");
+            serde_json::from_str("\"33000000-0000-4000-8000-000000000002\"").expect("paragraph 1");
         let second: ParagraphId =
-            serde_json::from_str("\"33000000-0000-4000-8000-000000000003\"")
-                .expect("paragraph 2");
+            serde_json::from_str("\"33000000-0000-4000-8000-000000000003\"").expect("paragraph 2");
         let paragraphs = vec![
             ImportedParagraphV1 {
                 paragraph_id: first,
@@ -450,7 +446,10 @@ mod tests {
             DesktopParagraphAlignmentProvenanceStateV1::ChapteraOverride
         );
 
-        assert_eq!(editor.graph().stories[&paragraph.story_id].text, source_text);
+        assert_eq!(
+            editor.graph().stories[&paragraph.story_id].text,
+            source_text
+        );
         assert_eq!(
             fs::read(&path).expect("re-read Carlton source"),
             original,
