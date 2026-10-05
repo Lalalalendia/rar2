@@ -393,9 +393,8 @@ mod tests {
                     {
                         continue;
                     }
-                    let scalar_len = fragment
-                        .scalar_end
-                        .saturating_sub(fragment.scalar_start) as usize;
+                    let scalar_len =
+                        fragment.scalar_end.saturating_sub(fragment.scalar_start) as usize;
                     let source_fragment_text = story
                         .text
                         .chars()
