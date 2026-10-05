@@ -93,11 +93,11 @@ jobs:
       - name: Prove linked Story same-session frame handoff on real PUB
         run: cargo test -p chaptera-desktop real_sample_newsletter_linked_story_session_hands_off_between_frames_without_topology_mutation -- --nocapture
 
-      - name: Prove scoped Bold Italic history on color-blocked real PUB
-        run: cargo test -p chaptera-desktop real_pub_color_blocked_story_uses_scoped_desktop_bold_italic_history_v016 -- --nocapture
+      - name: Prove scoped Bold Italic history on real PUB
+        run: cargo test -p chaptera-desktop real_pub_story_uses_scoped_desktop_bold_italic_history_v016 -- --nocapture
 
-      - name: Prove scoped Bold reaches current shaped-flow typography without Color authority
-        run: cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml real_51318_scoped_bold_reaches_current_boolean_typography_without_color_authority -- --nocapture
+      - name: Prove scoped Bold reaches current shaped-flow typography
+        run: cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml real_51318_scoped_bold_reaches_current_boolean_typography -- --nocapture
 
   gui-direct-text:
     needs: format-preflight

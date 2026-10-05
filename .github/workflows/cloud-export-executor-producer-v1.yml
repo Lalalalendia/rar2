@@ -30,7 +30,7 @@ permissions:
 jobs:
   edited-export-producer:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -42,7 +42,8 @@ jobs:
         run: |
           set -euo pipefail
           sudo timeout 600s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
-          sudo timeout 600s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus libreoffice-draw xvfb
+          # Hosted Ubuntu mirrors can exceed the former 600s cap; keep the install bounded within the 45-minute job.
+          sudo timeout 1500s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus libreoffice-draw xvfb
 
       - name: Fetch pinned real Publisher fixture
         shell: bash
