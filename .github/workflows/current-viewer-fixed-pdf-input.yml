@@ -201,6 +201,34 @@ jobs:
           if census.get("page_count") != 3:
               raise SystemExit(f"Carlton current Viewer page count drift: {census.get('page_count')!r}")
 
+          fallback_reasons = census.get("backend_fallback_reason_counts") or {}
+          expected_fallback_reasons = {
+              "shared_layout_incomplete": 7,
+              "story_extent_mismatch": 4,
+          }
+          if fallback_reasons != expected_fallback_reasons:
+              raise SystemExit(f"Carlton fallback partition drift: {fallback_reasons!r}")
+
+          causal = census.get("shared_layout_incomplete_cause_counts") or {}
+          paths = census.get("shared_layout_incomplete_path_counts") or {}
+          consumption = census.get("shared_layout_incomplete_consumption_counts") or {}
+          cause_spacing = census.get("shared_layout_incomplete_cause_spacing_counts") or {}
+          for name, values in [
+              ("cause", causal),
+              ("path", paths),
+              ("consumption", consumption),
+              ("cause@spacing", cause_spacing),
+          ]:
+              if sum(values.values()) != 7:
+                  raise SystemExit(
+                      f"Carlton SharedLayoutIncomplete {name} census does not cover exactly seven nodes: {values!r}"
+                  )
+
+          if census.get("story_prefix_whole_story_candidate_count") != 3:
+              raise SystemExit("Carlton bounded Story-prefix candidate identity drift")
+          if census.get("first_line_capacity_recovery_count") != 8:
+              raise SystemExit("Carlton first-line recovery identity drift")
+
           page_ids = binding.get("page_ids")
           if not isinstance(page_ids, list) or len(page_ids) != 3 or len(set(page_ids)) != 3:
               raise SystemExit("Carlton current Viewer page identity set is not exactly three unique pages")
