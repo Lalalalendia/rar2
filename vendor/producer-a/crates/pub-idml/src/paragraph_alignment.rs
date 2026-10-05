@@ -48,6 +48,9 @@ pub enum IdmlParagraphAlignmentError {
         story_id: StoryId,
         paragraph_id: pub_model::ParagraphId,
     },
+    StoryTextMismatch {
+        story_id: StoryId,
+    },
 }
 
 impl fmt::Display for IdmlParagraphAlignmentError {
@@ -132,6 +135,11 @@ impl fmt::Display for IdmlParagraphAlignmentError {
                 formatter,
                 "Paragraph {} in Story {} contains embedded U+000D outside its terminal boundary",
                 paragraph_id.as_canonical(),
+                story_id.as_canonical()
+            ),
+            Self::StoryTextMismatch { story_id } => write!(
+                formatter,
+                "IDML Story {} Content does not match canonical Story text",
                 story_id.as_canonical()
             ),
         }
@@ -306,6 +314,14 @@ pub fn add_paragraph_scoped_alignment_to_idml(
         let content_end = block.find(content_close).unwrap();
         if content_end < content_start {
             return Err(IdmlParagraphAlignmentError::UnexpectedStoryMarkup {
+                story_id: placement.story_id,
+            });
+        }
+        let existing_content =
+            &block[content_start + content_open.len()..content_end];
+        let expected_content = escape_xml_content(placement.story_text.clone());
+        if existing_content != expected_content {
+            return Err(IdmlParagraphAlignmentError::StoryTextMismatch {
                 story_id: placement.story_id,
             });
         }
