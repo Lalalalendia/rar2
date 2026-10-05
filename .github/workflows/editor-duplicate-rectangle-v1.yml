@@ -8,6 +8,8 @@ on:
       - "vendor/producer-a/crates/pub-editor/tests/duplicate_authored_rectangle_v1.rs"
       - "apps/chaptera-desktop/src/duplicate_rectangle.rs"
       - "apps/chaptera-desktop/src/duplicate_rectangle_gui_tests.rs"
+      - "tools/ci/pub_editor_pr_fanout.py"
+      - "tools/ci/test_pub_editor_pr_fanout.py"
       - ".github/workflows/editor-duplicate-rectangle-v1.yml"
   push:
     branches:
@@ -22,7 +24,70 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  classify:
+    name: Classify pub-editor Duplicate Rectangle scope
+    runs-on: ubuntu-latest
+    outputs:
+      duplicate_rectangle: ${{ steps.scope.outputs.duplicate_rectangle }}
+      reason: ${{ steps.scope.outputs.duplicate_reason }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.ref || github.sha }}
+          fetch-depth: 0
+
+      - id: base-authority
+        name: Resolve base-branch classifier authority
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch PR head for classification
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags origin "$HEAD_SHA"
+
+      - name: Test base-authority pub-editor classifier
+        run: python tools/ci/test_pub_editor_pr_fanout.py
+
+      - id: scope
+        name: Classify Duplicate Rectangle ownership
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ steps.base-authority.outputs.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/pub-editor-pr-fanout
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "duplicate_rectangle=true" >> "$GITHUB_OUTPUT"
+            echo "duplicate_reason=non_pr_event_fail_closed" >> "$GITHUB_OUTPUT"
+            printf '%s\n' '{"schema":"chaptera.pub-editor-pr-fanout.v1","duplicate_rectangle":true,"duplicate_reason":"non_pr_event_fail_closed"}' > target/pub-editor-pr-fanout/receipt.json
+            exit 0
+          fi
+          python tools/ci/pub_editor_pr_fanout.py \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --receipt target/pub-editor-pr-fanout/receipt.json \
+            --github-output "$GITHUB_OUTPUT"
+          if ! grep -q '^duplicate_rectangle=' "$GITHUB_OUTPUT"; then
+            echo "duplicate_rectangle=true" >> "$GITHUB_OUTPUT"
+            echo "duplicate_reason=base_classifier_missing_duplicate_output" >> "$GITHUB_OUTPUT"
+            python -c 'import json, pathlib; p=pathlib.Path("target/pub-editor-pr-fanout/receipt.json"); d=json.loads(p.read_text()); d["duplicate_rectangle"]=True; d["duplicate_reason"]="base_classifier_missing_duplicate_output"; p.write_text(json.dumps(d, indent=2, sort_keys=True) + "\n")'
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: pub-editor-duplicate-rectangle-scope-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/pub-editor-pr-fanout/receipt.json
+          if-no-files-found: warn
+
   core:
+    needs: classify
+    if: ${{ !cancelled() && always() && (needs.classify.result != 'success' || needs.classify.outputs.duplicate_rectangle == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -68,7 +133,8 @@ jobs:
           -A clippy::too_many_arguments
 
   real-gui:
-    needs: core
+    needs: [classify, core]
+    if: ${{ !cancelled() && always() && needs.core.result == 'success' && (needs.classify.result != 'success' || needs.classify.outputs.duplicate_rectangle == 'true') }}
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
