@@ -79,6 +79,14 @@ fn real_carlton_effective_full_story_alignment_drives_idml_and_odg() {
             AuthoredParagraphAlignmentValueV1::Center,
         )
         .expect("set Center across the whole Story");
+    assert!(session.can_enter_story_text_session(right.story_id).is_ok());
+    assert_eq!(
+        session
+            .can_replace_story_text(right.story_id)
+            .expect_err("ParagraphId history must fence Story text mutation")
+            .code(),
+        "paragraph_alignment_lifecycle_unsupported"
+    );
     let centered = session
         .effective_full_story_paragraph_alignment_v1()
         .expect("derive centered full-Story alignment");
@@ -98,6 +106,14 @@ fn real_carlton_effective_full_story_alignment_drives_idml_and_odg() {
     session
         .clear_paragraph_alignment_override_v1(paragraph_ids.clone())
         .expect("clear full-Story Center override");
+    assert!(session.can_enter_story_text_session(right.story_id).is_ok());
+    assert_eq!(
+        session
+            .can_replace_story_text(right.story_id)
+            .expect_err("Clear must not erase the ParagraphId lifecycle fence")
+            .code(),
+        "paragraph_alignment_lifecycle_unsupported"
+    );
     let cleared_idml = export_counts(&session, EditorEditableTarget::Idml);
     let cleared_odg = export_counts(&session, EditorEditableTarget::Odg);
     assert_eq!(cleared_idml.0, source_idml.0);

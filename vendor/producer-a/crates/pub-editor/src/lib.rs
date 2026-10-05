@@ -1531,7 +1531,7 @@ impl fmt::Display for EditorError {
                 .write_str("paragraph alignment override transition is not canonical"),
             Self::ParagraphAlignmentLifecycleUnsupported { story_id } => write!(
                 formatter,
-                "story {} has authored paragraph alignment overrides; Story text/topology mutation is fenced until paragraph lifecycle semantics are implemented",
+                "story {} has applied paragraph alignment history; Story text/topology mutation is fenced until ParagraphId lifecycle rebasing is implemented",
                 story_id.as_canonical()
             ),
             Self::NothingToUndo => formatter.write_str("editor session has nothing to undo"),
@@ -3018,19 +3018,44 @@ impl EditorSession {
         Ok(operation)
     }
 
-    fn story_has_authored_paragraph_alignment_override_v1(
+    fn story_has_paragraph_alignment_history_v1(
         &self,
         story_id: StoryId,
     ) -> Result<bool, EditorError> {
-        let overrides = self.current_paragraph_alignment_overrides_v1()?;
-        if overrides.is_empty() {
+        let has_paragraph_history = self.undo.iter().any(|operation| {
+            matches!(
+                operation,
+                EditOperation::SetParagraphAlignmentOverride { .. }
+                    | EditOperation::ClearParagraphAlignmentOverride { .. }
+            )
+        });
+        if !has_paragraph_history {
             return Ok(false);
         }
-        let paragraphs = self
+
+        let paragraph_ids = self
             .imported_paragraphs_v1()
-            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?;
-        Ok(paragraphs.iter().any(|paragraph| {
-            paragraph.story_id == story_id && overrides.contains_key(&paragraph.paragraph_id)
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .into_iter()
+            .filter(|paragraph| paragraph.story_id == story_id)
+            .map(|paragraph| paragraph.paragraph_id)
+            .collect::<BTreeSet<_>>();
+        if paragraph_ids.is_empty() {
+            return Ok(false);
+        }
+
+        Ok(self.undo.iter().any(|operation| match operation {
+            EditOperation::SetParagraphAlignmentOverride {
+                paragraph_ids: targets,
+                ..
+            }
+            | EditOperation::ClearParagraphAlignmentOverride {
+                paragraph_ids: targets,
+                ..
+            } => targets
+                .iter()
+                .any(|paragraph_id| paragraph_ids.contains(paragraph_id)),
+            _ => false,
         }))
     }
 
@@ -4873,9 +4898,12 @@ impl EditorSession {
         &self,
         story_id: StoryId,
         allow_character_format_history: bool,
+        allow_paragraph_format_history: bool,
     ) -> Result<(), EditorError> {
         self.validate_source_identity()?;
-        if self.story_has_authored_paragraph_alignment_override_v1(story_id)? {
+        if !allow_paragraph_format_history
+            && self.story_has_paragraph_alignment_history_v1(story_id)?
+        {
             return Err(EditorError::ParagraphAlignmentLifecycleUnsupported { story_id });
         }
 
@@ -4948,11 +4976,11 @@ impl EditorSession {
     }
 
     pub fn can_enter_story_text_session(&self, story_id: StoryId) -> Result<(), EditorError> {
-        self.validate_story_text_session_capability(story_id, true)
+        self.validate_story_text_session_capability(story_id, true, true)
     }
 
     pub fn can_replace_story_text(&self, story_id: StoryId) -> Result<(), EditorError> {
-        self.validate_story_text_session_capability(story_id, false)
+        self.validate_story_text_session_capability(story_id, false, false)
     }
 
     pub fn editable_table_cells_for_story(
@@ -5014,7 +5042,7 @@ impl EditorSession {
         let story_id = table
             .story_id
             .ok_or(EditorError::TableEditUnsupported { node_id })?;
-        if self.story_has_authored_paragraph_alignment_override_v1(story_id)? {
+        if self.story_has_paragraph_alignment_history_v1(story_id)? {
             return Err(EditorError::ParagraphAlignmentLifecycleUnsupported { story_id });
         }
         let story = self
@@ -5775,7 +5803,7 @@ impl EditorSession {
             .first()
             .expect("explicit chain must be non-empty")
             .story_id;
-        if self.story_has_authored_paragraph_alignment_override_v1(source_story_id)? {
+        if self.story_has_paragraph_alignment_history_v1(source_story_id)? {
             return Err(EditorError::ParagraphAlignmentLifecycleUnsupported {
                 story_id: source_story_id,
             });

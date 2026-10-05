@@ -26,6 +26,7 @@ mod locale;
 mod page_navigation;
 #[cfg(all(test, not(feature = "reader-only")))]
 mod page_navigation_gui_tests;
+mod paragraph_alignment_overlay;
 mod product_smoke;
 mod reader_product_cli;
 mod reader_product_ui;
@@ -3771,6 +3772,10 @@ impl ViewerApp {
         }
         .map_err(|error| error.to_string())?;
         if let Some(editor) = self.editor.as_ref() {
+            paragraph_alignment_overlay::apply_editor_paragraph_alignment_layout_v1(
+                &mut render_plan,
+                editor,
+            )?;
             authored_stack::apply_editor_authored_page_lane(&mut render_plan, editor)?;
         }
         let page_id_text = page.id.as_canonical().to_string();
@@ -5233,10 +5238,18 @@ fn paint_page_thumbnail(
     let Ok(mut render_plan) = build_desktop_page_render_plan(visual, page_index) else {
         return;
     };
-    if let Some(editor) = editor
-        && authored_stack::apply_editor_authored_page_lane(&mut render_plan, editor).is_err()
-    {
-        return;
+    if let Some(editor) = editor {
+        if paragraph_alignment_overlay::apply_editor_paragraph_alignment_layout_v1(
+            &mut render_plan,
+            editor,
+        )
+        .is_err()
+        {
+            return;
+        }
+        if authored_stack::apply_editor_authored_page_lane(&mut render_plan, editor).is_err() {
+            return;
+        }
     }
     if render_plan.page_size.width.get() <= 0 || render_plan.page_size.height.get() <= 0 {
         return;

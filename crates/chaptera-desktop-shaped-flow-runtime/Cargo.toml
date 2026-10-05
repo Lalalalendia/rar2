@@ -12,6 +12,7 @@ chaptera-text-caret-map-adapter = { path = "../chaptera-text-caret-map-adapter" 
 chaptera-viewer-render-plan = { path = "../chaptera-viewer-render-plan", features = ["projected-scene-instances"] }
 pub-editor = { path = "../../vendor/producer-a/crates/pub-editor" }
 pub-layout = { path = "../../vendor/producer-a/crates/pub-layout" }
+pub-line-placement = { path = "../pub-line-placement" }
 pub-model = { path = "../../vendor/producer-a/crates/pub-model" }
 pub-viewer = { path = "../../vendor/producer-a/crates/pub-viewer", features = ["cmo-slot-compose"] }
 serde = { version = "1", features = ["derive"] }

@@ -1,16 +1,24 @@
 use chaptera_caret_layout_feed::build_caret_map_from_shaped_flow_v1;
 use chaptera_text_caret_map_adapter::ResolvedTextCaretMapV1;
 use pub_editor::{
-    EditOperation, EditorCurrentImageResourceV1, EditorSession, FormatPropertyV1, FormatValueV1,
+    EditOperation, EditorCurrentImageResourceV1, EditorSession, EffectiveParagraphAlignmentValueV1,
+    FormatPropertyV1, FormatValueV1,
 };
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
     BoundedShapingRuntime, font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
 };
+use pub_line_placement::{
+    LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
+    ResolvedLineInputV1, resolve_paragraph_line_placement_v1,
+};
 use pub_model::{LengthEmu, NodeId, StoryId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::BTreeSet, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 pub const DESKTOP_SHAPED_FLOW_RUNTIME_V1: &str = "chaptera.desktop-shaped-flow-runtime.v1";
 pub const CURRENT_FIXED_PDF_RESOURCE_INPUT_V1: &str =
@@ -276,6 +284,160 @@ pub fn current_story_boolean_typography_v1(
     Ok(out)
 }
 
+fn effective_line_alignment_v1(
+    editor: &EditorSession,
+    story_id: StoryId,
+    scalar_start: u32,
+    consumed_scalar_end: u32,
+) -> Result<Option<ParagraphAlignmentV1>, DesktopShapedFlowRuntimeError> {
+    let paragraphs = match editor.imported_paragraphs_v1() {
+        Ok(paragraphs) => paragraphs,
+        Err(_) => return Ok(None),
+    };
+    let start = u64::from(scalar_start);
+    let end = u64::from(consumed_scalar_end);
+    let Some(paragraph) = paragraphs.iter().find(|paragraph| {
+        paragraph.story_id == story_id
+            && paragraph.range.start <= start
+            && start < paragraph.range.end
+            && end <= paragraph.range.end
+    }) else {
+        return Ok(None);
+    };
+
+    let effective = editor
+        .effective_paragraph_alignment_v1(paragraph.paragraph_id)
+        .map_err(|error| {
+            DesktopShapedFlowRuntimeError::new(
+                "paragraph_alignment_projection_failed",
+                format!("current ParagraphId alignment could not be resolved: {error}"),
+            )
+        })?;
+    Ok(match effective.effective {
+        Some(EffectiveParagraphAlignmentValueV1::Left) => Some(ParagraphAlignmentV1::Left),
+        Some(EffectiveParagraphAlignmentValueV1::Center) => Some(ParagraphAlignmentV1::Center),
+        Some(EffectiveParagraphAlignmentValueV1::Right) => Some(ParagraphAlignmentV1::Right),
+        Some(EffectiveParagraphAlignmentValueV1::InterWord)
+        | Some(EffectiveParagraphAlignmentValueV1::Distribute)
+        | None => None,
+    })
+}
+
+fn current_story_line_offsets_v1(
+    editor: &EditorSession,
+    story_id: StoryId,
+    layout_revision_id: &str,
+    shaped_flow: &BoundedShapedFlowScene,
+) -> Result<BTreeMap<u32, i64>, DesktopShapedFlowRuntimeError> {
+    let mut source_lines = shaped_flow
+        .lines
+        .iter()
+        .filter(|line| line.story_origin == story_id)
+        .collect::<Vec<_>>();
+    source_lines.sort_by_key(|line| (line.scalar_start, line.frame_origin, line.frame_line_index));
+
+    let mut offsets = BTreeMap::new();
+    for (ordinal, line) in source_lines.into_iter().enumerate() {
+        let Some(alignment) = effective_line_alignment_v1(
+            editor,
+            story_id,
+            line.scalar_start,
+            line.consumed_scalar_end,
+        )?
+        else {
+            continue;
+        };
+        let frame = shaped_flow
+            .nodes
+            .iter()
+            .find(|node| node.origin == line.frame_origin)
+            .ok_or_else(|| {
+                DesktopShapedFlowRuntimeError::new(
+                    "paragraph_alignment_frame_missing",
+                    "paragraph-aligned shaped line has no current frame geometry",
+                )
+            })?;
+        let placement = resolve_paragraph_line_placement_v1(&ParagraphLinePlacementInputV1 {
+            context: LayoutPlacementContextV1 {
+                authoring_revision: layout_revision_id.to_owned(),
+                layout_environment_fingerprint: DESKTOP_SHAPED_FLOW_RUNTIME_V1.to_owned(),
+            },
+            alignment,
+            story_overset: false,
+            lines: vec![ResolvedLineInputV1 {
+                line_index: 0,
+                story_id: story_id.as_canonical().to_string(),
+                frame_node_id: line.frame_origin.as_canonical().to_string(),
+                frame_line_index: line.frame_line_index,
+                scalar_start: line.scalar_start,
+                scalar_end: line.scalar_end,
+                content_leading_x_emu: 0,
+                content_width_emu: frame.bounds.width.get(),
+                measured_width_emu: line.measured_width.get(),
+            }],
+        })
+        .map_err(|error| {
+            DesktopShapedFlowRuntimeError::new(
+                "paragraph_alignment_placement_failed",
+                format!("current paragraph line placement failed: {error}"),
+            )
+        })?;
+        let offset = placement
+            .lines
+            .first()
+            .expect("one-line placement returns one line")
+            .line_origin_x_emu;
+        offsets.insert(
+            u32::try_from(ordinal).map_err(|_| {
+                DesktopShapedFlowRuntimeError::new(
+                    "line_count_overflow",
+                    "paragraph-aligned shaped line ordinal exceeds u32",
+                )
+            })?,
+            offset,
+        );
+    }
+    Ok(offsets)
+}
+
+fn apply_line_offsets_to_caret_map_v1(
+    caret_map: &mut ResolvedTextCaretMapV1,
+    offsets: &BTreeMap<u32, i64>,
+) -> Result<(), DesktopShapedFlowRuntimeError> {
+    let shifted = |value: i64, offset: i64| {
+        value.checked_add(offset).ok_or_else(|| {
+            DesktopShapedFlowRuntimeError::new(
+                "metric_overflow",
+                "paragraph alignment offset overflowed caret geometry",
+            )
+        })
+    };
+
+    for line in &mut caret_map.lines {
+        let Some(offset) = offsets.get(&line.flow_ordinal).copied() else {
+            continue;
+        };
+        for cluster in &mut line.clusters {
+            cluster.page_x_start_emu = shifted(cluster.page_x_start_emu, offset)?;
+            cluster.page_x_end_emu = shifted(cluster.page_x_end_emu, offset)?;
+            cluster.frame_x_start_emu = shifted(cluster.frame_x_start_emu, offset)?;
+            cluster.frame_x_end_emu = shifted(cluster.frame_x_end_emu, offset)?;
+            for stop in &mut cluster.internal_caret_stops {
+                stop.page_x_emu = shifted(stop.page_x_emu, offset)?;
+                stop.frame_x_emu = shifted(stop.frame_x_emu, offset)?;
+            }
+        }
+    }
+    for stop in &mut caret_map.caret_stops {
+        let Some(offset) = offsets.get(&stop.flow_ordinal).copied() else {
+            continue;
+        };
+        stop.page_x_emu = shifted(stop.page_x_emu, offset)?;
+        stop.frame_x_emu = shifted(stop.frame_x_emu, offset)?;
+    }
+    Ok(())
+}
+
 pub fn build_current_story_layout_v1(
     editor: &EditorSession,
     story_id: StoryId,
@@ -334,7 +496,7 @@ pub fn build_current_story_layout_v1(
         )
     })?;
 
-    let caret_map = build_caret_map_from_shaped_flow_v1(
+    let mut caret_map = build_caret_map_from_shaped_flow_v1(
         &shaped_flow,
         layout_revision_id,
         story_id,
@@ -346,6 +508,9 @@ pub fn build_current_story_layout_v1(
             format!("shaped-flow caret projection failed: {error}"),
         )
     })?;
+    let line_offsets =
+        current_story_line_offsets_v1(editor, story_id, layout_revision_id, &shaped_flow)?;
+    apply_line_offsets_to_caret_map_v1(&mut caret_map, &line_offsets)?;
 
     Ok(DesktopStoryLayoutV1 {
         layout_revision_id: layout_revision_id.to_owned(),
@@ -588,6 +753,322 @@ mod tests {
             original,
             "current typography projection must not mutate source PUB bytes"
         );
+    }
+
+    fn expected_paragraph_offset_v1(
+        alignment: ParagraphAlignmentV1,
+        content_width_emu: i64,
+        measured_width_emu: i64,
+    ) -> i64 {
+        let remaining = content_width_emu - measured_width_emu;
+        match alignment {
+            ParagraphAlignmentV1::Left => 0,
+            ParagraphAlignmentV1::Center => remaining / 2,
+            ParagraphAlignmentV1::Right => remaining,
+        }
+    }
+
+    fn assert_caret_flow_shift_v1(
+        raw: &ResolvedTextCaretMapV1,
+        shifted: &ResolvedTextCaretMapV1,
+        flow_ordinal: u32,
+        expected_offset: i64,
+    ) {
+        let raw_line = raw
+            .lines
+            .iter()
+            .find(|line| line.flow_ordinal == flow_ordinal)
+            .expect("raw caret line");
+        let shifted_line = shifted
+            .lines
+            .iter()
+            .find(|line| line.flow_ordinal == flow_ordinal)
+            .expect("shifted caret line");
+        assert_eq!(raw_line.clusters.len(), shifted_line.clusters.len());
+        for (raw_cluster, shifted_cluster) in raw_line.clusters.iter().zip(&shifted_line.clusters) {
+            assert_eq!(
+                shifted_cluster.page_x_start_emu,
+                raw_cluster.page_x_start_emu + expected_offset
+            );
+            assert_eq!(
+                shifted_cluster.page_x_end_emu,
+                raw_cluster.page_x_end_emu + expected_offset
+            );
+            assert_eq!(
+                shifted_cluster.frame_x_start_emu,
+                raw_cluster.frame_x_start_emu + expected_offset
+            );
+            assert_eq!(
+                shifted_cluster.frame_x_end_emu,
+                raw_cluster.frame_x_end_emu + expected_offset
+            );
+            assert_eq!(
+                raw_cluster.internal_caret_stops.len(),
+                shifted_cluster.internal_caret_stops.len()
+            );
+            for (raw_stop, shifted_stop) in raw_cluster
+                .internal_caret_stops
+                .iter()
+                .zip(&shifted_cluster.internal_caret_stops)
+            {
+                assert_eq!(
+                    shifted_stop.page_x_emu,
+                    raw_stop.page_x_emu + expected_offset
+                );
+                assert_eq!(
+                    shifted_stop.frame_x_emu,
+                    raw_stop.frame_x_emu + expected_offset
+                );
+            }
+        }
+
+        let raw_stops = raw
+            .caret_stops
+            .iter()
+            .filter(|stop| stop.flow_ordinal == flow_ordinal)
+            .collect::<Vec<_>>();
+        let shifted_stops = shifted
+            .caret_stops
+            .iter()
+            .filter(|stop| stop.flow_ordinal == flow_ordinal)
+            .collect::<Vec<_>>();
+        assert_eq!(raw_stops.len(), shifted_stops.len());
+        assert!(!raw_stops.is_empty());
+        for (raw_stop, shifted_stop) in raw_stops.into_iter().zip(shifted_stops) {
+            assert_eq!(
+                shifted_stop.page_x_emu,
+                raw_stop.page_x_emu + expected_offset
+            );
+            assert_eq!(
+                shifted_stop.frame_x_emu,
+                raw_stop.frame_x_emu + expected_offset
+            );
+        }
+    }
+
+    #[test]
+    fn real_carlton_paragraph_alignment_moves_caret_and_clear_restores_source_geometry() {
+        let Some(path) = env::var_os("CHAPTERA_CARLTON_PUB") else {
+            eprintln!("CHAPTERA_CARLTON_PUB not set; dedicated shaped-flow gate owns this test");
+            return;
+        };
+
+        let bytes = fs::read(path).expect("read pinned Carlton March PUB");
+        let digest = Sha256::digest(&bytes);
+        let mut digest_bytes = [0_u8; 32];
+        digest_bytes.copy_from_slice(&digest);
+        let source_hash = Sha256Digest::from_bytes(digest_bytes);
+        let mut editor =
+            open_mature_0x2c_editor(&bytes, source_hash).expect("open Carlton EditorSession");
+        let font = test_font();
+        let imported = editor
+            .imported_paragraphs_v1()
+            .expect("project canonical Carlton ParagraphIds");
+
+        let mut candidate = None;
+        for story_id in editor.graph().stories.keys().copied().collect::<Vec<_>>() {
+            if editor.can_enter_story_text_session(story_id).is_err() {
+                continue;
+            }
+            let Ok(baseline) =
+                build_current_story_layout_v1(&editor, story_id, "paragraph:source", &font)
+            else {
+                continue;
+            };
+            if baseline.caret_map.lines.is_empty() {
+                continue;
+            }
+            let raw = build_caret_map_from_shaped_flow_v1(
+                &baseline.shaped_flow,
+                "paragraph:raw",
+                story_id,
+                baseline.story_scalar_len,
+            )
+            .expect("raw caret map from the same shaped flow");
+
+            let mut lines = baseline
+                .shaped_flow
+                .lines
+                .iter()
+                .filter(|line| line.story_origin == story_id)
+                .collect::<Vec<_>>();
+            lines.sort_by_key(|line| (line.scalar_start, line.frame_origin, line.frame_line_index));
+
+            for (ordinal, line) in lines.into_iter().enumerate() {
+                let start = u64::from(line.scalar_start);
+                let end = u64::from(line.consumed_scalar_end);
+                let Some(paragraph) = imported.iter().find(|paragraph| {
+                    paragraph.story_id == story_id
+                        && paragraph.range.start <= start
+                        && start < paragraph.range.end
+                        && end <= paragraph.range.end
+                }) else {
+                    continue;
+                };
+                let Some(frame) = baseline
+                    .shaped_flow
+                    .nodes
+                    .iter()
+                    .find(|node| node.origin == line.frame_origin)
+                else {
+                    continue;
+                };
+                let remaining = frame.bounds.width.get() - line.measured_width.get();
+                if remaining <= 2 {
+                    continue;
+                }
+                let Ok(flow_ordinal) = u32::try_from(ordinal) else {
+                    continue;
+                };
+                if !raw.lines.iter().any(|caret_line| {
+                    caret_line.flow_ordinal == flow_ordinal && !caret_line.clusters.is_empty()
+                }) {
+                    continue;
+                }
+                let Ok(effective) = editor.effective_paragraph_alignment_v1(paragraph.paragraph_id)
+                else {
+                    continue;
+                };
+                let base_alignment = match effective.effective {
+                    Some(EffectiveParagraphAlignmentValueV1::Left) => ParagraphAlignmentV1::Left,
+                    Some(EffectiveParagraphAlignmentValueV1::Center) => {
+                        ParagraphAlignmentV1::Center
+                    }
+                    Some(EffectiveParagraphAlignmentValueV1::Right) => ParagraphAlignmentV1::Right,
+                    _ => continue,
+                };
+
+                let content_width_emu = frame.bounds.width.get();
+                let measured_width_emu = line.measured_width.get();
+                candidate = Some((
+                    story_id,
+                    paragraph.paragraph_id,
+                    baseline,
+                    raw,
+                    flow_ordinal,
+                    content_width_emu,
+                    measured_width_emu,
+                    base_alignment,
+                ));
+                break;
+            }
+            if candidate.is_some() {
+                break;
+            }
+        }
+
+        let (
+            story_id,
+            paragraph_id,
+            baseline,
+            raw,
+            flow_ordinal,
+            content_width_emu,
+            measured_width_emu,
+            base_alignment,
+        ) = candidate
+            .expect("Carlton must expose one editable paragraph line with horizontal slack");
+
+        assert_caret_flow_shift_v1(
+            &raw,
+            &baseline.caret_map,
+            flow_ordinal,
+            expected_paragraph_offset_v1(base_alignment, content_width_emu, measured_width_emu),
+        );
+
+        let mut paragraph_history_active = false;
+        for (alignment, authored) in [
+            (
+                ParagraphAlignmentV1::Left,
+                pub_editor::AuthoredParagraphAlignmentValueV1::Left,
+            ),
+            (
+                ParagraphAlignmentV1::Center,
+                pub_editor::AuthoredParagraphAlignmentValueV1::Center,
+            ),
+            (
+                ParagraphAlignmentV1::Right,
+                pub_editor::AuthoredParagraphAlignmentValueV1::Right,
+            ),
+        ] {
+            let current = editor
+                .effective_paragraph_alignment_v1(paragraph_id)
+                .expect("current paragraph alignment");
+            let already = matches!(
+                (current.effective, alignment),
+                (
+                    Some(EffectiveParagraphAlignmentValueV1::Left),
+                    ParagraphAlignmentV1::Left
+                ) | (
+                    Some(EffectiveParagraphAlignmentValueV1::Center),
+                    ParagraphAlignmentV1::Center
+                ) | (
+                    Some(EffectiveParagraphAlignmentValueV1::Right),
+                    ParagraphAlignmentV1::Right
+                )
+            );
+            if !already {
+                editor
+                    .set_paragraph_alignment_override_v1(vec![paragraph_id], authored)
+                    .expect("set current paragraph alignment");
+                paragraph_history_active = true;
+            }
+
+            assert!(editor.can_enter_story_text_session(story_id).is_ok());
+            if paragraph_history_active {
+                assert_eq!(
+                    editor
+                        .can_replace_story_text(story_id)
+                        .expect_err("ParagraphId history must fence Story text mutation")
+                        .code(),
+                    "paragraph_alignment_lifecycle_unsupported"
+                );
+            }
+
+            let layout = build_current_story_layout_v1(
+                &editor,
+                story_id,
+                &format!("paragraph:{alignment:?}"),
+                &font,
+            )
+            .expect("rebuild current paragraph layout");
+            assert_caret_flow_shift_v1(
+                &raw,
+                &layout.caret_map,
+                flow_ordinal,
+                expected_paragraph_offset_v1(alignment, content_width_emu, measured_width_emu),
+            );
+        }
+
+        let restore_from = if base_alignment != ParagraphAlignmentV1::Center {
+            pub_editor::AuthoredParagraphAlignmentValueV1::Center
+        } else {
+            pub_editor::AuthoredParagraphAlignmentValueV1::Left
+        };
+        editor
+            .set_paragraph_alignment_override_v1(vec![paragraph_id], restore_from)
+            .expect("establish explicit override before Clear");
+        editor
+            .clear_paragraph_alignment_override_v1(vec![paragraph_id])
+            .expect("Clear paragraph alignment override");
+        assert!(editor.can_enter_story_text_session(story_id).is_ok());
+        assert_eq!(
+            editor
+                .can_replace_story_text(story_id)
+                .expect_err("Clear must retain the ParagraphId lifecycle fence")
+                .code(),
+            "paragraph_alignment_lifecycle_unsupported"
+        );
+
+        let cleared = build_current_story_layout_v1(&editor, story_id, "paragraph:clear", &font)
+            .expect("rebuild paragraph layout after Clear");
+        assert_caret_flow_shift_v1(
+            &raw,
+            &cleared.caret_map,
+            flow_ordinal,
+            expected_paragraph_offset_v1(base_alignment, content_width_emu, measured_width_emu),
+        );
+        assert_eq!(editor.source_hash(), source_hash);
     }
 
     #[test]
