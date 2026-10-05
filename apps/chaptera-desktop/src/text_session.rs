@@ -1093,14 +1093,8 @@ mod tests {
         let revision = mode.session.revision_id.clone();
         let domain = mode.domain.clone();
         let layout = mode.layout.clone();
-        mode.session.selection = scalar_selection_for_current_authority(
-            &mode,
-            &revision,
-            &domain,
-            &layout,
-            scalar,
-            scalar,
-        );
+        mode.session.selection =
+            scalar_selection_for_current_authority(&mode, &revision, &domain, &layout, scalar, scalar);
 
         let source = paragraph_alignment_selection_state_v1(&editor, &mode)
             .expect("read source paragraph toolbar state");
@@ -1188,7 +1182,10 @@ mod tests {
             DesktopParagraphAlignmentProvenanceStateV1::ChapteraOverride
         );
 
-        assert_eq!(editor.graph().stories[&paragraph.story_id].text, fragment.text);
+        assert_eq!(
+            editor.graph().stories[&paragraph.story_id].text,
+            fragment.text
+        );
         assert_eq!(
             fs::read(&path).expect("re-read Carlton source"),
             original,
