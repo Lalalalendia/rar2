@@ -36,17 +36,20 @@ FORBIDDEN = {
         'vendor/producer-a/crates/pub-editor/tests/resize_node_v1.rs',
     ),
     '.github/workflows/authoring-move-nodes-v1.yml': (
+        'apps/chaptera-desktop/src/agent.rs',
         'vendor/producer-a/crates/pub-editor/src/lib.rs',
         'vendor/producer-a/crates/pub-editor/src/writer_assessment.rs',
         'vendor/producer-a/crates/pub-editor/tests/move_nodes_v1.rs',
         'vendor/producer-a/crates/pub-editor/tests/resize_node_v1.rs',
     ),
     '.github/workflows/authoring-create-shape-v1.yml': (
+        'apps/chaptera-desktop/src/agent.rs',
         'vendor/producer-a/crates/pub-editor/src/lib.rs',
         'vendor/producer-a/crates/pub-editor/src/writer_assessment.rs',
         'vendor/producer-a/crates/pub-editor/tests/create_shape_runtime_v1.rs',
     ),
     '.github/workflows/resize-nodes-v1.yml': (
+        'apps/chaptera-desktop/src/agent.rs',
         'vendor/producer-a/crates/pub-editor/src/lib.rs',
         'vendor/producer-a/crates/pub-editor/src/writer_assessment.rs',
         'vendor/producer-a/crates/pub-editor/tests/resize_nodes_v1.rs',
@@ -73,6 +76,7 @@ FORBIDDEN = {
         'vendor/producer-a/crates/pub-editor/tests/create_text_box_v1.rs',
     ),
     '.github/workflows/editor-resize-node.yml': (
+        'apps/chaptera-desktop/src/agent.rs',
         'vendor/producer-a/crates/pub-editor/src/lib.rs',
         'vendor/producer-a/crates/pub-editor/src/writer_assessment.rs',
         'vendor/producer-a/crates/pub-editor/tests/resize_node_v1.rs',
