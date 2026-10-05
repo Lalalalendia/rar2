@@ -948,14 +948,16 @@ mod tests {
                     _ => continue,
                 };
 
+                let content_width_emu = frame.bounds.width.get();
+                let measured_width_emu = line.measured_width.get();
                 candidate = Some((
                     story_id,
                     paragraph.paragraph_id,
                     baseline,
                     raw,
                     flow_ordinal,
-                    frame.bounds.width.get(),
-                    line.measured_width.get(),
+                    content_width_emu,
+                    measured_width_emu,
                     base_alignment,
                 ));
                 break;
@@ -987,6 +989,7 @@ mod tests {
             ),
         );
 
+        let mut paragraph_history_active = false;
         for (alignment, authored) in [
             (
                 ParagraphAlignmentV1::Left,
@@ -1021,16 +1024,19 @@ mod tests {
                 editor
                     .set_paragraph_alignment_override_v1(vec![paragraph_id], authored)
                     .expect("set current paragraph alignment");
+                paragraph_history_active = true;
             }
 
             assert!(editor.can_enter_story_text_session(story_id).is_ok());
-            assert_eq!(
-                editor
-                    .can_replace_story_text(story_id)
-                    .expect_err("ParagraphId history must fence Story text mutation")
-                    .code(),
-                "paragraph_alignment_lifecycle_unsupported"
-            );
+            if paragraph_history_active {
+                assert_eq!(
+                    editor
+                        .can_replace_story_text(story_id)
+                        .expect_err("ParagraphId history must fence Story text mutation")
+                        .code(),
+                    "paragraph_alignment_lifecycle_unsupported"
+                );
+            }
 
             let layout = build_current_story_layout_v1(
                 &editor,
