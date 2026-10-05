@@ -3744,6 +3744,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_14
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_15
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
         {
             let expected = required_editor_asset_refs_v1(&project.operations)
                 .into_iter()
@@ -3811,6 +3812,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_14
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_15
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
         {
             let actual_grids = effective_table_grids(&candidate.graph);
             if actual_grids != project.table_grids {
