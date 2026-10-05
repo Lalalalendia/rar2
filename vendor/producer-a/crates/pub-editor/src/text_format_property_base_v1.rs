@@ -541,6 +541,7 @@ mod tests {
             font_inherited: true,
             size_inherited: true,
             color_rgb,
+            color_scheme_slot: None,
             color_inherited: true,
             bold: bold.map(|effective_value| PubTypographyBooleanV1 {
                 local_toggle: false,
