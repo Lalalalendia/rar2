@@ -1,6 +1,6 @@
 use pub_editor::{
-    AuthoredParagraphAlignmentValueV1, EDITOR_PROJECT_VERSION_V0_15,
-    EditorEditableTarget, EffectiveParagraphAlignmentValueV1, ImportedParagraphAlignmentValueV1,
+    AuthoredParagraphAlignmentValueV1, EDITOR_PROJECT_VERSION_V0_15, EditorEditableTarget,
+    EffectiveParagraphAlignmentValueV1, ImportedParagraphAlignmentValueV1,
     ParagraphAlignmentAuthorityV1, Sha256Digest, open_mature_0x2c_editor,
 };
 use std::io::{Cursor, Read};
