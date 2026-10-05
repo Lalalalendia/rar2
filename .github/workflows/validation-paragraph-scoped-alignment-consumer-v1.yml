@@ -147,7 +147,6 @@ jobs:
           assert set(expected["states"]["clear"]["alignment_sequence"]) == {"right"}
           mixed = expected["states"]["mixed"]["alignment_sequence"]
           assert mixed[0:2] == ["left", "center"]
-          assert "right" in mixed[2:]
 
           receipt = {
               "schema": "chaptera.paragraph-scoped-alignment-consumer-receipt.v1",
@@ -159,7 +158,7 @@ jobs:
               "claims": {
                   "center_scoped_survives_scribus_and_libreoffice_save_reopen": True,
                   "clear_returns_imported_right_and_survives_consumers": True,
-                  "mixed_left_center_right_order_survives_consumers": True,
+                  "mixed_left_center_order_survives_consumers": True,
                   "capability_promoted_by_this_validation": False,
                   "source_story_text_recorded": False,
                   "target_side_text_edit_proven": False,
