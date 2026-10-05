@@ -977,30 +977,54 @@ class RevisionKernel:
             )
             node_id = command["node_id"]
             shapes = base_project.get("shapes")
-            target = shapes.get(node_id) if isinstance(shapes, dict) else None
-            if not isinstance(target, dict):
-                raise ValueError("RotateNodeQuarterTurn target missing from base project")
-            expected_pivot = authored_bounds_center_v1(target.get("bounds"))
+            picture_frames = base_project.get("picture_frames")
+            shape_target = (
+                shapes.get(node_id)
+                if isinstance(shapes, dict)
+                else None
+            )
+            picture_target = (
+                picture_frames.get(node_id)
+                if isinstance(picture_frames, dict)
+                else None
+            )
+            shape_present = isinstance(shape_target, dict)
+            picture_present = isinstance(picture_target, dict)
+            if shape_present == picture_present:
+                raise ValueError(
+                    "RotateNodeQuarterTurn target must resolve to exactly one canonical registry"
+                )
+
+            if shape_present:
+                registry_name = "shapes"
+                geometry_key = "bounds"
+                target = shape_target
+            else:
+                registry_name = "picture_frames"
+                geometry_key = "frame"
+                target = picture_target
+
+            expected_pivot = authored_bounds_center_v1(target.get(geometry_key))
             if operation.get("pivot") != expected_pivot:
                 raise ValueError(
                     "canonical RotateNodeQuarterTurn pivot differs from authored bounds center"
                 )
-            result_shapes = resulting_project.get("shapes")
+
+            result_registry = resulting_project.get(registry_name)
             result_target = (
-                result_shapes.get(node_id)
-                if isinstance(result_shapes, dict)
+                result_registry.get(node_id)
+                if isinstance(result_registry, dict)
                 else None
             )
             expected_transform = {
                 "kind": "affine",
                 **operation.get("after", {}),
             }
-            if (
-                not isinstance(result_target, dict)
-                or result_target.get("transform") != expected_transform
-            ):
+            expected_target = copy.deepcopy(target)
+            expected_target["transform"] = expected_transform
+            if result_target != expected_target:
                 raise ValueError(
-                    "RotateNodeQuarterTurn resulting project is not bound to canonical after transform"
+                    "RotateNodeQuarterTurn resulting target changed fields outside canonical transform"
                 )
             return operation, resulting_project, consequences
 
