@@ -59,6 +59,35 @@ def shape():
     }
 
 
+def picture_frame():
+    return {
+        "node_id": NODE_ID,
+        "kind": "image_frame",
+        "page_id": PAGE_ID,
+        "parent_id": PAGE_ID,
+        "frame": copy.deepcopy(BOUNDS),
+        "asset": "ef" * 32,
+        "asset_sha256": "ef" * 32,
+        "intrinsic": {
+            "width_px": 1600,
+            "height_px": 900,
+            "orientation_class": "normal",
+        },
+        "transform": {"kind": "identity"},
+        "visible": True,
+        "opacity_milli": 1000,
+        "crop": {
+            "left": 11,
+            "top": 22,
+            "right": 33,
+            "bottom": 44,
+        },
+        "placement": {"kind": "chaptera.cover-crop.v1"},
+        "supported": True,
+        "provenance": {"kind": "author_created"},
+    }
+
+
 def project():
     return {
         "schema_version": "pub-editor-v0.4",
@@ -148,6 +177,78 @@ class RotateQuarterV1Tests(unittest.TestCase):
                 for item in result["consequences"]
                 if item["key"] == "native_pub_write"
             ),
+        )
+
+    def test_picture_frame_quarter_turn_preserves_crop_placement_and_asset(self):
+        candidate = project()
+        candidate["shapes"] = {}
+        candidate["picture_frames"] = {NODE_ID: picture_frame()}
+
+        kernel = RevisionKernel()
+        baseline = kernel.register_baseline(
+            document_id="doc:rotate-picture",
+            source_hash=SOURCE_HASH,
+            project=candidate,
+        )
+        req = self.request(
+            "rotate-picture-0001",
+            base=baseline.revision_id,
+        )
+        req["document_id"] = "doc:rotate-picture"
+
+        before = copy.deepcopy(candidate["picture_frames"][NODE_ID])
+        result = kernel.commit_rotate_node_quarter(
+            req,
+            apply_rotate_node_quarter_v1,
+        )
+        operation = result["canonical_operation"]
+        current = kernel.current_revision("doc:rotate-picture").project
+
+        expected = copy.deepcopy(before)
+        expected["transform"] = {"kind": "affine", **operation["after"]}
+        self.assertEqual(expected, current["picture_frames"][NODE_ID])
+        self.assertEqual(before["frame"], current["picture_frames"][NODE_ID]["frame"])
+        self.assertEqual(before["crop"], current["picture_frames"][NODE_ID]["crop"])
+        self.assertEqual(
+            before["placement"],
+            current["picture_frames"][NODE_ID]["placement"],
+        )
+        self.assertEqual(
+            before["asset_sha256"],
+            current["picture_frames"][NODE_ID]["asset_sha256"],
+        )
+        self.assertEqual({}, current["shapes"])
+
+    def test_source_backed_picture_frame_fails_closed(self):
+        candidate = project()
+        candidate["shapes"] = {}
+        frame = picture_frame()
+        frame["provenance"] = {"kind": "source_backed"}
+        candidate["picture_frames"] = {NODE_ID: frame}
+
+        kernel = RevisionKernel()
+        baseline = kernel.register_baseline(
+            document_id="doc:rotate-picture-source",
+            source_hash=SOURCE_HASH,
+            project=candidate,
+        )
+        req = self.request(
+            "rotate-picture-source-0001",
+            base=baseline.revision_id,
+        )
+        req["document_id"] = "doc:rotate-picture-source"
+
+        with self.assertRaisesRegex(
+            RotateQuarterError,
+            "unsupported or source-backed",
+        ):
+            kernel.commit_rotate_node_quarter(
+                req,
+                apply_rotate_node_quarter_v1,
+            )
+        self.assertEqual(
+            baseline.revision_id,
+            kernel.current_revision("doc:rotate-picture-source").revision_id,
         )
 
     def test_negative_turn_canonicalizes_to_three(self):
