@@ -4,6 +4,21 @@
 use super::{SceneHitEntry, ViewerApp, text_session};
 use eframe::egui;
 
+fn paragraph_alignment_shortcut_v1(
+    key: egui::Key,
+    modifiers: egui::Modifiers,
+) -> Option<pub_editor::AuthoredParagraphAlignmentValueV1> {
+    if !(modifiers.ctrl || modifiers.command) || modifiers.alt || modifiers.shift {
+        return None;
+    }
+    match key {
+        egui::Key::L => Some(pub_editor::AuthoredParagraphAlignmentValueV1::Left),
+        egui::Key::E => Some(pub_editor::AuthoredParagraphAlignmentValueV1::Center),
+        egui::Key::R => Some(pub_editor::AuthoredParagraphAlignmentValueV1::Right),
+        _ => None,
+    }
+}
+
 impl ViewerApp {
     pub(super) fn enter_canvas_text_mode(
         &mut self,
@@ -356,26 +371,9 @@ impl ViewerApp {
                         continue;
                     }
 
-                    if (modifiers.ctrl || modifiers.command)
-                        && !modifiers.alt
-                        && !modifiers.shift
-                    {
-                        let alignment = match key {
-                            egui::Key::L => {
-                                Some(pub_editor::AuthoredParagraphAlignmentValueV1::Left)
-                            }
-                            egui::Key::E => {
-                                Some(pub_editor::AuthoredParagraphAlignmentValueV1::Center)
-                            }
-                            egui::Key::R => {
-                                Some(pub_editor::AuthoredParagraphAlignmentValueV1::Right)
-                            }
-                            _ => None,
-                        };
-                        if let Some(alignment) = alignment {
-                            self.apply_canvas_paragraph_alignment_v1(alignment);
-                            continue;
-                        }
+                    if let Some(alignment) = paragraph_alignment_shortcut_v1(key, modifiers) {
+                        self.apply_canvas_paragraph_alignment_v1(alignment);
+                        continue;
                     }
 
                     if self.process_story_object_keyboard(key, modifiers) {
@@ -746,7 +744,39 @@ pub(super) fn strict_document_rect_interior(
 
 #[cfg(test)]
 mod tests {
-    use super::strict_document_rect_interior;
+    use super::{paragraph_alignment_shortcut_v1, strict_document_rect_interior};
+
+    #[test]
+    fn paragraph_alignment_shortcuts_are_text_session_scoped_and_exact() {
+        let command = egui::Modifiers::CTRL;
+        assert_eq!(
+            paragraph_alignment_shortcut_v1(egui::Key::L, command),
+            Some(pub_editor::AuthoredParagraphAlignmentValueV1::Left)
+        );
+        assert_eq!(
+            paragraph_alignment_shortcut_v1(egui::Key::E, command),
+            Some(pub_editor::AuthoredParagraphAlignmentValueV1::Center)
+        );
+        assert_eq!(
+            paragraph_alignment_shortcut_v1(egui::Key::R, command),
+            Some(pub_editor::AuthoredParagraphAlignmentValueV1::Right)
+        );
+        assert_eq!(
+            paragraph_alignment_shortcut_v1(egui::Key::R, egui::Modifiers::NONE),
+            None
+        );
+        assert_eq!(
+            paragraph_alignment_shortcut_v1(
+                egui::Key::L,
+                egui::Modifiers {
+                    ctrl: true,
+                    shift: true,
+                    ..Default::default()
+                },
+            ),
+            None
+        );
+    }
 
     #[test]
     fn strict_text_activation_interior_excludes_exact_frame_boundary() {
