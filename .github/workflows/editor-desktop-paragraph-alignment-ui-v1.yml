@@ -5,6 +5,7 @@ on:
     paths:
       - "apps/chaptera-desktop/src/text_session.rs"
       - "apps/chaptera-desktop/src/text_session_shell.rs"
+      - "apps/chaptera-desktop/src/paragraph_alignment_ui.rs"
       - "tools/acquire_carlton_march_pair.py"
       - ".github/workflows/editor-desktop-paragraph-alignment-ui-v1.yml"
   workflow_dispatch:
