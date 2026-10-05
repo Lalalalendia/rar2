@@ -4,7 +4,7 @@ use pub_editor::{
     AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1,
     AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
     EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_10, EDITOR_PROJECT_VERSION_V0_12,
-    EDITOR_PROJECT_VERSION_V0_15, EditOperation, EditorError, EditorProject, EditorProjectError,
+    EDITOR_PROJECT_VERSION_V0_16, EditOperation, EditorError, EditorProject, EditorProjectError,
     EditorSession, LengthEmu, RectEmu, Srgb8V1, mature_0x2c_pub_persistence_target,
 };
 use pub_export::{PersistenceCompatibilityState, WriterCapabilityManifest};
