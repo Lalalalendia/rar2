@@ -75,6 +75,23 @@ jobs:
       - name: Prove linked Story same-session frame handoff on real PUB
         run: cargo test -p chaptera-desktop real_sample_newsletter_linked_story_session_hands_off_between_frames_without_topology_mutation -- --nocapture
 
+      - name: Acquire pinned Apache POI scoped-format witness
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="${RUNNER_TEMP}/51318.pub"
+          curl --fail --location --silent --show-error \
+            "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/51318.pub" \
+            --output "${fixture}"
+          actual_sha="$(sha256sum "${fixture}" | cut -d' ' -f1)"
+          actual_bytes="$(wc -c < "${fixture}" | tr -d ' ')"
+          test "${actual_sha}" = "3ab75a6a9196e0a51fc9b0aa759459501c71d313030c06652aabffbae0a2ab09"
+          test "${actual_bytes}" = "88576"
+          echo "CHAPTERA_SCOPED_TEXT_FORMAT_FIXTURE=${fixture}" >> "${GITHUB_ENV}"
+
+      - name: Prove scoped Bold reachability on color-blocked real PUB
+        run: cargo test -p chaptera-desktop real_51318_scoped_boolean_format_is_reachable_durable_and_reversible -- --nocapture
+
   gui-direct-text:
     needs: format-preflight
     runs-on: windows-latest
