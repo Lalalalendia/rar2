@@ -749,6 +749,7 @@ pub(super) fn strict_document_rect_interior(
 #[cfg(test)]
 mod tests {
     use super::{paragraph_alignment_shortcut_v1, strict_document_rect_interior};
+    use crate::egui;
 
     #[test]
     fn paragraph_alignment_shortcuts_are_text_session_scoped_and_exact() {
