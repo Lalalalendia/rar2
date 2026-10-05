@@ -1,16 +1,24 @@
 use chaptera_caret_layout_feed::build_caret_map_from_shaped_flow_v1;
 use chaptera_text_caret_map_adapter::ResolvedTextCaretMapV1;
 use pub_editor::{
-    EditOperation, EditorCurrentImageResourceV1, EditorSession, FormatPropertyV1, FormatValueV1,
+    EditOperation, EditorCurrentImageResourceV1, EditorSession, EffectiveParagraphAlignmentValueV1,
+    FormatPropertyV1, FormatValueV1,
 };
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
     BoundedShapingRuntime, font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
 };
+use pub_line_placement::{
+    LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
+    ResolvedLineInputV1, resolve_paragraph_line_placement_v1,
+};
 use pub_model::{LengthEmu, NodeId, StoryId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::BTreeSet, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 pub const DESKTOP_SHAPED_FLOW_RUNTIME_V1: &str = "chaptera.desktop-shaped-flow-runtime.v1";
 pub const CURRENT_FIXED_PDF_RESOURCE_INPUT_V1: &str =
@@ -276,6 +284,160 @@ pub fn current_story_boolean_typography_v1(
     Ok(out)
 }
 
+fn effective_line_alignment_v1(
+    editor: &EditorSession,
+    story_id: StoryId,
+    scalar_start: u32,
+    consumed_scalar_end: u32,
+) -> Result<Option<ParagraphAlignmentV1>, DesktopShapedFlowRuntimeError> {
+    let paragraphs = match editor.imported_paragraphs_v1() {
+        Ok(paragraphs) => paragraphs,
+        Err(_) => return Ok(None),
+    };
+    let start = u64::from(scalar_start);
+    let end = u64::from(consumed_scalar_end);
+    let Some(paragraph) = paragraphs.iter().find(|paragraph| {
+        paragraph.story_id == story_id
+            && paragraph.range.start <= start
+            && start < paragraph.range.end
+            && end <= paragraph.range.end
+    }) else {
+        return Ok(None);
+    };
+
+    let effective = editor
+        .effective_paragraph_alignment_v1(paragraph.paragraph_id)
+        .map_err(|error| {
+            DesktopShapedFlowRuntimeError::new(
+                "paragraph_alignment_projection_failed",
+                format!("current ParagraphId alignment could not be resolved: {error}"),
+            )
+        })?;
+    Ok(match effective.effective {
+        Some(EffectiveParagraphAlignmentValueV1::Left) => Some(ParagraphAlignmentV1::Left),
+        Some(EffectiveParagraphAlignmentValueV1::Center) => Some(ParagraphAlignmentV1::Center),
+        Some(EffectiveParagraphAlignmentValueV1::Right) => Some(ParagraphAlignmentV1::Right),
+        Some(EffectiveParagraphAlignmentValueV1::InterWord)
+        | Some(EffectiveParagraphAlignmentValueV1::Distribute)
+        | None => None,
+    })
+}
+
+fn current_story_line_offsets_v1(
+    editor: &EditorSession,
+    story_id: StoryId,
+    layout_revision_id: &str,
+    shaped_flow: &BoundedShapedFlowScene,
+) -> Result<BTreeMap<u32, i64>, DesktopShapedFlowRuntimeError> {
+    let mut source_lines = shaped_flow
+        .lines
+        .iter()
+        .filter(|line| line.story_origin == story_id)
+        .collect::<Vec<_>>();
+    source_lines.sort_by_key(|line| (line.scalar_start, line.frame_origin, line.frame_line_index));
+
+    let mut offsets = BTreeMap::new();
+    for (ordinal, line) in source_lines.into_iter().enumerate() {
+        let Some(alignment) = effective_line_alignment_v1(
+            editor,
+            story_id,
+            line.scalar_start,
+            line.consumed_scalar_end,
+        )?
+        else {
+            continue;
+        };
+        let frame = shaped_flow
+            .nodes
+            .iter()
+            .find(|node| node.origin == line.frame_origin)
+            .ok_or_else(|| {
+                DesktopShapedFlowRuntimeError::new(
+                    "paragraph_alignment_frame_missing",
+                    "paragraph-aligned shaped line has no current frame geometry",
+                )
+            })?;
+        let placement = resolve_paragraph_line_placement_v1(&ParagraphLinePlacementInputV1 {
+            context: LayoutPlacementContextV1 {
+                authoring_revision: layout_revision_id.to_owned(),
+                layout_environment_fingerprint: DESKTOP_SHAPED_FLOW_RUNTIME_V1.to_owned(),
+            },
+            alignment,
+            story_overset: false,
+            lines: vec![ResolvedLineInputV1 {
+                line_index: 0,
+                story_id: story_id.as_canonical().to_string(),
+                frame_node_id: line.frame_origin.as_canonical().to_string(),
+                frame_line_index: line.frame_line_index,
+                scalar_start: line.scalar_start,
+                scalar_end: line.scalar_end,
+                content_leading_x_emu: 0,
+                content_width_emu: frame.bounds.width.get(),
+                measured_width_emu: line.measured_width.get(),
+            }],
+        })
+        .map_err(|error| {
+            DesktopShapedFlowRuntimeError::new(
+                "paragraph_alignment_placement_failed",
+                format!("current paragraph line placement failed: {error}"),
+            )
+        })?;
+        let offset = placement
+            .lines
+            .first()
+            .expect("one-line placement returns one line")
+            .line_origin_x_emu;
+        offsets.insert(
+            u32::try_from(ordinal).map_err(|_| {
+                DesktopShapedFlowRuntimeError::new(
+                    "line_count_overflow",
+                    "paragraph-aligned shaped line ordinal exceeds u32",
+                )
+            })?,
+            offset,
+        );
+    }
+    Ok(offsets)
+}
+
+fn apply_line_offsets_to_caret_map_v1(
+    caret_map: &mut ResolvedTextCaretMapV1,
+    offsets: &BTreeMap<u32, i64>,
+) -> Result<(), DesktopShapedFlowRuntimeError> {
+    let shifted = |value: i64, offset: i64| {
+        value.checked_add(offset).ok_or_else(|| {
+            DesktopShapedFlowRuntimeError::new(
+                "metric_overflow",
+                "paragraph alignment offset overflowed caret geometry",
+            )
+        })
+    };
+
+    for line in &mut caret_map.lines {
+        let Some(offset) = offsets.get(&line.flow_ordinal).copied() else {
+            continue;
+        };
+        for cluster in &mut line.clusters {
+            cluster.page_x_start_emu = shifted(cluster.page_x_start_emu, offset)?;
+            cluster.page_x_end_emu = shifted(cluster.page_x_end_emu, offset)?;
+            cluster.frame_x_start_emu = shifted(cluster.frame_x_start_emu, offset)?;
+            cluster.frame_x_end_emu = shifted(cluster.frame_x_end_emu, offset)?;
+            for stop in &mut cluster.internal_caret_stops {
+                stop.page_x_emu = shifted(stop.page_x_emu, offset)?;
+                stop.frame_x_emu = shifted(stop.frame_x_emu, offset)?;
+            }
+        }
+    }
+    for stop in &mut caret_map.caret_stops {
+        let Some(offset) = offsets.get(&stop.flow_ordinal).copied() else {
+            continue;
+        };
+        stop.page_x_emu = shifted(stop.page_x_emu, offset)?;
+        stop.frame_x_emu = shifted(stop.frame_x_emu, offset)?;
+    }
+    Ok(())
+}
+
 pub fn build_current_story_layout_v1(
     editor: &EditorSession,
     story_id: StoryId,
@@ -334,7 +496,7 @@ pub fn build_current_story_layout_v1(
         )
     })?;
 
-    let caret_map = build_caret_map_from_shaped_flow_v1(
+    let mut caret_map = build_caret_map_from_shaped_flow_v1(
         &shaped_flow,
         layout_revision_id,
         story_id,
@@ -346,6 +508,9 @@ pub fn build_current_story_layout_v1(
             format!("shaped-flow caret projection failed: {error}"),
         )
     })?;
+    let line_offsets =
+        current_story_line_offsets_v1(editor, story_id, layout_revision_id, &shaped_flow)?;
+    apply_line_offsets_to_caret_map_v1(&mut caret_map, &line_offsets)?;
 
     Ok(DesktopStoryLayoutV1 {
         layout_revision_id: layout_revision_id.to_owned(),
