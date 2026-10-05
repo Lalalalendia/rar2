@@ -1,3 +1,4 @@
+// CI control: shared pub-editor lib change must retain fixed-output image resource validation.
 //! Bounded authoring session for Publisher migration workflows.
 //!
 //! This crate does not make a general "editable PUB" claim. Every edit
