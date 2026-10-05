@@ -38,6 +38,9 @@ SAFE_AUTHORED_STACK_RUNTIME_MODULES = {
 SAFE_AUTHORED_STACK_LIFECYCLE_MODULES = {
     "imported_paragraph_alignment_v1": PUB_EDITOR_PREFIX + "src/imported_paragraph_alignment_v1.rs",
 }
+SAFE_FIXED_OUTPUT_IMAGE_RESOURCES_MODULES = {
+    "imported_paragraph_alignment_v1": PUB_EDITOR_PREFIX + "src/imported_paragraph_alignment_v1.rs",
+}
 
 DIRECT_CONTINUITY_V2_OWNERS = (
     ".github/workflows/editor-desktop-continuity-v2-windows.yml",
@@ -122,6 +125,12 @@ DIRECT_AUTHORED_STACK_LIFECYCLE_OWNERS = (
     "vendor/producer-a/crates/pub-editor/tests/authored_stack_lifecycle_v1.rs",
     "vendor/producer-a/crates/pub-editor/tests/create_shape_runtime_v1.rs",
     "vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs",
+)
+
+DIRECT_FIXED_OUTPUT_IMAGE_RESOURCES_OWNERS = (
+    ".github/workflows/editor-fixed-output-current-image-resources.yml",
+    "tools/ci/pub_editor_pr_fanout.py",
+    "tools/ci/test_pub_editor_pr_fanout.py",
 )
 
 
@@ -405,6 +414,39 @@ def classify_authored_stack_lifecycle(
     return False, "proven_non_authored_stack_lifecycle_pub_editor_slice"
 
 
+def classify_fixed_output_image_resources(
+    paths: list[str],
+    *,
+    base_lib_source: str | None = None,
+    head_lib_source: str | None = None,
+) -> tuple[bool, str]:
+    if any(matches(path, DIRECT_FIXED_OUTPUT_IMAGE_RESOURCES_OWNERS) for path in paths):
+        return True, "direct_fixed_output_image_resources_owner_changed"
+
+    pub_editor_paths = [path for path in paths if path.startswith(PUB_EDITOR_PREFIX)]
+    if not pub_editor_paths:
+        return False, "no_fixed_output_image_resources_owner_changed"
+
+    allowed_paths = set(SAFE_FIXED_OUTPUT_IMAGE_RESOURCES_MODULES.values()) | {
+        PUB_EDITOR_LIB
+    }
+    unknown = sorted(set(pub_editor_paths) - allowed_paths)
+    if unknown:
+        return True, "unknown_or_core_pub_editor_path"
+
+    if PUB_EDITOR_LIB in pub_editor_paths:
+        if base_lib_source is None or head_lib_source is None:
+            return True, "lib_changed_without_source_proof"
+        if not facade_change_is_safe(
+            base_lib_source,
+            head_lib_source,
+            safe_modules=SAFE_FIXED_OUTPUT_IMAGE_RESOURCES_MODULES,
+        ):
+            return True, "pub_editor_lib_core_change"
+
+    return False, "proven_non_fixed_output_image_resources_pub_editor_slice"
+
+
 def git_show(revision: str, path: str) -> str | None:
     try:
         return subprocess.check_output(
@@ -456,6 +498,11 @@ def main() -> int:
         base_lib_source=base_lib,
         head_lib_source=head_lib,
     )
+    run_fixed_output_images, fixed_output_images_reason = classify_fixed_output_image_resources(
+        paths,
+        base_lib_source=base_lib,
+        head_lib_source=head_lib,
+    )
 
     receipt = {
         "schema": "chaptera.pub-editor-pr-fanout.v1",
@@ -488,6 +535,11 @@ def main() -> int:
         "safe_authored_stack_lifecycle_modules": sorted(
             SAFE_AUTHORED_STACK_LIFECYCLE_MODULES.values()
         ),
+        "fixed_output_image_resources": run_fixed_output_images,
+        "fixed_output_image_resources_reason": fixed_output_images_reason,
+        "safe_fixed_output_image_resources_modules": sorted(
+            SAFE_FIXED_OUTPUT_IMAGE_RESOURCES_MODULES.values()
+        ),
     }
 
     payload = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
@@ -519,6 +571,12 @@ def main() -> int:
                 f"authored_stack_lifecycle={'true' if run_authored_lifecycle else 'false'}\n"
             )
             handle.write(f"authored_stack_lifecycle_reason={authored_lifecycle_reason}\n")
+            handle.write(
+                f"fixed_output_image_resources={'true' if run_fixed_output_images else 'false'}\n"
+            )
+            handle.write(
+                f"fixed_output_image_resources_reason={fixed_output_images_reason}\n"
+            )
 
     return 0
 
