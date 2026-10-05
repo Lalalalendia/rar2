@@ -3,6 +3,7 @@
 //! The plan answers only what the current Viewer document intends to paint.
 //! It deliberately contains no egui types, EditorSession state, parser-private
 //! carrier names, source offsets, or mutable authoring commands.
+// Measurement-only #1504 touch: route exact Cloud reference through existing selective CI.
 
 #[cfg(feature = "projected-scene-instances")]
 use chaptera_scene_instance::{SceneInstanceV1, SceneProjectionKindV1};
