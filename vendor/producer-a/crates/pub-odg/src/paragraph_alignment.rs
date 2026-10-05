@@ -422,7 +422,7 @@ fn paragraph_carriers(
         carriers.push((
             open_start,
             carrier_end,
-            block[content_start..content_end].is_empty(),
+            paragraph_carrier_is_semantically_empty(&block[content_start..content_end]),
         ));
         cursor = carrier_end;
     }
@@ -431,6 +431,26 @@ fn paragraph_carriers(
         return Err(OdgParagraphAlignmentError::MissingTextCarrier { node_id: frame_id });
     }
     Ok(carriers)
+}
+
+fn paragraph_carrier_is_semantically_empty(content: &str) -> bool {
+    if content.is_empty() {
+        return true;
+    }
+
+    const TYPOGRAPHY_PREFIX: &str = "<text:span text:style-name=\"PubStoryT_";
+    const TYPOGRAPHY_SUFFIX: &str = "\"></text:span>";
+    let Some(style_id) = content
+        .strip_prefix(TYPOGRAPHY_PREFIX)
+        .and_then(|rest| rest.strip_suffix(TYPOGRAPHY_SUFFIX))
+    else {
+        return false;
+    };
+
+    style_id.len() == 32
+        && style_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 fn paragraph_style_name(paragraph_id: pub_model::ParagraphId) -> String {
@@ -722,6 +742,42 @@ mod tests {
         let xml = std::str::from_utf8(&package.parts[0].content).expect("content XML");
         assert_eq!(xml.matches("<text:p text:style-name=").count(), 2);
         assert!(xml.contains("<text:p></text:p>"));
+    }
+
+    #[test]
+    fn accepts_trailing_empty_typography_span_as_semantically_empty_carrier() {
+        let story_id = story(9);
+        let frame_id = frame(10);
+        let export_plan = plan(story_id);
+        let mut package = package_with_paragraphs(&export_plan, frame_id, &["One", "Two", ""]);
+        let xml = String::from_utf8(package.parts[0].content.clone()).expect("content XML");
+        let xml = xml.replace(
+            "<text:p></text:p>",
+            "<text:p><text:span text:style-name=\"PubStoryT_0123456789abcdef0123456789abcdef\"></text:span></text:p>",
+        );
+        package.parts[0].content = xml.into_bytes();
+
+        let placement = OdgParagraphScopedAlignmentPlacement {
+            story_id,
+            paragraphs: vec![
+                scoped(31, story_id, 0, 4, ParagraphScopedAlignmentValueV1::Left),
+                scoped(32, story_id, 4, 8, ParagraphScopedAlignmentValueV1::Right),
+            ],
+            frame_ids: vec![frame_id],
+        };
+
+        add_paragraph_scoped_alignment_to_odg(
+            &export_plan,
+            &mut package,
+            std::slice::from_ref(&placement),
+        )
+        .expect("empty typography span must remain an explicit trailing legacy carrier");
+
+        let xml = std::str::from_utf8(&package.parts[0].content).expect("content XML");
+        assert_eq!(xml.matches("<text:p text:style-name=").count(), 2);
+        assert!(xml.contains(
+            "<text:p><text:span text:style-name=\"PubStoryT_0123456789abcdef0123456789abcdef\"></text:span></text:p>"
+        ));
     }
 
     #[test]
