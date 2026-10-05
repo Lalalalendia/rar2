@@ -8,8 +8,16 @@
 //!
 //! Здесь реализуются только первые два. Третье остаётся отдельным native-validation gate.
 
+mod bootstrap_new_doc;
 mod seeded;
 mod structural_replay;
+
+pub use bootstrap_new_doc::{
+    BootstrapNewDocBlocked, BootstrapNewDocCandidate, BootstrapNewDocReport,
+    BootstrapNewDocStreamDelta, BootstrapNewDocTemplate, PUB_BOOTSTRAP_NEW_DOC_SCHEMA_V0_1,
+    PUB_BOOTSTRAP_NEW_DOC_TASK, PUB_BOOTSTRAP_RECTANGLE_SEQ_NUM, PUB_BOOTSTRAP_TEXTBOX_SEQ_NUM,
+    bootstrap_new_doc_report_json, materialize_bounded_bootstrap_new_doc_candidate,
+};
 
 pub use structural_replay::{
     OrdinaryShapeReplayGeometry, OrdinaryShapeReplayPlan, OrdinaryShapeReplayRequest,
