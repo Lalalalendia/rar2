@@ -258,7 +258,6 @@ impl ViewerApp {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
