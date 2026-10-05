@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Exact consumer oracle for history-owned ParagraphId alignment export."""
 from __future__ import annotations
 
 import argparse
