@@ -1,0 +1,11 @@
+# Rar2 live branch GC wave 12 — 2026-10-06
+# Evidence-complete and explicitly superseded stack refs.
+# 6 refs: each live tip was re-read and exactly matched the corresponding closed PR head.
+# Runtime branch-GC must recheck open heads + exact expected SHA before deletion.
+# Format: <branch> <expected_sha>
+conversion/editable-typography-promotion-census-01 f59e534676dc808342bcb505f28a28288a55ef4c
+conversion/editable-typography-montserrat-matrix-01 d9affd5ee9e6d13c7b7c336c94ce621419e400da
+research/editable-paragraph-alignment-census-01 700481a46202fec0adcfb6afdf59d52677bf7b38
+conversion/editable-typography-full-story-01 b6543b885d733b76ce1897360e36a313853c1d2a
+conversion/editable-paragraph-alignment-full-story-02 77bdc015d33f4417f2b52223ef4ea0905947b2c7
+ops/branch-gc-20261005-live-wave11-obsolete 4695cdc17af6f56cf2ff6eed79ff9dd3e22a9d09
