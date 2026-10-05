@@ -24,9 +24,9 @@ mod linked_story_ui;
 #[allow(dead_code)]
 mod locale;
 mod page_navigation;
-mod paragraph_alignment_overlay;
 #[cfg(all(test, not(feature = "reader-only")))]
 mod page_navigation_gui_tests;
+mod paragraph_alignment_overlay;
 mod product_smoke;
 mod reader_product_cli;
 mod reader_product_ui;
