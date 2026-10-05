@@ -911,6 +911,53 @@ fn uniform_text_content_bounds(bounds: RectEmu, inset_emu: u32) -> Option<RectEm
     ))
 }
 
+fn uncovered_size_only_scalar_ranges_v1(
+    effective_runs: &[ViewerTypographyRun],
+    story_id: StoryId,
+    scalar_start: u32,
+    scalar_end: u32,
+    text_size_emu: u32,
+) -> Vec<(u32, u32)> {
+    if scalar_start >= scalar_end {
+        return Vec::new();
+    }
+
+    let mut covered = effective_runs
+        .iter()
+        .filter(|run| {
+            run.story_id == story_id
+                && !run.source_font_name.is_empty()
+                && run.text_size_emu == text_size_emu
+                && run.scalar_start < scalar_end
+                && run.scalar_end > scalar_start
+        })
+        .map(|run| {
+            (
+                run.scalar_start.max(scalar_start),
+                run.scalar_end.min(scalar_end),
+            )
+        })
+        .filter(|(start, end)| start < end)
+        .collect::<Vec<_>>();
+    covered.sort_unstable();
+
+    let mut gaps = Vec::new();
+    let mut cursor = scalar_start;
+    for (start, end) in covered {
+        if start > cursor {
+            gaps.push((cursor, start));
+        }
+        cursor = cursor.max(end);
+        if cursor >= scalar_end {
+            break;
+        }
+    }
+    if cursor < scalar_end {
+        gaps.push((cursor, scalar_end));
+    }
+    gaps
+}
+
 fn viewer_story_frame_from_projection(
     frame: &ProjectedStoryFrame,
     graph: &PubResolvedGraph,
@@ -2439,27 +2486,32 @@ fn open_mature_0x2c_bundle(
             })
         })
         .collect::<Vec<_>>();
-    typography_runs.extend(
-        pipeline
-            .source
-            .typography_size_runs
-            .iter()
-            .filter_map(|run| {
-                let story = pipeline.resolved.graph.stories.get(&run.story_id)?;
-                Some(ViewerTypographyRun {
-                    story_id: run.story_id,
-                    scalar_start: run.story_scalar_start,
-                    scalar_end: run.story_scalar_end,
-                    source_font_name: String::new(),
-                    text_size_emu: run.text_size_emu,
-                    font_inherited: false,
-                    size_inherited: run.size_inherited,
-                    color_rgb: None,
-                    color_inherited: false,
-                    source_story_text_sha256: viewer_story_text_sha256(&story.text),
-                })
-            }),
-    );
+    for run in &pipeline.source.typography_size_runs {
+        let Some(story) = pipeline.resolved.graph.stories.get(&run.story_id) else {
+            continue;
+        };
+        let source_story_text_sha256 = viewer_story_text_sha256(&story.text);
+        for (scalar_start, scalar_end) in uncovered_size_only_scalar_ranges_v1(
+            &typography_runs,
+            run.story_id,
+            run.story_scalar_start,
+            run.story_scalar_end,
+            run.text_size_emu,
+        ) {
+            typography_runs.push(ViewerTypographyRun {
+                story_id: run.story_id,
+                scalar_start,
+                scalar_end,
+                source_font_name: String::new(),
+                text_size_emu: run.text_size_emu,
+                font_inherited: false,
+                size_inherited: run.size_inherited,
+                color_rgb: None,
+                color_inherited: false,
+                source_story_text_sha256,
+            });
+        }
+    }
     typography_runs.sort_by_key(|run| (run.story_id, run.scalar_start, run.scalar_end));
     if !typography_runs.is_empty() {
         let inherited = typography_runs
@@ -4725,6 +4777,69 @@ mod tests {
 
     fn id(byte: u8) -> CanonicalId {
         CanonicalId::from_bytes([byte; 16])
+    }
+
+    #[test]
+    fn size_only_typography_fills_only_matching_effective_coverage_gaps() {
+        let story_id = StoryId::from_canonical(id(41));
+        let hash = viewer_story_text_sha256("hello");
+        let effective = vec![
+            ViewerTypographyRun {
+                story_id,
+                scalar_start: 0,
+                scalar_end: 2,
+                source_font_name: "Arial".into(),
+                text_size_emu: 152_400,
+                font_inherited: false,
+                size_inherited: false,
+                color_rgb: Some([1, 2, 3]),
+                color_inherited: false,
+                source_story_text_sha256: hash,
+            },
+            ViewerTypographyRun {
+                story_id,
+                scalar_start: 3,
+                scalar_end: 5,
+                source_font_name: "Arial".into(),
+                text_size_emu: 152_400,
+                font_inherited: false,
+                size_inherited: false,
+                color_rgb: Some([1, 2, 3]),
+                color_inherited: false,
+                source_story_text_sha256: hash,
+            },
+        ];
+
+        assert_eq!(
+            uncovered_size_only_scalar_ranges_v1(&effective, story_id, 0, 5, 152_400),
+            vec![(2, 3)]
+        );
+        assert_eq!(
+            uncovered_size_only_scalar_ranges_v1(&effective, story_id, 0, 5, 177_800),
+            vec![(0, 5)],
+            "conflicting size authority must remain visible rather than being hidden"
+        );
+    }
+
+    #[test]
+    fn size_only_typography_is_suppressed_when_effective_run_already_covers_range() {
+        let story_id = StoryId::from_canonical(id(42));
+        let effective = vec![ViewerTypographyRun {
+            story_id,
+            scalar_start: 0,
+            scalar_end: 5,
+            source_font_name: "Arial".into(),
+            text_size_emu: 152_400,
+            font_inherited: false,
+            size_inherited: true,
+            color_rgb: Some([1, 2, 3]),
+            color_inherited: true,
+            source_story_text_sha256: viewer_story_text_sha256("hello"),
+        }];
+
+        assert!(
+            uncovered_size_only_scalar_ranges_v1(&effective, story_id, 0, 5, 152_400).is_empty()
+        );
     }
 
     #[test]
