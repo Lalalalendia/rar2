@@ -3634,8 +3634,9 @@ mod tests {
     #[test]
     fn inherited_default_line_spacing_provenance_is_required_for_native_one_point_one_nine() {
         let story_id = StoryId::from_canonical(canonical(3));
-        let mut visual = fixture().document;
+        let mut visual = fixture();
         let story_text = visual
+            .document
             .stories
             .iter()
             .find(|story| story.id == story_id)
