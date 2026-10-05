@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: layout-projection-index-v1-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   layout-projection-index:
     runs-on: ubuntu-latest
