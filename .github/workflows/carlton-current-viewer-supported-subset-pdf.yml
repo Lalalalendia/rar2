@@ -334,36 +334,18 @@ jobs:
               )
           if sum(prefix_signatures.values()) != prefix_candidates:
               raise SystemExit("Story-prefix signatures do not partition candidates")
-          if sum(prefix_outcomes.values()) != prefix_candidates:
-              raise SystemExit(f"Story-prefix outcomes do not partition candidates: {prefix_outcomes!r}")
-          if any(
-              key not in {"shared_resolved", "fallback:shared_layout_incomplete"}
-              for key in prefix_outcomes
-          ):
-              raise SystemExit(f"Story-prefix outcome widened beyond resolved/SLI: {prefix_outcomes!r}")
-
-          partial_story_overset = viewer_census["shared_resolved_partial_story_overset_count"]
-          partial_story_overset_signatures = viewer_census[
-              "shared_resolved_partial_story_overset_signature_counts"
-          ]
-          if partial_story_overset <= 0:
-              raise SystemExit("ordinary pure-overset admission recovered no fixed-PDF Story")
-          if sum(partial_story_overset_signatures.values()) != partial_story_overset:
-              raise SystemExit(
-                  "partial Story-overset signatures do not partition recovered layouts"
-              )
+          if prefix_outcomes != {"fallback:shared_layout_incomplete": 3}:
+              raise SystemExit(f"Story-prefix outcome drift: {prefix_outcomes!r}")
 
           if current_story_extent != 1:
               raise SystemExit(
                   f"Cmo marker-equivalence recovery did not leave exactly the true partial StoryExtentMismatch: "
                   f"story_extent={current_story_extent!r}"
               )
-          baseline_shared_incomplete = 7
-          if baseline_shared_incomplete - current_shared_incomplete != partial_story_overset:
+          if current_shared_incomplete - 4 != prefix_candidates:
               raise SystemExit(
-                  f"SharedLayoutIncomplete reduction is not exactly the ordinary partial-overset cohort: "
-                  f"baseline={baseline_shared_incomplete!r} current={current_shared_incomplete!r} "
-                  f"partial_overset={partial_story_overset!r}"
+                  f"SharedLayoutIncomplete increase is not exactly the prefix cohort: "
+                  f"shared_incomplete={current_shared_incomplete!r} candidates={prefix_candidates!r}"
               )
 
           if sum(viewer_census["shared_layout_incomplete_spacing_authority_counts"].values()) != current_shared_incomplete:
@@ -384,19 +366,11 @@ jobs:
               )
           if sum(first_line_signatures.values()) != first_line_recoveries:
               raise SystemExit("first-line capacity recovery signatures do not partition recoveries")
-          if (
-              12
-              - current_shared_incomplete
-              + prefix_candidates
-              - partial_story_overset
-              != first_line_recoveries
-          ):
-              raise SystemExit(
-                  "first-line recovery identity changed outside prefix + ordinary overset reclassification"
-              )
+          if 12 - current_shared_incomplete + prefix_candidates != first_line_recoveries:
+              raise SystemExit("first-line recovery identity changed outside the prefix reclassification")
 
           expected_fallback = {
-              "shared_layout_incomplete": current_shared_incomplete,
+              "shared_layout_incomplete": 7,
               "story_extent_mismatch": 1,
           }
           if mapping["backend_fallback_reason_counts"] != expected_fallback:
@@ -428,12 +402,6 @@ jobs:
               "pdf_sha256": sha(os.environ["CHAPTERA_SUPPORTED_PDF"]),
               "pdf_bytes": Path(os.environ["CHAPTERA_SUPPORTED_PDF"]).stat().st_size,
               "viewer_packet_census": viewer_census,
-              "ordinary_story_overset_recovery": {
-                  "baseline_shared_layout_incomplete": baseline_shared_incomplete,
-                  "current_shared_layout_incomplete": current_shared_incomplete,
-                  "partial_story_overset_count": partial_story_overset,
-                  "signature_counts": partial_story_overset_signatures,
-              },
               "mapping": mapping,
               "renderer_summary": summary,
               "page_significant_fractions": [page["diff"]["significant_fraction"] for page in diff["pages"]],
