@@ -162,7 +162,9 @@ pub fn boolean_format_selection_state_v1(
     }
 
     if cursor != end {
-        return Err("canonical scoped text-format query did not cover the full selection".to_owned());
+        return Err(
+            "canonical scoped text-format query did not cover the full selection".to_owned(),
+        );
     }
 
     Ok(DesktopBooleanSelectionStateV1 {
@@ -756,7 +758,7 @@ mod tests {
     }
 
     #[test]
-    fn real_pub_color_blocked_story_uses_scoped_desktop_bold_history_v016() {
+    fn real_pub_color_blocked_story_uses_scoped_desktop_bold_italic_history_v016() {
         let Some(root) = env::var_os("CHAPTERA_TEXT_FORMAT_FIXTURES_DIR") else {
             eprintln!(
                 "CHAPTERA_TEXT_FORMAT_FIXTURES_DIR not set; dedicated text-format gate owns real evidence"
@@ -912,6 +914,84 @@ mod tests {
             .expect("read replayed scoped Bold state"),
             after
         );
+
+        let clear_bold = clear_boolean_format_override_v1(
+            &mut reopened,
+            &mut reopened_mode,
+            DesktopBooleanFormatPropertyV1::Bold,
+        )
+        .expect("clear replayed scoped Bold override");
+        assert!(matches!(
+            clear_bold,
+            EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
+                story_id: id,
+                property: FormatPropertyV1::Bold,
+                ..
+            } if id == story_id
+        ));
+        assert_eq!(
+            boolean_format_selection_state_v1(
+                &reopened,
+                &reopened_mode,
+                DesktopBooleanFormatPropertyV1::Bold,
+            )
+            .expect("read cleared scoped Bold state"),
+            before
+        );
+
+        let italic_before = boolean_format_selection_state_v1(
+            &reopened,
+            &reopened_mode,
+            DesktopBooleanFormatPropertyV1::Italic,
+        )
+        .expect("read scoped source-effective Italic state");
+        let italic_expected = italic_before.next_explicit_value();
+        let italic_set = apply_boolean_format_toggle_v1(
+            &mut reopened,
+            &mut reopened_mode,
+            DesktopBooleanFormatPropertyV1::Italic,
+        )
+        .expect("commit scoped Italic operation");
+        assert!(matches!(
+            italic_set,
+            EditOperation::SetTextFormatPropertyScopedV1 {
+                story_id: id,
+                property: FormatPropertyV1::Italic,
+                value: FormatValueV1::Bool(value),
+                ..
+            } if id == story_id && value == italic_expected
+        ));
+        let italic_clear = clear_boolean_format_override_v1(
+            &mut reopened,
+            &mut reopened_mode,
+            DesktopBooleanFormatPropertyV1::Italic,
+        )
+        .expect("clear scoped Italic override");
+        assert!(matches!(
+            italic_clear,
+            EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
+                story_id: id,
+                property: FormatPropertyV1::Italic,
+                ..
+            } if id == story_id
+        ));
+        assert_eq!(
+            boolean_format_selection_state_v1(
+                &reopened,
+                &reopened_mode,
+                DesktopBooleanFormatPropertyV1::Italic,
+            )
+            .expect("read cleared scoped Italic state"),
+            italic_before
+        );
+        assert!(
+            reopened
+                .current_text_format_overlay_v1(story_id)
+                .expect_err("scoped Bold/Italic must not invent unresolved color")
+                .to_string()
+                .contains("bounded effective direct-RGB text color is unavailable")
+        );
+
         assert_eq!(reopened.graph().stories[&story_id].text, source_text);
         assert_eq!(reopened.source_hash(), source_hash);
         assert_eq!(
@@ -920,7 +1000,7 @@ mod tests {
             "scoped Desktop formatting must not mutate source PUB bytes"
         );
         eprintln!(
-            "scoped Desktop Bold witness={} story={} legacy_full_overlay_error={}",
+            "scoped Desktop Bold/Italic witness={} story={} legacy_full_overlay_error={}",
             path.file_name()
                 .and_then(|value| value.to_str())
                 .unwrap_or("<non-utf8>"),
