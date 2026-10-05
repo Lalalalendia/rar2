@@ -318,23 +318,25 @@ fn v016_project_cannot_smuggle_create_line_and_source_backed_provenance_fails_cl
         stroke: stroke(),
         provenance: AuthoredEntityProvenanceV1::SourceBacked,
     };
-    let current = EditorProject {
-        schema_version: EDITOR_PROJECT_VERSION_V0_17.to_owned(),
-        source_hash: source_hash(),
-        identity: None,
-        assets: Vec::new(),
-        table_grids: Vec::new(),
-        operations: vec![operation.clone()],
-    };
+    let mut seed = EditorSession::new(graph()).expect("seed session");
+    seed.create_line(
+        authored_node_id(),
+        page_id(),
+        geometry((0, 0), (100, 100)),
+        stroke(),
+    )
+    .expect("seed valid CreateLine");
+    let mut current = seed.project();
+    assert_eq!(current.schema_version, EDITOR_PROJECT_VERSION_V0_17);
+    current.operations = vec![operation.clone()];
 
     let mut session = EditorSession::new(graph()).expect("current session");
     assert!(matches!(
         session.apply_project(&current),
-        Err(EditorProjectError::MissingProjectIdentity)
-            | Err(EditorProjectError::Operation {
-                index: 0,
-                error: EditorError::CreateLineInvalidProvenance { .. }
-            })
+        Err(EditorProjectError::Operation {
+            index: 0,
+            error: EditorError::CreateLineInvalidProvenance { .. }
+        })
     ));
 
     let legacy = EditorProject {
