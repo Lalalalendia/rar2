@@ -112,6 +112,7 @@ def assert_fixed_pdf_consumer_wiring() -> None:
     required = (
         "Classify pub-editor fixed-PDF current revision scope",
         "ref: ${{ github.event.pull_request.base.ref || github.sha }}",
+        "vendor/producer-a/crates/pub-editor/**",
         "python tools/ci/pub_editor_pr_fanout.py",
         "needs: classify",
         "needs.classify.result != 'success'",
@@ -141,6 +142,7 @@ def assert_duplicate_consumer_wiring() -> None:
         "ref: ${{ github.event.pull_request.base.ref || github.sha }}",
         "if: ${{ github.event_name == 'pull_request' }}",
         "non_pr_event_fail_closed",
+        "vendor/producer-a/crates/pub-editor/**",
         "python tools/ci/pub_editor_pr_fanout.py",
         "needs: classify",
         "needs.classify.result != 'success'",
@@ -170,6 +172,7 @@ def assert_authored_stack_consumer_wiring() -> None:
         "ref: ${{ github.event.pull_request.base.ref || github.sha }}",
         "if: ${{ github.event_name == 'pull_request' }}",
         "non_pr_event_fail_closed",
+        "vendor/producer-a/crates/pub-editor/**",
         "python tools/ci/pub_editor_pr_fanout.py",
         "needs: classify",
         "needs.classify.result != 'success'",
