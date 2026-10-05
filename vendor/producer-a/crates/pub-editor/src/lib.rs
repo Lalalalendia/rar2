@@ -4197,7 +4197,9 @@ impl EditorSession {
 
         let mut paragraph_count_by_story = BTreeMap::<StoryId, usize>::new();
         for paragraph in &paragraphs {
-            *paragraph_count_by_story.entry(paragraph.story_id).or_default() += 1;
+            *paragraph_count_by_story
+                .entry(paragraph.story_id)
+                .or_default() += 1;
         }
         for item in self
             .effective_full_story_paragraph_alignment_v1()
