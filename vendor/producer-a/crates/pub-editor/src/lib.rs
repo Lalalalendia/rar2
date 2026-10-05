@@ -13,6 +13,7 @@ mod create_shape_runtime_v1;
 mod duplicate_authored_rectangle_v1;
 mod imported_paragraph_alignment_v1;
 mod imported_paragraphs_v1;
+mod text_format_property_base_v1;
 mod writer_assessment;
 
 pub use authored_paragraph_alignment_v1::{
@@ -47,6 +48,14 @@ pub use imported_paragraph_alignment_v1::{
     ImportedParagraphBaseAlignmentV1,
 };
 pub use imported_paragraphs_v1::{ImportedParagraphProjectionErrorV1, ImportedParagraphV1};
+pub use text_format_property_base_v1::{
+    TEXT_FORMAT_PROPERTY_STATE_V1, TextFormatPropertyBaseRunV1, TextFormatPropertyOverrideRunV1,
+    TextFormatPropertyStateV1, apply_text_format_property_operation_checked_v1,
+    apply_text_format_property_operation_semantic_v1, build_source_text_format_property_state_v1,
+    clear_text_format_property_state_v1, effective_text_format_property_segments_v1,
+    fold_text_format_property_history_v1, set_text_format_property_state_v1,
+    text_format_property_state_hash_v1,
+};
 pub use writer_assessment::{
     EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1, EditorPubPersistenceAssessment,
     EditorPubWriterAssessment, EditorPubWriterAssessmentError, EditorStoryWriterProbeResult,
