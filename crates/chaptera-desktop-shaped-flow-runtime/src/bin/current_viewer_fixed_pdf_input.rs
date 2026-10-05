@@ -9,8 +9,8 @@ use chaptera_viewer_render_plan::{
 use pub_editor::{
     EditOperation, EditorProject, EditorSession, Sha256Digest, open_mature_0x2c_editor,
 };
-use pub_layout::font_fingerprint_sha256;
-use pub_model::{EMU_PER_POINT, NodeId, RectEmu, ResourceId, StoryId};
+use pub_layout::{compatible_natural_line_height_emu_v1, font_fingerprint_sha256};
+use pub_model::{EMU_PER_POINT, LengthEmu, NodeId, RectEmu, ResourceId, StoryId};
 use pub_viewer::{
     ViewerGeometryDocument, ViewerParagraphLineSpacing, open_mature_0x2c_geometry,
     viewer_geometry_environment_v0_1,
@@ -64,6 +64,8 @@ struct CurrentViewerPlanCensusV1 {
     shared_layout_incomplete_family_authority_counts: BTreeMap<String, usize>,
     shared_layout_incomplete_font_binding_counts: BTreeMap<String, usize>,
     shared_layout_incomplete_spacing_family_binding_counts: BTreeMap<String, usize>,
+    first_line_capacity_recovery_count: usize,
+    first_line_capacity_recovery_signature_counts: BTreeMap<String, usize>,
     configured_fallback_font_size_emu: i64,
     configured_fallback_line_height_emu: i64,
     shaped_line_count: usize,
@@ -246,6 +248,8 @@ fn font_binding_class(fragment: &RenderTextFragmentV1) -> &'static str {
 fn census(
     visual: &ViewerGeometryDocument,
     plans: &[PageRenderPlanV1],
+    fallback_font_bytes: &[u8],
+    fallback_face_index: u32,
 ) -> CurrentViewerPlanCensusV1 {
     let mut out = CurrentViewerPlanCensusV1 {
         page_count: plans.len(),
@@ -339,8 +343,45 @@ fn census(
                 continue;
             };
             match &layout.disposition {
-                RenderTextLayoutDispositionV1::SharedResolved { .. } => {
+                RenderTextLayoutDispositionV1::SharedResolved {
+                    font_size_emu,
+                    line_height_emu,
+                    ..
+                } => {
                     out.shared_resolved_text_node_count += 1;
+
+                    let bounds = node.text_bounds.unwrap_or(node.bounds);
+                    let frame_height_emu = bounds.height.get();
+                    let resolved_line_count = i64::try_from(layout.lines.len()).unwrap_or(i64::MAX);
+                    if node.projected_scene_instance.is_none()
+                        && frame_height_emu > 0
+                        && *font_size_emu > 0
+                        && *line_height_emu > 0
+                        && resolved_line_count > 0
+                        && let Some(natural_extent) = compatible_natural_line_height_emu_v1(
+                            fallback_font_bytes,
+                            fallback_face_index,
+                            LengthEmu::new(*font_size_emu),
+                        )
+                    {
+                        let first_line_extent_emu = natural_extent.get().min(*line_height_emu);
+                        let old_capacity = frame_height_emu / *line_height_emu;
+                        let new_capacity = if frame_height_emu < first_line_extent_emu {
+                            0
+                        } else {
+                            1 + (frame_height_emu - first_line_extent_emu) / *line_height_emu
+                        };
+                        if old_capacity < resolved_line_count && new_capacity >= resolved_line_count
+                        {
+                            out.first_line_capacity_recovery_count += 1;
+                            *out.first_line_capacity_recovery_signature_counts
+                                .entry(format!(
+                                    "size={font_size_emu}|lines={resolved_line_count}|old={old_capacity}|new={new_capacity}"
+                                ))
+                                .or_default() += 1;
+                        }
+                    }
+
                     for line in &layout.lines {
                         out.shaped_line_count += 1;
                         if line.spans.is_empty() {
@@ -477,7 +518,7 @@ fn run(
             bytes: image.bytes.clone(),
         })
         .collect::<Vec<_>>();
-    let mut census = census(&visual, &pages);
+    let mut census = census(&visual, &pages, &font_bytes, font.face_index);
     census.image_resource_count = visual.images.len();
     census.configured_fallback_font_size_emu = font.default_font_size_emu;
     census.configured_fallback_line_height_emu = font.default_line_height_emu;
@@ -517,7 +558,7 @@ fn run(
     .map_err(|error| format!("write {}: {error}", output_path.display()))?;
 
     eprintln!(
-        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={} text_font_bindings={:?} shared_layout_incomplete_spacing={:?} shared_layout_incomplete_family={:?} shared_layout_incomplete_binding={:?} fallback_font_size_emu={} fallback_line_height_emu={}",
+        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={} text_font_bindings={:?} shared_layout_incomplete_spacing={:?} shared_layout_incomplete_family={:?} shared_layout_incomplete_binding={:?} first_line_capacity_recoveries={} first_line_capacity_recovery_signatures={:?} fallback_font_size_emu={} fallback_line_height_emu={}",
         packet.census.page_count,
         packet.census.node_count,
         packet.census.projected_instance_count,
@@ -546,6 +587,8 @@ fn run(
             .census
             .shared_layout_incomplete_family_authority_counts,
         packet.census.shared_layout_incomplete_font_binding_counts,
+        packet.census.first_line_capacity_recovery_count,
+        packet.census.first_line_capacity_recovery_signature_counts,
         packet.census.configured_fallback_font_size_emu,
         packet.census.configured_fallback_line_height_emu,
     );
