@@ -3771,6 +3771,7 @@ impl ViewerApp {
         }
         .map_err(|error| error.to_string())?;
         if let Some(editor) = self.editor.as_ref() {
+            font_binding::apply_current_scoped_boolean_typography(&mut render_plan, editor)?;
             authored_stack::apply_editor_authored_page_lane(&mut render_plan, editor)?;
         }
         let page_id_text = page.id.as_canonical().to_string();
