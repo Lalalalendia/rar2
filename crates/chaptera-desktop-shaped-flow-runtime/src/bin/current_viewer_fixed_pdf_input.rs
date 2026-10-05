@@ -291,10 +291,7 @@ fn scaled_fallback_line_height_emu(
     font_size_emu: i64,
     font: &ExplicitRenderTextFontResourceV1<'_>,
 ) -> Option<i64> {
-    if font_size_emu <= 0
-        || font.default_font_size_emu <= 0
-        || font.default_line_height_emu <= 0
-    {
+    if font_size_emu <= 0 || font.default_font_size_emu <= 0 || font.default_line_height_emu <= 0 {
         return None;
     }
     let numerator =
@@ -370,8 +367,7 @@ fn shared_layout_incomplete_cause(
         return ("projected_path", "unknown", "projected_fail_closed");
     }
 
-    let Some(font_size_emu) =
-        uniform_fragment_font_size_emu(fragment, font.default_font_size_emu)
+    let Some(font_size_emu) = uniform_fragment_font_size_emu(fragment, font.default_font_size_emu)
     else {
         return (
             "mixed_size_custom",
@@ -493,7 +489,8 @@ fn shared_layout_incomplete_cause(
 
     let cause = if has_no_capacity && source_lines.is_empty() {
         "first_line_height_rejection"
-    } else if has_unbreakable && mandatory_boundary_after_cursor(fragment, cursor, &runtime.shaping) {
+    } else if has_unbreakable && mandatory_boundary_after_cursor(fragment, cursor, &runtime.shaping)
+    {
         "mandatory_boundary_no_fit"
     } else if has_unbreakable {
         "width_no_legal_break"
