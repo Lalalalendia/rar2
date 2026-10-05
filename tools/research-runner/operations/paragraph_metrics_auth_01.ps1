@@ -28,7 +28,13 @@ New-Item -ItemType Directory -Force -Path $analysisDir,$logDir,$privateDir,$seed
 
 $progressPath = Join-Path $logDir "paragraph-metrics-progress.txt"
 function Write-ProgressMarker([string]$stage) {
-    ((Get-Date).ToString("o") + "`t" + $stage) | Add-Content -LiteralPath $progressPath -Encoding UTF8
+    try {
+        ((Get-Date).ToString("o") + "`t" + $stage) | Add-Content -LiteralPath $progressPath -Encoding UTF8
+    }
+    catch {
+        # Diagnostic telemetry only: a transient file-share race with the outer watchdog
+        # must never abort an otherwise valid Publisher semantic arm.
+    }
 }
 
 function Release-Com($value) {
