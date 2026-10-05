@@ -2747,6 +2747,44 @@ impl EditorSession {
         Ok(operation)
     }
 
+    fn validate_text_format_operation_against_current_state_v1(
+        &self,
+        operation: &EditOperation,
+    ) -> Result<(), EditorError> {
+        let (story_id, property, before_state_hash, _) = text_format_operation_parts_v1(operation)
+            .expect("text-format validation receives only text-format operations");
+
+        match self.current_text_format_overlay_v1(story_id) {
+            Ok(state) => {
+                let full_hash =
+                    state_hash_v1(&state).map_err(|error| EditorError::TextFormatStateInvalid {
+                        story_id,
+                        message: error.to_string(),
+                    })?;
+                if full_hash == before_state_hash {
+                    apply_text_format_history_operation_v1(&state, operation)?;
+                    return Ok(());
+                }
+            }
+            Err(EditorError::TextFormatUnsupported { .. }) => {}
+            Err(error) => return Err(error),
+        }
+
+        let state = self.current_text_format_property_state_v1(story_id, property)?;
+        if text_format_property_state_hash_v1(&state).map_err(|message| {
+            EditorError::TextFormatStateInvalid {
+                story_id,
+                message,
+            }
+        })? != before_state_hash
+        {
+            return Err(EditorError::StaleOperation { story_id });
+        }
+        apply_text_format_property_operation_checked_v1(&state, operation)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        Ok(())
+    }
+
     fn current_paragraph_alignment_overrides_v1(
         &self,
     ) -> Result<BTreeMap<ParagraphId, AuthoredParagraphAlignmentValueV1>, EditorError> {
