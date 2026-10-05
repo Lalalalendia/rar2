@@ -141,7 +141,7 @@ impl DesktopSourceFontRegistry {
 
         let mut cursor = fragment.scalar_start;
         let mut resolved_style = None;
-        let mut all_styles_absent = true;
+        let mut saw_absent_style = false;
         for run in &fragment.typography {
             if run.scalar_start != cursor
                 || run.scalar_end <= run.scalar_start
@@ -150,9 +150,16 @@ impl DesktopSourceFontRegistry {
                 return None;
             }
             match (run.bold, run.italic) {
-                (None, None) if all_styles_absent => {}
+                (None, None) => {
+                    if resolved_style.is_some() {
+                        return None;
+                    }
+                    saw_absent_style = true;
+                }
                 (Some(bold), Some(italic)) => {
-                    all_styles_absent = false;
+                    if saw_absent_style {
+                        return None;
+                    }
                     match resolved_style {
                         None => resolved_style = Some((bold, italic)),
                         Some(existing) if existing == (bold, italic) => {}
@@ -168,10 +175,8 @@ impl DesktopSourceFontRegistry {
         }
 
         match resolved_style {
-            Some((bold, italic)) if !all_styles_absent => {
-                self.resource_for_family_style(&family, bold, italic)
-            }
-            None if all_styles_absent => self.resource_for_family(&family),
+            Some((bold, italic)) => self.resource_for_family_style(&family, bold, italic),
+            None if saw_absent_style => self.resource_for_family(&family),
             _ => None,
         }
     }
