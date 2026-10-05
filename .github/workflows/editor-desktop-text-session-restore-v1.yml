@@ -7,6 +7,7 @@ on:
       - "apps/chaptera-desktop/src/text_session_gui_tests.rs"
       - "apps/chaptera-desktop/src/text_session.rs"
       - "apps/chaptera-desktop/Cargo.toml"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/lib.rs"
       - "vendor/producer-a/crates/pub-editor/src/lib.rs"
       - ".github/workflows/editor-desktop-text-session-restore-v1.yml"
   push:
@@ -94,6 +95,9 @@ jobs:
 
       - name: Prove scoped Bold Italic history on color-blocked real PUB
         run: cargo test -p chaptera-desktop real_pub_color_blocked_story_uses_scoped_desktop_bold_italic_history_v016 -- --nocapture
+
+      - name: Prove scoped Bold reaches current shaped-flow typography without Color authority
+        run: cargo test -p chaptera-desktop-shaped-flow-runtime real_51318_scoped_bold_reaches_current_boolean_typography_without_color_authority -- --nocapture
 
   gui-direct-text:
     needs: format-preflight
