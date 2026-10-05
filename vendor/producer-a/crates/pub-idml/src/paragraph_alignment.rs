@@ -9,13 +9,13 @@ use std::fmt;
 use std::fmt::Write as _;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdmlParagraphScopedAlignmentPlacement {
     pub story_id: StoryId,
     pub story_text: String,
     pub paragraphs: Vec<ParagraphScopedAlignmentV1>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdmlParagraphAlignmentError {
     NonIdmlPackage,
     DuplicateStory { story_id: StoryId },
@@ -23,6 +23,31 @@ pub enum IdmlParagraphAlignmentError {
     MissingStoryPart { story_id: StoryId },
     BinaryStoryPart { story_id: StoryId },
     UnexpectedStoryMarkup { story_id: StoryId },
+    EmptyParagraphs { story_id: StoryId },
+    ParagraphStoryMismatch {
+        story_id: StoryId,
+        paragraph_id: pub_model::ParagraphId,
+        paragraph_story_id: StoryId,
+    },
+    DuplicateParagraph {
+        paragraph_id: pub_model::ParagraphId,
+    },
+    NonContiguousParagraphRanges {
+        story_id: StoryId,
+    },
+    ParagraphCoverageMismatch {
+        story_id: StoryId,
+        expected_end: u64,
+        found_end: u64,
+    },
+    MissingParagraphTerminator {
+        story_id: StoryId,
+        paragraph_id: pub_model::ParagraphId,
+    },
+    EmbeddedParagraphTerminator {
+        story_id: StoryId,
+        paragraph_id: pub_model::ParagraphId,
+    },
 }
 
 impl fmt::Display for IdmlParagraphAlignmentError {
@@ -54,6 +79,59 @@ impl fmt::Display for IdmlParagraphAlignmentError {
             Self::UnexpectedStoryMarkup { story_id } => write!(
                 formatter,
                 "IDML Story {} is outside the bounded paragraph-alignment wire shape",
+                story_id.as_canonical()
+            ),
+            Self::EmptyParagraphs { story_id } => write!(
+                formatter,
+                "Story {} has no canonical ParagraphId alignment input",
+                story_id.as_canonical()
+            ),
+            Self::ParagraphStoryMismatch {
+                story_id,
+                paragraph_id,
+                paragraph_story_id,
+            } => write!(
+                formatter,
+                "Paragraph {} belongs to Story {}, expected {}",
+                paragraph_id.as_canonical(),
+                paragraph_story_id.as_canonical(),
+                story_id.as_canonical()
+            ),
+            Self::DuplicateParagraph { paragraph_id } => write!(
+                formatter,
+                "duplicate paragraph-scoped alignment for {}",
+                paragraph_id.as_canonical()
+            ),
+            Self::NonContiguousParagraphRanges { story_id } => write!(
+                formatter,
+                "Story {} paragraph ranges are not contiguous from scalar zero",
+                story_id.as_canonical()
+            ),
+            Self::ParagraphCoverageMismatch {
+                story_id,
+                expected_end,
+                found_end,
+            } => write!(
+                formatter,
+                "Story {} paragraph coverage ends at {found_end}, expected {expected_end}",
+                story_id.as_canonical()
+            ),
+            Self::MissingParagraphTerminator {
+                story_id,
+                paragraph_id,
+            } => write!(
+                formatter,
+                "non-final Paragraph {} in Story {} does not own terminal U+000D",
+                paragraph_id.as_canonical(),
+                story_id.as_canonical()
+            ),
+            Self::EmbeddedParagraphTerminator {
+                story_id,
+                paragraph_id,
+            } => write!(
+                formatter,
+                "Paragraph {} in Story {} contains embedded U+000D outside its terminal boundary",
+                paragraph_id.as_canonical(),
                 story_id.as_canonical()
             ),
         }
