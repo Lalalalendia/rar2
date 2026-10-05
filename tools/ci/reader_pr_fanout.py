@@ -65,6 +65,82 @@ def matches(path: str, patterns: Iterable[str]) -> bool:
     return False
 
 
+DESKTOP_MAIN = "apps/chaptera-desktop/src/main.rs"
+RAW_STRING_START = re.compile(r'(?:br|cr|r)(#*)"')
+CHAR_LITERAL = re.compile(r"'(?:[^'\\\n]|\\(?:[nrt0\\'\"]|x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}))'")
+
+
+def without_standalone_rust_comments(source: str) -> str | None:
+    """Remove ordinary comment lines only outside Rust literals/comments.
+
+    Keep every other byte, including inline comments and documentation. Unknown
+    or unterminated lexical state cannot establish a neutral source change.
+    """
+    output: list[str] = []
+    state = "code"
+    block_depth = 0
+    raw_end = ""
+    for line in source.splitlines(keepends=True):
+        stripped = line.lstrip(" \t")
+        if state == "code" and stripped.startswith("//") and not stripped.startswith(("///", "//!")):
+            continue
+        output.append(line)
+        index = 0
+        while index < len(line):
+            if state == "raw":
+                end = line.find(raw_end, index)
+                if end < 0:
+                    break
+                index = end + len(raw_end)
+                state = "code"
+            elif state == "string":
+                if line[index] == "\\":
+                    index += 2
+                elif line[index] == '"':
+                    index += 1
+                    state = "code"
+                else:
+                    index += 1
+            elif state == "block":
+                if line.startswith("/*", index):
+                    block_depth += 1
+                    index += 2
+                elif line.startswith("*/", index):
+                    block_depth -= 1
+                    index += 2
+                    if not block_depth:
+                        state = "code"
+                else:
+                    index += 1
+            elif line.startswith("//", index):
+                break
+            elif line.startswith("/*", index):
+                state = "block"
+                block_depth = 1
+                index += 2
+            else:
+                raw = RAW_STRING_START.match(line, index)
+                char = CHAR_LITERAL.match(line, index)
+                if raw:
+                    raw_end = '"' + raw.group(1)
+                    state = "raw"
+                    index = raw.end()
+                elif char:
+                    index = char.end()
+                elif line[index] == '"':
+                    state = "string"
+                    index += 1
+                else:
+                    index += 1
+    return "".join(output) if state == "code" else None
+
+
+def desktop_main_visual_change_is_neutral(base_source: str, head_source: str) -> bool:
+    base = without_standalone_rust_comments(base_source)
+    head = without_standalone_rust_comments(head_source)
+    return base is not None and head is not None and base == head
+
+
 def cfg_test_module_line(source: str) -> int | None:
     lines = source.splitlines()
     for index, line in enumerate(lines):
@@ -222,7 +298,8 @@ VISUAL_ORACLE = (
     "crates/chaptera-viewer-render-plan/**",
     "apps/chaptera-desktop/src/render_backend.rs",
     "apps/chaptera-desktop/src/source_font.rs",
-    "apps/chaptera-desktop/src/main.rs",
+    DESKTOP_MAIN,
+    "apps/chaptera-desktop/src/reader_visual_golden_tests.rs",
     "tools/acquire_carlton_march_pair.py",
     "tools/pdf_reference_diff_v1.py",
     "tools/reader_reference_pdf_raster_v1.py",
@@ -278,7 +355,8 @@ TYPOGRAPHY_GOLDEN = (
     "crates/chaptera-viewer-render-plan/**",
     "apps/chaptera-desktop/src/render_backend.rs",
     "apps/chaptera-desktop/src/source_font.rs",
-    "apps/chaptera-desktop/src/main.rs",
+    DESKTOP_MAIN,
+    "apps/chaptera-desktop/src/reader_visual_golden_tests.rs",
     ".github/workflows/reader-typography-golden.yml",
 )
 
@@ -365,6 +443,7 @@ SHARED_DESKTOP_FILES = {
     "apps/chaptera-desktop/src/reader_update_control.rs",
     "apps/chaptera-desktop/src/fallback_font.rs",
     "apps/chaptera-desktop/src/source_font.rs",
+    "apps/chaptera-desktop/src/reader_visual_golden_tests.rs",
 }
 
 
@@ -439,6 +518,8 @@ def reader_product_cli_bootstrap_errors(source: str) -> list[str]:
 def classify(
     paths: list[str],
     dynamic_evidence_only_paths: set[str] | None = None,
+    *,
+    visual_neutral_paths: set[str] | None = None,
 ) -> dict[str, bool]:
     evidence_only = EVIDENCE_ONLY_PATHS | (dynamic_evidence_only_paths or set())
     semantic_paths = [path for path in paths if path not in evidence_only]
@@ -464,6 +545,15 @@ def classify(
         scope: any(matches(path, patterns) for path in semantic_paths)
         for scope, patterns in mapping.items()
     }
+    # Golden tests still call ViewerApp and paint helpers owned by main.rs.
+    # A path alone cannot prove those dependencies unchanged. Only an exact
+    # standalone-comment proof may suppress their visual/typography allocation.
+    visual_paths = [
+        path for path in semantic_paths
+        if path != DESKTOP_MAIN or path not in (visual_neutral_paths or set())
+    ]
+    result["visual_oracle"] = any(matches(path, VISUAL_ORACLE) for path in visual_paths)
+    result["typography_golden"] = any(matches(path, TYPOGRAPHY_GOLDEN) for path in visual_paths)
     # The historical Virginia gate explicitly excluded probe-only binaries.
     # Preserve that boundary after routing it through the central PR DAG.
     virginia_paths = [
@@ -524,7 +614,22 @@ def main() -> int:
         return 2
 
     dynamic_evidence_only = test_region_evidence_only_paths(args.base, args.head, paths)
-    scopes = classify(paths, dynamic_evidence_only)
+    visual_neutral: set[str] = set()
+    if DESKTOP_MAIN in paths:
+        try:
+            merge_base = subprocess.check_output(
+                ["git", "merge-base", args.base, args.head], text=True
+            ).strip()
+            base_main = subprocess.check_output(
+                ["git", "show", f"{merge_base}:{DESKTOP_MAIN}"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        except subprocess.CalledProcessError:
+            base_main = None
+        if base_main is not None and desktop_main_visual_change_is_neutral(base_main, desktop_main):
+            visual_neutral.add(DESKTOP_MAIN)
+    scopes = classify(paths, dynamic_evidence_only, visual_neutral_paths=visual_neutral)
     receipt = {
         "schema": "chaptera.reader-pr-fanout.v1",
         "base_sha": args.base,
@@ -533,6 +638,7 @@ def main() -> int:
         "evidence_only_paths": sorted(
             (EVIDENCE_ONLY_PATHS & set(paths)) | dynamic_evidence_only
         ),
+        "visual_neutral_paths": sorted(visual_neutral),
         "scopes": scopes,
     }
 
