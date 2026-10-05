@@ -891,6 +891,52 @@ fn suppress_projected_object_marker_glyphs(text: &str) -> String {
         .collect()
 }
 
+fn render_text_is_story_equivalent_for_layout_v1(
+    _visual: &ViewerGeometryDocument,
+    _page_id: PageId,
+    _node_id: NodeId,
+    _projected_target_frame_node_id: Option<NodeId>,
+    fragment_text: &str,
+    story_text: &str,
+) -> bool {
+    if fragment_text == story_text {
+        return true;
+    }
+
+    #[cfg(feature = "projected-scene-instances")]
+    {
+        if _projected_target_frame_node_id.is_some() {
+            return false;
+        }
+        let target_page_id = _page_id.as_canonical().to_string();
+        let is_cmo_target_frame = _visual.projected_instances.iter().any(|projected| {
+            projected.target_frame_node_id == Some(_node_id)
+                && projected.scene_instance.target_page_id == target_page_id
+                && projected.scene_instance.projection_kind == SceneProjectionKindV1::CmoStorySlot
+        });
+        if !is_cmo_target_frame {
+            return false;
+        }
+
+        let mut saw_suppressed_marker = false;
+        let mut story = story_text.chars();
+        let mut fragment = fragment_text.chars();
+        loop {
+            match (story.next(), fragment.next()) {
+                (None, None) => return saw_suppressed_marker,
+                (Some(source), Some(rendered)) if source == rendered => {}
+                (Some('\u{FFFC}'), Some('\u{200B}')) => saw_suppressed_marker = true,
+                _ => return false,
+            }
+        }
+    }
+
+    #[cfg(not(feature = "projected-scene-instances"))]
+    {
+        false
+    }
+}
+
 #[cfg(feature = "projected-scene-instances")]
 fn clip_render_text_at_story_scalar_end(fragment: &mut RenderTextFragmentV1, scalar_end: u32) {
     let clipped_end = fragment.scalar_end.min(scalar_end);
@@ -1981,7 +2027,14 @@ fn resolve_text_layout_v1(
     };
     if fragment.scalar_start != 0
         || fragment.scalar_end != story_scalar_len
-        || fragment.text != story.text
+        || !render_text_is_story_equivalent_for_layout_v1(
+            visual,
+            page_id,
+            node_id,
+            projected_target_frame_node_id,
+            &fragment.text,
+            &story.text,
+        )
     {
         return fallback_layout(RenderTextLayoutFallbackReasonV1::StoryExtentMismatch);
     }
@@ -2053,7 +2106,7 @@ fn resolve_text_layout_v1(
         }],
         stories: vec![ProjectedStory {
             origin: story.id,
-            text: story.text.clone(),
+            text: fragment.text.clone(),
             paragraph_origins: Vec::new(),
             run_origins: Vec::new(),
         }],
@@ -2864,7 +2917,14 @@ where
     let story_scalar_len = u32::try_from(story.text.chars().count()).ok()?;
     if fragment.scalar_start != 0
         || fragment.scalar_end != story_scalar_len
-        || fragment.text != story.text
+        || !render_text_is_story_equivalent_for_layout_v1(
+            visual,
+            target.page_id,
+            target.node_id,
+            target.projected_target_frame_node_id,
+            &fragment.text,
+            &story.text,
+        )
     {
         return None;
     }
@@ -4799,6 +4859,138 @@ mod tests {
         assert!(!rendered.contains('\u{FFFC}'));
         assert_eq!(rendered.chars().count(), source.chars().count());
         assert!(rendered.ends_with("am."));
+    }
+
+    #[cfg(feature = "projected-scene-instances")]
+    #[test]
+    fn cmo_target_marker_suppression_is_the_only_nonliteral_layout_equivalence() {
+        let mut visual = fixture();
+        let page_id = visual.document.pages[0].id;
+        let frame_id = visual.scene.nodes[0].origin;
+        let source = "\u{FFFC}\rA";
+        let rendered = "\u{200B}\rA";
+        visual.document.stories[0].text = source.to_owned();
+        visual.projected_instances.push(pub_viewer::ViewerProjectedSceneInstanceV1 {
+            scene_instance: SceneInstanceV1 {
+                schema_version: SCENE_INSTANCE_SCHEMA_V1.to_owned(),
+                instance_id: "sha256:marker-layout-equivalence-fixture".to_owned(),
+                projection_kind: SceneProjectionKindV1::CmoStorySlot,
+                origin_node_id: frame_id.as_canonical().to_string(),
+                target_page_id: page_id.as_canonical().to_string(),
+                source_parent_origin: None,
+                story_authority_id: None,
+                cmo_slot_index: Some(0),
+                cmo_scalar_index: Some(0),
+            },
+            target_frame_node_id: Some(frame_id),
+            target_frame_paint_scalar_end: None,
+            text_content_bounds: None,
+            bounds: visual.scene.nodes[0].bounds,
+            transform: Affine2D::identity(),
+        });
+
+        assert!(render_text_is_story_equivalent_for_layout_v1(
+            &visual,
+            page_id,
+            frame_id,
+            None,
+            rendered,
+            source,
+        ));
+        assert!(!render_text_is_story_equivalent_for_layout_v1(
+            &visual,
+            page_id,
+            frame_id,
+            None,
+            "X\rA",
+            source,
+        ));
+        assert!(!render_text_is_story_equivalent_for_layout_v1(
+            &visual,
+            page_id,
+            frame_id,
+            Some(frame_id),
+            rendered,
+            source,
+        ));
+        assert_eq!(visual.document.stories[0].text, source);
+    }
+
+    #[cfg(feature = "projected-scene-instances")]
+    #[test]
+    fn marker_suppressed_direct_target_reaches_layout_without_story_extent_mismatch() {
+        let mut visual = fixture();
+        let page_id = visual.document.pages[0].id;
+        let frame_id = visual.scene.nodes[0].origin;
+        let story_id = visual.document.stories[0].id;
+        let source = "\u{FFFC} A";
+        visual.document.stories[0].text = source.to_owned();
+        visual.document.pages[0].width_emu = 10_000_000;
+        visual.document.pages[0].height_emu = 10_000_000;
+        visual.scene.surfaces[0].size =
+            Size2D::new(LengthEmu::new(10_000_000), LengthEmu::new(10_000_000));
+        visual.scene.nodes[0].bounds = RectEmu::new(
+            LengthEmu::ZERO,
+            LengthEmu::ZERO,
+            LengthEmu::new(5_000_000),
+            LengthEmu::new(5_000_000),
+        );
+        visual.text_fragments[0].text = source.to_owned();
+        visual.text_fragments[0].scalar_start = 0;
+        visual.text_fragments[0].scalar_end =
+            u32::try_from(source.chars().count()).expect("bounded fixture");
+        visual.story_frames.push(pub_viewer::ViewerStoryFrame {
+            story_id,
+            frame_id,
+            ordinal: 0,
+            text_content_bounds: None,
+            vertical_alignment: None,
+        });
+        visual.projected_instances.push(pub_viewer::ViewerProjectedSceneInstanceV1 {
+            scene_instance: SceneInstanceV1 {
+                schema_version: SCENE_INSTANCE_SCHEMA_V1.to_owned(),
+                instance_id: "sha256:marker-layout-integration-fixture".to_owned(),
+                projection_kind: SceneProjectionKindV1::CmoStorySlot,
+                origin_node_id: frame_id.as_canonical().to_string(),
+                target_page_id: page_id.as_canonical().to_string(),
+                source_parent_origin: None,
+                story_authority_id: None,
+                cmo_slot_index: Some(0),
+                cmo_scalar_index: Some(0),
+            },
+            target_frame_node_id: Some(frame_id),
+            target_frame_paint_scalar_end: None,
+            text_content_bounds: None,
+            bounds: visual.scene.nodes[0].bounds,
+            transform: Affine2D::identity(),
+        });
+
+        let font_bytes = font_test_data::AHEM;
+        let fingerprint = font_fingerprint_sha256(font_bytes);
+        let fallback = ExplicitRenderTextFontResourceV1 {
+            resource_id: "test:marker-layout",
+            expected_sha256: &fingerprint,
+            face_index: 0,
+            default_font_size_emu: 152_400,
+            default_line_height_emu: 190_500,
+            bytes: font_bytes,
+        };
+        let plan =
+            build_page_render_plan_with_text_layout_v1(&visual, 0, &fallback).expect("render plan");
+        let direct = plan
+            .nodes
+            .iter()
+            .find(|node| node.projected_scene_instance.is_none() && node.node_id == frame_id)
+            .expect("direct target frame");
+        let fragment = direct.text.as_ref().expect("direct text");
+        assert_eq!(fragment.text, "\u{200B} A");
+        assert_eq!(visual.document.stories[0].text, source);
+        assert_ne!(
+            fragment.layout.as_ref().map(|layout| &layout.disposition),
+            Some(&RenderTextLayoutDispositionV1::BackendFallback {
+                reason: RenderTextLayoutFallbackReasonV1::StoryExtentMismatch,
+            })
+        );
     }
 
     #[cfg(feature = "projected-scene-instances")]
