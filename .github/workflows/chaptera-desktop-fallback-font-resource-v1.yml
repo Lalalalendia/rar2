@@ -120,7 +120,7 @@ jobs:
             }
           }
           $carlton = Join-Path $root "Carlton-March-2026.pub"
-          Invoke-WebRequest -Uri "https://sj3-bucket-media.s3.eu-west-1.amazonaws.com/5a/5a939344-76a6-4a6a-b30b-7237edac8bfa" -OutFile $carlton
+          Invoke-WebRequest -Uri "https://docs-cdn.schooljotter3.com/1fd359a4-cb4e-412d-81a1-79f36166cafc/5a939344-76a6-4a6a-b30b-7237edac8bfa/5a939344-76a6-4a6a-b30b-7237edac8bfa.pub" -OutFile $carlton
           $carltonHash = (Get-FileHash $carlton -Algorithm SHA256).Hash.ToLowerInvariant()
           $carltonBytes = (Get-Item $carlton).Length
           if ($carltonHash -ne "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3") {
