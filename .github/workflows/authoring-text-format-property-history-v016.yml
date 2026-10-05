@@ -36,6 +36,14 @@ jobs:
           cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets
           cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets -- -D warnings
 
+      - name: Execute scoped history wire and hash-domain unit tests
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor \
+            scoped_text_format_wire_has_distinct_kind_and_schema_floor --lib -- --nocapture
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor \
+            text_format_property_base_v1 --lib -- --nocapture
+
       - name: Acquire pinned real-PUB text-format corpus
         shell: bash
         run: |
