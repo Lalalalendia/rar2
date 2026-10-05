@@ -60,6 +60,14 @@ def classify_authored_lifecycle(paths, base=None, head=None):
     )
 
 
+def classify_fixed_output_images(paths, base=None, head=None):
+    return mod.classify_fixed_output_image_resources(
+        paths,
+        base_lib_source=base,
+        head_lib_source=head,
+    )
+
+
 def assert_continuity_consumer_wiring() -> None:
     workflow_path = Path(".github/workflows/editor-desktop-continuity-v2-windows.yml")
     workflow = workflow_path.read_text(encoding="utf-8")
@@ -231,6 +239,33 @@ def assert_authored_lifecycle_consumer_wiring() -> None:
     ), "cheap contract must run when AuthoredStack Lifecycle wiring changes"
 
 
+def assert_fixed_output_images_consumer_wiring() -> None:
+    workflow_path = Path(".github/workflows/editor-fixed-output-current-image-resources.yml")
+    workflow = workflow_path.read_text(encoding="utf-8")
+
+    required = (
+        "Classify pub-editor fixed-output image resources scope",
+        "ref: ${{ github.event.pull_request.base.ref || github.sha }}",
+        "python tools/ci/pub_editor_pr_fanout.py",
+        "needs: classify",
+        "needs.classify.result != 'success'",
+        "needs.classify.outputs.fixed_output_image_resources == 'true'",
+        "base_classifier_missing_fixed_output_image_resources_output",
+    )
+    missing = [marker for marker in required if marker not in workflow]
+    assert not missing, (
+        "fixed-output image resources selective consumer lost required wiring: "
+        + ", ".join(missing)
+    )
+
+    contract = Path(
+        ".github/workflows/pub-editor-selective-fanout-contract.yml"
+    ).read_text(encoding="utf-8")
+    assert (
+        ".github/workflows/editor-fixed-output-current-image-resources.yml" in contract
+    ), "cheap contract must run when fixed-output image resource wiring changes"
+
+
 def main() -> None:
     assert_continuity_consumer_wiring()
     assert_textbox_consumer_wiring()
@@ -238,6 +273,7 @@ def main() -> None:
     assert_duplicate_consumer_wiring()
     assert_authored_stack_consumer_wiring()
     assert_authored_lifecycle_consumer_wiring()
+    assert_fixed_output_images_consumer_wiring()
 
     base = """mod duplicate_authored_rectangle_v1;
 mod imported_paragraphs_v1;
@@ -548,6 +584,45 @@ pub fn shared_core() {}
 
     run, reason = classify_authored_lifecycle(["README.md"])
     assert run is False and reason == "no_authored_stack_lifecycle_owner_changed"
+
+    assert mod.facade_change_is_safe(
+        base,
+        head_facade,
+        safe_modules=mod.SAFE_FIXED_OUTPUT_IMAGE_RESOURCES_MODULES,
+    )
+    run, reason = classify_fixed_output_images(
+        [
+            mod.PUB_EDITOR_LIB,
+            mod.SAFE_FIXED_OUTPUT_IMAGE_RESOURCES_MODULES[
+                "imported_paragraph_alignment_v1"
+            ],
+        ],
+        base,
+        head_facade,
+    )
+    assert run is False and reason == "proven_non_fixed_output_image_resources_pub_editor_slice"
+
+    run, reason = classify_fixed_output_images([mod.PUB_EDITOR_LIB], base, core_head)
+    assert run is True and reason == "pub_editor_lib_core_change"
+
+    run, reason = classify_fixed_output_images(
+        ["vendor/producer-a/crates/pub-editor/src/text_format_property_base_v1.rs"]
+    )
+    assert run is True and reason == "unknown_or_core_pub_editor_path"
+
+    for path in (
+        ".github/workflows/editor-fixed-output-current-image-resources.yml",
+        "tools/ci/pub_editor_pr_fanout.py",
+        "tools/ci/test_pub_editor_pr_fanout.py",
+    ):
+        run, reason = classify_fixed_output_images([path])
+        assert run is True and reason == "direct_fixed_output_image_resources_owner_changed", (
+            path,
+            reason,
+        )
+
+    run, reason = classify_fixed_output_images(["README.md"])
+    assert run is False and reason == "no_fixed_output_image_resources_owner_changed"
 
     print("pub-editor PR fanout classifier self-test: ok")
 
