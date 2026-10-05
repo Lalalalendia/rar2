@@ -74,5 +74,6 @@ class CurrentViewerSupportedSubsetSourceTests(unittest.TestCase):
 
 
 # Current-main rerun marker after paragraph-spacing consumer landing.
+# Validation marker v2: exact Carlton text-color census for #1433.
 if __name__ == "__main__":
     unittest.main()
