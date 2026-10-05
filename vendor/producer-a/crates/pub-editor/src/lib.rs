@@ -2496,6 +2496,42 @@ impl EditorSession {
         )
     }
 
+    pub fn source_text_format_property_state_v1(
+        &self,
+        story_id: StoryId,
+        property: FormatPropertyV1,
+    ) -> Result<TextFormatPropertyStateV1, EditorTextFormatBaseErrorV1> {
+        self.validate_source_identity()
+            .map_err(|_| EditorTextFormatBaseErrorV1::SourceIdentityChanged)?;
+        let story = self
+            .graph
+            .stories
+            .get(&story_id)
+            .ok_or(EditorTextFormatBaseErrorV1::MissingStory { story_id })?;
+        let source_revision_id = self
+            .source_story_state_ids
+            .get(&story_id)
+            .ok_or(EditorTextFormatBaseErrorV1::MissingStory { story_id })?;
+        if story_state_id_v1(story_id, &story.text) != *source_revision_id {
+            return Err(EditorTextFormatBaseErrorV1::StoryChanged { story_id });
+        }
+        let story_scalar_len = u32::try_from(story.text.chars().count()).map_err(|_| {
+            EditorTextFormatBaseErrorV1::UnsupportedBase {
+                story_id,
+                reason: "Story scalar length exceeds u32".to_owned(),
+            }
+        })?;
+
+        build_source_text_format_property_state_v1(
+            story_id,
+            source_revision_id,
+            story_scalar_len,
+            &self.source_typography_runs,
+            property,
+        )
+        .map_err(|reason| EditorTextFormatBaseErrorV1::UnsupportedBase { story_id, reason })
+    }
+
     pub fn current_text_format_overlay_v1(
         &self,
         story_id: StoryId,
@@ -2504,9 +2540,14 @@ impl EditorSession {
             .source_text_format_overlay_v1(story_id)
             .map_err(text_format_base_error_to_editor_v1)?;
         for operation in &self.undo {
-            if text_format_operation_story_id_v1(operation) == Some(story_id) {
-                state = apply_text_format_history_operation_v1(&state, operation)?;
+            if text_format_operation_story_id_v1(operation) != Some(story_id) {
+                continue;
             }
+            state = if is_scoped_text_format_operation_v1(operation) {
+                apply_text_format_history_operation_semantic_v1(&state, operation)?
+            } else {
+                apply_text_format_history_operation_v1(&state, operation)?
+            };
         }
         Ok(state)
     }
@@ -2520,6 +2561,40 @@ impl EditorSession {
             story_id,
             message: error.to_string(),
         })
+    }
+
+    pub fn current_text_format_property_state_v1(
+        &self,
+        story_id: StoryId,
+        property: FormatPropertyV1,
+    ) -> Result<TextFormatPropertyStateV1, EditorError> {
+        let state = self
+            .source_text_format_property_state_v1(story_id, property)
+            .map_err(text_format_base_error_to_editor_v1)?;
+        fold_text_format_property_history_v1(state, &self.undo)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })
+    }
+
+    pub fn current_text_format_property_state_hash_v1(
+        &self,
+        story_id: StoryId,
+        property: FormatPropertyV1,
+    ) -> Result<String, EditorError> {
+        let state = self.current_text_format_property_state_v1(story_id, property)?;
+        text_format_property_state_hash_v1(&state)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })
+    }
+
+    pub fn current_text_format_property_segments_v1(
+        &self,
+        story_id: StoryId,
+        property: FormatPropertyV1,
+        start_scalar: u32,
+        end_scalar: u32,
+    ) -> Result<Vec<EffectivePropertySegmentV1>, EditorError> {
+        let state = self.current_text_format_property_state_v1(story_id, property)?;
+        effective_text_format_property_segments_v1(&state, start_scalar, end_scalar)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })
     }
 
     pub fn set_text_format_property_v1(
@@ -2624,6 +2699,108 @@ impl EditorSession {
             return Err(EditorError::TextFormatStateInvalid {
                 story_id,
                 message: "canonical clear-format command did not reproduce its receipt state"
+                    .to_owned(),
+            });
+        }
+
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    pub fn set_text_format_property_scoped_v1(
+        &mut self,
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        property: FormatPropertyV1,
+        value: FormatValueV1,
+        expected_state_hash: &str,
+    ) -> Result<EditOperation, EditorError> {
+        let state = self.current_text_format_property_state_v1(story_id, property)?;
+        let before_state_hash =
+            text_format_property_state_hash_v1(&state).map_err(|message| {
+                EditorError::TextFormatStateInvalid { story_id, message }
+            })?;
+        if before_state_hash != expected_state_hash {
+            return Err(EditorError::StaleOperation { story_id });
+        }
+        let after =
+            set_text_format_property_state_v1(&state, start_scalar, end_scalar, value.clone())
+                .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        let after_state_hash =
+            text_format_property_state_hash_v1(&after).map_err(|message| {
+                EditorError::TextFormatStateInvalid { story_id, message }
+            })?;
+        if before_state_hash == after_state_hash {
+            return Err(EditorError::NoChange { story_id });
+        }
+
+        let operation = EditOperation::SetTextFormatPropertyScopedV1 {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            before_state_hash,
+            after_state_hash,
+        };
+        let replayed = apply_text_format_property_operation_checked_v1(&state, &operation)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        if replayed != after {
+            return Err(EditorError::TextFormatStateInvalid {
+                story_id,
+                message: "canonical scoped format command did not reproduce its state".to_owned(),
+            });
+        }
+
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    pub fn clear_text_format_property_override_scoped_v1(
+        &mut self,
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        property: FormatPropertyV1,
+        expected_state_hash: &str,
+    ) -> Result<EditOperation, EditorError> {
+        let state = self.current_text_format_property_state_v1(story_id, property)?;
+        let before_state_hash =
+            text_format_property_state_hash_v1(&state).map_err(|message| {
+                EditorError::TextFormatStateInvalid { story_id, message }
+            })?;
+        if before_state_hash != expected_state_hash {
+            return Err(EditorError::StaleOperation { story_id });
+        }
+        let after = clear_text_format_property_state_v1(&state, start_scalar, end_scalar)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        let after_state_hash =
+            text_format_property_state_hash_v1(&after).map_err(|message| {
+                EditorError::TextFormatStateInvalid { story_id, message }
+            })?;
+        if before_state_hash == after_state_hash {
+            return Err(EditorError::NoChange { story_id });
+        }
+
+        let operation = EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            before_state_hash,
+            after_state_hash,
+        };
+        let replayed = apply_text_format_property_operation_checked_v1(&state, &operation)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        if replayed != after {
+            return Err(EditorError::TextFormatStateInvalid {
+                story_id,
+                message: "canonical scoped clear-format command did not reproduce its state"
                     .to_owned(),
             });
         }
