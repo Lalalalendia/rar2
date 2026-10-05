@@ -1837,62 +1837,38 @@ fn paragraph_alignment_transition_error_to_editor_v1(
     }
 }
 
-fn text_format_operation_story_id_v1(operation: &EditOperation) -> Option<StoryId> {
+fn text_format_operation_parts_v1(
+    operation: &EditOperation,
+) -> Option<(StoryId, FormatPropertyV1, &str, &str)> {
     match operation {
-        EditOperation::SetTextFormatProperty { story_id, .. }
-        | EditOperation::ClearTextFormatPropertyOverride { story_id, .. } => Some(*story_id),
+        EditOperation::SetTextFormatProperty {
+            story_id,
+            property,
+            before_state_hash,
+            after_state_hash,
+            ..
+        }
+        | EditOperation::ClearTextFormatPropertyOverride {
+            story_id,
+            property,
+            before_state_hash,
+            after_state_hash,
+            ..
+        } => Some((*story_id, *property, before_state_hash, after_state_hash)),
         _ => None,
     }
 }
 
-fn apply_text_format_history_operation_v1(
+fn text_format_operation_story_id_v1(operation: &EditOperation) -> Option<StoryId> {
+    text_format_operation_parts_v1(operation).map(|(story_id, _, _, _)| story_id)
+}
+
+fn apply_text_format_history_operation_semantic_v1(
     state: &TextFormatOverlayStateV1,
     operation: &EditOperation,
 ) -> Result<TextFormatOverlayStateV1, EditorError> {
-    let (story_id, before_state_hash, after_state_hash, receipt) = match operation {
-        EditOperation::SetTextFormatProperty {
-            story_id,
-            start_scalar,
-            end_scalar,
-            property,
-            value,
-            before_state_hash,
-            after_state_hash,
-        } => (
-            *story_id,
-            before_state_hash,
-            after_state_hash,
-            overlay_set_text_format_property_v1(
-                state,
-                *start_scalar,
-                *end_scalar,
-                *property,
-                value.clone(),
-                before_state_hash,
-            ),
-        ),
-        EditOperation::ClearTextFormatPropertyOverride {
-            story_id,
-            start_scalar,
-            end_scalar,
-            property,
-            before_state_hash,
-            after_state_hash,
-        } => (
-            *story_id,
-            before_state_hash,
-            after_state_hash,
-            overlay_clear_text_format_property_override_v1(
-                state,
-                *start_scalar,
-                *end_scalar,
-                *property,
-                before_state_hash,
-            ),
-        ),
-        _ => unreachable!("format-history replay admits only text-format operations"),
-    };
-
+    let (story_id, _, _, _) = text_format_operation_parts_v1(operation)
+        .expect("semantic text-format replay receives only text-format operations");
     if state.story_id != story_id.as_canonical().to_string() {
         return Err(EditorError::TextFormatStateInvalid {
             story_id,
@@ -1900,20 +1876,75 @@ fn apply_text_format_history_operation_v1(
         });
     }
 
-    let receipt = receipt.map_err(|error| EditorError::TextFormatStateInvalid {
+    let current_hash = state_hash_v1(state).map_err(|error| EditorError::TextFormatStateInvalid {
         story_id,
         message: error.to_string(),
     })?;
-    if receipt.command.before_state_hash != *before_state_hash
-        || receipt.command.after_state_hash != *after_state_hash
-    {
+    let receipt = match operation {
+        EditOperation::SetTextFormatProperty {
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            ..
+        } => overlay_set_text_format_property_v1(
+            state,
+            *start_scalar,
+            *end_scalar,
+            *property,
+            value.clone(),
+            &current_hash,
+        ),
+        EditOperation::ClearTextFormatPropertyOverride {
+            start_scalar,
+            end_scalar,
+            property,
+            ..
+        } => overlay_clear_text_format_property_override_v1(
+            state,
+            *start_scalar,
+            *end_scalar,
+            *property,
+            &current_hash,
+        ),
+        _ => unreachable!("semantic text-format replay receives only text-format operations"),
+    }
+    .map_err(|error| EditorError::TextFormatStateInvalid {
+        story_id,
+        message: error.to_string(),
+    })?;
+    Ok(receipt.after_state)
+}
+
+fn apply_text_format_history_operation_v1(
+    state: &TextFormatOverlayStateV1,
+    operation: &EditOperation,
+) -> Result<TextFormatOverlayStateV1, EditorError> {
+    let (story_id, _, before_state_hash, after_state_hash) =
+        text_format_operation_parts_v1(operation)
+            .expect("checked text-format replay receives only text-format operations");
+    let current_hash = state_hash_v1(state).map_err(|error| EditorError::TextFormatStateInvalid {
+        story_id,
+        message: error.to_string(),
+    })?;
+    if current_hash != before_state_hash {
+        return Err(EditorError::StaleOperation { story_id });
+    }
+
+    let after = apply_text_format_history_operation_semantic_v1(state, operation)?;
+    let actual_after_hash =
+        state_hash_v1(&after).map_err(|error| EditorError::TextFormatStateInvalid {
+            story_id,
+            message: error.to_string(),
+        })?;
+    if actual_after_hash != after_state_hash {
         return Err(EditorError::TextFormatStateInvalid {
             story_id,
             message: "persisted format operation hashes do not match deterministic replay"
                 .to_owned(),
         });
     }
-    Ok(receipt.after_state)
+    Ok(after)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
