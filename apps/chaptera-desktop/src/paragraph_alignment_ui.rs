@@ -6,14 +6,14 @@ use pub_editor::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DesktopParagraphAlignmentEffectiveStateV1 {
+pub(crate) enum DesktopParagraphAlignmentEffectiveStateV1 {
     Uniform(AuthoredParagraphAlignmentValueV1),
     Mixed,
     Unsupported,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DesktopParagraphAlignmentProvenanceStateV1 {
+pub(crate) enum DesktopParagraphAlignmentProvenanceStateV1 {
     Base,
     ChapteraOverride,
     Mixed,
@@ -21,7 +21,7 @@ pub(super) enum DesktopParagraphAlignmentProvenanceStateV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct DesktopParagraphAlignmentSelectionStateV1 {
+pub(crate) struct DesktopParagraphAlignmentSelectionStateV1 {
     pub paragraph_ids: Vec<ParagraphId>,
     pub effective: DesktopParagraphAlignmentEffectiveStateV1,
     pub provenance: DesktopParagraphAlignmentProvenanceStateV1,
