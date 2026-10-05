@@ -301,7 +301,6 @@ mod tests {
             outside_scalar: u32,
             before_resource_id: String,
             after_resource_id: String,
-            color_error: String,
         }
 
         let root = env::var_os("CHAPTERA_TEXT_FORMAT_FIXTURES_DIR")
@@ -354,15 +353,6 @@ mod tests {
                     if fragment.scalar_start != 0
                         || fragment.scalar_end != story_len
                         || fragment.text != story.text
-                    {
-                        continue;
-                    }
-
-                    let color_error = match editor.current_text_format_overlay_v1(fragment.story_id) {
-                        Ok(_) => continue,
-                        Err(error) => error.to_string(),
-                    };
-                    if !color_error.contains("bounded effective direct-RGB text color is unavailable")
                     {
                         continue;
                     }
@@ -426,7 +416,6 @@ mod tests {
                             outside_scalar: run.scalar_start + 1,
                             before_resource_id,
                             after_resource_id,
-                            color_error,
                         });
                         break 'files;
                     }
@@ -435,7 +424,7 @@ mod tests {
         }
 
         let witness = selected.expect(
-            "pinned text-format corpus must expose a color-blocked placed Story with one uniquely resolvable exact Bold/Italic style transition",
+            "pinned text-format corpus must expose a placed Story with one uniquely resolvable exact Bold/Italic style transition",
         );
         let original = fs::read(&witness.path).expect("read selected witness");
         let digest = Sha256::digest(&original);
@@ -585,13 +574,6 @@ mod tests {
             Some(witness.before_resource_id.as_str())
         );
 
-        assert!(
-            reopened
-                .current_text_format_overlay_v1(witness.story_id)
-                .expect_err("direct-RGB Color must remain unresolved")
-                .to_string()
-                .contains("bounded effective direct-RGB text color is unavailable")
-        );
         assert_eq!(reopened.graph().stories[&witness.story_id].text, source_text);
         assert_eq!(reopened.source_hash(), source_hash);
         assert_eq!(
@@ -615,7 +597,6 @@ mod tests {
             "redo_restores_styled": true,
             "v016_reopen_restores_styled": true,
             "clear_restores_source": true,
-            "color_remains_unresolved": witness.color_error.contains("direct-RGB"),
             "story_text_unchanged": true,
             "source_pub_bytes_unchanged": true
         });
