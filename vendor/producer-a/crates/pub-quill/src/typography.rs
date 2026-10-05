@@ -133,6 +133,11 @@ pub struct QuillExplicitTypographyRun {
     pub text_size_emu: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_rgb: Option<[u8; 3]>,
+    /// Publisher scheme slot 0..7 when the Quill PL reference uses the
+    /// natively-grounded fSchemeIndex form. RGB remains unresolved here
+    /// because publication scheme authority lives in /Contents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_scheme_slot: Option<u8>,
     #[serde(default)]
     pub color_inherited: bool,
     pub fdpc_descriptor_ordinal: u32,
@@ -274,6 +279,11 @@ pub struct QuillEffectiveTypographyRun {
     pub text_size_source: QuillTypographyValueSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_rgb: Option<[u8; 3]>,
+    /// Publisher scheme slot 0..7 when the Quill PL reference uses the
+    /// natively-grounded fSchemeIndex form. Effective RGB is resolved only
+    /// after joining the publication OplSccm authority in pub-reader.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_scheme_slot: Option<u8>,
     #[serde(default)]
     pub color_inherited: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -727,6 +737,11 @@ pub fn parse_bounded_typography(
                 continue;
             };
 
+            let explicit_color =
+                resolve_effective_text_color(range, None, &text_color_references)
+                    .map(|(color, _)| color);
+            let (color_rgb, color_scheme_slot) = split_bounded_quill_text_color(explicit_color);
+
             for intersection in &range.story_intersections {
                 explicit_runs.push(QuillExplicitTypographyRun {
                     story_index: intersection.story_index,
@@ -736,8 +751,8 @@ pub fn parse_bounded_typography(
                     font_index: *font_index,
                     font_name: font_name.clone(),
                     text_size_emu: *text_size_emu,
-                    color_rgb: resolve_effective_text_color(range, None, &text_color_references)
-                        .map(|(rgb, _)| rgb),
+                    color_rgb,
+                    color_scheme_slot,
                     color_inherited: false,
                     fdpc_descriptor_ordinal: range.fdpc_descriptor_ordinal,
                     fdpc_style_ordinal: range.fdpc_style_ordinal,
@@ -1946,10 +1961,11 @@ fn build_effective_runs(
         }
 
         let color_default = default.or(implicit_style_zero_default);
-        let (color_rgb, color_source) =
+        let (color_value, color_source) =
             resolve_effective_text_color(fdpc, color_default, text_color_references)
-                .map(|(rgb, source)| (Some(rgb), Some(source)))
+                .map(|(color, source)| (Some(color), Some(source)))
                 .unwrap_or((None, None));
+        let (color_rgb, color_scheme_slot) = split_bounded_quill_text_color(color_value);
         let color_inherited = color_source == Some(QuillTypographyValueSource::InheritedStsh1);
 
         let uses_inheritance = font_source == QuillTypographyValueSource::InheritedStsh1
@@ -2007,6 +2023,7 @@ fn build_effective_runs(
             text_size_emu,
             text_size_source,
             color_rgb,
+            color_scheme_slot,
             color_inherited,
             bold,
             italic,
@@ -2231,32 +2248,66 @@ fn parse_text_color_references(
     Ok(references)
 }
 
-fn resolve_direct_quill_text_color(raw: u32) -> Option<[u8; 3]> {
-    // Only the unflagged direct COLORREF form is authorized in this first
-    // bounded text-color slice. Scheme/palette/system/procedural forms must
-    // remain unresolved until their Quill context is independently grounded.
-    if (raw >> 24) != 0 {
-        return None;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundedQuillTextColor {
+    DirectRgb([u8; 3]),
+    PublisherSchemeSlot(u8),
+}
+
+fn resolve_bounded_quill_text_color(raw: u32) -> Option<BoundedQuillTextColor> {
+    let high = (raw >> 24) as u8;
+    if high == 0 {
+        return Some(BoundedQuillTextColor::DirectRgb([
+            (raw & 0xFF) as u8,
+            ((raw >> 8) & 0xFF) as u8,
+            ((raw >> 16) & 0xFF) as u8,
+        ]));
     }
-    Some([
-        (raw & 0xFF) as u8,
-        ((raw >> 8) & 0xFF) as u8,
-        ((raw >> 16) & 0xFF) as u8,
-    ])
+
+    // QUILL-SCHEME-TEXT-COLOR-AUTH-01 native Publisher 2019 evidence proves
+    // this exact form only: fSchemeIndex high byte 0x08, zero middle payload,
+    // and low-byte slot 0..7. COM SchemeColor roles 1..8 persist as slots
+    // 0..7 and the slot stays stable across a document ColorScheme switch.
+    if high == 0x08 && (raw & 0x00FF_FF00) == 0 {
+        let slot = (raw & 0xFF) as u8;
+        if slot < 8 {
+            return Some(BoundedQuillTextColor::PublisherSchemeSlot(slot));
+        }
+    }
+
+    // Palette/system/auto/procedural and wider scheme forms remain fail-closed.
+    None
+}
+
+fn split_bounded_quill_text_color(
+    color: Option<BoundedQuillTextColor>,
+) -> (Option<[u8; 3]>, Option<u8>) {
+    match color {
+        Some(BoundedQuillTextColor::DirectRgb(rgb)) => (Some(rgb), None),
+        Some(BoundedQuillTextColor::PublisherSchemeSlot(slot)) => (None, Some(slot)),
+        None => (None, None),
+    }
+}
+
+fn resolve_direct_quill_text_color(raw: u32) -> Option<[u8; 3]> {
+    match resolve_bounded_quill_text_color(raw) {
+        Some(BoundedQuillTextColor::DirectRgb(rgb)) => Some(rgb),
+        _ => None,
+    }
 }
 
 fn resolve_effective_text_color(
     fdpc: &QuillTypographyRange,
     default: Option<&CharacterDefaultObservation>,
     references: &[u32],
-) -> Option<([u8; 3], QuillTypographyValueSource)> {
+) -> Option<(BoundedQuillTextColor, QuillTypographyValueSource)> {
     let mut explicit = fdpc.color_indices.clone();
     explicit.sort_unstable();
     explicit.dedup();
     if let [index] = explicit.as_slice() {
         let raw = references.get(*index as usize)?;
-        return resolve_direct_quill_text_color(*raw)
-            .map(|rgb| (rgb, QuillTypographyValueSource::ExplicitFdpc));
+        return resolve_bounded_quill_text_color(*raw)
+            .map(|color| (color, QuillTypographyValueSource::ExplicitFdpc));
     }
     if !explicit.is_empty() {
         return None;
@@ -2270,8 +2321,8 @@ fn resolve_effective_text_color(
         return None;
     };
     let raw = references.get(*index as usize)?;
-    resolve_direct_quill_text_color(*raw)
-        .map(|rgb| (rgb, QuillTypographyValueSource::InheritedStsh1))
+    resolve_bounded_quill_text_color(*raw)
+        .map(|color| (color, QuillTypographyValueSource::InheritedStsh1))
 }
 
 fn parse_fdpc_styles(
@@ -3609,6 +3660,22 @@ mod tests {
         assert_eq!(resolve_direct_quill_text_color(0x0800_0001), None);
         assert_eq!(resolve_direct_quill_text_color(0x1001_8000), None);
         assert_eq!(resolve_direct_quill_text_color(0xFF11_2233), None);
+    }
+
+    #[test]
+    fn publisher_scheme_text_color_accepts_only_native_grounded_eight_slot_form() {
+        assert_eq!(
+            resolve_bounded_quill_text_color(0x0800_0000),
+            Some(BoundedQuillTextColor::PublisherSchemeSlot(0))
+        );
+        assert_eq!(
+            resolve_bounded_quill_text_color(0x0800_0007),
+            Some(BoundedQuillTextColor::PublisherSchemeSlot(7))
+        );
+        assert_eq!(resolve_bounded_quill_text_color(0x0800_0008), None);
+        assert_eq!(resolve_bounded_quill_text_color(0x0800_0100), None);
+        assert_eq!(resolve_bounded_quill_text_color(0x1000_0000), None);
+        assert_eq!(resolve_bounded_quill_text_color(0xFF00_0000), None);
     }
 
     #[test]
