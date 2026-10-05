@@ -785,9 +785,7 @@ mod tests {
             .find(|line| line.flow_ordinal == flow_ordinal)
             .expect("shifted caret line");
         assert_eq!(raw_line.clusters.len(), shifted_line.clusters.len());
-        for (raw_cluster, shifted_cluster) in
-            raw_line.clusters.iter().zip(&shifted_line.clusters)
-        {
+        for (raw_cluster, shifted_cluster) in raw_line.clusters.iter().zip(&shifted_line.clusters) {
             assert_eq!(
                 shifted_cluster.page_x_start_emu,
                 raw_cluster.page_x_start_emu + expected_offset
@@ -894,9 +892,7 @@ mod tests {
                 .iter()
                 .filter(|line| line.story_origin == story_id)
                 .collect::<Vec<_>>();
-            lines.sort_by_key(|line| {
-                (line.scalar_start, line.frame_origin, line.frame_line_index)
-            });
+            lines.sort_by_key(|line| (line.scalar_start, line.frame_origin, line.frame_line_index));
 
             for (ordinal, line) in lines.into_iter().enumerate() {
                 let start = u64::from(line.scalar_start);
@@ -924,18 +920,12 @@ mod tests {
                 let Ok(flow_ordinal) = u32::try_from(ordinal) else {
                     continue;
                 };
-                if !raw
-                    .lines
-                    .iter()
-                    .any(|caret_line| {
-                        caret_line.flow_ordinal == flow_ordinal
-                            && !caret_line.clusters.is_empty()
-                    })
-                {
+                if !raw.lines.iter().any(|caret_line| {
+                    caret_line.flow_ordinal == flow_ordinal && !caret_line.clusters.is_empty()
+                }) {
                     continue;
                 }
-                let Ok(effective) =
-                    editor.effective_paragraph_alignment_v1(paragraph.paragraph_id)
+                let Ok(effective) = editor.effective_paragraph_alignment_v1(paragraph.paragraph_id)
                 else {
                     continue;
                 };
@@ -976,17 +966,14 @@ mod tests {
             content_width_emu,
             measured_width_emu,
             base_alignment,
-        ) = candidate.expect("Carlton must expose one editable paragraph line with horizontal slack");
+        ) = candidate
+            .expect("Carlton must expose one editable paragraph line with horizontal slack");
 
         assert_caret_flow_shift_v1(
             &raw,
             &baseline.caret_map,
             flow_ordinal,
-            expected_paragraph_offset_v1(
-                base_alignment,
-                content_width_emu,
-                measured_width_emu,
-            ),
+            expected_paragraph_offset_v1(base_alignment, content_width_emu, measured_width_emu),
         );
 
         let mut paragraph_history_active = false;
@@ -1049,11 +1036,7 @@ mod tests {
                 &raw,
                 &layout.caret_map,
                 flow_ordinal,
-                expected_paragraph_offset_v1(
-                    alignment,
-                    content_width_emu,
-                    measured_width_emu,
-                ),
+                expected_paragraph_offset_v1(alignment, content_width_emu, measured_width_emu),
             );
         }
 
@@ -1077,9 +1060,8 @@ mod tests {
             "paragraph_alignment_lifecycle_unsupported"
         );
 
-        let cleared =
-            build_current_story_layout_v1(&editor, story_id, "paragraph:clear", &font)
-                .expect("rebuild paragraph layout after Clear");
+        let cleared = build_current_story_layout_v1(&editor, story_id, "paragraph:clear", &font)
+            .expect("rebuild paragraph layout after Clear");
         assert_caret_flow_shift_v1(
             &raw,
             &cleared.caret_map,
