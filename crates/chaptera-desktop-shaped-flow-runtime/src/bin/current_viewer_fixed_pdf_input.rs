@@ -2,14 +2,20 @@ use chaptera_scene_instance::{
     GeometrySyncPolicyV1, direct_page_local_instance_v1, geometry_sync_policy_v1,
 };
 use chaptera_viewer_render_plan::{
-    ExplicitRenderTextFontResourceV1, PageRenderPlanV1, RenderTextFragmentV1,
-    RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_v1,
-    complete_scalar_source_font_family_v1, effective_source_font_family_v1,
+    ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, PageRenderPlanV1, RenderTextFragmentV1,
+    RenderTextLayoutDispositionV1, SHARED_TEXT_LAYOUT_REVISION_V1,
+    build_page_render_plan_with_text_layout_v1, complete_scalar_source_font_family_v1,
+    effective_source_font_family_v1,
 };
 use pub_editor::{
     EditOperation, EditorProject, EditorSession, Sha256Digest, open_mature_0x2c_editor,
 };
-use pub_layout::{compatible_natural_line_height_emu_v1, font_fingerprint_sha256};
+use pub_layout::{
+    BoundedBreakKind, BoundedLayoutEnvironment, BoundedLayoutProjection, BoundedShapedFlowRuntime,
+    BoundedShapingRuntime, ProjectedNodeGeometry, ProjectedPage, ProjectedStory,
+    ProjectedStoryFrame, break_policy_for_shaped_text, compatible_natural_line_height_emu_v1,
+    font_fingerprint_sha256, resolve_bounded_shaped_flow, shape_bounded_ltr,
+};
 use pub_model::{EMU_PER_POINT, LengthEmu, NodeId, RectEmu, ResourceId, StoryId};
 use pub_viewer::{
     ViewerGeometryDocument, ViewerParagraphLineSpacing, open_mature_0x2c_geometry,
@@ -64,6 +70,10 @@ struct CurrentViewerPlanCensusV1 {
     shared_layout_incomplete_family_authority_counts: BTreeMap<String, usize>,
     shared_layout_incomplete_font_binding_counts: BTreeMap<String, usize>,
     shared_layout_incomplete_spacing_family_binding_counts: BTreeMap<String, usize>,
+    shared_layout_incomplete_path_counts: BTreeMap<String, usize>,
+    shared_layout_incomplete_consumption_counts: BTreeMap<String, usize>,
+    shared_layout_incomplete_cause_counts: BTreeMap<String, usize>,
+    shared_layout_incomplete_cause_spacing_counts: BTreeMap<String, usize>,
     first_line_capacity_recovery_count: usize,
     first_line_capacity_recovery_signature_counts: BTreeMap<String, usize>,
     story_prefix_whole_story_candidate_count: usize,
@@ -248,6 +258,253 @@ fn font_binding_class(fragment: &RenderTextFragmentV1) -> &'static str {
     }
 }
 
+fn uniform_fragment_font_size_emu(
+    fragment: &RenderTextFragmentV1,
+    default_font_size_emu: i64,
+) -> Option<i64> {
+    if fragment.typography.is_empty() {
+        return (default_font_size_emu > 0).then_some(default_font_size_emu);
+    }
+
+    let mut cursor = fragment.scalar_start;
+    let mut selected = None;
+    for run in &fragment.typography {
+        if run.scalar_start != cursor
+            || run.scalar_end <= run.scalar_start
+            || run.scalar_end > fragment.scalar_end
+            || run.text_size_emu == 0
+        {
+            return None;
+        }
+        let size = i64::from(run.text_size_emu);
+        match selected {
+            None => selected = Some(size),
+            Some(previous) if previous == size => {}
+            Some(_) => return None,
+        }
+        cursor = run.scalar_end;
+    }
+    (cursor == fragment.scalar_end).then_some(selected.unwrap_or(default_font_size_emu))
+}
+
+fn scaled_fallback_line_height_emu(
+    font_size_emu: i64,
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+) -> Option<i64> {
+    if font_size_emu <= 0 || font.default_font_size_emu <= 0 || font.default_line_height_emu <= 0 {
+        return None;
+    }
+    let numerator =
+        i128::from(font_size_emu).checked_mul(i128::from(font.default_line_height_emu))?;
+    let denominator = i128::from(font.default_font_size_emu);
+    let rounded = numerator
+        .checked_add(denominator / 2)?
+        .checked_div(denominator)?;
+    let value = i64::try_from(rounded).ok()?;
+    (value > 0).then_some(value)
+}
+
+fn diagnostic_uniform_line_height_emu(
+    visual: &ViewerGeometryDocument,
+    fragment: &RenderTextFragmentV1,
+    font_size_emu: i64,
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+) -> Option<i64> {
+    let story = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == fragment.story_id)?;
+
+    let mut intersecting = visual
+        .paragraph_line_spacings
+        .iter()
+        .filter(|run| run.story_id == fragment.story_id)
+        .filter(|run| run.applies_to_story_text(&story.text))
+        .filter(|run| {
+            run.scalar_end > fragment.scalar_start && run.scalar_start < fragment.scalar_end
+        });
+
+    if let Some(run) = intersecting.next()
+        && intersecting.next().is_none()
+        && run.scalar_start <= fragment.scalar_start
+        && run.scalar_end >= fragment.scalar_end
+        && let ViewerParagraphLineSpacing::Absolute { spacing_emu } = run.line_spacing
+        && spacing_emu > 0
+    {
+        return Some(i64::from(spacing_emu));
+    }
+
+    scaled_fallback_line_height_emu(font_size_emu, font)
+}
+
+fn mandatory_boundary_after_cursor(
+    fragment: &RenderTextFragmentV1,
+    cursor: u32,
+    runtime: &BoundedShapingRuntime<'_>,
+) -> bool {
+    let Ok(shaped) = shape_bounded_ltr(&fragment.text, runtime) else {
+        return false;
+    };
+    let Ok(policy) = break_policy_for_shaped_text(&fragment.text, &shaped.glyphs) else {
+        return false;
+    };
+    policy
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.scalar_boundary > cursor)
+        .any(|candidate| candidate.kind == BoundedBreakKind::Mandatory)
+}
+
+fn shared_layout_incomplete_cause(
+    visual: &ViewerGeometryDocument,
+    page: &PageRenderPlanV1,
+    node: &NodeRenderPlanV1,
+    fragment: &RenderTextFragmentV1,
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+) -> (&'static str, &'static str, &'static str) {
+    if node.projected_scene_instance.is_some() {
+        return ("projected_path", "unknown", "projected_fail_closed");
+    }
+
+    let Some(font_size_emu) = uniform_fragment_font_size_emu(fragment, font.default_font_size_emu)
+    else {
+        return (
+            "mixed_size_custom",
+            "unknown",
+            "mixed_size_path_fail_closed",
+        );
+    };
+
+    let Some(story) = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == fragment.story_id)
+    else {
+        return ("uniform_fallback", "unknown", "story_missing");
+    };
+    let Ok(story_scalar_len) = u32::try_from(story.text.chars().count()) else {
+        return ("uniform_fallback", "unknown", "story_extent_overflow");
+    };
+    if fragment.scalar_start != 0
+        || fragment.scalar_end != story_scalar_len
+        || fragment.text != story.text
+    {
+        return ("uniform_fallback", "unknown", "story_extent_mismatch");
+    }
+
+    let mut frames = visual
+        .story_frames
+        .iter()
+        .filter(|frame| frame.story_id == fragment.story_id);
+    let Some(frame) = frames.next() else {
+        return ("uniform_fallback", "unknown", "frame_missing");
+    };
+    if frames.next().is_some() || frame.frame_id != node.node_id {
+        return ("uniform_fallback", "unknown", "multi_frame_fail_closed");
+    }
+
+    let bounds = node.text_bounds.unwrap_or(node.bounds);
+    let Some(line_height_emu) =
+        diagnostic_uniform_line_height_emu(visual, fragment, font_size_emu, font)
+    else {
+        return ("uniform_fallback", "unknown", "line_height_unavailable");
+    };
+
+    let projection = BoundedLayoutProjection {
+        pages: vec![ProjectedPage {
+            origin: page.page_id,
+            size: page.page_size,
+            bleed: None,
+            margins: None,
+        }],
+        node_geometry: vec![ProjectedNodeGeometry {
+            origin: node.node_id,
+            parent_origin: page.page_id.into_canonical(),
+            bounds,
+            transform: node.transform.clone(),
+        }],
+        stories: vec![ProjectedStory {
+            origin: story.id,
+            text: story.text.clone(),
+            paragraph_origins: Vec::new(),
+            run_origins: Vec::new(),
+        }],
+        story_frames: vec![ProjectedStoryFrame {
+            story_origin: story.id,
+            frame_origin: node.node_id,
+            ordinal: frame.ordinal,
+            previous_frame_origin: None,
+            next_frame_origin: None,
+        }],
+        tables: Vec::new(),
+        guides: Vec::new(),
+        diagnostics: Vec::new(),
+    };
+    let runtime = BoundedShapedFlowRuntime {
+        shaping: BoundedShapingRuntime {
+            layout: BoundedLayoutEnvironment {
+                engine_revision: SHARED_TEXT_LAYOUT_REVISION_V1.to_owned(),
+                font_set_fingerprint: font.expected_sha256.to_owned(),
+                resource_fingerprint: font.resource_id.to_owned(),
+            },
+            face_index: font.face_index,
+            font_size_emu: LengthEmu::new(font_size_emu),
+            font_bytes: font.bytes,
+        },
+        line_height: LengthEmu::new(line_height_emu),
+    };
+    let Ok(scene) = resolve_bounded_shaped_flow(&projection, &runtime) else {
+        return ("uniform_fallback", "unknown", "shared_layout_error");
+    };
+
+    let mut source_lines = scene
+        .lines
+        .iter()
+        .filter(|line| line.story_origin == story.id && line.frame_origin == node.node_id)
+        .collect::<Vec<_>>();
+    source_lines.sort_by_key(|line| line.frame_line_index);
+    let consumption = if source_lines.is_empty() {
+        "zero_lines"
+    } else {
+        "partial_lines"
+    };
+    let has_no_capacity = scene
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "text_frame_has_no_capacity");
+    let has_unbreakable = scene
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "unbreakable_shaped_line");
+    let has_overset = scene
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "story_overset");
+    let cursor = source_lines
+        .last()
+        .map(|line| line.consumed_scalar_end)
+        .unwrap_or(fragment.scalar_start);
+
+    let cause = if has_no_capacity && source_lines.is_empty() {
+        "first_line_height_rejection"
+    } else if has_unbreakable && mandatory_boundary_after_cursor(fragment, cursor, &runtime.shaping)
+    {
+        "mandatory_boundary_no_fit"
+    } else if has_unbreakable {
+        "width_no_legal_break"
+    } else if has_overset && !source_lines.is_empty() {
+        "later_height_capacity_exhausted"
+    } else if has_overset {
+        "overset_without_lines"
+    } else {
+        "other_fail_closed"
+    };
+
+    ("uniform_fallback", consumption, cause)
+}
+
 fn story_prefix_whole_story_candidates(
     visual: &ViewerGeometryDocument,
 ) -> (BTreeSet<NodeId>, BTreeMap<String, usize>) {
@@ -335,8 +592,7 @@ fn story_prefix_whole_story_candidates(
 fn census(
     visual: &ViewerGeometryDocument,
     plans: &[PageRenderPlanV1],
-    fallback_font_bytes: &[u8],
-    fallback_face_index: u32,
+    fallback_font: &ExplicitRenderTextFontResourceV1<'_>,
 ) -> CurrentViewerPlanCensusV1 {
     let mut out = CurrentViewerPlanCensusV1 {
         page_count: plans.len(),
@@ -462,8 +718,8 @@ fn census(
                         && *line_height_emu > 0
                         && resolved_line_count > 0
                         && let Some(natural_extent) = compatible_natural_line_height_emu_v1(
-                            fallback_font_bytes,
-                            fallback_face_index,
+                            fallback_font.bytes,
+                            fallback_font.face_index,
                             LengthEmu::new(*font_size_emu),
                         )
                     {
@@ -527,6 +783,21 @@ fn census(
                             .or_default() += 1;
                         *out.shared_layout_incomplete_spacing_family_binding_counts
                             .entry(format!("{spacing}@{family}@{binding}"))
+                            .or_default() += 1;
+
+                        let (path, consumption, cause) =
+                            shared_layout_incomplete_cause(visual, page, node, text, fallback_font);
+                        *out.shared_layout_incomplete_path_counts
+                            .entry(path.to_owned())
+                            .or_default() += 1;
+                        *out.shared_layout_incomplete_consumption_counts
+                            .entry(consumption.to_owned())
+                            .or_default() += 1;
+                        *out.shared_layout_incomplete_cause_counts
+                            .entry(cause.to_owned())
+                            .or_default() += 1;
+                        *out.shared_layout_incomplete_cause_spacing_counts
+                            .entry(format!("{cause}@{spacing}"))
                             .or_default() += 1;
                     }
                 }
@@ -626,7 +897,7 @@ fn run(
             bytes: image.bytes.clone(),
         })
         .collect::<Vec<_>>();
-    let mut census = census(&visual, &pages, &font_bytes, font.face_index);
+    let mut census = census(&visual, &pages, &font);
     census.image_resource_count = visual.images.len();
     census.configured_fallback_font_size_emu = font.default_font_size_emu;
     census.configured_fallback_line_height_emu = font.default_line_height_emu;
@@ -666,7 +937,7 @@ fn run(
     .map_err(|error| format!("write {}: {error}", output_path.display()))?;
 
     eprintln!(
-        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={} text_font_bindings={:?} shared_layout_incomplete_spacing={:?} shared_layout_incomplete_family={:?} shared_layout_incomplete_binding={:?} first_line_capacity_recoveries={} first_line_capacity_recovery_signatures={:?} fallback_font_size_emu={} fallback_line_height_emu={}",
+        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={} text_font_bindings={:?} shared_layout_incomplete_spacing={:?} shared_layout_incomplete_family={:?} shared_layout_incomplete_binding={:?} shared_layout_incomplete_path={:?} shared_layout_incomplete_consumption={:?} shared_layout_incomplete_cause={:?} shared_layout_incomplete_cause_spacing={:?} first_line_capacity_recoveries={} first_line_capacity_recovery_signatures={:?} fallback_font_size_emu={} fallback_line_height_emu={}",
         packet.census.page_count,
         packet.census.node_count,
         packet.census.projected_instance_count,
@@ -695,6 +966,10 @@ fn run(
             .census
             .shared_layout_incomplete_family_authority_counts,
         packet.census.shared_layout_incomplete_font_binding_counts,
+        packet.census.shared_layout_incomplete_path_counts,
+        packet.census.shared_layout_incomplete_consumption_counts,
+        packet.census.shared_layout_incomplete_cause_counts,
+        packet.census.shared_layout_incomplete_cause_spacing_counts,
         packet.census.first_line_capacity_recovery_count,
         packet.census.first_line_capacity_recovery_signature_counts,
         packet.census.configured_fallback_font_size_emu,
