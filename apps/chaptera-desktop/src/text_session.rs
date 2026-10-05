@@ -907,18 +907,16 @@ mod tests {
         let mut reopened_mode = enter_explicit_text_mode(&reopened, story_id, frame_id)
             .expect("reenter reopened Story");
         select_all(&mut reopened_mode);
-        let text_mutation_error = replace_external_text(
-            &mut reopened,
-            &mut reopened_mode,
-            "must remain rejected while scoped character-format history is active",
-        )
-        .expect_err("text mutation must remain fenced after format-only session reentry");
-        assert!(
-            text_mutation_error.contains(
-                "has active character-format history and cannot change text until range rebasing is implemented"
-            ),
-            "unexpected text-mutation fence: {text_mutation_error}"
-        );
+        reopened
+            .can_enter_story_text_session(story_id)
+            .expect("format-only Story session must remain admissible after replay");
+        assert!(matches!(
+            reopened
+                .can_replace_story_text(story_id)
+                .expect_err("text mutation must remain fenced after format-only session reentry"),
+            pub_editor::EditorError::TextFormatTextMutationConflict { story_id: id }
+                if id == story_id
+        ));
         assert_eq!(reopened.graph().stories[&story_id].text, source_text);
         assert_eq!(
             boolean_format_selection_state_v1(
