@@ -33,6 +33,7 @@ permissions:
 jobs:
   preflight:
     name: Cloud reference cheap preflight
+    if: ${{ github.event_name != 'pull_request' || github.event.action != 'closed' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -50,6 +51,7 @@ jobs:
 
   reference-pairs:
     needs: preflight
+    if: ${{ github.event_name != 'pull_request' || github.event.action != 'closed' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
