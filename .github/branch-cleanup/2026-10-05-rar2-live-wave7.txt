@@ -19,7 +19,7 @@ cloud/cloud-reader-product-ui-01-current 9d0172fbb9674257de7d15082250560ff276bf3
 fix/viewer-table-native-autoformat-cell-paint-02 bb31f72b463404fdf605b173c6af923682087a4e
 fix/research-runner-windows-powershell-compat-01 33236d50608fca145cdc9767c85b7645bff27685
 fix/research-runner-prebuilt-dgg-oracle-01 af8aab5095f254efac4a50841c018f207f634ad4
-fix/native-publisher-path-case-dedupe e1d048360320040b0db9f9838a3c4a1ace2ce83a8
+fix/native-publisher-path-case-dedupe e1d048360320040b0dbf9838a3c4a1ace2ce83a8
 fix/winps-pubruntime-ascii d7d6a7485ad614c6efed494d9e5c2bbd504e16a4
 fix/carlton-acquisition-stale-main-01 7fda857c23503c91e26a19a228a3af82411f5608
 fix/viewer-sparse-textbox-dgg-nonapplicability-01 752c9e124994defef44dc73a7456b0b0db9b117e
