@@ -11,7 +11,7 @@ use pub_layout::{
     BoundedShapedGlyph, BoundedShapingDescriptor, BoundedShapingRuntime, ProjectedNodeGeometry,
     ProjectedPage, ProjectedStory, ProjectedStoryFrame, break_policy_for_shaped_text,
     compatible_natural_line_height_emu_v1, font_fingerprint_sha256, resolve_bounded_shaped_flow,
-    shape_bounded_ltr_segment,
+    shape_bounded_ltr, shape_bounded_ltr_segment,
 };
 use pub_line_placement::{
     LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
@@ -2212,6 +2212,278 @@ fn resolve_text_layout_v1(
         ),
         lines,
     }
+}
+
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SharedLayoutIncompleteDiagnosticV1 {
+    pub path: &'static str,
+    pub consumption: &'static str,
+    pub cause: &'static str,
+}
+
+/// Replays the same bounded uniform shared-flow path for a node that the
+/// current render plan has already classified as SharedLayoutIncomplete.
+///
+/// This is an evidence helper only. It does not alter render admission,
+/// fallback disposition, Story text, or the returned PageRenderPlan.
+#[doc(hidden)]
+pub fn diagnose_shared_layout_incomplete_v1(
+    visual: &ViewerGeometryDocument,
+    page: &PageRenderPlanV1,
+    node: &NodeRenderPlanV1,
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+    font_is_source_resolved: bool,
+) -> Option<SharedLayoutIncompleteDiagnosticV1> {
+    let fragment = node.text.as_ref()?;
+    let layout = fragment.layout.as_ref()?;
+    if !matches!(
+        layout.disposition,
+        RenderTextLayoutDispositionV1::BackendFallback {
+            reason: RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete
+        }
+    ) {
+        return None;
+    }
+
+    #[cfg(feature = "projected-scene-instances")]
+    if node.projected_scene_instance.is_some() {
+        return Some(SharedLayoutIncompleteDiagnosticV1 {
+            path: "projected_path",
+            consumption: "unknown",
+            cause: "projected_fail_closed",
+        });
+    }
+
+    let Some(story) = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == fragment.story_id)
+    else {
+        return Some(SharedLayoutIncompleteDiagnosticV1 {
+            path: "uniform_path",
+            consumption: "unknown",
+            cause: "story_missing",
+        });
+    };
+    let Ok(story_scalar_len) = u32::try_from(story.text.chars().count()) else {
+        return Some(SharedLayoutIncompleteDiagnosticV1 {
+            path: "uniform_path",
+            consumption: "unknown",
+            cause: "story_extent_overflow",
+        });
+    };
+    if fragment.scalar_start != 0
+        || fragment.scalar_end != story_scalar_len
+        || !render_text_is_story_equivalent_for_layout_v1(
+            visual,
+            page.page_id,
+            node.node_id,
+            None,
+            &fragment.text,
+            &story.text,
+        )
+    {
+        return Some(SharedLayoutIncompleteDiagnosticV1 {
+            path: "uniform_path",
+            consumption: "unknown",
+            cause: "story_extent_mismatch",
+        });
+    }
+
+    let frame_ordinal =
+        match admitted_layout_frame_ordinal(visual, fragment.story_id, node.node_id, None) {
+            Ok(ordinal) => ordinal,
+            Err(_) => {
+                return Some(SharedLayoutIncompleteDiagnosticV1 {
+                    path: "uniform_path",
+                    consumption: "unknown",
+                    cause: "frame_topology_fail_closed",
+                });
+            }
+        };
+
+    let bounds = node.text_bounds.unwrap_or(node.bounds);
+    if bounds.width.get() <= 0 || bounds.height.get() <= 0 {
+        return Some(SharedLayoutIncompleteDiagnosticV1 {
+            path: "uniform_path",
+            consumption: "unknown",
+            cause: "frame_geometry_invalid",
+        });
+    }
+    if font.resource_id.is_empty()
+        || font.bytes.is_empty()
+        || font.default_font_size_emu <= 0
+        || font.default_line_height_emu <= 0
+    {
+        return Some(SharedLayoutIncompleteDiagnosticV1 {
+            path: "uniform_path",
+            consumption: "unknown",
+            cause: "font_resource_invalid",
+        });
+    }
+
+    let fingerprint = font_fingerprint_sha256(font.bytes);
+    if font.expected_sha256.is_empty() || fingerprint != font.expected_sha256 {
+        return Some(SharedLayoutIncompleteDiagnosticV1 {
+            path: "uniform_path",
+            consumption: "unknown",
+            cause: "font_fingerprint_mismatch",
+        });
+    }
+
+    let font_size_emu = match admitted_font_size_emu(fragment, font.default_font_size_emu) {
+        Ok(size) => size,
+        Err(RenderTextLayoutFallbackReasonV1::MixedTypographySize) => {
+            return Some(SharedLayoutIncompleteDiagnosticV1 {
+                path: "mixed_size_path",
+                consumption: "unknown",
+                cause: "mixed_size_path_incomplete",
+            });
+        }
+        Err(_) => {
+            return Some(SharedLayoutIncompleteDiagnosticV1 {
+                path: "uniform_path",
+                consumption: "unknown",
+                cause: "typography_fail_closed",
+            });
+        }
+    };
+    let Some(line_height_emu) = resolved_uniform_line_height_emu_v1(
+        visual,
+        fragment,
+        font_size_emu,
+        font,
+        font_is_source_resolved,
+    ) else {
+        return Some(SharedLayoutIncompleteDiagnosticV1 {
+            path: "uniform_path",
+            consumption: "unknown",
+            cause: "line_height_unavailable",
+        });
+    };
+
+    let projection = BoundedLayoutProjection {
+        pages: vec![ProjectedPage {
+            origin: page.page_id,
+            size: page.page_size,
+            bleed: None,
+            margins: None,
+        }],
+        node_geometry: vec![ProjectedNodeGeometry {
+            origin: node.node_id,
+            parent_origin: page.page_id.into_canonical(),
+            bounds,
+            transform: node.transform.clone(),
+        }],
+        stories: vec![ProjectedStory {
+            origin: story.id,
+            text: fragment.text.clone(),
+            paragraph_origins: Vec::new(),
+            run_origins: Vec::new(),
+        }],
+        story_frames: vec![ProjectedStoryFrame {
+            story_origin: story.id,
+            frame_origin: node.node_id,
+            ordinal: frame_ordinal,
+            previous_frame_origin: None,
+            next_frame_origin: None,
+        }],
+        tables: Vec::new(),
+        guides: Vec::new(),
+        diagnostics: Vec::new(),
+    };
+    let runtime = BoundedShapedFlowRuntime {
+        shaping: BoundedShapingRuntime {
+            layout: BoundedLayoutEnvironment {
+                engine_revision: SHARED_TEXT_LAYOUT_REVISION_V1.to_owned(),
+                font_set_fingerprint: fingerprint,
+                resource_fingerprint: font.resource_id.to_owned(),
+            },
+            face_index: font.face_index,
+            font_size_emu: LengthEmu::new(font_size_emu),
+            font_bytes: font.bytes,
+        },
+        line_height: LengthEmu::new(line_height_emu),
+    };
+    let scene = match resolve_bounded_shaped_flow(&projection, &runtime) {
+        Ok(scene) => scene,
+        Err(_) => {
+            return Some(SharedLayoutIncompleteDiagnosticV1 {
+                path: "uniform_path",
+                consumption: "unknown",
+                cause: "shared_layout_error",
+            });
+        }
+    };
+
+    let mut source_lines = scene
+        .lines
+        .iter()
+        .filter(|line| line.story_origin == story.id && line.frame_origin == node.node_id)
+        .collect::<Vec<_>>();
+    source_lines.sort_by_key(|line| line.frame_line_index);
+    let consumption = if source_lines.is_empty() {
+        "zero_lines"
+    } else {
+        "partial_lines"
+    };
+    let cursor = source_lines
+        .last()
+        .map(|line| line.consumed_scalar_end)
+        .unwrap_or(fragment.scalar_start);
+    if cursor == story_scalar_len {
+        return Some(SharedLayoutIncompleteDiagnosticV1 {
+            path: "uniform_path",
+            consumption,
+            cause: "replay_completed_unexpectedly",
+        });
+    }
+
+    let has_no_capacity = scene
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "text_frame_has_no_capacity");
+    let has_unbreakable = scene
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "unbreakable_shaped_line");
+    let has_overset = scene
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "story_overset");
+
+    let mandatory_after_cursor = shape_bounded_ltr(&fragment.text, &runtime.shaping)
+        .ok()
+        .and_then(|shaped| break_policy_for_shaped_text(&fragment.text, &shaped.glyphs).ok())
+        .is_some_and(|policy| {
+            policy
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.scalar_boundary > cursor)
+                .any(|candidate| candidate.kind == BoundedBreakKind::Mandatory)
+        });
+
+    let cause = if has_no_capacity && source_lines.is_empty() {
+        "first_line_height_rejection"
+    } else if has_unbreakable && mandatory_after_cursor {
+        "mandatory_boundary_no_fit"
+    } else if has_unbreakable {
+        "width_no_legal_break"
+    } else if has_overset && !source_lines.is_empty() {
+        "later_height_capacity_exhausted"
+    } else if has_overset {
+        "overset_without_lines"
+    } else {
+        "other_fail_closed"
+    };
+
+    Some(SharedLayoutIncompleteDiagnosticV1 {
+        path: "uniform_path",
+        consumption,
+        cause,
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
