@@ -321,19 +321,19 @@ jobs:
           mapping = mapping_receipt["mapping"]
           viewer_census = packet["census"]
 
-          if viewer_census["backend_fallback_reason_counts"].get("shared_layout_incomplete") != 12:
+          if viewer_census["backend_fallback_reason_counts"].get("shared_layout_incomplete") != 9:
               raise SystemExit(f"SharedLayoutIncomplete census drift: {viewer_census['backend_fallback_reason_counts']!r}")
-          if sum(viewer_census["shared_layout_incomplete_spacing_authority_counts"].values()) != 12:
+          if sum(viewer_census["shared_layout_incomplete_spacing_authority_counts"].values()) != 9:
               raise SystemExit("spacing-authority partition does not cover every SharedLayoutIncomplete node")
-          if sum(viewer_census["shared_layout_incomplete_family_authority_counts"].values()) != 12:
+          if sum(viewer_census["shared_layout_incomplete_family_authority_counts"].values()) != 9:
               raise SystemExit("family-authority partition does not cover every SharedLayoutIncomplete node")
-          if sum(viewer_census["shared_layout_incomplete_font_binding_counts"].values()) != 12:
+          if sum(viewer_census["shared_layout_incomplete_font_binding_counts"].values()) != 9:
               raise SystemExit("font-binding partition does not cover every SharedLayoutIncomplete node")
-          if sum(viewer_census["shared_layout_incomplete_spacing_family_binding_counts"].values()) != 12:
+          if sum(viewer_census["shared_layout_incomplete_spacing_family_binding_counts"].values()) != 9:
               raise SystemExit("spacing/family/binding cross-tab does not cover every SharedLayoutIncomplete node")
 
           expected_fallback = {
-              "shared_layout_incomplete": 12,
+              "shared_layout_incomplete": 9,
               "story_extent_mismatch": 7,
           }
           if mapping["backend_fallback_reason_counts"] != expected_fallback:
