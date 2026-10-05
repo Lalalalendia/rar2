@@ -69,8 +69,63 @@ jobs:
           test "${actual_bytes}" = "291840"
           echo "CHAPTERA_SAMPLE_NEWSLETTER=${fixture}" >> "${GITHUB_ENV}"
 
+      - name: Acquire pinned text-format fixture corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/chaptera-text-format-fixtures"
+          mkdir -p "${root}"
+          base="https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher"
+          while read -r name bytes blob_sha; do
+            test -n "${name}"
+            fixture="${root}/${name}"
+            curl --fail --location --silent --show-error "${base}/${name}" --output "${fixture}"
+            actual_bytes="$(wc -c < "${fixture}" | tr -d ' ')"
+            actual_blob_sha="$(git hash-object "${fixture}")"
+            test "${actual_bytes}" = "${bytes}"
+            test "${actual_blob_sha}" = "${blob_sha}"
+          done <<'EOF'
+          51318.pub 88576 728811c92dff5694520e56b6c020533b29d5295d
+          60685.pub 119296 37d3dce70e1786e948edd5592527f90be1fae2ff
+          LinkAt0And10.pub 64512 c4459fb830ef546d89a8302b4e969c36da412c43
+          LinkAt10.pub 64512 89c4a4427197129d30e085e2cc88ef3fdcb9562f
+          LinkAt10And20And30.pub 64512 5f7f747d5b0bfe2c5faaaadf6eda47244869d703
+          LinkAt10And20And30And40.pub 64512 d19ddc46a34afc5c89f90873283a0bbe501ca39d
+          LinkAt10Longer.pub 64512 8a3dcc277ee3b9393211a1ac151a7fcefc5ed040
+          LinkAt20.pub 64512 091a38c71818bfc6404c82a43681d7fa3a188261
+          Sample.pub 72192 b870168319048c9e8631c2338eb937e6f8f62b5b
+          Sample2.pub 72704 610362c471b81bac36e46166ae98d5f3033a7e5f
+          Sample2000.pub 61440 2c6174e5e89235f08a3e5883c785c4951728d855
+          Sample2_2010.pub 73216 74f4566056a39ee880c847b5dd4b8234762a9489
+          Sample3.pub 72192 4f19bec93d25f3d80501490dd108abef4f09b6cb
+          Sample3_2010.pub 72704 d2982c06bbb6e228951781f23d56ea5928893d2b
+          Sample4.pub 72192 445df85f092970c36d4b3003d375331a707d6b3c
+          Sample4_2010.pub 72704 dd6c25b173680d33678ce1bba7a0be5fef3910f5
+          Sample98.pub 61440 8adffda77aefed96e3afda319e2698d43dd478cb
+          SampleBrochure.pub 161792 00deec14dc6cff6d8a47b120d6d84e7e20c72166
+          SampleNewsletter.pub 291840 94900925af5832c493784f3cb51563f838a64df8
+          Sample_2010.pub 72704 ace1540716820640be5c67d85db6b70f48fbc0d4
+          Simple.pub 65536 2397b9d01cfa159de2f73cf5c990d9698eb69567
+          EOF
+
+          libmspub_base="https://raw.githubusercontent.com/fosnola/libmspub-test/33d8f78db8b8b319098c3d5ba3ad3e952369b323"
+          while read -r name relative_path; do
+            test -n "${name}"
+            fixture="${root}/${name}"
+            curl --fail --location --silent --show-error               "${libmspub_base}/${relative_path}"               --output "${fixture}"
+          done <<'EOF'
+          libmspub-pub2007-rich-text.pub testset/12.0/REG-TXT1-pub97-to-pub2007-with-pub2007.pub
+          libmspub-pub2010-rich-text.pub testset/14.0/REG-TXT1-pub2010.pub
+          libmspub-pub2007-fonts.pub testset/12.0/fonts.pub
+          EOF
+
+          echo "CHAPTERA_TEXT_FORMAT_FIXTURES_DIR=${root}" >> "${GITHUB_ENV}"
+
       - name: Prove direct text session on real PUB
         run: cargo test -p chaptera-desktop real_sample_newsletter_direct_text_session_enters_types_rebinds_and_exits -- --nocapture
+
+      - name: Prove property-scoped Bold history on real PUB corpus
+        run: cargo test -p chaptera-desktop real_pub_corpus_boolean_format_helper_is_durable_and_reversible -- --nocapture
 
   gui-direct-text:
     needs: format-preflight
