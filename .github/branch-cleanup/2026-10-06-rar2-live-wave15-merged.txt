@@ -1,0 +1,39 @@
+# Rar2 live branch GC wave 15 — 2026-10-06
+# 34 ordinary merged-main refs. reader-effective-bool-projection-02 excluded because live tip diverged from merged PR head.
+# Every listed ref was exact-SHA compared immediately before manifest creation.
+# Runtime guard rechecks open PR heads + exact remote SHA.
+# Format: <branch> <expected_sha>
+ci/pub-editor-fanout-classifier-01 921d5d5d36f2727e63b0aa976db4bdd50f36d2f0
+feat/carlton-current-viewer-yab-supported-subset-1279 89c41c77cb44067af8b9c1f11afd9a6dc434dea9
+fix/paragraph-direct-launcher-pin-1330 c4ad32f69e7948ab33db1c2963e2337c843ec8f0
+authoring/paragraph-substrate-rar2-02 90339ece5275854906836c1d006e030993ff02d8
+ci/carlton-mainrs-admission-owner-01 6a58c075273c3f838d031cc121c8b3bbbf6fedc1
+fix/paragraph-textrange-api 506a178bb96e3126bff324f202a4ffa067b39144
+ci/reader-mainrs-parallel-shared-core-01 728e14bd1988eee3a97a938a69c21d12fea00e78
+fix/yab259-order-preserving-fixed-pdf-1279 8867fab65af21efc1c617f20555cd850a03ef309
+ci/fmt-reader-product-cli-01 d6e0ce4cc131e61ee72e1a71b85dc1e5c9d2d3da
+feat/current-viewer-fixed-pdf-input-1279 64a697e66b4313dcaba1e14ddcd739f5193957ce
+feat/carlton-march-editor-sample-1279 c0e0c2a9a91289c3a3726e0956ce4bc2a17b80fe
+ci/reader-mainrs-shared-core-smoke-01 b21950ca8b10ffe97013ed13021f95f3f6a5b599
+feat/viewer-render-plan-shaping-evidence-1279 264ab958cf8ceb5bfd778941defa26e120860331
+editor-text-format-overlay-rust-02 0bf78c47d9e80c3eddba1960e6576893e0cde770
+quill-bool-01 fb84bf7d7874cad7903f1f1f3a38bf1802a044be
+fix/win-update-recovery-lock-01 dd6138a14bae5ac1295ecf2d927e9b9e950236b7
+ci/desktop-mainrs-textbox-shell-v2 e81a98e36efaadfe802dcf4b3da1493a3ece2caa
+feat/current-fixed-pdf-story-move-profile-1279 c674cf4b34a1984a2bc14418485205b92232d513
+ci/desktop-mainrs-rectangle-shell-v4 bbce782e21632abecc1938f3ee5ffaf140a023ab
+ci/dll-mainrs-runtime-admission-01 1595f74f5551e4a3700ae18e1b82ab825e4420c1
+fix/editor-fixed-pdf-current-revision-acceptance-851-v2 f32da207e883a914db8faad4a808cb01738036a1
+ci/desktop-mainrs-fallback-font-admission-01 f4b50deff8d16b95953e57895bfb61015bffa8c1
+recover/editor-move-snap-yab209-v5 34a7c1cd44f2ef629f1e8fad5ff78a77909af2e8
+fix/yab259-utf8-stdin-851 d0984e7d9997eeb563d537ec12da3bcb30457948
+ci/desktop-mainrs-duplicate-owner-01 64ab3e3e4e1759389ac411b15f74957dfc139369
+fix/yab259-subprocess-input-851 aff254b275ec99e52091407b94c1739073debdd6
+ci/scope-reader-update-control-01 acb453e2a64da472ee35e07e1d67919deb31a4c7
+fix/editor-current-fixed-pdf-input-851 b64874fcdc5dcfebe92dde30f5129198cd9525ac
+ci/desktop-mainrs-vtpe-locale-admission-01 c4e9557d78de7e74470e5f2ef6ba2d813d1a6a44
+fix/yab259-current-resource-materializer-851 8284efa79b93015d0a70b2bec2e65edc62887c85
+fix/shaped-flow-fixed-output-metrics-851 465b67db4dc05fa9b84dd95ccf89c08ed23937ff
+ci/desktop-mainrs-authored-stack-owner-01 32a02358c23446c48a7d1f382ff675dabafdb8f2
+ci/desktop-mainrs-history-owner-01 7cecb9900c77f9460df1884eaf41cd9f10240a17
+ci/desktop-mainrs-page-navigation-01 abb20f6739f13725f7421c3216d3d6b3c407af92
