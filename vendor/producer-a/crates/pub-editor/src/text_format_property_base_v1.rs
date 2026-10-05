@@ -10,6 +10,15 @@ use std::collections::BTreeSet;
 
 pub const TEXT_FORMAT_PROPERTY_STATE_V1: &str = "chaptera.text-format-property-state.v1";
 
+fn validate_supported_property_v1(property: FormatPropertyV1) -> Result<(), String> {
+    match property {
+        FormatPropertyV1::Bold | FormatPropertyV1::Italic => Ok(()),
+        FormatPropertyV1::FontSizeEmu | FormatPropertyV1::TextColorRgb => {
+            Err("property-scoped text-format state v1 supports only bold/italic".to_owned())
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextFormatPropertyBaseRunV1 {
     pub start_scalar: u32,
@@ -39,22 +48,14 @@ fn validate_property_value(
     property: FormatPropertyV1,
     value: &FormatValueV1,
 ) -> Result<(), String> {
+    validate_supported_property_v1(property)?;
     match (property, value) {
         (FormatPropertyV1::Bold | FormatPropertyV1::Italic, FormatValueV1::Bool(_)) => Ok(()),
-        (FormatPropertyV1::FontSizeEmu, FormatValueV1::Integer(value)) if *value > 0 => Ok(()),
-        (FormatPropertyV1::TextColorRgb, FormatValueV1::String(value))
-            if value.len() == 7
-                && value.starts_with('#')
-                && value.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit) =>
-        {
-            Ok(())
-        }
         (FormatPropertyV1::Bold, _) => Err("bold must be boolean".to_owned()),
         (FormatPropertyV1::Italic, _) => Err("italic must be boolean".to_owned()),
-        (FormatPropertyV1::FontSizeEmu, _) => {
-            Err("font_size_emu must be a positive integer".to_owned())
+        (FormatPropertyV1::FontSizeEmu | FormatPropertyV1::TextColorRgb, _) => {
+            unreachable!("unsupported properties are fenced above")
         }
-        (FormatPropertyV1::TextColorRgb, _) => Err("text_color_rgb must be #RRGGBB".to_owned()),
     }
 }
 
@@ -129,6 +130,7 @@ pub fn build_source_text_format_property_state_v1(
     source_runs: &[PubTypographyRun],
     property: FormatPropertyV1,
 ) -> Result<TextFormatPropertyStateV1, String> {
+    validate_supported_property_v1(property)?;
     if base_revision_id.is_empty() {
         return Err("base_revision_id is required".to_owned());
     }
@@ -538,6 +540,29 @@ mod tests {
         assert_eq!(state.base_runs.len(), 1);
         assert_eq!(state.base_runs[0].value, FormatValueV1::Bool(true));
         assert!(state.overrides.is_empty());
+    }
+
+    #[test]
+    fn property_state_v1_rejects_unrelated_size_and_color_domains() {
+        let size_error = build_source_text_format_property_state_v1(
+            story_id(),
+            "sha256:source-story",
+            4,
+            &[run(0, 4, Some(false), Some(false), Some([0, 0, 0]))],
+            FormatPropertyV1::FontSizeEmu,
+        )
+        .expect_err("v1 is bounded to Bold/Italic");
+        assert!(size_error.contains("only bold/italic"));
+
+        let color_error = build_source_text_format_property_state_v1(
+            story_id(),
+            "sha256:source-story",
+            4,
+            &[run(0, 4, Some(false), Some(false), Some([0, 0, 0]))],
+            FormatPropertyV1::TextColorRgb,
+        )
+        .expect_err("v1 is bounded to Bold/Italic");
+        assert!(color_error.contains("only bold/italic"));
     }
 
     #[test]
