@@ -1,0 +1,16 @@
+# Rar2 live branch GC wave 17 — 2026-10-06
+# 8 technical restack/tmp refs with zero unique commits versus main + 3 completed GC-owner refs.
+# Diverged tmp/restack refs are explicitly excluded.
+# Runtime guard rechecks open PR heads + exact remote SHA.
+# Format: <branch> <expected_sha>
+restack/pr1231-stage02-20261004 465b67db4dc05fa9b84dd95ccf89c08ed23937ff
+restack/pr1235-stage02-20261004 8284efa79b93015d0a70b2bec2e65edc62887c85
+restack/pr1240-stage02-final-20261004 79bf81d3e164367a015c90b55fa0127f834e83c3
+tmp-restack-1120-semantic-20261004 8f23c42aababa44b67fe234794b1bfa8195bba02
+tmp-restack-1128-semantic-20261004 b53595af6fc86fdad58e9b6524cbb58ce3462c95
+tmp-restack-1135-final-20261004 2bf8b5925f817969e1edf0c9d3905fea1b79d2e9
+tmp-restack-1148-main-20261004b 640032a33834a8d9c4c5c8413eb149ad37a2783b
+viewer/paragraph-line-height-auth-1139-restack-02 92c4456f51b0d2485a216cb892f5ca1ded570f82
+ops/branch-gc-20261006-live-wave14-merged 64d11a0c46c5d3919bc49886573baf8787e54902
+ops/branch-gc-20261006-live-wave15-merged f4ce31ba6f86b1f425bc3a36f3acf798b8599635
+ops/branch-gc-20261006-live-wave16-superseded 716e033489d9e3d24c6b848e8cbf3c00b2336319
