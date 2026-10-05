@@ -1,0 +1,13 @@
+# Rar2 live branch GC wave 11 — 2026-10-05
+# Assimilated/evidence-complete/superseded refs + completed GC owner refs.
+# 8 refs: each live tip was re-read and exactly matched its closed PR head.
+# Runtime branch-GC must recheck open heads + exact expected SHA before deletion.
+# Format: <branch> <expected_sha>
+fix/pub-editor-table-fixture-current-01 7296485519a0e9dd3682d4298df90fb41e724fde
+ci/refresh-viewer-receipt-main-01 80f11e8e5bb7012db3533855fb06f5ffed69264a
+measure/local-caladea-source-font-01 daea4b64bb223acb95f396d9ea8c45d0cd3c8f79
+fix/fixed-pdf-renderer-recovery-preflight d8b8de42c6141e60b51055aac00ae52da758654f
+ops/branch-gc-20261005-live-wave8-prepared cced0fceaa8ee0ee63926c7c190b8afb2b3276c7
+ops/branch-gc-20261005-live-wave9-prepared d3052d479cb44301d665bef32f75e7c017e58080
+ops/branch-gc-20261005-live-wave10-prepared cf564368d25a24074fb4229de903c9da4f15aefc
+ops/branch-gc-20261005-live-wave8-superseded ea7ddf8e942f69ff5e39eb85dd159b119eb8acbd
