@@ -5798,6 +5798,90 @@ fn validated_editor_asset(
     })
 }
 
+fn replay_canonical_text_format_operation_v1(
+    session: &mut EditorSession,
+    expected: &EditOperation,
+    index: usize,
+) -> Result<EditOperation, EditorProjectError> {
+    let (story_id, property, before_state_hash, _) = text_format_operation_parts_v1(expected)
+        .expect("canonical text-format replay receives only text-format operations");
+
+    if session
+        .current_text_format_state_hash_v1(story_id)
+        .ok()
+        .as_deref()
+        == Some(before_state_hash)
+    {
+        return match expected {
+            EditOperation::SetTextFormatProperty {
+                start_scalar,
+                end_scalar,
+                value,
+                ..
+            } => session.set_text_format_property_v1(
+                story_id,
+                *start_scalar,
+                *end_scalar,
+                property,
+                value.clone(),
+                before_state_hash,
+            ),
+            EditOperation::ClearTextFormatPropertyOverride {
+                start_scalar,
+                end_scalar,
+                ..
+            } => session.clear_text_format_property_override_v1(
+                story_id,
+                *start_scalar,
+                *end_scalar,
+                property,
+                before_state_hash,
+            ),
+            _ => unreachable!("canonical text-format replay receives only text-format operations"),
+        }
+        .map_err(|error| EditorProjectError::Operation { index, error });
+    }
+
+    let scoped_hash = session
+        .current_text_format_property_state_hash_v1(story_id, property)
+        .map_err(|error| EditorProjectError::Operation { index, error })?;
+    if scoped_hash != before_state_hash {
+        return Err(EditorProjectError::Operation {
+            index,
+            error: EditorError::StaleOperation { story_id },
+        });
+    }
+
+    match expected {
+        EditOperation::SetTextFormatProperty {
+            start_scalar,
+            end_scalar,
+            value,
+            ..
+        } => session.set_text_format_property_scoped_v1(
+            story_id,
+            *start_scalar,
+            *end_scalar,
+            property,
+            value.clone(),
+            before_state_hash,
+        ),
+        EditOperation::ClearTextFormatPropertyOverride {
+            start_scalar,
+            end_scalar,
+            ..
+        } => session.clear_text_format_property_override_scoped_v1(
+            story_id,
+            *start_scalar,
+            *end_scalar,
+            property,
+            before_state_hash,
+        ),
+        _ => unreachable!("canonical text-format replay receives only text-format operations"),
+    }
+    .map_err(|error| EditorProjectError::Operation { index, error })
+}
+
 fn replay_canonical_operation(
     session: &mut EditorSession,
     expected: &EditOperation,
@@ -5907,40 +5991,10 @@ fn replay_canonical_operation(
         EditOperation::ReorderAuthoredStack { .. } => session
             .consume_canonical_reorder_authored_stack(expected.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
-        EditOperation::SetTextFormatProperty {
-            story_id,
-            start_scalar,
-            end_scalar,
-            property,
-            value,
-            before_state_hash,
-            ..
-        } => session
-            .set_text_format_property_v1(
-                *story_id,
-                *start_scalar,
-                *end_scalar,
-                *property,
-                value.clone(),
-                before_state_hash,
-            )
-            .map_err(|error| EditorProjectError::Operation { index, error }),
-        EditOperation::ClearTextFormatPropertyOverride {
-            story_id,
-            start_scalar,
-            end_scalar,
-            property,
-            before_state_hash,
-            ..
-        } => session
-            .clear_text_format_property_override_v1(
-                *story_id,
-                *start_scalar,
-                *end_scalar,
-                *property,
-                before_state_hash,
-            )
-            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::SetTextFormatProperty { .. }
+        | EditOperation::ClearTextFormatPropertyOverride { .. } => {
+            replay_canonical_text_format_operation_v1(session, expected, index)
+        }
         EditOperation::SetParagraphAlignmentOverride {
             paragraph_ids,
             value,
