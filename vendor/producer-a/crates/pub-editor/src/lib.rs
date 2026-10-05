@@ -6025,6 +6025,40 @@ fn replay_canonical_operation(
                 before_state_hash,
             )
             .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::SetTextFormatPropertyScopedV1 {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            before_state_hash,
+            ..
+        } => session
+            .set_text_format_property_scoped_v1(
+                *story_id,
+                *start_scalar,
+                *end_scalar,
+                *property,
+                value.clone(),
+                before_state_hash,
+            )
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            before_state_hash,
+            ..
+        } => session
+            .clear_text_format_property_override_scoped_v1(
+                *story_id,
+                *start_scalar,
+                *end_scalar,
+                *property,
+                before_state_hash,
+            )
+            .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::SetParagraphAlignmentOverride {
             paragraph_ids,
             value,
@@ -7093,7 +7127,9 @@ fn apply_forward(
             unreachable!("ReorderAuthoredStack is applied to the authored lane overlay state")
         }
         EditOperation::SetTextFormatProperty { .. }
-        | EditOperation::ClearTextFormatPropertyOverride { .. } => {
+        | EditOperation::ClearTextFormatPropertyOverride { .. }
+        | EditOperation::SetTextFormatPropertyScopedV1 { .. }
+        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 { .. } => {
             unreachable!("text-format operations are derived from editor history")
         }
         EditOperation::SetParagraphAlignmentOverride { .. }
@@ -7343,7 +7379,9 @@ fn apply_inverse(
             unreachable!("ReorderAuthoredStack is reverted in the authored lane overlay state")
         }
         EditOperation::SetTextFormatProperty { .. }
-        | EditOperation::ClearTextFormatPropertyOverride { .. } => {
+        | EditOperation::ClearTextFormatPropertyOverride { .. }
+        | EditOperation::SetTextFormatPropertyScopedV1 { .. }
+        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 { .. } => {
             unreachable!("text-format operations are derived from editor history")
         }
         EditOperation::SetParagraphAlignmentOverride { .. }
