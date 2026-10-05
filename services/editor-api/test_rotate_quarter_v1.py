@@ -427,7 +427,7 @@ class RotateQuarterV1Tests(unittest.TestCase):
             resulting["shapes"][NODE_ID]["transform"] = {"kind": "identity"}
             return operation, resulting, consequences
 
-        with self.assertRaisesRegex(ValueError, "not bound"):
+        with self.assertRaisesRegex(ValueError, "outside canonical transform"):
             self.kernel.commit_rotate_node_quarter(
                 self.request("rotate-forged-result"),
                 forged_result,
