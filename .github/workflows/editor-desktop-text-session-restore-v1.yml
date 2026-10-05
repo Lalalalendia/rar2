@@ -97,7 +97,7 @@ jobs:
         run: cargo test -p chaptera-desktop real_pub_color_blocked_story_uses_scoped_desktop_bold_italic_history_v016 -- --nocapture
 
       - name: Prove scoped Bold reaches current shaped-flow typography without Color authority
-        run: cargo test -p chaptera-desktop-shaped-flow-runtime real_51318_scoped_bold_reaches_current_boolean_typography_without_color_authority -- --nocapture
+        run: cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml real_51318_scoped_bold_reaches_current_boolean_typography_without_color_authority -- --nocapture
 
   gui-direct-text:
     needs: format-preflight
