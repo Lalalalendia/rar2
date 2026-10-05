@@ -173,10 +173,7 @@ mod tests {
 
     #[test]
     fn line_rejects_non_positive_stroke_and_unsafe_coordinates() {
-        let mut bad_stroke = line(
-            PointEmuV1 { x: 0, y: 0 },
-            PointEmuV1 { x: 1, y: 1 },
-        );
+        let mut bad_stroke = line(PointEmuV1 { x: 0, y: 0 }, PointEmuV1 { x: 1, y: 1 });
         bad_stroke.stroke.width_emu = 0;
         assert_eq!(
             validate_authored_line_runtime_v1(&bad_stroke),
