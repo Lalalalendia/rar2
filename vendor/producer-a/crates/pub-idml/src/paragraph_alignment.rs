@@ -691,6 +691,34 @@ mod tests {
     }
 
     #[test]
+    fn rejects_scoped_rewrite_when_package_story_text_differs() {
+        let story_id = story(35);
+        let export_plan = plan(story_id);
+        let mut package = package_with_story_text(&export_plan, story_id, "Package text");
+        let placement = IdmlParagraphScopedAlignmentPlacement {
+            story_id,
+            story_text: "Different canonical text".into(),
+            paragraphs: vec![scoped(
+                36,
+                story_id,
+                0,
+                24,
+                ParagraphScopedAlignmentValueV1::Left,
+            )],
+        };
+
+        assert!(matches!(
+            add_paragraph_scoped_alignment_to_idml(
+                &export_plan,
+                &mut package,
+                std::slice::from_ref(&placement),
+            ),
+            Err(IdmlParagraphAlignmentError::StoryTextMismatch { story_id: found })
+                if found == story_id
+        ));
+    }
+
+    #[test]
     fn rejects_incomplete_canonical_story_coverage() {
         let story_id = story(40);
         let export_plan = plan(story_id);
