@@ -162,7 +162,7 @@ jobs:
           cargo test --manifest-path apps/chaptera-desktop/Cargo.toml --features embedded-fixture-tests windows_source_font_real_pub_receipt_compares_shared_layouts -- --nocapture
           if ($LASTEXITCODE -ne 0) { throw "source-font real-PUB layout proof failed" }
 
-          cargo test --manifest-path apps/chaptera-desktop/Cargo.toml font_binding::tests::windows_real_pub_scoped_style_changes_exact_resource_and_roundtrips -- --nocapture
+          cargo test --manifest-path apps/chaptera-desktop/Cargo.toml font_binding::tests::windows_real_pub_scoped_style_changes_exact_resource_and_roundtrips -- --ignored --nocapture
           if ($LASTEXITCODE -ne 0) { throw "styled-font scoped real-PUB proof failed" }
 
           if (-not (Test-Path $environmentReceipt)) { throw "source-font environment receipt missing" }
