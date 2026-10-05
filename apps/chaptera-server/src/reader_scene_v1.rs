@@ -1791,8 +1791,8 @@ mod tests {
     use chaptera_scene_instance::SceneProjectionKindV1;
     use chaptera_viewer_render_plan::{
         RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
-        build_page_render_plan_with_text_layout_v1, effective_source_font_family_v1,
-        uniform_text_color_rgb_v1,
+        build_page_render_plan_with_text_layout_v1, diagnose_shared_layout_incomplete_v1,
+        effective_source_font_family_v1, uniform_text_color_rgb_v1,
     };
     use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
     use sha2::{Digest, Sha256};
@@ -2430,6 +2430,11 @@ mod tests {
         let mut shared_nonempty_lines = 0_usize;
         let mut layout_none = 0_usize;
         let mut backend_fallbacks = BTreeMap::<&'static str, usize>::new();
+        let mut shared_layout_incomplete_path_counts = BTreeMap::<&'static str, usize>::new();
+        let mut shared_layout_incomplete_consumption_counts =
+            BTreeMap::<&'static str, usize>::new();
+        let mut shared_layout_incomplete_cause_counts = BTreeMap::<&'static str, usize>::new();
+        let mut shared_layout_incomplete_cause_path_counts = BTreeMap::<String, usize>::new();
         let mut projected_text_nodes = 0_usize;
         let mut projected_typography_runs = 0_usize;
         let mut projected_complete_typography_nodes = 0_usize;
@@ -2451,14 +2456,14 @@ mod tests {
                 build_page_render_plan_with_text_layout_v1(&bundle.geometry, page_index, &font)
                     .expect("exact reference render plan must build");
 
-            for node in plan.nodes {
+            for node in &plan.nodes {
                 let projected = node
                     .projected_scene_instance
                     .as_ref()
                     .is_some_and(|instance| {
                         instance.projection_kind == SceneProjectionKindV1::CmoStorySlot
                     });
-                let Some(text) = node.text else {
+                let Some(text) = node.text.as_ref() else {
                     continue;
                 };
                 text_nodes += 1;
@@ -2466,7 +2471,7 @@ mod tests {
                 if projected {
                     projected_text_nodes += 1;
                     projected_typography_runs += text.typography.len();
-                    if let Some(text_bounds) = node.text_bounds {
+                    if let Some(text_bounds) = node.text_bounds.as_ref() {
                         projected_text_bounds_nodes += 1;
                         let left = text_bounds.x.get() - node.bounds.x.get();
                         let top = text_bounds.y.get() - node.bounds.y.get();
@@ -2517,11 +2522,11 @@ mod tests {
                     }
                 }
 
-                let Some(layout) = text.layout else {
+                let Some(layout) = text.layout.as_ref() else {
                     layout_none += 1;
                     continue;
                 };
-                match layout.disposition {
+                match &layout.disposition {
                     RenderTextLayoutDispositionV1::SharedResolved {
                         font_resource_id,
                         font_fingerprint_sha256,
@@ -2537,10 +2542,10 @@ mod tests {
 
                         if projected {
                             *projected_layout_resources
-                                .entry(font_resource_id)
+                                .entry(font_resource_id.clone())
                                 .or_default() += 1;
                             *projected_layout_fingerprints
-                                .entry(font_fingerprint_sha256)
+                                .entry(font_fingerprint_sha256.clone())
                                 .or_default() += 1;
                             *projected_line_counts.entry(layout.lines.len()).or_default() += 1;
                             for line in &layout.lines {
@@ -2554,6 +2559,28 @@ mod tests {
                     }
                     RenderTextLayoutDispositionV1::BackendFallback { reason } => {
                         *backend_fallbacks.entry(reason.code()).or_default() += 1;
+                        if reason.code() == "shared_layout_incomplete" {
+                            let diagnostic = diagnose_shared_layout_incomplete_v1(
+                                &bundle.geometry,
+                                &plan,
+                                node,
+                                &font,
+                                false,
+                            )
+                            .expect("SLI diagnostic replay must accept an already-classified SLI");
+                            *shared_layout_incomplete_path_counts
+                                .entry(diagnostic.path)
+                                .or_default() += 1;
+                            *shared_layout_incomplete_consumption_counts
+                                .entry(diagnostic.consumption)
+                                .or_default() += 1;
+                            *shared_layout_incomplete_cause_counts
+                                .entry(diagnostic.cause)
+                                .or_default() += 1;
+                            *shared_layout_incomplete_cause_path_counts
+                                .entry(format!("{}@{}", diagnostic.cause, diagnostic.path))
+                                .or_default() += 1;
+                        }
                     }
                 }
             }
@@ -2561,6 +2588,18 @@ mod tests {
 
         let backend_fallbacks_json =
             serde_json::to_string(&backend_fallbacks).expect("serialize fallback census");
+        let shared_layout_incomplete_path_json =
+            serde_json::to_string(&shared_layout_incomplete_path_counts)
+                .expect("serialize SLI path census");
+        let shared_layout_incomplete_consumption_json =
+            serde_json::to_string(&shared_layout_incomplete_consumption_counts)
+                .expect("serialize SLI consumption census");
+        let shared_layout_incomplete_cause_json =
+            serde_json::to_string(&shared_layout_incomplete_cause_counts)
+                .expect("serialize SLI cause census");
+        let shared_layout_incomplete_cause_path_json =
+            serde_json::to_string(&shared_layout_incomplete_cause_path_counts)
+                .expect("serialize SLI cause/path census");
         let projected_source_family_fingerprints_json =
             serde_json::to_string(&projected_source_family_fingerprints)
                 .expect("serialize projected family fingerprints");
@@ -2582,6 +2621,32 @@ mod tests {
 
         match actual_sha256.as_str() {
             "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" => {
+                assert_eq!(
+                    backend_fallbacks,
+                    BTreeMap::from([
+                        ("shared_layout_incomplete", 3_usize),
+                        ("story_extent_mismatch", 1_usize),
+                    ]),
+                    "exact post-marker Carlton fallback frontier drift"
+                );
+                for (name, values) in [
+                    ("path", &shared_layout_incomplete_path_counts),
+                    ("consumption", &shared_layout_incomplete_consumption_counts),
+                    ("cause", &shared_layout_incomplete_cause_counts),
+                ] {
+                    assert_eq!(
+                        values.values().sum::<usize>(),
+                        3,
+                        "exact Carlton SLI {name} census must cover all three residuals"
+                    );
+                }
+                assert_eq!(
+                    shared_layout_incomplete_cause_path_counts
+                        .values()
+                        .sum::<usize>(),
+                    3,
+                    "exact Carlton SLI cause/path cross-tab must cover all three residuals"
+                );
                 assert_eq!(
                     projected_text_nodes, 4,
                     "exact Carlton projected carrier count drift"
@@ -2606,6 +2671,18 @@ mod tests {
             }
             "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e" => {
                 assert_eq!(
+                    backend_fallbacks,
+                    BTreeMap::from([("shared_layout_incomplete", 1_usize)]),
+                    "Virginia Devinettes fallback frontier must remain unchanged"
+                );
+                assert_eq!(
+                    shared_layout_incomplete_cause_counts
+                        .values()
+                        .sum::<usize>(),
+                    1,
+                    "Virginia SLI cause census must cover its single control residual"
+                );
+                assert_eq!(
                     projected_text_nodes, 0,
                     "Virginia Devinettes must remain a zero-projected control"
                 );
@@ -2622,7 +2699,7 @@ mod tests {
         }
 
         println!(
-            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={}",
+            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} sli_path={} sli_consumption={} sli_cause={} sli_cause_path={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={}",
             actual_sha256,
             bundle.geometry.document.pages.len(),
             text_nodes,
@@ -2631,6 +2708,10 @@ mod tests {
             shared_nonempty_lines,
             layout_none,
             backend_fallbacks_json,
+            shared_layout_incomplete_path_json,
+            shared_layout_incomplete_consumption_json,
+            shared_layout_incomplete_cause_json,
+            shared_layout_incomplete_cause_path_json,
             projected_text_nodes,
             projected_typography_runs,
             projected_complete_typography_nodes,
