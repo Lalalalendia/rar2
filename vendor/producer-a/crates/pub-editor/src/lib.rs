@@ -1884,6 +1884,32 @@ fn is_scoped_text_format_operation_v1(operation: &EditOperation) -> bool {
     )
 }
 
+fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
+    if operations.iter().any(is_scoped_text_format_operation_v1) {
+        EDITOR_PROJECT_VERSION_V0_16
+    } else if operations.iter().any(|operation| {
+        matches!(
+            operation,
+            EditOperation::SetParagraphAlignmentOverride { .. }
+                | EditOperation::ClearParagraphAlignmentOverride { .. }
+        )
+    }) {
+        EDITOR_PROJECT_VERSION_V0_15
+    } else if operations
+        .iter()
+        .any(|operation| text_format_operation_story_id_v1(operation).is_some())
+    {
+        EDITOR_PROJECT_VERSION_V0_14
+    } else if operations
+        .iter()
+        .any(|operation| matches!(operation, EditOperation::ReorderAuthoredStack { .. }))
+    {
+        EDITOR_PROJECT_VERSION_V0_13
+    } else {
+        EDITOR_PROJECT_VERSION_V0_12
+    }
+}
+
 fn apply_text_format_history_operation_semantic_v1(
     state: &TextFormatOverlayStateV1,
     operation: &EditOperation,
@@ -3292,17 +3318,7 @@ impl EditorSession {
         }
         let (schema_version, identity) = if let Some(identity) = &self.project_identity {
             (
-                if carries_scoped_text_format {
-                    EDITOR_PROJECT_VERSION_V0_16
-                } else if carries_paragraph_alignment {
-                    EDITOR_PROJECT_VERSION_V0_15
-                } else if carries_text_format {
-                    EDITOR_PROJECT_VERSION_V0_14
-                } else if carries_reorder {
-                    EDITOR_PROJECT_VERSION_V0_13
-                } else {
-                    EDITOR_PROJECT_VERSION_V0_12
-                },
+                minimum_identity_project_schema_v1(&self.undo),
                 Some(identity.clone()),
             )
         } else {
