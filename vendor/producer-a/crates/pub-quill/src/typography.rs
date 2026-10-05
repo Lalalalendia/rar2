@@ -484,7 +484,6 @@ pub struct QuillRawFdppStyle {
 /// Unlike historical archaeology, unknown framing is never assumed empty.
 /// Neither raw 0x34 nor packed 0x234 is assigned units, defaults or a mode.
 #[cfg(feature = "research-inspection")]
-#[cfg(feature = "research-inspection")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QuillResearchColorReferenceSource {
     ExplicitFdpc,
@@ -519,6 +518,7 @@ pub struct QuillResearchEffectiveColorReferenceRun {
     pub kind: QuillResearchColorReferenceKind,
 }
 
+#[cfg(feature = "research-inspection")]
 pub fn inspect_raw_fdpp_styles(
     bytes: &[u8],
     story_catalog: &QuillStoryCatalog,
