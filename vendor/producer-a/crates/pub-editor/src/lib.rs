@@ -1861,7 +1861,9 @@ fn text_format_operation_story_id_v1(operation: &EditOperation) -> Option<StoryI
         EditOperation::SetTextFormatProperty { story_id, .. }
         | EditOperation::ClearTextFormatPropertyOverride { story_id, .. }
         | EditOperation::SetTextFormatPropertyScopedV1 { story_id, .. }
-        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 { story_id, .. } => Some(*story_id),
+        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 { story_id, .. } => {
+            Some(*story_id)
+        }
         _ => None,
     }
 }
@@ -1871,7 +1873,9 @@ fn text_format_operation_property_v1(operation: &EditOperation) -> Option<Format
         EditOperation::SetTextFormatProperty { property, .. }
         | EditOperation::ClearTextFormatPropertyOverride { property, .. }
         | EditOperation::SetTextFormatPropertyScopedV1 { property, .. }
-        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 { property, .. } => Some(*property),
+        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 { property, .. } => {
+            Some(*property)
+        }
         _ => None,
     }
 }
@@ -1922,10 +1926,11 @@ fn apply_text_format_history_operation_semantic_v1(
             message: "format operation Story does not match overlay Story".to_owned(),
         });
     }
-    let current_hash = state_hash_v1(state).map_err(|error| EditorError::TextFormatStateInvalid {
-        story_id,
-        message: error.to_string(),
-    })?;
+    let current_hash =
+        state_hash_v1(state).map_err(|error| EditorError::TextFormatStateInvalid {
+            story_id,
+            message: error.to_string(),
+        })?;
     let receipt = match operation {
         EditOperation::SetTextFormatProperty {
             start_scalar,
@@ -2029,7 +2034,9 @@ fn apply_text_format_history_operation_v1(
                 before_state_hash,
             ),
         ),
-        _ => unreachable!("checked complete-overlay replay admits only legacy text-format operations"),
+        _ => unreachable!(
+            "checked complete-overlay replay admits only legacy text-format operations"
+        ),
     };
 
     if state.story_id != story_id.as_canonical().to_string() {
@@ -2745,20 +2752,16 @@ impl EditorSession {
         expected_state_hash: &str,
     ) -> Result<EditOperation, EditorError> {
         let state = self.current_text_format_property_state_v1(story_id, property)?;
-        let before_state_hash =
-            text_format_property_state_hash_v1(&state).map_err(|message| {
-                EditorError::TextFormatStateInvalid { story_id, message }
-            })?;
+        let before_state_hash = text_format_property_state_hash_v1(&state)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
         if before_state_hash != expected_state_hash {
             return Err(EditorError::StaleOperation { story_id });
         }
         let after =
             set_text_format_property_state_v1(&state, start_scalar, end_scalar, value.clone())
                 .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
-        let after_state_hash =
-            text_format_property_state_hash_v1(&after).map_err(|message| {
-                EditorError::TextFormatStateInvalid { story_id, message }
-            })?;
+        let after_state_hash = text_format_property_state_hash_v1(&after)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
         if before_state_hash == after_state_hash {
             return Err(EditorError::NoChange { story_id });
         }
@@ -2796,19 +2799,15 @@ impl EditorSession {
         expected_state_hash: &str,
     ) -> Result<EditOperation, EditorError> {
         let state = self.current_text_format_property_state_v1(story_id, property)?;
-        let before_state_hash =
-            text_format_property_state_hash_v1(&state).map_err(|message| {
-                EditorError::TextFormatStateInvalid { story_id, message }
-            })?;
+        let before_state_hash = text_format_property_state_hash_v1(&state)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
         if before_state_hash != expected_state_hash {
             return Err(EditorError::StaleOperation { story_id });
         }
         let after = clear_text_format_property_state_v1(&state, start_scalar, end_scalar)
             .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
-        let after_state_hash =
-            text_format_property_state_hash_v1(&after).map_err(|message| {
-                EditorError::TextFormatStateInvalid { story_id, message }
-            })?;
+        let after_state_hash = text_format_property_state_hash_v1(&after)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
         if before_state_hash == after_state_hash {
             return Err(EditorError::NoChange { story_id });
         }
@@ -3631,9 +3630,11 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
         {
-            if let Some(index) = project.operations.iter().position(|operation| {
-                text_format_operation_story_id_v1(operation).is_some()
-            }) {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(|operation| text_format_operation_story_id_v1(operation).is_some())
+            {
                 return Err(EditorProjectError::LegacyProjectCarriesTextFormatOperation { index });
             }
         }
@@ -8026,10 +8027,7 @@ mod asset_reachability_tests {
         let legacy_json = serde_json::to_value(&legacy).expect("legacy format JSON");
         let scoped_json = serde_json::to_value(&scoped).expect("scoped format JSON");
         assert_eq!(legacy_json["kind"], "set_text_format_property");
-        assert_eq!(
-            scoped_json["kind"],
-            "set_text_format_property_scoped_v1"
-        );
+        assert_eq!(scoped_json["kind"], "set_text_format_property_scoped_v1");
         assert!(legacy_json.get("state_domain").is_none());
         assert!(scoped_json.get("state_domain").is_none());
         assert_eq!(
