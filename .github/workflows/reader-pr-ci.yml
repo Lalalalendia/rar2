@@ -182,7 +182,7 @@ jobs:
           workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
           required_lifecycle_markers = [
               "types: [opened, synchronize, reopened, closed]",
-              "if: ${{ github.event_name != 'pull_request' || github.event.action != 'closed' }}",
+              "if: $" + "{{ github.event_name != 'pull_request' || github.event.action != 'closed' }}",
           ]
           missing_lifecycle = [
               marker for marker in required_lifecycle_markers if marker not in workflow
