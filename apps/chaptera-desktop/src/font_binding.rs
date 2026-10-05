@@ -1,7 +1,9 @@
 //! Desktop fallback/source-font binding owned outside the monolithic shell.
 
 use crate::{ViewerApp, ViewerGeometryDocument, fallback_font, source_font};
-use chaptera_desktop_shaped_flow_runtime::current_story_boolean_typography_v1;
+use chaptera_desktop_shaped_flow_runtime::{
+    DesktopCurrentBooleanTypographyRunV1, current_story_boolean_typography_v1,
+};
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, PageRenderPlanV1, RenderPlanErrorV1, RenderTextFragmentV1,
     RenderTypographyRunV1, build_page_render_plan_with_text_layout_and_typography_resolvers_v1,
@@ -45,17 +47,14 @@ pub(super) fn build_desktop_page_render_plan_with_source_fonts(
     )
 }
 
-fn current_fragment_typography_v1(
-    editor: &EditorSession,
+fn compose_current_fragment_typography_v1(
     fragment: &RenderTextFragmentV1,
+    current: &[DesktopCurrentBooleanTypographyRunV1],
 ) -> Result<Option<Vec<RenderTypographyRunV1>>, String> {
-    if fragment.scalar_start >= fragment.scalar_end || fragment.typography.is_empty() {
-        return Ok(None);
-    }
-
-    let current = current_story_boolean_typography_v1(editor, fragment.story_id)
-        .map_err(|error| error.to_string())?;
-    if current.is_empty() {
+    if fragment.scalar_start >= fragment.scalar_end
+        || fragment.typography.is_empty()
+        || current.is_empty()
+    {
         return Ok(None);
     }
 
@@ -66,7 +65,7 @@ fn current_fragment_typography_v1(
             boundaries.push(fragment.scalar_end.min(run.scalar_end));
         }
     }
-    for run in &current {
+    for run in current {
         if fragment.scalar_start < run.scalar_end && run.scalar_start < fragment.scalar_end {
             boundaries.push(fragment.scalar_start.max(run.scalar_start));
             boundaries.push(fragment.scalar_end.min(run.scalar_end));
@@ -121,6 +120,18 @@ fn current_fragment_typography_v1(
     Ok(Some(resolved))
 }
 
+fn current_fragment_typography_v1(
+    editor: &EditorSession,
+    fragment: &RenderTextFragmentV1,
+) -> Result<Option<Vec<RenderTypographyRunV1>>, String> {
+    if !editor.graph().stories.contains_key(&fragment.story_id) {
+        return Ok(None);
+    }
+    let current = current_story_boolean_typography_v1(editor, fragment.story_id)
+        .map_err(|error| error.to_string())?;
+    compose_current_fragment_typography_v1(fragment, &current)
+}
+
 pub(super) fn build_desktop_page_render_plan_with_current_source_fonts(
     visual: &ViewerGeometryDocument,
     page_index: usize,
@@ -156,6 +167,87 @@ pub(super) fn build_desktop_page_render_plan_with_current_source_fonts(
 
 pub(super) fn install_startup_font(ctx: &egui::Context) {
     fallback_font::install(ctx).expect("pinned Chaptera fallback font resource must validate");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pub_model::{CanonicalId, StoryId};
+
+    fn story_id() -> StoryId {
+        StoryId::from_canonical(CanonicalId::from_bytes([0x42; 16]))
+    }
+
+    fn fragment_with_style(bold: Option<bool>, italic: Option<bool>) -> RenderTextFragmentV1 {
+        RenderTextFragmentV1 {
+            story_id: story_id(),
+            scalar_start: 0,
+            scalar_end: 4,
+            text: "ABCD".to_owned(),
+            line_count: 1,
+            typography: vec![RenderTypographyRunV1 {
+                scalar_start: 0,
+                scalar_end: 4,
+                source_font_name: "Example Family".to_owned(),
+                text_size_emu: 152_400,
+                font_inherited: false,
+                size_inherited: false,
+                color_rgb: None,
+                color_inherited: false,
+                bold,
+                italic,
+            }],
+            paragraph_alignments: Vec::new(),
+            backend_font_resource_id: None,
+            layout: None,
+        }
+    }
+
+    #[test]
+    fn current_boolean_overlay_splits_source_runs_without_inventing_unset_properties() {
+        let fragment = fragment_with_style(Some(false), Some(false));
+        let current = vec![
+            DesktopCurrentBooleanTypographyRunV1 {
+                scalar_start: 0,
+                scalar_end: 2,
+                bold: None,
+                italic: None,
+            },
+            DesktopCurrentBooleanTypographyRunV1 {
+                scalar_start: 2,
+                scalar_end: 4,
+                bold: Some(true),
+                italic: None,
+            },
+        ];
+
+        let runs = compose_current_fragment_typography_v1(&fragment, &current)
+            .expect("composition")
+            .expect("current typography");
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].scalar_start..runs[0].scalar_end, 0..2);
+        assert_eq!((runs[0].bold, runs[0].italic), (Some(false), Some(false)));
+        assert_eq!(runs[1].scalar_start..runs[1].scalar_end, 2..4);
+        assert_eq!((runs[1].bold, runs[1].italic), (Some(true), Some(false)));
+    }
+
+    #[test]
+    fn current_boolean_overlay_preserves_unknown_instead_of_normalizing_false() {
+        let fragment = fragment_with_style(None, None);
+        let current = vec![DesktopCurrentBooleanTypographyRunV1 {
+            scalar_start: 0,
+            scalar_end: 4,
+            bold: None,
+            italic: Some(true),
+        }];
+
+        let runs = compose_current_fragment_typography_v1(&fragment, &current)
+            .expect("composition")
+            .expect("current typography");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].bold, None);
+        assert_eq!(runs[0].italic, Some(true));
+    }
 }
 
 impl ViewerApp {
