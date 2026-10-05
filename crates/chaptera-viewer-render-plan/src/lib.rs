@@ -4051,6 +4051,61 @@ mod tests {
     }
 
     #[test]
+    fn mixed_family_runs_preserve_existing_admission_even_with_one_exact_resource() {
+        let story_id = fixture().document.stories[0].id;
+        let fragment = render_fragment(
+            story_id,
+            "ABCD",
+            vec![
+                RenderTypographyRunV1 {
+                    scalar_start: 0,
+                    scalar_end: 2,
+                    source_font_name: "Family A".to_owned(),
+                    text_size_emu: 152_400,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
+                    bold: None,
+                    italic: None,
+                },
+                RenderTypographyRunV1 {
+                    scalar_start: 2,
+                    scalar_end: 4,
+                    source_font_name: "Family B".to_owned(),
+                    text_size_emu: 152_400,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
+                    bold: None,
+                    italic: None,
+                },
+            ],
+        );
+        let bytes: &[u8] = b"source-free-shared-resource";
+        let sha = font_fingerprint_sha256(bytes);
+        let mut resolver = |_: &RenderTextFragmentV1, _: &RenderTypographyRunV1| {
+            Some(ExplicitRenderTextFontResourceV1 {
+                resource_id: "shared-exact-resource",
+                expected_sha256: &sha,
+                face_index: 0,
+                default_font_size_emu: 152_400,
+                default_line_height_emu: 190_500,
+                bytes,
+            })
+        };
+
+        let runs = admitted_mixed_family_typography_runs_v1(&fragment, &mut resolver)
+            .expect("existing mixed-family admission must remain valid");
+        assert_eq!(runs.len(), 2);
+        assert!(
+            runs.iter()
+                .all(|run| run.font.resource_id == "shared-exact-resource")
+        );
+    }
+
+    #[test]
     fn plan_collects_document_paint_facts_without_backend_state() {
         let visual = fixture();
         let plan = build_page_render_plan_v1(&visual, 0).expect("render plan");
