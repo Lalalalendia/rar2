@@ -5234,13 +5234,12 @@ fn paint_page_thumbnail(
     let Ok(mut render_plan) = build_desktop_page_render_plan(visual, page_index) else {
         return;
     };
-    if let Some(editor) = editor {
-        if font_binding::apply_editor_current_boolean_typography_v1(&mut render_plan, editor)
+    if let Some(editor) = editor
+        && (font_binding::apply_editor_current_boolean_typography_v1(&mut render_plan, editor)
             .is_err()
-            || authored_stack::apply_editor_authored_page_lane(&mut render_plan, editor).is_err()
-        {
-            return;
-        }
+            || authored_stack::apply_editor_authored_page_lane(&mut render_plan, editor).is_err())
+    {
+        return;
     }
     if render_plan.page_size.width.get() <= 0 || render_plan.page_size.height.get() <= 0 {
         return;
