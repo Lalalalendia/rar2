@@ -119,6 +119,17 @@ jobs:
               throw "$name git blob identity mismatch: $actualBlob"
             }
           }
+          $carlton = Join-Path $root "Carlton-March-2026.pub"
+          Invoke-WebRequest -Uri "https://sj3-bucket-media.s3.eu-west-1.amazonaws.com/5a/5a939344-76a6-4a6a-b30b-7237edac8bfa" -OutFile $carlton
+          $carltonHash = (Get-FileHash $carlton -Algorithm SHA256).Hash.ToLowerInvariant()
+          $carltonBytes = (Get-Item $carlton).Length
+          if ($carltonHash -ne "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3") {
+            throw "Carlton March PUB SHA-256 mismatch: $carltonHash"
+          }
+          if ($carltonBytes -ne 9580032) {
+            throw "Carlton March PUB byte length mismatch: $carltonBytes"
+          }
+
           "CHAPTERA_TEXT_FORMAT_FIXTURES_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Prove bounded Windows source-font binding
