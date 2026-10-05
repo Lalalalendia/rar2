@@ -281,48 +281,29 @@ pub fn materialize_bounded_bootstrap_new_doc_candidate(
     // require the raw/ordered CDM page counts to equal Publisher's native page
     // count. Native Publisher acceptance owns that one-customer-page assertion.
     //
-    // The offline writer gate can still prove the bounded structural fact it
-    // actually owns: seq293 and seq294 must have exactly one shared raw PAGE owner.
-    let rectangle_owner_pages = resolved
-        .graph
-        .pages
-        .iter()
-        .filter_map(|(page_id, page)| {
-            page.children
-                .contains(&rectangle.header.id)
-                .then_some(*page_id)
-        })
-        .collect::<Vec<_>>();
-    let textbox_owner_pages = resolved
-        .graph
-        .pages
-        .iter()
-        .filter_map(|(page_id, page)| {
-            page.children
-                .contains(&textbox.header.id)
-                .then_some(*page_id)
-        })
-        .collect::<Vec<_>>();
-
-    if rectangle_owner_pages.len() != 1 || textbox_owner_pages.len() != 1 {
+    // Node membership is canonical in NodeHeader.parent_id. Page.children is
+    // intentionally empty for imported PUB because the reader preserves parent
+    // identity without inventing z-order from Contents directory order. The
+    // bootstrap gate therefore checks the semantic parent IDs directly.
+    if rectangle.header.parent_id != textbox.header.parent_id {
         return Err(BootstrapNewDocBlocked::OutputSemantic {
-            detail: format!(
-                "expected one raw PAGE owner per bootstrap node, rectangle owners={} textbox owners={}",
-                rectangle_owner_pages.len(),
-                textbox_owner_pages.len()
-            ),
-        });
-    }
-    if rectangle_owner_pages[0] != textbox_owner_pages[0] {
-        return Err(BootstrapNewDocBlocked::OutputSemantic {
-            detail: "rectangle seq293 and textbox seq294 do not share one raw PAGE owner".into(),
+            detail: "rectangle seq293 and textbox seq294 do not share one raw PAGE parent".into(),
         });
     }
 
-    let page_id = rectangle_owner_pages[0];
+    let page_id = resolved
+        .graph
+        .pages
+        .keys()
+        .copied()
+        .find(|page_id| page_id.into_canonical() == rectangle.header.parent_id)
+        .ok_or_else(|| BootstrapNewDocBlocked::OutputSemantic {
+            detail: "shared bootstrap parent is not a recovered raw PAGE".into(),
+        })?;
+
     if !resolved.graph.document.pages.contains(&page_id) {
         return Err(BootstrapNewDocBlocked::OutputSemantic {
-            detail: "shared bootstrap PAGE owner is absent from DOCUMENT page order".into(),
+            detail: "shared bootstrap PAGE parent is absent from DOCUMENT page order".into(),
         });
     }
 
