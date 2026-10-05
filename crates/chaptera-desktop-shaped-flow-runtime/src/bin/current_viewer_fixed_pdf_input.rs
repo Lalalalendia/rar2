@@ -364,16 +364,14 @@ fn census(
                             LengthEmu::new(*font_size_emu),
                         )
                     {
-                        let first_line_extent_emu =
-                            natural_extent.get().min(*line_height_emu);
+                        let first_line_extent_emu = natural_extent.get().min(*line_height_emu);
                         let old_capacity = frame_height_emu / *line_height_emu;
                         let new_capacity = if frame_height_emu < first_line_extent_emu {
                             0
                         } else {
                             1 + (frame_height_emu - first_line_extent_emu) / *line_height_emu
                         };
-                        if old_capacity < resolved_line_count
-                            && new_capacity >= resolved_line_count
+                        if old_capacity < resolved_line_count && new_capacity >= resolved_line_count
                         {
                             out.first_line_capacity_recovery_count += 1;
                             *out.first_line_capacity_recovery_signature_counts
