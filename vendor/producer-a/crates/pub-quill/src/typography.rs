@@ -3751,6 +3751,232 @@ mod tests {
         assert!(unknown.is_empty());
     }
 
+    fn classify_effective_color_provenance_for_test(
+        fdpc: &QuillTypographyRange,
+        default: Option<&CharacterDefaultObservation>,
+        references: Result<&[u32], ()>,
+    ) -> &'static str {
+        let mut explicit = fdpc.color_indices.clone();
+        explicit.sort_unstable();
+        explicit.dedup();
+        match explicit.as_slice() {
+            [index] => {
+                let Ok(references) = references else {
+                    return "explicit_color_table_unavailable";
+                };
+                let Some(raw) = references.get(*index as usize) else {
+                    return "explicit_index_out_of_range";
+                };
+                if resolve_direct_quill_text_color(*raw).is_some() {
+                    "resolved_explicit_direct"
+                } else {
+                    "explicit_unsupported_reference_form"
+                }
+            }
+            [] => {
+                let Some(default) = default else {
+                    return "no_default_color_authority";
+                };
+                let mut inherited = default.color_indices.clone();
+                inherited.sort_unstable();
+                inherited.dedup();
+                match inherited.as_slice() {
+                    [index] => {
+                        let Ok(references) = references else {
+                            return "inherited_color_table_unavailable";
+                        };
+                        let Some(raw) = references.get(*index as usize) else {
+                            return "inherited_index_out_of_range";
+                        };
+                        if resolve_direct_quill_text_color(*raw).is_some() {
+                            "resolved_inherited_direct"
+                        } else {
+                            "inherited_unsupported_reference_form"
+                        }
+                    }
+                    [] => "no_color_carrier",
+                    _ => "inherited_ambiguous_index",
+                }
+            }
+            _ => "explicit_ambiguous_index",
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the pinned public Carlton March PUB path"]
+    fn carlton_effective_text_color_provenance_is_source_safe() {
+        let carlton = std::env::var_os("CHAPTERA_GOLDEN_CARLTON_MARCH")
+            .map(std::path::PathBuf::from)
+            .expect("CHAPTERA_GOLDEN_CARLTON_MARCH");
+        let pub_bytes = std::fs::read(&carlton).expect("read pinned Carlton PUB");
+        let quill = pub_cfb::read_stream_reader(
+            std::io::Cursor::new(pub_bytes.as_slice()),
+            "/Quill/QuillSub/CONTENTS",
+        )
+        .expect("read Carlton Quill stream");
+        let story_catalog = crate::parse_confirmed_story_catalog(
+            StreamPath("/Quill/QuillSub/CONTENTS".into()),
+            &quill,
+        )
+        .expect("parse Carlton Story catalog");
+
+        let catalog =
+            parse_bounded_typography(&quill, &story_catalog).expect("parse bounded typography");
+        let descriptors = story_catalog
+            .descriptor_nodes
+            .iter()
+            .flat_map(|node| node.descriptors.iter())
+            .enumerate()
+            .collect::<Vec<_>>();
+        let font_names = parse_font_catalog(&quill, &descriptors).expect("parse FONT catalog");
+        let color_references_result = parse_text_color_references(&quill, &descriptors);
+        let color_references = color_references_result
+            .as_ref()
+            .map(Vec::as_slice)
+            .map_err(|_| ());
+
+        let mut fdpp_unknown = BTreeSet::new();
+        let paragraph_styles =
+            parse_fdpp_styles(&quill, &story_catalog, &descriptors, &mut fdpp_unknown)
+                .expect("parse Carlton FDPP");
+        validate_monotone_fdpp_text_offsets(&paragraph_styles)
+            .expect("Carlton FDPP offsets are monotone");
+
+        let text_start =
+            u32::try_from(story_catalog.text.source.offset).expect("TEXT offset fits u32");
+        let text_len = u32::try_from(story_catalog.text.source.len).expect("TEXT len fits u32");
+        let text_end = text_start.checked_add(text_len).expect("TEXT end fits u32");
+        let story_extents = build_story_extents(&story_catalog.stories).expect("Story extents");
+        let total_utf16 = story_extents
+            .last()
+            .map(|extent| extent.global_end_utf16)
+            .unwrap_or(0);
+        let mut paragraph_ranges =
+            materialize_paragraph_ranges(&paragraph_styles, text_start, text_end, total_utf16)
+                .expect("materialize Carlton paragraph ranges");
+
+        let mut inheritance_unknown = BTreeSet::new();
+        let character_defaults = parse_stsh1_character_defaults(
+            &quill,
+            &story_catalog,
+            &descriptors,
+            &font_names,
+            &mut inheritance_unknown,
+        )
+        .expect("parse Carlton STSH1 character defaults");
+        apply_bounded_implicit_style_zero(&mut paragraph_ranges, &character_defaults);
+
+        assert!(
+            fdpp_unknown.is_empty() && inheritance_unknown.is_empty(),
+            "Carlton color provenance census must not cross unknown fixed block widths"
+        );
+
+        let mut disposition_counts = std::collections::BTreeMap::<String, usize>::new();
+        let mut unresolved_disposition_counts =
+            std::collections::BTreeMap::<String, usize>::new();
+        let mut resolved_run_count = 0_usize;
+        let mut unresolved_run_count = 0_usize;
+
+        for run in &catalog.effective_runs {
+            let story = story_extents
+                .iter()
+                .find(|story| story.story_index == run.story_index)
+                .expect("effective run Story owner");
+            let start = story
+                .global_start_utf16
+                .checked_add(run.story_start_utf16)
+                .expect("effective run global start");
+            let end = story
+                .global_start_utf16
+                .checked_add(run.story_end_utf16)
+                .expect("effective run global end");
+            let fdpc = exactly_one_covering_fdpc(&catalog.ranges, start, end)
+                .expect("effective run FDPC owner");
+            let paragraph = exactly_one_covering_paragraph(&paragraph_ranges, start, end)
+                .expect("effective run paragraph owner");
+
+            let default = paragraph.selected_style_index.and_then(|style_index| {
+                character_defaults
+                    .iter()
+                    .find(|candidate| candidate.logical_style_index == style_index)
+            });
+            let implicit_style_zero_default = if paragraph.selected_style_index.is_none()
+                && !paragraph.default_style_selector_present
+            {
+                let mut candidates = character_defaults
+                    .iter()
+                    .filter(|candidate| candidate.logical_style_index == 0);
+                match (candidates.next(), candidates.next()) {
+                    (Some(candidate), None) => Some(candidate),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let color_default = default.or(implicit_style_zero_default);
+            let disposition = classify_effective_color_provenance_for_test(
+                fdpc,
+                color_default,
+                color_references,
+            );
+
+            *disposition_counts.entry(disposition.to_owned()).or_default() += 1;
+            if run.color_rgb.is_some() {
+                resolved_run_count += 1;
+                assert!(
+                    disposition.starts_with("resolved_"),
+                    "resolved run must classify as resolved provenance, got {disposition}"
+                );
+            } else {
+                unresolved_run_count += 1;
+                assert!(
+                    !disposition.starts_with("resolved_"),
+                    "unresolved run must not classify as resolved provenance"
+                );
+                *unresolved_disposition_counts
+                    .entry(disposition.to_owned())
+                    .or_default() += 1;
+            }
+        }
+
+        assert_eq!(
+            resolved_run_count + unresolved_run_count,
+            catalog.effective_runs.len(),
+            "color provenance must partition every effective typography run"
+        );
+
+        let pl_table_state = match &color_references_result {
+            Ok(references) if references.is_empty() => "available_empty",
+            Ok(_) => "available_nonempty",
+            Err(_) => "parse_failed",
+        };
+        let source_sha256 = std::env::var("CHAPTERA_CARLTON_SOURCE_SHA256")
+            .unwrap_or_else(|_| "workflow_verified_external".to_owned());
+        let receipt = serde_json::json!({
+            "schema": "chaptera.carlton-quill-color-provenance.v1",
+            "source_pub_sha256": source_sha256,
+            "pl_table_state": pl_table_state,
+            "effective_run_count": catalog.effective_runs.len(),
+            "resolved_color_run_count": resolved_run_count,
+            "unresolved_color_run_count": unresolved_run_count,
+            "disposition_counts": disposition_counts,
+            "unresolved_disposition_counts": unresolved_disposition_counts,
+            "unknown_fdpc_block_type_count": catalog.unknown_block_types_assumed_zero_length.len(),
+            "unknown_inheritance_block_type_count": catalog
+                .inheritance_unknown_block_types_assumed_zero_length
+                .len(),
+            "raw_customer_text_emitted": false,
+            "raw_color_values_emitted": false,
+            "raw_source_offsets_emitted": false
+        });
+
+        let encoded = serde_json::to_string_pretty(&receipt).expect("serialize color receipt");
+        println!("CARLTON_COLOR_PROVENANCE_JSON={}", serde_json::to_string(&receipt).unwrap());
+        if let Some(path) = std::env::var_os("CHAPTERA_CARLTON_COLOR_RECEIPT") {
+            std::fs::write(path, format!("{encoded}\n")).expect("write color provenance receipt");
+        }
+    }
+
     #[test]
     #[ignore = "requires the pinned public Carlton March PUB path"]
     fn carlton_missing_paragraph_alignment_topology_is_source_safe() {
