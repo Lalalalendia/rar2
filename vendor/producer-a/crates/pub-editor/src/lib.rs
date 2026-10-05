@@ -63,8 +63,8 @@ pub use writer_assessment::{
 };
 
 use chaptera_text_format_overlay::{
-    BaseCharacterFormatV1, BaseFormatRunV1, FormatPropertyV1, FormatValueV1,
-    TextFormatOverlayStateV1, build_text_format_overlay_state_v1,
+    BaseCharacterFormatV1, BaseFormatRunV1, EffectivePropertySegmentV1, FormatPropertyV1,
+    FormatValueV1, TextFormatOverlayStateV1, build_text_format_overlay_state_v1,
     clear_text_format_property_override_v1 as overlay_clear_text_format_property_override_v1,
     set_text_format_property_v1 as overlay_set_text_format_property_v1, state_hash_v1,
 };
@@ -127,7 +127,8 @@ pub const EDITOR_PROJECT_VERSION_V0_12: &str = "pub-editor-v0.12";
 pub const EDITOR_PROJECT_VERSION_V0_13: &str = "pub-editor-v0.13";
 pub const EDITOR_PROJECT_VERSION_V0_14: &str = "pub-editor-v0.14";
 pub const EDITOR_PROJECT_VERSION_V0_15: &str = "pub-editor-v0.15";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_15;
+pub const EDITOR_PROJECT_VERSION_V0_16: &str = "pub-editor-v0.16";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_16;
 pub const MAX_MOVE_NODES_V1: usize = 1024;
 pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
@@ -357,6 +358,23 @@ pub enum EditOperation {
         before_state_hash: String,
         after_state_hash: String,
     },
+    SetTextFormatPropertyScopedV1 {
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        property: FormatPropertyV1,
+        value: FormatValueV1,
+        before_state_hash: String,
+        after_state_hash: String,
+    },
+    ClearTextFormatPropertyOverrideScopedV1 {
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        property: FormatPropertyV1,
+        before_state_hash: String,
+        after_state_hash: String,
+    },
     SetParagraphAlignmentOverride {
         paragraph_ids: Vec<ParagraphId>,
         value: AuthoredParagraphAlignmentValueV1,
@@ -406,6 +424,8 @@ impl EditOperation {
             | Self::ReorderAuthoredStack { .. }
             | Self::SetTextFormatProperty { .. }
             | Self::ClearTextFormatPropertyOverride { .. }
+            | Self::SetTextFormatPropertyScopedV1 { .. }
+            | Self::ClearTextFormatPropertyOverrideScopedV1 { .. }
             | Self::SetParagraphAlignmentOverride { .. }
             | Self::ClearParagraphAlignmentOverride { .. } => Vec::new(),
         }
@@ -542,7 +562,9 @@ impl PersistenceRequirements for EditOperation {
                 property_path: Some("page.authored_stack".into()),
             }],
             Self::SetTextFormatProperty { story_id, .. }
-            | Self::ClearTextFormatPropertyOverride { story_id, .. } => {
+            | Self::ClearTextFormatPropertyOverride { story_id, .. }
+            | Self::SetTextFormatPropertyScopedV1 { story_id, .. }
+            | Self::ClearTextFormatPropertyOverrideScopedV1 { story_id, .. } => {
                 vec![PersistenceRequirement {
                     feature: "story.character_format_overlay".into(),
                     origin: Some(story_id.into_canonical()),
@@ -1957,6 +1979,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesTextFormatOperation {
         index: usize,
     },
+    LegacyProjectCarriesScopedTextFormatOperation {
+        index: usize,
+    },
     LegacyProjectCarriesParagraphAlignmentOperation {
         index: usize,
     },
@@ -2008,7 +2033,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, or {EDITOR_PROJECT_VERSION_V0_15:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, or {EDITOR_PROJECT_VERSION_V0_16:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -2063,6 +2088,10 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesTextFormatOperation { index } => write!(
                 formatter,
                 "editor project operation {index} uses text-format overrides but the project schema predates pub-editor-v0.14"
+            ),
+            Self::LegacyProjectCarriesScopedTextFormatOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses property-scoped text-format history but the project schema predates pub-editor-v0.16"
             ),
             Self::LegacyProjectCarriesParagraphAlignmentOperation { index } => write!(
                 formatter,
