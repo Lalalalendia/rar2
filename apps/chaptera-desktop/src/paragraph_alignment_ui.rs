@@ -306,14 +306,15 @@ mod tests {
     #[ignore = "requires the pinned public Carlton March PUB path"]
     fn real_carlton_paragraph_alignment_ui_state_set_clear_and_left() {
         let Some(path) = env::var_os("CHAPTERA_CARLTON_PUB").map(std::path::PathBuf::from) else {
-            eprintln!("CHAPTERA_CARLTON_PUB not set; dedicated paragraph UI gate owns real evidence");
+            eprintln!(
+                "CHAPTERA_CARLTON_PUB not set; dedicated paragraph UI gate owns real evidence"
+            );
             return;
         };
         let original = fs::read(&path).expect("read pinned Carlton March PUB");
-        let source_hash =
-            "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
-                .parse::<Sha256Digest>()
-                .expect("pinned Carlton source hash");
+        let source_hash = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+            .parse::<Sha256Digest>()
+            .expect("pinned Carlton source hash");
         let mut editor =
             open_mature_0x2c_editor(&original, source_hash).expect("open Carlton EditorSession");
         let base = editor
@@ -321,9 +322,7 @@ mod tests {
             .expect("bind Carlton imported paragraph base alignment");
         let paragraph = base
             .iter()
-            .find(|item| {
-                item.alignment == pub_editor::ImportedParagraphAlignmentValueV1::Right
-            })
+            .find(|item| item.alignment == pub_editor::ImportedParagraphAlignmentValueV1::Right)
             .expect("Carlton must expose one grounded Right paragraph base")
             .clone();
         let visual = pub_viewer::open_mature_0x2c_geometry(
