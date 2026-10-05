@@ -59,6 +59,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned Carlton acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
       - name: Acquire pinned SampleNewsletter
         shell: pwsh
         run: |
@@ -119,8 +124,13 @@ jobs:
               throw "$name git blob identity mismatch: $actualBlob"
             }
           }
+          $carltonRoot = Join-Path $env:RUNNER_TEMP "chaptera-styled-font-carlton"
+          python tools/acquire_carlton_march_pair.py $carltonRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw "Carlton March public acquisition failed"
+          }
           $carlton = Join-Path $root "Carlton-March-2026.pub"
-          Invoke-WebRequest -Uri "https://docs-cdn.schooljotter3.com/1fd359a4-cb4e-412d-81a1-79f36166cafc/5a939344-76a6-4a6a-b30b-7237edac8bfa/5a939344-76a6-4a6a-b30b-7237edac8bfa.pub" -OutFile $carlton
+          Copy-Item (Join-Path $carltonRoot "March-2026.pub") $carlton
           $carltonHash = (Get-FileHash $carlton -Algorithm SHA256).Hash.ToLowerInvariant()
           $carltonBytes = (Get-Item $carlton).Length
           if ($carltonHash -ne "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3") {
