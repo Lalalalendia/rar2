@@ -356,6 +356,16 @@ jobs:
               raise SystemExit("font-binding partition does not cover every SharedLayoutIncomplete node")
           if sum(viewer_census["shared_layout_incomplete_spacing_family_binding_counts"].values()) != current_shared_incomplete:
               raise SystemExit("spacing/family/binding cross-tab does not cover every SharedLayoutIncomplete node")
+          if sum(viewer_census["shared_layout_incomplete_path_counts"].values()) != current_shared_incomplete:
+              raise SystemExit("path census does not cover every SharedLayoutIncomplete node")
+          if sum(viewer_census["shared_layout_incomplete_consumption_counts"].values()) != current_shared_incomplete:
+              raise SystemExit("consumption census does not cover every SharedLayoutIncomplete node")
+          if sum(viewer_census["shared_layout_incomplete_cause_counts"].values()) != current_shared_incomplete:
+              raise SystemExit("cause census does not cover every SharedLayoutIncomplete node")
+          if sum(viewer_census["shared_layout_incomplete_cause_authority_counts"].values()) != current_shared_incomplete:
+              raise SystemExit("cause/authority cross-tab does not cover every SharedLayoutIncomplete node")
+          if current_shared_incomplete != 7:
+              raise SystemExit(f"supported-subset SLI residual drift: {current_shared_incomplete!r}")
 
           first_line_recoveries = viewer_census["first_line_capacity_recovery_count"]
           first_line_signatures = viewer_census["first_line_capacity_recovery_signature_counts"]
