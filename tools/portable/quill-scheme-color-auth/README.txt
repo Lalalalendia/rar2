@@ -1,4 +1,4 @@
-QUILL SCHEME TEXT COLOR AUTHORITY - PORTABLE V1
+QUILL SCHEME TEXT COLOR AUTHORITY - PORTABLE V2
 ================================================
 
 Purpose
@@ -38,6 +38,11 @@ B. Copies that saved synthetic PUB, finds a second installed Publisher ColorSche
 C. Opens the bundled exact public Carlton March PUB read-only, records its current
    8-role scheme tuple privately, and emits only an ordered tuple SHA-256 fingerprint
    in the public-safe analysis receipt.
+
+D. Runs a bundled static Quill probe over both generated synthetic PUBs and Carlton:
+   - binds COM SchemeColor roles 1..8 to persisted Quill eight-slot scheme references;
+   - verifies the persisted role->slot mapping is unchanged after document ColorScheme switch;
+   - retains only source-safe aggregate Carlton scheme-slot counts in the public receipt.
 
 Returned evidence
 -----------------
