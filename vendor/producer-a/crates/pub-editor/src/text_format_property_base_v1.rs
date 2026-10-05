@@ -415,6 +415,20 @@ fn operation_for_state<'a>(
             before_state_hash,
             after_state_hash,
             ..
+        }
+        | EditOperation::SetTextFormatPropertyScopedV1 {
+            story_id,
+            property,
+            before_state_hash,
+            after_state_hash,
+            ..
+        }
+        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
+            story_id,
+            property,
+            before_state_hash,
+            after_state_hash,
+            ..
         } if story_id.as_canonical().to_string() == state.story_id
             && *property == state.property =>
         {
@@ -436,12 +450,27 @@ pub fn apply_text_format_property_operation_semantic_v1(
             property,
             value,
             ..
+        }
+        | EditOperation::SetTextFormatPropertyScopedV1 {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            ..
         } if story_id.as_canonical().to_string() == state.story_id
             && *property == state.property =>
         {
             set_text_format_property_state_v1(state, *start_scalar, *end_scalar, value.clone())
         }
         EditOperation::ClearTextFormatPropertyOverride {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            ..
+        }
+        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
             story_id,
             start_scalar,
             end_scalar,
@@ -577,6 +606,64 @@ mod tests {
         .expect_err("unknown Bold must remain unavailable");
 
         assert!(error.contains("bold"));
+    }
+
+    #[test]
+    fn scoped_persisted_kinds_replay_in_property_hash_domain() {
+        let source = build_source_text_format_property_state_v1(
+            story_id(),
+            "sha256:source-story",
+            4,
+            &[run(0, 4, Some(false), Some(false), None)],
+            FormatPropertyV1::Bold,
+        )
+        .expect("source Bold state");
+        let source_hash =
+            text_format_property_state_hash_v1(&source).expect("source property hash");
+        let after_set = set_text_format_property_state_v1(&source, 0, 4, FormatValueV1::Bool(true))
+            .expect("set scoped Bold");
+        let set_hash =
+            text_format_property_state_hash_v1(&after_set).expect("edited property hash");
+        let set_operation = EditOperation::SetTextFormatPropertyScopedV1 {
+            story_id: story_id(),
+            start_scalar: 0,
+            end_scalar: 4,
+            property: FormatPropertyV1::Bold,
+            value: FormatValueV1::Bool(true),
+            before_state_hash: source_hash.clone(),
+            after_state_hash: set_hash.clone(),
+        };
+
+        assert_eq!(
+            apply_text_format_property_operation_checked_v1(&source, &set_operation)
+                .expect("checked scoped Set replay"),
+            after_set
+        );
+
+        let after_clear =
+            clear_text_format_property_state_v1(&after_set, 0, 4).expect("clear scoped Bold");
+        assert_eq!(after_clear, source);
+        let clear_operation = EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
+            story_id: story_id(),
+            start_scalar: 0,
+            end_scalar: 4,
+            property: FormatPropertyV1::Bold,
+            before_state_hash: set_hash,
+            after_state_hash: source_hash,
+        };
+        assert_eq!(
+            apply_text_format_property_operation_checked_v1(&after_set, &clear_operation)
+                .expect("checked scoped Clear replay"),
+            source
+        );
+        assert_eq!(
+            fold_text_format_property_history_v1(
+                source.clone(),
+                &[set_operation, clear_operation],
+            )
+            .expect("scoped Set/Clear history projection"),
+            source
+        );
     }
 
     #[test]

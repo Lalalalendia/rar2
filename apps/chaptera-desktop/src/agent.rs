@@ -2250,6 +2250,40 @@ fn operation_summary(operation: &EditOperation) -> Value {
             "before_state_hash":before_state_hash,
             "after_state_hash":after_state_hash
         }),
+        EditOperation::SetTextFormatPropertyScopedV1 {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            before_state_hash,
+            after_state_hash,
+        } => json!({
+            "kind":"set_text_format_property_scoped_v1",
+            "story_id":story_id.as_canonical().to_string(),
+            "start_scalar":start_scalar,
+            "end_scalar":end_scalar,
+            "property":property,
+            "value":value,
+            "before_state_hash":before_state_hash,
+            "after_state_hash":after_state_hash
+        }),
+        EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            before_state_hash,
+            after_state_hash,
+        } => json!({
+            "kind":"clear_text_format_property_override_scoped_v1",
+            "story_id":story_id.as_canonical().to_string(),
+            "start_scalar":start_scalar,
+            "end_scalar":end_scalar,
+            "property":property,
+            "before_state_hash":before_state_hash,
+            "after_state_hash":after_state_hash
+        }),
         EditOperation::SetParagraphAlignmentOverride {
             paragraph_ids,
             value,
