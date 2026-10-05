@@ -737,9 +737,8 @@ pub fn parse_bounded_typography(
                 continue;
             };
 
-            let explicit_color =
-                resolve_effective_text_color(range, None, &text_color_references)
-                    .map(|(color, _)| color);
+            let explicit_color = resolve_effective_text_color(range, None, &text_color_references)
+                .map(|(color, _)| color);
             let (color_rgb, color_scheme_slot) = split_bounded_quill_text_color(explicit_color);
 
             for intersection in &range.story_intersections {
