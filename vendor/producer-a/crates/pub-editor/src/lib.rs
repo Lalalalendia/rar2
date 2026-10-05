@@ -139,7 +139,8 @@ pub const EDITOR_PROJECT_VERSION_V0_13: &str = "pub-editor-v0.13";
 pub const EDITOR_PROJECT_VERSION_V0_14: &str = "pub-editor-v0.14";
 pub const EDITOR_PROJECT_VERSION_V0_15: &str = "pub-editor-v0.15";
 pub const EDITOR_PROJECT_VERSION_V0_16: &str = "pub-editor-v0.16";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_16;
+pub const EDITOR_PROJECT_VERSION_V0_17: &str = "pub-editor-v0.17";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_17;
 pub const MAX_MOVE_NODES_V1: usize = 1024;
 pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
@@ -1989,7 +1990,12 @@ fn is_scoped_text_format_operation_v1(operation: &EditOperation) -> bool {
 }
 
 fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
-    if operations.iter().any(is_scoped_text_format_operation_v1) {
+    if operations
+        .iter()
+        .any(|operation| matches!(operation, EditOperation::CreateLine { .. }))
+    {
+        EDITOR_PROJECT_VERSION_V0_17
+    } else if operations.iter().any(is_scoped_text_format_operation_v1) {
         EDITOR_PROJECT_VERSION_V0_16
     } else if operations.iter().any(|operation| {
         matches!(
@@ -2194,6 +2200,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesCreateShapeOperation {
         index: usize,
     },
+    LegacyProjectCarriesCreateLineOperation {
+        index: usize,
+    },
     LegacyProjectCarriesCreateTextBoxOperation {
         index: usize,
     },
@@ -2299,6 +2308,10 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesCreateShapeOperation { index } => write!(
                 formatter,
                 "editor project operation {index} uses CreateShape but the project schema predates pub-editor-v0.10"
+            ),
+            Self::LegacyProjectCarriesCreateLineOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses CreateLine but the project schema predates pub-editor-v0.17"
             ),
             Self::LegacyProjectCarriesCreateTextBoxOperation { index } => write!(
                 formatter,
@@ -3457,6 +3470,12 @@ impl EditorSession {
             let legacy_schema = if self
                 .undo
                 .iter()
+                .any(|operation| matches!(operation, EditOperation::CreateLine { .. }))
+            {
+                EDITOR_PROJECT_VERSION_V0_17
+            } else if self
+                .undo
+                .iter()
                 .any(|operation| matches!(operation, EditOperation::CreateShape { .. }))
             {
                 EDITOR_PROJECT_VERSION_V0_10
@@ -3832,6 +3851,7 @@ impl EditorSession {
             || !self.replacement_assets.is_empty()
             || !self.image_replacements.is_empty()
             || !self.authored_shapes.is_empty()
+            || !self.authored_lines.is_empty()
             || !self.authored_stacks.is_empty()
         {
             return Err(EditorProjectError::SessionNotEmpty);
@@ -6169,9 +6189,13 @@ impl EditorSession {
                 }
 
                 let mut candidate_shapes = self.authored_shapes.clone();
+                let mut candidate_lines = self.authored_lines.clone();
                 match &operation {
                     EditOperation::CreateShape { .. } => {
                         apply_authored_shape_inverse(&mut candidate_shapes, &operation)?;
+                    }
+                    EditOperation::CreateLine { .. } => {
+                        apply_authored_line_inverse(&mut candidate_lines, &operation)?;
                     }
                     EditOperation::DeleteNode { .. } => {
                         apply_authored_shape_delete_inverse(&mut candidate_shapes, &operation)?;
@@ -6180,6 +6204,7 @@ impl EditorSession {
                     _ => unreachable!("authored-stack page helper only admits lane operations"),
                 }
                 self.authored_shapes = candidate_shapes;
+                self.authored_lines = candidate_lines;
                 self.authored_stacks = before_stacks;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_inverse(&mut self.image_replacements, &operation)?;
@@ -6239,12 +6264,19 @@ impl EditorSession {
                 apply_authored_stack_history_forward_v1(&mut after_stacks, &operation)?;
 
                 let mut candidate_shapes = self.authored_shapes.clone();
+                let mut candidate_lines = self.authored_lines.clone();
                 match &operation {
                     EditOperation::CreateShape { .. } => {
                         let shape = authored_shape_from_operation(&operation)
                             .expect("CreateShape operation reconstructs authored shape");
                         self.validate_create_shape_candidate(&shape)?;
                         candidate_shapes.insert(shape.node_id, shape);
+                    }
+                    EditOperation::CreateLine { .. } => {
+                        let line = authored_line_from_operation(&operation)
+                            .expect("CreateLine operation reconstructs authored line");
+                        self.validate_create_line_candidate(&line)?;
+                        candidate_lines.insert(line.node_id, line);
                     }
                     EditOperation::DeleteNode { .. } => {
                         apply_authored_shape_delete_forward(&mut candidate_shapes, &operation)?;
@@ -6254,6 +6286,7 @@ impl EditorSession {
                 }
 
                 self.authored_shapes = candidate_shapes;
+                self.authored_lines = candidate_lines;
                 self.authored_stacks = after_stacks;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_forward(&mut self.image_replacements, &operation)?;
@@ -6473,6 +6506,9 @@ fn replay_canonical_operation(
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::CreateShape { .. } => session
             .consume_canonical_create_shape(expected.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::CreateLine { .. } => session
+            .consume_canonical_create_line(expected.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::DeleteNode { .. } => session
             .consume_canonical_delete_node(expected.clone())
@@ -7609,6 +7645,9 @@ fn apply_forward(
         EditOperation::CreateShape { .. } => {
             unreachable!("CreateShape is applied to the authored overlay state")
         }
+        EditOperation::CreateLine { .. } => {
+            unreachable!("CreateLine is applied to the authored overlay state")
+        }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is applied to the authored overlay state")
         }
@@ -7861,6 +7900,9 @@ fn apply_inverse(
         EditOperation::CreateShape { .. } => {
             unreachable!("CreateShape is reverted in the authored overlay state")
         }
+        EditOperation::CreateLine { .. } => {
+            unreachable!("CreateLine is reverted in the authored overlay state")
+        }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is reverted in the authored overlay state")
         }
@@ -7883,9 +7925,9 @@ fn apply_inverse(
 
 fn authored_stack_operation_page_id_v1(operation: &EditOperation) -> Option<PageId> {
     match operation {
-        EditOperation::CreateShape { page_id, .. } | EditOperation::DeleteNode { page_id, .. } => {
-            Some(*page_id)
-        }
+        EditOperation::CreateShape { page_id, .. }
+        | EditOperation::CreateLine { page_id, .. }
+        | EditOperation::DeleteNode { page_id, .. } => Some(*page_id)
         EditOperation::ReorderAuthoredStack { transition } => Some(transition.page_id),
         _ => None,
     }
@@ -7915,6 +7957,19 @@ fn apply_authored_stack_history_forward_v1(
                 .cloned()
                 .unwrap_or_else(|| AuthoredStackV1::empty(*page_id));
             let transition = plan_create_shape_append_v1(&before, &shape)
+                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+            let after = apply_authored_stack_transition_forward_v1(&before, &transition)
+                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+            install_authored_stack_in_map_v1(stacks, after);
+        }
+        EditOperation::CreateLine { page_id, .. } => {
+            let line = authored_line_from_operation(operation)
+                .expect("CreateLine reconstructs authored line");
+            let before = stacks
+                .get(page_id)
+                .cloned()
+                .unwrap_or_else(|| AuthoredStackV1::empty(*page_id));
+            let transition = plan_create_line_append_v1(&before, &line)
                 .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
             let after = apply_authored_stack_transition_forward_v1(&before, &transition)
                 .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
@@ -7984,6 +8039,42 @@ fn authored_shape_from_operation(operation: &EditOperation) -> Option<AuthoredSh
         }),
         _ => None,
     }
+}
+
+fn authored_line_from_operation(operation: &EditOperation) -> Option<AuthoredLineRuntimeV1> {
+    match operation {
+        EditOperation::CreateLine {
+            node_id,
+            page_id,
+            parent_id,
+            geometry,
+            stroke,
+            provenance,
+        } => Some(AuthoredLineRuntimeV1 {
+            node_id: *node_id,
+            page_id: *page_id,
+            parent_id: *parent_id,
+            geometry: *geometry,
+            stroke: stroke.clone(),
+            provenance: *provenance,
+        }),
+        _ => None,
+    }
+}
+
+fn apply_authored_line_inverse(
+    authored_lines: &mut BTreeMap<NodeId, AuthoredLineRuntimeV1>,
+    operation: &EditOperation,
+) -> Result<(), EditorError> {
+    let line = authored_line_from_operation(operation)
+        .expect("CreateLine inverse receives CreateLine operation");
+    if authored_lines.get(&line.node_id) != Some(&line) {
+        return Err(EditorError::CreateLineIdCollision {
+            node_id: line.node_id,
+        });
+    }
+    authored_lines.remove(&line.node_id);
+    Ok(())
 }
 
 fn apply_authored_shape_inverse(
