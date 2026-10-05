@@ -1027,8 +1027,8 @@ fn projected_text(
                 size_inherited: run.size_inherited,
                 color_rgb: run.color_rgb,
                 color_inherited: run.color_inherited,
-            bold: None,
-            italic: None,
+                bold: None,
+                italic: None,
             })
         })
         .collect();
@@ -1212,8 +1212,8 @@ pub fn build_page_render_plan_v1(
                                 size_inherited: run.size_inherited,
                                 color_rgb: run.color_rgb,
                                 color_inherited: run.color_inherited,
-                            bold: None,
-                            italic: None,
+                                bold: None,
+                                italic: None,
                             })
                         })
                         .collect(),
@@ -3915,8 +3915,8 @@ mod tests {
         let bold_bytes: &[u8] = b"same-family-bold";
         let regular_sha = font_fingerprint_sha256(regular_bytes);
         let bold_sha = font_fingerprint_sha256(bold_bytes);
-        let mut resolver = |_: &RenderTextFragmentV1, run: &RenderTypographyRunV1| {
-            match (run.bold, run.italic) {
+        let mut resolver =
+            |_: &RenderTextFragmentV1, run: &RenderTypographyRunV1| match (run.bold, run.italic) {
                 (Some(false), Some(false)) => Some(ExplicitRenderTextFontResourceV1 {
                     resource_id: "family-a-regular",
                     expected_sha256: &regular_sha,
@@ -3934,8 +3934,7 @@ mod tests {
                     bytes: bold_bytes,
                 }),
                 _ => None,
-            }
-        };
+            };
 
         let runs = admitted_mixed_family_typography_runs_v1(&fragment, &mut resolver)
             .expect("same-family style change must admit mixed exact resources");
