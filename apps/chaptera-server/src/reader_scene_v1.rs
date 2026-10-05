@@ -2556,8 +2556,8 @@ mod tests {
                     RenderTextLayoutDispositionV1::BackendFallback { reason } => {
                         *backend_fallbacks.entry(reason.code()).or_default() += 1;
 
-                        if reason.code() == "story_extent_mismatch" {
-                            if let Some(story) = bundle
+                        if reason.code() == "story_extent_mismatch"
+                            && let Some(story) = bundle
                                 .geometry
                                 .document
                                 .stories
@@ -2621,7 +2621,6 @@ mod tests {
                                 *full_extent_story_mismatch_profiles
                                     .entry(profile)
                                     .or_default() += 1;
-                            }
                         }
                     }
                 }
