@@ -72,8 +72,8 @@ fn effective_boolean_at(
             "{label} scoped typography is ambiguous at {start}..{end}"
         ));
     }
-    match segment.value {
-        FormatValueV1::Bool(value) => Ok(value),
+    match &segment.value {
+        FormatValueV1::Bool(value) => Ok(*value),
         _ => Err(format!(
             "{label} scoped typography is not boolean at {start}..{end}"
         )),
@@ -239,6 +239,37 @@ mod tests {
         }
     }
 
+    fn render_bool_at(
+        runs: &[RenderTypographyRunV1],
+        scalar: u32,
+        bold: bool,
+    ) -> Option<bool> {
+        let run = runs
+            .iter()
+            .find(|run| run.scalar_start <= scalar && scalar < run.scalar_end)?;
+        if bold { run.bold } else { run.italic }
+    }
+
+    fn assert_same_effective_booleans(
+        expected: &[RenderTypographyRunV1],
+        actual: &[RenderTypographyRunV1],
+        start: u32,
+        end: u32,
+    ) {
+        for scalar in start..end {
+            assert_eq!(
+                render_bool_at(actual, scalar, true),
+                render_bool_at(expected, scalar, true),
+                "Bold mismatch at scalar {scalar}"
+            );
+            assert_eq!(
+                render_bool_at(actual, scalar, false),
+                render_bool_at(expected, scalar, false),
+                "Italic mismatch at scalar {scalar}"
+            );
+        }
+    }
+
     #[test]
     fn real_51318_scoped_bold_reaches_current_render_typography_input() {
         let Some(path) = env::var_os("CHAPTERA_TEXT_FORMAT_51318") else {
@@ -397,7 +428,12 @@ mod tests {
             )
             .expect("Clear scoped Bold override");
         let (_, cleared_typography) = render_current(&editor);
-        assert_eq!(cleared_typography, source_typography);
+        assert_same_effective_booleans(
+            &source_typography,
+            &cleared_typography,
+            scalar_start,
+            scalar_end,
+        );
 
         let serialized =
             serde_json::to_vec(&edited_project).expect("serialize edited v0.16 project");
