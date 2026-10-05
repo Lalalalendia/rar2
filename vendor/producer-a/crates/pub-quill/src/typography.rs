@@ -484,6 +484,41 @@ pub struct QuillRawFdppStyle {
 /// Unlike historical archaeology, unknown framing is never assumed empty.
 /// Neither raw 0x34 nor packed 0x234 is assigned units, defaults or a mode.
 #[cfg(feature = "research-inspection")]
+#[cfg(feature = "research-inspection")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QuillResearchColorReferenceSource {
+    ExplicitFdpc,
+    InheritedStsh1,
+    None,
+}
+
+#[cfg(feature = "research-inspection")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QuillResearchColorReferenceKind {
+    DirectRgb,
+    PublisherEightSlotScheme { slot: u8 },
+    SchemeFlagOutsideEightSlots { slot: u8 },
+    AutoFlagZeroRgb,
+    AutoFlagNonzeroRgb,
+    OtherFlaggedForm { flag: u8 },
+    MissingDefaultAuthority,
+    MissingColorCarrier,
+    AmbiguousColorIndex,
+    ColorIndexOutOfRange,
+}
+
+#[cfg(feature = "research-inspection")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillResearchEffectiveColorReferenceRun {
+    pub story_index: u32,
+    pub story_start_utf16: u32,
+    pub story_end_utf16: u32,
+    pub source: QuillResearchColorReferenceSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pl_index: Option<u32>,
+    pub kind: QuillResearchColorReferenceKind,
+}
+
 pub fn inspect_raw_fdpp_styles(
     bytes: &[u8],
     story_catalog: &QuillStoryCatalog,
@@ -556,6 +591,210 @@ pub fn inspect_raw_fdpp_styles(
         previous_end = global_end_utf16;
     }
     Ok(result)
+}
+
+#[cfg(feature = "research-inspection")]
+pub fn inspect_effective_text_color_references(
+    bytes: &[u8],
+    story_catalog: &QuillStoryCatalog,
+) -> Result<Vec<QuillResearchEffectiveColorReferenceRun>, QuillTypographyReadError> {
+    let catalog = parse_bounded_typography(bytes, story_catalog)?;
+    let descriptors = story_catalog
+        .descriptor_nodes
+        .iter()
+        .flat_map(|node| node.descriptors.iter())
+        .enumerate()
+        .collect::<Vec<_>>();
+    let font_names = parse_font_catalog(bytes, &descriptors)?;
+    let color_references = parse_text_color_references(bytes, &descriptors)?;
+
+    let mut fdpp_unknown = BTreeSet::new();
+    let paragraph_styles =
+        parse_fdpp_styles(bytes, story_catalog, &descriptors, &mut fdpp_unknown)?;
+    validate_monotone_fdpp_text_offsets(&paragraph_styles)?;
+    if !fdpp_unknown.is_empty() {
+        return Err(QuillTypographyReadError::new(
+            "effective color inspection requires fully known FDPP block framing",
+        ));
+    }
+
+    let text_start = u32::try_from(story_catalog.text.source.offset)
+        .map_err(|_| QuillTypographyReadError::new("TEXT offset exceeds u32"))?;
+    let text_len = u32::try_from(story_catalog.text.source.len)
+        .map_err(|_| QuillTypographyReadError::new("TEXT length exceeds u32"))?;
+    let text_end = text_start
+        .checked_add(text_len)
+        .ok_or_else(|| QuillTypographyReadError::new("TEXT span overflows u32"))?;
+    let story_extents = build_story_extents(&story_catalog.stories)?;
+    let total_utf16 = story_extents
+        .last()
+        .map(|extent| extent.global_end_utf16)
+        .unwrap_or(0);
+    let mut paragraph_ranges =
+        materialize_paragraph_ranges(&paragraph_styles, text_start, text_end, total_utf16)?;
+
+    let mut inheritance_unknown = BTreeSet::new();
+    let character_defaults = parse_stsh1_character_defaults(
+        bytes,
+        story_catalog,
+        &descriptors,
+        &font_names,
+        &mut inheritance_unknown,
+    )?;
+    if !inheritance_unknown.is_empty() {
+        return Err(QuillTypographyReadError::new(
+            "effective color inspection requires fully known STSH1 block framing",
+        ));
+    }
+    apply_bounded_implicit_style_zero(&mut paragraph_ranges, &character_defaults);
+
+    fn classify_raw(raw: u32) -> QuillResearchColorReferenceKind {
+        if resolve_direct_quill_text_color(raw).is_some() {
+            return QuillResearchColorReferenceKind::DirectRgb;
+        }
+        let flag = (raw >> 24) as u8;
+        let green_blue = raw & 0x00ff_ff00;
+        let low = (raw & 0xff) as u8;
+        if flag == 0x08 && green_blue == 0 {
+            if low < 8 {
+                QuillResearchColorReferenceKind::PublisherEightSlotScheme { slot: low }
+            } else {
+                QuillResearchColorReferenceKind::SchemeFlagOutsideEightSlots { slot: low }
+            }
+        } else if flag == 0xff {
+            if (raw & 0x00ff_ffff) == 0 {
+                QuillResearchColorReferenceKind::AutoFlagZeroRgb
+            } else {
+                QuillResearchColorReferenceKind::AutoFlagNonzeroRgb
+            }
+        } else {
+            QuillResearchColorReferenceKind::OtherFlaggedForm { flag }
+        }
+    }
+
+    let mut out = Vec::with_capacity(catalog.effective_runs.len());
+    for run in &catalog.effective_runs {
+        let story = story_extents
+            .iter()
+            .find(|story| story.story_index == run.story_index)
+            .ok_or_else(|| QuillTypographyReadError::new("effective run Story owner missing"))?;
+        let start = story
+            .global_start_utf16
+            .checked_add(run.story_start_utf16)
+            .ok_or_else(|| QuillTypographyReadError::new("effective run global start overflow"))?;
+        let end = story
+            .global_start_utf16
+            .checked_add(run.story_end_utf16)
+            .ok_or_else(|| QuillTypographyReadError::new("effective run global end overflow"))?;
+        let fdpc = exactly_one_covering_fdpc(&catalog.ranges, start, end)?;
+        let paragraph = exactly_one_covering_paragraph(&paragraph_ranges, start, end)?;
+
+        let default = paragraph.selected_style_index.and_then(|style_index| {
+            character_defaults
+                .iter()
+                .find(|candidate| candidate.logical_style_index == style_index)
+        });
+        let implicit_style_zero_default = if paragraph.selected_style_index.is_none()
+            && !paragraph.default_style_selector_present
+        {
+            let mut candidates = character_defaults
+                .iter()
+                .filter(|candidate| candidate.logical_style_index == 0);
+            match (candidates.next(), candidates.next()) {
+                (Some(candidate), None) => Some(candidate),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let color_default = default.or(implicit_style_zero_default);
+
+        let mut explicit = fdpc.color_indices.clone();
+        explicit.sort_unstable();
+        explicit.dedup();
+
+        let (source, index, kind) = match explicit.as_slice() {
+            [index] => {
+                let Some(raw) = color_references.get(*index as usize) else {
+                    out.push(QuillResearchEffectiveColorReferenceRun {
+                        story_index: run.story_index,
+                        story_start_utf16: run.story_start_utf16,
+                        story_end_utf16: run.story_end_utf16,
+                        source: QuillResearchColorReferenceSource::ExplicitFdpc,
+                        pl_index: Some(*index),
+                        kind: QuillResearchColorReferenceKind::ColorIndexOutOfRange,
+                    });
+                    continue;
+                };
+                (
+                    QuillResearchColorReferenceSource::ExplicitFdpc,
+                    Some(*index),
+                    classify_raw(*raw),
+                )
+            }
+            [] => {
+                let Some(default) = color_default else {
+                    out.push(QuillResearchEffectiveColorReferenceRun {
+                        story_index: run.story_index,
+                        story_start_utf16: run.story_start_utf16,
+                        story_end_utf16: run.story_end_utf16,
+                        source: QuillResearchColorReferenceSource::None,
+                        pl_index: None,
+                        kind: QuillResearchColorReferenceKind::MissingDefaultAuthority,
+                    });
+                    continue;
+                };
+                let mut inherited = default.color_indices.clone();
+                inherited.sort_unstable();
+                inherited.dedup();
+                match inherited.as_slice() {
+                    [index] => {
+                        let Some(raw) = color_references.get(*index as usize) else {
+                            out.push(QuillResearchEffectiveColorReferenceRun {
+                                story_index: run.story_index,
+                                story_start_utf16: run.story_start_utf16,
+                                story_end_utf16: run.story_end_utf16,
+                                source: QuillResearchColorReferenceSource::InheritedStsh1,
+                                pl_index: Some(*index),
+                                kind: QuillResearchColorReferenceKind::ColorIndexOutOfRange,
+                            });
+                            continue;
+                        };
+                        (
+                            QuillResearchColorReferenceSource::InheritedStsh1,
+                            Some(*index),
+                            classify_raw(*raw),
+                        )
+                    }
+                    [] => (
+                        QuillResearchColorReferenceSource::InheritedStsh1,
+                        None,
+                        QuillResearchColorReferenceKind::MissingColorCarrier,
+                    ),
+                    _ => (
+                        QuillResearchColorReferenceSource::InheritedStsh1,
+                        None,
+                        QuillResearchColorReferenceKind::AmbiguousColorIndex,
+                    ),
+                }
+            }
+            _ => (
+                QuillResearchColorReferenceSource::ExplicitFdpc,
+                None,
+                QuillResearchColorReferenceKind::AmbiguousColorIndex,
+            ),
+        };
+
+        out.push(QuillResearchEffectiveColorReferenceRun {
+            story_index: run.story_index,
+            story_start_utf16: run.story_start_utf16,
+            story_end_utf16: run.story_end_utf16,
+            source,
+            pl_index: index,
+            kind,
+        });
+    }
+    Ok(out)
 }
 
 pub fn parse_bounded_typography(
