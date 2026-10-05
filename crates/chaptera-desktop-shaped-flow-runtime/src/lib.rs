@@ -1066,11 +1066,7 @@ mod tests {
             &raw,
             &cleared.caret_map,
             flow_ordinal,
-            expected_paragraph_offset_v1(
-                base_alignment,
-                content_width_emu,
-                measured_width_emu,
-            ),
+            expected_paragraph_offset_v1(base_alignment, content_width_emu, measured_width_emu),
         );
         assert_eq!(editor.source_hash(), source_hash);
     }
