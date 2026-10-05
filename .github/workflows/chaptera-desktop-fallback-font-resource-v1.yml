@@ -87,6 +87,9 @@ jobs:
           cargo test --manifest-path apps/chaptera-desktop/Cargo.toml source_font::tests::windows_environment_font_binds_identical_layout_and_paint_bytes -- --nocapture
           if ($LASTEXITCODE -ne 0) { throw "source-font Windows environment proof failed" }
 
+          cargo test --manifest-path apps/chaptera-desktop/Cargo.toml source_font::tests::windows_environment_font_binds_exact_style_tuple_resources -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "styled source-font Windows environment proof failed" }
+
           cargo test --manifest-path apps/chaptera-desktop/Cargo.toml --features embedded-fixture-tests windows_source_font_real_pub_receipt_compares_shared_layouts -- --nocapture
           if ($LASTEXITCODE -ne 0) { throw "source-font real-PUB layout proof failed" }
 
