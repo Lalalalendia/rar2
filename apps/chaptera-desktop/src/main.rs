@@ -22,6 +22,7 @@ mod history_gui_tests;
 mod image_decode_adapter;
 #[allow(dead_code)]
 mod locale;
+mod linked_story_ui;
 mod page_navigation;
 #[cfg(all(test, not(feature = "reader-only")))]
 mod page_navigation_gui_tests;
@@ -2823,20 +2824,19 @@ impl ViewerApp {
             }
             self.show_table_cell_edit_controls(ui, story_id, &table_cells);
         } else {
-            if frame_ordinals.is_empty() {
-                ui.weak(
-                    "Read-only in the desktop slice: this Story has no proven placed TextFrame.",
-                );
-                return;
-            }
-            if frame_ordinals.len() > 1 {
-                ui.strong(format!(
-                    "Linked Story chain: {}",
-                    linked_story_chain_label(&frame_ordinals)
+            let story_ui = match linked_story_ui::state_for_validated_story_v1(&frame_ordinals) {
+                Ok(state) => state,
+                Err(reason) => {
+                    ui.weak(format!("Read-only in the desktop slice: {reason}."));
+                    return;
+                }
+            };
+            if let Some(chain_membership) = &story_ui.chain_membership {
+                ui.strong(format!("Linked Story chain: {chain_membership}"));
+                ui.small(format!(
+                    "{} frames share one canonical Story. Editing reflows that Story through the existing chain; link topology remains unchanged.",
+                    story_ui.frame_count
                 ));
-                ui.small(
-                    "All listed frames share one canonical Story. Editing reflows that Story through the existing chain; link topology remains unchanged.",
-                );
             }
             self.show_story_text_edit_controls(ui, story_id);
         }
@@ -5130,16 +5130,6 @@ fn replacement_image_mime(path: &Path) -> Option<&'static str> {
     }
 }
 
-fn linked_story_chain_label(frame_ordinals: &[u32]) -> String {
-    let mut ordinals = frame_ordinals.to_vec();
-    ordinals.sort_unstable();
-    ordinals
-        .into_iter()
-        .map(|ordinal| ordinal.saturating_add(1).to_string())
-        .collect::<Vec<_>>()
-        .join(" → ")
-}
-
 fn search_result_preview(text: &str) -> String {
     const LIMIT: usize = 48;
     let mut preview = text.replace(['\r', '\n'], " ");
@@ -6831,9 +6821,14 @@ mod tests {
                 .filter(|frame| frame.story_id == story.id)
                 .map(|frame| frame.ordinal)
                 .collect::<Vec<_>>();
+            let story_ui = linked_story_ui::state_for_validated_story_v1(&frame_ordinals)
+                .expect("editable linked Story has placed frames");
             let chain_label = format!(
                 "Linked Story chain: {}",
-                linked_story_chain_label(&frame_ordinals)
+                story_ui
+                    .chain_membership
+                    .as_deref()
+                    .expect("multi-frame Story exposes chain membership")
             );
             let topology = editor
                 .graph()
