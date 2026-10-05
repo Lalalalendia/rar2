@@ -2195,6 +2195,22 @@ fn operation_summary(operation: &EditOperation) -> Value {
             "paint":paint,
             "provenance":provenance
         }),
+        EditOperation::CreateLine {
+            node_id,
+            page_id,
+            parent_id,
+            geometry,
+            stroke,
+            provenance,
+        } => json!({
+            "kind":"create_line",
+            "node_id":node_id.as_canonical().to_string(),
+            "page_id":page_id.as_canonical().to_string(),
+            "parent_id":parent_id.as_canonical().to_string(),
+            "geometry":geometry,
+            "stroke":stroke,
+            "provenance":provenance
+        }),
         EditOperation::DeleteNode {
             node_id,
             page_id,
@@ -2495,6 +2511,39 @@ mod tests {
             summary["text_preset"]["resource_id"],
             "chaptera.desktop.fallback-font.ubuntu-light.v1"
         );
+    }
+
+    #[test]
+    fn create_line_operation_summary_is_explicit_and_stable() {
+        let node_id: pub_editor::NodeId =
+            serde_json::from_str("\"01890f47-0c00-7abc-8def-0123456789ab\"").unwrap();
+        let page_id: pub_editor::PageId =
+            serde_json::from_str("\"33333333-3333-3333-3333-333333333333\"").unwrap();
+        let operation = EditOperation::CreateLine {
+            node_id,
+            page_id,
+            parent_id: page_id,
+            geometry: pub_editor::LineGeometryV1 {
+                begin: pub_editor::PointEmuV1 { x: 10, y: 20 },
+                end: pub_editor::PointEmuV1 { x: 300, y: 400 },
+            },
+            stroke: pub_editor::AuthoredSolidStrokeV1 {
+                visible: true,
+                color: pub_editor::Srgb8V1 { r: 4, g: 5, b: 6 },
+                width_emu: 25_400,
+            },
+            provenance: pub_editor::AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+
+        let summary = operation_summary(&operation);
+        assert_eq!(summary["kind"], "create_line");
+        assert_eq!(summary["node_id"], node_id.as_canonical().to_string());
+        assert_eq!(summary["page_id"], page_id.as_canonical().to_string());
+        assert_eq!(summary["parent_id"], page_id.as_canonical().to_string());
+        assert_eq!(summary["geometry"]["begin"]["x"], 10);
+        assert_eq!(summary["geometry"]["end"]["y"], 400);
+        assert_eq!(summary["stroke"]["width_emu"], 25_400);
+        assert_eq!(summary["provenance"]["kind"], "author_created");
     }
 
     #[test]

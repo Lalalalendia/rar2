@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 
 use pub_editor::{
     AuthoredEntityProvenanceV1, AuthoredShapePaintV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
-    AuthoredStackReorderModeV1, EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_12,
-    EDITOR_PROJECT_VERSION_V0_13, EDITOR_PROJECT_VERSION_V0_16, EditOperation, EditorError,
-    EditorProjectError, EditorSession, LengthEmu, RectEmu, Srgb8V1,
+    AuthoredStackReorderModeV1, EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_10,
+    EDITOR_PROJECT_VERSION_V0_12, EDITOR_PROJECT_VERSION_V0_13, EDITOR_PROJECT_VERSION_V0_17,
+    EditOperation, EditorError, EditorProjectError, EditorSession, LengthEmu, LineGeometryV1,
+    PointEmuV1, RectEmu, Srgb8V1,
 };
 use pub_model::{
     Document, DocumentId, NodeId, Page, PageId, ResolvedGraph, Sha256Digest, Size2D,
@@ -32,6 +33,10 @@ fn node_a() -> NodeId {
 
 fn node_b() -> NodeId {
     canonical_id("01890f47-0d01-7abc-8def-0123456789ab")
+}
+
+fn line_node() -> NodeId {
+    canonical_id("01890f47-0d02-7abc-8def-0123456789ab")
 }
 
 fn rect(x: i64) -> RectEmu {
@@ -112,8 +117,112 @@ fn create_two(session: &mut EditorSession) {
 }
 
 #[test]
+fn create_line_is_one_v0_17_history_unit_with_exact_undo_redo_and_replay() {
+    let geometry = LineGeometryV1 {
+        begin: PointEmuV1 {
+            x: 400_000,
+            y: 800_000,
+        },
+        end: PointEmuV1 {
+            x: 100_000,
+            y: 200_000,
+        },
+    };
+    let stroke = paint().stroke;
+
+    let mut session = EditorSession::new(graph()).expect("session");
+    let operation = session
+        .create_line(line_node(), page_id(), geometry, stroke.clone())
+        .expect("create line");
+
+    assert!(matches!(operation, EditOperation::CreateLine { .. }));
+    let line = session.authored_line(line_node()).expect("current line");
+    assert_eq!(line.geometry, geometry);
+    assert_eq!(line.stroke, stroke);
+    assert_eq!(line.page_id, page_id());
+    assert_eq!(line.parent_id, page_id());
+    assert_eq!(
+        session.authored_stack(page_id()).expect("stack").members,
+        vec![line_node()]
+    );
+
+    let project = session.project();
+    assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_17);
+    assert_eq!(project.operations, vec![operation.clone()]);
+
+    session.undo().expect("undo line");
+    assert!(session.authored_line(line_node()).is_none());
+    assert!(
+        session
+            .authored_stack(page_id())
+            .expect("stack after undo")
+            .members
+            .is_empty()
+    );
+
+    session.redo().expect("redo line");
+    let redone = session.authored_line(line_node()).expect("redone line");
+    assert_eq!(redone.geometry, geometry);
+    assert_eq!(redone.stroke, stroke);
+    assert_eq!(
+        session
+            .authored_stack(page_id())
+            .expect("redone stack")
+            .members,
+        vec![line_node()]
+    );
+
+    let mut fresh = EditorSession::new(graph()).expect("fresh session");
+    fresh.apply_project(&project).expect("fresh project replay");
+    let reopened = fresh.authored_line(line_node()).expect("replayed line");
+    assert_eq!(reopened.geometry, geometry);
+    assert_eq!(reopened.stroke, stroke);
+    assert_eq!(
+        fresh
+            .authored_stack(page_id())
+            .expect("replayed stack")
+            .members,
+        vec![line_node()]
+    );
+    assert_eq!(fresh.project(), project);
+    assert_eq!(fresh.source_hash(), source_hash());
+}
+
+#[test]
+fn identity_less_legacy_session_cannot_emit_v0_17_create_line_project() {
+    let mut legacy_project = EditorSession::new(graph())
+        .expect("legacy producer")
+        .project();
+    legacy_project.schema_version = EDITOR_PROJECT_VERSION_V0_10.to_owned();
+    legacy_project.identity = None;
+
+    let mut session = EditorSession::new(graph()).expect("legacy target");
+    session
+        .apply_project(&legacy_project)
+        .expect("empty legacy project remains readable");
+    assert!(session.operations().is_empty());
+
+    session
+        .create_line(
+            line_node(),
+            page_id(),
+            LineGeometryV1 {
+                begin: PointEmuV1 { x: 100, y: 200 },
+                end: PointEmuV1 { x: 300, y: 400 },
+            },
+            paint().stroke,
+        )
+        .expect("runtime Line edit remains admissible");
+
+    assert!(matches!(
+        session.try_project(),
+        Err(EditorProjectError::MissingProjectIdentity)
+    ));
+}
+
+#[test]
 fn create_delete_history_remains_v0_12_while_current_schema_advances() {
-    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_16);
+    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_17);
 
     let mut session = EditorSession::new(graph()).expect("session");
     create_two(&mut session);

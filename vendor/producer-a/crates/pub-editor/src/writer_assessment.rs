@@ -139,6 +139,7 @@ impl EditorSession {
                 | EditOperation::ResizeNodes { .. }
                 | EditOperation::CreateTextBox { .. }
                 | EditOperation::CreateShape { .. }
+                | EditOperation::CreateLine { .. }
                 | EditOperation::DeleteNode { .. }
                 | EditOperation::ReorderAuthoredStack { .. }
                 | EditOperation::SetTextFormatProperty { .. }
@@ -241,6 +242,7 @@ impl EditorSession {
                 | EditOperation::ResizeNodes { .. }
                 | EditOperation::CreateTextBox { .. }
                 | EditOperation::CreateShape { .. }
+                | EditOperation::CreateLine { .. }
                 | EditOperation::DeleteNode { .. }
                 | EditOperation::ReorderAuthoredStack { .. }
                 | EditOperation::SetTextFormatProperty { .. }
