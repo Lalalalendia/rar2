@@ -6,8 +6,8 @@ use chaptera_viewer_render_plan::{
     build_page_render_plan_with_text_layout_resolver_v1,
     build_page_render_plan_with_text_layout_v1,
 };
-use pub_editor::{EditOperation, EditorSession, FormatPropertyV1, FormatValueV1, StoryId};
 use eframe::egui;
+use pub_editor::{EditOperation, EditorSession, FormatPropertyV1, FormatValueV1, StoryId};
 
 fn desktop_text_font_resource() -> ExplicitRenderTextFontResourceV1<'static> {
     ExplicitRenderTextFontResourceV1 {
@@ -49,14 +49,10 @@ fn scoped_boolean_history(editor: &EditorSession, story_id: StoryId) -> ScopedBo
     for operation in editor.operations() {
         let (operation_story_id, property) = match operation {
             EditOperation::SetTextFormatPropertyScopedV1 {
-                story_id,
-                property,
-                ..
+                story_id, property, ..
             }
             | EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
-                story_id,
-                property,
-                ..
+                story_id, property, ..
             } => (*story_id, *property),
             _ => continue,
         };
@@ -173,13 +169,11 @@ fn current_boolean_typography_runs(
         let mut matching = source
             .iter()
             .filter(|run| run.scalar_start <= start && end <= run.scalar_end);
-        let source_run = matching.next().ok_or_else(|| {
-            format!("source typography has a coverage gap at {start}..{end}")
-        })?;
+        let source_run = matching
+            .next()
+            .ok_or_else(|| format!("source typography has a coverage gap at {start}..{end}"))?;
         if matching.next().is_some() {
-            return Err(format!(
-                "source typography is ambiguous at {start}..{end}"
-            ));
+            return Err(format!("source typography is ambiguous at {start}..{end}"));
         }
 
         let mut run = source_run.clone();
@@ -196,7 +190,9 @@ fn current_boolean_typography_runs(
 
     if out.first().map(|run| run.scalar_start) != Some(fragment_start)
         || out.last().map(|run| run.scalar_end) != Some(fragment_end)
-        || out.windows(2).any(|pair| pair[0].scalar_end != pair[1].scalar_start)
+        || out
+            .windows(2)
+            .any(|pair| pair[0].scalar_end != pair[1].scalar_start)
     {
         return Err("current scoped typography does not cover the full render fragment".to_owned());
     }
@@ -277,11 +273,7 @@ mod tests {
         }
     }
 
-    fn render_bool_at(
-        runs: &[RenderTypographyRunV1],
-        scalar: u32,
-        bold: bool,
-    ) -> Option<bool> {
+    fn render_bool_at(runs: &[RenderTypographyRunV1], scalar: u32, bold: bool) -> Option<bool> {
         let run = runs
             .iter()
             .find(|run| run.scalar_start <= scalar && scalar < run.scalar_end)?;
@@ -363,7 +355,9 @@ mod tests {
                     Ok(segments) if !segments.is_empty() => segments,
                     _ => continue,
                 };
-                if bold.iter().any(|segment| bool_value(&segment.value).is_none())
+                if bold
+                    .iter()
+                    .any(|segment| bool_value(&segment.value).is_none())
                     || italic
                         .iter()
                         .any(|segment| bool_value(&segment.value).is_none())
@@ -436,7 +430,11 @@ mod tests {
 
         let (changed, edited_typography) = render_current(&editor);
         assert!(changed > 0);
-        assert!(edited_typography.iter().all(|run| run.bold == Some(desired_bold)));
+        assert!(
+            edited_typography
+                .iter()
+                .all(|run| run.bold == Some(desired_bold))
+        );
         assert!(
             editor
                 .current_text_format_overlay_v1(story_id)
