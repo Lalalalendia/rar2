@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn canonical_line_mapping_keeps_cr_with_preceding_paragraph() {
-        use pub_editor::{ParagraphId, Sha256Digest};
+        use pub_editor::ParagraphId;
         use pub_model::{CanonicalId, TextRange};
 
         fn id(byte: u8) -> CanonicalId {
@@ -185,13 +185,11 @@ mod tests {
                 paragraph_id: ParagraphId::from_canonical(id(2)),
                 story_id,
                 range: TextRange::new(0, 4).unwrap(),
-                source_story_text_sha256: Sha256Digest::from_bytes([3; 32]),
             },
             ImportedParagraphV1 {
                 paragraph_id: ParagraphId::from_canonical(id(4)),
                 story_id,
                 range: TextRange::new(4, 7).unwrap(),
-                source_story_text_sha256: Sha256Digest::from_bytes([3; 32]),
             },
         ];
         assert_eq!(
