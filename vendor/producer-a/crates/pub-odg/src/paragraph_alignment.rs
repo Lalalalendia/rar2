@@ -1,7 +1,7 @@
 use crate::{ODG_CONTENT_PATH, OdgPackage, OdgPartKind};
 use pub_export::{
-    ExportPlan, FullStoryParagraphAlignmentV1, ParagraphAlignmentV1,
-    STORY_PARAGRAPH_ALIGNMENT_FEATURE,
+    ExportPlan, FullStoryParagraphAlignmentV1, ParagraphAlignmentV1, ParagraphScopedAlignmentV1,
+    ParagraphScopedAlignmentValueV1, STORY_PARAGRAPH_ALIGNMENT_FEATURE,
 };
 use pub_model::{CanonicalId, NodeId, StoryId};
 use std::collections::BTreeSet;
@@ -11,6 +11,13 @@ use std::fmt::Write as _;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OdgFullStoryParagraphAlignmentPlacement {
     pub alignment: FullStoryParagraphAlignmentV1,
+    pub frame_ids: Vec<NodeId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OdgParagraphScopedAlignmentPlacement {
+    pub story_id: StoryId,
+    pub paragraphs: Vec<ParagraphScopedAlignmentV1>,
     pub frame_ids: Vec<NodeId>,
 }
 
@@ -27,6 +34,26 @@ pub enum OdgParagraphAlignmentError {
     MissingFrame { node_id: NodeId },
     MissingTextCarrier { node_id: NodeId },
     ExistingParagraphStyle { node_id: NodeId },
+    EmptyParagraphs { story_id: StoryId },
+    ParagraphStoryMismatch {
+        story_id: StoryId,
+        paragraph_id: pub_model::ParagraphId,
+        paragraph_story_id: StoryId,
+    },
+    DuplicateParagraph {
+        paragraph_id: pub_model::ParagraphId,
+    },
+    NonMonotonicParagraphRanges {
+        story_id: StoryId,
+    },
+    ParagraphCarrierCountMismatch {
+        node_id: NodeId,
+        expected: usize,
+        found: usize,
+    },
+    UnexpectedExtraParagraphCarrier {
+        node_id: NodeId,
+    },
 }
 
 impl fmt::Display for OdgParagraphAlignmentError {
@@ -73,6 +100,46 @@ impl fmt::Display for OdgParagraphAlignmentError {
             Self::ExistingParagraphStyle { node_id } => write!(
                 formatter,
                 "ODG text frame {} already contains paragraph style references",
+                node_id.as_canonical()
+            ),
+            Self::EmptyParagraphs { story_id } => write!(
+                formatter,
+                "Story {} has no canonical ParagraphId alignment input",
+                story_id.as_canonical()
+            ),
+            Self::ParagraphStoryMismatch {
+                story_id,
+                paragraph_id,
+                paragraph_story_id,
+            } => write!(
+                formatter,
+                "Paragraph {} belongs to Story {}, expected {}",
+                paragraph_id.as_canonical(),
+                paragraph_story_id.as_canonical(),
+                story_id.as_canonical()
+            ),
+            Self::DuplicateParagraph { paragraph_id } => write!(
+                formatter,
+                "duplicate paragraph-scoped alignment for {}",
+                paragraph_id.as_canonical()
+            ),
+            Self::NonMonotonicParagraphRanges { story_id } => write!(
+                formatter,
+                "Story {} paragraph ranges are not strictly ordered and non-overlapping",
+                story_id.as_canonical()
+            ),
+            Self::ParagraphCarrierCountMismatch {
+                node_id,
+                expected,
+                found,
+            } => write!(
+                formatter,
+                "ODG text frame {} has {found} physical paragraph carriers, expected {expected} canonical paragraphs or one trailing empty legacy carrier",
+                node_id.as_canonical()
+            ),
+            Self::UnexpectedExtraParagraphCarrier { node_id } => write!(
+                formatter,
+                "ODG text frame {} has an extra non-empty paragraph carrier",
                 node_id.as_canonical()
             ),
         }
