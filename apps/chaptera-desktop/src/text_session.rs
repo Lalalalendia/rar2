@@ -1032,6 +1032,150 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the pinned public Carlton March PUB path"]
+    fn real_carlton_paragraph_alignment_ui_state_set_clear_and_left() {
+        let Some(path) = env::var_os("CHAPTERA_CARLTON_PUB").map(std::path::PathBuf::from) else {
+            eprintln!("CHAPTERA_CARLTON_PUB not set; dedicated paragraph UI gate owns real evidence");
+            return;
+        };
+        let original = fs::read(&path).expect("read pinned Carlton March PUB");
+        let source_hash =
+            "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+                .parse::<Sha256Digest>()
+                .expect("pinned Carlton source hash");
+        let mut editor =
+            open_mature_0x2c_editor(&original, source_hash).expect("open Carlton EditorSession");
+        let base = editor
+            .imported_paragraph_base_alignments_v1()
+            .expect("bind Carlton imported paragraph base alignment");
+        let paragraph = base
+            .iter()
+            .find(|item| {
+                item.alignment == pub_editor::ImportedParagraphAlignmentValueV1::Right
+            })
+            .expect("Carlton must expose one grounded Right paragraph base")
+            .clone();
+        let visual = pub_viewer::open_mature_0x2c_geometry(
+            &original,
+            pub_viewer::viewer_geometry_environment_v0_1(),
+        )
+        .expect("open Carlton geometry");
+        let fragment = visual
+            .text_fragments
+            .iter()
+            .find(|fragment| fragment.story_id == paragraph.story_id)
+            .expect("grounded Right Story must be projected into one real TextFrame");
+        let mut mode = enter_explicit_text_mode(&editor, paragraph.story_id, fragment.frame_id)
+            .expect("enter grounded paragraph Story");
+
+        let scalar = u32::try_from(paragraph.range.start).expect("paragraph scalar fits Desktop V1");
+        let revision = mode.session.revision_id.clone();
+        let domain = mode.domain.clone();
+        let layout = mode.layout.clone();
+        mode.session.selection = scalar_selection_for_current_authority(
+            &mode,
+            &revision,
+            &domain,
+            &layout,
+            scalar,
+            scalar,
+        );
+
+        let source = paragraph_alignment_selection_state_v1(&editor, &mode)
+            .expect("read source paragraph toolbar state");
+        assert!(source.paragraph_ids.contains(&paragraph.paragraph_id));
+        assert_eq!(
+            source.effective,
+            DesktopParagraphAlignmentEffectiveStateV1::Uniform(
+                AuthoredParagraphAlignmentValueV1::Right
+            )
+        );
+        assert_eq!(
+            source.provenance,
+            DesktopParagraphAlignmentProvenanceStateV1::Base
+        );
+        assert!(!source.has_chaptera_override);
+
+        let center = apply_paragraph_alignment_v1(
+            &mut editor,
+            &mut mode,
+            AuthoredParagraphAlignmentValueV1::Center,
+        )
+        .expect("commit Center through Desktop paragraph command")
+        .expect("Center must append one operation");
+        assert!(matches!(
+            center,
+            EditOperation::SetParagraphAlignmentOverride { value, .. }
+                if value == AuthoredParagraphAlignmentValueV1::Center
+        ));
+        let centered = paragraph_alignment_selection_state_v1(&editor, &mode)
+            .expect("read centered toolbar state");
+        assert_eq!(
+            centered.effective,
+            DesktopParagraphAlignmentEffectiveStateV1::Uniform(
+                AuthoredParagraphAlignmentValueV1::Center
+            )
+        );
+        assert_eq!(
+            centered.provenance,
+            DesktopParagraphAlignmentProvenanceStateV1::ChapteraOverride
+        );
+        assert!(centered.has_chaptera_override);
+
+        let clear = clear_paragraph_alignment_override_v1(&mut editor, &mut mode)
+            .expect("clear paragraph override through Desktop command");
+        assert!(matches!(
+            clear,
+            EditOperation::ClearParagraphAlignmentOverride { .. }
+        ));
+        let cleared = paragraph_alignment_selection_state_v1(&editor, &mode)
+            .expect("read cleared toolbar state");
+        assert_eq!(
+            cleared.effective,
+            DesktopParagraphAlignmentEffectiveStateV1::Uniform(
+                AuthoredParagraphAlignmentValueV1::Right
+            )
+        );
+        assert_eq!(
+            cleared.provenance,
+            DesktopParagraphAlignmentProvenanceStateV1::Base
+        );
+        assert!(!cleared.has_chaptera_override);
+
+        let left = apply_paragraph_alignment_v1(
+            &mut editor,
+            &mut mode,
+            AuthoredParagraphAlignmentValueV1::Left,
+        )
+        .expect("commit Left through Desktop paragraph command")
+        .expect("Left must append one operation");
+        assert!(matches!(
+            left,
+            EditOperation::SetParagraphAlignmentOverride { value, .. }
+                if value == AuthoredParagraphAlignmentValueV1::Left
+        ));
+        let left_state = paragraph_alignment_selection_state_v1(&editor, &mode)
+            .expect("read Left toolbar state");
+        assert_eq!(
+            left_state.effective,
+            DesktopParagraphAlignmentEffectiveStateV1::Uniform(
+                AuthoredParagraphAlignmentValueV1::Left
+            )
+        );
+        assert_eq!(
+            left_state.provenance,
+            DesktopParagraphAlignmentProvenanceStateV1::ChapteraOverride
+        );
+
+        assert_eq!(editor.graph().stories[&paragraph.story_id].text, fragment.text);
+        assert_eq!(
+            fs::read(&path).expect("re-read Carlton source"),
+            original,
+            "Desktop paragraph controls must not mutate source PUB bytes"
+        );
+    }
+
+    #[test]
     fn real_pub_color_blocked_story_uses_scoped_desktop_bold_italic_history_v016() {
         let Some(root) = env::var_os("CHAPTERA_TEXT_FORMAT_FIXTURES_DIR") else {
             eprintln!(
