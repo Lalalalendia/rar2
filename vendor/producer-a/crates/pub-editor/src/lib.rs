@@ -3300,10 +3300,6 @@ impl EditorSession {
             .undo
             .iter()
             .any(|operation| text_format_operation_story_id_v1(operation).is_some());
-        let carries_scoped_text_format = self
-            .undo
-            .iter()
-            .any(is_scoped_text_format_operation_v1);
         let carries_paragraph_alignment = self.undo.iter().any(|operation| {
             matches!(
                 operation,
@@ -8003,6 +7999,62 @@ mod asset_reachability_tests {
                     .all(|item| { item.origin != arial_story.into_canonical() })
             );
         }
+    }
+
+    #[test]
+    fn scoped_text_format_wire_has_distinct_kind_and_schema_floor() {
+        let story_id = StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x61; 16]));
+        let legacy = EditOperation::SetTextFormatProperty {
+            story_id,
+            start_scalar: 0,
+            end_scalar: 3,
+            property: FormatPropertyV1::Bold,
+            value: FormatValueV1::Bool(true),
+            before_state_hash: "legacy-before".to_owned(),
+            after_state_hash: "legacy-after".to_owned(),
+        };
+        let scoped = EditOperation::SetTextFormatPropertyScopedV1 {
+            story_id,
+            start_scalar: 0,
+            end_scalar: 3,
+            property: FormatPropertyV1::Bold,
+            value: FormatValueV1::Bool(true),
+            before_state_hash: "sha256:scoped-before".to_owned(),
+            after_state_hash: "sha256:scoped-after".to_owned(),
+        };
+
+        let legacy_json = serde_json::to_value(&legacy).expect("legacy format JSON");
+        let scoped_json = serde_json::to_value(&scoped).expect("scoped format JSON");
+        assert_eq!(legacy_json["kind"], "set_text_format_property");
+        assert_eq!(
+            scoped_json["kind"],
+            "set_text_format_property_scoped_v1"
+        );
+        assert!(legacy_json.get("state_domain").is_none());
+        assert!(scoped_json.get("state_domain").is_none());
+        assert_eq!(
+            serde_json::from_value::<EditOperation>(legacy_json)
+                .expect("legacy JSON remains readable"),
+            legacy
+        );
+        assert_eq!(
+            serde_json::from_value::<EditOperation>(scoped_json)
+                .expect("scoped JSON is readable by v0.16"),
+            scoped
+        );
+
+        assert_eq!(
+            minimum_identity_project_schema_v1(&[legacy]),
+            EDITOR_PROJECT_VERSION_V0_14
+        );
+        assert_eq!(
+            minimum_identity_project_schema_v1(&[scoped]),
+            EDITOR_PROJECT_VERSION_V0_16
+        );
+        assert_eq!(
+            minimum_identity_project_schema_v1(&[]),
+            EDITOR_PROJECT_VERSION_V0_12
+        );
     }
 
     #[test]
