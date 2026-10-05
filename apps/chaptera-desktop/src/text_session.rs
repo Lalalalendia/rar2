@@ -898,6 +898,52 @@ mod tests {
             before
         );
 
+        let italic_before = boolean_format_selection_state_v1(
+            &reopened,
+            &reopened_mode,
+            DesktopBooleanFormatPropertyV1::Italic,
+        )
+        .expect("scoped Italic must be queryable despite unresolved color");
+        let italic_expected = italic_before.next_explicit_value();
+        let italic_set = apply_boolean_format_toggle_v1(
+            &mut reopened,
+            &mut reopened_mode,
+            DesktopBooleanFormatPropertyV1::Italic,
+        )
+        .expect("commit scoped Italic operation");
+        assert!(matches!(
+            italic_set,
+            EditOperation::SetTextFormatPropertyScopedV1 {
+                story_id: id,
+                property: FormatPropertyV1::Italic,
+                value: FormatValueV1::Bool(value),
+                ..
+            } if id == story_id && value == italic_expected
+        ));
+        let italic_clear = clear_boolean_format_override_v1(
+            &mut reopened,
+            &mut reopened_mode,
+            DesktopBooleanFormatPropertyV1::Italic,
+        )
+        .expect("clear scoped Italic override");
+        assert!(matches!(
+            italic_clear,
+            EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
+                story_id: id,
+                property: FormatPropertyV1::Italic,
+                ..
+            } if id == story_id
+        ));
+        assert_eq!(
+            boolean_format_selection_state_v1(
+                &reopened,
+                &reopened_mode,
+                DesktopBooleanFormatPropertyV1::Italic,
+            )
+            .expect("read cleared scoped Italic"),
+            italic_before
+        );
+
         assert_eq!(reopened.graph().stories[&story_id].text, source_text);
         assert_eq!(reopened.source_hash(), source_hash);
         assert_eq!(
