@@ -1,0 +1,78 @@
+# Rar2 live branch GC wave 18 — 2026-10-06
+# 70 exact merged-main refs + completed Wave 17 GC owner.
+# Selection is computed from current live ref->SHA map and full closed-PR history.
+# Open PR heads and open PR bases are excluded before manifest creation.
+# Every merged ref exactly equals its merged PR head SHA; commits remain reachable from main and PR history.
+# Runtime guard rechecks open PR heads + exact remote SHA.
+# Format: <branch> <expected_sha>
+measure/carlton-fixed-pdf-spacing-font-overlap-1139 601b67cb52be7b859fcbc5ad6c013696ab256038
+measure/carlton-residual-node-partition-1279 a358c721fee2241088766e845dbc441ff2796e38
+research/struct-txn-escher-01-close 37a5be45c0a314bd8e0b2a31102f8f516b98f1bc
+validation/carlton-alpha-smask-ab-1279 b819048e7f006bb3b72f3b3dbe0d9e0cb3b202d3
+research/table-shared-edge-conflict-01 e5b44d9233d8167c4b96c9b0526c401e68c010bd
+ops/pub2019-runner-recovery-summary-1201 974bafbd1e5b45e7088547598b24cf37b2d7c943
+research/recover-artifact-family-replay-yab80-v2 df6f242cd56612e2b71f0c4856d85846e12c4857
+ops/mature-029-direct-classify-1063 bcfe4931a4848f3793728c722063a7d5e405e54f
+ops/paragraph-metrics-direct-complete-1139 92e09b233ce41ea5271367e1a459f5bfb8ce04c8
+ops/master-stack-direct-current-main 41e17938d0119d4d377fdaea20989623f09997e2
+tooling/paragraph-metrics-structural-receipt-01 6ef10b2ea59c00794b58e16a0d8c645b72ebb54a
+ops/paragraph-metrics-direct-823 4a1dce5443e7d0a89b6d9766d10175ccf0f6ea34
+research/paragraph-metrics-causal-analysis-823-v2 c74f634746421d8ed46e1f40f493b4bfa3868531
+research/master-projection-stack-auth-1118-v4 bf2a34b7ad2ce67b17b56f81633cd80340245cc9
+research/mature-029-native-receipt-classifier-1100 d9d0db78003c3edeb710c7b20e8ffda0c57677f1
+ops/cancel-stale-native-main-runs-02 683e6fb697a9b9b5831550d287719ba5b3f51414
+research/quill-story-offline-direct-v2 b1fe807b156c964995942494db892fff69a589b5
+ops/mature-029-native-page-spread-direct-1065 26c616b50abf9b2e5ef5875c43a7ce3f178b0c52
+research/carlton-heading-native-once-1054 35717b895177f0b429bf5c82749838f2963d630b
+research/carlton-paragraph-default-topology-01-v3 bb1d5eb1b3026345480df3db45690e90bbb2da3c
+research/mature-029-native-page-spread-oracle-1063 a0928bda840d39b85fe23a0800e412f4387279de
+research/carlton-heading-alignment-com-1046 6324b2019361c953e7d581610bf64d796218b5ee
+research/pub-vba-call-bearing-native-direct-01 308d9b2a58171695005218fc6e4fbb4dc466aca0
+research/pub-vba-call-bearing-native-estate-01 f06adc1b1f23f32cac7be1013eb9efbce81e6ac9
+research/paragraph-metrics-auth-823 e6e7929a6292cdb49e78388240a02602fd920a91
+research/pub-vba-call-classifier-v2-1 36f8d1016816e4b13d6b2fb03e8f87c8871c24f8
+research/pub-vba-call-classifier-v2 dbb16056741ace1757b46b9ea2a1086b13e34b8e
+research/carlton-paragraph-default-receipt-1014 4bafa9a08292c051512c883c9f48f8e6e111e5e5
+research/quill-story-readonly-oracle-direct 5e33646c86033528e2e7997dafc0e1267ff5a473
+research/reader1050-exhausted-terminal-contract ea91db1781e3fd11e15a154b148b177603a6c91f
+research/borderart-payload-layout a406bc123996b0411f22a04e5a4c4a12e2452e2e
+research/quill-story-readonly-oracle-v2 8908908626cd3058df7fb941e8c0166b3bbbab76
+research/borderart-native-once d4476b14ec4fb9e24d60fb2f59a850b9684b952c
+research/borderart-native-auth-v2 453e745c93c87d1325fd1e53b288b84c4f82e32c
+research/t891-step-progress-v2 dda2c4e90f5a5005dfbcb41e0472e70f45be5bb9
+research/t891-evidence-summary-v2 95d816d9a9073348988077cc3dcd6337282bc6d2
+research/borderart-fbid-corpus-census 9c0920b1a783036424606760349b37d846b01e11
+research/borderart-fbid-index-join 9d10c0a35068caef9d1d357e498bd1db6fb5e632
+ops/pub-native-runner-recovery d9ee69d173c86b1d09e65b906b5f72563f6a8ed0
+research/reader1050-trophy-wayback-lineage cfa581676639466e82a0adfc1d02cd58246a10ac
+research/borderart-catalog-usage-census 908f794af9f8dce4a7f47243b7267e88d02cf9b1
+research/vba-native-positive-02 dd39d34f129aa440a5134391fedca88a8d3c7436
+research/reader1050-ledger-close-opnhous-open-32b 0a522f2d43cf886cbbb5dd420fdbf7c8c2dd0420
+research/reader1050-evidence-ledger-bridge d88d925c73942e6e8fcaba646e1414c0fb37f9f4
+ops/disable-overnight-pub-cron 218ec549917e2cfbaa251093b68179eddd4ca50f
+research/publisher-html-inferred-priv 38c3f778743df86eabe53751b7e221ea7021ba54
+research/publisher-html-harvester ca89363f2e24e1b723537d98db4012c55e6ae006
+research/pub-tlb-shape-effects-evidence-contract 97b2cfdd7002219a2c62ce41e8e87b0adbd85d59
+research/pub-t-894-vba-estate-scanner-01 d9ee5d2137de24b240e187222c64de08f55df403
+research/carlton-paragraph-align-reconcile-841 52ccb9e2b919b08e6197e6f603771a940af28d30
+research/pub-operation-algebra-t840-fill-01 2a4d586d03d31cdc766e815521887cdf8e3bf16b
+corpus/publisher-visual-golden-batch01-tranche-c 9cb1594a0c2a1a737cf20dcb74e77712b2927a2f
+corpus/publisher-visual-golden-batch01-tranche-b 1104cffe6242746ee0f9682795bd4db9f366c276
+corpus/publisher-visual-golden-batch01-tranche-a 5038f85877ed9cdf712e5418e8d92e43427e52d1
+ops/overnight-hosted-cycle-01 19e6aa35c67a871effc3e3e474ee596b8ddedf7c
+research/fix-modern-base-pin-offline-lock-01 014e6d03fa77b9a270f248c013fe36fa8e092439
+research/table-border-weight-oracle-01 a7ba9c490e04c945fc1d936be98516ba5431f94a
+research/fix-table-border-oracle-inplace-save-04 35883f7d8b6bb33978dbd7fff5c6cbcec2a17e61
+research/fix-table-border-oracle-table-identity-03 75466e83854580d483e26c62300ebe83288c6670
+research/modern-base-pin-01-current 6eaacf0a982dfe19fd168a37b471c4ac3ae24131
+research/fix-table-border-oracle-duplicate-anchors 021b7f2cddfba61e79e52eb22fe85f806780984d
+research/publisher-table-border-carrier-map-01 12e6dbc7559a28f05aecb427132e96d07d03ed11
+research/publisher-table-autoformat-phase1-01 0c26d4e11c5513213267c9737644f037b316a063
+research/publisher-dgg-textbox-applicability-01 cbf3e2d56be32d0813b8e56bd73c4f72adfe5851
+measure/cmo7-size-pair-probe-01 374743eb789497946525b902531fb7b2f0ac2294
+measure/cloud-image-scene-envelope-01 83c9e230dc978df6d406f6b327e7ad39999cc8fb
+validation/reader-salvage-1050-acceptance-01 9fdd778e805b7586b4beb49d20fcbc0e82240681
+measure/cloud-carlton-embedded-font-authority-01 c31c01113fa03e3ec0350eb96b5fa3c7c2edda19
+research/carlton-line-only-outline-current-main-01 b192ea4f822ecc7c2ee52afc38f4914d3e103ccb
+research/roundrect-geometry-census-01 34c46d020f62ab65eac472bf509c7381952ffae7
+ops/branch-gc-20261006-live-wave17-ephemeral 40ccc0dbed0ebb919d1c95f933461ba4359ee7c3
