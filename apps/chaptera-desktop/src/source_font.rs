@@ -1,6 +1,7 @@
 use chaptera_viewer_render_plan::{
-    ExplicitRenderTextFontResourceV1, RenderTextFragmentV1, build_page_render_plan_v1,
-    complete_scalar_source_font_family_v1, effective_source_font_family_v1,
+    ExplicitRenderTextFontResourceV1, RenderTextFragmentV1, RenderTypographyRunV1,
+    build_page_render_plan_v1, complete_scalar_source_font_family_v1,
+    effective_source_font_family_v1,
 };
 use pub_viewer::ViewerGeometryDocument;
 #[cfg(target_os = "windows")]
@@ -20,8 +21,8 @@ struct ResolvedDesktopFont {
 pub struct DesktopSourceFontRegistry {
     #[cfg(target_os = "windows")]
     database: fontdb::Database,
-    resolved: BTreeMap<String, ResolvedDesktopFont>,
-    unavailable: BTreeSet<String>,
+    resolved: BTreeMap<(String, bool, bool), ResolvedDesktopFont>,
+    unavailable: BTreeSet<(String, bool, bool)>,
     effective_fragment_families: BTreeMap<(String, u32, u32, String), String>,
 }
 
@@ -76,7 +77,11 @@ impl DesktopSourceFontRegistry {
 
         let mut changed = false;
         for family in families {
-            changed |= self.ensure_family(&family);
+            for bold in [false, true] {
+                for italic in [false, true] {
+                    changed |= self.ensure_family_style(&family, bold, italic);
+                }
+            }
         }
         changed
     }
@@ -108,7 +113,76 @@ impl DesktopSourceFontRegistry {
         &'a self,
         family: &str,
     ) -> Option<ExplicitRenderTextFontResourceV1<'a>> {
-        let key = normalize_family(family);
+        self.resource_for_family_style(family, false, false)
+    }
+
+    pub fn resource_for_typography_run<'a>(
+        &'a self,
+        run: &RenderTypographyRunV1,
+    ) -> Option<ExplicitRenderTextFontResourceV1<'a>> {
+        let (Some(bold), Some(italic)) = (run.bold, run.italic) else {
+            return None;
+        };
+        self.resource_for_family_style(&run.source_font_name, bold, italic)
+    }
+
+    pub fn resource_for_current_fragment<'a>(
+        &'a self,
+        fragment: &RenderTextFragmentV1,
+    ) -> Option<ExplicitRenderTextFontResourceV1<'a>> {
+        let family = complete_scalar_source_font_family_v1(fragment).or_else(|| {
+            self.effective_fragment_families
+                .get(&fragment_family_key(fragment))
+                .cloned()
+        })?;
+        if fragment.typography.is_empty() {
+            return self.resource_for_family(&family);
+        }
+
+        let mut cursor = fragment.scalar_start;
+        let mut resolved_style = None;
+        let mut all_styles_absent = true;
+        for run in &fragment.typography {
+            if run.scalar_start != cursor
+                || run.scalar_end <= run.scalar_start
+                || run.scalar_end > fragment.scalar_end
+            {
+                return None;
+            }
+            match (run.bold, run.italic) {
+                (None, None) if all_styles_absent => {}
+                (Some(bold), Some(italic)) => {
+                    all_styles_absent = false;
+                    match resolved_style {
+                        None => resolved_style = Some((bold, italic)),
+                        Some(existing) if existing == (bold, italic) => {}
+                        Some(_) => return None,
+                    }
+                }
+                _ => return None,
+            }
+            cursor = run.scalar_end;
+        }
+        if cursor != fragment.scalar_end {
+            return None;
+        }
+
+        match resolved_style {
+            Some((bold, italic)) if !all_styles_absent => {
+                self.resource_for_family_style(&family, bold, italic)
+            }
+            None if all_styles_absent => self.resource_for_family(&family),
+            _ => None,
+        }
+    }
+
+    fn resource_for_family_style<'a>(
+        &'a self,
+        family: &str,
+        bold: bool,
+        italic: bool,
+    ) -> Option<ExplicitRenderTextFontResourceV1<'a>> {
+        let key = (normalize_family(family), bold, italic);
         let font = self.resolved.get(&key)?;
         Some(ExplicitRenderTextFontResourceV1 {
             resource_id: &font.resource_id,
@@ -125,33 +199,51 @@ impl DesktopSourceFontRegistry {
     }
 
     pub fn resolved_families(&self) -> impl Iterator<Item = (&str, &str, &str)> {
-        self.resolved.values().map(|font| {
-            (
-                font.source_family.as_str(),
-                font.resolved_family.as_str(),
-                font.sha256.as_str(),
-            )
-        })
+        self.resolved
+            .iter()
+            .filter_map(|((_, bold, italic), font)| {
+                (!*bold && !*italic).then_some((
+                    font.source_family.as_str(),
+                    font.resolved_family.as_str(),
+                    font.sha256.as_str(),
+                ))
+            })
     }
 
     #[cfg(target_os = "windows")]
     fn ensure_family(&mut self, family: &str) -> bool {
-        let key = normalize_family(family);
+        self.ensure_family_style(family, false, false)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn ensure_family_style(&mut self, family: &str, bold: bool, italic: bool) -> bool {
+        let normalized_family = normalize_family(family);
+        let key = (normalized_family.clone(), bold, italic);
         if self.resolved.contains_key(&key) || self.unavailable.contains(&key) {
             return false;
         }
 
+        let expected_weight = if bold {
+            fontdb::Weight::BOLD
+        } else {
+            fontdb::Weight::NORMAL
+        };
+        let expected_style = if italic {
+            fontdb::Style::Italic
+        } else {
+            fontdb::Style::Normal
+        };
         let matching_faces = self
             .database
             .faces()
             .filter(|info| {
-                info.weight == fontdb::Weight::NORMAL
+                info.weight == expected_weight
                     && info.stretch == fontdb::Stretch::Normal
-                    && info.style == fontdb::Style::Normal
+                    && info.style == expected_style
                     && info
                         .families
                         .iter()
-                        .any(|(name, _)| normalize_family(name) == key)
+                        .any(|(name, _)| normalize_family(name) == normalized_family)
             })
             .map(|info| info.id)
             .collect::<Vec<_>>();
@@ -203,9 +295,16 @@ impl DesktopSourceFontRegistry {
 
     #[cfg(not(target_os = "windows"))]
     fn ensure_family(&mut self, family: &str) -> bool {
-        self.unavailable.insert(normalize_family(family));
+        self.ensure_family_style(family, false, false)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn ensure_family_style(&mut self, family: &str, bold: bool, italic: bool) -> bool {
+        self.unavailable
+            .insert((normalize_family(family), bold, italic));
         false
     }
+
 }
 
 fn normalize_family(name: &str) -> String {
@@ -225,6 +324,84 @@ fn fragment_family_key(fragment: &RenderTextFragmentV1) -> (String, u32, u32, St
 mod tests {
     #[cfg(target_os = "windows")]
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_environment_font_binds_exact_style_tuple_resources() {
+        let mut registry = DesktopSourceFontRegistry::new();
+        let source_family = ["Arial", "Times New Roman", "Calibri", "Segoe UI"]
+            .into_iter()
+            .find(|family| {
+                for (bold, italic) in [
+                    (false, false),
+                    (true, false),
+                    (false, true),
+                    (true, true),
+                ] {
+                    registry.ensure_family_style(family, bold, italic);
+                }
+                [
+                    (false, false),
+                    (true, false),
+                    (false, true),
+                    (true, true),
+                ]
+                .into_iter()
+                .all(|(bold, italic)| {
+                    registry
+                        .resolved
+                        .contains_key(&(normalize_family(family), bold, italic))
+                })
+            })
+            .expect("windows-latest should expose one bounded family with four unique style faces");
+
+        let resources = [
+            (false, false),
+            (true, false),
+            (false, true),
+            (true, true),
+        ]
+        .into_iter()
+        .map(|(bold, italic)| {
+            registry
+                .resource_for_family_style(source_family, bold, italic)
+                .expect("exact style tuple resource")
+        })
+        .collect::<Vec<_>>();
+
+        let identities = resources
+            .iter()
+            .map(|resource| {
+                (
+                    resource.resource_id.to_owned(),
+                    resource.expected_sha256.to_owned(),
+                    resource.face_index,
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            identities.len(),
+            4,
+            "Regular/Bold/Italic/BoldItalic must resolve to distinct exact physical identities"
+        );
+        assert!(resources.iter().all(|resource| !resource.bytes.is_empty()));
+        assert!(resources.iter().all(|resource| {
+            format!("{:x}", Sha256::digest(resource.bytes)) == resource.expected_sha256
+        }));
+
+        let paint_fonts = registry.egui_fonts();
+        assert!(resources.iter().all(|resource| {
+            paint_fonts.iter().any(|font| {
+                font.resource_id == resource.resource_id
+                    && font.face_index == resource.face_index
+                    && font.bytes == resource.bytes
+            })
+        }));
+
+        let ctx = eframe::egui::Context::default();
+        crate::fallback_font::install_with_additional(&ctx, &paint_fonts)
+            .expect("all exact styled resources should register in egui");
+    }
 
     #[cfg(target_os = "windows")]
     #[test]
@@ -257,7 +434,7 @@ mod tests {
 
         let resolved = registry
             .resolved
-            .get(&normalize_family(source_family))
+            .get(&(normalize_family(source_family), false, false))
             .expect("resolved source family");
         let receipt = serde_json::json!({
             "schema": "chaptera.desktop-source-font-environment-receipt.v1",
