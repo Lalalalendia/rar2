@@ -241,6 +241,7 @@ fn override_value_at(
     Ok(found)
 }
 
+#[derive(Clone, Copy)]
 enum PropertyEdit<'a> {
     Set {
         start: u32,
