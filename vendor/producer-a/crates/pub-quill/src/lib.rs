@@ -48,4 +48,8 @@ pub use typography::{
 };
 
 #[cfg(feature = "research-inspection")]
-pub use typography::{QuillRawFdppProperty, QuillRawFdppStyle, inspect_raw_fdpp_styles};
+pub use typography::{
+    QuillRawFdppProperty, QuillRawFdppStyle, QuillResearchColorReferenceKind,
+    QuillResearchColorReferenceSource, QuillResearchEffectiveColorReferenceRun,
+    inspect_effective_text_color_references, inspect_raw_fdpp_styles,
+};
