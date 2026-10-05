@@ -510,9 +510,10 @@ mod tests {
     use super::*;
     use crate::{ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgPart, OdgPartKind};
     use pub_export::{
-        SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile, plan_export,
+        ParagraphScopedAlignmentV1, ParagraphScopedAlignmentValueV1, SemanticFeatureRequest,
+        TargetCapabilityManifest, TargetProfile, plan_export,
     };
-    use pub_model::CanonicalId;
+    use pub_model::{CanonicalId, ParagraphId, TextRange};
     use std::collections::BTreeMap;
 
     fn id(byte: u8) -> CanonicalId {
@@ -565,6 +566,46 @@ mod tests {
         }
     }
 
+    fn package_with_paragraphs(
+        export_plan: &ExportPlan,
+        frame_id: NodeId,
+        paragraphs: &[&str],
+    ) -> OdgPackage {
+        let body = paragraphs
+            .iter()
+            .map(|value| format!("<text:p>{value}</text:p>"))
+            .collect::<String>();
+        let content = format!(
+            "<?xml version=\"1.0\"?><office:document-content xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\" xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\">\n  <office:automatic-styles/>\n<office:body><office:drawing><draw:page><draw:frame draw:name=\"{}\"><draw:text-box>{body}</draw:text-box>\n        </draw:frame></draw:page></office:drawing></office:body></office:document-content>",
+            frame_name(frame_id)
+        );
+        OdgPackage {
+            target: export_plan.target.clone(),
+            conversion_fence: None,
+            parts: vec![OdgPart {
+                path: ODG_CONTENT_PATH.into(),
+                kind: OdgPartKind::Content,
+                media_type: "text/xml".into(),
+                content: content.into_bytes(),
+            }],
+        }
+    }
+
+    fn scoped(
+        paragraph_byte: u8,
+        story_id: StoryId,
+        start: u64,
+        end: u64,
+        alignment: ParagraphScopedAlignmentValueV1,
+    ) -> ParagraphScopedAlignmentV1 {
+        ParagraphScopedAlignmentV1 {
+            story_id,
+            paragraph_id: ParagraphId::from_canonical(id(paragraph_byte)),
+            range: TextRange::new(start, end).expect("canonical paragraph range"),
+            alignment,
+        }
+    }
+
     #[test]
     fn writes_center_paragraph_style_without_upgrading_loss_state() {
         let story_id = story(1);
@@ -594,6 +635,185 @@ mod tests {
             loss.origin == Some(story_id.into_canonical())
                 && loss.feature == STORY_PARAGRAPH_ALIGNMENT_FEATURE
         }));
+    }
+
+    #[test]
+    fn writes_scoped_left_center_right_in_canonical_range_order() {
+        let story_id = story(5);
+        let frame_id = frame(6);
+        let export_plan = plan(story_id);
+        let mut package =
+            package_with_paragraphs(&export_plan, frame_id, &["One", "Two", "Three"]);
+
+        let first = scoped(
+            11,
+            story_id,
+            0,
+            4,
+            ParagraphScopedAlignmentValueV1::Left,
+        );
+        let second = scoped(
+            12,
+            story_id,
+            4,
+            8,
+            ParagraphScopedAlignmentValueV1::Center,
+        );
+        let third = scoped(
+            13,
+            story_id,
+            8,
+            13,
+            ParagraphScopedAlignmentValueV1::Right,
+        );
+        let placement = OdgParagraphScopedAlignmentPlacement {
+            story_id,
+            paragraphs: vec![third.clone(), first.clone(), second.clone()],
+            frame_ids: vec![frame_id],
+        };
+
+        add_paragraph_scoped_alignment_to_odg(
+            &export_plan,
+            &mut package,
+            std::slice::from_ref(&placement),
+        )
+        .expect("paragraph-scoped ODG alignment");
+
+        let xml = std::str::from_utf8(&package.parts[0].content).expect("content XML");
+        assert_eq!(xml.matches("fo:text-align=\"left\"").count(), 1);
+        assert_eq!(xml.matches("fo:text-align=\"center\"").count(), 1);
+        assert_eq!(xml.matches("fo:text-align=\"right\"").count(), 1);
+
+        let first_marker = format!(
+            "<text:p text:style-name=\"{}\">",
+            paragraph_style_name(first.paragraph_id)
+        );
+        let second_marker = format!(
+            "<text:p text:style-name=\"{}\">",
+            paragraph_style_name(second.paragraph_id)
+        );
+        let third_marker = format!(
+            "<text:p text:style-name=\"{}\">",
+            paragraph_style_name(third.paragraph_id)
+        );
+        assert!(xml.find(&first_marker).unwrap() < xml.find(&second_marker).unwrap());
+        assert!(xml.find(&second_marker).unwrap() < xml.find(&third_marker).unwrap());
+    }
+
+    #[test]
+    fn accepts_one_trailing_empty_legacy_carrier_without_styling_it() {
+        let story_id = story(7);
+        let frame_id = frame(8);
+        let export_plan = plan(story_id);
+        let mut package = package_with_paragraphs(&export_plan, frame_id, &["One", "Two", ""]);
+        let placement = OdgParagraphScopedAlignmentPlacement {
+            story_id,
+            paragraphs: vec![
+                scoped(
+                    21,
+                    story_id,
+                    0,
+                    4,
+                    ParagraphScopedAlignmentValueV1::Left,
+                ),
+                scoped(
+                    22,
+                    story_id,
+                    4,
+                    8,
+                    ParagraphScopedAlignmentValueV1::Right,
+                ),
+            ],
+            frame_ids: vec![frame_id],
+        };
+
+        add_paragraph_scoped_alignment_to_odg(
+            &export_plan,
+            &mut package,
+            std::slice::from_ref(&placement),
+        )
+        .expect("protected-terminal extra carrier is explicit and bounded");
+
+        let xml = std::str::from_utf8(&package.parts[0].content).expect("content XML");
+        assert_eq!(xml.matches("<text:p text:style-name=").count(), 2);
+        assert!(xml.contains("<text:p></text:p>"));
+    }
+
+    #[test]
+    fn rejects_extra_non_empty_physical_carrier() {
+        let story_id = story(9);
+        let frame_id = frame(10);
+        let export_plan = plan(story_id);
+        let mut package =
+            package_with_paragraphs(&export_plan, frame_id, &["One", "Two", "Unexpected"]);
+        let placement = OdgParagraphScopedAlignmentPlacement {
+            story_id,
+            paragraphs: vec![
+                scoped(
+                    31,
+                    story_id,
+                    0,
+                    4,
+                    ParagraphScopedAlignmentValueV1::Left,
+                ),
+                scoped(
+                    32,
+                    story_id,
+                    4,
+                    8,
+                    ParagraphScopedAlignmentValueV1::Right,
+                ),
+            ],
+            frame_ids: vec![frame_id],
+        };
+
+        assert!(matches!(
+            add_paragraph_scoped_alignment_to_odg(
+                &export_plan,
+                &mut package,
+                std::slice::from_ref(&placement),
+            ),
+            Err(OdgParagraphAlignmentError::UnexpectedExtraParagraphCarrier { node_id })
+                if node_id == frame_id
+        ));
+    }
+
+    #[test]
+    fn rejects_non_contiguous_canonical_ranges() {
+        let story_id = story(11);
+        let frame_id = frame(12);
+        let export_plan = plan(story_id);
+        let mut package = package_with_paragraphs(&export_plan, frame_id, &["One", "Two"]);
+        let placement = OdgParagraphScopedAlignmentPlacement {
+            story_id,
+            paragraphs: vec![
+                scoped(
+                    41,
+                    story_id,
+                    0,
+                    4,
+                    ParagraphScopedAlignmentValueV1::Left,
+                ),
+                scoped(
+                    42,
+                    story_id,
+                    5,
+                    9,
+                    ParagraphScopedAlignmentValueV1::Center,
+                ),
+            ],
+            frame_ids: vec![frame_id],
+        };
+
+        assert!(matches!(
+            add_paragraph_scoped_alignment_to_odg(
+                &export_plan,
+                &mut package,
+                std::slice::from_ref(&placement),
+            ),
+            Err(OdgParagraphAlignmentError::NonMonotonicParagraphRanges { story_id: found })
+                if found == story_id
+        ));
     }
 
     #[test]
