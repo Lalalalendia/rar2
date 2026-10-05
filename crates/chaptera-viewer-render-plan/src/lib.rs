@@ -2181,9 +2181,9 @@ fn resolve_text_layout_v1(
             projected_target_frame_node_id,
             &scene.diagnostics,
             story.id,
-            source_lines.iter().any(|line| {
-                line.scalar_end > line.scalar_start && line.measured_width.get() > 0
-            }),
+            source_lines
+                .iter()
+                .any(|line| line.scalar_end > line.scalar_start && line.measured_width.get() > 0),
             source_lines.last().map(|line| line.consumed_scalar_end),
             story_scalar_len,
         );
@@ -4891,38 +4891,46 @@ mod tests {
             message: "bounded fixture".into(),
         };
 
-        assert!(ordinary_incomplete_layout_is_admitted_partial_story_overset(
-            None,
-            std::slice::from_ref(&overset),
-            story_id,
-            true,
-            Some(7),
-            10,
-        ));
-        assert!(!ordinary_incomplete_layout_is_admitted_partial_story_overset(
-            Some(frame_id),
-            std::slice::from_ref(&overset),
-            story_id,
-            true,
-            Some(7),
-            10,
-        ));
-        assert!(!ordinary_incomplete_layout_is_admitted_partial_story_overset(
-            None,
-            std::slice::from_ref(&overset),
-            story_id,
-            false,
-            None,
-            10,
-        ));
-        assert!(!ordinary_incomplete_layout_is_admitted_partial_story_overset(
-            None,
-            std::slice::from_ref(&overset),
-            story_id,
-            true,
-            Some(10),
-            10,
-        ));
+        assert!(
+            ordinary_incomplete_layout_is_admitted_partial_story_overset(
+                None,
+                std::slice::from_ref(&overset),
+                story_id,
+                true,
+                Some(7),
+                10,
+            )
+        );
+        assert!(
+            !ordinary_incomplete_layout_is_admitted_partial_story_overset(
+                Some(frame_id),
+                std::slice::from_ref(&overset),
+                story_id,
+                true,
+                Some(7),
+                10,
+            )
+        );
+        assert!(
+            !ordinary_incomplete_layout_is_admitted_partial_story_overset(
+                None,
+                std::slice::from_ref(&overset),
+                story_id,
+                false,
+                None,
+                10,
+            )
+        );
+        assert!(
+            !ordinary_incomplete_layout_is_admitted_partial_story_overset(
+                None,
+                std::slice::from_ref(&overset),
+                story_id,
+                true,
+                Some(10),
+                10,
+            )
+        );
 
         assert!(projected_incomplete_layout_is_explicit_overset(
             Some(frame_id),
