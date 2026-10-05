@@ -73,9 +73,10 @@ jobs:
           if any(slot["rgb"] is None for slot in slots):
               raise SystemExit("OplSccm has unresolved slot RGB")
           native_fingerprint = "b03bd58c04ef9fb81cf5873b601a67dc24be8d2dcd266fd92f1946cf977be838"
-          canonical = json.dumps([slot["rgb"] for slot in slots], separators=(",", ":")).encode()
+          colorrefs = [rgb[0] | (rgb[1] << 8) | (rgb[2] << 16) for rgb in (slot["rgb"] for slot in slots)]
+          canonical = ",".join(str(value) for value in colorrefs).encode()
           fingerprint = hashlib.sha256(canonical).hexdigest()
-          # Native packet hashes the same ordered 8-role RGB tuple. Do not retain raw RGB values.
+          # Native packet hashes the same ordered 8-role COLORREF tuple as comma-separated decimal values. Do not retain raw RGB values.
           if fingerprint != native_fingerprint:
               raise SystemExit(f"persisted/native scheme fingerprint mismatch: {fingerprint}")
           receipt = {
