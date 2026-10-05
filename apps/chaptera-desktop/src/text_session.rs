@@ -329,6 +329,16 @@ fn derive_domain(editor: &EditorSession, story_id: StoryId) -> Result<StoryEditD
     derive_editor_story_edit_domain_auto_v1(editor, story_id).map_err(|error| error.to_string())
 }
 
+pub fn can_enter_text_mode(editor: &EditorSession, story_id: StoryId) -> Result<(), String> {
+    match editor.can_replace_story_text(story_id) {
+        Ok(()) => Ok(()),
+        Err(pub_editor::EditorError::TextFormatTextMutationConflict { .. }) => {
+            derive_domain(editor, story_id).map(|_| ())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 fn resolve_post_edit_stop(
     layout: &DesktopStoryLayoutV1,
     scalar_boundary: u32,
@@ -517,9 +527,7 @@ pub fn enter_explicit_text_mode(
     story_id: StoryId,
     frame_id: NodeId,
 ) -> Result<DesktopTextMode, String> {
-    editor
-        .can_replace_story_text(story_id)
-        .map_err(|error| error.to_string())?;
+    can_enter_text_mode(editor, story_id)?;
     let revision = revision_id(editor);
     let domain = derive_domain(editor, story_id)?;
     let interaction_domain = to_interaction_domain_v1(&domain);
@@ -561,9 +569,7 @@ pub fn enter_pointer_text_mode(
     page_x_emu: i64,
     page_y_emu: i64,
 ) -> Result<DesktopTextMode, String> {
-    editor
-        .can_replace_story_text(story_id)
-        .map_err(|error| error.to_string())?;
+    can_enter_text_mode(editor, story_id)?;
     let revision = revision_id(editor);
     let domain = derive_domain(editor, story_id)?;
     let interaction_domain = to_interaction_domain_v1(&domain);
@@ -905,6 +911,19 @@ mod tests {
         let mut reopened_mode = enter_explicit_text_mode(&reopened, story_id, frame_id)
             .expect("reenter reopened Story");
         select_all(&mut reopened_mode);
+        let text_mutation_error = replace_external_text(
+            &mut reopened,
+            &mut reopened_mode,
+            "must remain rejected while scoped character-format history is active",
+        )
+        .expect_err("text mutation must remain fenced after format-only session reentry");
+        assert!(
+            text_mutation_error.contains(
+                "has active character-format history and cannot change text until range rebasing is implemented"
+            ),
+            "unexpected text-mutation fence: {text_mutation_error}"
+        );
+        assert_eq!(reopened.graph().stories[&story_id].text, source_text);
         assert_eq!(
             boolean_format_selection_state_v1(
                 &reopened,
