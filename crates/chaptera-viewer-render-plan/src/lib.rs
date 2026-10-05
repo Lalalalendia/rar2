@@ -1169,12 +1169,14 @@ pub fn build_page_render_plan_v1(
         .ok_or(RenderPlanErrorV1::PageSurfaceMissing { page_id: page.id })?;
 
     let parent_origin = page.id.into_canonical();
+    #[allow(unused_mut)]
     let mut nodes = visual
         .scene
         .nodes
         .iter()
         .filter(|node| node.parent_origin == parent_origin)
         .map(|node| {
+            #[allow(unused_mut)]
             let mut text = visual
                 .text_fragments
                 .iter()
@@ -3087,6 +3089,8 @@ mod tests {
                 size_inherited: true,
                 color_rgb: None,
                 color_inherited: false,
+                bold: None,
+                italic: None,
                 source_story_text_sha256: viewer_story_text_sha256("hello"),
             }],
             paragraph_alignments: Vec::new(),
