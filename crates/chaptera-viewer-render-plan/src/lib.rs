@@ -3182,7 +3182,6 @@ mod tests {
                 source_story_text_sha256: viewer_story_text_sha256("hello"),
             }],
             paragraph_alignments: Vec::new(),
-            paragraph_line_spacings: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             images: vec![ViewerEmbeddedImage {
@@ -4418,6 +4417,8 @@ mod tests {
             story_id,
             frame_id: node_id,
             ordinal: 0,
+            text_content_bounds: None,
+            vertical_alignment: None,
         });
         visual.typography_runs = vec![ViewerTypographyRun {
             story_id,
@@ -4449,7 +4450,6 @@ mod tests {
                 color_inherited: false,
             }],
             paragraph_alignments: Vec::new(),
-            paragraph_line_spacings: Vec::new(),
             backend_font_resource_id: None,
             layout: None,
         };
@@ -4478,11 +4478,15 @@ mod tests {
                 story_id,
                 frame_id: node_id,
                 ordinal: 0,
+                text_content_bounds: None,
+                vertical_alignment: None,
             },
             pub_viewer::ViewerStoryFrame {
                 story_id,
                 frame_id: NodeId::from_canonical(canonical(10)),
                 ordinal: 1,
+                text_content_bounds: None,
+                vertical_alignment: None,
             },
         ]);
 
@@ -4494,7 +4498,6 @@ mod tests {
             line_count: 1,
             typography: Vec::new(),
             paragraph_alignments: Vec::new(),
-            paragraph_line_spacings: Vec::new(),
             backend_font_resource_id: None,
             layout: None,
         };
@@ -4518,6 +4521,8 @@ mod tests {
             story_id,
             frame_id: node_id,
             ordinal: 0,
+            text_content_bounds: None,
+            vertical_alignment: None,
         });
 
         let mut fragment = RenderTextFragmentV1 {
@@ -4528,7 +4533,6 @@ mod tests {
             line_count: 1,
             typography: Vec::new(),
             paragraph_alignments: Vec::new(),
-            paragraph_line_spacings: Vec::new(),
             backend_font_resource_id: None,
             layout: None,
         };
