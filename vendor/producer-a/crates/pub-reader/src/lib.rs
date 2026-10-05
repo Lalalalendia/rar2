@@ -644,6 +644,10 @@ pub struct PubTypographyRun {
     pub size_inherited: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_rgb: Option<[u8; 3]>,
+    /// Source Quill Publisher scheme slot 0..7, retained separately from
+    /// the resolved publication-scheme RGB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_scheme_slot: Option<u8>,
     #[serde(default)]
     pub color_inherited: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2970,6 +2974,16 @@ pub fn build_mature_0x2c_from_streams(
                     });
                     continue;
                 };
+                let color_rgb = bounded_quill_text_rgb(
+                    run.color_rgb,
+                    run.color_scheme_slot,
+                    color_scheme.as_ref().map(|value| &value.scheme),
+                );
+                let color_rgb = bounded_quill_text_rgb(
+                    run.color_rgb,
+                    run.color_scheme_slot,
+                    color_scheme.as_ref().map(|value| &value.scheme),
+                );
                 typography_runs.push(PubTypographyRun {
                     story_id,
                     story_utf16_start: run.story_start_utf16,
@@ -2982,7 +2996,8 @@ pub fn build_mature_0x2c_from_streams(
                     font_inherited: run.font_source == QuillTypographyValueSource::InheritedStsh1,
                     size_inherited: run.text_size_source
                         == QuillTypographyValueSource::InheritedStsh1,
-                    color_rgb: run.color_rgb,
+                    color_rgb,
+                    color_scheme_slot: run.color_scheme_slot,
                     color_inherited: run.color_inherited,
                     bold: run.bold.as_ref().map(project_effective_boolean_v1),
                     italic: run.italic.as_ref().map(project_effective_boolean_v1),
@@ -3027,7 +3042,8 @@ pub fn build_mature_0x2c_from_streams(
                     text_size_emu: run.text_size_emu,
                     font_inherited: false,
                     size_inherited: false,
-                    color_rgb: run.color_rgb,
+                    color_rgb,
+                    color_scheme_slot: run.color_scheme_slot,
                     color_inherited: run.color_inherited,
                     bold: None,
                     italic: None,
@@ -4851,6 +4867,20 @@ fn bounded_officeart_rgb(value: u32, color_scheme: Option<&MatureColorScheme>) -
             let ordinal = usize::try_from(value & 0x00FF_FFFF).ok()?;
             color_scheme?.slots.get(ordinal)?.rgb
         }
+        _ => None,
+    }
+}
+
+fn bounded_quill_text_rgb(
+    direct_rgb: Option<[u8; 3]>,
+    scheme_slot: Option<u8>,
+    color_scheme: Option<&MatureColorScheme>,
+) -> Option<[u8; 3]> {
+    match (direct_rgb, scheme_slot) {
+        (Some(rgb), None) => Some(rgb),
+        (None, Some(slot)) => color_scheme?.slots.get(usize::from(slot))?.rgb,
+        // Both carriers at once are not a grounded Quill state; neither is
+        // absence of both. Keep those cases fail-closed.
         _ => None,
     }
 }
