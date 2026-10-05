@@ -629,24 +629,27 @@ mod tests {
         let mut digest_bytes = [0_u8; 32];
         digest_bytes.copy_from_slice(&digest);
         let source_hash = Sha256Digest::from_bytes(digest_bytes);
-        let editor =
+        let mut editor =
             open_mature_0x2c_editor(&original, source_hash).expect("open real SampleNewsletter");
 
-        let topology_before = editor
-            .graph()
-            .nodes
-            .iter()
-            .filter_map(|(node_id, node)| {
-                let frame = node.payload.story_frame.as_ref()?;
-                Some((
-                    *node_id,
-                    frame.story_id?,
-                    frame.ordinal,
-                    frame.previous_frame,
-                    frame.next_frame,
-                ))
-            })
-            .collect::<Vec<_>>();
+        let topology = |session: &EditorSession| {
+            session
+                .graph()
+                .nodes
+                .iter()
+                .filter_map(|(node_id, node)| {
+                    let frame = node.payload.story_frame.as_ref()?;
+                    Some((
+                        *node_id,
+                        frame.story_id?,
+                        frame.ordinal,
+                        frame.previous_frame,
+                        frame.next_frame,
+                    ))
+                })
+                .collect::<Vec<_>>()
+        };
+        let topology_before = topology(&editor);
 
         let mut frames_by_story = std::collections::BTreeMap::<StoryId, Vec<NodeId>>::new();
         for (node_id, node) in &editor.graph().nodes {
@@ -686,6 +689,7 @@ mod tests {
         let (mut mode, target_stop) =
             witness.expect("SampleNewsletter must expose one editable linked multi-frame Story");
         let original_story_id = mode.story_id;
+        let original_story_text = editor.graph().stories[&original_story_id].text.clone();
         let original_frame_id = mode.frame_id;
         let target_frame_id = node_id_from_caret_frame(&target_stop.frame_id)
             .expect("target caret stop must carry a canonical TextFrame id");
@@ -720,31 +724,71 @@ mod tests {
             operation_count_before,
             "same-Story frame handoff is transient interaction state"
         );
-
-        let topology_after = editor
-            .graph()
-            .nodes
-            .iter()
-            .filter_map(|(node_id, node)| {
-                let frame = node.payload.story_frame.as_ref()?;
-                Some((
-                    *node_id,
-                    frame.story_id?,
-                    frame.ordinal,
-                    frame.previous_frame,
-                    frame.next_frame,
-                ))
-            })
-            .collect::<Vec<_>>();
         assert_eq!(
-            topology_after, topology_before,
-            "linked Story frame topology must remain unchanged"
+            topology(&editor),
+            topology_before,
+            "pointer handoff must not mutate linked Story topology"
+        );
+
+        replace_external_text(&mut editor, &mut mode, "X")
+            .expect("canonical Story edit must remain valid after linked-frame handoff");
+        assert_eq!(mode.story_id, original_story_id);
+        assert_eq!(
+            mode.session.story_id,
+            original_story_id.as_canonical().to_string()
+        );
+        assert_eq!(mode.session.revision_id, editor.project().state_id_v1());
+        assert_eq!(editor.operations().len(), operation_count_before + 1);
+        assert!(matches!(
+            editor.operations().last(),
+            Some(EditOperation::ReplaceStoryRange { story_id, .. }) if *story_id == original_story_id
+        ));
+        let edited_story_text = editor.graph().stories[&original_story_id].text.clone();
+        assert_ne!(
+            edited_story_text, original_story_text,
+            "linked Story mutation must change the one canonical Story"
+        );
+        assert_eq!(
+            topology(&editor),
+            topology_before,
+            "linked Story text mutation and reflow must not rewrite frame topology"
+        );
+
+        editor.undo().expect("undo linked Story text mutation");
+        assert_eq!(
+            editor.graph().stories[&original_story_id].text,
+            original_story_text
+        );
+        assert_eq!(topology(&editor), topology_before);
+
+        editor.redo().expect("redo linked Story text mutation");
+        assert_eq!(
+            editor.graph().stories[&original_story_id].text,
+            edited_story_text
+        );
+        assert_eq!(topology(&editor), topology_before);
+
+        let project = editor.project();
+        let mut reopened =
+            open_mature_0x2c_editor(&original, source_hash).expect("fresh linked Story editor");
+        reopened
+            .apply_project(&project)
+            .expect("fresh EditorProject replay of linked Story edit");
+        assert_eq!(
+            reopened.graph().stories[&original_story_id].text,
+            edited_story_text
+        );
+        assert_eq!(
+            topology(&reopened),
+            topology_before,
+            "fresh replay must preserve exact linked Story topology"
         );
         assert_eq!(editor.source_hash(), source_hash);
+        assert_eq!(reopened.source_hash(), source_hash);
         assert_eq!(
             fs::read(path).expect("re-read source PUB"),
             original,
-            "linked Story interaction must not mutate source PUB bytes"
+            "linked Story editing must not mutate source PUB bytes"
         );
     }
 
