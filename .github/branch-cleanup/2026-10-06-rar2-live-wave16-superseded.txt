@@ -1,0 +1,12 @@
+# Rar2 live branch GC wave 16 — 2026-10-06
+# Closed superseded / evidence-only / falsified-owner refs only.
+# measure/cloud-sli-cause-census-post-marker-01 intentionally excluded: live tip moved +1 beyond closed PR head.
+# Every listed ref was exact-SHA compared immediately before manifest creation.
+# Format: <branch> <expected_sha>
+viewer-ordinary-story-overset-post-default-spacing-01 ff5f3682ed38173ebde63259510e7cc7d4be00db
+measure/cloud-sli-cause-census-post-marker-02 ae96f6c4023de7aeb2909298cfb726ecaf83a7b0
+measure/cloud-sli-cause-census-post-marker-03 7a949ec98cc0ba01d766e844c02a39b5ad9cfca1
+measure/cloud-sli-cause-post1498 813ce08f5696aa0c583bf8b7876851f234ba95ef
+measure/post1493-full-extent-text-transform d8ef730a6eff00af21d7d47812019dc4e3077aed
+viewer-ordinary-story-overset-01 8f5d6c02cd33762332d7a0af11490658e3b8c29b
+viewer-paragraph-default-line-spacing-01 8dbd5c5e65171c21f4e619cc20dbf0283c0c6688
