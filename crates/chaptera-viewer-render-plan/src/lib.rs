@@ -2528,6 +2528,8 @@ where
     }
 
     let mut cursor = fragment.scalar_start;
+    let mut first_resource: Option<(String, String, u32)> = None;
+    let mut mixed_resource = false;
     let mut admitted = Vec::with_capacity(fragment.typography.len());
 
     for run in &fragment.typography {
@@ -2554,6 +2556,16 @@ where
         if font.expected_sha256.is_empty() || fingerprint != font.expected_sha256 {
             return None;
         }
+        let resource_identity = (
+            font.resource_id.to_owned(),
+            fingerprint.clone(),
+            font.face_index,
+        );
+        match first_resource.as_ref() {
+            None => first_resource = Some(resource_identity),
+            Some(first) if *first == resource_identity => {}
+            Some(_) => mixed_resource = true,
+        }
 
         admitted.push(ResolvedFamilyTypographyRunV1 {
             scalar_start: run.scalar_start,
@@ -2565,7 +2577,7 @@ where
         cursor = run.scalar_end;
     }
 
-    if cursor != fragment.scalar_end {
+    if cursor != fragment.scalar_end || !mixed_resource {
         return None;
     }
     Some(admitted)
