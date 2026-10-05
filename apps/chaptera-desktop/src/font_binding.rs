@@ -317,7 +317,9 @@ mod tests {
             let plan = build_desktop_page_render_plan(&visual, page_index).expect("source plan");
             for node in &plan.nodes {
                 let Some(fragment) = node.text.as_ref().filter(|fragment| {
-                    fragment.scalar_start < fragment.scalar_end && !fragment.typography.is_empty()
+                    fragment.scalar_start < fragment.scalar_end
+                        && !fragment.typography.is_empty()
+                        && fragment.typography.iter().any(|run| run.bold.is_some())
                 }) else {
                     continue;
                 };
@@ -368,6 +370,10 @@ mod tests {
             "51318.pub must expose a rendered Story whose full overlay is color-blocked but Bold is property-scoped",
         );
 
+        assert!(
+            source_typography.iter().any(|run| run.bold.is_some()),
+            "Reader-proven source Bold must survive pub-viewer -> render-plan before any Editor override"
+        );
         let all_true = before_segments.iter().all(bool_value);
         let expected = !all_true;
         let state_hash = editor
