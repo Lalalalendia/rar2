@@ -44,6 +44,7 @@ pub use duplicate_authored_rectangle_v1::{
     validate_duplicate_authored_rectangle_source_v1,
 };
 pub use imported_paragraph_alignment_v1::{
+    // CI control: AuthoredStack Runtime must skip this allowlisted paragraph facade slice.
     ImportedParagraphAlignmentValueV1, ImportedParagraphBaseAlignmentErrorV1,
     ImportedParagraphBaseAlignmentV1,
 };
