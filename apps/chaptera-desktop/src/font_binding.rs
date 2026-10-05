@@ -177,9 +177,7 @@ pub(super) fn install_startup_font(ctx: &egui::Context) {
 mod tests {
     use super::*;
     #[cfg(target_os = "windows")]
-    use chaptera_viewer_render_plan::{
-        RenderTextLayoutDispositionV1, build_page_render_plan_v1,
-    };
+    use chaptera_viewer_render_plan::{RenderTextLayoutDispositionV1, build_page_render_plan_v1};
     #[cfg(target_os = "windows")]
     use pub_editor::{
         EDITOR_PROJECT_VERSION_V0_16, FormatPropertyV1, FormatValueV1, NodeId, Sha256Digest,
@@ -275,6 +273,22 @@ mod tests {
     }
 
     #[cfg(target_os = "windows")]
+    fn current_resource_for_scalar(
+        editor: &EditorSession,
+        fragment: &RenderTextFragmentV1,
+        registry: &source_font::DesktopSourceFontRegistry,
+        scalar: u32,
+    ) -> Option<String> {
+        let typography = current_fragment_typography_v1(editor, fragment).ok().flatten()?;
+        let run = typography
+            .iter()
+            .find(|run| run.scalar_start <= scalar && scalar < run.scalar_end)?;
+        registry
+            .resource_for_typography_run(run)
+            .map(|font| font.resource_id.to_owned())
+    }
+
+    #[cfg(target_os = "windows")]
     fn resource_for_scalar(fragment: &RenderTextFragmentV1, scalar: u32) -> Option<&str> {
         let layout = fragment.layout.as_ref()?;
         for line in &layout.lines {
@@ -357,19 +371,6 @@ mod tests {
                     {
                         continue;
                     }
-                    let Some(story) = editor.graph().stories.get(&fragment.story_id) else {
-                        continue;
-                    };
-                    let Ok(story_len) = u32::try_from(story.text.chars().count()) else {
-                        continue;
-                    };
-                    if fragment.scalar_start != 0
-                        || fragment.scalar_end != story_len
-                        || fragment.text != story.text
-                    {
-                        continue;
-                    }
-
                     let Ok(Some(current_typography)) =
                         current_fragment_typography_v1(&editor, fragment)
                     else {
@@ -459,17 +460,19 @@ mod tests {
             open_mature_0x2c_editor(&original, source_hash).expect("open witness editor");
         let source_text = editor.graph().stories[&witness.story_id].text.clone();
 
-        let before_plan = build_desktop_page_render_plan_with_current_source_fonts(
-            &visual,
-            witness.page_index,
-            &registry,
-            &editor,
-        )
-        .expect("source/base render plan");
-        let before_text =
-            text_for_node(&before_plan, witness.node_id).expect("source/base text node");
+        let base_plan = build_page_render_plan_v1(&visual, witness.page_index)
+            .expect("source/base render plan");
+        let source_fragment = text_for_node(&base_plan, witness.node_id)
+            .expect("source/base text node")
+            .clone();
         assert_eq!(
-            resource_for_scalar(before_text, witness.edit_start),
+            current_resource_for_scalar(
+                &editor,
+                &source_fragment,
+                &registry,
+                witness.edit_start,
+            )
+            .as_deref(),
             Some(witness.before_resource_id.as_str())
         );
 
@@ -487,53 +490,49 @@ mod tests {
             )
             .expect("commit scoped style");
 
-        let styled_plan = build_desktop_page_render_plan_with_current_source_fonts(
-            &visual,
-            witness.page_index,
-            &registry,
-            &editor,
-        )
-        .expect("styled render plan");
-        let styled_text = text_for_node(&styled_plan, witness.node_id).expect("styled text node");
         assert_eq!(
-            resource_for_scalar(styled_text, witness.edit_start),
+            current_resource_for_scalar(
+                &editor,
+                &source_fragment,
+                &registry,
+                witness.edit_start,
+            )
+            .as_deref(),
             Some(witness.after_resource_id.as_str())
         );
         assert_eq!(
-            resource_for_scalar(styled_text, witness.outside_scalar),
+            current_resource_for_scalar(
+                &editor,
+                &source_fragment,
+                &registry,
+                witness.outside_scalar,
+            )
+            .as_deref(),
             Some(witness.before_resource_id.as_str()),
             "exact styled resource may change only inside the edited scalar range"
         );
 
         editor.undo().expect("undo scoped style");
-        let undo_plan = build_desktop_page_render_plan_with_current_source_fonts(
-            &visual,
-            witness.page_index,
-            &registry,
-            &editor,
-        )
-        .expect("undo render plan");
         assert_eq!(
-            resource_for_scalar(
-                text_for_node(&undo_plan, witness.node_id).expect("undo text node"),
+            current_resource_for_scalar(
+                &editor,
+                &source_fragment,
+                &registry,
                 witness.edit_start,
-            ),
+            )
+            .as_deref(),
             Some(witness.before_resource_id.as_str())
         );
 
         editor.redo().expect("redo scoped style");
-        let redo_plan = build_desktop_page_render_plan_with_current_source_fonts(
-            &visual,
-            witness.page_index,
-            &registry,
-            &editor,
-        )
-        .expect("redo render plan");
         assert_eq!(
-            resource_for_scalar(
-                text_for_node(&redo_plan, witness.node_id).expect("redo text node"),
+            current_resource_for_scalar(
+                &editor,
+                &source_fragment,
+                &registry,
                 witness.edit_start,
-            ),
+            )
+            .as_deref(),
             Some(witness.after_resource_id.as_str())
         );
 
@@ -546,18 +545,14 @@ mod tests {
         reopened
             .apply_project(&project_roundtrip)
             .expect("replay scoped styled project");
-        let reopened_plan = build_desktop_page_render_plan_with_current_source_fonts(
-            &visual,
-            witness.page_index,
-            &registry,
-            &reopened,
-        )
-        .expect("reopened styled render plan");
         assert_eq!(
-            resource_for_scalar(
-                text_for_node(&reopened_plan, witness.node_id).expect("reopened text node"),
+            current_resource_for_scalar(
+                &reopened,
+                &source_fragment,
+                &registry,
                 witness.edit_start,
-            ),
+            )
+            .as_deref(),
             Some(witness.after_resource_id.as_str())
         );
 
@@ -573,18 +568,14 @@ mod tests {
                 &clear_hash,
             )
             .expect("clear scoped style");
-        let cleared_plan = build_desktop_page_render_plan_with_current_source_fonts(
-            &visual,
-            witness.page_index,
-            &registry,
-            &reopened,
-        )
-        .expect("cleared render plan");
         assert_eq!(
-            resource_for_scalar(
-                text_for_node(&cleared_plan, witness.node_id).expect("cleared text node"),
+            current_resource_for_scalar(
+                &reopened,
+                &source_fragment,
+                &registry,
                 witness.edit_start,
-            ),
+            )
+            .as_deref(),
             Some(witness.before_resource_id.as_str())
         );
 
