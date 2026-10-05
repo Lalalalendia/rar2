@@ -18,7 +18,10 @@ use chaptera_text_interaction_adapter::{
     TextSelectionStateV1, activate_explicit_edit_text_v1, activate_pointer_text_v1,
     exit_desktop_text_mode_v1, handoff_same_story_frame_v1, rebind_text_edit_session_authority_v1,
 };
-use pub_editor::{EditorSession, NodeId, StoryId};
+use pub_editor::{
+    EditOperation, EditorSession, EffectivePropertySourceV1, FormatPropertyV1, FormatValueV1,
+    NodeId, StoryId,
+};
 use pub_model::CanonicalId;
 
 #[derive(Debug, Clone)]
@@ -28,6 +31,212 @@ pub struct DesktopTextMode {
     pub domain: StoryEditDomainV1,
     pub layout: DesktopStoryLayoutV1,
     pub session: TextEditSessionV1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DesktopBooleanFormatPropertyV1 {
+    Bold,
+    Italic,
+}
+
+impl DesktopBooleanFormatPropertyV1 {
+    pub const fn canonical(self) -> FormatPropertyV1 {
+        match self {
+            Self::Bold => FormatPropertyV1::Bold,
+            Self::Italic => FormatPropertyV1::Italic,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Bold => "Bold",
+            Self::Italic => "Italic",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DesktopBooleanEffectiveStateV1 {
+    Uniform(bool),
+    Mixed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DesktopBooleanProvenanceStateV1 {
+    Base,
+    ChapteraOverride,
+    Mixed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DesktopBooleanSelectionStateV1 {
+    pub effective: DesktopBooleanEffectiveStateV1,
+    pub provenance: DesktopBooleanProvenanceStateV1,
+}
+
+impl DesktopBooleanSelectionStateV1 {
+    pub const fn next_explicit_value(self) -> bool {
+        match self.effective {
+            DesktopBooleanEffectiveStateV1::Uniform(true) => false,
+            DesktopBooleanEffectiveStateV1::Uniform(false)
+            | DesktopBooleanEffectiveStateV1::Mixed => true,
+        }
+    }
+
+    pub const fn has_chaptera_override(self) -> bool {
+        !matches!(self.provenance, DesktopBooleanProvenanceStateV1::Base)
+    }
+}
+
+fn non_empty_scalar_selection(mode: &DesktopTextMode) -> Result<(u32, u32), String> {
+    let anchor = mode.session.selection.anchor_scalar;
+    let focus = mode.session.selection.focus_scalar;
+    let start = anchor.min(focus);
+    let end = anchor.max(focus);
+    if start == end {
+        return Err(
+            "Bold/Italic V1 requires a non-empty canonical Story selection; collapsed-caret typing format remains transient"
+                .to_owned(),
+        );
+    }
+    Ok((start, end))
+}
+
+pub fn boolean_format_selection_state_v1(
+    editor: &EditorSession,
+    mode: &DesktopTextMode,
+    property: DesktopBooleanFormatPropertyV1,
+) -> Result<DesktopBooleanSelectionStateV1, String> {
+    let (start, end) = non_empty_scalar_selection(mode)?;
+    let segments = editor
+        .current_text_format_property_segments_v1(
+            mode.story_id,
+            property.canonical(),
+            start,
+            end,
+        )
+        .map_err(|error| error.to_string())?;
+    if segments.is_empty() {
+        return Err("canonical property-scoped text-format query returned no effective segments".to_owned());
+    }
+
+    let mut effective = None;
+    let mut effective_mixed = false;
+    let mut provenance = None;
+    let mut provenance_mixed = false;
+    let mut cursor = start;
+
+    for segment in &segments {
+        if segment.start_scalar != cursor
+            || segment.end_scalar <= segment.start_scalar
+            || segment.end_scalar > end
+        {
+            return Err(
+                "canonical property-scoped text-format query did not cover the selected range contiguously"
+                    .to_owned(),
+            );
+        }
+        cursor = segment.end_scalar;
+
+        let value = match &segment.value {
+            FormatValueV1::Bool(value) => *value,
+            _ => {
+                return Err(format!(
+                    "{} canonical effective value is not boolean",
+                    property.label()
+                ));
+            }
+        };
+        if effective.is_some_and(|previous| previous != value) {
+            effective_mixed = true;
+        } else if effective.is_none() {
+            effective = Some(value);
+        }
+
+        let source = match segment.source {
+            EffectivePropertySourceV1::Base => DesktopBooleanProvenanceStateV1::Base,
+            EffectivePropertySourceV1::ChapteraOverride => {
+                DesktopBooleanProvenanceStateV1::ChapteraOverride
+            }
+        };
+        if provenance.is_some_and(|previous| previous != source) {
+            provenance_mixed = true;
+        } else if provenance.is_none() {
+            provenance = Some(source);
+        }
+    }
+
+    if cursor != end {
+        return Err("canonical property-scoped text-format query did not cover the full selection".to_owned());
+    }
+
+    Ok(DesktopBooleanSelectionStateV1 {
+        effective: if effective_mixed {
+            DesktopBooleanEffectiveStateV1::Mixed
+        } else {
+            DesktopBooleanEffectiveStateV1::Uniform(
+                effective.ok_or_else(|| "missing boolean effective state".to_owned())?,
+            )
+        },
+        provenance: if provenance_mixed {
+            DesktopBooleanProvenanceStateV1::Mixed
+        } else {
+            provenance.ok_or_else(|| "missing boolean provenance state".to_owned())?
+        },
+    })
+}
+
+pub fn apply_boolean_format_toggle_v1(
+    editor: &mut EditorSession,
+    mode: &mut DesktopTextMode,
+    property: DesktopBooleanFormatPropertyV1,
+) -> Result<EditOperation, String> {
+    let selection = boolean_format_selection_state_v1(editor, mode, property)?;
+    let (start, end) = non_empty_scalar_selection(mode)?;
+    let state_hash = editor
+        .current_text_format_property_state_hash_v1(mode.story_id, property.canonical())
+        .map_err(|error| error.to_string())?;
+    let operation = editor
+        .set_text_format_property_scoped_v1(
+            mode.story_id,
+            start,
+            end,
+            property.canonical(),
+            FormatValueV1::Bool(selection.next_explicit_value()),
+            &state_hash,
+        )
+        .map_err(|error| error.to_string())?;
+    rebind_after_non_text_document_change(editor, mode)?;
+    Ok(operation)
+}
+
+pub fn clear_boolean_format_override_v1(
+    editor: &mut EditorSession,
+    mode: &mut DesktopTextMode,
+    property: DesktopBooleanFormatPropertyV1,
+) -> Result<EditOperation, String> {
+    let selection = boolean_format_selection_state_v1(editor, mode, property)?;
+    if !selection.has_chaptera_override() {
+        return Err(format!(
+            "{} selection has no Chaptera override to clear",
+            property.label()
+        ));
+    }
+    let (start, end) = non_empty_scalar_selection(mode)?;
+    let state_hash = editor
+        .current_text_format_property_state_hash_v1(mode.story_id, property.canonical())
+        .map_err(|error| error.to_string())?;
+    let operation = editor
+        .clear_text_format_property_override_scoped_v1(
+            mode.story_id,
+            start,
+            end,
+            property.canonical(),
+            &state_hash,
+        )
+        .map_err(|error| error.to_string())?;
+    rebind_after_non_text_document_change(editor, mode)?;
+    Ok(operation)
 }
 
 fn fallback_font_resource() -> ExplicitDesktopFontResourceV1<'static> {
@@ -535,6 +744,187 @@ mod tests {
         assert!(
             node_id_from_caret_frame("frame:B").is_err(),
             "non-canonical frame identities remain fail-closed"
+        );
+    }
+
+    #[test]
+    fn boolean_selection_state_next_click_matches_ui_law() {
+        use DesktopBooleanEffectiveStateV1::{Mixed, Uniform};
+        use DesktopBooleanProvenanceStateV1::{Base, ChapteraOverride, Mixed as MixedSource};
+
+        for (state, expected) in [
+            (
+                DesktopBooleanSelectionStateV1 {
+                    effective: Uniform(false),
+                    provenance: Base,
+                },
+                true,
+            ),
+            (
+                DesktopBooleanSelectionStateV1 {
+                    effective: Uniform(true),
+                    provenance: ChapteraOverride,
+                },
+                false,
+            ),
+            (
+                DesktopBooleanSelectionStateV1 {
+                    effective: Mixed,
+                    provenance: MixedSource,
+                },
+                true,
+            ),
+        ] {
+            assert_eq!(state.next_explicit_value(), expected);
+        }
+    }
+
+    #[test]
+    fn real_51318_scoped_bold_ui_history_ignores_unknown_color() {
+        let Some(path) = env::var_os("CHAPTERA_TEXT_FORMAT_51318") else {
+            eprintln!(
+                "CHAPTERA_TEXT_FORMAT_51318 not set; dedicated Desktop scoped-format gate owns real evidence"
+            );
+            return;
+        };
+
+        let original = fs::read(&path).expect("read pinned 51318.pub");
+        let digest = Sha256::digest(&original);
+        let mut digest_bytes = [0_u8; 32];
+        digest_bytes.copy_from_slice(&digest);
+        let source_hash = Sha256Digest::from_bytes(digest_bytes);
+        let mut editor =
+            open_mature_0x2c_editor(&original, source_hash).expect("open pinned 51318.pub");
+        let visual = pub_viewer::open_mature_0x2c_geometry(
+            &original,
+            pub_viewer::viewer_geometry_environment_v0_1(),
+        )
+        .expect("open 51318.pub Viewer geometry");
+
+        let (story_id, frame_id) = visual
+            .text_fragments
+            .iter()
+            .find_map(|fragment| {
+                let full_error = editor
+                    .source_text_format_overlay_v1(fragment.story_id)
+                    .err()?
+                    .to_string();
+                if !full_error.contains("bounded effective direct-RGB text color is unavailable") {
+                    return None;
+                }
+                editor
+                    .current_text_format_property_state_v1(
+                        fragment.story_id,
+                        FormatPropertyV1::Bold,
+                    )
+                    .ok()
+                    .filter(|state| state.story_scalar_len > 0 && !state.base_runs.is_empty())?;
+                enter_explicit_text_mode(&editor, fragment.story_id, fragment.frame_id)
+                    .ok()
+                    .map(|_| (fragment.story_id, fragment.frame_id))
+            })
+            .expect("51318.pub must expose one color-blocked Story with bounded Bold authority");
+
+        let source_text = editor.graph().stories[&story_id].text.clone();
+        let mut mode =
+            enter_explicit_text_mode(&editor, story_id, frame_id).expect("enter format Story");
+        select_all(&mut mode);
+
+        let before =
+            boolean_format_selection_state_v1(&editor, &mode, DesktopBooleanFormatPropertyV1::Bold)
+                .expect("read property-scoped source-effective Bold");
+        let expected = before.next_explicit_value();
+
+        let operation = apply_boolean_format_toggle_v1(
+            &mut editor,
+            &mut mode,
+            DesktopBooleanFormatPropertyV1::Bold,
+        )
+        .expect("commit property-scoped Bold from Desktop helper");
+        assert!(matches!(
+            operation,
+            EditOperation::SetTextFormatPropertyScopedV1 {
+                story_id: id,
+                property: FormatPropertyV1::Bold,
+                value: FormatValueV1::Bool(value),
+                ..
+            } if id == story_id && value == expected
+        ));
+        assert_eq!(editor.project().schema_version, pub_editor::EDITOR_PROJECT_VERSION_V0_16);
+        assert_eq!(editor.graph().stories[&story_id].text, source_text);
+
+        let after =
+            boolean_format_selection_state_v1(&editor, &mode, DesktopBooleanFormatPropertyV1::Bold)
+                .expect("read edited scoped Bold");
+        assert_eq!(
+            after.effective,
+            DesktopBooleanEffectiveStateV1::Uniform(expected)
+        );
+        assert!(matches!(
+            after.provenance,
+            DesktopBooleanProvenanceStateV1::ChapteraOverride
+                | DesktopBooleanProvenanceStateV1::Mixed
+        ));
+
+        let unresolved = editor
+            .current_text_format_overlay_v1(story_id)
+            .expect_err("Desktop scoped Bold must not invent unresolved color")
+            .to_string();
+        assert!(unresolved.contains("bounded effective direct-RGB text color is unavailable"));
+
+        editor.undo().expect("Undo scoped Bold");
+        rebind_after_non_text_document_change(&editor, &mut mode)
+            .expect("rebind after scoped Bold Undo");
+        assert_eq!(
+            boolean_format_selection_state_v1(
+                &editor,
+                &mode,
+                DesktopBooleanFormatPropertyV1::Bold,
+            )
+            .expect("read undone scoped Bold"),
+            before
+        );
+
+        editor.redo().expect("Redo scoped Bold");
+        rebind_after_non_text_document_change(&editor, &mut mode)
+            .expect("rebind after scoped Bold Redo");
+        assert_eq!(
+            boolean_format_selection_state_v1(
+                &editor,
+                &mode,
+                DesktopBooleanFormatPropertyV1::Bold,
+            )
+            .expect("read redone scoped Bold"),
+            after
+        );
+
+        let project = editor.project();
+        let serialized = serde_json::to_vec(&project).expect("serialize v0.16 Desktop project");
+        let roundtrip: pub_editor::EditorProject =
+            serde_json::from_slice(&serialized).expect("deserialize v0.16 Desktop project");
+        let mut reopened =
+            open_mature_0x2c_editor(&original, source_hash).expect("fresh reopen pinned source");
+        reopened
+            .apply_project(&roundtrip)
+            .expect("fresh replay Desktop scoped Bold history");
+        let mut reopened_mode = enter_explicit_text_mode(&reopened, story_id, frame_id)
+            .expect("reenter reopened scoped Story");
+        select_all(&mut reopened_mode);
+        assert_eq!(
+            boolean_format_selection_state_v1(
+                &reopened,
+                &reopened_mode,
+                DesktopBooleanFormatPropertyV1::Bold,
+            )
+            .expect("read replayed scoped Bold"),
+            after
+        );
+        assert_eq!(reopened.graph().stories[&story_id].text, source_text);
+        assert_eq!(reopened.source_hash(), source_hash);
+        assert_eq!(
+            fs::read(path).expect("re-read pinned 51318.pub"),
+            original,
+            "Desktop scoped formatting history must not mutate source PUB bytes"
         );
     }
 
