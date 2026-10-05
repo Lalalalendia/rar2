@@ -221,14 +221,14 @@ class DesktopVerticalRunnerTests(unittest.TestCase):
         self.assertEqual(receipt, saved)
         self.assertEqual(saved["project"]["schema_version"], "pub-editor-v0.11")
 
-    def test_v0_12_and_v0_13_identity_projects_are_accepted(self):
+    def test_v0_12_through_v0_16_identity_projects_are_accepted(self):
         identity = '''"identity": {
         "project_id": "018f0000-0000-7000-8000-000000000001",
         "document_id": "018f0000-0000-7000-8000-000000000002",
         "history_id": "018f0000-0000-7000-8000-000000000003",
         "genesis_revision_id": "018f0000-0000-7000-8000-000000000004"
     },'''
-        for schema_version in ("pub-editor-v0.12", "pub-editor-v0.13"):
+        for schema_version in ("pub-editor-v0.12", "pub-editor-v0.13", "pub-editor-v0.14", "pub-editor-v0.15", "pub-editor-v0.16"):
             with self.subTest(schema_version=schema_version):
                 engine = FAKE_ENGINE.replace(
                     '"schema_version": "pub-editor-v0.4",',
@@ -252,6 +252,50 @@ class DesktopVerticalRunnerTests(unittest.TestCase):
                 validate_schema(saved)
                 self.assertEqual(receipt, saved)
                 self.assertEqual(saved["project"]["schema_version"], schema_version)
+
+    def test_v0_16_without_identity_is_rejected(self):
+        engine = FAKE_ENGINE.replace(
+            '"schema_version": "pub-editor-v0.4",',
+            '"schema_version": "pub-editor-v0.16",',
+            1,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture, project, export, receipt_path, command = self.make_files(tmp, engine)
+            with self.assertRaisesRegex(
+                DesktopVerticalError, "pub-editor-v0.16 EditorProject must carry durable identity"
+            ):
+                run_local_desktop_vertical(
+                    fixture=fixture,
+                    project_output=project,
+                    export_output=export,
+                    receipt_output=receipt_path,
+                    command_template=command,
+                    expected_hash=SOURCE_HASH,
+                    expected_len=len(SOURCE_BYTES),
+                    rar_commit=RAR_COMMIT,
+                )
+
+    def test_future_editor_project_schema_is_rejected(self):
+        engine = FAKE_ENGINE.replace(
+            '"schema_version": "pub-editor-v0.4",',
+            '"schema_version": "pub-editor-v0.17",',
+            1,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture, project, export, receipt_path, command = self.make_files(tmp, engine)
+            with self.assertRaisesRegex(
+                DesktopVerticalError, "unsupported EditorProject schema_version"
+            ):
+                run_local_desktop_vertical(
+                    fixture=fixture,
+                    project_output=project,
+                    export_output=export,
+                    receipt_output=receipt_path,
+                    command_template=command,
+                    expected_hash=SOURCE_HASH,
+                    expected_len=len(SOURCE_BYTES),
+                    rar_commit=RAR_COMMIT,
+                )
 
     def test_current_rust_editor_project_schema_is_admitted_everywhere(self):
         pub_editor = (
