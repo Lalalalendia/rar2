@@ -1,0 +1,44 @@
+# Rar2 live branch GC wave 7 — 2026-10-05
+# Prepared conservatively from live GitHub state.
+# 38 refs: current live tip exactly matches a merged PR head whose base was main.
+# Excluded: main/default, open PR heads, open PR bases, moved tips, closed-unmerged refs.
+# Runtime branch-GC must recheck open heads + exact expected SHA before deletion.
+# Format: <branch> <expected_sha>
+viewer/grouped-carrier-stack-order-01 715bc42c90070cdb6254215bd4dd89d000f5b4d1
+platform/win-destination-identity-01 fc52e0d31586a6edf61c0435ae5d2b5c3613d6b4
+editor/desktop-multiselect-restore-01 93b614509e0081e0c4bd0ba2540c41515301386c
+ci/package-extracted-smoke-current-01 986592ac14c385e2b4065ef6ce975c3d68e577d5
+editor/project-asset-reachability-01 b60a1c1f39ad700d97000f0a9c4c62406a2e478c
+cloud/cloud-reader-observability-01 81332ea0b6c5153ba929c47dbc360807d9bb7d09
+viewer/table-cell-paint-t595-01 0f0496fe2ea4b794681597f0cd74259648a45918
+oracle/reference-media-extent-01 fafc2fe2be7894fc0433005b47130aae03cf9852
+product/pub-editable-export-current-01 aa0ce9722cac46f5f17908a9b7d0406a4deb58b5
+cloud/cloud-reader-server7-host-acceptance-01 f8fd4659d8aa5b3e6163ef01996abaa5348d33c6
+cloud/cloud-reader-host-harness-install-01 c8ff6d4b5a2443af35593df41895b620e5512477
+cloud/cloud-reader-product-ui-01-current 9d0172fbb9674257de7d15082250560ff276bf30
+fix/viewer-table-native-autoformat-cell-paint-02 bb31f72b463404fdf605b173c6af923682087a4e
+fix/research-runner-windows-powershell-compat-01 33236d50608fca145cdc9767c85b7645bff27685
+fix/research-runner-prebuilt-dgg-oracle-01 af8aab5095f254efac4a50841c018f207f634ad4
+fix/native-publisher-path-case-dedupe e1d048360320040b0db9f9838a3c4a1ace2ce83a8
+fix/winps-pubruntime-ascii d7d6a7485ad614c6efed494d9e5c2bbd504e16a4
+fix/carlton-acquisition-stale-main-01 7fda857c23503c91e26a19a228a3af82411f5608
+fix/viewer-sparse-textbox-dgg-nonapplicability-01 752c9e124994defef44dc73a7456b0b0db9b117e
+fix/current-main-roundrect-geometry-03 2aa8b07fdcc39b836143aa966f7ebdce1b7210e0
+product/migration-editable-route-service-01 d79d8c1e3f93fd9f4e6971160267faafe3ce575e
+fix/table-autoformat-border-physical-tracks-01 aaec1801df2c486f33da7c0818a5489c2797e7c3
+cloud/cloud-reader-app-shell-01 881c2270734ac97826370a723c74ef3044316dc1
+hosted-reader1050-frontier-02 cf119619366523f63d6affcd9eb09d08259c2a74
+hosted-reader1050-discriminator-01 7dfd126d3d93179ecf947916cdb7dc4aad2789ca
+hosted-reader1050-forced-trigger-01 1f2c48c2bdab732c07f8bef7001881538d4c2a24
+fix/picture-recolor-802 ab8001efca65b6f699652a041a755397513a4935
+ci/publisher-visual-golden-batch01 b581fec38320dc324831d5f6eabcfb445a390c3d
+fix/visual-batch01-fingerprint-hash-01 4b53d4c91f3ad508809c999d29f2f5a72c5860a7
+fix/pub-vba-project-root-admission-01 dab733a658f7aef77caaf761d8e16d1e20a53740
+product/editor-desktop-continuity-v2-01 44839cc334f669d98907eb2b47d8a5fed6cd8dfe
+ci/publisher-visual-batch01-fix-sha 85d5e7b1eb9c6bc7b00db8a6926f25dc982a66a8
+ci/virginia-optional-public-pair-v1 e30e603bdcb1f02e597d137c045f66dbe289a04a
+ci/scope-publisher-html-harvest b3f33597626624dc8bc130ae36ffcb2a13ce5a21
+reader/exact-sha-salvage-authority 2ab142ec8a44cf75569fd10525600e654ce9d277
+ci/reduce-pr-fanout-v3 69268af22661b997ab5e4e5df978e365cb11035d
+ci/reduce-reader-research-fanout 829105f0f3bb79b285bebc50222ecfa9bdff7559
+editor-desktop-selection-keyboard-restore-01 f4d0c2f33078e61fe07fa58c224784d896df74e3
