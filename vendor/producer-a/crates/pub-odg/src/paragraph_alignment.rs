@@ -24,17 +24,33 @@ pub struct OdgParagraphScopedAlignmentPlacement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OdgParagraphAlignmentError {
     NonOdgPackage,
-    DuplicateStory { story_id: StoryId },
-    DuplicateFrame { node_id: NodeId },
-    EmptyFrames { story_id: StoryId },
-    MissingPlannedFeature { story_id: StoryId },
+    DuplicateStory {
+        story_id: StoryId,
+    },
+    DuplicateFrame {
+        node_id: NodeId,
+    },
+    EmptyFrames {
+        story_id: StoryId,
+    },
+    MissingPlannedFeature {
+        story_id: StoryId,
+    },
     MissingContent,
     InvalidContentUtf8,
     InvalidAutomaticStyles,
-    MissingFrame { node_id: NodeId },
-    MissingTextCarrier { node_id: NodeId },
-    ExistingParagraphStyle { node_id: NodeId },
-    EmptyParagraphs { story_id: StoryId },
+    MissingFrame {
+        node_id: NodeId,
+    },
+    MissingTextCarrier {
+        node_id: NodeId,
+    },
+    ExistingParagraphStyle {
+        node_id: NodeId,
+    },
+    EmptyParagraphs {
+        story_id: StoryId,
+    },
     ParagraphStoryMismatch {
         story_id: StoryId,
         paragraph_id: pub_model::ParagraphId,
@@ -367,9 +383,9 @@ fn apply_scoped_styles_to_frame(
         });
     }
     if carriers.len() == paragraphs.len() + 1 && !carriers.last().is_some_and(|item| item.2) {
-        return Err(OdgParagraphAlignmentError::UnexpectedExtraParagraphCarrier {
-            node_id: frame_id,
-        });
+        return Err(
+            OdgParagraphAlignmentError::UnexpectedExtraParagraphCarrier { node_id: frame_id },
+        );
     }
 
     for (index, paragraph) in paragraphs.iter().enumerate().rev() {
@@ -642,30 +658,11 @@ mod tests {
         let story_id = story(5);
         let frame_id = frame(6);
         let export_plan = plan(story_id);
-        let mut package =
-            package_with_paragraphs(&export_plan, frame_id, &["One", "Two", "Three"]);
+        let mut package = package_with_paragraphs(&export_plan, frame_id, &["One", "Two", "Three"]);
 
-        let first = scoped(
-            11,
-            story_id,
-            0,
-            4,
-            ParagraphScopedAlignmentValueV1::Left,
-        );
-        let second = scoped(
-            12,
-            story_id,
-            4,
-            8,
-            ParagraphScopedAlignmentValueV1::Center,
-        );
-        let third = scoped(
-            13,
-            story_id,
-            8,
-            13,
-            ParagraphScopedAlignmentValueV1::Right,
-        );
+        let first = scoped(11, story_id, 0, 4, ParagraphScopedAlignmentValueV1::Left);
+        let second = scoped(12, story_id, 4, 8, ParagraphScopedAlignmentValueV1::Center);
+        let third = scoped(13, story_id, 8, 13, ParagraphScopedAlignmentValueV1::Right);
         let placement = OdgParagraphScopedAlignmentPlacement {
             story_id,
             paragraphs: vec![third.clone(), first.clone(), second.clone()],
@@ -709,20 +706,8 @@ mod tests {
         let placement = OdgParagraphScopedAlignmentPlacement {
             story_id,
             paragraphs: vec![
-                scoped(
-                    21,
-                    story_id,
-                    0,
-                    4,
-                    ParagraphScopedAlignmentValueV1::Left,
-                ),
-                scoped(
-                    22,
-                    story_id,
-                    4,
-                    8,
-                    ParagraphScopedAlignmentValueV1::Right,
-                ),
+                scoped(21, story_id, 0, 4, ParagraphScopedAlignmentValueV1::Left),
+                scoped(22, story_id, 4, 8, ParagraphScopedAlignmentValueV1::Right),
             ],
             frame_ids: vec![frame_id],
         };
@@ -749,20 +734,8 @@ mod tests {
         let placement = OdgParagraphScopedAlignmentPlacement {
             story_id,
             paragraphs: vec![
-                scoped(
-                    31,
-                    story_id,
-                    0,
-                    4,
-                    ParagraphScopedAlignmentValueV1::Left,
-                ),
-                scoped(
-                    32,
-                    story_id,
-                    4,
-                    8,
-                    ParagraphScopedAlignmentValueV1::Right,
-                ),
+                scoped(31, story_id, 0, 4, ParagraphScopedAlignmentValueV1::Left),
+                scoped(32, story_id, 4, 8, ParagraphScopedAlignmentValueV1::Right),
             ],
             frame_ids: vec![frame_id],
         };
@@ -787,20 +760,8 @@ mod tests {
         let placement = OdgParagraphScopedAlignmentPlacement {
             story_id,
             paragraphs: vec![
-                scoped(
-                    41,
-                    story_id,
-                    0,
-                    4,
-                    ParagraphScopedAlignmentValueV1::Left,
-                ),
-                scoped(
-                    42,
-                    story_id,
-                    5,
-                    9,
-                    ParagraphScopedAlignmentValueV1::Center,
-                ),
+                scoped(41, story_id, 0, 4, ParagraphScopedAlignmentValueV1::Left),
+                scoped(42, story_id, 5, 9, ParagraphScopedAlignmentValueV1::Center),
             ],
             frame_ids: vec![frame_id],
         };
