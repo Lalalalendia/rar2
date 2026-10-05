@@ -2789,7 +2789,7 @@ impl ViewerApp {
             return;
         };
 
-        let frame_count = self
+        let frame_ordinals = self
             .visual
             .as_ref()
             .map(|visual| {
@@ -2797,9 +2797,10 @@ impl ViewerApp {
                     .story_frames
                     .iter()
                     .filter(|frame| frame.story_id == story_id)
-                    .count()
+                    .map(|frame| frame.ordinal)
+                    .collect::<Vec<_>>()
             })
-            .unwrap_or(0);
+            .unwrap_or_default();
 
         let Some(editor) = self.editor.as_ref() else {
             ui.colored_label(
@@ -2822,11 +2823,20 @@ impl ViewerApp {
             }
             self.show_table_cell_edit_controls(ui, story_id, &table_cells);
         } else {
-            if frame_count != 1 {
-                ui.weak(format!(
-                    "Read-only in the desktop slice: this Story has {frame_count} frames. The engine can validate shared-Story editing, but this Viewer does not yet paint linked text flow faithfully."
-                ));
+            if frame_ordinals.is_empty() {
+                ui.weak(
+                    "Read-only in the desktop slice: this Story has no proven placed TextFrame.",
+                );
                 return;
+            }
+            if frame_ordinals.len() > 1 {
+                ui.strong(format!(
+                    "Linked Story chain: {}",
+                    linked_story_chain_label(&frame_ordinals)
+                ));
+                ui.small(
+                    "All listed frames share one canonical Story. Editing reflows that Story through the existing chain; link topology remains unchanged.",
+                );
             }
             self.show_story_text_edit_controls(ui, story_id);
         }
@@ -2922,7 +2932,9 @@ impl ViewerApp {
     }
 
     fn show_story_text_edit_controls(&mut self, ui: &mut egui::Ui, story_id: pub_editor::StoryId) {
-        ui.small("Safe slice: one validated ordinary Story. The original PUB remains immutable.");
+        ui.small(
+            "Safe slice: one validated ordinary Story. Existing frame topology and the original PUB remain immutable.",
+        );
         if self
             .preview_clipped_story_keys
             .contains(&format!("{:?}", story_id))
@@ -5118,6 +5130,16 @@ fn replacement_image_mime(path: &Path) -> Option<&'static str> {
     }
 }
 
+fn linked_story_chain_label(frame_ordinals: &[u32]) -> String {
+    let mut ordinals = frame_ordinals.to_vec();
+    ordinals.sort_unstable();
+    ordinals
+        .into_iter()
+        .map(|ordinal| ordinal.saturating_add(1).to_string())
+        .collect::<Vec<_>>()
+        .join(" → ")
+}
+
 fn search_result_preview(text: &str) -> String {
     const LIMIT: usize = 48;
     let mut preview = text.replace(['\r', '\n'], " ");
@@ -6771,7 +6793,7 @@ mod tests {
             "GUI open must create the EditorSession"
         );
 
-        let (story_id, original_story, search_term) = {
+        let (story_id, original_story, search_term, chain_label, linked_topology_before) = {
             let app = harness.state();
             let visual = app.visual.as_ref().expect("visual loaded");
             let editor = app.editor.as_ref().expect("editor loaded");
@@ -6785,11 +6807,11 @@ mod tests {
                         .iter()
                         .filter(|frame| frame.story_id == story.id)
                         .count()
-                        == 1
+                        > 1
                         && editor.can_replace_story_text(story.id).is_ok()
                         && !story.text.trim().is_empty()
                 })
-                .expect("real fixture exposes a GUI-editable Story");
+                .expect("real fixture exposes a GUI-editable linked Story");
             let term = story
                 .text
                 .split_whitespace()
@@ -6797,13 +6819,37 @@ mod tests {
                     word.trim_matches(|ch: char| !ch.is_alphanumeric())
                         .to_owned()
                 })
-                .filter(|word| word.chars().count() >= 6)
+                .filter(|word| word.chars().count() >= 4)
                 .find(|word| {
                     let matches = visual.document.search_text(word);
                     matches.len() == 1 && matches[0].story_id == story.id
                 })
-                .expect("editable Story exposes one unique search term");
-            (story.id, story.text.clone(), term)
+                .expect("editable linked Story exposes one unique search term");
+            let frame_ordinals = visual
+                .story_frames
+                .iter()
+                .filter(|frame| frame.story_id == story.id)
+                .map(|frame| frame.ordinal)
+                .collect::<Vec<_>>();
+            let chain_label = format!(
+                "Linked Story chain: {}",
+                linked_story_chain_label(&frame_ordinals)
+            );
+            let topology = editor
+                .graph()
+                .nodes
+                .iter()
+                .filter_map(|(node_id, node)| {
+                    let frame = node.payload.story_frame.as_ref()?;
+                    (frame.story_id == Some(story.id)).then_some((
+                        *node_id,
+                        frame.ordinal,
+                        frame.previous_frame,
+                        frame.next_frame,
+                    ))
+                })
+                .collect::<Vec<_>>();
+            (story.id, story.text.clone(), term, chain_label, topology)
         };
 
         {
@@ -6823,6 +6869,11 @@ mod tests {
         harness.get_by_label(&result_label).click();
         harness.step();
         assert_eq!(harness.state().edit_buffer, original_story);
+        assert!(
+            !chain_label.ends_with(": "),
+            "linked Story chain label must expose at least two recovered frame ordinals"
+        );
+        let _chain = harness.get_by_label(&chain_label);
 
         let replacement = "Chaptera GUI-only V0 acceptance text".to_owned();
         {
@@ -6853,6 +6904,28 @@ mod tests {
                 .len(),
             1,
             "Story edit must be admitted through the real GUI button"
+        );
+        let linked_topology_after = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor present")
+            .graph()
+            .nodes
+            .iter()
+            .filter_map(|(node_id, node)| {
+                let frame = node.payload.story_frame.as_ref()?;
+                (frame.story_id == Some(story_id)).then_some((
+                    *node_id,
+                    frame.ordinal,
+                    frame.previous_frame,
+                    frame.next_frame,
+                ))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            linked_topology_after, linked_topology_before,
+            "GUI linked Story edit must preserve exact frame topology"
         );
 
         let (movable_page_label, movable_document_point) = {
