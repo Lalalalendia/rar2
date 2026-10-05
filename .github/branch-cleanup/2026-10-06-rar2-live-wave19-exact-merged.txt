@@ -1,0 +1,17 @@
+# Rar2 live branch GC wave 19 — 2026-10-06
+# 10 exact-SHA refs whose current SHA equals an already-merged PR head in the recent closed-PR window,
+# plus the completed Wave 18 execution-only GC owner.
+# Open PR heads and bases were excluded before manifest creation.
+# Runtime guard rechecks open PR heads + exact remote SHA; moved refs are skipped, absent refs are harmless.
+# Format: <branch> <expected_sha>
+conversion/editable-typography-consumer-edit-01c 524503ce2d096341a4c619257b3f6a47f5d53dfa
+editor-text-format-overlay-rust-01 0bf78c47d9e80c3eddba1960e6576893e0cde770
+research/picture-recolor-reference-census-832-v2 b7c4222e28b6f4ec88dbd4262643c4f563d19ab7
+restack/pr1267-after-utf8-exact-20261004 f32da207e883a914db8faad4a808cb01738036a1
+restack/pr1282-after-1290-20261004 c0e0c2a9a91289c3a3726e0956ce4bc2a17b80fe
+restack/pr1290-carlton-20261004 264ab958cf8ceb5bfd778941defa26e120860331
+tmp-restack-1021-20261004 7bf8b44ec47fc662e9576910d0baeb0c46e4a389
+tmp/restack-borderart-assets-after-1022 4fb4acb7162a2c333257de34e82cd08c86fcf90b
+tmp/restack-viewer-borderart-after-1022 63131e8eaf36f958cf9d1ef9b00f2a57a0b14623
+viewer/fill-boolean-subfield-01 e46f3e7acb4c01e3eb23fb219865d392076de72d
+ops/branch-gc-20261006-live-wave18-merged-evidence 1fa40e36156eb49c8b041eaf85beafa3c73105cf
