@@ -759,19 +759,16 @@ mod tests {
                     return None;
                 }
 
-                let mut mode = match enter_explicit_text_mode(
-                    &editor,
-                    fragment.story_id,
-                    fragment.frame_id,
-                ) {
-                    Ok(mode) => mode,
-                    Err(error) => {
-                        *rejection_counts
-                            .entry(format!("enter_text_mode:{error}"))
-                            .or_default() += 1;
-                        return None;
-                    }
-                };
+                let mut mode =
+                    match enter_explicit_text_mode(&editor, fragment.story_id, fragment.frame_id) {
+                        Ok(mode) => mode,
+                        Err(error) => {
+                            *rejection_counts
+                                .entry(format!("enter_text_mode:{error}"))
+                                .or_default() += 1;
+                            return None;
+                        }
+                    };
                 select_all(&mut mode);
                 match boolean_format_selection_state_v1(
                     &editor,
@@ -793,7 +790,9 @@ mod tests {
 
         let (path, original, source_hash, mut editor, story_id, frame_id) =
             witness.unwrap_or_else(|| {
-                eprintln!("text-format admission census inspected {inspected_stories} placed Stories");
+                eprintln!(
+                    "text-format admission census inspected {inspected_stories} placed Stories"
+                );
                 for (reason, count) in &rejection_counts {
                     eprintln!("text-format rejection {count}x: {reason}");
                 }
