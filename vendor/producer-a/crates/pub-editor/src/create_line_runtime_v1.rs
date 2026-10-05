@@ -115,8 +115,7 @@ mod tests {
     }
 
     fn page_id() -> PageId {
-        serde_json::from_str("\"11000000-0000-4000-8000-000000000001\"")
-            .expect("canonical PageId")
+        serde_json::from_str("\"11000000-0000-4000-8000-000000000001\"").expect("canonical PageId")
     }
 
     fn stroke() -> AuthoredSolidStrokeV1 {
@@ -140,10 +139,7 @@ mod tests {
 
     #[test]
     fn ordered_endpoints_remain_canonical_while_bounds_normalize() {
-        let forward = line(
-            PointEmuV1 { x: 100, y: 200 },
-            PointEmuV1 { x: 400, y: 500 },
-        );
+        let forward = line(PointEmuV1 { x: 100, y: 200 }, PointEmuV1 { x: 400, y: 500 });
         let reverse = line(forward.geometry.end, forward.geometry.begin);
 
         assert_ne!(forward.geometry, reverse.geometry);
@@ -156,26 +152,14 @@ mod tests {
     #[test]
     fn horizontal_vertical_and_zero_length_lines_are_valid() {
         for candidate in [
-            line(
-                PointEmuV1 { x: 100, y: 100 },
-                PointEmuV1 { x: 220, y: 100 },
-            ),
-            line(
-                PointEmuV1 { x: 100, y: 100 },
-                PointEmuV1 { x: 100, y: 220 },
-            ),
-            line(
-                PointEmuV1 { x: 140, y: 140 },
-                PointEmuV1 { x: 140, y: 140 },
-            ),
+            line(PointEmuV1 { x: 100, y: 100 }, PointEmuV1 { x: 220, y: 100 }),
+            line(PointEmuV1 { x: 100, y: 100 }, PointEmuV1 { x: 100, y: 220 }),
+            line(PointEmuV1 { x: 140, y: 140 }, PointEmuV1 { x: 140, y: 140 }),
         ] {
             validate_authored_line_runtime_v1(&candidate).expect("Publisher-compatible Line");
         }
 
-        let zero = line(
-            PointEmuV1 { x: 140, y: 140 },
-            PointEmuV1 { x: 140, y: 140 },
-        );
+        let zero = line(PointEmuV1 { x: 140, y: 140 }, PointEmuV1 { x: 140, y: 140 });
         assert_eq!(
             line_bounds_v1(zero.geometry).expect("zero bounds"),
             RectEmu::new(
