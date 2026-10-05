@@ -5108,8 +5108,11 @@ mod tests {
                 None => None,
             },
             |fragment| {
-                observed_extent =
-                    Some((fragment.scalar_start, fragment.scalar_end, fragment.text.clone()));
+                observed_extent = Some((
+                    fragment.scalar_start,
+                    fragment.scalar_end,
+                    fragment.text.clone(),
+                ));
                 Some(vec![
                     RenderTypographyRunV1 {
                         scalar_start: 0,
@@ -5147,7 +5150,10 @@ mod tests {
         assert_eq!(fragment.typography.len(), 2);
         assert_eq!(fragment.typography[1].bold, Some(true));
 
-        let layout = fragment.layout.as_ref().expect("resolved exact-resource layout");
+        let layout = fragment
+            .layout
+            .as_ref()
+            .expect("resolved exact-resource layout");
         let resource_ids = layout
             .lines
             .iter()
