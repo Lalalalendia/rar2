@@ -471,12 +471,11 @@ mod tests {
                         }
                         witness_census.entry(family.clone()).or_default()[3] += 1;
 
-                        let Ok(before_plan) = build_desktop_page_render_plan_with_current_source_fonts(
-                            &visual,
-                            page_index,
-                            &registry,
-                            &editor,
-                        ) else {
+                        let Ok(before_plan) =
+                            build_desktop_page_render_plan_with_current_source_fonts(
+                                &visual, page_index, &registry, &editor,
+                            )
+                        else {
                             continue;
                         };
                         let Some(before_text) = text_for_node(&before_plan, node.node_id) else {
