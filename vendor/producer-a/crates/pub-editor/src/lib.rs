@@ -4873,9 +4873,12 @@ impl EditorSession {
         &self,
         story_id: StoryId,
         allow_character_format_history: bool,
+        allow_paragraph_format_history: bool,
     ) -> Result<(), EditorError> {
         self.validate_source_identity()?;
-        if self.story_has_authored_paragraph_alignment_override_v1(story_id)? {
+        if !allow_paragraph_format_history
+            && self.story_has_authored_paragraph_alignment_override_v1(story_id)?
+        {
             return Err(EditorError::ParagraphAlignmentLifecycleUnsupported { story_id });
         }
 
@@ -4948,11 +4951,11 @@ impl EditorSession {
     }
 
     pub fn can_enter_story_text_session(&self, story_id: StoryId) -> Result<(), EditorError> {
-        self.validate_story_text_session_capability(story_id, true)
+        self.validate_story_text_session_capability(story_id, true, true)
     }
 
     pub fn can_replace_story_text(&self, story_id: StoryId) -> Result<(), EditorError> {
-        self.validate_story_text_session_capability(story_id, false)
+        self.validate_story_text_session_capability(story_id, false, false)
     }
 
     pub fn editable_table_cells_for_story(
