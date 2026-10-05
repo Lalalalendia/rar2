@@ -35,12 +35,12 @@ fn effective_alignment_v1(
     }
 }
 
-fn paragraph_for_line_v1<'a>(
-    paragraphs: &'a [ImportedParagraphV1],
+fn paragraph_for_line_v1(
+    paragraphs: &[ImportedParagraphV1],
     story_id: StoryId,
     scalar_start: u32,
     consumed_scalar_end: u32,
-) -> Option<&'a ImportedParagraphV1> {
+) -> Option<&ImportedParagraphV1> {
     let start = u64::from(scalar_start);
     let end = u64::from(consumed_scalar_end);
     paragraphs.iter().find(|paragraph| {
