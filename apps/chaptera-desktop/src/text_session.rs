@@ -456,7 +456,8 @@ pub fn focus_caret(mode: &DesktopTextMode) -> Option<&CaretStopV1> {
 mod tests {
     use super::*;
     use pub_editor::{
-        AuthoringTextPresetV1, EditOperation, LengthEmu, RectEmu, Sha256Digest,
+        AuthoringTextPresetV1, EDITOR_PROJECT_VERSION_V0_16, EditOperation, EditorProject,
+        FormatPropertyV1, FormatValueV1, LengthEmu, RectEmu, Sha256Digest,
         open_mature_0x2c_editor,
     };
     use sha2::{Digest, Sha256};
@@ -535,6 +536,181 @@ mod tests {
             fs::read(path).expect("re-read source PUB"),
             original,
             "direct text editing must not mutate source PUB bytes"
+        );
+    }
+
+    #[test]
+    fn real_pub_corpus_boolean_format_helper_is_durable_and_reversible() {
+        let Some(root) = env::var_os("CHAPTERA_TEXT_FORMAT_FIXTURES_DIR") else {
+            eprintln!(
+                "CHAPTERA_TEXT_FORMAT_FIXTURES_DIR not set; dedicated scoped-format validation owns real evidence"
+            );
+            return;
+        };
+
+        let mut paths = fs::read_dir(root)
+            .expect("read pinned text-format fixture corpus")
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|value| value.eq_ignore_ascii_case("pub"))
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+
+        let witness = paths.into_iter().find_map(|path| {
+            let original = fs::read(&path).ok()?;
+            let digest = Sha256::digest(&original);
+            let mut digest_bytes = [0_u8; 32];
+            digest_bytes.copy_from_slice(&digest);
+            let source_hash = Sha256Digest::from_bytes(digest_bytes);
+            let editor = open_mature_0x2c_editor(&original, source_hash).ok()?;
+            let visual = pub_viewer::open_mature_0x2c_geometry(
+                &original,
+                pub_viewer::viewer_geometry_environment_v0_1(),
+            )
+            .ok()?;
+
+            let (story_id, source_state, target) =
+                visual.text_fragments.iter().find_map(|fragment| {
+                    let source_state = editor
+                        .source_text_format_property_state_v1(
+                            fragment.story_id,
+                            FormatPropertyV1::Bold,
+                        )
+                        .ok()?;
+                    if source_state.story_scalar_len == 0 {
+                        return None;
+                    }
+                    let overlay_error = editor
+                        .source_text_format_overlay_v1(fragment.story_id)
+                        .err()?;
+                    if !overlay_error.to_string().contains("text color") {
+                        return None;
+                    }
+                    let source_first = match &source_state.base_runs.first()?.value {
+                        FormatValueV1::Bool(value) => *value,
+                        _ => return None,
+                    };
+                    Some((fragment.story_id, source_state, !source_first))
+                })?;
+
+            Some((
+                path,
+                original,
+                source_hash,
+                editor,
+                story_id,
+                source_state,
+                target,
+            ))
+        });
+
+        let (path, original, source_hash, mut editor, story_id, source_state, target) =
+            witness.expect(
+                "pinned real-PUB corpus must expose a Story with proven Bold and unresolved color",
+            );
+
+        eprintln!(
+            "property-scoped real-PUB witness: fixture={} story={story_id:?}",
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("<unknown>")
+        );
+
+        let source_overlay_error = editor
+            .source_text_format_overlay_v1(story_id)
+            .expect_err("witness complete overlay must remain unavailable");
+        assert!(source_overlay_error.to_string().contains("text color"));
+
+        let before_hash = pub_editor::text_format_property_state_hash_v1(&source_state)
+            .expect("source Bold state hash");
+        let operation = editor
+            .set_text_format_property_scoped_v1(
+                story_id,
+                0,
+                source_state.story_scalar_len,
+                FormatPropertyV1::Bold,
+                FormatValueV1::Bool(target),
+                &before_hash,
+            )
+            .expect("commit property-scoped Bold operation");
+        assert!(matches!(
+            operation,
+            EditOperation::SetTextFormatPropertyScopedV1 {
+                story_id: id,
+                property: FormatPropertyV1::Bold,
+                value: FormatValueV1::Bool(value),
+                ..
+            } if id == story_id && value == target
+        ));
+
+        let edited_state = editor
+            .current_text_format_property_state_v1(story_id, FormatPropertyV1::Bold)
+            .expect("current scoped Bold state");
+        let edited_segments = editor
+            .current_text_format_property_segments_v1(
+                story_id,
+                FormatPropertyV1::Bold,
+                0,
+                source_state.story_scalar_len,
+            )
+            .expect("current scoped Bold segments");
+        assert!(!edited_segments.is_empty());
+        assert!(
+            edited_segments
+                .iter()
+                .all(|segment| segment.value == FormatValueV1::Bool(target))
+        );
+
+        editor.undo().expect("Undo scoped Bold formatting");
+        assert_eq!(
+            editor
+                .current_text_format_property_state_v1(story_id, FormatPropertyV1::Bold)
+                .expect("undone scoped Bold state"),
+            source_state
+        );
+
+        editor.redo().expect("Redo scoped Bold formatting");
+        assert_eq!(
+            editor
+                .current_text_format_property_state_v1(story_id, FormatPropertyV1::Bold)
+                .expect("redone scoped Bold state"),
+            edited_state
+        );
+
+        let project = editor.project();
+        assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_16);
+        assert!(matches!(
+            project.operations.last(),
+            Some(EditOperation::SetTextFormatPropertyScopedV1 { .. })
+        ));
+        let project_json = serde_json::to_vec(&project).expect("serialize v0.16 EditorProject");
+        let persisted: EditorProject =
+            serde_json::from_slice(&project_json).expect("deserialize v0.16 EditorProject");
+        assert_eq!(persisted, project);
+
+        let mut reopened =
+            open_mature_0x2c_editor(&original, source_hash).expect("fresh reopen source");
+        reopened
+            .apply_project(&persisted)
+            .expect("replay scoped-format project onto fresh source");
+        assert_eq!(
+            reopened
+                .current_text_format_property_state_v1(story_id, FormatPropertyV1::Bold)
+                .expect("replayed scoped Bold state"),
+            edited_state
+        );
+        let reopened_color_error = reopened
+            .source_text_format_overlay_v1(story_id)
+            .expect_err("replayed project must not invent unresolved source color");
+        assert!(reopened_color_error.to_string().contains("text color"));
+        assert_eq!(reopened.source_hash(), source_hash);
+        assert_eq!(
+            fs::read(&path).expect("re-read source PUB"),
+            original,
+            "property-scoped formatting history must not mutate source PUB bytes"
         );
     }
 
