@@ -1,0 +1,37 @@
+# Rar2 live branch GC wave 8 — 2026-10-05
+# Conservative closed-unmerged cleanup.
+# 31 refs: PR explicitly marks branch superseded/control/evidence-complete AND live tip exactly matches PR head.
+# Excluded: default/protected refs, open PR heads, open PR bases, moved tips, ambiguous closed-unmerged refs.
+# Runtime branch-GC rechecks open heads + exact SHA before deletion.
+# Format: <branch> <expected_sha>
+fix/story-prefix-post-styled-01 482b56efc462db9beb4af5f72b7d1c6d092d4157
+desktop/paragraph-align-ui-02 78b53b85df83ac90a26f3df8a80df406b123136a
+desktop-styled-font-resource-01 bc5a535d2badaa01db1986ea547f83097c9ac664
+desktop-styled-font-resource-02 6a1319ed48c1d137279ff2e880e2c8c48921141d
+fix/quill-scheme-text-color-current-03 0bf0ee162e93ff8998f9e9e4e1445ddde826719b
+fix/quill-scheme-text-color-1405-current2 de0ca5f74289ce21eafc867cc696b84c804b92cd
+ci/reader-close-child-cancel-control-01 c247130f8f6eaa7a7b0f34399ed4d9bab3f78ce1
+desktop/paragraph-align-live-layout-01 cd25345e60f6ac11beffac26a87454bdb6ec0901
+ci/reader-desktop-rustfmt-negative-01 1f59363f53b053bd9604533383a386f4266a820a
+ci/reader-desktop-rustfmt-positive-01 72cb812474615fd4dfa84a490f485b4e9f5a488f
+desktop/text-format-render-consume-01 ef5266a13b048ed2bdbd6499a62b403f2c250bbf
+ci/reader-close-lifecycle-control-01 1906a5980f38322a9ee3e50cf5cabc3ffdc295d8
+measure/story-prefix-causal-1428 946fd4778a8761bda2ffb2b92265650b22a932b7
+ci/fixed-output-image-resources-core-positive-01 df6fe4fec3b5fddd7172d9c8ea9730030067d43e
+validation/paragraph-scoped-alignment-consumer-03 b442d355812553c78cf2d398ecb401459aa4b987
+validation/paragraph-scoped-alignment-consumer-02 b3982265a9847678f940b36ba6563578c3dcaf40
+conversion/effective-paragraph-align-05 8ae067541c657f91fe79526bb492a2bfb77e708b
+ci/fixed-output-image-resources-safe-negative-01 d8b6370d9495286de67ce0f0c3eb6c434eafbd65
+ci/authored-stack-lifecycle-core-positive-01 35aa8454e92c3bbe902fcb8e0645b52d227ce753
+ci/authored-stack-lifecycle-safe-negative-01 b2769bc508e76fa2e4afa567cd0818bd7d2f7038
+ci/desktop-mainrs-rectangle-shell 53ac258061300ca6fc74b5be0abb89290515b190
+ci/history-mainrs-negative-control-01 6c87db5e0b070ccae2b17e22d4832ad74b10d4f8
+ci/history-owner-positive-control-01 cbe8aa148983208d78cf00a6a1226596ef86ebf0
+ci/text-session-mainrs-negative-control 38f3031b04e983bf945b115c892e301eef8a5379
+ci/text-session-shell-positive-control 57f9b9053b2140ee9de15dd05ce7cf84466025e3
+ci/page-nav-mainrs-negative-control-01 320ad280617eb053472e3592dfefe8eff48c3ea6
+ci/sign-preflight-trust-negative-control-01 e9fe963d3655311bdefc734d69df7c2111356c85
+ci/mainrs-text-session-negative-control-01 d9c9ae284dcbeb167e142a2c9d12a4812e107c9c
+ci/fallback-font-mainrs-negative-control-01 518f645a61d0b66b362b15a99911445e9a23343a
+ci/duplicate-mainrs-negative-control-01 14c01d5e7a2a60dc300fe73f3ab29181649bfed2
+ci/update-control-mainrs-negative-01 39b944bcc268231bc2a67e911a3808cc981c5a3b
