@@ -415,6 +415,20 @@ fn operation_for_state<'a>(
             before_state_hash,
             after_state_hash,
             ..
+        }
+        | EditOperation::SetTextFormatPropertyScopedV1 {
+            story_id,
+            property,
+            before_state_hash,
+            after_state_hash,
+            ..
+        }
+        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
+            story_id,
+            property,
+            before_state_hash,
+            after_state_hash,
+            ..
         } if story_id.as_canonical().to_string() == state.story_id
             && *property == state.property =>
         {
@@ -436,12 +450,27 @@ pub fn apply_text_format_property_operation_semantic_v1(
             property,
             value,
             ..
+        }
+        | EditOperation::SetTextFormatPropertyScopedV1 {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            ..
         } if story_id.as_canonical().to_string() == state.story_id
             && *property == state.property =>
         {
             set_text_format_property_state_v1(state, *start_scalar, *end_scalar, value.clone())
         }
         EditOperation::ClearTextFormatPropertyOverride {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            ..
+        }
+        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
             story_id,
             start_scalar,
             end_scalar,
