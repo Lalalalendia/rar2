@@ -310,7 +310,7 @@ jobs:
   cloud-reference:
     name: Cloud exact PUB-PDF reference
     needs: [classify, tier-a]
-    if: ${{ !cancelled() && always() && needs.classify.outputs.cloud_reference == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ !cancelled() && always() && ((github.event_name == 'pull_request' && github.event.action == 'closed') || (needs.classify.outputs.cloud_reference == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped'))) }}
     uses: ./.github/workflows/cloud-reader-reference-pairs.yml
 
   virginia-page-role:
