@@ -2603,6 +2603,8 @@ fn mixed_family_layout_fingerprint_v1(runs: &[ResolvedFamilyTypographyRunV1<'_>]
         fingerprint.push_str(run.font.resource_id);
         fingerprint.push(':');
         fingerprint.push_str(&run.font_fingerprint_sha256);
+        fingerprint.push(':');
+        fingerprint.push_str(&run.font.face_index.to_string());
     }
     fingerprint
 }
@@ -3726,6 +3728,46 @@ mod tests {
 
         assert_eq!(mixed_family_line_base_height_v1(0, &runs), Ok(300_000));
         assert_eq!(mixed_family_line_base_height_v1(2, &runs), Ok(100_000));
+    }
+
+    #[test]
+    fn mixed_family_layout_fingerprint_includes_face_index() {
+        let bytes: &[u8] = b"same-font-collection-bytes";
+        let sha = font_fingerprint_sha256(bytes);
+        let face0 = vec![ResolvedFamilyTypographyRunV1 {
+            scalar_start: 0,
+            scalar_end: 2,
+            font_size_emu: 152_400,
+            font: ExplicitRenderTextFontResourceV1 {
+                resource_id: "shared-collection",
+                expected_sha256: &sha,
+                face_index: 0,
+                default_font_size_emu: 152_400,
+                default_line_height_emu: 190_500,
+                bytes,
+            },
+            font_fingerprint_sha256: sha.clone(),
+        }];
+        let face1 = vec![ResolvedFamilyTypographyRunV1 {
+            scalar_start: 0,
+            scalar_end: 2,
+            font_size_emu: 152_400,
+            font: ExplicitRenderTextFontResourceV1 {
+                resource_id: "shared-collection",
+                expected_sha256: &sha,
+                face_index: 1,
+                default_font_size_emu: 152_400,
+                default_line_height_emu: 190_500,
+                bytes,
+            },
+            font_fingerprint_sha256: sha,
+        }];
+
+        assert_ne!(
+            mixed_family_layout_fingerprint_v1(&face0),
+            mixed_family_layout_fingerprint_v1(&face1),
+            "different faces from the same collection bytes must not share a layout fingerprint"
+        );
     }
 
     #[test]
