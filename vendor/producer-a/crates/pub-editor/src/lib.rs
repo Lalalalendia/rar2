@@ -3479,19 +3479,13 @@ impl EditorSession {
                         .effective_editable_paragraph_alignment_inputs_v1()
                         .map_err(|message| EditorExportError::Projection { target, message })?;
                     let scoped_placements = self
-                        .idml_paragraph_scoped_alignment_placements_v1(
-                            &scoped_paragraph_alignments,
-                        )
+                        .idml_paragraph_scoped_alignment_placements_v1(&scoped_paragraph_alignments)
                         .map_err(|message| EditorExportError::Projection { target, message })?;
-                    add_paragraph_scoped_alignment_to_idml(
-                        &plan,
-                        &mut package,
-                        &scoped_placements,
-                    )
-                    .map_err(|error| EditorExportError::Projection {
-                        target,
-                        message: error.to_string(),
-                    })?;
+                    add_paragraph_scoped_alignment_to_idml(&plan, &mut package, &scoped_placements)
+                        .map_err(|error| EditorExportError::Projection {
+                            target,
+                            message: error.to_string(),
+                        })?;
                     add_full_story_paragraph_alignment_to_idml(
                         &plan,
                         &mut package,
@@ -3527,19 +3521,13 @@ impl EditorSession {
                     let (paragraph_alignments, scoped_paragraph_alignments) = self
                         .effective_editable_paragraph_alignment_inputs_v1()
                         .map_err(|message| EditorExportError::Projection { target, message })?;
-                    let scoped_placements = self
-                        .odg_paragraph_scoped_alignment_placements_v1(
-                            &scoped_paragraph_alignments,
-                        );
-                    add_paragraph_scoped_alignment_to_odg(
-                        &plan,
-                        &mut package,
-                        &scoped_placements,
-                    )
-                    .map_err(|error| EditorExportError::Projection {
-                        target,
-                        message: error.to_string(),
-                    })?;
+                    let scoped_placements =
+                        self.odg_paragraph_scoped_alignment_placements_v1(&scoped_paragraph_alignments);
+                    add_paragraph_scoped_alignment_to_odg(&plan, &mut package, &scoped_placements)
+                        .map_err(|error| EditorExportError::Projection {
+                            target,
+                            message: error.to_string(),
+                        })?;
                     let paragraph_alignment_placements = self
                         .odg_full_story_paragraph_alignment_placements_v1(&paragraph_alignments);
                     add_full_story_paragraph_alignment_to_odg(
@@ -3608,19 +3596,13 @@ impl EditorSession {
                     .effective_editable_paragraph_alignment_inputs_v1()
                     .map_err(|message| EditorExportError::Projection { target, message })?;
                 let scoped_placements = self
-                    .idml_paragraph_scoped_alignment_placements_v1(
-                        &scoped_paragraph_alignments,
-                    )
+                    .idml_paragraph_scoped_alignment_placements_v1(&scoped_paragraph_alignments)
                     .map_err(|message| EditorExportError::Projection { target, message })?;
-                add_paragraph_scoped_alignment_to_idml(
-                    &plan,
-                    &mut package,
-                    &scoped_placements,
-                )
-                .map_err(|error| EditorExportError::Projection {
-                    target,
-                    message: error.to_string(),
-                })?;
+                add_paragraph_scoped_alignment_to_idml(&plan, &mut package, &scoped_placements)
+                    .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
                 add_full_story_paragraph_alignment_to_idml(
                     &plan,
                     &mut package,
@@ -3661,19 +3643,13 @@ impl EditorSession {
                 let (paragraph_alignments, scoped_paragraph_alignments) = self
                     .effective_editable_paragraph_alignment_inputs_v1()
                     .map_err(|message| EditorExportError::Projection { target, message })?;
-                let scoped_placements = self
-                    .odg_paragraph_scoped_alignment_placements_v1(
-                        &scoped_paragraph_alignments,
-                    );
-                add_paragraph_scoped_alignment_to_odg(
-                    &plan,
-                    &mut package,
-                    &scoped_placements,
-                )
-                .map_err(|error| EditorExportError::Projection {
-                    target,
-                    message: error.to_string(),
-                })?;
+                let scoped_placements =
+                    self.odg_paragraph_scoped_alignment_placements_v1(&scoped_paragraph_alignments);
+                add_paragraph_scoped_alignment_to_odg(&plan, &mut package, &scoped_placements)
+                    .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
                 let paragraph_alignment_placements =
                     self.odg_full_story_paragraph_alignment_placements_v1(&paragraph_alignments);
                 add_full_story_paragraph_alignment_to_odg(
@@ -3940,7 +3916,10 @@ impl EditorSession {
     ) -> Result<Vec<IdmlParagraphScopedAlignmentPlacement>, String> {
         let mut by_story = BTreeMap::<StoryId, Vec<ParagraphScopedAlignmentV1>>::new();
         for item in alignments {
-            by_story.entry(item.story_id).or_default().push(item.clone());
+            by_story
+                .entry(item.story_id)
+                .or_default()
+                .push(item.clone());
         }
 
         let mut result = Vec::with_capacity(by_story.len());
@@ -3951,9 +3930,7 @@ impl EditorSession {
                     story_id.as_canonical()
                 )
             })?;
-            paragraphs.sort_by_key(|item| {
-                (item.range.start, item.range.end, item.paragraph_id)
-            });
+            paragraphs.sort_by_key(|item| (item.range.start, item.range.end, item.paragraph_id));
             result.push(IdmlParagraphScopedAlignmentPlacement {
                 story_id,
                 story_text: story.text.clone(),
@@ -3973,7 +3950,10 @@ impl EditorSession {
             .collect::<BTreeSet<_>>();
         let mut by_story = BTreeMap::<StoryId, Vec<ParagraphScopedAlignmentV1>>::new();
         for item in alignments {
-            by_story.entry(item.story_id).or_default().push(item.clone());
+            by_story
+                .entry(item.story_id)
+                .or_default()
+                .push(item.clone());
         }
 
         let mut roots = BTreeMap::<StoryId, Vec<NodeId>>::new();
@@ -3995,9 +3975,8 @@ impl EditorSession {
                 let mut frame_ids = roots.get(&story_id)?.clone();
                 frame_ids.sort_unstable();
                 frame_ids.dedup();
-                paragraphs.sort_by_key(|item| {
-                    (item.range.start, item.range.end, item.paragraph_id)
-                });
+                paragraphs
+                    .sort_by_key(|item| (item.range.start, item.range.end, item.paragraph_id));
                 (!frame_ids.is_empty()).then(|| OdgParagraphScopedAlignmentPlacement {
                     story_id,
                     paragraphs,
