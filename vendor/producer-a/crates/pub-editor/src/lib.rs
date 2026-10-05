@@ -3270,13 +3270,14 @@ impl EditorSession {
             .undo
             .iter()
             .any(|operation| matches!(operation, EditOperation::ReorderAuthoredStack { .. }));
-        let carries_text_format = self.undo.iter().any(|operation| {
-            matches!(
-                operation,
-                EditOperation::SetTextFormatProperty { .. }
-                    | EditOperation::ClearTextFormatPropertyOverride { .. }
-            )
-        });
+        let carries_text_format = self
+            .undo
+            .iter()
+            .any(|operation| text_format_operation_story_id_v1(operation).is_some());
+        let carries_scoped_text_format = self
+            .undo
+            .iter()
+            .any(is_scoped_text_format_operation_v1);
         let carries_paragraph_alignment = self.undo.iter().any(|operation| {
             matches!(
                 operation,
@@ -3291,7 +3292,9 @@ impl EditorSession {
         }
         let (schema_version, identity) = if let Some(identity) = &self.project_identity {
             (
-                if carries_paragraph_alignment {
+                if carries_scoped_text_format {
+                    EDITOR_PROJECT_VERSION_V0_16
+                } else if carries_paragraph_alignment {
                     EDITOR_PROJECT_VERSION_V0_15
                 } else if carries_text_format {
                     EDITOR_PROJECT_VERSION_V0_14
