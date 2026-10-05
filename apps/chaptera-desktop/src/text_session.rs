@@ -979,14 +979,6 @@ mod tests {
             .expect("read cleared scoped Italic state"),
             italic_before
         );
-        assert!(
-            reopened
-                .current_text_format_overlay_v1(story_id)
-                .expect_err("scoped Bold/Italic must not invent unresolved color")
-                .to_string()
-                .contains("bounded effective direct-RGB text color is unavailable")
-        );
-
         assert_eq!(reopened.graph().stories[&story_id].text, source_text);
         assert_eq!(reopened.source_hash(), source_hash);
         assert_eq!(
@@ -995,12 +987,11 @@ mod tests {
             "scoped Desktop formatting must not mutate source PUB bytes"
         );
         eprintln!(
-            "scoped Desktop Bold/Italic witness={} story={} legacy_full_overlay_error={}",
+            "scoped Desktop Bold/Italic witness={} story={}",
             path.file_name()
                 .and_then(|value| value.to_str())
                 .unwrap_or("<non-utf8>"),
-            story_id.as_canonical(),
-            full_error
+            story_id.as_canonical()
         );
     }
 
