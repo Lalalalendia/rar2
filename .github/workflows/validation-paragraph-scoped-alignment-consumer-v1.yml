@@ -1,0 +1,191 @@
+name: Validation Paragraph Scoped Alignment Consumer V1
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/validation-paragraph-scoped-alignment-consumer-v1.yml"
+      - "tools/verify_paragraph_scoped_alignment_consumer.py"
+      - "tools/ci/scribus_idml_consumer.py"
+      - "tools/acquire_carlton_march_pair.py"
+      - "vendor/producer-a/crates/pub-editor/src/bin/paragraph_scoped_alignment_consumer_fixture.rs"
+      - "vendor/producer-a/crates/pub-editor/src/lib.rs"
+      - "vendor/producer-a/crates/pub-idml/**"
+      - "vendor/producer-a/crates/pub-odg/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validation-paragraph-scoped-alignment-consumer-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  consumer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/paragraph-scoped-alignment-consumer
+      EVIDENCE_ROOT: ${{ github.workspace }}/target/paragraph-scoped-alignment-consumer-evidence
+      CARLTON_SHA256: "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check validation tooling
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
+          python -m py_compile tools/verify_paragraph_scoped_alignment_consumer.py
+
+      - name: Build exact consumer fixture
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml             -p pub-editor --release             --bin paragraph_scoped_alignment_consumer_fixture
+
+      - name: Acquire pinned Carlton March source
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+          root="$RUNNER_TEMP/paragraph-scoped-alignment-carlton"
+          mkdir -p "$root"
+          python tools/acquire_carlton_march_pair.py "$root"
+          pub="$root/March-2026.pub"
+          test -s "$pub"
+          found="$(sha256sum "$pub" | awk '{print $1}')"
+          test "$found" = "$CARLTON_SHA256"
+          echo "CHAPTERA_CARLTON_PUB=$pub" >> "$GITHUB_ENV"
+
+      - name: Install independent consumers
+        run: |
+          set -euo pipefail
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends             scribus libreoffice-draw xvfb fonts-montserrat
+
+      - name: Materialize Center Clear and mixed ParagraphId fixtures
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT"
+          "$CARGO_TARGET_DIR/release/paragraph_scoped_alignment_consumer_fixture"             "$CHAPTERA_CARLTON_PUB"             "$EVIDENCE_ROOT"             > "$EVIDENCE_ROOT/fixture.json"
+          test -s "$EVIDENCE_ROOT/expected.json"
+          for state in center clear mixed; do
+            test -s "$EVIDENCE_ROOT/$state/output.idml"
+            test -s "$EVIDENCE_ROOT/$state/output.odg"
+          done
+
+      - name: Verify exact target wire
+        run: |
+          set -euo pipefail
+          for state in center clear mixed; do
+            python tools/verify_paragraph_scoped_alignment_consumer.py wire               --expected "$EVIDENCE_ROOT/expected.json"               --state "$state"               --root "$EVIDENCE_ROOT/$state"               --receipt "$EVIDENCE_ROOT/$state-wire.json"
+          done
+
+      - name: Scribus import save fresh-reopen save
+        run: |
+          set -euo pipefail
+          for state in center clear mixed; do
+            root="$EVIDENCE_ROOT/$state-scribus"
+            mkdir -p "$root"
+            CHAPTERA_SCRIBUS_SLA_OUT="$root/round1.sla"               xvfb-run -a scribus -g -ns               -py tools/ci/scribus_idml_consumer.py --               "$EVIDENCE_ROOT/$state/output.idml"
+            test -s "$root/round1.sla"
+            CHAPTERA_SCRIBUS_SLA_OUT="$root/round2.sla"               xvfb-run -a scribus -g -ns               -py tools/ci/scribus_idml_consumer.py --               "$root/round1.sla"
+            test -s "$root/round2.sla"
+            python tools/verify_paragraph_scoped_alignment_consumer.py scribus               --expected "$EVIDENCE_ROOT/expected.json"               --state "$state"               --input "$root/round2.sla"               --receipt "$EVIDENCE_ROOT/$state-scribus.json"
+          done
+
+      - name: LibreOffice import save fresh-reopen save
+        run: |
+          set -euo pipefail
+          for state in center clear mixed; do
+            root="$EVIDENCE_ROOT/$state-lo"
+            mkdir -p "$root/round1" "$root/round2" "$root/round3"
+            p1="$(realpath -m "$root/profile1")"
+            p2="$(realpath -m "$root/profile2")"
+            p3="$(realpath -m "$root/profile3")"
+            libreoffice --headless --nologo --nodefault --norestore               "-env:UserInstallation=file://$p1"               --convert-to fodg               --outdir "$root/round1"               "$EVIDENCE_ROOT/$state/output.odg"
+            test -s "$root/round1/output.fodg"
+            libreoffice --headless --nologo --nodefault --norestore               "-env:UserInstallation=file://$p2"               --convert-to odg               --outdir "$root/round2"               "$root/round1/output.fodg"
+            test -s "$root/round2/output.odg"
+            libreoffice --headless --nologo --nodefault --norestore               "-env:UserInstallation=file://$p3"               --convert-to fodg               --outdir "$root/round3"               "$root/round2/output.odg"
+            test -s "$root/round3/output.fodg"
+            python tools/verify_paragraph_scoped_alignment_consumer.py libreoffice               --expected "$EVIDENCE_ROOT/expected.json"               --state "$state"               --input "$root/round3/output.fodg"               --wire-root "$EVIDENCE_ROOT/$state"               --receipt "$EVIDENCE_ROOT/$state-libreoffice.json"
+          done
+
+      - name: Build source-safe consumer receipt
+        env:
+          REPO_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["EVIDENCE_ROOT"])
+          expected = json.loads((root / "expected.json").read_text())
+          checks = {}
+          for state in ("center", "clear", "mixed"):
+              checks[state] = {
+                  mode: json.loads((root / f"{state}-{mode}.json").read_text())
+                  for mode in ("wire", "scribus", "libreoffice")
+              }
+              wanted = expected["states"][state]["alignment_sequence"]
+              assert checks[state]["scribus"]["ordered_alignment_sequence"] == wanted
+              assert checks[state]["libreoffice"]["ordered_alignment_sequence"] == wanted
+
+          assert expected["states"]["center"]["alignment_sequence"]
+          assert set(expected["states"]["center"]["alignment_sequence"]) == {"center"}
+          assert set(expected["states"]["clear"]["alignment_sequence"]) == {"right"}
+          mixed = expected["states"]["mixed"]["alignment_sequence"]
+          assert mixed[0:2] == ["left", "center"]
+          assert "right" in mixed[2:]
+
+          receipt = {
+              "schema": "chaptera.paragraph-scoped-alignment-consumer-receipt.v1",
+              "repository_commit_sha": os.environ["REPO_SHA"],
+              "source_sha256": expected["source_sha256"],
+              "story_id": expected["story_id"],
+              "paragraph_count": expected["paragraph_count"],
+              "checks": checks,
+              "claims": {
+                  "center_scoped_survives_scribus_and_libreoffice_save_reopen": True,
+                  "clear_returns_imported_right_and_survives_consumers": True,
+                  "mixed_left_center_right_order_survives_consumers": True,
+                  "capability_promoted_by_this_validation": False,
+                  "source_story_text_recorded": False,
+                  "target_side_text_edit_proven": False,
+              },
+          }
+          (root / "receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps({
+              "story_id": receipt["story_id"],
+              "paragraph_count": receipt["paragraph_count"],
+              "claims": receipt["claims"],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-safe consumer evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: paragraph-scoped-alignment-consumer-v1-${{ github.run_id }}
+          path: |
+            target/paragraph-scoped-alignment-consumer-evidence/expected.json
+            target/paragraph-scoped-alignment-consumer-evidence/fixture.json
+            target/paragraph-scoped-alignment-consumer-evidence/*-wire.json
+            target/paragraph-scoped-alignment-consumer-evidence/*-scribus.json
+            target/paragraph-scoped-alignment-consumer-evidence/*-libreoffice.json
+            target/paragraph-scoped-alignment-consumer-evidence/receipt.json
+          if-no-files-found: warn
+          retention-days: 90
