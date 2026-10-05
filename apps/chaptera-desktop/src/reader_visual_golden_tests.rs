@@ -230,9 +230,11 @@ fn golden_carlton_march_clean_pages_use_current_reader_render_backend() {
         "Carlton product surface count"
     );
     assert!(
-        visual.document.diagnostics.iter().any(
-            |diagnostic| diagnostic.code == "viewer.page_projection.family_profile_applied"
-        ),
+        visual
+            .document
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "viewer.page_projection.family_profile_applied"),
         "exact Carlton family presentation profile must be active before visual rendering"
     );
     let cmo_projected_instances = visual
@@ -399,18 +401,15 @@ fn golden_carlton_march_clean_pages_use_current_reader_render_backend() {
                 let viewer_projected = visual
                     .projected_instances
                     .iter()
-                    .find(|projected| {
-                        projected.scene_instance.instance_id == instance.instance_id
-                    })
+                    .find(|projected| projected.scene_instance.instance_id == instance.instance_id)
                     .expect("render-plan projected instance must come from Viewer adapter");
-                let target_frame =
-                    viewer_projected.target_frame_node_id.and_then(|target_id| {
-                        visual
-                            .scene
-                            .nodes
-                            .iter()
-                            .find(|candidate| candidate.origin == target_id)
-                    });
+                let target_frame = viewer_projected.target_frame_node_id.and_then(|target_id| {
+                    visual
+                        .scene
+                        .nodes
+                        .iter()
+                        .find(|candidate| candidate.origin == target_id)
+                });
                 Some(serde_json::json!({
                     "instance_id": instance.instance_id,
                     "origin_node_id": instance.origin_node_id,
@@ -558,8 +557,7 @@ fn golden_sample_newsletter_reference_customer_page_1_uses_shared_typography_ren
         .typography_runs
         .iter()
         .filter(|run| {
-            !run.source_font_name.trim().is_empty()
-                && (run.font_inherited || run.size_inherited)
+            !run.source_font_name.trim().is_empty() && (run.font_inherited || run.size_inherited)
         })
         .count();
     let size_only_typography_run_count = visual
