@@ -139,7 +139,7 @@ pub fn add_full_story_typography_to_idml(
         };
 
         let marker = "      <CharacterStyleRange AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\">\n";
-        if xml.matches(marker).count() != 1 {
+        if !xml.contains(marker) {
             return Err(IdmlTypographyError::UnexpectedStoryMarkup {
                 story_id: item.story_id,
             });
@@ -154,7 +154,7 @@ pub fn add_full_story_typography_to_idml(
         let replacement = format!(
             "      <CharacterStyleRange AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\" FontStyle=\"Regular\" PointSize=\"{point_size}\">\n        <Properties>\n          <AppliedFont type=\"string\">{font_family}</AppliedFont>\n        </Properties>\n"
         );
-        *xml = xml.replacen(marker, &replacement, 1);
+        *xml = xml.replace(marker, &replacement);
     }
 
     if !font_resources.is_empty() {
@@ -492,6 +492,47 @@ mod tests {
             loss.origin == Some(story_id.into_canonical())
                 && loss.feature == STORY_FONT_FAMILY_FEATURE
         }));
+    }
+
+    #[test]
+    fn full_story_typography_composes_across_multiple_character_ranges() {
+        let story_id = story(4);
+        let export_plan = plan(story_id);
+        let mut package = package(&export_plan, story_id);
+        let story_part = package
+            .parts
+            .iter_mut()
+            .find(|part| part.kind == IdmlPartKind::Story)
+            .expect("story part");
+        let xml = story_part.content.as_text().expect("story text").to_owned();
+        let second = "    <ParagraphStyleRange AppliedParagraphStyle=\"ParagraphStyle/$ID/[No paragraph style]\">\n      <CharacterStyleRange AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\">\n        <Content>World</Content>\n      </CharacterStyleRange>\n    </ParagraphStyleRange>\n";
+        let xml = xml.replace("  </Story>", &format!("{second}  </Story>"));
+        story_part.content = IdmlPartContent::Text(xml);
+
+        let typography = FullStoryTypographyV1 {
+            story_id,
+            font_family: "Montserrat".into(),
+            font_size_emu: LengthEmu::new(12 * EMU_PER_POINT),
+        };
+        add_full_story_typography_to_idml(
+            &export_plan,
+            &mut package,
+            std::slice::from_ref(&typography),
+        )
+        .expect("full-Story typography should compose across paragraph ranges");
+
+        let xml = package
+            .parts
+            .iter()
+            .find(|part| part.kind == IdmlPartKind::Story)
+            .and_then(|part| part.content.as_text())
+            .expect("story text");
+        assert_eq!(xml.matches("PointSize=\"12\"").count(), 2);
+        assert_eq!(
+            xml.matches("<AppliedFont type=\"string\">Montserrat</AppliedFont>")
+                .count(),
+            2
+        );
     }
 
     #[test]
