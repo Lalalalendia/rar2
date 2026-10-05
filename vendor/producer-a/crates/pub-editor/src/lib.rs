@@ -5667,9 +5667,22 @@ impl EditorSession {
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_inverse(&mut self.image_replacements, &operation)?;
             } else if let Some(story_id) = text_format_operation_story_id_v1(&operation) {
-                let before_state = self.current_text_format_overlay_v1(story_id)?;
-                let _after_state =
-                    apply_text_format_history_operation_v1(&before_state, &operation)?;
+                if is_scoped_text_format_operation_v1(&operation) {
+                    let property = text_format_operation_property_v1(&operation)
+                        .expect("scoped text-format operation carries property");
+                    let before_state =
+                        self.current_text_format_property_state_v1(story_id, property)?;
+                    let _after_state =
+                        apply_text_format_property_operation_checked_v1(&before_state, &operation)
+                            .map_err(|message| EditorError::TextFormatStateInvalid {
+                                story_id,
+                                message,
+                            })?;
+                } else {
+                    let before_state = self.current_text_format_overlay_v1(story_id)?;
+                    let _after_state =
+                        apply_text_format_history_operation_v1(&before_state, &operation)?;
+                }
             } else if authored_paragraph_alignment_v1::paragraph_alignment_operation_snapshots_v1(
                 &operation,
             )
@@ -5728,9 +5741,22 @@ impl EditorSession {
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_forward(&mut self.image_replacements, &operation)?;
             } else if let Some(story_id) = text_format_operation_story_id_v1(&operation) {
-                let before_state = self.current_text_format_overlay_v1(story_id)?;
-                let _after_state =
-                    apply_text_format_history_operation_v1(&before_state, &operation)?;
+                if is_scoped_text_format_operation_v1(&operation) {
+                    let property = text_format_operation_property_v1(&operation)
+                        .expect("scoped text-format operation carries property");
+                    let before_state =
+                        self.current_text_format_property_state_v1(story_id, property)?;
+                    let _after_state =
+                        apply_text_format_property_operation_checked_v1(&before_state, &operation)
+                            .map_err(|message| EditorError::TextFormatStateInvalid {
+                                story_id,
+                                message,
+                            })?;
+                } else {
+                    let before_state = self.current_text_format_overlay_v1(story_id)?;
+                    let _after_state =
+                        apply_text_format_history_operation_v1(&before_state, &operation)?;
+                }
             } else if authored_paragraph_alignment_v1::paragraph_alignment_operation_snapshots_v1(
                 &operation,
             )
