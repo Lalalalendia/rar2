@@ -1904,11 +1904,11 @@ fn incomplete_layout_is_explicit_story_overset(
 fn incomplete_layout_is_admitted_partial_story_overset(
     diagnostics: &[pub_layout::ResolveDiagnostic],
     story_id: StoryId,
-    line_count: usize,
+    has_visible_resolved_line: bool,
     last_consumed_scalar_end: Option<u32>,
     story_scalar_len: u32,
 ) -> bool {
-    line_count > 0
+    has_visible_resolved_line
         && last_consumed_scalar_end.is_some_and(|end| end < story_scalar_len)
         && incomplete_layout_is_explicit_story_overset(diagnostics, story_id)
 }
@@ -2160,7 +2160,9 @@ fn resolve_text_layout_v1(
     let admitted_partial_story_overset = incomplete_layout_is_admitted_partial_story_overset(
         &scene.diagnostics,
         story.id,
-        source_lines.len(),
+        source_lines.iter().any(|line| {
+            line.scalar_end > line.scalar_start && line.measured_width.get() > 0
+        }),
         source_lines.last().map(|line| line.consumed_scalar_end),
         story_scalar_len,
     );
@@ -4789,21 +4791,21 @@ mod tests {
         assert!(incomplete_layout_is_admitted_partial_story_overset(
             std::slice::from_ref(&overset),
             story_id,
-            1,
+            true,
             Some(7),
             10,
         ));
         assert!(!incomplete_layout_is_admitted_partial_story_overset(
             std::slice::from_ref(&overset),
             story_id,
-            0,
+            false,
             None,
             10,
         ));
         assert!(!incomplete_layout_is_admitted_partial_story_overset(
             std::slice::from_ref(&overset),
             story_id,
-            1,
+            true,
             Some(10),
             10,
         ));
