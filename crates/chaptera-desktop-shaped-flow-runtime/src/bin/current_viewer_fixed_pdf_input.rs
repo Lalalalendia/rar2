@@ -353,7 +353,8 @@ fn census(
                     let bounds = node.text_bounds.unwrap_or(node.bounds);
                     let frame_height_emu = bounds.height.get();
                     let resolved_line_count = i64::try_from(layout.lines.len()).unwrap_or(i64::MAX);
-                    if frame_height_emu > 0
+                    if node.projected_scene_instance.is_none()
+                        && frame_height_emu > 0
                         && *font_size_emu > 0
                         && *line_height_emu > 0
                         && resolved_line_count > 0
