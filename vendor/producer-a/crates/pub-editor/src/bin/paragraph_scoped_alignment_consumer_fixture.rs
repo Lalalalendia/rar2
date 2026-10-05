@@ -1,6 +1,5 @@
 use pub_editor::{
-    AuthoredParagraphAlignmentValueV1, EditorEditableTarget, Sha256Digest,
-    open_mature_0x2c_editor,
+    AuthoredParagraphAlignmentValueV1, EditorEditableTarget, Sha256Digest, open_mature_0x2c_editor,
 };
 use pub_export::ParagraphAlignmentV1;
 use serde_json::{Value, json};
@@ -37,7 +36,9 @@ fn scalar_slice(text: &str, start: u64, end: u64) -> Result<String, Box<dyn Erro
     let end = usize::try_from(end)?;
     let scalar_len = text.chars().count();
     if start > end || end > scalar_len {
-        return Err(format!("invalid scalar range {start}..{end} for Story length {scalar_len}").into());
+        return Err(
+            format!("invalid scalar range {start}..{end} for Story length {scalar_len}").into(),
+        );
     }
     Ok(text.chars().skip(start).take(end - start).collect())
 }
@@ -107,7 +108,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             .cloned()
             .collect::<Vec<_>>();
         paragraphs.sort_by_key(|paragraph| {
-            (paragraph.range.start, paragraph.range.end, paragraph.paragraph_id)
+            (
+                paragraph.range.start,
+                paragraph.range.end,
+                paragraph.paragraph_id,
+            )
         });
         if paragraphs.len() < 3 {
             continue;
