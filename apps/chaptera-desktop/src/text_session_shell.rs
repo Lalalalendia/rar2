@@ -504,7 +504,7 @@ pub(super) fn canvas_text_pointer_request(
                 .text_fragments
                 .iter()
                 .find(|fragment| fragment.frame_id == hit.node_id)
-            && editor.is_some_and(|editor| editor.can_replace_story_text(fragment.story_id).is_ok())
+            && editor.is_some_and(|editor| text_session::can_enter_text_mode(editor, fragment.story_id).is_ok())
         {
             request.text_activation_request = Some((
                 fragment.story_id,
@@ -554,7 +554,7 @@ pub(super) fn show_canvas_edit_text_button(
             .text_fragments
             .iter()
             .find(|fragment| fragment.frame_id == selected_node_id)
-        && editor.is_some_and(|editor| editor.can_replace_story_text(fragment.story_id).is_ok())
+        && editor.is_some_and(|editor| text_session::can_enter_text_mode(editor, fragment.story_id).is_ok())
     {
         let button_width = 76.0_f32;
         let button_height = 22.0_f32;
