@@ -7,6 +7,7 @@ on:
       - "apps/chaptera-desktop/src/text_session_gui_tests.rs"
       - "apps/chaptera-desktop/src/text_session.rs"
       - "apps/chaptera-desktop/Cargo.toml"
+      - "vendor/producer-a/crates/pub-editor/src/lib.rs"
       - ".github/workflows/editor-desktop-text-session-restore-v1.yml"
   push:
     branches:
@@ -69,11 +70,30 @@ jobs:
           test "${actual_bytes}" = "291840"
           echo "CHAPTERA_SAMPLE_NEWSLETTER=${fixture}" >> "${GITHUB_ENV}"
 
+      - name: Acquire pinned 51318 text-format witness
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/chaptera-text-format-fixtures"
+          mkdir -p "${root}"
+          fixture="${root}/51318.pub"
+          curl --fail --location --silent --show-error \
+            "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/51318.pub" \
+            --output "${fixture}"
+          actual_sha="$(sha256sum "${fixture}" | cut -d' ' -f1)"
+          actual_bytes="$(wc -c < "${fixture}" | tr -d ' ')"
+          test "${actual_sha}" = "3ab75a6a9196e0a51fc9b0aa759459501c71d313030c06652aabffbae0a2ab09"
+          test "${actual_bytes}" = "88576"
+          echo "CHAPTERA_TEXT_FORMAT_FIXTURES_DIR=${root}" >> "${GITHUB_ENV}"
+
       - name: Prove direct text session on real PUB
         run: cargo test -p chaptera-desktop real_sample_newsletter_direct_text_session_enters_types_rebinds_and_exits -- --nocapture
 
       - name: Prove linked Story same-session frame handoff on real PUB
         run: cargo test -p chaptera-desktop real_sample_newsletter_linked_story_session_hands_off_between_frames_without_topology_mutation -- --nocapture
+
+      - name: Prove scoped Bold Italic history on color-blocked real PUB
+        run: cargo test -p chaptera-desktop real_pub_color_blocked_story_uses_scoped_desktop_bold_italic_history_v016 -- --nocapture
 
   gui-direct-text:
     needs: format-preflight
