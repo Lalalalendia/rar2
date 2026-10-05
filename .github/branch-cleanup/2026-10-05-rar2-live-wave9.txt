@@ -1,0 +1,38 @@
+# Rar2 live branch GC wave 9 — 2026-10-05
+# Conservative merged-head cleanup.
+# 32 refs: live tip exactly matches a merged PR head targeting main.
+# Excluded: default/protected refs, open PR heads, open PR bases, moved tips.
+# Runtime branch-GC rechecks open heads + exact SHA before deletion.
+# Format: <branch> <expected_sha>
+ci/visual-gates-after-tier-a 95f530835081c7b55e25481803e66590839f2b83
+ci/reduce-authoring-feature-fanout b54e0e73fa4e8796a35dfa5c547dceb8734ae299
+viewer/cardinal-picture-content-rotation-current-main-806-v5 76c6b40569e65914bb6e6de734ab0b04345db49d
+reader/quill-text-color-current-main-v5 44d0a44beba3563c42bb9ecceb4b4aca341f22ed
+conversion/editable-source-image-export-01 def981a01630cb25a4f8a37baed01987dde60c63
+ci/stabilize-editor-current-version-tests f4d16c4e8f0ec5203e4e4f5972e7703fe042fb12
+ci-pub-editor-rustfmt-919 18b18e362514b81041e6a1d5e72a6ed63099df1e
+fix/viewer-image-page-admission-compose-01 dbb89ea276fa1e15ecc7e40935418eef8611d996
+fix/legacy22-point-group-viewer-02 6dd3a362de042efc015cd35866ec0712b57a1f43
+fix/mixed-layout-safe-reuse-01-v3 998df52ba01441f60ba06375dce99e3bb428b9ef
+viewer/mixed-family-text-current-main-v4 2e8b8d19ebe67136dab4172e973555016605093b
+render-span-font-fields-fix 58eeae2777f34d8277b74072198942604c6c405f
+authoring-delete-node-runtime-01 6b0bf947359ff4f2fd88ea0d22246451df0ae01e
+conversion/editable-typography-loss-accounting-01 3846a7ca2b4a740dac221b53cdb398cc3725952e
+fix/legacy22-page-role-profile-903-v4 84212fd47a3477f5cf132fb7eefa318120e29949
+authoring-authored-stack-lifecycle-01 0189409b6453c5b647837531ee4f57e72035e0b8
+ci/cloud-reader-live-index-identity 1a6b7202ffde679310891f619f74fd576d6889b6
+reader/reader1050-trophy-quill-authority-replay 35dda8cd26daa39c820ffd8cf48000563b643073
+fix/mature-terminal-service-page-role-965 0d74067eeed782a4ae50c6e490ba382860083e32
+viewer/paragraph-default-align-957 1f838e49c895d90652062d55c324dfc798400bd2
+fix/mature-interleaved-k-page-role-975-v2 eedcf7a2aa9fba3a9d0d621285b336665e1e7cd6
+fix/mature-detached-tail-page-role-980-v3 af081c00c8b4e0583d6be618c9feb865fbb0fc7b
+fix/mature-zero-leader-detached-tail-983-v4 ac1f599efa96cf5b706ba185a313ffb741d7ef87
+authoring-authored-stack-runtime-01 a0ba330a91d198384adeea22d161c0520513e9e5
+cloud-reader/font-supply-diagnostics-944-v3 a7320dfb49d232a9053f877680d8e1db4d17501b
+scene-authored-stack-01 157b1d96352b51f29b155be745c7ad5a1c2f24da
+fix/mature-master-bank-page-role-1005 de9ef7cac602a97645582e90a90949e73b1929e6
+revert/master-bank-page-role-1007-membership b1622451aa20049c9ac75bfb8732316fbd189c1a
+build-canvas-creation-workspace-exclude-01 1190261566357205a4897e673658254729a45c3a
+ci/batch01-page-membership-gate-1025 a08eb217aef5274285580133030674d2a1e6a886
+ci/carlton-native-contract-ubuntu-v2 28cc765bb1ecc63c74e8c30ff08fe76a83485a40
+ci/force-cancel-obsolete-runs-v2 d1477dead031f9d6016b8699aea4f87d7427ed67
