@@ -3751,6 +3751,28 @@ mod tests {
         assert!(unknown.is_empty());
     }
 
+    fn classify_unsupported_color_reference_shape_for_test(raw: u32) -> &'static str {
+        let high = (raw >> 24) as u8;
+        let green_blue = raw & 0x00ff_ff00;
+        let low = (raw & 0xff) as u8;
+
+        if high == 0x08 && green_blue == 0 {
+            if low < 8 {
+                "publisher_eight_slot_scheme_shape"
+            } else {
+                "scheme_flag_outside_eight_slot_shape"
+            }
+        } else if high == 0xff {
+            if (raw & 0x00ff_ffff) == 0 {
+                "auto_flag_zero_rgb_shape"
+            } else {
+                "auto_flag_nonzero_rgb_shape"
+            }
+        } else {
+            "other_flagged_form"
+        }
+    }
+
     fn classify_effective_color_provenance_for_test(
         fdpc: &QuillTypographyRange,
         default: Option<&CharacterDefaultObservation>,
@@ -3876,6 +3898,10 @@ mod tests {
             std::collections::BTreeMap::<String, usize>::new();
         let mut resolved_run_count = 0_usize;
         let mut unresolved_run_count = 0_usize;
+        let mut unsupported_reference_shape_counts =
+            std::collections::BTreeMap::<String, usize>::new();
+        let mut unsupported_reference_source_shape_counts =
+            std::collections::BTreeMap::<String, usize>::new();
 
         for run in &catalog.effective_runs {
             let story = story_extents
@@ -3921,6 +3947,37 @@ mod tests {
             );
 
             *disposition_counts.entry(disposition.to_owned()).or_default() += 1;
+
+            if disposition == "explicit_unsupported_reference_form"
+                || disposition == "inherited_unsupported_reference_form"
+            {
+                let mut explicit = fdpc.color_indices.clone();
+                explicit.sort_unstable();
+                explicit.dedup();
+                let (source, index) = if let [index] = explicit.as_slice() {
+                    ("explicit", *index)
+                } else {
+                    let default = color_default.expect("inherited unsupported form requires default");
+                    let mut inherited = default.color_indices.clone();
+                    inherited.sort_unstable();
+                    inherited.dedup();
+                    let [index] = inherited.as_slice() else {
+                        panic!("inherited unsupported form requires one inherited color index");
+                    };
+                    ("inherited", *index)
+                };
+                let references = color_references.expect("unsupported form requires readable PL table");
+                let raw = *references
+                    .get(index as usize)
+                    .expect("unsupported form requires in-range PL index");
+                let shape = classify_unsupported_color_reference_shape_for_test(raw);
+                *unsupported_reference_shape_counts
+                    .entry(shape.to_owned())
+                    .or_default() += 1;
+                *unsupported_reference_source_shape_counts
+                    .entry(format!("{source}@{shape}"))
+                    .or_default() += 1;
+            }
             if run.color_rgb.is_some() {
                 resolved_run_count += 1;
                 assert!(
@@ -3961,6 +4018,8 @@ mod tests {
             "unresolved_color_run_count": unresolved_run_count,
             "disposition_counts": disposition_counts,
             "unresolved_disposition_counts": unresolved_disposition_counts,
+            "unsupported_reference_shape_counts": unsupported_reference_shape_counts,
+            "unsupported_reference_source_shape_counts": unsupported_reference_source_shape_counts,
             "unknown_fdpc_block_type_count": catalog.unknown_block_types_assumed_zero_length.len(),
             "unknown_inheritance_block_type_count": catalog
                 .inheritance_unknown_block_types_assumed_zero_length
