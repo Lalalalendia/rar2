@@ -126,6 +126,54 @@ impl DesktopSourceFontRegistry {
         self.resource_for_family_style(&run.source_font_name, bold, italic)
     }
 
+    pub fn resource_for_current_fragment<'a>(
+        &'a self,
+        fragment: &RenderTextFragmentV1,
+    ) -> Option<ExplicitRenderTextFontResourceV1<'a>> {
+        let family = complete_scalar_source_font_family_v1(fragment).or_else(|| {
+            self.effective_fragment_families
+                .get(&fragment_family_key(fragment))
+                .cloned()
+        })?;
+
+        if fragment.typography.is_empty() {
+            return self.resource_for_family(&family);
+        }
+
+        let mut cursor = fragment.scalar_start;
+        let mut style = None;
+        let mut saw_current_style = false;
+        for run in &fragment.typography {
+            if run.scalar_start != cursor
+                || run.scalar_end <= run.scalar_start
+                || run.scalar_end > fragment.scalar_end
+            {
+                return None;
+            }
+            match (run.bold, run.italic) {
+                (None, None) if !saw_current_style => {}
+                (Some(bold), Some(italic)) => {
+                    saw_current_style = true;
+                    match style {
+                        None => style = Some((bold, italic)),
+                        Some(existing) if existing == (bold, italic) => {}
+                        Some(_) => return None,
+                    }
+                }
+                _ => return None,
+            }
+            cursor = run.scalar_end;
+        }
+        if cursor != fragment.scalar_end {
+            return None;
+        }
+
+        match style {
+            Some((bold, italic)) => self.resource_for_family_style(&family, bold, italic),
+            None => self.resource_for_family(&family),
+        }
+    }
+
     fn resource_for_family_style<'a>(
         &'a self,
         family: &str,
