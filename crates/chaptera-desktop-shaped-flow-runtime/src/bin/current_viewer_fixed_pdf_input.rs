@@ -66,6 +66,9 @@ struct CurrentViewerPlanCensusV1 {
     shared_layout_incomplete_spacing_family_binding_counts: BTreeMap<String, usize>,
     first_line_capacity_recovery_count: usize,
     first_line_capacity_recovery_signature_counts: BTreeMap<String, usize>,
+    story_prefix_whole_story_candidate_count: usize,
+    story_prefix_whole_story_candidate_signature_counts: BTreeMap<String, usize>,
+    story_prefix_whole_story_candidate_outcome_counts: BTreeMap<String, usize>,
     configured_fallback_font_size_emu: i64,
     configured_fallback_line_height_emu: i64,
     shaped_line_count: usize,
@@ -245,6 +248,91 @@ fn font_binding_class(fragment: &RenderTextFragmentV1) -> &'static str {
     }
 }
 
+fn story_prefix_whole_story_candidates(
+    visual: &ViewerGeometryDocument,
+) -> (BTreeSet<NodeId>, BTreeMap<String, usize>) {
+    let mut candidates = BTreeSet::new();
+    let mut signatures = BTreeMap::new();
+
+    for fragment in &visual.text_fragments {
+        if fragment.scalar_start != 0 {
+            continue;
+        }
+        let Some(story) = visual
+            .document
+            .stories
+            .iter()
+            .find(|story| story.id == fragment.story_id)
+        else {
+            continue;
+        };
+        let Ok(story_scalar_len) = u32::try_from(story.text.chars().count()) else {
+            continue;
+        };
+        if fragment.scalar_end >= story_scalar_len
+            || u32::try_from(fragment.text.chars().count()).ok() != Some(fragment.scalar_end)
+        {
+            continue;
+        }
+
+        let Ok(prefix_end) = usize::try_from(fragment.scalar_end) else {
+            continue;
+        };
+        let story_prefix = story.text.chars().take(prefix_end).collect::<String>();
+        if story_prefix != fragment.text {
+            continue;
+        }
+
+        let mut frames = visual
+            .story_frames
+            .iter()
+            .filter(|frame| frame.story_id == fragment.story_id);
+        let Some(frame) = frames.next() else {
+            continue;
+        };
+        if frames.next().is_some() || frame.frame_id != fragment.frame_id {
+            continue;
+        }
+
+        let Some(node) = visual
+            .scene
+            .nodes
+            .iter()
+            .find(|node| node.origin == fragment.frame_id)
+        else {
+            continue;
+        };
+        if !visual
+            .document
+            .pages
+            .iter()
+            .any(|page| page.id.into_canonical() == node.parent_origin)
+        {
+            continue;
+        }
+
+        #[cfg(feature = "projected-scene-instances")]
+        if visual.projected_instances.iter().any(|projected| {
+            projected.target_frame_node_id == Some(fragment.frame_id)
+                && projected.scene_instance.target_page_id == node.parent_origin.to_string()
+        }) {
+            continue;
+        }
+
+        if candidates.insert(fragment.frame_id) {
+            let delta = story_scalar_len - fragment.scalar_end;
+            *signatures
+                .entry(format!(
+                    "end_delta={delta}|source_lines={}",
+                    fragment.line_count
+                ))
+                .or_default() += 1;
+        }
+    }
+
+    (candidates, signatures)
+}
+
 fn census(
     visual: &ViewerGeometryDocument,
     plans: &[PageRenderPlanV1],
@@ -257,6 +345,10 @@ fn census(
     };
     let mut node_counts = BTreeMap::<NodeId, usize>::new();
     let mut projected_ids = BTreeSet::new();
+    let (story_prefix_candidates, story_prefix_signatures) =
+        story_prefix_whole_story_candidates(visual);
+    out.story_prefix_whole_story_candidate_count = story_prefix_candidates.len();
+    out.story_prefix_whole_story_candidate_signature_counts = story_prefix_signatures;
 
     for page in plans {
         let plan_order = page
@@ -338,8 +430,15 @@ fn census(
             *out.text_font_binding_counts
                 .entry(font_binding_class(text).to_owned())
                 .or_default() += 1;
+            let is_story_prefix_candidate =
+                node.projected_scene_instance.is_none() && story_prefix_candidates.contains(&node.node_id);
             let Some(layout) = &text.layout else {
                 out.missing_text_layout_count += 1;
+                if is_story_prefix_candidate {
+                    *out.story_prefix_whole_story_candidate_outcome_counts
+                        .entry("missing_layout".to_owned())
+                        .or_default() += 1;
+                }
                 continue;
             };
             match &layout.disposition {
@@ -349,6 +448,11 @@ fn census(
                     ..
                 } => {
                     out.shared_resolved_text_node_count += 1;
+                    if is_story_prefix_candidate {
+                        *out.story_prefix_whole_story_candidate_outcome_counts
+                            .entry("shared_resolved".to_owned())
+                            .or_default() += 1;
+                    }
 
                     let bounds = node.text_bounds.unwrap_or(node.bounds);
                     let frame_height_emu = bounds.height.get();
@@ -400,6 +504,11 @@ fn census(
                 }
                 RenderTextLayoutDispositionV1::BackendFallback { reason } => {
                     out.backend_fallback_text_node_count += 1;
+                    if is_story_prefix_candidate {
+                        *out.story_prefix_whole_story_candidate_outcome_counts
+                            .entry(format!("fallback:{}", reason.code()))
+                            .or_default() += 1;
+                    }
                     *out.backend_fallback_reason_counts
                         .entry(reason.code().to_owned())
                         .or_default() += 1;
