@@ -4186,18 +4186,37 @@ impl EditorSession {
         let overrides = self
             .current_paragraph_alignment_overrides_v1()
             .map_err(|error| error.to_string())?;
-        if overrides.is_empty() {
-            return Ok(Vec::new());
-        }
-
         let paragraphs = self
             .imported_paragraphs_v1()
             .map_err(|error| error.to_string())?;
-        let scoped_story_ids = paragraphs
+        let mut scoped_story_ids = paragraphs
             .iter()
             .filter(|paragraph| overrides.contains_key(&paragraph.paragraph_id))
             .map(|paragraph| paragraph.story_id)
             .collect::<BTreeSet<_>>();
+
+        let mut paragraph_count_by_story = BTreeMap::<StoryId, usize>::new();
+        for paragraph in &paragraphs {
+            *paragraph_count_by_story.entry(paragraph.story_id).or_default() += 1;
+        }
+        for item in self
+            .effective_full_story_paragraph_alignment_v1()
+            .map_err(|error| error.to_string())?
+        {
+            if item.alignment == ParagraphAlignmentV1::Right
+                && paragraph_count_by_story
+                    .get(&item.story_id)
+                    .copied()
+                    .unwrap_or_default()
+                    > 1
+            {
+                scoped_story_ids.insert(item.story_id);
+            }
+        }
+
+        if scoped_story_ids.is_empty() {
+            return Ok(Vec::new());
+        }
 
         let mut result = Vec::new();
         for paragraph in paragraphs {
