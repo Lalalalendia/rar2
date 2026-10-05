@@ -1,3 +1,4 @@
+use pub_export::ParagraphScopedAlignmentValueV1;
 use pub_editor::{
     AuthoredParagraphAlignmentValueV1, EDITOR_PROJECT_VERSION_V0_15,
     EffectiveParagraphAlignmentValueV1, ImportedParagraphAlignmentValueV1,
@@ -153,6 +154,13 @@ fn real_carlton_paragraph_alignment_override_roundtrips_history_and_project() {
         cleared.authority,
         Some(ParagraphAlignmentAuthorityV1::ImportedBase)
     );
+    let cleared_scoped = reopened
+        .effective_paragraph_scoped_alignments_v1()
+        .expect("project paragraph-scoped effective alignment after Clear");
+    assert!(cleared_scoped.materializable.iter().any(|item| {
+        item.paragraph_id == paragraph_id
+            && item.alignment == ParagraphScopedAlignmentValueV1::Right
+    }));
 
     let redundant = reopened
         .set_paragraph_alignment_override_v1(
@@ -191,4 +199,11 @@ fn real_carlton_paragraph_alignment_override_roundtrips_history_and_project() {
         left.authority,
         Some(ParagraphAlignmentAuthorityV1::ChapteraOverride)
     );
+    let left_scoped = reopened
+        .effective_paragraph_scoped_alignments_v1()
+        .expect("project paragraph-scoped effective alignment after Left override");
+    assert!(left_scoped.materializable.iter().any(|item| {
+        item.paragraph_id == paragraph_id
+            && item.alignment == ParagraphScopedAlignmentValueV1::Left
+    }));
 }
