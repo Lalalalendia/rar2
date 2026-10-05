@@ -63,10 +63,13 @@ pub use writer_assessment::{
 };
 
 use chaptera_text_format_overlay::{
-    BaseCharacterFormatV1, BaseFormatRunV1, FormatPropertyV1, FormatValueV1,
-    TextFormatOverlayStateV1, build_text_format_overlay_state_v1,
+    BaseCharacterFormatV1, BaseFormatRunV1, build_text_format_overlay_state_v1,
     clear_text_format_property_override_v1 as overlay_clear_text_format_property_override_v1,
     set_text_format_property_v1 as overlay_set_text_format_property_v1, state_hash_v1,
+};
+pub use chaptera_text_format_overlay::{
+    EffectivePropertySegmentV1, EffectivePropertySourceV1, FormatPropertyV1, FormatValueV1,
+    TextFormatOverlayStateV1, effective_property_segments_v1,
 };
 use pub_export::{
     CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
