@@ -432,9 +432,10 @@ mod tests {
         IdmlPackageBuilder, IdmlPartKind,
     };
     use pub_export::{
-        SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile, plan_export,
+        ParagraphScopedAlignmentV1, ParagraphScopedAlignmentValueV1, SemanticFeatureRequest,
+        TargetCapabilityManifest, TargetProfile, plan_export,
     };
-    use pub_model::CanonicalId;
+    use pub_model::{CanonicalId, ParagraphId, TextRange};
     use std::collections::BTreeMap;
 
     fn id(byte: u8) -> CanonicalId {
@@ -489,6 +490,219 @@ mod tests {
             )
             .unwrap();
         builder.finish().unwrap()
+    }
+
+    fn package_with_story_text(
+        export_plan: &ExportPlan,
+        story_id: StoryId,
+        escaped_story_text: &str,
+    ) -> IdmlPackage {
+        let mut builder = IdmlPackageBuilder::from_export_plan(export_plan).expect("builder");
+        builder
+            .add_part(
+                "designmap.xml",
+                IdmlPartKind::DesignMap,
+                format!(
+                    "<Document xmlns:idPkg=\"{}\" DOMVersion=\"7.0\">\n</Document>\n",
+                    IDML_PACKAGING_NAMESPACE
+                ),
+            )
+            .unwrap();
+        builder
+            .add_part(
+                story_path(story_id),
+                IdmlPartKind::Story,
+                format!(
+                    "<idPkg:Story><Story Self=\"{}\">\n    <ParagraphStyleRange AppliedParagraphStyle=\"ParagraphStyle/$ID/[No paragraph style]\">\n      <CharacterStyleRange AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\" FontStyle=\"Regular\" PointSize=\"12\">\n        <Properties>\n          <AppliedFont type=\"string\">Montserrat</AppliedFont>\n        </Properties>\n        <Content>{escaped_story_text}</Content>\n      </CharacterStyleRange>\n    </ParagraphStyleRange>\n  </Story></idPkg:Story>\n",
+                    idml_self("us", story_id.into_canonical())
+                ),
+            )
+            .unwrap();
+        builder.finish().unwrap()
+    }
+
+    fn scoped(
+        paragraph_byte: u8,
+        story_id: StoryId,
+        start: u64,
+        end: u64,
+        alignment: ParagraphScopedAlignmentValueV1,
+    ) -> ParagraphScopedAlignmentV1 {
+        ParagraphScopedAlignmentV1 {
+            story_id,
+            paragraph_id: ParagraphId::from_canonical(id(paragraph_byte)),
+            range: TextRange::new(start, end).expect("canonical paragraph range"),
+            alignment,
+        }
+    }
+
+    #[test]
+    fn writes_scoped_left_center_right_as_sibling_paragraph_ranges() {
+        let story_id = story(10);
+        let export_plan = plan(story_id);
+        let story_text = "One &\rTwo<\rThree";
+        let mut package = package_with_story_text(&export_plan, story_id, "One &amp;\rTwo&lt;\rThree");
+        let placement = IdmlParagraphScopedAlignmentPlacement {
+            story_id,
+            story_text: story_text.into(),
+            paragraphs: vec![
+                scoped(
+                    12,
+                    story_id,
+                    6,
+                    11,
+                    ParagraphScopedAlignmentValueV1::Center,
+                ),
+                scoped(
+                    11,
+                    story_id,
+                    0,
+                    6,
+                    ParagraphScopedAlignmentValueV1::Left,
+                ),
+                scoped(
+                    13,
+                    story_id,
+                    11,
+                    16,
+                    ParagraphScopedAlignmentValueV1::Right,
+                ),
+            ],
+        };
+
+        add_paragraph_scoped_alignment_to_idml(
+            &export_plan,
+            &mut package,
+            std::slice::from_ref(&placement),
+        )
+        .expect("paragraph-scoped IDML alignment");
+
+        let xml = package
+            .parts
+            .iter()
+            .find(|part| part.kind == IdmlPartKind::Story)
+            .and_then(|part| part.content.as_text())
+            .expect("story XML");
+        assert_eq!(xml.matches("<ParagraphStyleRange ").count(), 3);
+        assert_eq!(xml.matches("Justification=\"LeftAlign\"").count(), 1);
+        assert_eq!(xml.matches("Justification=\"CenterAlign\"").count(), 1);
+        assert_eq!(xml.matches("Justification=\"RightAlign\"").count(), 1);
+        assert!(xml.contains("<Content>One &amp;</Content>"));
+        assert!(xml.contains("<Content>Two&lt;</Content>"));
+        assert!(xml.contains("<Content>Three</Content>"));
+        assert!(!xml.contains('\r'));
+        assert_eq!(xml.matches("PointSize=\"12\"").count(), 3);
+        assert_eq!(
+            xml.matches("<AppliedFont type=\"string\">Montserrat</AppliedFont>")
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn provenance_terminal_cr_becomes_one_final_paragraph_range_not_br() {
+        let story_id = story(20);
+        let export_plan = plan(story_id);
+        let mut package = package_with_story_text(&export_plan, story_id, "Alpha\r");
+        let placement = IdmlParagraphScopedAlignmentPlacement {
+            story_id,
+            story_text: "Alpha\r".into(),
+            paragraphs: vec![scoped(
+                21,
+                story_id,
+                0,
+                6,
+                ParagraphScopedAlignmentValueV1::Right,
+            )],
+        };
+
+        add_paragraph_scoped_alignment_to_idml(
+            &export_plan,
+            &mut package,
+            std::slice::from_ref(&placement),
+        )
+        .expect("terminal CR is structural paragraph boundary");
+
+        let xml = package
+            .parts
+            .iter()
+            .find(|part| part.kind == IdmlPartKind::Story)
+            .and_then(|part| part.content.as_text())
+            .expect("story XML");
+        assert_eq!(xml.matches("<ParagraphStyleRange ").count(), 1);
+        assert!(xml.contains("<Content>Alpha</Content>"));
+        assert!(!xml.contains("<Br"));
+        assert!(!xml.contains('\r'));
+    }
+
+    #[test]
+    fn rejects_non_final_range_without_owned_terminal_cr() {
+        let story_id = story(30);
+        let export_plan = plan(story_id);
+        let mut package = package_with_story_text(&export_plan, story_id, "OneTwo");
+        let placement = IdmlParagraphScopedAlignmentPlacement {
+            story_id,
+            story_text: "OneTwo".into(),
+            paragraphs: vec![
+                scoped(
+                    31,
+                    story_id,
+                    0,
+                    3,
+                    ParagraphScopedAlignmentValueV1::Left,
+                ),
+                scoped(
+                    32,
+                    story_id,
+                    3,
+                    6,
+                    ParagraphScopedAlignmentValueV1::Right,
+                ),
+            ],
+        };
+
+        assert!(matches!(
+            add_paragraph_scoped_alignment_to_idml(
+                &export_plan,
+                &mut package,
+                std::slice::from_ref(&placement),
+            ),
+            Err(IdmlParagraphAlignmentError::MissingParagraphTerminator {
+                story_id: found,
+                ..
+            }) if found == story_id
+        ));
+    }
+
+    #[test]
+    fn rejects_incomplete_canonical_story_coverage() {
+        let story_id = story(40);
+        let export_plan = plan(story_id);
+        let mut package = package_with_story_text(&export_plan, story_id, "Alpha");
+        let placement = IdmlParagraphScopedAlignmentPlacement {
+            story_id,
+            story_text: "Alpha".into(),
+            paragraphs: vec![scoped(
+                41,
+                story_id,
+                0,
+                4,
+                ParagraphScopedAlignmentValueV1::Center,
+            )],
+        };
+
+        assert!(matches!(
+            add_paragraph_scoped_alignment_to_idml(
+                &export_plan,
+                &mut package,
+                std::slice::from_ref(&placement),
+            ),
+            Err(IdmlParagraphAlignmentError::ParagraphCoverageMismatch {
+                story_id: found,
+                expected_end: 5,
+                found_end: 4,
+            }) if found == story_id
+        ));
     }
 
     #[test]
