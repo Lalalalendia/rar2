@@ -1,0 +1,96 @@
+name: Carlton Quill color provenance
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-quill/src/typography.rs"
+      - "vendor/producer-a/crates/pub-quill/Cargo.toml"
+      - "tools/acquire_carlton_march_pair.py"
+      - ".github/workflows/carlton-quill-color-provenance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: carlton-quill-color-provenance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Acquire exact public Carlton March pair
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/carlton-quill-color-provenance"
+          mkdir -p "$root"
+          python tools/acquire_carlton_march_pair.py "$root"
+          pub="$root/March-2026.pub"
+          reference="$root/March-2026-reference.pdf"
+          python - "$pub" "$reference" <<'PY'
+          import hashlib, pathlib, sys
+          expected = {
+              sys.argv[1]: "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3",
+              sys.argv[2]: "c1288571ee8da91afa27ca5c49191aacefe82123df294c11f58ca047d0ced769",
+          }
+          for path, digest in expected.items():
+              actual = hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+              if actual != digest:
+                  raise SystemExit(f"identity drift for {path}: {actual}")
+          PY
+          echo "CHAPTERA_GOLDEN_CARLTON_MARCH=$pub" >> "$GITHUB_ENV"
+          echo "CHAPTERA_CARLTON_SOURCE_SHA256=bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" >> "$GITHUB_ENV"
+          echo "CHAPTERA_CARLTON_COLOR_RECEIPT=$root/carlton-quill-color-provenance.receipt.json" >> "$GITHUB_ENV"
+          echo "CHAPTERA_CARLTON_COLOR_ROOT=$root" >> "$GITHUB_ENV"
+
+      - name: Run normal pub-quill tests
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-quill
+
+      - name: Run exact source-safe Carlton color provenance census
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-quill carlton_effective_text_color_provenance_is_source_safe -- --ignored --nocapture
+
+      - name: Validate retained receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, pathlib
+          path = pathlib.Path(os.environ["CHAPTERA_CARLTON_COLOR_RECEIPT"])
+          data = json.loads(path.read_text(encoding="utf-8"))
+          if data["schema"] != "chaptera.carlton-quill-color-provenance.v1":
+              raise SystemExit("color provenance schema drift")
+          if data["source_pub_sha256"] != "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3":
+              raise SystemExit("source identity drift")
+          if data["effective_run_count"] <= 0:
+              raise SystemExit("effective typography run census is empty")
+          if data["resolved_color_run_count"] + data["unresolved_color_run_count"] != data["effective_run_count"]:
+              raise SystemExit("effective color disposition partition is incomplete")
+          if sum(data["disposition_counts"].values()) != data["effective_run_count"]:
+              raise SystemExit("color disposition count does not partition effective runs")
+          if sum(data["unresolved_disposition_counts"].values()) != data["unresolved_color_run_count"]:
+              raise SystemExit("unresolved color disposition count drift")
+          for key in ("raw_customer_text_emitted", "raw_color_values_emitted", "raw_source_offsets_emitted"):
+              if data[key] is not False:
+                  raise SystemExit(f"source-safe fence failed: {key}")
+          print(json.dumps(data, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: carlton-quill-color-provenance
+          path: ${{ env.CHAPTERA_CARLTON_COLOR_RECEIPT }}
+          if-no-files-found: error
