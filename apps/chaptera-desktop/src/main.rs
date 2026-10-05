@@ -2824,7 +2824,8 @@ impl ViewerApp {
             }
             self.show_table_cell_edit_controls(ui, story_id, &table_cells);
         } else {
-            let story_ui = match linked_story_ui::state_for_validated_story_v1(&frame_ordinals) {
+            let story_ui =
+                match linked_story_ui::state_for_validated_story_v1(&frame_ordinals) {
                 Ok(state) => state,
                 Err(reason) => {
                     ui.weak(format!("Read-only in the desktop slice: {reason}."));
