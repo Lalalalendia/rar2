@@ -3041,7 +3041,9 @@ impl EditorSession {
             | EditOperation::ClearParagraphAlignmentOverride {
                 paragraph_ids: targets,
                 ..
-            } => targets.iter().any(|paragraph_id| paragraph_ids.contains(paragraph_id)),
+            } => targets
+                .iter()
+                .any(|paragraph_id| paragraph_ids.contains(paragraph_id)),
             _ => false,
         }))
     }
