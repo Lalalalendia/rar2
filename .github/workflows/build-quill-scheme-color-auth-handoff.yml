@@ -7,6 +7,8 @@ on:
       - "tools/portable/quill-scheme-color-auth/**"
       - "tools/windows/pub-runtime/PubRuntime.psm1"
       - "tools/acquire_carlton_march_pair.py"
+      - "tools/research-runner/quill-scheme-color-probe/**"
+      - "vendor/producer-a/crates/pub-quill/**"
 
 permissions:
   contents: read
@@ -28,6 +30,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
       - name: Parse portable PowerShell
         shell: powershell
         run: |
@@ -35,6 +41,34 @@ jobs:
           $tokens=$null; $errors=$null
           [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "tools/portable/quill-scheme-color-auth/run-native.ps1").Path,[ref]$tokens,[ref]$errors)
           if($errors.Count -ne 0){$errors | ForEach-Object {Write-Error $_.Message}; throw "portable runner parse failed"}
+
+      - name: Build self-contained Quill scheme-color probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:RUSTFLAGS = "-C target-feature=+crt-static"
+          cargo build --release --manifest-path tools/research-runner/quill-scheme-color-probe/Cargo.toml
+          $exe = "tools/research-runner/quill-scheme-color-probe/target/release/quill-scheme-color-probe.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "scheme-color probe exe missing" }
+
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+          if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { throw "vswhere.exe missing" }
+          $install = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+          if ([string]::IsNullOrWhiteSpace($install)) { throw "Visual Studio VC tools not found" }
+          $dumpbin = Get-ChildItem -LiteralPath (Join-Path $install "VC/Tools/MSVC") -Directory |
+            Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName "bin/Hostx64/x64/dumpbin.exe" } |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+            Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace([string]$dumpbin)) { throw "dumpbin.exe not found" }
+
+          $deps = (& $dumpbin /dependents $exe 2>&1 | Out-String)
+          $deps | Set-Content -LiteralPath quill-scheme-color-probe-dependencies.txt -Encoding UTF8
+          foreach ($forbidden in @("VCRUNTIME", "MSVCP", "api-ms-win-crt", "ucrtbase.dll")) {
+            if ($deps -match [regex]::Escape($forbidden)) {
+              throw "Portable scheme-color probe depends on external CRT component: $forbidden"
+            }
+          }
 
       - name: Acquire exact public Carlton March PUB
         shell: pwsh
@@ -55,7 +89,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $bundle = Join-Path $PWD "portable/QUILL-SCHEME-COLOR-AUTH-V1"
+          $bundle = Join-Path $PWD "portable/QUILL-SCHEME-COLOR-AUTH-V2"
           New-Item -ItemType Directory -Force -Path $bundle | Out-Null
 
           Copy-Item "tools/portable/quill-scheme-color-auth/README.txt" (Join-Path $bundle "README.txt")
@@ -65,6 +99,11 @@ jobs:
           $runtimeDst = Join-Path $bundle "tools/windows/pub-runtime"
           New-Item -ItemType Directory -Force -Path $runtimeDst | Out-Null
           Copy-Item "tools/windows/pub-runtime/PubRuntime.psm1" (Join-Path $runtimeDst "PubRuntime.psm1")
+
+          $runtime = Join-Path $bundle "runtime"
+          New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+          Copy-Item "tools/research-runner/quill-scheme-color-probe/target/release/quill-scheme-color-probe.exe" (Join-Path $runtime "quill-scheme-color-probe.exe")
+          Copy-Item "quill-scheme-color-probe-dependencies.txt" (Join-Path $runtime "quill-scheme-color-probe-dependencies.txt")
 
           $fixtureDst = Join-Path $bundle "fixtures"
           New-Item -ItemType Directory -Force -Path $fixtureDst | Out-Null
@@ -90,18 +129,18 @@ jobs:
             files=$records
           } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $bundle "bundle-manifest.json") -Encoding UTF8
 
-          Compress-Archive -Path (Join-Path $bundle "*") -DestinationPath "QUILL-SCHEME-COLOR-AUTH-V1.zip" -CompressionLevel Optimal -Force
-          $sha=(Get-FileHash "QUILL-SCHEME-COLOR-AUTH-V1.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
-          $bytes=(Get-Item "QUILL-SCHEME-COLOR-AUTH-V1.zip").Length
-          [ordered]@{schema="chaptera.quill-scheme-color-portable-zip.v1";sha256=$sha;bytes=[int64]$bytes} | ConvertTo-Json | Set-Content "QUILL-SCHEME-COLOR-AUTH-V1.sha256.json" -Encoding UTF8
+          Compress-Archive -Path (Join-Path $bundle "*") -DestinationPath "QUILL-SCHEME-COLOR-AUTH-V2.zip" -CompressionLevel Optimal -Force
+          $sha=(Get-FileHash "QUILL-SCHEME-COLOR-AUTH-V2.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes=(Get-Item "QUILL-SCHEME-COLOR-AUTH-V2.zip").Length
+          [ordered]@{schema="chaptera.quill-scheme-color-portable-zip.v1";sha256=$sha;bytes=[int64]$bytes} | ConvertTo-Json | Set-Content "QUILL-SCHEME-COLOR-AUTH-V2.sha256.json" -Encoding UTF8
           Write-Host "bundle_sha256=$sha"
           Write-Host "bundle_bytes=$bytes"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: quill-scheme-color-auth-portable-v1
+          name: quill-scheme-color-auth-portable-v2
           path: |
-            QUILL-SCHEME-COLOR-AUTH-V1.zip
-            QUILL-SCHEME-COLOR-AUTH-V1.sha256.json
+            QUILL-SCHEME-COLOR-AUTH-V2.zip
+            QUILL-SCHEME-COLOR-AUTH-V2.sha256.json
           if-no-files-found: error
           retention-days: 14
