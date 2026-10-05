@@ -777,7 +777,9 @@ fn run(
         packet.census.shared_layout_incomplete_path_counts,
         packet.census.shared_layout_incomplete_consumption_counts,
         packet.census.shared_layout_incomplete_cause_counts,
-        packet.census.shared_layout_incomplete_cause_authority_counts,
+        packet
+            .census
+            .shared_layout_incomplete_cause_authority_counts,
         packet.census.first_line_capacity_recovery_count,
         packet.census.first_line_capacity_recovery_signature_counts,
         packet.census.configured_fallback_font_size_emu,
