@@ -45,20 +45,28 @@ fn real_carlton_effective_full_story_alignment_drives_idml_and_odg() {
     let source_alignments = session
         .effective_full_story_paragraph_alignment_v1()
         .expect("derive effective full-Story alignment");
+    let imported = session
+        .imported_paragraphs_v1()
+        .expect("project Carlton imported ParagraphIds");
     let right = source_alignments
         .iter()
-        .find(|item| item.alignment == ParagraphAlignmentV1::Right)
-        .expect("Carlton must expose one uniform effective Right Story")
+        .filter(|item| item.alignment == ParagraphAlignmentV1::Right)
+        .find(|item| {
+            imported
+                .iter()
+                .filter(|paragraph| paragraph.story_id == item.story_id)
+                .count()
+                >= 2
+        })
+        .expect("Carlton must expose one multi-paragraph uniform effective Right Story")
         .clone();
 
-    let paragraph_ids = session
-        .imported_paragraphs_v1()
-        .expect("project Carlton imported ParagraphIds")
+    let paragraph_ids = imported
         .into_iter()
         .filter(|paragraph| paragraph.story_id == right.story_id)
         .map(|paragraph| paragraph.paragraph_id)
         .collect::<Vec<_>>();
-    assert!(!paragraph_ids.is_empty());
+    assert!(paragraph_ids.len() >= 2);
 
     let source_idml = export_counts(&session, EditorEditableTarget::Idml);
     let source_odg = export_counts(&session, EditorEditableTarget::Odg);
@@ -82,10 +90,10 @@ fn real_carlton_effective_full_story_alignment_drives_idml_and_odg() {
     let centered_odg = export_counts(&session, EditorEditableTarget::Odg);
     assert_eq!(centered_idml.0, source_idml.0);
     assert_eq!(centered_idml.1, source_idml.1 + paragraph_ids.len());
-    assert_eq!(centered_idml.2 + 1, source_idml.2);
+    assert_eq!(centered_idml.2 + paragraph_ids.len(), source_idml.2);
     assert_eq!(centered_odg.0, source_odg.0);
     assert_eq!(centered_odg.1, source_odg.1 + paragraph_ids.len());
-    assert_eq!(centered_odg.2 + 1, source_odg.2);
+    assert_eq!(centered_odg.2 + paragraph_ids.len(), source_odg.2);
 
     session
         .clear_paragraph_alignment_override_v1(paragraph_ids.clone())
@@ -117,14 +125,8 @@ fn real_carlton_effective_full_story_alignment_drives_idml_and_odg() {
     let left_odg = export_counts(&session, EditorEditableTarget::Odg);
     assert_eq!(left_idml.0, source_idml.0 + 1);
     assert_eq!(left_idml.1, source_idml.1);
-    assert_eq!(
-        left_idml.2,
-        source_idml.2 - 1 + paragraph_ids.len().saturating_sub(1)
-    );
+    assert_eq!(left_idml.2 + 1, source_idml.2);
     assert_eq!(left_odg.0, source_odg.0 + 1);
     assert_eq!(left_odg.1, source_odg.1);
-    assert_eq!(
-        left_odg.2,
-        source_odg.2 - 1 + paragraph_ids.len().saturating_sub(1)
-    );
+    assert_eq!(left_odg.2 + 1, source_odg.2);
 }
