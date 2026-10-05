@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 
+// CI-READER-VISUAL: isolated ordinary-comment admission control.
 // The cadence API is intentionally staged one PR before its UI consumer (#227).
 mod acceptance;
 mod acceptance_cli;
