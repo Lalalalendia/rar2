@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use pub_editor::{
     AuthoredEntityProvenanceV1, AuthoredLineRuntimeV1, AuthoredSolidStrokeV1,
     EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_16, EDITOR_PROJECT_VERSION_V0_17,
-    EditOperation, EditorError, EditorProjectError, EditorSession, LineGeometryV1,
-    PointEmuV1, Srgb8V1, mature_0x2c_pub_persistence_target,
+    EditOperation, EditorError, EditorProjectError, EditorSession, LineGeometryV1, PointEmuV1,
+    Srgb8V1, mature_0x2c_pub_persistence_target,
 };
 use pub_export::{PersistenceCompatibilityState, WriterCapabilityManifest};
 use pub_model::{
@@ -182,7 +182,10 @@ fn create_line_is_one_v017_history_unit_and_source_graph_stays_immutable() {
     let authored = session.authored_line(node_id).expect("authored Line");
     assert_eq!(authored.geometry, ordered, "endpoint order is canonical");
     assert_eq!(authored.parent_id, page_id());
-    assert_eq!(authored.provenance, AuthoredEntityProvenanceV1::AuthorCreated);
+    assert_eq!(
+        authored.provenance,
+        AuthoredEntityProvenanceV1::AuthorCreated
+    );
 
     let project = session.project();
     assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_17);
@@ -204,7 +207,10 @@ fn create_line_is_one_v017_history_unit_and_source_graph_stays_immutable() {
     let mut reopened = EditorSession::new(base).expect("reopen");
     reopened.apply_project(&project).expect("project replay");
     assert_eq!(reopened.project(), project);
-    assert_eq!(reopened.authored_line(node_id), session.authored_line(node_id));
+    assert_eq!(
+        reopened.authored_line(node_id),
+        session.authored_line(node_id)
+    );
 }
 
 #[test]
@@ -221,14 +227,20 @@ fn endpoint_direction_and_zero_spans_survive_history_and_replay_exactly() {
             .create_line(authored_node_id(), page_id(), ordered, stroke())
             .expect("create");
         assert_eq!(
-            session.authored_line(authored_node_id()).expect("line").geometry,
+            session
+                .authored_line(authored_node_id())
+                .expect("line")
+                .geometry,
             ordered
         );
 
         session.undo().expect("undo");
         session.redo().expect("redo");
         assert_eq!(
-            session.authored_line(authored_node_id()).expect("redo line").geometry,
+            session
+                .authored_line(authored_node_id())
+                .expect("redo line")
+                .geometry,
             ordered
         );
 
@@ -372,7 +384,10 @@ fn native_pub_persistence_does_not_overclaim_line_support() {
         })
         .expect("assessment");
 
-    assert_eq!(assessment.state, PersistenceCompatibilityState::NotEvaluated);
+    assert_eq!(
+        assessment.state,
+        PersistenceCompatibilityState::NotEvaluated
+    );
     assert!(assessment.items.iter().any(|item| {
         item.requirement.feature == "line.geometry.endpoints"
             && item.state == PersistenceCompatibilityState::NotEvaluated
