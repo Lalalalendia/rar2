@@ -26,7 +26,8 @@ pub use package_writer::{
     write_idml_ucf,
 };
 pub use paragraph_alignment::{
-    IdmlParagraphAlignmentError, add_full_story_paragraph_alignment_to_idml,
+    IdmlParagraphAlignmentError, IdmlParagraphScopedAlignmentPlacement,
+    add_full_story_paragraph_alignment_to_idml, add_paragraph_scoped_alignment_to_idml,
 };
 pub use semantic::{
     IDML_PACKAGING_NAMESPACE, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IdmlSemanticError, IdmlWireProfile,
