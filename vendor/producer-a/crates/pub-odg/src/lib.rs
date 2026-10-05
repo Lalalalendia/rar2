@@ -24,7 +24,8 @@ pub use image::{
 
 pub use paragraph_alignment::{
     OdgFullStoryParagraphAlignmentPlacement, OdgParagraphAlignmentError,
-    add_full_story_paragraph_alignment_to_odg,
+    OdgParagraphScopedAlignmentPlacement, add_full_story_paragraph_alignment_to_odg,
+    add_paragraph_scoped_alignment_to_odg,
 };
 
 pub use semantic::{OdgSemanticError, project_resolved_graph_to_odg};
