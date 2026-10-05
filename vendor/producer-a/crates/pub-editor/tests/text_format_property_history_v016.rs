@@ -72,14 +72,7 @@ fn real_pub_color_blocked_story_persists_scoped_bold_history_v016() {
             };
 
             return Some((
-                path,
-                original,
-                hash,
-                editor,
-                story_id,
-                before,
-                !first,
-                full_error,
+                path, original, hash, editor, story_id, before, !first, full_error,
             ));
         }
         None
@@ -127,7 +120,8 @@ fn real_pub_color_blocked_story_persists_scoped_bold_history_v016() {
         } if id == story_id && value == desired
     ));
     assert_eq!(
-        editor.graph().stories[&story_id].text, source_text,
+        editor.graph().stories[&story_id].text,
+        source_text,
         "scoped formatting must not mutate Story text"
     );
 
@@ -135,17 +129,11 @@ fn real_pub_color_blocked_story_persists_scoped_bold_history_v016() {
         .current_text_format_property_state_v1(story_id, FormatPropertyV1::Bold)
         .expect("edited scoped Bold state");
     let segments = editor
-        .current_text_format_property_segments_v1(
-            story_id,
-            FormatPropertyV1::Bold,
-            0,
-            story_len,
-        )
+        .current_text_format_property_segments_v1(story_id, FormatPropertyV1::Bold, 0, story_len)
         .expect("edited scoped Bold segments");
     assert!(!segments.is_empty());
     assert!(segments.iter().all(|segment| {
-        segment.property == FormatPropertyV1::Bold
-            && segment.value == FormatValueV1::Bool(desired)
+        segment.property == FormatPropertyV1::Bold && segment.value == FormatValueV1::Bool(desired)
     }));
 
     let still_unresolved = editor
