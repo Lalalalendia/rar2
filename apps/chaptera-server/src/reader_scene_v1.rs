@@ -1790,8 +1790,8 @@ mod tests {
 
     use chaptera_scene_instance::SceneProjectionKindV1;
     use chaptera_viewer_render_plan::{
-        ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, PageRenderPlanV1,
-        RenderTextFragmentV1, RenderTextLayoutDispositionV1, SHARED_TEXT_LAYOUT_REVISION_V1,
+        ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, PageRenderPlanV1, RenderTextFragmentV1,
+        RenderTextLayoutDispositionV1, SHARED_TEXT_LAYOUT_REVISION_V1,
         build_page_render_plan_with_text_layout_resolver_v1,
         build_page_render_plan_with_text_layout_resolvers_v1,
         build_page_render_plan_with_text_layout_v1, effective_source_font_family_v1,
@@ -1804,7 +1804,9 @@ mod tests {
         resolve_bounded_shaped_flow, shape_bounded_ltr,
     };
     use pub_model::LengthEmu;
-    use pub_viewer::{ViewerParagraphLineSpacing, open_pub_bundle, viewer_geometry_environment_v0_1};
+    use pub_viewer::{
+        ViewerParagraphLineSpacing, open_pub_bundle, viewer_geometry_environment_v0_1,
+    };
     use sha2::{Digest, Sha256};
 
     use super::{
@@ -1888,13 +1890,18 @@ mod tests {
         font_size_emu: i64,
         font: &ExplicitRenderTextFontResourceV1<'_>,
     ) -> Option<i64> {
-        if font_size_emu <= 0 || font.default_font_size_emu <= 0 || font.default_line_height_emu <= 0 {
+        if font_size_emu <= 0
+            || font.default_font_size_emu <= 0
+            || font.default_line_height_emu <= 0
+        {
             return None;
         }
         let numerator =
             i128::from(font_size_emu).checked_mul(i128::from(font.default_line_height_emu))?;
         let denominator = i128::from(font.default_font_size_emu);
-        let rounded = numerator.checked_add(denominator / 2)?.checked_div(denominator)?;
+        let rounded = numerator
+            .checked_add(denominator / 2)?
+            .checked_div(denominator)?;
         let value = i64::try_from(rounded).ok()?;
         (value > 0).then_some(value)
     }
@@ -1958,8 +1965,7 @@ mod tests {
         if node.projected_scene_instance.is_some() {
             return ("projected_path", "unknown", "projected_fail_closed");
         }
-        let Some(font_size_emu) =
-            probe_uniform_font_size_emu(fragment, font.default_font_size_emu)
+        let Some(font_size_emu) = probe_uniform_font_size_emu(fragment, font.default_font_size_emu)
         else {
             return ("mixed_size_path", "unknown", "mixed_size_fail_closed");
         };
@@ -2946,10 +2952,7 @@ mod tests {
 
         println!(
             "CLOUD_READER_SLI_CAUSE_CENSUS source_sha256={} paths={} consumption={} causes={}",
-            actual_sha256,
-            sli_probe_path_json,
-            sli_probe_consumption_json,
-            sli_probe_cause_json,
+            actual_sha256, sli_probe_path_json, sli_probe_consumption_json, sli_probe_cause_json,
         );
 
         println!(
