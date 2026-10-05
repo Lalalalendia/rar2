@@ -125,7 +125,7 @@ impl eframe::App for GoldenPageOnlyApp {
         self.ensure_image_textures(ctx);
         let render_plan = build_desktop_page_render_plan(&self.visual, self.page_index)
             .expect("clean golden page render plan");
-        let scene_scale = 144.0_f32 / 914_400.0_f32;
+        let scene_scale=144.0_f32/914_400.0_f32;
         self.painted_text_nodes = 0;
         self.clipped_text_nodes = 0;
         self.source_typography_sections = 0;
