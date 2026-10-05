@@ -18,12 +18,24 @@ pub struct IdmlParagraphScopedAlignmentPlacement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdmlParagraphAlignmentError {
     NonIdmlPackage,
-    DuplicateStory { story_id: StoryId },
-    MissingPlannedFeature { story_id: StoryId },
-    MissingStoryPart { story_id: StoryId },
-    BinaryStoryPart { story_id: StoryId },
-    UnexpectedStoryMarkup { story_id: StoryId },
-    EmptyParagraphs { story_id: StoryId },
+    DuplicateStory {
+        story_id: StoryId,
+    },
+    MissingPlannedFeature {
+        story_id: StoryId,
+    },
+    MissingStoryPart {
+        story_id: StoryId,
+    },
+    BinaryStoryPart {
+        story_id: StoryId,
+    },
+    UnexpectedStoryMarkup {
+        story_id: StoryId,
+    },
+    EmptyParagraphs {
+        story_id: StoryId,
+    },
     ParagraphStoryMismatch {
         story_id: StoryId,
         paragraph_id: pub_model::ParagraphId,
@@ -261,7 +273,8 @@ pub fn add_paragraph_scoped_alignment_to_idml(
                     paragraph_id: paragraph.paragraph_id,
                 });
             }
-            if paragraph.range.start != previous_end || paragraph.range.end < paragraph.range.start {
+            if paragraph.range.start != previous_end || paragraph.range.end < paragraph.range.start
+            {
                 return Err(IdmlParagraphAlignmentError::NonContiguousParagraphRanges {
                     story_id: placement.story_id,
                 });
@@ -290,8 +303,7 @@ pub fn add_paragraph_scoped_alignment_to_idml(
             });
         };
 
-        let paragraph_open =
-            "    <ParagraphStyleRange AppliedParagraphStyle=\"ParagraphStyle/$ID/[No paragraph style]\">\n";
+        let paragraph_open = "    <ParagraphStyleRange AppliedParagraphStyle=\"ParagraphStyle/$ID/[No paragraph style]\">\n";
         let paragraph_close = "    </ParagraphStyleRange>\n";
         if xml.matches(paragraph_open).count() != 1 || xml.matches(paragraph_close).count() != 1 {
             return Err(IdmlParagraphAlignmentError::UnexpectedStoryMarkup {
@@ -317,8 +329,7 @@ pub fn add_paragraph_scoped_alignment_to_idml(
                 story_id: placement.story_id,
             });
         }
-        let existing_content =
-            &block[content_start + content_open.len()..content_end];
+        let existing_content = &block[content_start + content_open.len()..content_end];
         let expected_content = escape_xml_content(placement.story_text.clone());
         if existing_content != expected_content {
             return Err(IdmlParagraphAlignmentError::StoryTextMismatch {
@@ -561,32 +572,15 @@ mod tests {
         let story_id = story(10);
         let export_plan = plan(story_id);
         let story_text = "One &\rTwo<\rThree";
-        let mut package = package_with_story_text(&export_plan, story_id, "One &amp;\rTwo&lt;\rThree");
+        let mut package =
+            package_with_story_text(&export_plan, story_id, "One &amp;\rTwo&lt;\rThree");
         let placement = IdmlParagraphScopedAlignmentPlacement {
             story_id,
             story_text: story_text.into(),
             paragraphs: vec![
-                scoped(
-                    12,
-                    story_id,
-                    6,
-                    11,
-                    ParagraphScopedAlignmentValueV1::Center,
-                ),
-                scoped(
-                    11,
-                    story_id,
-                    0,
-                    6,
-                    ParagraphScopedAlignmentValueV1::Left,
-                ),
-                scoped(
-                    13,
-                    story_id,
-                    11,
-                    16,
-                    ParagraphScopedAlignmentValueV1::Right,
-                ),
+                scoped(12, story_id, 6, 11, ParagraphScopedAlignmentValueV1::Center),
+                scoped(11, story_id, 0, 6, ParagraphScopedAlignmentValueV1::Left),
+                scoped(13, story_id, 11, 16, ParagraphScopedAlignmentValueV1::Right),
             ],
         };
 
@@ -665,20 +659,8 @@ mod tests {
             story_id,
             story_text: "OneTwo".into(),
             paragraphs: vec![
-                scoped(
-                    31,
-                    story_id,
-                    0,
-                    3,
-                    ParagraphScopedAlignmentValueV1::Left,
-                ),
-                scoped(
-                    32,
-                    story_id,
-                    3,
-                    6,
-                    ParagraphScopedAlignmentValueV1::Right,
-                ),
+                scoped(31, story_id, 0, 3, ParagraphScopedAlignmentValueV1::Left),
+                scoped(32, story_id, 3, 6, ParagraphScopedAlignmentValueV1::Right),
             ],
         };
 
