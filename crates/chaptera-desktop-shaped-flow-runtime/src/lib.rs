@@ -1,6 +1,8 @@
 use chaptera_caret_layout_feed::build_caret_map_from_shaped_flow_v1;
 use chaptera_text_caret_map_adapter::ResolvedTextCaretMapV1;
-use pub_editor::{EditorCurrentImageResourceV1, EditorSession};
+use pub_editor::{
+    EditOperation, EditorCurrentImageResourceV1, EditorSession, FormatPropertyV1, FormatValueV1,
+};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
     BoundedShapingRuntime, font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
@@ -8,7 +10,7 @@ use pub_layout::{
 use pub_model::{LengthEmu, NodeId, StoryId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fmt;
+use std::{collections::BTreeSet, fmt};
 
 pub const DESKTOP_SHAPED_FLOW_RUNTIME_V1: &str = "chaptera.desktop-shaped-flow-runtime.v1";
 pub const CURRENT_FIXED_PDF_RESOURCE_INPUT_V1: &str =
@@ -30,8 +32,19 @@ pub struct DesktopStoryLayoutV1 {
     pub story_id: StoryId,
     pub story_scalar_len: u32,
     pub font_fingerprint_sha256: String,
+    pub current_boolean_typography: Vec<DesktopCurrentBooleanTypographyRunV1>,
     pub shaped_flow: BoundedShapedFlowScene,
     pub caret_map: ResolvedTextCaretMapV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesktopCurrentBooleanTypographyRunV1 {
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,6 +143,139 @@ pub fn validate_explicit_font_resource_v1(
     Ok(actual)
 }
 
+fn has_scoped_property_history_v1(
+    editor: &EditorSession,
+    story_id: StoryId,
+    property: FormatPropertyV1,
+) -> bool {
+    editor.operations().iter().any(|operation| {
+        matches!(
+            operation,
+            EditOperation::SetTextFormatPropertyScopedV1 {
+                story_id: operation_story_id,
+                property: operation_property,
+                ..
+            } | EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
+                story_id: operation_story_id,
+                property: operation_property,
+                ..
+            } if *operation_story_id == story_id && *operation_property == property
+        )
+    })
+}
+
+fn current_boolean_property_segments_v1(
+    editor: &EditorSession,
+    story_id: StoryId,
+    story_scalar_len: u32,
+    property: FormatPropertyV1,
+) -> Result<Option<Vec<pub_editor::EffectivePropertySegmentV1>>, DesktopShapedFlowRuntimeError> {
+    match editor.current_text_format_property_segments_v1(story_id, property, 0, story_scalar_len) {
+        Ok(segments) => Ok(Some(segments)),
+        Err(_error) if !has_scoped_property_history_v1(editor, story_id, property) => {
+            // This projection is additive to the established shaped-flow path. A source Story
+            // may not yet expose bounded authority for a particular boolean property, and plain
+            // text edits can invalidate source-relative ranges. In either case, absence remains
+            // explicit None rather than inventing false or blocking unrelated layout.
+            Ok(None)
+        }
+        Err(error) => Err(DesktopShapedFlowRuntimeError::new(
+            "current_boolean_typography_unavailable",
+            format!(
+                "scoped {property:?} history exists but current property state is unavailable: {error}"
+            ),
+        )),
+    }
+}
+
+fn boolean_value_covering_v1(
+    segments: Option<&[pub_editor::EffectivePropertySegmentV1]>,
+    start: u32,
+    end: u32,
+) -> Result<Option<bool>, DesktopShapedFlowRuntimeError> {
+    let Some(segments) = segments else {
+        return Ok(None);
+    };
+    let segment = segments
+        .iter()
+        .find(|segment| segment.start_scalar <= start && end <= segment.end_scalar)
+        .ok_or_else(|| {
+            DesktopShapedFlowRuntimeError::new(
+                "current_boolean_typography_invalid",
+                "effective property segments do not cover one current typography interval",
+            )
+        })?;
+    match &segment.value {
+        FormatValueV1::Bool(value) => Ok(Some(*value)),
+        _ => Err(DesktopShapedFlowRuntimeError::new(
+            "current_boolean_typography_invalid",
+            "Bold/Italic effective property value is not boolean",
+        )),
+    }
+}
+
+pub fn current_story_boolean_typography_v1(
+    editor: &EditorSession,
+    story_id: StoryId,
+) -> Result<Vec<DesktopCurrentBooleanTypographyRunV1>, DesktopShapedFlowRuntimeError> {
+    let story = editor.graph().stories.get(&story_id).ok_or_else(|| {
+        DesktopShapedFlowRuntimeError::new(
+            "story_missing",
+            "requested Story is absent from current EditorSession graph",
+        )
+    })?;
+    let story_scalar_len = u32::try_from(story.text.chars().count()).map_err(|_| {
+        DesktopShapedFlowRuntimeError::new(
+            "story_extent_overflow",
+            "current Story scalar length exceeds the V1 u32 domain",
+        )
+    })?;
+    if story_scalar_len == 0 {
+        return Ok(Vec::new());
+    }
+
+    let bold = current_boolean_property_segments_v1(
+        editor,
+        story_id,
+        story_scalar_len,
+        FormatPropertyV1::Bold,
+    )?;
+    let italic = current_boolean_property_segments_v1(
+        editor,
+        story_id,
+        story_scalar_len,
+        FormatPropertyV1::Italic,
+    )?;
+    if bold.is_none() && italic.is_none() {
+        return Ok(Vec::new());
+    }
+
+    let mut boundaries = BTreeSet::from([0, story_scalar_len]);
+    for segments in [bold.as_deref(), italic.as_deref()].into_iter().flatten() {
+        for segment in segments {
+            boundaries.insert(segment.start_scalar);
+            boundaries.insert(segment.end_scalar);
+        }
+    }
+
+    let points = boundaries.into_iter().collect::<Vec<_>>();
+    let mut out = Vec::with_capacity(points.len().saturating_sub(1));
+    for pair in points.windows(2) {
+        let scalar_start = pair[0];
+        let scalar_end = pair[1];
+        if scalar_start >= scalar_end {
+            continue;
+        }
+        out.push(DesktopCurrentBooleanTypographyRunV1 {
+            scalar_start,
+            scalar_end,
+            bold: boolean_value_covering_v1(bold.as_deref(), scalar_start, scalar_end)?,
+            italic: boolean_value_covering_v1(italic.as_deref(), scalar_start, scalar_end)?,
+        });
+    }
+    Ok(out)
+}
+
 pub fn build_current_story_layout_v1(
     editor: &EditorSession,
     story_id: StoryId,
@@ -157,6 +303,7 @@ pub fn build_current_story_layout_v1(
     })?;
 
     let fingerprint = validate_explicit_font_resource_v1(font)?;
+    let current_boolean_typography = current_story_boolean_typography_v1(editor, story_id)?;
     let authoring =
         pub_viewer::bounded_authoring_slice_from_resolved(editor.graph()).map_err(|error| {
             DesktopShapedFlowRuntimeError::new(
@@ -205,6 +352,7 @@ pub fn build_current_story_layout_v1(
         story_id,
         story_scalar_len,
         font_fingerprint_sha256: fingerprint,
+        current_boolean_typography,
         shaped_flow,
         caret_map,
     })
@@ -323,6 +471,123 @@ mod tests {
         font.expected_sha256 = "00";
         let error = validate_explicit_font_resource_v1(&font).unwrap_err();
         assert_eq!(error.code, "font_fingerprint_mismatch");
+    }
+
+    #[test]
+    fn real_51318_scoped_bold_reaches_current_boolean_typography_without_color_authority() {
+        let Some(root) = env::var_os("CHAPTERA_TEXT_FORMAT_FIXTURES_DIR") else {
+            eprintln!(
+                "CHAPTERA_TEXT_FORMAT_FIXTURES_DIR not set; dedicated Desktop text-format gate owns this test"
+            );
+            return;
+        };
+        let path = std::path::PathBuf::from(root).join("51318.pub");
+        let original = fs::read(&path).expect("read pinned 51318.pub");
+        let digest = Sha256::digest(&original);
+        let mut digest_bytes = [0_u8; 32];
+        digest_bytes.copy_from_slice(&digest);
+        let source_hash = Sha256Digest::from_bytes(digest_bytes);
+        let mut editor =
+            open_mature_0x2c_editor(&original, source_hash).expect("open pinned 51318.pub");
+
+        let story_id = editor
+            .graph()
+            .stories
+            .keys()
+            .copied()
+            .find(|story_id| {
+                editor
+                    .current_text_format_overlay_v1(*story_id)
+                    .err()
+                    .is_some_and(|error| {
+                        error
+                            .to_string()
+                            .contains("bounded effective direct-RGB text color is unavailable")
+                    })
+                    && current_story_boolean_typography_v1(&editor, *story_id)
+                        .ok()
+                        .is_some_and(|runs| runs.iter().any(|run| run.bold.is_some()))
+            })
+            .expect("51318.pub must expose a color-blocked Story with bounded Bold authority");
+
+        let before = current_story_boolean_typography_v1(&editor, story_id)
+            .expect("source boolean typography");
+        let first = before
+            .iter()
+            .find(|run| run.bold.is_some())
+            .expect("known Bold interval")
+            .clone();
+        let desired = !first.bold.expect("known Bold value");
+        let state_hash = editor
+            .current_text_format_property_state_hash_v1(story_id, FormatPropertyV1::Bold)
+            .expect("scoped Bold state hash");
+        editor
+            .set_text_format_property_scoped_v1(
+                story_id,
+                first.scalar_start,
+                first.scalar_end,
+                FormatPropertyV1::Bold,
+                FormatValueV1::Bool(desired),
+                &state_hash,
+            )
+            .expect("set scoped Bold");
+
+        let after = current_story_boolean_typography_v1(&editor, story_id)
+            .expect("edited boolean typography");
+        let changed = after
+            .iter()
+            .find(|run| {
+                run.scalar_start <= first.scalar_start && first.scalar_end <= run.scalar_end
+            })
+            .expect("edited interval remains covered");
+        assert_eq!(changed.bold, Some(desired));
+        assert_eq!(changed.italic, first.italic);
+        assert!(
+            editor
+                .current_text_format_overlay_v1(story_id)
+                .expect_err("unknown direct-RGB color must remain unresolved")
+                .to_string()
+                .contains("bounded effective direct-RGB text color is unavailable")
+        );
+
+        let layout =
+            build_current_story_layout_v1(&editor, story_id, "layout:scoped-bold", &test_font())
+                .expect("current shaped-flow layout consumes scoped boolean typography");
+        assert_eq!(layout.current_boolean_typography, after);
+
+        editor.undo().expect("undo scoped Bold");
+        assert_eq!(
+            current_story_boolean_typography_v1(&editor, story_id)
+                .expect("boolean typography after Undo"),
+            before
+        );
+        editor.redo().expect("redo scoped Bold");
+        assert_eq!(
+            current_story_boolean_typography_v1(&editor, story_id)
+                .expect("boolean typography after Redo"),
+            after
+        );
+
+        let project = editor.project();
+        let serialized = serde_json::to_vec(&project).expect("serialize v0.16 project");
+        let roundtrip: pub_editor::EditorProject =
+            serde_json::from_slice(&serialized).expect("deserialize v0.16 project");
+        let mut reopened =
+            open_mature_0x2c_editor(&original, source_hash).expect("fresh reopen pinned source");
+        reopened
+            .apply_project(&roundtrip)
+            .expect("replay scoped Bold on fresh source");
+        assert_eq!(
+            current_story_boolean_typography_v1(&reopened, story_id)
+                .expect("replayed current boolean typography"),
+            after
+        );
+        assert_eq!(reopened.source_hash(), source_hash);
+        assert_eq!(
+            fs::read(path).expect("re-read pinned 51318.pub"),
+            original,
+            "current typography projection must not mutate source PUB bytes"
+        );
     }
 
     #[test]
