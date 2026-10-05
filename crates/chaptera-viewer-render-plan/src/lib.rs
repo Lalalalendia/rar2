@@ -4870,40 +4870,32 @@ mod tests {
         let source = "\u{FFFC}\rA";
         let rendered = "\u{200B}\rA";
         visual.document.stories[0].text = source.to_owned();
-        visual.projected_instances.push(pub_viewer::ViewerProjectedSceneInstanceV1 {
-            scene_instance: SceneInstanceV1 {
-                schema_version: SCENE_INSTANCE_SCHEMA_V1.to_owned(),
-                instance_id: "sha256:marker-layout-equivalence-fixture".to_owned(),
-                projection_kind: SceneProjectionKindV1::CmoStorySlot,
-                origin_node_id: frame_id.as_canonical().to_string(),
-                target_page_id: page_id.as_canonical().to_string(),
-                source_parent_origin: None,
-                story_authority_id: None,
-                cmo_slot_index: Some(0),
-                cmo_scalar_index: Some(0),
-            },
-            target_frame_node_id: Some(frame_id),
-            target_frame_paint_scalar_end: None,
-            text_content_bounds: None,
-            bounds: visual.scene.nodes[0].bounds,
-            transform: Affine2D::identity(),
-        });
+        visual
+            .projected_instances
+            .push(pub_viewer::ViewerProjectedSceneInstanceV1 {
+                scene_instance: SceneInstanceV1 {
+                    schema_version: SCENE_INSTANCE_SCHEMA_V1.to_owned(),
+                    instance_id: "sha256:marker-layout-equivalence-fixture".to_owned(),
+                    projection_kind: SceneProjectionKindV1::CmoStorySlot,
+                    origin_node_id: frame_id.as_canonical().to_string(),
+                    target_page_id: page_id.as_canonical().to_string(),
+                    source_parent_origin: None,
+                    story_authority_id: None,
+                    cmo_slot_index: Some(0),
+                    cmo_scalar_index: Some(0),
+                },
+                target_frame_node_id: Some(frame_id),
+                target_frame_paint_scalar_end: None,
+                text_content_bounds: None,
+                bounds: visual.scene.nodes[0].bounds,
+                transform: Affine2D::identity(),
+            });
 
         assert!(render_text_is_story_equivalent_for_layout_v1(
-            &visual,
-            page_id,
-            frame_id,
-            None,
-            rendered,
-            source,
+            &visual, page_id, frame_id, None, rendered, source,
         ));
         assert!(!render_text_is_story_equivalent_for_layout_v1(
-            &visual,
-            page_id,
-            frame_id,
-            None,
-            "X\rA",
-            source,
+            &visual, page_id, frame_id, None, "X\rA", source,
         ));
         assert!(!render_text_is_story_equivalent_for_layout_v1(
             &visual,
@@ -4946,24 +4938,26 @@ mod tests {
             text_content_bounds: None,
             vertical_alignment: None,
         });
-        visual.projected_instances.push(pub_viewer::ViewerProjectedSceneInstanceV1 {
-            scene_instance: SceneInstanceV1 {
-                schema_version: SCENE_INSTANCE_SCHEMA_V1.to_owned(),
-                instance_id: "sha256:marker-layout-integration-fixture".to_owned(),
-                projection_kind: SceneProjectionKindV1::CmoStorySlot,
-                origin_node_id: frame_id.as_canonical().to_string(),
-                target_page_id: page_id.as_canonical().to_string(),
-                source_parent_origin: None,
-                story_authority_id: None,
-                cmo_slot_index: Some(0),
-                cmo_scalar_index: Some(0),
-            },
-            target_frame_node_id: Some(frame_id),
-            target_frame_paint_scalar_end: None,
-            text_content_bounds: None,
-            bounds: visual.scene.nodes[0].bounds,
-            transform: Affine2D::identity(),
-        });
+        visual
+            .projected_instances
+            .push(pub_viewer::ViewerProjectedSceneInstanceV1 {
+                scene_instance: SceneInstanceV1 {
+                    schema_version: SCENE_INSTANCE_SCHEMA_V1.to_owned(),
+                    instance_id: "sha256:marker-layout-integration-fixture".to_owned(),
+                    projection_kind: SceneProjectionKindV1::CmoStorySlot,
+                    origin_node_id: frame_id.as_canonical().to_string(),
+                    target_page_id: page_id.as_canonical().to_string(),
+                    source_parent_origin: None,
+                    story_authority_id: None,
+                    cmo_slot_index: Some(0),
+                    cmo_scalar_index: Some(0),
+                },
+                target_frame_node_id: Some(frame_id),
+                target_frame_paint_scalar_end: None,
+                text_content_bounds: None,
+                bounds: visual.scene.nodes[0].bounds,
+                transform: Affine2D::identity(),
+            });
 
         let font_bytes = font_test_data::AHEM;
         let fingerprint = font_fingerprint_sha256(font_bytes);
