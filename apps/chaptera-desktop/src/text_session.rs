@@ -2,7 +2,9 @@ use chaptera_desktop_fallback_font_resource as fallback_resource;
 use chaptera_desktop_shaped_flow_runtime::{
     DesktopStoryLayoutV1, ExplicitDesktopFontResourceV1, build_current_story_layout_v1,
 };
-use chaptera_text_caret_map_adapter::{CaretStopV1, resolve_story_position_v1};
+use chaptera_text_caret_map_adapter::{
+    CaretStopV1, hit_test_story_position_v1, resolve_story_position_v1,
+};
 use chaptera_text_input_adapter::{
     TextInputCommitV1, apply_keyboard_command_and_lower_v1,
     domain::{
@@ -14,9 +16,10 @@ use chaptera_text_input_adapter::{
 use chaptera_text_interaction_adapter::{
     SELECTION_VERSION_V1, TextEditSessionV1, TextEntryCandidateV1, TextPointerTargetV1,
     TextSelectionStateV1, activate_explicit_edit_text_v1, activate_pointer_text_v1,
-    exit_desktop_text_mode_v1, rebind_text_edit_session_authority_v1,
+    exit_desktop_text_mode_v1, handoff_same_story_frame_v1, rebind_text_edit_session_authority_v1,
 };
 use pub_editor::{EditorSession, NodeId, StoryId};
+use pub_model::CanonicalId;
 
 #[derive(Debug, Clone)]
 pub struct DesktopTextMode {
@@ -58,6 +61,53 @@ fn candidate(story_id: StoryId, frame_id: NodeId) -> TextEntryCandidateV1 {
         capability: "editable".to_owned(),
         reason: None,
     }
+}
+
+fn node_id_from_caret_frame(frame_id: &str) -> Result<NodeId, String> {
+    let canonical = frame_id.parse::<CanonicalId>().map_err(|error| {
+        format!("caret stop carries invalid canonical TextFrame id {frame_id:?}: {error}")
+    })?;
+    Ok(NodeId::from_canonical(canonical))
+}
+
+fn handoff_mode_to_frame(mode: &mut DesktopTextMode, frame_id: NodeId) -> Result<(), String> {
+    let frame_text = frame_id.as_canonical().to_string();
+    if mode.frame_id == frame_id
+        && mode.session.current_frame_id.as_deref() == Some(frame_text.as_str())
+    {
+        return Ok(());
+    }
+
+    let interaction_domain = to_interaction_domain_v1(&mode.domain);
+    let handoff = handoff_same_story_frame_v1(
+        &mode.session,
+        &candidate(mode.story_id, frame_id),
+        &interaction_domain,
+        &mode.layout.caret_map,
+        &mode.layout.layout_revision_id,
+        None,
+        None,
+    )
+    .map_err(|error| error.to_string())?;
+
+    mode.frame_id = frame_id;
+    mode.session = handoff.session;
+    Ok(())
+}
+
+fn sync_mode_frame_to_projected_focus(mode: &mut DesktopTextMode) -> Result<(), String> {
+    let Some(stop_id) = mode.session.selection.focus_visual_stop_id.as_deref() else {
+        return Ok(());
+    };
+    let stop = mode
+        .layout
+        .caret_map
+        .caret_stops
+        .iter()
+        .find(|stop| stop.stop_id == stop_id)
+        .ok_or_else(|| "projected focus stop is absent from the current caret map".to_owned())?;
+    let frame_id = node_id_from_caret_frame(&stop.frame_id)?;
+    handoff_mode_to_frame(mode, frame_id)
 }
 
 fn build_layout(
@@ -130,12 +180,7 @@ fn rebind_after_commit(
         commit.post_edit_selection.focus_scalar,
         mode.frame_id,
     )?;
-    if stop.frame_id != mode.frame_id.as_canonical().to_string() {
-        return Err(
-            "post-edit caret moved outside the current bounded TextFrame; linked-flow handoff is not admitted in Desktop V0"
-                .to_owned(),
-        );
-    }
+    let rebound_frame_id = node_id_from_caret_frame(&stop.frame_id)?;
 
     let selection = TextSelectionStateV1 {
         protocol_version: SELECTION_VERSION_V1.to_owned(),
@@ -163,7 +208,7 @@ fn rebind_after_commit(
     mode.domain = domain;
     mode.layout = layout;
     mode.session = rebound.session;
-    Ok(())
+    handoff_mode_to_frame(mode, rebound_frame_id)
 }
 
 fn scalar_selection_for_current_authority(
@@ -243,7 +288,7 @@ pub fn rebind_after_non_text_document_change(
     mode.domain = domain;
     mode.layout = layout;
     mode.session = rebound.session;
-    Ok(())
+    sync_mode_frame_to_projected_focus(mode)
 }
 
 /// Select the complete active Story through the existing selection authority.
@@ -390,6 +435,7 @@ pub fn apply_keyboard_command(
         rebind_after_commit(editor, mode, &commit)?;
     } else if let Some(selection) = result.decision.selection {
         mode.session.selection = selection;
+        sync_mode_frame_to_projected_focus(mode)?;
     }
     Ok(())
 }
@@ -401,17 +447,27 @@ pub fn reposition_pointer(
     page_y_emu: i64,
 ) -> Result<(), String> {
     let interaction_domain = to_interaction_domain_v1(&mode.domain);
+    let pointer = TextPointerTargetV1 {
+        page_id: page_id.to_owned(),
+        page_x_emu,
+        page_y_emu,
+    };
+    let pointer_stop = hit_test_story_position_v1(
+        &mode.layout.caret_map,
+        page_id,
+        page_x_emu,
+        page_y_emu,
+        Some(&mode.layout.layout_revision_id),
+    )
+    .map_err(|error| error.to_string())?;
+    let target_frame_id = node_id_from_caret_frame(&pointer_stop.frame_id)?;
     let activation = activate_pointer_text_v1(
-        &candidate(mode.story_id, mode.frame_id),
+        &candidate(mode.story_id, target_frame_id),
         &mode.session.revision_id,
         &interaction_domain,
         &mode.layout.caret_map,
         &mode.layout.layout_revision_id,
-        &TextPointerTargetV1 {
-            page_id: page_id.to_owned(),
-            page_x_emu,
-            page_y_emu,
-        },
+        &pointer,
         Some(&mode.session),
         true,
         1,
@@ -422,6 +478,7 @@ pub fn reposition_pointer(
     .map_err(|error| error.to_string())?;
     if let Some(session) = activation.active_session {
         mode.session = session;
+        mode.frame_id = target_frame_id;
         Ok(())
     } else {
         Err(activation
@@ -461,6 +518,25 @@ mod tests {
     };
     use sha2::{Digest, Sha256};
     use std::{env, fs};
+
+    #[test]
+    fn authoritative_caret_frame_accepts_same_story_handoff_to_another_frame() {
+        let frame_a: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+            .expect("canonical frame A");
+        let frame_b: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000002\"")
+            .expect("canonical frame B");
+
+        assert_ne!(frame_a, frame_b);
+        assert_eq!(
+            node_id_from_caret_frame(&frame_b.as_canonical().to_string())
+                .expect("authoritative caret frame must admit linked-frame handoff"),
+            frame_b
+        );
+        assert!(
+            node_id_from_caret_frame("frame:B").is_err(),
+            "non-canonical frame identities remain fail-closed"
+        );
+    }
 
     #[test]
     fn real_sample_newsletter_direct_text_session_enters_types_rebinds_and_exits() {
@@ -535,6 +611,184 @@ mod tests {
             fs::read(path).expect("re-read source PUB"),
             original,
             "direct text editing must not mutate source PUB bytes"
+        );
+    }
+
+    #[test]
+    fn real_sample_newsletter_linked_story_session_hands_off_between_frames_without_topology_mutation()
+     {
+        let Some(path) = env::var_os("CHAPTERA_SAMPLE_NEWSLETTER") else {
+            eprintln!(
+                "CHAPTERA_SAMPLE_NEWSLETTER not set; dedicated direct-text gate owns real evidence"
+            );
+            return;
+        };
+
+        let original = fs::read(&path).expect("read pinned SampleNewsletter");
+        let digest = Sha256::digest(&original);
+        let mut digest_bytes = [0_u8; 32];
+        digest_bytes.copy_from_slice(&digest);
+        let source_hash = Sha256Digest::from_bytes(digest_bytes);
+        let mut editor =
+            open_mature_0x2c_editor(&original, source_hash).expect("open real SampleNewsletter");
+
+        let topology = |session: &EditorSession| {
+            session
+                .graph()
+                .nodes
+                .iter()
+                .filter_map(|(node_id, node)| {
+                    let frame = node.payload.story_frame.as_ref()?;
+                    Some((
+                        *node_id,
+                        frame.story_id?,
+                        frame.ordinal,
+                        frame.previous_frame,
+                        frame.next_frame,
+                    ))
+                })
+                .collect::<Vec<_>>()
+        };
+        let topology_before = topology(&editor);
+
+        let mut frames_by_story = std::collections::BTreeMap::<StoryId, Vec<NodeId>>::new();
+        for (node_id, node) in &editor.graph().nodes {
+            let Some(frame) = node.payload.story_frame.as_ref() else {
+                continue;
+            };
+            let Some(story_id) = frame.story_id else {
+                continue;
+            };
+            frames_by_story.entry(story_id).or_default().push(*node_id);
+        }
+
+        let mut witness = None;
+        'stories: for (story_id, frames) in frames_by_story {
+            if frames.len() < 2 || editor.can_replace_story_text(story_id).is_err() {
+                continue;
+            }
+            for frame_id in frames {
+                let Ok(mode) = enter_explicit_text_mode(&editor, story_id, frame_id) else {
+                    continue;
+                };
+                let current_frame = frame_id.as_canonical().to_string();
+                if let Some(target_stop) = mode
+                    .layout
+                    .caret_map
+                    .caret_stops
+                    .iter()
+                    .find(|stop| stop.frame_id != current_frame)
+                    .cloned()
+                {
+                    witness = Some((mode, target_stop));
+                    break 'stories;
+                }
+            }
+        }
+
+        let (mut mode, target_stop) =
+            witness.expect("SampleNewsletter must expose one editable linked multi-frame Story");
+        let original_story_id = mode.story_id;
+        let original_story_text = editor.graph().stories[&original_story_id].text.clone();
+        let original_frame_id = mode.frame_id;
+        let target_frame_id = node_id_from_caret_frame(&target_stop.frame_id)
+            .expect("target caret stop must carry a canonical TextFrame id");
+        assert_ne!(
+            target_frame_id, original_frame_id,
+            "witness must require a real same-Story frame handoff"
+        );
+
+        let operation_count_before = editor.operations().len();
+        let target_y = target_stop.page_y_top_emu
+            + (target_stop.page_y_bottom_emu - target_stop.page_y_top_emu) / 2;
+        reposition_pointer(
+            &mut mode,
+            &target_stop.page_id,
+            target_stop.page_x_emu,
+            target_y,
+        )
+        .expect("same-Story pointer handoff must admit another linked TextFrame");
+
+        assert_eq!(mode.story_id, original_story_id);
+        assert_eq!(mode.frame_id, target_frame_id);
+        assert_eq!(
+            mode.session.story_id,
+            original_story_id.as_canonical().to_string()
+        );
+        assert_eq!(
+            mode.session.current_frame_id.as_deref(),
+            Some(target_stop.frame_id.as_str())
+        );
+        assert_eq!(
+            editor.operations().len(),
+            operation_count_before,
+            "same-Story frame handoff is transient interaction state"
+        );
+        assert_eq!(
+            topology(&editor),
+            topology_before,
+            "pointer handoff must not mutate linked Story topology"
+        );
+
+        replace_external_text(&mut editor, &mut mode, "X")
+            .expect("canonical Story edit must remain valid after linked-frame handoff");
+        assert_eq!(mode.story_id, original_story_id);
+        assert_eq!(
+            mode.session.story_id,
+            original_story_id.as_canonical().to_string()
+        );
+        assert_eq!(mode.session.revision_id, editor.project().state_id_v1());
+        assert_eq!(editor.operations().len(), operation_count_before + 1);
+        assert!(matches!(
+            editor.operations().last(),
+            Some(EditOperation::ReplaceStoryRange { story_id, .. }) if *story_id == original_story_id
+        ));
+        let edited_story_text = editor.graph().stories[&original_story_id].text.clone();
+        assert_ne!(
+            edited_story_text, original_story_text,
+            "linked Story mutation must change the one canonical Story"
+        );
+        assert_eq!(
+            topology(&editor),
+            topology_before,
+            "linked Story text mutation and reflow must not rewrite frame topology"
+        );
+
+        editor.undo().expect("undo linked Story text mutation");
+        assert_eq!(
+            editor.graph().stories[&original_story_id].text,
+            original_story_text
+        );
+        assert_eq!(topology(&editor), topology_before);
+
+        editor.redo().expect("redo linked Story text mutation");
+        assert_eq!(
+            editor.graph().stories[&original_story_id].text,
+            edited_story_text
+        );
+        assert_eq!(topology(&editor), topology_before);
+
+        let project = editor.project();
+        let mut reopened =
+            open_mature_0x2c_editor(&original, source_hash).expect("fresh linked Story editor");
+        reopened
+            .apply_project(&project)
+            .expect("fresh EditorProject replay of linked Story edit");
+        assert_eq!(
+            reopened.graph().stories[&original_story_id].text,
+            edited_story_text
+        );
+        assert_eq!(
+            topology(&reopened),
+            topology_before,
+            "fresh replay must preserve exact linked Story topology"
+        );
+        assert_eq!(editor.source_hash(), source_hash);
+        assert_eq!(reopened.source_hash(), source_hash);
+        assert_eq!(
+            fs::read(path).expect("re-read source PUB"),
+            original,
+            "linked Story editing must not mutate source PUB bytes"
         );
     }
 
