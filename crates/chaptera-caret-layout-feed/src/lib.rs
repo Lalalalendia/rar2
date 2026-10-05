@@ -223,11 +223,23 @@ pub fn build_caret_map_from_shaped_flow_v1(
         }
 
         let row_y = checked_mul(i64::from(source.frame_line_index), line_height)?;
-        let row_bottom = checked_add(row_y, line_height)?;
-        if row_bottom > frame.bounds.height.get() {
+        let frame_height = frame.bounds.height.get();
+        if row_y < 0 || row_y >= frame_height {
             return Err(CaretLayoutFeedError::new(
                 "line_outside_frame",
-                "resolved shaped line exceeds frame height",
+                "resolved shaped line starts outside frame height",
+            ));
+        }
+        // Shaped flow is the authority for physical line admission. Its first
+        // painted-line extent can be smaller than the subsequent baseline
+        // advance, so caret projection must not re-reject an admitted final
+        // line merely because row_y + line_height crosses the frame bottom.
+        let nominal_row_bottom = checked_add(row_y, line_height)?;
+        let row_bottom = nominal_row_bottom.min(frame_height);
+        if row_bottom <= row_y {
+            return Err(CaretLayoutFeedError::new(
+                "line_outside_frame",
+                "resolved shaped line has no in-frame caret extent",
             ));
         }
         let page_y_top = checked_add(frame.bounds.y.get(), row_y)?;
@@ -377,6 +389,58 @@ mod tests {
         assert_eq!(map.materialized_ranges[0].end_scalar, 3);
         assert_eq!(map.lines[0].page_y_top_emu, 220);
         assert_eq!(map.lines[0].clusters[1].page_x_start_emu, 110);
+    }
+
+    #[test]
+    fn admitted_first_line_clamps_caret_extent_instead_of_reapplying_baseline_capacity() {
+        let source = BoundedShapedLine {
+            story_origin: story(7),
+            frame_origin: node(10),
+            frame_line_index: 0,
+            scalar_start: 0,
+            scalar_end: 1,
+            consumed_scalar_end: 1,
+            text: "a".into(),
+            units_per_em: 1000,
+            measured_width: LengthEmu::new(10),
+            glyphs: vec![glyph(0, 10)],
+            break_kind: BoundedBreakKind::Allowed,
+            reshaped_for_break: false,
+        };
+        let mut s = scene(vec![source]);
+        s.nodes[0].bounds.height = LengthEmu::new(15);
+        let map =
+            build_caret_map_from_shaped_flow_v1(&s, "layout:r1", story(7), 1).unwrap();
+        assert_eq!(map.lines[0].frame_y_top_emu, 0);
+        assert_eq!(map.lines[0].frame_y_bottom_emu, 15);
+        assert_eq!(map.lines[0].page_y_top_emu, 200);
+        assert_eq!(map.lines[0].page_y_bottom_emu, 215);
+    }
+
+    #[test]
+    fn shaped_line_whose_top_is_outside_frame_stays_rejected() {
+        let source = BoundedShapedLine {
+            story_origin: story(7),
+            frame_origin: node(10),
+            frame_line_index: 1,
+            scalar_start: 0,
+            scalar_end: 1,
+            consumed_scalar_end: 1,
+            text: "a".into(),
+            units_per_em: 1000,
+            measured_width: LengthEmu::new(10),
+            glyphs: vec![glyph(0, 10)],
+            break_kind: BoundedBreakKind::Allowed,
+            reshaped_for_break: false,
+        };
+        let mut s = scene(vec![source]);
+        s.nodes[0].bounds.height = LengthEmu::new(15);
+        assert_eq!(
+            build_caret_map_from_shaped_flow_v1(&s, "layout:r1", story(7), 1)
+                .unwrap_err()
+                .code,
+            "line_outside_frame"
+        );
     }
 
     #[test]
