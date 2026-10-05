@@ -4195,24 +4195,19 @@ impl EditorSession {
             .map(|paragraph| paragraph.story_id)
             .collect::<BTreeSet<_>>();
 
-        let mut paragraph_count_by_story = BTreeMap::<StoryId, usize>::new();
-        for paragraph in &paragraphs {
-            *paragraph_count_by_story
-                .entry(paragraph.story_id)
-                .or_default() += 1;
+        let mut touched_paragraph_ids = BTreeSet::<ParagraphId>::new();
+        for operation in &self.undo {
+            match operation {
+                EditOperation::SetParagraphAlignmentOverride { paragraph_ids, .. }
+                | EditOperation::ClearParagraphAlignmentOverride { paragraph_ids, .. } => {
+                    touched_paragraph_ids.extend(paragraph_ids.iter().copied());
+                }
+                _ => {}
+            }
         }
-        for item in self
-            .effective_full_story_paragraph_alignment_v1()
-            .map_err(|error| error.to_string())?
-        {
-            if item.alignment == ParagraphAlignmentV1::Right
-                && paragraph_count_by_story
-                    .get(&item.story_id)
-                    .copied()
-                    .unwrap_or_default()
-                    > 1
-            {
-                scoped_story_ids.insert(item.story_id);
+        for paragraph in &paragraphs {
+            if touched_paragraph_ids.contains(&paragraph.paragraph_id) {
+                scoped_story_ids.insert(paragraph.story_id);
             }
         }
 
