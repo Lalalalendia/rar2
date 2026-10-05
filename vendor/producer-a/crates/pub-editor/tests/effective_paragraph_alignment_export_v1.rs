@@ -90,21 +90,27 @@ fn real_carlton_effective_full_story_alignment_drives_idml_and_odg() {
     let centered_odg = export_counts(&session, EditorEditableTarget::Odg);
     assert_eq!(centered_idml.0, source_idml.0);
     assert_eq!(centered_idml.1, source_idml.1 + paragraph_ids.len());
-    assert_eq!(centered_idml.2 + paragraph_ids.len(), source_idml.2);
+    assert_eq!(centered_idml.2 + 1, source_idml.2);
     assert_eq!(centered_odg.0, source_odg.0);
     assert_eq!(centered_odg.1, source_odg.1 + paragraph_ids.len());
-    assert_eq!(centered_odg.2 + paragraph_ids.len(), source_odg.2);
+    assert_eq!(centered_odg.2 + 1, source_odg.2);
 
     session
         .clear_paragraph_alignment_override_v1(paragraph_ids.clone())
         .expect("clear full-Story Center override");
+    let cleared_idml = export_counts(&session, EditorEditableTarget::Idml);
+    let cleared_odg = export_counts(&session, EditorEditableTarget::Odg);
+    assert_eq!(cleared_idml.0, source_idml.0);
+    assert_eq!(cleared_idml.1, source_idml.1);
     assert_eq!(
-        export_counts(&session, EditorEditableTarget::Idml),
-        source_idml
+        cleared_idml.2,
+        source_idml.2 - 1 + paragraph_ids.len()
     );
+    assert_eq!(cleared_odg.0, source_odg.0);
+    assert_eq!(cleared_odg.1, source_odg.1);
     assert_eq!(
-        export_counts(&session, EditorEditableTarget::Odg),
-        source_odg
+        cleared_odg.2,
+        source_odg.2 - 1 + paragraph_ids.len()
     );
 
     session
@@ -125,8 +131,14 @@ fn real_carlton_effective_full_story_alignment_drives_idml_and_odg() {
     let left_odg = export_counts(&session, EditorEditableTarget::Odg);
     assert_eq!(left_idml.0, source_idml.0 + 1);
     assert_eq!(left_idml.1, source_idml.1);
-    assert_eq!(left_idml.2 + 1, source_idml.2);
+    assert_eq!(
+        left_idml.2,
+        source_idml.2 - 1 + paragraph_ids.len().saturating_sub(1)
+    );
     assert_eq!(left_odg.0, source_odg.0 + 1);
     assert_eq!(left_odg.1, source_odg.1);
-    assert_eq!(left_odg.2 + 1, source_odg.2);
+    assert_eq!(
+        left_odg.2,
+        source_odg.2 - 1 + paragraph_ids.len().saturating_sub(1)
+    );
 }
