@@ -2528,6 +2528,8 @@ where
     }
 
     let mut cursor = fragment.scalar_start;
+    let mut first_family: Option<String> = None;
+    let mut mixed_family = false;
     let mut first_resource: Option<(String, String, u32)> = None;
     let mut mixed_resource = false;
     let mut admitted = Vec::with_capacity(fragment.typography.len());
@@ -2544,6 +2546,13 @@ where
         if display_family.is_empty() {
             return None;
         }
+        let normalized_family = normalize_source_font_family_v1(display_family);
+        match first_family.as_ref() {
+            None => first_family = Some(normalized_family),
+            Some(first) if *first == normalized_family => {}
+            Some(_) => mixed_family = true,
+        }
+
         let font = resolve_span_font(fragment, run)?;
         if font.resource_id.is_empty()
             || font.bytes.is_empty()
@@ -2577,7 +2586,7 @@ where
         cursor = run.scalar_end;
     }
 
-    if cursor != fragment.scalar_end || !mixed_resource {
+    if cursor != fragment.scalar_end || (!mixed_family && !mixed_resource) {
         return None;
     }
     Some(admitted)
