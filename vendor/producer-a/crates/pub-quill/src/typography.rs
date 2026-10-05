@@ -2289,6 +2289,7 @@ fn split_bounded_quill_text_color(
     }
 }
 
+#[cfg(test)]
 fn resolve_direct_quill_text_color(raw: u32) -> Option<[u8; 3]> {
     match resolve_bounded_quill_text_color(raw) {
         Some(BoundedQuillTextColor::DirectRgb(rgb)) => Some(rgb),
