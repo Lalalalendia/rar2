@@ -89,9 +89,13 @@ function Ensure-PublisherPreflightIdle {
 }
 
 function Assert-NoPublisherProcess {
-    if (@(Get-Process -Name MSPUB -ErrorAction SilentlyContinue).Count -gt 0) {
-        throw "MSPUB.EXE is still running after a completed experiment stage."
+    for ($i = 0; $i -lt 80; $i++) {
+        if (@(Get-Process -Name MSPUB -ErrorAction SilentlyContinue).Count -eq 0) { return }
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+        Start-Sleep -Milliseconds 250
     }
+    throw "MSPUB.EXE is still running 20 seconds after a completed experiment stage. This indicates a leaked COM reference or an external Publisher session; no process was killed."
 }
 
 function Assert-Publisher2019([string]$Root) {
@@ -219,15 +223,18 @@ function Assert-RoleSnapshot([object]$Snapshot) {
 }
 
 function New-SyntheticSchemePublication([string]$Path) {
-    $app=$null; $doc=$null; $shape=$null; $range=$null
+    $app=$null; $doc=$null; $pages=$null; $page=$null; $shapes=$null; $shape=$null; $range=$null
     try {
         $app = New-PubPublisherApplication
         try { $doc = $app.NewDocument() } catch { $doc = $app.Documents.Add() }
         if ($null -eq $doc) { throw "Publisher did not create a new document." }
-        if ([int]$doc.Pages.Count -ne 1) { throw "Synthetic seed must have one page." }
-        if ([int]$doc.Pages.Item(1).Shapes.Count -ne 0) { throw "Synthetic seed must start with zero shapes." }
+        $pages = $doc.Pages
+        if ([int]$pages.Count -ne 1) { throw "Synthetic seed must have one page." }
+        $page = $pages.Item(1)
+        $shapes = $page.Shapes
+        if ([int]$shapes.Count -ne 0) { throw "Synthetic seed must start with zero shapes." }
 
-        $shape = $doc.Pages.Item(1).Shapes.AddTextbox($PbTextOrientationHorizontal, 72, 72, 420, 72)
+        $shape = $shapes.AddTextbox($PbTextOrientationHorizontal, 72, 72, 420, 72)
         $range = $shape.TextFrame.TextRange
         $range.Text = "ABCDEFGHI"
         $range.Font.Name = "Arial"
@@ -261,34 +268,50 @@ function New-SyntheticSchemePublication([string]$Path) {
         $doc.SaveAs($Path, $PbFilePublication, $false)
         return [ordered]@{ before_save=$beforeSave }
     } finally {
-        Release-Com $range; Release-Com $shape; Close-Doc $doc; Close-App $app
+        Release-Com $range
+        Release-Com $shape
+        Release-Com $shapes
+        Release-Com $page
+        Release-Com $pages
+        Close-Doc $doc
+        Close-App $app
     }
 }
 
 function Read-SyntheticSchemePublication([string]$Path, [string]$Phase) {
-    $app=$null; $doc=$null; $shape=$null
+    $app=$null; $doc=$null; $pages=$null; $page=$null; $shapes=$null; $shape=$null
     try {
         $app = New-PubPublisherApplication
         $doc = $app.Open($Path, $true, $false)
-        if ([int]$doc.Pages.Count -ne 1 -or [int]$doc.Pages.Item(1).Shapes.Count -ne 1) {
-            throw "Synthetic publication topology drift after reopen."
-        }
-        $shape = $doc.Pages.Item(1).Shapes.Item(1)
+        $pages = $doc.Pages
+        if ([int]$pages.Count -ne 1) { throw "Synthetic publication page topology drift after reopen." }
+        $page = $pages.Item(1)
+        $shapes = $page.Shapes
+        if ([int]$shapes.Count -ne 1) { throw "Synthetic publication shape topology drift after reopen." }
+        $shape = $shapes.Item(1)
         $snapshot = Get-TextRoleSnapshot $shape $Phase
         Assert-RoleSnapshot $snapshot
         $tuple = Get-DocumentSchemeTuple $doc
         return [ordered]@{ snapshot=$snapshot; scheme_tuple=$tuple; scheme_fingerprint=(Get-SchemeTupleFingerprint $tuple) }
     } finally {
-        Release-Com $shape; Close-Doc $doc; Close-App $app
+        Release-Com $shape
+        Release-Com $shapes
+        Release-Com $page
+        Release-Com $pages
+        Close-Doc $doc
+        Close-App $app
     }
 }
 
 function Find-DifferentApplicationScheme($App, [array]$CurrentTuple) {
-    $count = [int]$App.ColorSchemes.Count
-    for ($i = 1; $i -le $count; $i++) {
-        $scheme=$null
-        try {
-            $scheme = $App.ColorSchemes.Item($i)
+    $schemes=$null
+    try {
+        $schemes = $App.ColorSchemes
+        $count = [int]$schemes.Count
+        for ($i = 1; $i -le $count; $i++) {
+            $scheme=$null
+            try {
+                $scheme = $schemes.Item($i)
             $tuple=@()
             for ($role=1; $role -le 8; $role++) {
                 $color=$null
@@ -301,44 +324,60 @@ function Find-DifferentApplicationScheme($App, [array]$CurrentTuple) {
             if ($changed -ge 2) {
                 return [ordered]@{ index=$i; changed_slots=$changed; tuple=$tuple; name=$(try { [string]$scheme.Name } catch { "" }) }
             }
-        } finally {
-            Release-Com $scheme
+            } finally {
+                Release-Com $scheme
+            }
         }
+        throw "No installed Publisher ColorScheme differs from current publication in at least two roles."
+    } finally {
+        Release-Com $schemes
     }
-    throw "No installed Publisher ColorScheme differs from current publication in at least two roles."
 }
 
 function Apply-SchemeSwitch([string]$Path, [array]$CurrentTuple) {
-    $app=$null; $doc=$null; $scheme=$null
+    $app=$null; $doc=$null; $schemes=$null; $scheme=$null
     try {
         $app = New-PubPublisherApplication
         $doc = $app.Open($Path, $false, $false)
         $candidate = Find-DifferentApplicationScheme $app $CurrentTuple
-        $scheme = $app.ColorSchemes.Item([int]$candidate.index)
+        $schemes = $app.ColorSchemes
+        $scheme = $schemes.Item([int]$candidate.index)
         $doc.ColorScheme = $scheme
         $doc.Save()
         return $candidate
     } finally {
-        Release-Com $scheme; Close-Doc $doc; Close-App $app
+        Release-Com $scheme
+        Release-Com $schemes
+        Close-Doc $doc
+        Close-App $app
     }
 }
 
 function Read-CarltonScheme([string]$Path) {
     $before = Get-Sha256 $Path
     if ($before -ne $ExpectedCarltonSha256) { throw "Carlton source SHA mismatch: $before" }
-    $app=$null; $doc=$null
+    $app=$null; $doc=$null; $scheme=$null
     try {
         $app = New-PubPublisherApplication
         $doc = $app.Open($Path, $true, $false)
         $tuple = Get-DocumentSchemeTuple $doc
         $fingerprint = Get-SchemeTupleFingerprint $tuple
+        $schemeName = ""
+        try {
+            $scheme = $doc.ColorScheme
+            $schemeName = [string]$scheme.Name
+        } catch {
+            $schemeName = ""
+        }
         return [ordered]@{
             private_tuple = $tuple
             public_fingerprint = $fingerprint
-            scheme_name = $(try { [string]$doc.ColorScheme.Name } catch { "" })
+            scheme_name = $schemeName
         }
     } finally {
-        Close-Doc $doc; Close-App $app
+        Release-Com $scheme
+        Close-Doc $doc
+        Close-App $app
         $after = Get-Sha256 $Path
         if ($after -ne $before) { throw "Exact Carlton source changed during read-only probe." }
     }
