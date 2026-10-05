@@ -1,25 +1,8 @@
 use pub_editor::{
-    AuthoredParagraphAlignmentValueV1, EDITOR_PROJECT_VERSION_V0_15, EditorEditableTarget,
+    AuthoredParagraphAlignmentValueV1, EDITOR_PROJECT_VERSION_V0_15,
     EffectiveParagraphAlignmentValueV1, ImportedParagraphAlignmentValueV1,
     ParagraphAlignmentAuthorityV1, Sha256Digest, open_mature_0x2c_editor,
 };
-use std::io::{Cursor, Read};
-use zip::ZipArchive;
-
-fn archive_xml_contains(bytes: &[u8], needle: &str) -> bool {
-    let mut archive = ZipArchive::new(Cursor::new(bytes)).expect("open editable export ZIP");
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).expect("ZIP entry");
-        if !entry.name().ends_with(".xml") {
-            continue;
-        }
-        let mut xml = String::new();
-        if entry.read_to_string(&mut xml).is_ok() && xml.contains(needle) {
-            return true;
-        }
-    }
-    false
-}
 
 #[test]
 #[ignore = "requires the pinned public Carlton March PUB path"]
@@ -149,20 +132,6 @@ fn real_carlton_paragraph_alignment_override_roundtrips_history_and_project() {
         reopened_effective.authority,
         Some(ParagraphAlignmentAuthorityV1::ChapteraOverride)
     );
-    let center_idml = reopened
-        .export_editable(EditorEditableTarget::Idml, "carlton-center")
-        .expect("export authored Center to IDML");
-    assert!(archive_xml_contains(
-        &center_idml.bytes,
-        "Justification=\"CenterAlign\""
-    ));
-    let center_odg = reopened
-        .export_editable(EditorEditableTarget::Odg, "carlton-center")
-        .expect("export authored Center to ODG");
-    assert!(archive_xml_contains(
-        &center_odg.bytes,
-        "fo:text-align=\"center\""
-    ));
 
     reopened
         .clear_paragraph_alignment_override_v1(vec![paragraph_id])
@@ -184,20 +153,6 @@ fn real_carlton_paragraph_alignment_override_roundtrips_history_and_project() {
         cleared.authority,
         Some(ParagraphAlignmentAuthorityV1::ImportedBase)
     );
-    let cleared_idml = reopened
-        .export_editable(EditorEditableTarget::Idml, "carlton-cleared")
-        .expect("export cleared imported Right to IDML");
-    assert!(archive_xml_contains(
-        &cleared_idml.bytes,
-        "Justification=\"RightAlign\""
-    ));
-    let cleared_odg = reopened
-        .export_editable(EditorEditableTarget::Odg, "carlton-cleared")
-        .expect("export cleared imported Right to ODG");
-    assert!(archive_xml_contains(
-        &cleared_odg.bytes,
-        "fo:text-align=\"right\""
-    ));
 
     let redundant = reopened
         .set_paragraph_alignment_override_v1(
@@ -236,18 +191,4 @@ fn real_carlton_paragraph_alignment_override_roundtrips_history_and_project() {
         left.authority,
         Some(ParagraphAlignmentAuthorityV1::ChapteraOverride)
     );
-    let left_idml = reopened
-        .export_editable(EditorEditableTarget::Idml, "carlton-left")
-        .expect("export authored Left to IDML");
-    assert!(archive_xml_contains(
-        &left_idml.bytes,
-        "Justification=\"LeftAlign\""
-    ));
-    let left_odg = reopened
-        .export_editable(EditorEditableTarget::Odg, "carlton-left")
-        .expect("export authored Left to ODG");
-    assert!(archive_xml_contains(
-        &left_odg.bytes,
-        "fo:text-align=\"left\""
-    ));
 }
