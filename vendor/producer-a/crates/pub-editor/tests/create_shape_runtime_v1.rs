@@ -194,7 +194,7 @@ fn create_shape_is_one_v0_10_history_unit_and_source_graph_stays_immutable() {
     );
 
     let project = session.project();
-    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_15);
+    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_16);
     assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_12);
     assert_eq!(project.operations, vec![operation.clone()]);
     assert_eq!(session.persistence_requirements().len(), 3);
