@@ -341,7 +341,7 @@ pub fn add_paragraph_scoped_alignment_to_idml(
                 paragraph.range.end,
             );
             let is_last = index + 1 == paragraphs.len();
-            let content = paragraph_content_from_canonical_range(
+            let (content, has_return) = paragraph_content_from_canonical_range(
                 placement.story_id,
                 paragraph.paragraph_id,
                 raw,
@@ -362,6 +362,9 @@ pub fn add_paragraph_scoped_alignment_to_idml(
             replacement.push_str(content_open);
             replacement.push_str(&escaped);
             replacement.push_str(content_close);
+            if has_return {
+                replacement.push_str("\n        <Br/>");
+            }
             replacement.push_str(char_suffix);
             replacement.push_str(paragraph_close);
         }
@@ -385,14 +388,15 @@ fn paragraph_content_from_canonical_range(
     paragraph_id: pub_model::ParagraphId,
     mut raw: String,
     is_last: bool,
-) -> Result<String, IdmlParagraphAlignmentError> {
-    if !is_last && !raw.ends_with('\r') {
+) -> Result<(String, bool), IdmlParagraphAlignmentError> {
+    let has_return = raw.ends_with('\r');
+    if !is_last && !has_return {
         return Err(IdmlParagraphAlignmentError::MissingParagraphTerminator {
             story_id,
             paragraph_id,
         });
     }
-    if raw.ends_with('\r') {
+    if has_return {
         raw.pop();
     }
     if raw.contains('\r') {
@@ -401,7 +405,7 @@ fn paragraph_content_from_canonical_range(
             paragraph_id,
         });
     }
-    Ok(raw)
+    Ok((raw, has_return))
 }
 
 fn escape_xml_content(input: String) -> String {
@@ -607,6 +611,7 @@ mod tests {
         assert!(xml.contains("<Content>Two&lt;</Content>"));
         assert!(xml.contains("<Content>Three</Content>"));
         assert!(!xml.contains('\r'));
+        assert_eq!(xml.matches("<Br/>").count(), 2);
         assert_eq!(xml.matches("PointSize=\"12\"").count(), 3);
         assert_eq!(
             xml.matches("<AppliedFont type=\"string\">Montserrat</AppliedFont>")
@@ -616,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn provenance_terminal_cr_becomes_one_final_paragraph_range_not_br() {
+    fn provenance_terminal_cr_becomes_one_final_paragraph_range_with_return_marker() {
         let story_id = story(20);
         let export_plan = plan(story_id);
         let mut package = package_with_story_text(&export_plan, story_id, "Alpha\r");
@@ -637,7 +642,7 @@ mod tests {
             &mut package,
             std::slice::from_ref(&placement),
         )
-        .expect("terminal CR is structural paragraph boundary");
+        .expect("terminal CR is preserved as bounded IDML return marker");
 
         let xml = package
             .parts
@@ -647,7 +652,7 @@ mod tests {
             .expect("story XML");
         assert_eq!(xml.matches("<ParagraphStyleRange ").count(), 1);
         assert!(xml.contains("<Content>Alpha</Content>"));
-        assert!(!xml.contains("<Br"));
+        assert_eq!(xml.matches("<Br/>").count(), 1);
         assert!(!xml.contains('\r'));
     }
 
