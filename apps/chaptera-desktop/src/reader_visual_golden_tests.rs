@@ -1,8 +1,8 @@
 //! Reader visual/typography golden acceptance owners.
 //!
 //! These tests are intentionally isolated from the monolithic Desktop shell so
-//! Reader visual CI admission follows the render evidence owner rather than any
-//! unrelated main.rs change.
+//! Reader visual CI admission follows this owner and its runtime dependencies.
+//! main.rs still owns ViewerApp and shared paint helpers used below.
 
 use super::*;
 
@@ -235,10 +235,25 @@ fn golden_carlton_march_clean_pages_use_current_reader_render_backend() {
         ),
         "exact Carlton family presentation profile must be active before visual rendering"
     );
+    let cmo_projected_instances = visual
+        .projected_instances
+        .iter()
+        .filter(|projected| {
+            projected.scene_instance.projection_kind
+                == chaptera_scene_instance::SceneProjectionKindV1::CmoStorySlot
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
-        visual.projected_instances.len(),
+        cmo_projected_instances.len(),
         4,
         "exact March must admit exactly four visible canonical Cmo scene instances"
+    );
+    assert!(
+        visual.projected_instances.iter().any(|projected| {
+            projected.scene_instance.projection_kind
+                == chaptera_scene_instance::SceneProjectionKindV1::InheritedMaster
+        }),
+        "exact March must retain inherited-master projections alongside Cmo"
     );
     let projected_instance_ids = visual
         .projected_instances
@@ -247,13 +262,18 @@ fn golden_carlton_march_clean_pages_use_current_reader_render_backend() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         projected_instance_ids.len(),
-        4,
+        visual.projected_instances.len(),
         "canonical projected SceneInstance identities must be distinct"
     );
-    assert!(visual.projected_instances.iter().all(|projected| {
-        projected.scene_instance.projection_kind
-            == chaptera_scene_instance::SceneProjectionKindV1::CmoStorySlot
-    }));
+    let cmo_projected_instance_ids = cmo_projected_instances
+        .iter()
+        .map(|projected| projected.scene_instance.instance_id.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        cmo_projected_instance_ids.len(),
+        4,
+        "canonical Cmo SceneInstance identities must remain distinct"
+    );
     let direct_scene_origins = visual
         .scene
         .nodes
@@ -275,7 +295,11 @@ fn golden_carlton_march_clean_pages_use_current_reader_render_backend() {
             visual
                 .projected_instances
                 .iter()
-                .filter(|projected| projected.scene_instance.target_page_id == page_id)
+                .filter(|projected| {
+                    projected.scene_instance.target_page_id == page_id
+                        && projected.scene_instance.projection_kind
+                            == chaptera_scene_instance::SceneProjectionKindV1::CmoStorySlot
+                })
                 .count()
         })
         .collect::<Vec<_>>();
@@ -284,9 +308,22 @@ fn golden_carlton_march_clean_pages_use_current_reader_render_backend() {
         vec![1, 2, 1],
         "exact March projected Cmo distribution must stay 1/2/1"
     );
+    let total_projected_page_counts = visual
+        .document
+        .pages
+        .iter()
+        .map(|page| {
+            let page_id = page.id.as_canonical().to_string();
+            visual
+                .projected_instances
+                .iter()
+                .filter(|projected| projected.scene_instance.target_page_id == page_id)
+                .count()
+        })
+        .collect::<Vec<_>>();
 
     let mut page_receipts = Vec::new();
-    for (page_index, expected_projected_node_count) in
+    for (page_index, expected_cmo_projected_node_count) in
         projected_page_counts.iter().copied().enumerate()
     {
         let plan = build_desktop_page_render_plan(&visual, page_index)
@@ -296,9 +333,22 @@ fn golden_carlton_march_clean_pages_use_current_reader_render_backend() {
             .iter()
             .filter(|node| node.projected_scene_instance.is_some())
             .count();
+        let cmo_projected_node_count = plan
+            .nodes
+            .iter()
+            .filter_map(|node| node.projected_scene_instance.as_ref())
+            .filter(|instance| {
+                instance.projection_kind
+                    == chaptera_scene_instance::SceneProjectionKindV1::CmoStorySlot
+            })
+            .count();
         assert_eq!(
-            projected_node_count, expected_projected_node_count,
-            "render-plan projected instance count must match canonical Viewer adapter"
+            cmo_projected_node_count, expected_cmo_projected_node_count,
+            "render-plan Cmo instance count must match canonical Viewer adapter"
+        );
+        assert_eq!(
+            projected_node_count, total_projected_page_counts[page_index],
+            "render-plan total projected instance count must match canonical Viewer adapter"
         );
         assert!(
             plan.nodes
@@ -353,30 +403,32 @@ fn golden_carlton_march_clean_pages_use_current_reader_render_backend() {
                         projected.scene_instance.instance_id == instance.instance_id
                     })
                     .expect("render-plan projected instance must come from Viewer adapter");
-                let target_frame = visual
-                    .scene
-                    .nodes
-                    .iter()
-                    .find(|candidate| candidate.origin == viewer_projected.target_frame_node_id)
-                    .expect("projected target frame remains in resolved customer scene");
+                let target_frame =
+                    viewer_projected.target_frame_node_id.and_then(|target_id| {
+                        visual
+                            .scene
+                            .nodes
+                            .iter()
+                            .find(|candidate| candidate.origin == target_id)
+                    });
                 Some(serde_json::json!({
                     "instance_id": instance.instance_id,
                     "origin_node_id": instance.origin_node_id,
+                    "projection_kind": instance.projection_kind,
                     "target_frame_node_id": viewer_projected
                         .target_frame_node_id
-                        .as_canonical()
-                        .to_string(),
+                        .map(|target_id| target_id.as_canonical().to_string()),
                     "cmo_slot_index": instance.cmo_slot_index,
                     "cmo_scalar_index": instance.cmo_scalar_index,
                     "target_frame_paint_scalar_end": viewer_projected
                         .target_frame_paint_scalar_end,
                     "story_authority_present": instance.story_authority_id.is_some(),
-                    "target_frame_bounds_emu": [
+                    "target_frame_bounds_emu": target_frame.map(|target_frame| [
                         target_frame.bounds.x.get(),
                         target_frame.bounds.y.get(),
                         target_frame.bounds.width.get(),
                         target_frame.bounds.height.get(),
-                    ],
+                    ]),
                     "projected_bounds_emu": [
                         node.bounds.x.get(),
                         node.bounds.y.get(),
@@ -457,7 +509,10 @@ fn golden_carlton_march_clean_pages_use_current_reader_render_backend() {
             .map(|diagnostic| diagnostic.code.clone())
             .collect::<Vec<_>>(),
         "projected_scene_instance_ids": projected_instance_ids,
+        "cmo_projected_scene_instance_ids": cmo_projected_instance_ids,
         "projected_page_counts": projected_page_counts,
+        "projected_page_counts_semantics": "cmo_story_slot_only",
+        "total_projected_page_counts": total_projected_page_counts,
         "pages": page_receipts,
     });
     fs::write(
@@ -611,4 +666,3 @@ fn golden_sample_newsletter_reference_customer_page_1_uses_shared_typography_ren
     )
     .expect("write golden receipt");
 }
-

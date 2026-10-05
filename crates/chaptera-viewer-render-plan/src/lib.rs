@@ -10,7 +10,8 @@ use pub_layout::{
     BoundedBreakKind, BoundedLayoutEnvironment, BoundedLayoutProjection, BoundedShapedFlowRuntime,
     BoundedShapedGlyph, BoundedShapingDescriptor, BoundedShapingRuntime, ProjectedNodeGeometry,
     ProjectedPage, ProjectedStory, ProjectedStoryFrame, break_policy_for_shaped_text,
-    font_fingerprint_sha256, resolve_bounded_shaped_flow, shape_bounded_ltr_segment,
+    compatible_natural_line_height_emu_v1, font_fingerprint_sha256, resolve_bounded_shaped_flow,
+    shape_bounded_ltr_segment,
 };
 use pub_line_placement::{
     LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
@@ -25,7 +26,8 @@ use pub_model::{
 use pub_viewer::ViewerProjectedSceneInstanceV1;
 use pub_viewer::{
     ViewerDecorativeBorderSlotV1, ViewerGeometryDocument, ViewerParagraphAlignment,
-    ViewerScriptFontEntryDisposition, ViewerStoryFrame, ViewerTextVerticalAlignment,
+    ViewerParagraphLineSpacing, ViewerScriptFontEntryDisposition, ViewerStoryFrame,
+    ViewerTextVerticalAlignment,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -983,18 +985,38 @@ fn projected_text(
     else {
         return Ok(None);
     };
-    let scalar_end = u32::try_from(story.text.chars().count()).unwrap_or(u32::MAX);
+
+    let (scalar_start, scalar_end, text, line_count) =
+        if instance.scene_instance.projection_kind == SceneProjectionKindV1::InheritedMaster {
+            let origin_node_id =
+                parse_node_id(&instance.scene_instance.origin_node_id, "origin_node_id")?;
+            let Some(fragment) = visual.text_fragments.iter().find(|fragment| {
+                fragment.frame_id == origin_node_id && fragment.story_id == story_id
+            }) else {
+                return Ok(None);
+            };
+            (
+                fragment.scalar_start,
+                fragment.scalar_end,
+                fragment.text.clone(),
+                fragment.line_count,
+            )
+        } else {
+            let scalar_end = u32::try_from(story.text.chars().count()).unwrap_or(u32::MAX);
+            (0, scalar_end, story.text.clone(), 0)
+        };
+
     let typography = visual
         .typography_runs
         .iter()
         .filter(|run| run.story_id == story_id)
         .filter(|run| run.applies_to_story_text(&story.text))
         .filter_map(|run| {
-            let scalar_start = run.scalar_start.min(scalar_end);
-            let scalar_end = run.scalar_end.min(scalar_end);
-            (scalar_start < scalar_end).then(|| RenderTypographyRunV1 {
-                scalar_start,
-                scalar_end,
+            let run_start = run.scalar_start.max(scalar_start);
+            let run_end = run.scalar_end.min(scalar_end);
+            (run_start < run_end).then(|| RenderTypographyRunV1 {
+                scalar_start: run_start,
+                scalar_end: run_end,
                 source_font_name: run.source_font_name.clone(),
                 text_size_emu: run.text_size_emu,
                 font_inherited: run.font_inherited,
@@ -1004,18 +1026,19 @@ fn projected_text(
             })
         })
         .collect();
+
     Ok(Some(RenderTextFragmentV1 {
         story_id,
-        scalar_start: 0,
+        scalar_start,
         scalar_end,
-        text: story.text.clone(),
-        line_count: 0,
+        text,
+        line_count,
         typography,
         paragraph_alignments: render_paragraph_alignment_runs_v1(
             visual,
             story_id,
             &story.text,
-            0,
+            scalar_start,
             scalar_end,
         ),
         backend_font_resource_id: None,
@@ -1193,7 +1216,7 @@ pub fn build_page_render_plan_v1(
             {
                 let projected_for_frame = visual.projected_instances.iter().filter(|projected| {
                     projected.scene_instance.target_page_id == page.id.as_canonical().to_string()
-                        && projected.target_frame_node_id == node.origin
+                        && projected.target_frame_node_id == Some(node.origin)
                 });
                 let mut has_projection = false;
                 let mut paint_scalar_end = None::<u32>;
@@ -1289,70 +1312,121 @@ pub fn build_page_render_plan_v1(
         .collect::<Vec<_>>();
 
     #[cfg(feature = "projected-scene-instances")]
-    for projected in visual.projected_instances.iter().filter(|projected| {
-        projected.scene_instance.target_page_id == page.id.as_canonical().to_string()
-    }) {
-        if projected.scene_instance.projection_kind != SceneProjectionKindV1::CmoStorySlot {
-            return Err(RenderPlanErrorV1::ProjectedKindUnsupported {
-                instance_id: projected.scene_instance.instance_id.clone(),
-            });
-        }
-        let origin_node_id =
-            parse_node_id(&projected.scene_instance.origin_node_id, "origin_node_id")?;
-        let paint = visual
-            .paints
-            .iter()
-            .find(|paint| paint.node_id == origin_node_id);
-        let image = visual
-            .images
-            .iter()
-            .find(|image| image.node_ids.contains(&origin_node_id))
-            .map(|image| {
-                let source_window = image
-                    .placements
-                    .iter()
-                    .find(|placement| placement.node_id == origin_node_id)
-                    .and_then(|placement| placement.source_window.as_ref())
-                    .map(|window| RenderImageSourceWindowV1 {
-                        left_q16: window.left_q16,
-                        top_q16: window.top_q16,
-                        right_q16: window.right_q16,
-                        bottom_q16: window.bottom_q16,
-                    });
-                RenderImageRefV1 {
-                    resource_id: image.resource_id,
-                    mime: image.mime.clone(),
-                    source_window,
-                }
-            });
-        let node = NodeRenderPlanV1 {
-            node_id: origin_node_id,
-            projected_scene_instance: Some(projected.scene_instance.clone()),
-            bounds: projected.bounds,
-            text_bounds: projected.text_content_bounds,
-            transform: projected.transform.clone(),
-            solid_fill_rgb: paint.and_then(|paint| paint.solid_fill_rgb),
-            solid_line: paint
-                .and_then(|paint| paint.solid_line.as_ref())
-                .map(|line| RenderSolidLineV1 {
-                    rgb: line.rgb,
-                    width_emu: line.width_emu,
-                }),
-            decorative_border: render_decorative_border_v1(visual, origin_node_id),
-            image,
-            text: projected_text(visual, projected)?,
-            table: None,
-        };
+    {
+        let mut inherited_master_nodes = Vec::new();
 
-        let insert_at = nodes
-            .iter()
-            .position(|candidate| {
-                candidate.projected_scene_instance.is_none()
-                    && candidate.node_id == projected.target_frame_node_id
-            })
-            .map(|index| index + 1)
-            .unwrap_or(nodes.len());
-        nodes.insert(insert_at, node);
+        for projected in visual.projected_instances.iter().filter(|projected| {
+            projected.scene_instance.target_page_id == page.id.as_canonical().to_string()
+        }) {
+            let origin_node_id =
+                parse_node_id(&projected.scene_instance.origin_node_id, "origin_node_id")?;
+            let paint = visual
+                .paints
+                .iter()
+                .find(|paint| paint.node_id == origin_node_id);
+            let image = visual
+                .images
+                .iter()
+                .find(|image| image.node_ids.contains(&origin_node_id))
+                .map(|image| {
+                    let source_window = image
+                        .placements
+                        .iter()
+                        .find(|placement| placement.node_id == origin_node_id)
+                        .and_then(|placement| placement.source_window.as_ref())
+                        .map(|window| RenderImageSourceWindowV1 {
+                            left_q16: window.left_q16,
+                            top_q16: window.top_q16,
+                            right_q16: window.right_q16,
+                            bottom_q16: window.bottom_q16,
+                        });
+                    RenderImageRefV1 {
+                        resource_id: image.resource_id,
+                        mime: image.mime.clone(),
+                        source_window,
+                    }
+                });
+            let table = visual
+                .tables
+                .iter()
+                .find(|table| table.node_id == origin_node_id)
+                .map(|table| RenderTableV1 {
+                    story_id: table.story_id,
+                    rows: table.rows,
+                    columns: table.columns,
+                    cells: table
+                        .cells
+                        .iter()
+                        .map(|cell| RenderTableCellV1 {
+                            id: cell.id,
+                            row: cell.address.row,
+                            column: cell.address.column,
+                            row_span: cell.row_span,
+                            column_span: cell.column_span,
+                            text: cell.text.clone(),
+                            bounds: cell.bounds,
+                            fill_rgb: cell.fill_rgb,
+                            fill_visible: cell.fill_visible,
+                        })
+                        .collect(),
+                });
+            let node = NodeRenderPlanV1 {
+                node_id: origin_node_id,
+                projected_scene_instance: Some(projected.scene_instance.clone()),
+                bounds: projected.bounds,
+                text_bounds: projected.text_content_bounds,
+                transform: projected.transform.clone(),
+                solid_fill_rgb: paint.and_then(|paint| paint.solid_fill_rgb),
+                solid_line: paint
+                    .and_then(|paint| paint.solid_line.as_ref())
+                    .map(|line| RenderSolidLineV1 {
+                        rgb: line.rgb,
+                        width_emu: line.width_emu,
+                    }),
+                decorative_border: render_decorative_border_v1(visual, origin_node_id),
+                image,
+                text: projected_text(visual, projected)?,
+                table,
+            };
+
+            match projected.scene_instance.projection_kind {
+                SceneProjectionKindV1::InheritedMaster => {
+                    if projected.target_frame_node_id.is_some() {
+                        return Err(RenderPlanErrorV1::ProjectedKindUnsupported {
+                            instance_id: projected.scene_instance.instance_id.clone(),
+                        });
+                    }
+                    inherited_master_nodes.push(node);
+                }
+                SceneProjectionKindV1::CmoStorySlot => {
+                    let Some(target_frame_node_id) = projected.target_frame_node_id else {
+                        return Err(RenderPlanErrorV1::ProjectedKindUnsupported {
+                            instance_id: projected.scene_instance.instance_id.clone(),
+                        });
+                    };
+                    let insert_at = nodes
+                        .iter()
+                        .position(|candidate| {
+                            candidate.projected_scene_instance.is_none()
+                                && candidate.node_id == target_frame_node_id
+                        })
+                        .map(|index| index + 1)
+                        .unwrap_or(nodes.len());
+                    nodes.insert(insert_at, node);
+                }
+                SceneProjectionKindV1::DirectPageLocal => {
+                    return Err(RenderPlanErrorV1::ProjectedKindUnsupported {
+                        instance_id: projected.scene_instance.instance_id.clone(),
+                    });
+                }
+            }
+        }
+
+        // Native Publisher acceptance proves the bounded ordinary single-master
+        // stacking law: inherited master paints below page-local content. The
+        // Viewer producer already preserves source order within the master lane.
+        inherited_master_nodes.extend(nodes);
+        nodes = inherited_master_nodes;
     }
 
     Ok(PageRenderPlanV1 {
@@ -1432,7 +1506,7 @@ where
                         .find(|projected| {
                             projected.scene_instance.instance_id == instance.instance_id
                         })
-                        .map(|projected| projected.target_frame_node_id)
+                        .and_then(|projected| projected.target_frame_node_id)
                 })
             }
             #[cfg(not(feature = "projected-scene-instances"))]
@@ -1469,11 +1543,18 @@ where
             fragment.layout = Some(layout);
             continue;
         }
+        let font_is_source_resolved = resolved_font.is_some();
         fragment.backend_font_resource_id = resolved_font
             .as_ref()
             .map(|font| font.resource_id.to_owned());
         let font = resolved_font.as_ref().unwrap_or(fallback_font);
-        fragment.layout = Some(resolve_text_layout_v1(visual, target, fragment, font));
+        fragment.layout = Some(resolve_text_layout_v1(
+            visual,
+            target,
+            fragment,
+            font,
+            font_is_source_resolved,
+        ));
     }
 
     Ok(plan)
@@ -1613,11 +1694,106 @@ fn projected_incomplete_layout_is_explicit_overset(
         && diagnostics[0].origin == story_id.into_canonical()
 }
 
+const PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1: u32 = 12 * 12_700;
+const PUBLISHER_ONE_POINT_FIVE_POINT_EQUIVALENT_EMU_V1: u32 = 18 * 12_700;
+
+fn source_paragraph_line_spacing_v1(
+    visual: &ViewerGeometryDocument,
+    fragment: &RenderTextFragmentV1,
+) -> Option<ViewerParagraphLineSpacing> {
+    let story = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == fragment.story_id)?;
+
+    let mut intersecting = visual
+        .paragraph_line_spacings
+        .iter()
+        .filter(|run| run.story_id == fragment.story_id)
+        .filter(|run| run.applies_to_story_text(&story.text))
+        .filter(|run| {
+            run.scalar_end > fragment.scalar_start && run.scalar_start < fragment.scalar_end
+        });
+
+    let run = intersecting.next()?;
+    if intersecting.next().is_some()
+        || run.scalar_start > fragment.scalar_start
+        || run.scalar_end < fragment.scalar_end
+    {
+        return None;
+    }
+    Some(run.line_spacing)
+}
+
+fn scale_proportional_line_height_emu_v1(
+    natural_line_height_emu: i64,
+    point_equivalent_emu: u32,
+) -> Option<i64> {
+    if natural_line_height_emu <= 0
+        || !matches!(
+            point_equivalent_emu,
+            PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1
+                | PUBLISHER_ONE_POINT_FIVE_POINT_EQUIVALENT_EMU_V1
+        )
+    {
+        return None;
+    }
+
+    let numerator = i128::from(natural_line_height_emu) * i128::from(point_equivalent_emu);
+    let denominator = i128::from(PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1);
+    let rounded = (numerator + denominator / 2) / denominator;
+    let line_height_emu = i64::try_from(rounded).ok()?;
+    (line_height_emu > 0).then_some(line_height_emu)
+}
+
+fn resolved_uniform_line_height_emu_v1(
+    visual: &ViewerGeometryDocument,
+    fragment: &RenderTextFragmentV1,
+    font_size_emu: i64,
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+    font_is_source_resolved: bool,
+) -> Option<i64> {
+    if let Some(line_spacing) = source_paragraph_line_spacing_v1(visual, fragment) {
+        match line_spacing {
+            ViewerParagraphLineSpacing::Absolute { spacing_emu } if spacing_emu > 0 => {
+                return Some(i64::from(spacing_emu));
+            }
+            ViewerParagraphLineSpacing::Proportional {
+                point_equivalent_emu,
+            } if font_is_source_resolved => {
+                if let Some(natural_line_height_emu) = compatible_natural_line_height_emu_v1(
+                    font.bytes,
+                    font.face_index,
+                    LengthEmu::new(font_size_emu),
+                )
+                .map(LengthEmu::get)
+                    && let Some(line_height_emu) = scale_proportional_line_height_emu_v1(
+                        natural_line_height_emu,
+                        point_equivalent_emu,
+                    )
+                {
+                    return Some(line_height_emu);
+                }
+            }
+            ViewerParagraphLineSpacing::Absolute { .. }
+            | ViewerParagraphLineSpacing::Proportional { .. } => {}
+        }
+    }
+
+    scaled_line_height_emu(
+        font_size_emu,
+        font.default_font_size_emu,
+        font.default_line_height_emu,
+    )
+}
+
 fn resolve_text_layout_v1(
     visual: &ViewerGeometryDocument,
     target: RenderTextLayoutTargetV1,
     fragment: &RenderTextFragmentV1,
     font: &ExplicitRenderTextFontResourceV1<'_>,
+    font_is_source_resolved: bool,
 ) -> RenderTextLayoutV1 {
     let RenderTextLayoutTargetV1 {
         page_id,
@@ -1689,10 +1865,12 @@ fn resolve_text_layout_v1(
         }
         Err(reason) => return fallback_layout(reason),
     };
-    let Some(line_height_emu) = scaled_line_height_emu(
+    let Some(line_height_emu) = resolved_uniform_line_height_emu_v1(
+        visual,
+        fragment,
         font_size_emu,
-        font.default_font_size_emu,
-        font.default_line_height_emu,
+        font,
+        font_is_source_resolved,
     ) else {
         return fallback_layout(RenderTextLayoutFallbackReasonV1::FontResourceInvalid);
     };
@@ -2660,9 +2838,9 @@ mod tests {
     };
     use pub_viewer::{
         ViewerDocument, ViewerEmbeddedImage, ViewerImagePlacementV1, ViewerImageSourceWindowV1,
-        ViewerNodePaint, ViewerPage, ViewerScriptFontEntry, ViewerScriptFontMap, ViewerSolidLine,
-        ViewerSource, ViewerTable, ViewerTableCell, ViewerTextFragment, ViewerTypographyRun,
-        viewer_story_text_sha256,
+        ViewerNodePaint, ViewerPage, ViewerParagraphLineSpacingRun, ViewerScriptFontEntry,
+        ViewerScriptFontMap, ViewerSolidLine, ViewerSource, ViewerTable, ViewerTableCell,
+        ViewerTextFragment, ViewerTypographyRun, viewer_story_text_sha256,
     };
 
     fn canonical(byte: u8) -> CanonicalId {
@@ -2891,6 +3069,7 @@ mod tests {
                 source_story_text_sha256: viewer_story_text_sha256("hello"),
             }],
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             images: vec![ViewerEmbeddedImage {
@@ -3067,6 +3246,101 @@ mod tests {
                     .is_some_and(|shaping| shaping.units_per_em > 0 && !shaping.glyphs.is_empty())
             }));
         }
+    }
+
+    #[test]
+    fn absolute_paragraph_line_spacing_overrides_only_one_complete_fresh_run() {
+        let mut visual = fixture();
+        let story_id = visual.document.stories[0].id;
+        let story_text = visual.document.stories[0].text.clone();
+        let fragment = render_fragment(story_id, &story_text, Vec::new());
+        let fallback = 15 * 12_700;
+        let absolute = 18 * 12_700;
+        let font = ExplicitRenderTextFontResourceV1 {
+            resource_id: "test:fallback",
+            expected_sha256: "",
+            face_index: 0,
+            default_font_size_emu: 12 * 12_700,
+            default_line_height_emu: fallback,
+            bytes: &[],
+        };
+
+        assert_eq!(
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
+            Some(fallback)
+        );
+
+        visual.paragraph_line_spacings = vec![ViewerParagraphLineSpacingRun {
+            story_id,
+            scalar_start: fragment.scalar_start,
+            scalar_end: fragment.scalar_end,
+            line_spacing: ViewerParagraphLineSpacing::Absolute {
+                spacing_emu: u32::try_from(absolute).expect("absolute spacing"),
+            },
+            source_value: Some(1_828_801),
+            source_story_text_sha256: viewer_story_text_sha256(&story_text),
+        }];
+        assert_eq!(
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
+            Some(absolute)
+        );
+
+        visual.paragraph_line_spacings[0].line_spacing = ViewerParagraphLineSpacing::Proportional {
+            point_equivalent_emu: 18 * 12_700,
+        };
+        assert_eq!(
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
+            Some(fallback)
+        );
+
+        visual.paragraph_line_spacings[0].line_spacing = ViewerParagraphLineSpacing::Absolute {
+            spacing_emu: u32::try_from(absolute).expect("absolute spacing"),
+        };
+        visual.paragraph_line_spacings[0].scalar_end = fragment.scalar_end - 1;
+        assert_eq!(
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
+            Some(fallback)
+        );
+
+        visual.paragraph_line_spacings[0].scalar_end = fragment.scalar_end;
+        visual
+            .paragraph_line_spacings
+            .push(visual.paragraph_line_spacings[0].clone());
+        assert_eq!(
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
+            Some(fallback)
+        );
+
+        visual.paragraph_line_spacings.truncate(1);
+        visual.paragraph_line_spacings[0].source_story_text_sha256 =
+            viewer_story_text_sha256("stale");
+        assert_eq!(
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
+            Some(fallback)
+        );
+    }
+
+    #[test]
+    fn proportional_line_height_scales_only_proven_single_and_one_point_five_modes() {
+        let natural = 198_636;
+        assert_eq!(
+            scale_proportional_line_height_emu_v1(
+                natural,
+                PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1,
+            ),
+            Some(natural)
+        );
+        assert_eq!(
+            scale_proportional_line_height_emu_v1(
+                natural,
+                PUBLISHER_ONE_POINT_FIVE_POINT_EQUIVALENT_EMU_V1,
+            ),
+            Some(297_954)
+        );
+        assert_eq!(
+            scale_proportional_line_height_emu_v1(natural, 24 * 12_700),
+            None
+        );
     }
 
     #[test]
@@ -3692,6 +3966,55 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "projected-scene-instances")]
+    #[test]
+    fn inherited_master_lane_paints_before_direct_page_local_lane() {
+        let mut visual = fixture();
+        let page_id = visual.document.pages[0].id;
+        let direct_node_id = visual.scene.nodes[0].origin;
+        let master_node_id = NodeId::from_canonical(canonical(8));
+        let master_page_id = PageId::from_canonical(canonical(9));
+        let instance = SceneInstanceV1 {
+            schema_version: SCENE_INSTANCE_SCHEMA_V1.to_owned(),
+            instance_id: "sha256:inherited-master-lane-fixture".to_owned(),
+            projection_kind: SceneProjectionKindV1::InheritedMaster,
+            origin_node_id: master_node_id.as_canonical().to_string(),
+            target_page_id: page_id.as_canonical().to_string(),
+            source_parent_origin: Some(master_page_id.as_canonical().to_string()),
+            story_authority_id: None,
+            cmo_slot_index: None,
+            cmo_scalar_index: None,
+        };
+        visual
+            .projected_instances
+            .push(pub_viewer::ViewerProjectedSceneInstanceV1 {
+                scene_instance: instance,
+                target_frame_node_id: None,
+                target_frame_paint_scalar_end: None,
+                text_content_bounds: None,
+                bounds: RectEmu::new(
+                    LengthEmu::new(5),
+                    LengthEmu::new(6),
+                    LengthEmu::new(70),
+                    LengthEmu::new(80),
+                ),
+                transform: Affine2D::identity(),
+            });
+
+        let plan = build_page_render_plan_v1(&visual, 0).expect("render plan");
+        assert_eq!(plan.nodes.len(), 2);
+        assert_eq!(plan.nodes[0].node_id, master_node_id);
+        assert_eq!(
+            plan.nodes[0]
+                .projected_scene_instance
+                .as_ref()
+                .map(|instance| instance.projection_kind),
+            Some(SceneProjectionKindV1::InheritedMaster)
+        );
+        assert_eq!(plan.nodes[1].node_id, direct_node_id);
+        assert!(plan.nodes[1].projected_scene_instance.is_none());
+    }
+
     #[test]
     fn projected_cmo_layout_admits_hidden_carrier_with_single_target_frame() {
         let mut visual = fixture();
@@ -3822,7 +4145,7 @@ mod tests {
             .projected_instances
             .push(pub_viewer::ViewerProjectedSceneInstanceV1 {
                 scene_instance: instance.clone(),
-                target_frame_node_id: origin_node_id,
+                target_frame_node_id: Some(origin_node_id),
                 target_frame_paint_scalar_end: None,
                 text_content_bounds: None,
                 bounds: RectEmu::new(
@@ -3876,7 +4199,7 @@ mod tests {
             .projected_instances
             .push(pub_viewer::ViewerProjectedSceneInstanceV1 {
                 scene_instance: instance,
-                target_frame_node_id: frame_id,
+                target_frame_node_id: Some(frame_id),
                 target_frame_paint_scalar_end: None,
                 text_content_bounds: None,
                 bounds: visual.scene.nodes[0].bounds,
@@ -3922,7 +4245,7 @@ mod tests {
             .projected_instances
             .push(pub_viewer::ViewerProjectedSceneInstanceV1 {
                 scene_instance: instance,
-                target_frame_node_id: frame_id,
+                target_frame_node_id: Some(frame_id),
                 target_frame_paint_scalar_end: Some(3),
                 text_content_bounds: None,
                 bounds: visual.scene.nodes[0].bounds,

@@ -18,9 +18,23 @@ SAFE_CONTINUITY_V2_MODULES = {
     "duplicate_authored_rectangle_v1": PUB_EDITOR_PREFIX + "src/duplicate_authored_rectangle_v1.rs",
     "imported_paragraph_alignment_v1": PUB_EDITOR_PREFIX + "src/imported_paragraph_alignment_v1.rs",
 }
+# Stage 3 intentionally starts with the same tiny proven-safe set. Grow this
+# only with consumer-specific negative controls.
+SAFE_TEXTBOX_RESTORE_MODULES = SAFE_CONTINUITY_V2_MODULES
+# Stage 4 starts narrower: only the real paragraph-base slice has measured
+# fixed-PDF false-positive evidence.
+SAFE_FIXED_PDF_CURRENT_REVISION_MODULES = {
+    "imported_paragraph_alignment_v1": PUB_EDITOR_PREFIX + "src/imported_paragraph_alignment_v1.rs",
+}
+# Stage 5 starts from the same measured safe paragraph slice.
+SAFE_DUPLICATE_RECTANGLE_MODULES = {
+    "imported_paragraph_alignment_v1": PUB_EDITOR_PREFIX + "src/imported_paragraph_alignment_v1.rs",
+}
 
 DIRECT_CONTINUITY_V2_OWNERS = (
     ".github/workflows/editor-desktop-continuity-v2-windows.yml",
+    "tools/ci/pub_editor_pr_fanout.py",
+    "tools/ci/test_pub_editor_pr_fanout.py",
     "apps/chaptera-desktop/src/acceptance.rs",
     "apps/chaptera-desktop/src/acceptance_v2.rs",
     "apps/chaptera-desktop/src/acceptance_v2_cli.rs",
@@ -30,6 +44,50 @@ DIRECT_CONTINUITY_V2_OWNERS = (
     "tools/verify_editable_export_geometry.py",
     "vendor/producer-a/crates/pub-odg/**",
     "crates/chaptera-scene-instance/**",
+)
+
+DIRECT_TEXTBOX_RESTORE_OWNERS = (
+    ".github/workflows/editor-desktop-textbox-restore-v1.yml",
+    "tools/ci/pub_editor_pr_fanout.py",
+    "tools/ci/test_pub_editor_pr_fanout.py",
+    "apps/chaptera-desktop/src/text_box_creation.rs",
+    "apps/chaptera-desktop/src/text_box_creation_shell.rs",
+    "apps/chaptera-desktop/src/text_box_creation_gui_tests.rs",
+    "apps/chaptera-desktop/src/text_session.rs",
+    "apps/chaptera-desktop/src/text_session_shell.rs",
+    "apps/chaptera-desktop/src/selection_keyboard_shell.rs",
+    "apps/chaptera-desktop/Cargo.toml",
+    "crates/chaptera-canvas-creation-interaction/**",
+    "crates/chaptera-desktop-fallback-font-resource/**",
+)
+
+DIRECT_FIXED_PDF_CURRENT_REVISION_OWNERS = (
+    ".github/workflows/editor-fixed-pdf-current-revision.yml",
+    "tools/ci/pub_editor_pr_fanout.py",
+    "tools/ci/test_pub_editor_pr_fanout.py",
+    "tools/run_editor_fixed_pdf_current_revision_v2.py",
+    "tools/run_editor_desktop_continuity_v2.py",
+    "tools/validate_editor_desktop_continuity_v2_receipt.py",
+    "tools/run_yab259_current_fixed_pdf_resource_request.py",
+    "tools/yab259_current_fixed_pdf_resource_request.rs",
+    "tools/run_yab259_fixed_pdf_packet_renderer.py",
+    "tools/yab259_fixed_pdf_packet_renderer.rs",
+    "tools/run_yab259_fixed_pdf_closure.py",
+    "apps/chaptera-desktop/src/acceptance_v2.rs",
+    "crates/chaptera-desktop-shaped-flow-runtime/src/bin/current_fixed_pdf_input.rs",
+    "crates/chaptera-desktop-shaped-flow-runtime/src/lib.rs",
+    "crates/chaptera-desktop-fallback-font-resource/**",
+    "vendor/producer-a/crates/pub-layout/src/shaped_flow.rs",
+)
+
+DIRECT_DUPLICATE_RECTANGLE_OWNERS = (
+    ".github/workflows/editor-duplicate-rectangle-v1.yml",
+    "tools/ci/pub_editor_pr_fanout.py",
+    "tools/ci/test_pub_editor_pr_fanout.py",
+    "vendor/producer-a/crates/pub-editor/src/duplicate_authored_rectangle_v1.rs",
+    "vendor/producer-a/crates/pub-editor/tests/duplicate_authored_rectangle_v1.rs",
+    "apps/chaptera-desktop/src/duplicate_rectangle.rs",
+    "apps/chaptera-desktop/src/duplicate_rectangle_gui_tests.rs",
 )
 
 
@@ -55,8 +113,13 @@ def matches(path: str, patterns: Iterable[str]) -> bool:
     return False
 
 
-def strip_safe_facade_blocks(source: str) -> str:
+def strip_safe_facade_blocks(
+    source: str,
+    safe_modules: dict[str, str] | None = None,
+) -> str:
     """Remove only declarations/re-exports for explicitly safe modules."""
+    if safe_modules is None:
+        safe_modules = SAFE_CONTINUITY_V2_MODULES
     lines = source.splitlines(keepends=True)
     output: list[str] = []
     index = 0
@@ -66,7 +129,7 @@ def strip_safe_facade_blocks(source: str) -> str:
         module = next(
             (
                 name
-                for name in SAFE_CONTINUITY_V2_MODULES
+                for name in safe_modules
                 if stripped == f"mod {name};"
             ),
             None,
@@ -78,7 +141,7 @@ def strip_safe_facade_blocks(source: str) -> str:
         module = next(
             (
                 name
-                for name in SAFE_CONTINUITY_V2_MODULES
+                for name in safe_modules
                 if stripped.startswith(f"pub use {name}::")
             ),
             None,
@@ -101,8 +164,15 @@ def strip_safe_facade_blocks(source: str) -> str:
     return "".join(output)
 
 
-def facade_change_is_safe(base_source: str, head_source: str) -> bool:
-    return strip_safe_facade_blocks(base_source) == strip_safe_facade_blocks(head_source)
+def facade_change_is_safe(
+    base_source: str,
+    head_source: str,
+    *,
+    safe_modules: dict[str, str] | None = None,
+) -> bool:
+    return strip_safe_facade_blocks(
+        base_source, safe_modules
+    ) == strip_safe_facade_blocks(head_source, safe_modules)
 
 
 def classify_continuity_v2_windows(
@@ -134,6 +204,105 @@ def classify_continuity_v2_windows(
     return False, "proven_non_continuity_pub_editor_slice"
 
 
+def classify_textbox_restore(
+    paths: list[str],
+    *,
+    base_lib_source: str | None = None,
+    head_lib_source: str | None = None,
+) -> tuple[bool, str]:
+    if any(matches(path, DIRECT_TEXTBOX_RESTORE_OWNERS) for path in paths):
+        return True, "direct_textbox_owner_changed"
+
+    pub_editor_paths = [
+        path for path in paths if path.startswith(PUB_EDITOR_PREFIX)
+    ]
+    if not pub_editor_paths:
+        return False, "no_textbox_owner_changed"
+
+    allowed_paths = set(SAFE_TEXTBOX_RESTORE_MODULES.values()) | {PUB_EDITOR_LIB}
+    unknown = sorted(set(pub_editor_paths) - allowed_paths)
+    if unknown:
+        return True, "unknown_or_core_pub_editor_path"
+
+    if PUB_EDITOR_LIB in pub_editor_paths:
+        if base_lib_source is None or head_lib_source is None:
+            return True, "lib_changed_without_source_proof"
+        if not facade_change_is_safe(base_lib_source, head_lib_source):
+            return True, "pub_editor_lib_core_change"
+
+    return False, "proven_non_textbox_pub_editor_slice"
+
+
+def classify_fixed_pdf_current_revision(
+    paths: list[str],
+    *,
+    base_lib_source: str | None = None,
+    head_lib_source: str | None = None,
+) -> tuple[bool, str]:
+    if any(matches(path, DIRECT_FIXED_PDF_CURRENT_REVISION_OWNERS) for path in paths):
+        return True, "direct_fixed_pdf_owner_changed"
+
+    pub_editor_paths = [
+        path for path in paths if path.startswith(PUB_EDITOR_PREFIX)
+    ]
+    if not pub_editor_paths:
+        return False, "no_fixed_pdf_owner_changed"
+
+    allowed_paths = set(SAFE_FIXED_PDF_CURRENT_REVISION_MODULES.values()) | {
+        PUB_EDITOR_LIB
+    }
+    unknown = sorted(set(pub_editor_paths) - allowed_paths)
+    if unknown:
+        return True, "unknown_or_core_pub_editor_path"
+
+    if PUB_EDITOR_LIB in pub_editor_paths:
+        if base_lib_source is None or head_lib_source is None:
+            return True, "lib_changed_without_source_proof"
+        if not facade_change_is_safe(
+            base_lib_source,
+            head_lib_source,
+            safe_modules=SAFE_FIXED_PDF_CURRENT_REVISION_MODULES,
+        ):
+            return True, "pub_editor_lib_core_change"
+
+    return False, "proven_non_fixed_pdf_pub_editor_slice"
+
+
+def classify_duplicate_rectangle(
+    paths: list[str],
+    *,
+    base_lib_source: str | None = None,
+    head_lib_source: str | None = None,
+) -> tuple[bool, str]:
+    if any(matches(path, DIRECT_DUPLICATE_RECTANGLE_OWNERS) for path in paths):
+        return True, "direct_duplicate_owner_changed"
+
+    pub_editor_paths = [
+        path for path in paths if path.startswith(PUB_EDITOR_PREFIX)
+    ]
+    if not pub_editor_paths:
+        return False, "no_duplicate_owner_changed"
+
+    allowed_paths = set(SAFE_DUPLICATE_RECTANGLE_MODULES.values()) | {
+        PUB_EDITOR_LIB
+    }
+    unknown = sorted(set(pub_editor_paths) - allowed_paths)
+    if unknown:
+        return True, "unknown_or_core_pub_editor_path"
+
+    if PUB_EDITOR_LIB in pub_editor_paths:
+        if base_lib_source is None or head_lib_source is None:
+            return True, "lib_changed_without_source_proof"
+        if not facade_change_is_safe(
+            base_lib_source,
+            head_lib_source,
+            safe_modules=SAFE_DUPLICATE_RECTANGLE_MODULES,
+        ):
+            return True, "pub_editor_lib_core_change"
+
+    return False, "proven_non_duplicate_pub_editor_slice"
+
+
 def git_show(revision: str, path: str) -> str | None:
     try:
         return subprocess.check_output(
@@ -160,6 +329,21 @@ def main() -> int:
         base_lib_source=base_lib,
         head_lib_source=head_lib,
     )
+    run_textbox, textbox_reason = classify_textbox_restore(
+        paths,
+        base_lib_source=base_lib,
+        head_lib_source=head_lib,
+    )
+    run_fixed_pdf, fixed_pdf_reason = classify_fixed_pdf_current_revision(
+        paths,
+        base_lib_source=base_lib,
+        head_lib_source=head_lib,
+    )
+    run_duplicate, duplicate_reason = classify_duplicate_rectangle(
+        paths,
+        base_lib_source=base_lib,
+        head_lib_source=head_lib,
+    )
 
     receipt = {
         "schema": "chaptera.pub-editor-pr-fanout.v1",
@@ -169,6 +353,19 @@ def main() -> int:
         "continuity_v2_windows": run_windows,
         "reason": reason,
         "safe_continuity_v2_modules": sorted(SAFE_CONTINUITY_V2_MODULES.values()),
+        "textbox_restore": run_textbox,
+        "textbox_reason": textbox_reason,
+        "safe_textbox_restore_modules": sorted(SAFE_TEXTBOX_RESTORE_MODULES.values()),
+        "fixed_pdf_current_revision": run_fixed_pdf,
+        "fixed_pdf_reason": fixed_pdf_reason,
+        "safe_fixed_pdf_current_revision_modules": sorted(
+            SAFE_FIXED_PDF_CURRENT_REVISION_MODULES.values()
+        ),
+        "duplicate_rectangle": run_duplicate,
+        "duplicate_reason": duplicate_reason,
+        "safe_duplicate_rectangle_modules": sorted(
+            SAFE_DUPLICATE_RECTANGLE_MODULES.values()
+        ),
     }
 
     payload = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
@@ -182,6 +379,16 @@ def main() -> int:
         with args.github_output.open("a", encoding="utf-8") as handle:
             handle.write(f"continuity_v2_windows={'true' if run_windows else 'false'}\n")
             handle.write(f"reason={reason}\n")
+            handle.write(f"textbox_restore={'true' if run_textbox else 'false'}\n")
+            handle.write(f"textbox_reason={textbox_reason}\n")
+            handle.write(
+                f"fixed_pdf_current_revision={'true' if run_fixed_pdf else 'false'}\n"
+            )
+            handle.write(f"fixed_pdf_reason={fixed_pdf_reason}\n")
+            handle.write(
+                f"duplicate_rectangle={'true' if run_duplicate else 'false'}\n"
+            )
+            handle.write(f"duplicate_reason={duplicate_reason}\n")
 
     return 0
 

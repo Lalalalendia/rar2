@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - ".github/workflows/pub-editor-selective-fanout-contract.yml"
+      - ".github/workflows/editor-desktop-continuity-v2-windows.yml"
+      - ".github/workflows/editor-desktop-textbox-restore-v1.yml"
+      - ".github/workflows/editor-fixed-pdf-current-revision.yml"
+      - ".github/workflows/editor-duplicate-rectangle-v1.yml"
       - "tools/ci/pub_editor_pr_fanout.py"
       - "tools/ci/test_pub_editor_pr_fanout.py"
   workflow_dispatch:

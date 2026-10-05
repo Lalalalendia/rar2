@@ -28,10 +28,10 @@ mod page_navigation_gui_tests;
 mod product_smoke;
 mod reader_product_cli;
 mod reader_product_ui;
-#[cfg(test)]
-mod reader_visual_golden_tests;
 mod reader_salvage;
 mod reader_update_control;
+#[cfg(test)]
+mod reader_visual_golden_tests;
 mod rectangle_creation;
 mod rectangle_creation_shell;
 mod render_backend;

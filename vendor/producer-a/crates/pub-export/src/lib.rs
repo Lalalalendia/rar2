@@ -26,7 +26,7 @@ pub use report::{
     ExportReportItem, ExportReportSource, build_export_report, render_human_summary,
 };
 
-use pub_model::{CanonicalId, LengthEmu, StoryId};
+use pub_model::{CanonicalId, LengthEmu, ParagraphId, StoryId, TextRange};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -93,6 +93,43 @@ pub struct FullStoryTypographyV1 {
     pub story_id: StoryId,
     pub font_family: String,
     pub font_size_emu: LengthEmu,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParagraphAlignmentV1 {
+    Center,
+    Right,
+}
+
+/// Bounded physical-writer authority for one Story whose current effective
+/// ParagraphId alignment is completely known, uniform and representable by
+/// the existing full-Story Center/Right target wires.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FullStoryParagraphAlignmentV1 {
+    pub story_id: StoryId,
+    pub alignment: ParagraphAlignmentV1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParagraphScopedAlignmentValueV1 {
+    Left,
+    Center,
+    Right,
+}
+
+/// Target-neutral physical-writer authority for one canonical ParagraphId.
+///
+/// The range is the current Story-global Unicode-scalar paragraph range and
+/// remains the ordering/binding authority. Target adapters must not infer
+/// paragraph identity from raw delimiter splitting alone.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ParagraphScopedAlignmentV1 {
+    pub story_id: StoryId,
+    pub paragraph_id: ParagraphId,
+    pub range: TextRange,
+    pub alignment: ParagraphScopedAlignmentValueV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

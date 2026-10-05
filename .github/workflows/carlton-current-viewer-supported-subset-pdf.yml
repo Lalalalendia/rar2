@@ -250,8 +250,18 @@ jobs:
 
           packet_nodes = [node["node_id"] for page in packet["pages"] for node in page["nodes"]]
           request_nodes = [node["origin"] for node in request["scene"]["nodes"]]
-          if packet_nodes != request_nodes:
-              raise SystemExit("product node paint order changed before renderer")
+          origin_mapping = request["scene"].get("origin_mapping", [])
+          mapped_authoring_nodes = [entry["authoring_origin"] for entry in origin_mapping]
+          mapped_resolved_nodes = [entry["resolved_node_origin"] for entry in origin_mapping]
+
+          if packet_nodes != mapped_authoring_nodes:
+              raise SystemExit("product authoring-node paint order changed before renderer")
+          if request_nodes != mapped_resolved_nodes:
+              raise SystemExit("resolved output node order differs from scene origin mapping")
+          if len(request_nodes) != len(set(request_nodes)):
+              raise SystemExit("resolved output NodeIds must remain unique")
+          if len(request_nodes) != len(packet_nodes):
+              raise SystemExit("node cardinality changed before renderer")
 
           binding_pages = packet["binding"].get("page_ids")
           if binding_pages != packet_pages:
@@ -304,10 +314,23 @@ jobs:
           def sha(path):
               return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
+          packet = json.loads(Path(os.environ["CHAPTERA_CURRENT_VIEWER_PACKET"]).read_text(encoding="utf-8"))
           mapping_receipt = json.loads(Path(os.environ["CHAPTERA_SUPPORTED_MAPPING"]).read_text(encoding="utf-8"))
           renderer_receipt = json.loads(Path(os.environ["CHAPTERA_SUPPORTED_RENDERER"]).read_text(encoding="utf-8"))
           diff = json.loads(Path(os.environ["CHAPTERA_SUPPORTED_DIFF"]).read_text(encoding="utf-8"))
           mapping = mapping_receipt["mapping"]
+          viewer_census = packet["census"]
+
+          if viewer_census["backend_fallback_reason_counts"].get("shared_layout_incomplete") != 12:
+              raise SystemExit(f"SharedLayoutIncomplete census drift: {viewer_census['backend_fallback_reason_counts']!r}")
+          if sum(viewer_census["shared_layout_incomplete_spacing_authority_counts"].values()) != 12:
+              raise SystemExit("spacing-authority partition does not cover every SharedLayoutIncomplete node")
+          if sum(viewer_census["shared_layout_incomplete_family_authority_counts"].values()) != 12:
+              raise SystemExit("family-authority partition does not cover every SharedLayoutIncomplete node")
+          if sum(viewer_census["shared_layout_incomplete_font_binding_counts"].values()) != 12:
+              raise SystemExit("font-binding partition does not cover every SharedLayoutIncomplete node")
+          if sum(viewer_census["shared_layout_incomplete_spacing_family_binding_counts"].values()) != 12:
+              raise SystemExit("spacing/family/binding cross-tab does not cover every SharedLayoutIncomplete node")
 
           expected_fallback = {
               "shared_layout_incomplete": 12,
@@ -319,8 +342,10 @@ jobs:
               raise SystemExit("cropped-image residual drift")
           if mapping["table_node_count"] != 1:
               raise SystemExit("table residual drift")
-          if mapping["input_page_count"] != 3 or mapping["input_node_count"] != 102:
+          if mapping["input_page_count"] != 3 or mapping["input_node_count"] != 108:
               raise SystemExit("Carlton supported-subset input census drift")
+          if mapping.get("semantic_duplicate_node_id_count") != 2:
+              raise SystemExit("Carlton semantic duplicate-node census drift")
 
           summary = renderer_receipt["renderer_result"]["summary"]
           if summary["page_count"] != 3:
@@ -339,6 +364,7 @@ jobs:
               "packet_sha256": sha(os.environ["CHAPTERA_CURRENT_VIEWER_PACKET"]),
               "pdf_sha256": sha(os.environ["CHAPTERA_SUPPORTED_PDF"]),
               "pdf_bytes": Path(os.environ["CHAPTERA_SUPPORTED_PDF"]).stat().st_size,
+              "viewer_packet_census": viewer_census,
               "mapping": mapping,
               "renderer_summary": summary,
               "page_significant_fractions": [page["diff"]["significant_fraction"] for page in diff["pages"]],

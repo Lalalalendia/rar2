@@ -11,13 +11,33 @@ assert spec and spec.loader
 spec.loader.exec_module(mod)
 
 
-def assert_scope(paths, *, evidence_only_paths=None, **expected):
-    actual = mod.classify(paths, evidence_only_paths)
+def assert_scope(paths, *, evidence_only_paths=None, visual_neutral_paths=None, **expected):
+    actual = mod.classify(paths, evidence_only_paths, visual_neutral_paths=visual_neutral_paths)
     for key, value in expected.items():
         assert actual[key] is value, (paths, key, actual)
 
 
 def main():
+    production = 'fn paint() { draw(1); }\n'
+    comment_only = '// bounded neutral control\n' + production
+    assert mod.desktop_main_visual_change_is_neutral(production, comment_only)
+    assert not mod.desktop_main_visual_change_is_neutral(production, production.replace('draw(1)', 'draw(2)'))
+    assert not mod.desktop_main_visual_change_is_neutral(production, '/// documentation\n' + production)
+    for literal in (
+        'const TEXT: &str = r##"\n// visible text\n"##;\n',
+        'const TEXT: &str = br#"\n// visible text\n"#;\n',
+        'const TEXT: &str = cr#"\n// visible text\n"#;\n',
+        'const TEXT: &str = "\n// visible text\n";\n',
+        '/* outer /* nested */\n// retained block content\n*/\n',
+    ):
+        assert not mod.desktop_main_visual_change_is_neutral(literal, literal.replace('//', '// changed'))
+        assert mod.desktop_main_visual_change_is_neutral(literal, '// neutral\n' + literal)
+    for malformed in ('r#"unterminated\n// text\n', '"unterminated\n// text\n', '/* unterminated\n// text\n'):
+        assert not mod.desktop_main_visual_change_is_neutral(malformed, '// neutral\n' + malformed)
+    chars_and_lifetimes = "fn f<'a>(x: &'a str) { let slash = '/'; let quote = '\\''; }\n"
+    assert mod.desktop_main_visual_change_is_neutral(chars_and_lifetimes, '// neutral\n' + chars_and_lifetimes)
+    assert not mod.desktop_main_visual_change_is_neutral(chars_and_lifetimes, chars_and_lifetimes.replace("'/'", "'*'"))
+
     base_source = """fn production() {}
 
 #[cfg(test)]
@@ -292,9 +312,29 @@ fn main() -> eframe::Result<()> {
         reader_windows_smoke=True,
         reader_windows=False,
         editor_windows=False,
+        visual_oracle=True,
+        typography_golden=True,
+        update_accept=False,
+    )
+    assert_scope(
+        [mod.DESKTOP_MAIN],
+        visual_neutral_paths={mod.DESKTOP_MAIN},
+        tier_a=True,
+        reader_windows_smoke=True,
         visual_oracle=False,
         typography_golden=False,
-        update_accept=False,
+    )
+    assert_scope(
+        [mod.DESKTOP_MAIN, "apps/chaptera-desktop/src/render_backend.rs"],
+        visual_neutral_paths={mod.DESKTOP_MAIN},
+        visual_oracle=True,
+        typography_golden=True,
+    )
+    assert_scope(
+        [mod.DESKTOP_MAIN, "apps/chaptera-desktop/src/reader_visual_golden_tests.rs"],
+        visual_neutral_paths={mod.DESKTOP_MAIN},
+        visual_oracle=True,
+        typography_golden=True,
     )
     assert_scope(
         ["apps/chaptera-desktop/src/reader_visual_golden_tests.rs"],
@@ -333,8 +373,8 @@ fn main() -> eframe::Result<()> {
         reader_windows_smoke=True,
         reader_windows=False,
         editor_windows=True,
-        visual_oracle=False,
-        typography_golden=False,
+        visual_oracle=True,
+        typography_golden=True,
         update_accept=False,
     )
     assert_scope(

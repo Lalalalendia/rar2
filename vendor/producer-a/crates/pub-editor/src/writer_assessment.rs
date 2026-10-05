@@ -142,7 +142,9 @@ impl EditorSession {
                 | EditOperation::DeleteNode { .. }
                 | EditOperation::ReorderAuthoredStack { .. }
                 | EditOperation::SetTextFormatProperty { .. }
-                | EditOperation::ClearTextFormatPropertyOverride { .. } => {}
+                | EditOperation::ClearTextFormatPropertyOverride { .. }
+                | EditOperation::SetParagraphAlignmentOverride { .. }
+                | EditOperation::ClearParagraphAlignmentOverride { .. } => {}
             }
         }
 
@@ -240,7 +242,9 @@ impl EditorSession {
                 | EditOperation::DeleteNode { .. }
                 | EditOperation::ReorderAuthoredStack { .. }
                 | EditOperation::SetTextFormatProperty { .. }
-                | EditOperation::ClearTextFormatPropertyOverride { .. } => {
+                | EditOperation::ClearTextFormatPropertyOverride { .. }
+                | EditOperation::SetParagraphAlignmentOverride { .. }
+                | EditOperation::ClearParagraphAlignmentOverride { .. } => {
                     requirements.extend(operation.persistence_requirements());
                 }
             }

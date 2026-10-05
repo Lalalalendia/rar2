@@ -20,7 +20,10 @@ use chaptera_layout_projection::{
     CarrierExtentV1, CmoStorySlotFlowInputV1, resolve_cmo_slot_flow_v1,
 };
 #[cfg(feature = "cmo-slot-compose")]
-use chaptera_scene_instance::{SceneInstanceV1, SceneProjectionKindV1, cmo_story_slot_instance_v1};
+use chaptera_scene_instance::{
+    SceneInstanceV1, SceneProjectionKindV1, cmo_story_slot_instance_v1,
+    inherited_master_instance_v1,
+};
 use pub_layout::{
     BoundedAuthoringSlice, BoundedLayoutProjection, BoundedNodeGeometryInput, BoundedTableInput,
     BoundedTextFlowEnvironment, BoundedTextMetrics, BoundedUniformTableMetrics,
@@ -61,8 +64,6 @@ use pub_presentation_profile::{
 };
 #[cfg(test)]
 use pub_reader::LegacyOleCachedPresentation;
-#[cfg(feature = "cmo-slot-compose")]
-use pub_reader::build_mature_0x2c_cmo_projection_bridge_v1;
 pub use pub_reader::{
     CHAPTERA_EXACT_FILE_CONSENT_V1, CHAPTERA_INTAKE_RETENTION_POLICY_V1, FailureIntakeClass,
     FailureIntakeClassification, FailureIntakeConfidence, FailureIntakeReason,
@@ -80,16 +81,20 @@ use pub_reader::{
     FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
     LegacyOleCachedPresentationSelection, MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
     PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
-    PubExplicitImageCropSource, PubParagraphAlignment, PubResolveDiagnostic, PubResolvedGraph,
-    PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
-    PubSourceGraphBuild, PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
-    analyze_legacy_0x22_page_roles, analyze_mature_0x2c_page_roles, build_failure_envelope,
-    build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
-    build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
-    build_mature_0x2c_wmf_preview_bundle_from_bytes, derive_pub_page_id,
-    materialize_bounded_table_cells, rasterize_wmf_preview, read_legacy_0x22_image_wmfs,
-    resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
+    PubExplicitImageCropSource, PubParagraphAlignment, PubParagraphLineSpacing,
+    PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild, PubResolvedNodePayload,
+    PubScriptFontEntryDisposition, PubSourceGraphBuild, PubSourcePagePaintOrderV1,
+    PubTextFrameVerticalAlignment, WmfPreviewRgba, analyze_legacy_0x22_page_roles,
+    analyze_mature_0x2c_page_roles, build_failure_envelope, build_legacy_0x22_noquill_source_graph,
+    build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
+    build_mature_0x2c_source_graph, build_mature_0x2c_wmf_preview_bundle_from_bytes,
+    derive_pub_page_id, materialize_bounded_table_cells, rasterize_wmf_preview,
+    read_legacy_0x22_image_wmfs, resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
     select_unambiguous_legacy_ole_cached_presentation,
+};
+#[cfg(feature = "cmo-slot-compose")]
+use pub_reader::{
+    build_mature_0x2c_cmo_projection_bridge_v1, build_mature_0x2c_master_projection_bridge_v1,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -222,7 +227,8 @@ pub struct ViewerProjectedSceneInstanceV1 {
     /// Canonical visual identity/projection semantics from chaptera-scene-instance.
     pub scene_instance: SceneInstanceV1,
     /// Paint placement metadata only; not an identity authority.
-    pub target_frame_node_id: NodeId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_frame_node_id: Option<NodeId>,
     /// Story-global direct-paint cutoff from native Cmo slot-flow.
     /// Scalars at or after this authoritative first-nonfitting boundary remain
     /// canonical source text but are overset and must not paint in the target frame.
@@ -251,6 +257,8 @@ pub struct ViewerGeometryDocument {
     pub typography_runs: Vec<ViewerTypographyRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_alignments: Vec<ViewerParagraphAlignmentRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paragraph_line_spacings: Vec<ViewerParagraphLineSpacingRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub script_font_maps: Vec<ViewerScriptFontMap>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -287,6 +295,17 @@ struct ViewerSourcePaintOrderApplicationStatsV1 {
 /// covered by ViewerPagePaintOrderV1. Nodes outside that bounded authority keep
 /// their exact slots, so no relative ordering is invented for projected,
 /// inherited, grouped, or otherwise unsupported classes.
+#[cfg(feature = "cmo-slot-compose")]
+fn retain_viewer_paints_for_admitted_origins_v1(
+    paints: &mut Vec<ViewerNodePaint>,
+    direct_scene_origins: &BTreeSet<NodeId>,
+    projected_origins: &BTreeSet<NodeId>,
+) {
+    paints.retain(|paint| {
+        direct_scene_origins.contains(&paint.node_id) || projected_origins.contains(&paint.node_id)
+    });
+}
+
 fn apply_known_source_page_paint_orders_to_scene_nodes_v1(
     nodes: &mut [ResolvedPhysicalNode],
     source_orders: &[ViewerPagePaintOrderV1],
@@ -987,6 +1006,29 @@ pub struct ViewerParagraphAlignmentRun {
 }
 
 impl ViewerParagraphAlignmentRun {
+    pub fn applies_to_story_text(&self, text: &str) -> bool {
+        self.source_story_text_sha256 == viewer_story_text_sha256(text)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ViewerParagraphLineSpacing {
+    Proportional { point_equivalent_emu: u32 },
+    Absolute { spacing_emu: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerParagraphLineSpacingRun {
+    pub story_id: StoryId,
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub line_spacing: ViewerParagraphLineSpacing,
+    pub source_value: Option<u32>,
+    pub source_story_text_sha256: Sha256Digest,
+}
+
+impl ViewerParagraphLineSpacingRun {
     pub fn applies_to_story_text(&self, text: &str) -> bool {
         self.source_story_text_sha256 == viewer_story_text_sha256(text)
     }
@@ -2172,6 +2214,7 @@ fn open_legacy_0x22_noquill_bundle(
         text_fragments,
         typography_runs: Vec::new(),
         paragraph_alignments: Vec::new(),
+        paragraph_line_spacings: Vec::new(),
         script_font_maps: Vec::new(),
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
@@ -2301,6 +2344,7 @@ fn open_legacy_0x22_quill_bundle(
         text_fragments,
         typography_runs: Vec::new(),
         paragraph_alignments: Vec::new(),
+        paragraph_line_spacings: Vec::new(),
         script_font_maps: Vec::new(),
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
@@ -2478,6 +2522,33 @@ fn open_mature_0x2c_bundle(
             ),
         });
     }
+
+    let paragraph_line_spacings = pipeline
+        .source
+        .paragraph_line_spacings
+        .iter()
+        .filter_map(|run| {
+            let story = pipeline.resolved.graph.stories.get(&run.story_id)?;
+            let line_spacing = match run.line_spacing {
+                PubParagraphLineSpacing::Proportional {
+                    point_equivalent_emu,
+                } => ViewerParagraphLineSpacing::Proportional {
+                    point_equivalent_emu,
+                },
+                PubParagraphLineSpacing::Absolute { spacing_emu } => {
+                    ViewerParagraphLineSpacing::Absolute { spacing_emu }
+                }
+            };
+            Some(ViewerParagraphLineSpacingRun {
+                story_id: run.story_id,
+                scalar_start: run.story_scalar_start,
+                scalar_end: run.story_scalar_end,
+                line_spacing,
+                source_value: run.source_value,
+                source_story_text_sha256: viewer_story_text_sha256(&story.text),
+            })
+        })
+        .collect::<Vec<_>>();
 
     let script_font_maps = pipeline
         .source
@@ -2660,10 +2731,75 @@ fn open_mature_0x2c_bundle(
     ));
 
     let selected_pages = effective_page_ids.iter().copied().collect::<BTreeSet<_>>();
-    let image_admission =
-        retain_viewer_image_uses_for_selected_pages_v1(&mut images, &selected_pages, |node_id| {
-            resolved_page_for_node_v1(&pipeline.resolved.graph, node_id)
-        });
+
+    #[cfg(feature = "cmo-slot-compose")]
+    let mut story_frames = story_frames;
+    #[cfg(feature = "cmo-slot-compose")]
+    let mut text_fragments = text_fragments;
+    #[cfg(feature = "cmo-slot-compose")]
+    let mut tables = tables;
+
+    #[cfg(feature = "cmo-slot-compose")]
+    let master_projection = match project_mature_inherited_master_instances_v1(
+        bytes,
+        &pipeline,
+        &selected_pages,
+        scene.environment.clone(),
+    ) {
+        Ok(bundle) => {
+            if !bundle.projected_instances.is_empty() {
+                document.diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.master.projection_applied".to_owned(),
+                    severity: ViewerDiagnosticSeverity::Info,
+                    message: format!(
+                        "{} canonical read-only InheritedMaster SceneInstanceV1 projection(s) admitted.",
+                        bundle.projected_instances.len()
+                    ),
+                });
+            }
+            bundle
+        }
+        Err(error) => {
+            document.diagnostics.push(ViewerDiagnostic {
+                code: "viewer.master.projection_unavailable".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message: format!(
+                    "Canonical InheritedMaster projection rejected ({error}); source truth preserved."
+                ),
+            });
+            ViewerMasterProjectionBundleV1 {
+                projected_instances: Vec::new(),
+                master_page_ids: BTreeSet::new(),
+                story_frames: Vec::new(),
+                text_fragments: Vec::new(),
+                tables: Vec::new(),
+                diagnostics: Vec::new(),
+            }
+        }
+    };
+    #[cfg(feature = "cmo-slot-compose")]
+    {
+        document
+            .diagnostics
+            .extend(master_projection.diagnostics.clone());
+        story_frames.extend(master_projection.story_frames.clone());
+        text_fragments.extend(master_projection.text_fragments.clone());
+        tables.extend(master_projection.tables.clone());
+    }
+
+    #[cfg(feature = "cmo-slot-compose")]
+    let image_admitted_pages = selected_pages
+        .union(&master_projection.master_page_ids)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    #[cfg(not(feature = "cmo-slot-compose"))]
+    let image_admitted_pages = selected_pages.clone();
+
+    let image_admission = retain_viewer_image_uses_for_selected_pages_v1(
+        &mut images,
+        &image_admitted_pages,
+        |node_id| resolved_page_for_node_v1(&pipeline.resolved.graph, node_id),
+    );
     if image_admission.dropped_node_uses > 0
         || image_admission.dropped_placements > 0
         || image_admission.dropped_resources > 0
@@ -2681,7 +2817,11 @@ fn open_mature_0x2c_bundle(
     }
 
     #[cfg(feature = "cmo-slot-compose")]
-    let projected_instances = match project_carlton_march_cmo_instances(bytes, &pipeline, &scene) {
+    let mut projected_instances = master_projection.projected_instances.clone();
+    #[cfg(feature = "cmo-slot-compose")]
+    let cmo_projected_instances = match project_carlton_march_cmo_instances(
+        bytes, &pipeline, &scene,
+    ) {
         Ok(instances) => {
             if !instances.is_empty() {
                 document.diagnostics.push(ViewerDiagnostic {
@@ -2706,6 +2846,35 @@ fn open_mature_0x2c_bundle(
             Vec::new()
         }
     };
+    #[cfg(feature = "cmo-slot-compose")]
+    projected_instances.extend(cmo_projected_instances);
+
+    #[cfg(feature = "cmo-slot-compose")]
+    let mut paints = paints;
+    #[cfg(feature = "cmo-slot-compose")]
+    {
+        let direct_scene_origins = scene
+            .nodes
+            .iter()
+            .map(|node| node.origin)
+            .collect::<BTreeSet<_>>();
+        let projected_origins = projected_instances
+            .iter()
+            .filter_map(|projected| {
+                projected
+                    .scene_instance
+                    .origin_node_id
+                    .parse::<CanonicalId>()
+                    .ok()
+                    .map(NodeId::from_canonical)
+            })
+            .collect::<BTreeSet<_>>();
+        retain_viewer_paints_for_admitted_origins_v1(
+            &mut paints,
+            &direct_scene_origins,
+            &projected_origins,
+        );
+    }
 
     let source_page_paint_orders = pipeline
         .source
@@ -2757,6 +2926,7 @@ fn open_mature_0x2c_bundle(
         text_fragments,
         typography_runs,
         paragraph_alignments,
+        paragraph_line_spacings,
         script_font_maps,
         tables,
         #[cfg(feature = "cmo-slot-compose")]
@@ -3848,6 +4018,185 @@ fn page_for_resolved_node(graph: &PubResolvedGraph, node_id: NodeId) -> Result<P
 }
 
 #[cfg(feature = "cmo-slot-compose")]
+#[derive(Debug)]
+struct ViewerMasterProjectionBundleV1 {
+    projected_instances: Vec<ViewerProjectedSceneInstanceV1>,
+    master_page_ids: BTreeSet<PageId>,
+    story_frames: Vec<ViewerStoryFrame>,
+    text_fragments: Vec<ViewerTextFragment>,
+    tables: Vec<ViewerTable>,
+    diagnostics: Vec<ViewerDiagnostic>,
+}
+
+#[cfg(feature = "cmo-slot-compose")]
+fn project_mature_inherited_master_instances_v1(
+    bytes: &[u8],
+    pipeline: &Mature0x2cPipeline,
+    selected_pages: &BTreeSet<PageId>,
+    environment: BoundedLayoutEnvironment,
+) -> Result<ViewerMasterProjectionBundleV1> {
+    let bridge = build_mature_0x2c_master_projection_bridge_v1(
+        bytes,
+        pipeline.source_hash,
+        &pipeline.source.graph,
+    )
+    .context("build active Reader master projection authority bridge")?;
+    if !bridge.active_graph_identity_parity {
+        return Err(anyhow!(
+            "active Reader master bridge did not prove identity parity"
+        ));
+    }
+
+    let relations = bridge
+        .output
+        .context
+        .master_relations
+        .iter()
+        .filter_map(|relation| {
+            let source_page = relation.source_page_id.parse::<CanonicalId>().ok()?;
+            let source_page = PageId::from_canonical(source_page);
+            selected_pages
+                .contains(&source_page)
+                .then_some(relation.clone())
+        })
+        .collect::<Vec<_>>();
+    if relations.is_empty() {
+        return Ok(ViewerMasterProjectionBundleV1 {
+            projected_instances: Vec::new(),
+            master_page_ids: BTreeSet::new(),
+            story_frames: Vec::new(),
+            text_fragments: Vec::new(),
+            tables: Vec::new(),
+            diagnostics: Vec::new(),
+        });
+    }
+
+    let master_page_ids = relations
+        .iter()
+        .map(|relation| {
+            relation
+                .master_page_id
+                .parse::<CanonicalId>()
+                .map(PageId::from_canonical)
+                .context("master relation PAGE identity is not canonical")
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    let master_pages = master_page_ids.iter().copied().collect::<Vec<_>>();
+
+    let authoring =
+        bounded_authoring_slice_from_resolved_pages(&pipeline.resolved.graph, &master_pages)?;
+    let projection = project_bounded(authoring);
+    let mut diagnostics = projection
+        .diagnostics
+        .iter()
+        .map(map_projection_diagnostic)
+        .collect::<Vec<_>>();
+    let mut master_scene =
+        resolve_bounded_geometry(&projection, environment).map_err(|blocked| {
+            let codes = blocked
+                .projection_errors
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow!(
+                "master Viewer geometry resolution blocked by layout projection errors: {codes}"
+            )
+        })?;
+    diagnostics.extend(
+        master_scene
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code != "story_text_layout_not_implemented")
+            .map(map_scene_diagnostic),
+    );
+
+    let master_orders = pipeline
+        .source
+        .source_page_paint_orders
+        .iter()
+        .filter(|order| master_page_ids.contains(&order.page_id))
+        .map(viewer_page_paint_order_from_source)
+        .collect::<Vec<_>>();
+    apply_known_source_page_paint_orders_to_scene_nodes_v1(&mut master_scene.nodes, &master_orders);
+
+    let story_frames = projection
+        .story_frames
+        .iter()
+        .map(|frame| viewer_story_frame_from_projection(frame, &pipeline.resolved.graph))
+        .collect::<Vec<_>>();
+    let (text_fragments, text_diagnostics) = resolve_viewer_text_fragments(&projection)?;
+    diagnostics.extend(text_diagnostics.iter().map(map_scene_diagnostic));
+    let (tables, table_diagnostics) =
+        viewer_tables_from_resolved(&pipeline.resolved.graph, &projection);
+    diagnostics.extend(table_diagnostics);
+
+    let story_frame_by_node = story_frames
+        .iter()
+        .map(|frame| (frame.frame_id, frame))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut projected_instances = Vec::new();
+    for relation in &relations {
+        let source_page = relation
+            .source_page_id
+            .parse::<CanonicalId>()
+            .map(PageId::from_canonical)
+            .context("master relation source PAGE identity is not canonical")?;
+        let master_page = relation
+            .master_page_id
+            .parse::<CanonicalId>()
+            .map(PageId::from_canonical)
+            .context("master relation target PAGE identity is not canonical")?;
+
+        for node in master_scene
+            .nodes
+            .iter()
+            .filter(|node| node.parent_origin == master_page.into_canonical())
+        {
+            let origin_node_id = node.origin;
+            let scene_instance = inherited_master_instance_v1(
+                &origin_node_id.as_canonical().to_string(),
+                &master_page.as_canonical().to_string(),
+                &source_page.as_canonical().to_string(),
+                relation,
+            )
+            .context("materialize inherited-master SceneInstanceV1")?;
+            let story_authority_id = pipeline
+                .resolved
+                .graph
+                .nodes
+                .get(&origin_node_id)
+                .and_then(|resolved| resolved.payload.story_frame.as_ref())
+                .and_then(|frame| frame.story_id)
+                .map(|story_id| story_id.as_canonical().to_string());
+            let mut scene_instance = scene_instance;
+            scene_instance.story_authority_id = story_authority_id;
+
+            projected_instances.push(ViewerProjectedSceneInstanceV1 {
+                scene_instance,
+                target_frame_node_id: None,
+                target_frame_paint_scalar_end: None,
+                text_content_bounds: story_frame_by_node
+                    .get(&origin_node_id)
+                    .and_then(|frame| frame.text_content_bounds),
+                bounds: node.bounds,
+                transform: node.transform.clone(),
+            });
+        }
+    }
+
+    Ok(ViewerMasterProjectionBundleV1 {
+        projected_instances,
+        master_page_ids,
+        story_frames,
+        text_fragments,
+        tables,
+        diagnostics,
+    })
+}
+
+#[cfg(feature = "cmo-slot-compose")]
 fn project_carlton_march_cmo_instances(
     bytes: &[u8],
     pipeline: &Mature0x2cPipeline,
@@ -4171,7 +4520,7 @@ fn project_carlton_march_cmo_instances(
 
             projected.push(ViewerProjectedSceneInstanceV1 {
                 scene_instance,
-                target_frame_node_id,
+                target_frame_node_id: Some(target_frame_node_id),
                 target_frame_paint_scalar_end,
                 bounds,
                 text_content_bounds,
@@ -4273,6 +4622,43 @@ mod tests {
     };
     use pub_reader::{PubResolvedNodePayload, PubResolvedStoryFrame};
     use std::collections::BTreeMap;
+
+    #[cfg(feature = "cmo-slot-compose")]
+    #[test]
+    fn paint_admission_keeps_only_direct_or_projected_origins() {
+        let direct = NodeId::from_canonical(CanonicalId::from_bytes([0x11; 16]));
+        let projected = NodeId::from_canonical(CanonicalId::from_bytes([0x22; 16]));
+        let excluded = NodeId::from_canonical(CanonicalId::from_bytes([0x33; 16]));
+        let mut paints = vec![
+            ViewerNodePaint {
+                node_id: direct,
+                preset_shape: None,
+                solid_fill_rgb: Some([1, 2, 3]),
+                solid_line: None,
+            },
+            ViewerNodePaint {
+                node_id: projected,
+                preset_shape: None,
+                solid_fill_rgb: Some([4, 5, 6]),
+                solid_line: None,
+            },
+            ViewerNodePaint {
+                node_id: excluded,
+                preset_shape: None,
+                solid_fill_rgb: Some([7, 8, 9]),
+                solid_line: None,
+            },
+        ];
+        retain_viewer_paints_for_admitted_origins_v1(
+            &mut paints,
+            &BTreeSet::from([direct]),
+            &BTreeSet::from([projected]),
+        );
+        assert_eq!(
+            paints.iter().map(|paint| paint.node_id).collect::<Vec<_>>(),
+            vec![direct, projected]
+        );
+    }
 
     #[test]
     fn local_failure_report_exposes_structural_class_without_source_content() {
@@ -5081,6 +5467,7 @@ mod tests {
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -5240,6 +5627,7 @@ mod tests {
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -5696,6 +6084,7 @@ mod tests {
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -5807,6 +6196,7 @@ mod tests {
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -5877,6 +6267,7 @@ mod tests {
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
