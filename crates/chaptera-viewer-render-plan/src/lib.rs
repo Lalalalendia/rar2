@@ -1997,7 +1997,6 @@ fn resolved_uniform_line_height_emu_v1(
     )
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SharedLayoutIncompleteCauseV1 {
     pub path: &'static str,
@@ -2058,21 +2057,17 @@ pub fn classify_shared_layout_incomplete_cause_v1(
         };
     };
 
-    let frame_ordinal = match admitted_layout_frame_ordinal(
-        visual,
-        fragment.story_id,
-        node.node_id,
-        None,
-    ) {
-        Ok(value) => value,
-        Err(_) => {
-            return SharedLayoutIncompleteCauseV1 {
-                path: "uniform_path",
-                consumption: "unknown",
-                cause: "frame_fail_closed",
-            };
-        }
-    };
+    let frame_ordinal =
+        match admitted_layout_frame_ordinal(visual, fragment.story_id, node.node_id, None) {
+            Ok(value) => value,
+            Err(_) => {
+                return SharedLayoutIncompleteCauseV1 {
+                    path: "uniform_path",
+                    consumption: "unknown",
+                    cause: "frame_fail_closed",
+                };
+            }
+        };
 
     let bounds = node.text_bounds.unwrap_or(node.bounds);
     if bounds.width.get() <= 0 || bounds.height.get() <= 0 {
