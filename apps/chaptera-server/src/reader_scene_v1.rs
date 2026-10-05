@@ -2499,7 +2499,9 @@ mod tests {
                     if let RenderTextLayoutDispositionV1::BackendFallback { reason } =
                         layout.disposition
                     {
-                        *configured_backend_fallbacks.entry(reason.code()).or_default() += 1;
+                        *configured_backend_fallbacks
+                            .entry(reason.code())
+                            .or_default() += 1;
                     }
                 }
             }

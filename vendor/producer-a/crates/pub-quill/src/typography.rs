@@ -3802,9 +3802,7 @@ mod tests {
             })
         );
         assert_eq!(
-            decode_explicit_paragraph_line_spacing(
-                PUBLISHER_DEFAULT_PARAGRAPH_LINE_SPACING_RAW_V1,
-            ),
+            decode_explicit_paragraph_line_spacing(PUBLISHER_DEFAULT_PARAGRAPH_LINE_SPACING_RAW_V1,),
             Some(QuillParagraphLineSpacing::Proportional {
                 point_equivalent_emu: 181_356,
             })
@@ -3919,9 +3917,7 @@ mod tests {
         );
 
         let raw = 1_219_202_u32.to_le_bytes();
-        let explicit_bytes = [
-            10, 0, 0, 0, 0x34, 0x22, raw[0], raw[1], raw[2], raw[3],
-        ];
+        let explicit_bytes = [10, 0, 0, 0, 0x34, 0x22, raw[0], raw[1], raw[2], raw[3]];
         let mut explicit_range = base_range.clone();
         explicit_range.style_source = RawSpan {
             stream,

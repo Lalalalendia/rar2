@@ -18,6 +18,7 @@ pub-viewer = { path = "../../vendor/producer-a/crates/pub-viewer" }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
+chaptera-desktop-fallback-font-resource = { path = "../chaptera-desktop-fallback-font-resource" }
 font-test-data = "=0.8.0"
 serde_json = "1"
 
