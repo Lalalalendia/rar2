@@ -1077,6 +1077,21 @@ fn resolved_vertical_offset_emu_v1(
     }
 }
 
+fn uniform_laid_out_height_emu_v1(
+    first_line_extent_emu: i64,
+    baseline_advance_emu: i64,
+    line_count: usize,
+) -> Option<i64> {
+    if line_count == 0 {
+        return Some(0);
+    }
+    if first_line_extent_emu <= 0 || baseline_advance_emu <= 0 {
+        return None;
+    }
+    let subsequent_count = i64::try_from(line_count.checked_sub(1)?).ok()?;
+    first_line_extent_emu.checked_add(subsequent_count.checked_mul(baseline_advance_emu)?)
+}
+
 /// Append the authoritative Chaptera-authored lane after the existing base/imported
 /// lane without changing either lane's internal order.
 ///
@@ -1971,10 +1986,17 @@ fn resolve_text_layout_v1(
         })
         .collect();
 
-    let laid_out_height_emu = lines
-        .iter()
-        .try_fold(0_i64, |total, line| total.checked_add(line.line_height_emu))
-        .unwrap_or(0);
+    let first_line_extent_emu = compatible_natural_line_height_emu_v1(
+        font.bytes,
+        font.face_index,
+        LengthEmu::new(font_size_emu),
+    )
+    .map(LengthEmu::get)
+    .map(|extent| extent.min(line_height_emu))
+    .unwrap_or(line_height_emu);
+    let laid_out_height_emu =
+        uniform_laid_out_height_emu_v1(first_line_extent_emu, line_height_emu, lines.len())
+            .unwrap_or(0);
     RenderTextLayoutV1 {
         disposition: RenderTextLayoutDispositionV1::SharedResolved {
             font_resource_id: font.resource_id.to_owned(),
@@ -3246,6 +3268,23 @@ mod tests {
                     .is_some_and(|shaping| shaping.units_per_em > 0 && !shaping.glyphs.is_empty())
             }));
         }
+    }
+
+    #[test]
+    fn uniform_layout_height_uses_first_line_extent_then_baseline_advance() {
+        assert_eq!(uniform_laid_out_height_emu_v1(198_000, 222_250, 0), Some(0));
+        assert_eq!(
+            uniform_laid_out_height_emu_v1(198_000, 222_250, 1),
+            Some(198_000)
+        );
+        assert_eq!(
+            uniform_laid_out_height_emu_v1(198_000, 222_250, 2),
+            Some(420_250)
+        );
+        assert_eq!(
+            uniform_laid_out_height_emu_v1(198_000, 222_250, 3),
+            Some(642_500)
+        );
     }
 
     #[test]

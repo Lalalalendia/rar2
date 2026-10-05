@@ -299,6 +299,8 @@ export function resolvedTextLinePaintPlan(node) {
       }));
     }
 
+    const lineTop = cursorY - y;
+    if (lineTop < 0 || lineTop >= height) return null;
     lines.push(Object.freeze({
       line_index: lineIndex,
       x: x + lineOffset,
@@ -309,7 +311,6 @@ export function resolvedTextLinePaintPlan(node) {
       spans: Object.freeze(spans)
     }));
     cursorY += currentLineHeight;
-    if (cursorY - y > height) return null;
   }
 
   return Object.freeze({

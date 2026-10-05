@@ -381,6 +381,17 @@ struct SharedResolvedPaintParams<'a> {
     clip_rect: egui::Rect,
 }
 
+fn shared_resolved_block_height_px(
+    first_line_extent_px: f32,
+    line_height_px: f32,
+    line_count: usize,
+) -> f32 {
+    if line_count == 0 {
+        return 0.0;
+    }
+    first_line_extent_px + line_count.saturating_sub(1) as f32 * line_height_px
+}
+
 fn paint_shared_resolved_text(
     painter: &egui::Painter,
     fragment: &RenderTextFragmentV1,
@@ -413,6 +424,7 @@ fn paint_shared_resolved_text(
         egui::FontFamily::Name(font_resource_id.into()),
     );
     let mut max_width_px = 0.0_f32;
+    let mut first_line_extent_px = None;
     let text_color = uniform_text_color_rgb_v1(fragment)
         .map(|rgb| egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
         .unwrap_or(egui::Color32::BLACK);
@@ -427,12 +439,19 @@ fn paint_shared_resolved_text(
         let job = shared_resolved_line_job(&line.text, font_id.clone(), text_color);
         let galley = painter.layout_job(job);
         max_width_px = max_width_px.max(galley.size().x);
+        if expected_index == 0 {
+            first_line_extent_px = Some(galley.size().y);
+        }
         let y = clip_rect.top() + line.line_index as f32 * line_height_px;
         let x = clip_rect.left() + line.x_offset_emu as f32 * scene_scale;
         painter.galley(egui::pos2(x, y), galley, text_color);
     }
 
-    let resolved_height_px = lines.len() as f32 * line_height_px;
+    let resolved_height_px = if lines.is_empty() {
+        0.0
+    } else {
+        shared_resolved_block_height_px(first_line_extent_px?, line_height_px, lines.len())
+    };
     let source_typography_sections = fragment.typography.len();
     let fallback_sections = usize::from(fragment.typography.is_empty());
 
@@ -707,6 +726,13 @@ mod tests {
         assert!(!preview_text_height_is_clipped(100.0, 100.0));
         assert!(!preview_text_height_is_clipped(100.4, 100.0));
         assert!(preview_text_height_is_clipped(100.6, 100.0));
+    }
+
+    #[test]
+    fn shared_resolved_block_height_separates_first_line_from_baseline_advance() {
+        assert_eq!(shared_resolved_block_height_px(15.6, 17.5, 0), 0.0);
+        assert_eq!(shared_resolved_block_height_px(15.6, 17.5, 1), 15.6);
+        assert_eq!(shared_resolved_block_height_px(15.6, 17.5, 2), 33.1);
     }
 
     #[test]

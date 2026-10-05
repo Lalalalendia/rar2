@@ -119,6 +119,23 @@ struct EvaluatedBreak {
     reshaped: bool,
 }
 
+fn shaped_line_capacity_v1(
+    frame_height_emu: i64,
+    first_line_extent_emu: i64,
+    baseline_advance_emu: i64,
+) -> Option<usize> {
+    if frame_height_emu <= 0 || first_line_extent_emu <= 0 || baseline_advance_emu <= 0 {
+        return Some(0);
+    }
+    if frame_height_emu < first_line_extent_emu {
+        return Some(0);
+    }
+
+    let remaining = frame_height_emu.checked_sub(first_line_extent_emu)?;
+    let subsequent = remaining / baseline_advance_emu;
+    usize::try_from(subsequent.checked_add(1)?).ok()
+}
+
 /// LAYOUT-RESOLVE-01B2C: execute Unicode break policy over real shaping and
 /// explicit linked-frame flow.
 ///
@@ -226,19 +243,29 @@ pub fn resolve_bounded_shaped_flow(
                 continue;
             }
 
-            let row_count = bounds.height.get() / runtime.line_height.get();
-            if row_count <= 0 {
+            let first_line_extent_emu = crate::compatible_natural_line_height_emu_v1(
+                runtime.shaping.font_bytes,
+                runtime.shaping.face_index,
+                runtime.shaping.font_size_emu,
+            )
+            .map(LengthEmu::get)
+            .map(|extent| extent.min(runtime.line_height.get()))
+            .unwrap_or(runtime.line_height.get());
+            let row_count = shaped_line_capacity_v1(
+                bounds.height.get(),
+                first_line_extent_emu,
+                runtime.line_height.get(),
+            )
+            .ok_or(BoundedShapedFlowError::MetricOverflow)?;
+            if row_count == 0 {
                 diagnostics.push(ResolveDiagnostic {
                     code: "text_frame_has_no_capacity".into(),
                     severity: ResolveSeverity::FidelityWarning,
                     origin: frame_origin.into_canonical(),
-                    message: "text frame cannot fit one declared line height".into(),
+                    message: "text frame cannot fit one physical first-line extent".into(),
                 });
                 continue;
             }
-
-            let row_count =
-                usize::try_from(row_count).map_err(|_| BoundedShapedFlowError::MetricOverflow)?;
             let mut frame_stalled = false;
 
             for frame_line_index in 0..row_count {
@@ -598,6 +625,37 @@ mod tests {
         height: LengthEmu,
     ) -> BoundedLayoutProjection {
         project_bounded(authoring_slice(linked, text, width, height))
+    }
+
+    #[test]
+    fn first_line_extent_is_distinct_from_subsequent_baseline_advance() {
+        let first_line_extent = 198_000_i64;
+        let baseline_advance = 222_250_i64;
+
+        assert_eq!(
+            shaped_line_capacity_v1(first_line_extent - 1, first_line_extent, baseline_advance),
+            Some(0)
+        );
+        assert_eq!(
+            shaped_line_capacity_v1(first_line_extent, first_line_extent, baseline_advance),
+            Some(1)
+        );
+        assert_eq!(
+            shaped_line_capacity_v1(
+                first_line_extent + baseline_advance - 1,
+                first_line_extent,
+                baseline_advance,
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            shaped_line_capacity_v1(
+                first_line_extent + baseline_advance,
+                first_line_extent,
+                baseline_advance,
+            ),
+            Some(2)
+        );
     }
 
     #[test]
