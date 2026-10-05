@@ -11,6 +11,7 @@ on:
       - "tools/yab259_fixed_pdf_packet_renderer.rs"
       - "crates/chaptera-desktop-shaped-flow-runtime/**"
       - "crates/chaptera-viewer-render-plan/**"
+      - "vendor/producer-a/crates/pub-viewer/src/lib.rs"
       - "apps/chaptera-desktop/src/acceptance.rs"
       - "tools/acquire_carlton_march_pair.py"
       - "tools/pdf_reference_diff_v1.py"
