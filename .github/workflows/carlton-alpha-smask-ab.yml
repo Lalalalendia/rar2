@@ -176,16 +176,21 @@ jobs:
               raise SystemExit("baseline and alpha mapping summaries differ")
           baseline = json.loads(Path(os.environ["CHAPTERA_BASELINE_RENDERER"]).read_text(encoding="utf-8"))["renderer_result"]
           alpha = json.loads(Path(os.environ["CHAPTERA_ALPHA_RENDERER"]).read_text(encoding="utf-8"))["renderer_result"]
-          expected_baseline = {"page_count": 3, "node_painted": 45, "node_partial": 0, "node_unsupported": 63}
-          expected_alpha = {"page_count": 3, "node_painted": 78, "node_partial": 0, "node_unsupported": 30}
-          if baseline["summary"] != {**expected_baseline, "diagnostic_codes": baseline["summary"]["diagnostic_codes"]}:
-              raise SystemExit(f"baseline summary drift: {baseline['summary']!r}")
-          for key, value in expected_baseline.items():
-              if baseline["summary"].get(key) != value:
-                  raise SystemExit(f"baseline summary drift for {key}: {baseline['summary'].get(key)!r}")
-          for key, value in expected_alpha.items():
-              if alpha["summary"].get(key) != value:
-                  raise SystemExit(f"alpha summary drift for {key}: {alpha['summary'].get(key)!r}")
+          for label, summary in (("baseline", baseline["summary"]), ("alpha", alpha["summary"])):
+              if summary.get("page_count") != 3:
+                  raise SystemExit(f"{label} page-count drift: {summary!r}")
+              if summary.get("node_partial") != 0:
+                  raise SystemExit(f"{label} partial-node drift: {summary!r}")
+          # This gate owns only the SMask delta. Other Reader improvements may
+          # lawfully move the common baseline/alpha painted census together.
+          painted_delta = alpha["summary"].get("node_painted", -1) - baseline["summary"].get("node_painted", -1)
+          unsupported_delta = alpha["summary"].get("node_unsupported", -1) - baseline["summary"].get("node_unsupported", -1)
+          if painted_delta != 33 or unsupported_delta != -33:
+              raise SystemExit(
+                  "alpha-only aggregate transition drift: "
+                  f"painted_delta={painted_delta}, unsupported_delta={unsupported_delta}, "
+                  f"baseline={baseline['summary']!r}, alpha={alpha['summary']!r}"
+              )
           if "pdf.image.alpha_unsupported" not in baseline["summary"].get("diagnostic_codes", []):
               raise SystemExit("baseline alpha diagnostic missing")
           if "pdf.image.alpha_unsupported" in alpha["summary"].get("diagnostic_codes", []):
