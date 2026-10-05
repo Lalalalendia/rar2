@@ -7955,7 +7955,7 @@ fn authored_stack_operation_page_id_v1(operation: &EditOperation) -> Option<Page
     match operation {
         EditOperation::CreateShape { page_id, .. }
         | EditOperation::CreateLine { page_id, .. }
-        | EditOperation::DeleteNode { page_id, .. } => Some(*page_id)
+        | EditOperation::DeleteNode { page_id, .. } => Some(*page_id),
         EditOperation::ReorderAuthoredStack { transition } => Some(transition.page_id),
         _ => None,
     }
