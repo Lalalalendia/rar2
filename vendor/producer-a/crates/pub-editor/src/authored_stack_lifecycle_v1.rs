@@ -5,7 +5,10 @@
 //! A runtime owner can atomically commit an entity mutation together with the
 //! returned exact lane transition without consulting Scene or Page.children.
 
-use crate::{AuthoredShapeRuntimeV1, NodeId, PageId, validate_authored_shape_runtime_v1};
+use crate::{
+    AuthoredLineRuntimeV1, AuthoredShapeRuntimeV1, NodeId, PageId,
+    validate_authored_line_runtime_v1, validate_authored_shape_runtime_v1,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -58,6 +61,7 @@ pub struct AuthoredStackLifecycleTransitionV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthoredStackLifecycleErrorV1 {
     InvalidAuthoredShape,
+    InvalidAuthoredLine,
     StackPageMismatch {
         stack_page_id: PageId,
         shape_page_id: PageId,
@@ -83,6 +87,8 @@ impl fmt::Display for AuthoredStackLifecycleErrorV1 {
         match self {
             Self::InvalidAuthoredShape => formatter
                 .write_str("authored-stack lifecycle requires a canonical AuthorCreated shape"),
+            Self::InvalidAuthoredLine => formatter
+                .write_str("authored-stack lifecycle requires a canonical AuthorCreated line"),
             Self::StackPageMismatch {
                 stack_page_id,
                 shape_page_id,
@@ -168,32 +174,55 @@ fn validate_shape_for_stack(
     Ok(())
 }
 
-pub fn plan_create_shape_append_v1(
+fn plan_created_member_append_v1(
     stack: &AuthoredStackV1,
-    shape: &AuthoredShapeRuntimeV1,
+    node_id: NodeId,
+    page_id: PageId,
 ) -> Result<AuthoredStackLifecycleTransitionV1, AuthoredStackLifecycleErrorV1> {
-    validate_shape_for_stack(stack, shape)?;
-    if stack.members.contains(&shape.node_id) {
-        return Err(AuthoredStackLifecycleErrorV1::DuplicateMembership {
-            node_id: shape.node_id,
+    validate_authored_stack_v1(stack)?;
+    if stack.page_id != page_id {
+        return Err(AuthoredStackLifecycleErrorV1::StackPageMismatch {
+            stack_page_id: stack.page_id,
+            shape_page_id: page_id,
         });
+    }
+    if stack.members.contains(&node_id) {
+        return Err(AuthoredStackLifecycleErrorV1::DuplicateMembership { node_id });
     }
 
     let before = stack.clone();
     let member_index = before.members.len();
     let mut after = before.clone();
-    after.members.push(shape.node_id);
+    after.members.push(node_id);
 
     Ok(AuthoredStackLifecycleTransitionV1 {
         kind: AuthoredStackLifecycleKindV1::AppendCreated,
-        page_id: shape.page_id,
-        node_id: shape.node_id,
+        page_id,
+        node_id,
         member_index,
         before_state_id: authored_stack_state_id_v1(&before),
         after_state_id: authored_stack_state_id_v1(&after),
         before,
         after,
     })
+}
+
+pub fn plan_create_shape_append_v1(
+    stack: &AuthoredStackV1,
+    shape: &AuthoredShapeRuntimeV1,
+) -> Result<AuthoredStackLifecycleTransitionV1, AuthoredStackLifecycleErrorV1> {
+    validate_shape_for_stack(stack, shape)?;
+    plan_created_member_append_v1(stack, shape.node_id, shape.page_id)
+}
+
+pub fn plan_create_line_append_v1(
+    stack: &AuthoredStackV1,
+    line: &AuthoredLineRuntimeV1,
+) -> Result<AuthoredStackLifecycleTransitionV1, AuthoredStackLifecycleErrorV1> {
+    validate_authored_stack_v1(stack)?;
+    validate_authored_line_runtime_v1(line)
+        .map_err(|_| AuthoredStackLifecycleErrorV1::InvalidAuthoredLine)?;
+    plan_created_member_append_v1(stack, line.node_id, line.page_id)
 }
 
 pub fn plan_delete_shape_remove_v1(
