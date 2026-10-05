@@ -3953,6 +3953,29 @@ impl EditorSession {
             .collect()
     }
 
+    fn effective_editable_paragraph_alignment_inputs_v1(
+        &self,
+    ) -> Result<
+        (
+            Vec<FullStoryParagraphAlignmentV1>,
+            Vec<ParagraphScopedAlignmentV1>,
+        ),
+        String,
+    > {
+        let scoped = self.effective_paragraph_scoped_alignment_v1()?;
+        let scoped_story_ids = scoped
+            .iter()
+            .map(|item| item.story_id)
+            .collect::<BTreeSet<_>>();
+        let full_story = self
+            .effective_full_story_paragraph_alignment_v1()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .filter(|item| !scoped_story_ids.contains(&item.story_id))
+            .collect();
+        Ok((full_story, scoped))
+    }
+
     pub fn effective_full_story_paragraph_alignment_v1(
         &self,
     ) -> Result<Vec<FullStoryParagraphAlignmentV1>, EditorError> {
