@@ -4003,6 +4003,153 @@ mod tests {
     }
 
     #[test]
+    fn top_level_layout_prefers_distinct_same_family_span_resources_over_uniform_family_resource() {
+        let mut visual = fixture();
+        let story_id = visual.document.stories[0].id;
+        let node_id = visual.scene.nodes[0].origin;
+        let text = "ABCD";
+
+        visual.document.stories[0].text = text.to_owned();
+        visual.document.pages[0].width_emu = 10_000_000;
+        visual.document.pages[0].height_emu = 10_000_000;
+        visual.scene.surfaces[0].size =
+            Size2D::new(LengthEmu::new(10_000_000), LengthEmu::new(10_000_000));
+        visual.scene.nodes[0].bounds = RectEmu::new(
+            LengthEmu::ZERO,
+            LengthEmu::ZERO,
+            LengthEmu::new(5_000_000),
+            LengthEmu::new(5_000_000),
+        );
+        visual.text_fragments[0].scalar_end = 4;
+        visual.text_fragments[0].text = text.to_owned();
+        visual.story_frames.push(pub_viewer::ViewerStoryFrame {
+            story_id,
+            frame_id: node_id,
+            ordinal: 0,
+            text_content_bounds: None,
+            vertical_alignment: None,
+        });
+        visual.typography_runs = vec![
+            ViewerTypographyRun {
+                story_id,
+                scalar_start: 0,
+                scalar_end: 2,
+                source_font_name: "Family A".to_owned(),
+                text_size_emu: 152_400,
+                font_inherited: false,
+                size_inherited: false,
+                color_rgb: None,
+                color_inherited: false,
+                bold: Some(pub_viewer::ViewerTypographyBooleanV1 {
+                    local_toggle: false,
+                    inherited_value: false,
+                    effective_value: false,
+                }),
+                italic: Some(pub_viewer::ViewerTypographyBooleanV1 {
+                    local_toggle: false,
+                    inherited_value: false,
+                    effective_value: false,
+                }),
+                source_story_text_sha256: viewer_story_text_sha256(text),
+            },
+            ViewerTypographyRun {
+                story_id,
+                scalar_start: 2,
+                scalar_end: 4,
+                source_font_name: "Family A".to_owned(),
+                text_size_emu: 152_400,
+                font_inherited: false,
+                size_inherited: false,
+                color_rgb: None,
+                color_inherited: false,
+                bold: Some(pub_viewer::ViewerTypographyBooleanV1 {
+                    local_toggle: true,
+                    inherited_value: false,
+                    effective_value: true,
+                }),
+                italic: Some(pub_viewer::ViewerTypographyBooleanV1 {
+                    local_toggle: false,
+                    inherited_value: false,
+                    effective_value: false,
+                }),
+                source_story_text_sha256: viewer_story_text_sha256(text),
+            },
+        ];
+
+        let regular_bytes: &[u8] = font_test_data::AHEM;
+        let bold_bytes: &[u8] = font_test_data::TINOS_SUBSET;
+        let regular_sha = font_fingerprint_sha256(regular_bytes);
+        let bold_sha = font_fingerprint_sha256(bold_bytes);
+        let fallback = ExplicitRenderTextFontResourceV1 {
+            resource_id: "fallback",
+            expected_sha256: &regular_sha,
+            face_index: 0,
+            default_font_size_emu: 152_400,
+            default_line_height_emu: 190_500,
+            bytes: regular_bytes,
+        };
+
+        let plan = build_page_render_plan_with_text_layout_resolvers_v1(
+            &visual,
+            0,
+            &fallback,
+            |_| {
+                Some(ExplicitRenderTextFontResourceV1 {
+                    resource_id: "family-a-uniform-regular",
+                    expected_sha256: &regular_sha,
+                    face_index: 0,
+                    default_font_size_emu: 152_400,
+                    default_line_height_emu: 190_500,
+                    bytes: regular_bytes,
+                })
+            },
+            |_, run| match run.bold {
+                Some(false) => Some(ExplicitRenderTextFontResourceV1 {
+                    resource_id: "family-a-span-regular",
+                    expected_sha256: &regular_sha,
+                    face_index: 0,
+                    default_font_size_emu: 152_400,
+                    default_line_height_emu: 190_500,
+                    bytes: regular_bytes,
+                }),
+                Some(true) => Some(ExplicitRenderTextFontResourceV1 {
+                    resource_id: "family-a-span-bold",
+                    expected_sha256: &bold_sha,
+                    face_index: 0,
+                    default_font_size_emu: 152_400,
+                    default_line_height_emu: 190_500,
+                    bytes: bold_bytes,
+                }),
+                None => None,
+            },
+        )
+        .expect("top-level render plan");
+
+        let fragment = plan.nodes[0].text.as_ref().expect("text fragment");
+        assert_eq!(
+            fragment.backend_font_resource_id,
+            None,
+            "styled per-span route must win over the uniform family resource"
+        );
+        let layout = fragment.layout.as_ref().expect("resolved layout");
+        let resource_ids = layout
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .filter_map(|span| span.font_resource_id.as_deref())
+            .collect::<Vec<_>>();
+        assert!(
+            resource_ids.contains(&"family-a-span-regular")
+                && resource_ids.contains(&"family-a-span-bold"),
+            "top-level layout must execute both exact same-family style resources: {resource_ids:?}"
+        );
+        assert!(
+            !resource_ids.contains(&"family-a-uniform-regular"),
+            "uniform family resolver must not mask distinct per-span resources"
+        );
+    }
+
+    #[test]
     fn same_family_runs_with_one_exact_resource_do_not_open_styled_span_lane() {
         let story_id = fixture().document.stories[0].id;
         let fragment = render_fragment(
