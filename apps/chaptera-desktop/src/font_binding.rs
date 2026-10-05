@@ -325,6 +325,7 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
+    #[ignore = "requires pinned CHAPTERA_TEXT_FORMAT_FIXTURES_DIR hosted corpus"]
     fn windows_real_pub_scoped_style_changes_exact_resource_and_roundtrips() {
         struct Witness {
             path: PathBuf,
