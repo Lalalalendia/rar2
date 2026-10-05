@@ -2618,7 +2618,9 @@ mod tests {
                                         i64::from(fragment_len) - i64::from(story_len),
                                     )
                                 };
-                                *full_extent_story_mismatch_profiles.entry(profile).or_default() += 1;
+                                *full_extent_story_mismatch_profiles
+                                    .entry(profile)
+                                    .or_default() += 1;
                             }
                         }
                     }
