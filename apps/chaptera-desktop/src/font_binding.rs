@@ -223,3 +223,206 @@ impl ViewerApp {
         true
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pub_editor::{Sha256Digest, open_mature_0x2c_editor};
+    use sha2::{Digest, Sha256};
+    use std::{env, fs};
+
+    fn bool_value(value: &FormatValueV1) -> Option<bool> {
+        match value {
+            FormatValueV1::Bool(value) => Some(*value),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn real_51318_scoped_bold_reaches_current_render_typography_input() {
+        let Some(path) = env::var_os("CHAPTERA_TEXT_FORMAT_51318") else {
+            eprintln!(
+                "CHAPTERA_TEXT_FORMAT_51318 not set; dedicated render-consume gate owns real evidence"
+            );
+            return;
+        };
+
+        let original = fs::read(&path).expect("read pinned 51318.pub");
+        let digest = Sha256::digest(&original);
+        let mut digest_bytes = [0_u8; 32];
+        digest_bytes.copy_from_slice(&digest);
+        let source_hash = Sha256Digest::from_bytes(digest_bytes);
+        let mut editor =
+            open_mature_0x2c_editor(&original, source_hash).expect("open pinned 51318.pub");
+        let visual = pub_viewer::open_mature_0x2c_geometry(
+            &original,
+            pub_viewer::viewer_geometry_environment_v0_1(),
+        )
+        .expect("open pinned 51318 Viewer geometry");
+
+        let mut witness = None;
+        'pages: for page_index in 0..visual.document.pages.len() {
+            let plan = chaptera_viewer_render_plan::build_page_render_plan_v1(&visual, page_index)
+                .expect("source render plan");
+            for fragment in plan.nodes.iter().filter_map(|node| node.text.as_ref()) {
+                if fragment.scalar_start >= fragment.scalar_end || fragment.typography.is_empty() {
+                    continue;
+                }
+                let full_error = match editor.current_text_format_overlay_v1(fragment.story_id) {
+                    Ok(_) => continue,
+                    Err(error) => error.to_string(),
+                };
+                if !full_error.contains("bounded effective direct-RGB text color is unavailable") {
+                    continue;
+                }
+                let bold = match editor.current_text_format_property_segments_v1(
+                    fragment.story_id,
+                    FormatPropertyV1::Bold,
+                    fragment.scalar_start,
+                    fragment.scalar_end,
+                ) {
+                    Ok(segments) if !segments.is_empty() => segments,
+                    _ => continue,
+                };
+                let italic = match editor.current_text_format_property_segments_v1(
+                    fragment.story_id,
+                    FormatPropertyV1::Italic,
+                    fragment.scalar_start,
+                    fragment.scalar_end,
+                ) {
+                    Ok(segments) if !segments.is_empty() => segments,
+                    _ => continue,
+                };
+                if bold.iter().any(|segment| bool_value(&segment.value).is_none())
+                    || italic
+                        .iter()
+                        .any(|segment| bool_value(&segment.value).is_none())
+                {
+                    continue;
+                }
+                let all_bold = bold
+                    .iter()
+                    .all(|segment| bool_value(&segment.value) == Some(true));
+                witness = Some((
+                    page_index,
+                    fragment.story_id,
+                    fragment.scalar_start,
+                    fragment.scalar_end,
+                    fragment.typography.clone(),
+                    !all_bold,
+                    full_error,
+                ));
+                break 'pages;
+            }
+        }
+
+        let (
+            page_index,
+            story_id,
+            scalar_start,
+            scalar_end,
+            source_typography,
+            desired_bold,
+            full_error,
+        ) = witness.expect(
+            "51318.pub must expose one rendered color-blocked range with scoped Bold/Italic authority",
+        );
+
+        let before_hash = editor
+            .current_text_format_property_state_hash_v1(story_id, FormatPropertyV1::Bold)
+            .expect("current scoped Bold hash");
+        editor
+            .set_text_format_property_scoped_v1(
+                story_id,
+                scalar_start,
+                scalar_end,
+                FormatPropertyV1::Bold,
+                FormatValueV1::Bool(desired_bold),
+                &before_hash,
+            )
+            .expect("Set scoped Bold for current render input");
+
+        let edited_project = editor.project();
+        let render_current = |session: &EditorSession| {
+            let mut plan =
+                chaptera_viewer_render_plan::build_page_render_plan_v1(&visual, page_index)
+                    .expect("render plan");
+            let changed = apply_current_scoped_boolean_typography(&mut plan, session)
+                .expect("apply current scoped typography");
+            let typography = plan
+                .nodes
+                .iter()
+                .filter_map(|node| node.text.as_ref())
+                .find(|fragment| {
+                    fragment.story_id == story_id
+                        && fragment.scalar_start == scalar_start
+                        && fragment.scalar_end == scalar_end
+                })
+                .expect("same render fragment")
+                .typography
+                .clone();
+            (changed, typography)
+        };
+
+        let (changed, edited_typography) = render_current(&editor);
+        assert!(changed > 0);
+        assert!(edited_typography.iter().all(|run| run.bold == Some(desired_bold)));
+        assert!(
+            editor
+                .current_text_format_overlay_v1(story_id)
+                .expect_err("scoped Bold must not invent unresolved color")
+                .to_string()
+                .contains("bounded effective direct-RGB text color is unavailable")
+        );
+
+        editor.undo().expect("Undo scoped Bold");
+        let (_, undone_typography) = render_current(&editor);
+        assert_eq!(undone_typography, source_typography);
+
+        editor.redo().expect("Redo scoped Bold");
+        let (_, redone_typography) = render_current(&editor);
+        assert_eq!(redone_typography, edited_typography);
+
+        let clear_hash = editor
+            .current_text_format_property_state_hash_v1(story_id, FormatPropertyV1::Bold)
+            .expect("edited scoped Bold hash");
+        editor
+            .clear_text_format_property_override_scoped_v1(
+                story_id,
+                scalar_start,
+                scalar_end,
+                FormatPropertyV1::Bold,
+                &clear_hash,
+            )
+            .expect("Clear scoped Bold override");
+        let (_, cleared_typography) = render_current(&editor);
+        assert_eq!(cleared_typography, source_typography);
+
+        let serialized =
+            serde_json::to_vec(&edited_project).expect("serialize edited v0.16 project");
+        let project_roundtrip: pub_editor::EditorProject =
+            serde_json::from_slice(&serialized).expect("deserialize edited v0.16 project");
+        let mut reopened =
+            open_mature_0x2c_editor(&original, source_hash).expect("fresh reopen 51318.pub");
+        reopened
+            .apply_project(&project_roundtrip)
+            .expect("fresh replay scoped Bold project");
+        let (_, replayed_typography) = render_current(&reopened);
+        assert_eq!(replayed_typography, edited_typography);
+
+        assert_eq!(reopened.source_hash(), source_hash);
+        assert_eq!(
+            fs::read(&path).expect("re-read pinned 51318.pub"),
+            original,
+            "render consumption must not mutate source PUB bytes"
+        );
+        eprintln!(
+            "render-consume witness story={} range={}..{} legacy_full_overlay_error={}",
+            story_id.as_canonical(),
+            scalar_start,
+            scalar_end,
+            full_error
+        );
+    }
+}
