@@ -2502,6 +2502,35 @@ mod tests {
                         *configured_backend_fallbacks
                             .entry(reason.code())
                             .or_default() += 1;
+                        if reason.code() == "shared_layout_incomplete" {
+                            let spacing_runs = bundle
+                                .geometry
+                                .paragraph_line_spacings
+                                .iter()
+                                .filter(|run| run.story_id == text.story_id)
+                                .filter(|run| {
+                                    run.scalar_end > text.scalar_start
+                                        && run.scalar_start < text.scalar_end
+                                })
+                                .map(|run| {
+                                    format!(
+                                        "{:?}:{}..{}:source={:?}",
+                                        run.line_spacing,
+                                        run.scalar_start,
+                                        run.scalar_end,
+                                        run.source_value
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+                            println!(
+                                "CLOUD_READER_DEFAULT_SPACING_DIAGNOSTIC node={:?} story={:?} fragment={}..{} spacing_runs={:?}",
+                                node.node_id,
+                                text.story_id,
+                                text.scalar_start,
+                                text.scalar_end,
+                                spacing_runs
+                            );
+                        }
                     }
                 }
             }
