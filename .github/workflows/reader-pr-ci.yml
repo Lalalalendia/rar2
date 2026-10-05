@@ -121,6 +121,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tier_a: ${{ steps.scope.outputs.tier_a }}
+      desktop_rustfmt: ${{ steps.scope.outputs.desktop_rustfmt }}
       reader_windows_smoke: ${{ steps.scope.outputs.reader_windows_smoke }}
       reader_windows: ${{ steps.scope.outputs.reader_windows }}
       editor_windows: ${{ steps.scope.outputs.editor_windows }}
@@ -262,6 +263,22 @@ jobs:
     needs: classify
     if: needs.classify.outputs.tier_a == 'true'
     uses: ./.github/workflows/reader-consumer-preflight.yml
+
+  desktop-rustfmt:
+    name: Desktop rustfmt
+    needs: classify
+    if: ${{ !cancelled() && always() && needs.classify.outputs.desktop_rustfmt == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Check Chaptera Desktop formatting
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
 
   reader-windows-smoke:
     name: Reader Windows shared-core smoke
