@@ -72,6 +72,9 @@ jobs:
       - name: Prove direct text session on real PUB
         run: cargo test -p chaptera-desktop real_sample_newsletter_direct_text_session_enters_types_rebinds_and_exits -- --nocapture
 
+      - name: Prove linked Story same-session frame handoff on real PUB
+        run: cargo test -p chaptera-desktop real_sample_newsletter_linked_story_session_hands_off_between_frames_without_topology_mutation -- --nocapture
+
   gui-direct-text:
     needs: format-preflight
     runs-on: windows-latest
