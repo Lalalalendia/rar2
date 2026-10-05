@@ -3495,9 +3495,9 @@ mod tests {
                     size_inherited: false,
                     color_rgb: Some([255, 204, 0]),
                     color_inherited: false,
-                
                     bold: None,
-                    italic: None,},
+                    italic: None,
+                },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
                     scalar_end: 5,
@@ -3507,9 +3507,9 @@ mod tests {
                     size_inherited: false,
                     color_rgb: Some([255, 204, 0]),
                     color_inherited: true,
-                
                     bold: None,
-                    italic: None,},
+                    italic: None,
+                },
             ],
         );
         assert_eq!(uniform_text_color_rgb_v1(&uniform), Some([255, 204, 0]));
@@ -3545,9 +3545,9 @@ mod tests {
                 size_inherited: false,
                 color_rgb: None,
                 color_inherited: false,
-            
                 bold: None,
-                italic: None,}],
+                italic: None,
+            }],
         );
 
         assert_eq!(
@@ -3646,9 +3646,9 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
-                
                     bold: None,
-                    italic: None,},
+                    italic: None,
+                },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
                     scalar_end: 5,
@@ -3658,9 +3658,9 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
-                
                     bold: None,
-                    italic: None,},
+                    italic: None,
+                },
             ],
         );
 
@@ -3736,9 +3736,9 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
-                
                     bold: None,
-                    italic: None,},
+                    italic: None,
+                },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
                     scalar_end: 4,
@@ -3748,9 +3748,9 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
-                
                     bold: None,
-                    italic: None,},
+                    italic: None,
+                },
             ],
         );
 
@@ -3857,9 +3857,9 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
-                
                     bold: None,
-                    italic: None,},
+                    italic: None,
+                },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
                     scalar_end: 4,
@@ -3869,9 +3869,9 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
-                
                     bold: None,
-                    italic: None,},
+                    italic: None,
+                },
             ],
         );
         let elephant_bytes: &[u8] = b"source-free-elephant-test-font";
