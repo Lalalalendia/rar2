@@ -26,8 +26,8 @@ pub use authored_stack_lifecycle_v1::{
     AUTHORED_STACK_PROTOCOL_V1, AuthoredStackLifecycleErrorV1, AuthoredStackLifecycleKindV1,
     AuthoredStackLifecycleTransitionV1, AuthoredStackV1,
     apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
-    authored_stack_state_id_v1, plan_create_shape_append_v1, plan_delete_shape_remove_v1,
-    validate_authored_stack_v1,
+    authored_stack_state_id_v1, plan_create_line_append_v1, plan_create_shape_append_v1,
+    plan_delete_shape_remove_v1, validate_authored_stack_v1,
 };
 pub use authored_stack_runtime_v1::{
     AuthoredStackReorderErrorV1, AuthoredStackReorderModeV1, AuthoredStackReorderTransitionV1,
@@ -343,6 +343,14 @@ pub enum EditOperation {
         paint: AuthoredShapePaintV1,
         provenance: AuthoredEntityProvenanceV1,
     },
+    CreateLine {
+        node_id: NodeId,
+        page_id: PageId,
+        parent_id: PageId,
+        geometry: LineGeometryV1,
+        stroke: AuthoredSolidStrokeV1,
+        provenance: AuthoredEntityProvenanceV1,
+    },
     DeleteNode {
         node_id: NodeId,
         page_id: PageId,
@@ -431,6 +439,7 @@ impl EditOperation {
             | Self::ResizeNodes { .. }
             | Self::CreateTextBox { .. }
             | Self::CreateShape { .. }
+            | Self::CreateLine { .. }
             | Self::DeleteNode { .. }
             | Self::ReorderAuthoredStack { .. }
             | Self::SetTextFormatProperty { .. }
@@ -560,6 +569,23 @@ impl PersistenceRequirements for EditOperation {
                     feature: "shape.paint".into(),
                     origin: Some(node_id.into_canonical()),
                     property_path: Some("node.paint".into()),
+                },
+            ],
+            Self::CreateLine { node_id, .. } => vec![
+                PersistenceRequirement {
+                    feature: "node.created_identity".into(),
+                    origin: Some(node_id.into_canonical()),
+                    property_path: Some("node".into()),
+                },
+                PersistenceRequirement {
+                    feature: "line.geometry.endpoints".into(),
+                    origin: Some(node_id.into_canonical()),
+                    property_path: Some("node.line.geometry".into()),
+                },
+                PersistenceRequirement {
+                    feature: "line.stroke".into(),
+                    origin: Some(node_id.into_canonical()),
+                    property_path: Some("node.line.stroke".into()),
                 },
             ],
             Self::DeleteNode { node_id, .. } => vec![PersistenceRequirement {
@@ -1089,6 +1115,27 @@ pub enum EditorError {
     CreateShapeMalformed {
         node_id: NodeId,
     },
+    CreateLineInvalidNodeId {
+        node_id: NodeId,
+    },
+    CreateLinePageMissing {
+        page_id: PageId,
+    },
+    CreateLineIdCollision {
+        node_id: NodeId,
+    },
+    CreateLineInvalidGeometry {
+        node_id: NodeId,
+    },
+    CreateLineInvalidStroke {
+        node_id: NodeId,
+    },
+    CreateLineInvalidProvenance {
+        node_id: NodeId,
+    },
+    CreateLineMalformed {
+        node_id: NodeId,
+    },
     NodeDeleteUnsupported {
         node_id: NodeId,
     },
@@ -1365,6 +1412,41 @@ impl fmt::Display for EditorError {
                 "CreateShape node {} violates the bounded rectangle/identity/page contract",
                 node_id.as_canonical()
             ),
+            Self::CreateLineInvalidNodeId { node_id } => write!(
+                formatter,
+                "CreateLine node {} is not an editor-created UUIDv7",
+                node_id.as_canonical()
+            ),
+            Self::CreateLinePageMissing { page_id } => write!(
+                formatter,
+                "CreateLine page {} is not present in the opened document",
+                page_id.as_canonical()
+            ),
+            Self::CreateLineIdCollision { node_id } => write!(
+                formatter,
+                "CreateLine node {} collides with an existing visual node",
+                node_id.as_canonical()
+            ),
+            Self::CreateLineInvalidGeometry { node_id } => write!(
+                formatter,
+                "CreateLine node {} has invalid or unsafe ordered endpoint geometry",
+                node_id.as_canonical()
+            ),
+            Self::CreateLineInvalidStroke { node_id } => write!(
+                formatter,
+                "CreateLine node {} has invalid explicit stroke",
+                node_id.as_canonical()
+            ),
+            Self::CreateLineInvalidProvenance { node_id } => write!(
+                formatter,
+                "CreateLine node {} is not explicitly author-created",
+                node_id.as_canonical()
+            ),
+            Self::CreateLineMalformed { node_id } => write!(
+                formatter,
+                "CreateLine node {} violates the bounded identity/page contract",
+                node_id.as_canonical()
+            ),
             Self::NodeDeleteUnsupported { node_id } => write!(
                 formatter,
                 "node {} is not an admitted author-created direct page-owned Rectangle",
@@ -1580,6 +1662,13 @@ impl EditorError {
             Self::CreateShapeInvalidPaint { .. } => "create_shape_invalid_paint",
             Self::CreateShapeInvalidProvenance { .. } => "create_shape_invalid_provenance",
             Self::CreateShapeMalformed { .. } => "create_shape_malformed",
+            Self::CreateLineInvalidNodeId { .. } => "create_line_invalid_node_id",
+            Self::CreateLinePageMissing { .. } => "create_line_page_missing",
+            Self::CreateLineIdCollision { .. } => "create_line_id_collision",
+            Self::CreateLineInvalidGeometry { .. } => "create_line_invalid_geometry",
+            Self::CreateLineInvalidStroke { .. } => "create_line_invalid_stroke",
+            Self::CreateLineInvalidProvenance { .. } => "create_line_invalid_provenance",
+            Self::CreateLineMalformed { .. } => "create_line_malformed",
             Self::NodeDeleteUnsupported { .. } => "node_delete_unsupported",
             Self::NodeDeletePageMismatch { .. } => "node_delete_page_mismatch",
             Self::StaleNodeDelete { .. } => "stale_node_delete",
@@ -2457,6 +2546,7 @@ pub struct EditorSession {
     replacement_assets: BTreeMap<Sha256Digest, EditorReplacementAsset>,
     image_replacements: BTreeMap<NodeId, Sha256Digest>,
     authored_shapes: BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
+    authored_lines: BTreeMap<NodeId, AuthoredLineRuntimeV1>,
     authored_stacks: BTreeMap<PageId, AuthoredStackV1>,
     undo: Vec<EditOperation>,
     redo: Vec<EditOperation>,
@@ -2488,6 +2578,7 @@ impl EditorSession {
             replacement_assets: BTreeMap::new(),
             image_replacements: BTreeMap::new(),
             authored_shapes: BTreeMap::new(),
+            authored_lines: BTreeMap::new(),
             authored_stacks: BTreeMap::new(),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -3206,6 +3297,16 @@ impl EditorSession {
 
     pub fn authored_shape(&self, node_id: NodeId) -> Option<&AuthoredShapeRuntimeV1> {
         self.authored_shapes.get(&node_id)
+    }
+
+    pub fn authored_lines(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &AuthoredLineRuntimeV1> + DoubleEndedIterator {
+        self.authored_lines.values()
+    }
+
+    pub fn authored_line(&self, node_id: NodeId) -> Option<&AuthoredLineRuntimeV1> {
+        self.authored_lines.get(&node_id)
     }
 
     pub fn authored_stack(&self, page_id: PageId) -> Option<AuthoredStackV1> {
@@ -5338,6 +5439,7 @@ impl EditorSession {
         }
         if self.graph.nodes.contains_key(&shape.node_id)
             || self.authored_shapes.contains_key(&shape.node_id)
+            || self.authored_lines.contains_key(&shape.node_id)
         {
             return Err(EditorError::CreateShapeIdCollision {
                 node_id: shape.node_id,
@@ -5373,6 +5475,100 @@ impl EditorSession {
             ) => Err(EditorError::CreateShapeMalformed {
                 node_id: shape.node_id,
             }),
+        }
+    }
+
+    pub fn create_line(
+        &mut self,
+        node_id: NodeId,
+        page_id: PageId,
+        geometry: LineGeometryV1,
+        stroke: AuthoredSolidStrokeV1,
+    ) -> Result<EditOperation, EditorError> {
+        let operation = EditOperation::CreateLine {
+            node_id,
+            page_id,
+            parent_id: page_id,
+            geometry,
+            stroke,
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        self.consume_canonical_create_line(operation)
+    }
+
+    fn consume_canonical_create_line(
+        &mut self,
+        operation: EditOperation,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let line = authored_line_from_operation(&operation)
+            .expect("consume_canonical_create_line receives CreateLine");
+        self.validate_create_line_candidate(&line)?;
+
+        let before_stack = self.current_authored_stack_v1(line.page_id);
+        let transition = plan_create_line_append_v1(&before_stack, &line).map_err(|_| {
+            EditorError::StaleAuthoredStack {
+                page_id: line.page_id,
+            }
+        })?;
+        let after_stack = apply_authored_stack_transition_forward_v1(&before_stack, &transition)
+            .map_err(|_| EditorError::StaleAuthoredStack {
+                page_id: line.page_id,
+            })?;
+
+        self.authored_lines.insert(line.node_id, line);
+        self.install_authored_stack_v1(after_stack);
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    fn validate_create_line_candidate(
+        &self,
+        line: &AuthoredLineRuntimeV1,
+    ) -> Result<(), EditorError> {
+        if !self.graph.pages.contains_key(&line.page_id) {
+            return Err(EditorError::CreateLinePageMissing {
+                page_id: line.page_id,
+            });
+        }
+        if self.graph.nodes.contains_key(&line.node_id)
+            || self.authored_shapes.contains_key(&line.node_id)
+            || self.authored_lines.contains_key(&line.node_id)
+        {
+            return Err(EditorError::CreateLineIdCollision {
+                node_id: line.node_id,
+            });
+        }
+        match validate_authored_line_runtime_v1(line) {
+            Ok(()) => Ok(()),
+            Err(CreateLineRuntimeValidationError::NodeIdNotUuidV7) => {
+                Err(EditorError::CreateLineInvalidNodeId {
+                    node_id: line.node_id,
+                })
+            }
+            Err(
+                CreateLineRuntimeValidationError::CoordinateOutOfRange
+                | CreateLineRuntimeValidationError::DerivedBoundsOverflow,
+            ) => Err(EditorError::CreateLineInvalidGeometry {
+                node_id: line.node_id,
+            }),
+            Err(CreateLineRuntimeValidationError::InvalidStroke) => {
+                Err(EditorError::CreateLineInvalidStroke {
+                    node_id: line.node_id,
+                })
+            }
+            Err(CreateLineRuntimeValidationError::NonAuthorCreatedProvenance) => {
+                Err(EditorError::CreateLineInvalidProvenance {
+                    node_id: line.node_id,
+                })
+            }
+            Err(CreateLineRuntimeValidationError::ParentPageMismatch) => {
+                Err(EditorError::CreateLineMalformed {
+                    node_id: line.node_id,
+                })
+            }
         }
     }
 
