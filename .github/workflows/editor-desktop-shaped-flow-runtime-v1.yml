@@ -7,6 +7,7 @@ on:
       - "crates/chaptera-caret-layout-feed/**"
       - "crates/chaptera-text-caret-map-adapter/**"
       - "vendor/producer-a/crates/pub-layout/**"
+      - "tools/acquire_carlton_march_pair.py"
       - ".github/workflows/editor-desktop-shaped-flow-runtime-v1.yml"
   workflow_dispatch:
 
@@ -27,6 +28,9 @@ jobs:
         with:
           toolchain: "1.94.1"
           components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Format
         run: cargo fmt --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml -- --check
@@ -48,6 +52,24 @@ jobs:
           actual_len="$(wc -c < "$fixture" | tr -d ' ')"
           test "$actual_len" = "291840"
           echo "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" >> "$GITHUB_ENV"
+
+      - name: Acquire pinned Carlton March source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+          root="$RUNNER_TEMP/paragraph-alignment-carlton"
+          mkdir -p "$root"
+          python tools/acquire_carlton_march_pair.py "$root"
+          pub="$root/March-2026.pub"
+          actual_sha="$(sha256sum "$pub" | awk '{print $1}')"
+          test "$actual_sha" = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+          echo "CHAPTERA_CARLTON_PUB=$pub" >> "$GITHUB_ENV"
+
+      - name: Real paragraph alignment caret geometry and Clear restore
+        run: |
+          cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml \
+            real_carlton_paragraph_alignment_moves_caret_and_clear_restores_source_geometry -- --nocapture
 
       - name: Real current-Story shaped-flow edit rebuild
         run: |
