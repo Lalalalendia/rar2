@@ -251,16 +251,6 @@ pub fn materialize_bounded_bootstrap_new_doc_candidate(
         }
     })?;
 
-    if resolved.graph.document.pages.len() != 1 || resolved.graph.pages.len() != 1 {
-        return Err(BootstrapNewDocBlocked::OutputSemantic {
-            detail: format!(
-                "expected one page, document has {} ordered pages and {} page entities",
-                resolved.graph.document.pages.len(),
-                resolved.graph.pages.len()
-            ),
-        });
-    }
-
     let rectangle = resolved
         .graph
         .nodes
@@ -284,21 +274,56 @@ pub fn materialize_bounded_bootstrap_new_doc_candidate(
             ),
         })?;
 
-    let page_id = resolved.graph.document.pages[0];
-    let page = resolved.graph.pages.get(&page_id).ok_or_else(|| {
-        BootstrapNewDocBlocked::OutputSemantic {
-            detail: "ordered customer page is missing from page registry".into(),
-        }
-    })?;
-    for node in [rectangle, textbox] {
-        if !page.children.contains(&node.header.id) {
-            return Err(BootstrapNewDocBlocked::OutputSemantic {
-                detail: format!(
-                    "page does not own expected Contents seq {} node",
-                    node.payload.contents_seq_num
-                ),
-            });
-        }
+    // The generic mature reader intentionally preserves every recovered raw PAGE.
+    // That registry is not a customer-visible Publisher Pages collection: service,
+    // master, carrier, and other PAGE roles can remain present until a bounded
+    // presentation projection applies. Therefore this bootstrap slice must not
+    // require the raw/ordered CDM page counts to equal Publisher's native page
+    // count. Native Publisher acceptance owns that one-customer-page assertion.
+    //
+    // The offline writer gate can still prove the bounded structural fact it
+    // actually owns: seq293 and seq294 must have exactly one shared raw PAGE owner.
+    let rectangle_owner_pages = resolved
+        .graph
+        .pages
+        .iter()
+        .filter_map(|(page_id, page)| {
+            page.children
+                .contains(&rectangle.header.id)
+                .then_some(*page_id)
+        })
+        .collect::<Vec<_>>();
+    let textbox_owner_pages = resolved
+        .graph
+        .pages
+        .iter()
+        .filter_map(|(page_id, page)| {
+            page.children
+                .contains(&textbox.header.id)
+                .then_some(*page_id)
+        })
+        .collect::<Vec<_>>();
+
+    if rectangle_owner_pages.len() != 1 || textbox_owner_pages.len() != 1 {
+        return Err(BootstrapNewDocBlocked::OutputSemantic {
+            detail: format!(
+                "expected one raw PAGE owner per bootstrap node, rectangle owners={} textbox owners={}",
+                rectangle_owner_pages.len(),
+                textbox_owner_pages.len()
+            ),
+        });
+    }
+    if rectangle_owner_pages[0] != textbox_owner_pages[0] {
+        return Err(BootstrapNewDocBlocked::OutputSemantic {
+            detail: "rectangle seq293 and textbox seq294 do not share one raw PAGE owner".into(),
+        });
+    }
+
+    let page_id = rectangle_owner_pages[0];
+    if !resolved.graph.document.pages.contains(&page_id) {
+        return Err(BootstrapNewDocBlocked::OutputSemantic {
+            detail: "shared bootstrap PAGE owner is absent from DOCUMENT page order".into(),
+        });
     }
 
     let story_id = textbox
