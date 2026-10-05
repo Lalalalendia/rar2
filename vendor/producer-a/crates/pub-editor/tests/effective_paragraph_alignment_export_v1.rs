@@ -102,16 +102,10 @@ fn real_carlton_effective_full_story_alignment_drives_idml_and_odg() {
     let cleared_odg = export_counts(&session, EditorEditableTarget::Odg);
     assert_eq!(cleared_idml.0, source_idml.0);
     assert_eq!(cleared_idml.1, source_idml.1);
-    assert_eq!(
-        cleared_idml.2,
-        source_idml.2 - 1 + paragraph_ids.len()
-    );
+    assert_eq!(cleared_idml.2, source_idml.2 - 1 + paragraph_ids.len());
     assert_eq!(cleared_odg.0, source_odg.0);
     assert_eq!(cleared_odg.1, source_odg.1);
-    assert_eq!(
-        cleared_odg.2,
-        source_odg.2 - 1 + paragraph_ids.len()
-    );
+    assert_eq!(cleared_odg.2, source_odg.2 - 1 + paragraph_ids.len());
 
     session
         .set_paragraph_alignment_override_v1(
