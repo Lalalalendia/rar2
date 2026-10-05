@@ -4,7 +4,8 @@ use chaptera_scene_instance::{
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, PageRenderPlanV1, RenderTextFragmentV1,
     RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_v1,
-    complete_scalar_source_font_family_v1, effective_source_font_family_v1,
+    classify_shared_layout_incomplete_cause_v1, complete_scalar_source_font_family_v1,
+    effective_source_font_family_v1,
 };
 use pub_editor::{
     EditOperation, EditorProject, EditorSession, Sha256Digest, open_mature_0x2c_editor,
@@ -64,6 +65,10 @@ struct CurrentViewerPlanCensusV1 {
     shared_layout_incomplete_family_authority_counts: BTreeMap<String, usize>,
     shared_layout_incomplete_font_binding_counts: BTreeMap<String, usize>,
     shared_layout_incomplete_spacing_family_binding_counts: BTreeMap<String, usize>,
+    shared_layout_incomplete_path_counts: BTreeMap<String, usize>,
+    shared_layout_incomplete_consumption_counts: BTreeMap<String, usize>,
+    shared_layout_incomplete_cause_counts: BTreeMap<String, usize>,
+    shared_layout_incomplete_cause_authority_counts: BTreeMap<String, usize>,
     first_line_capacity_recovery_count: usize,
     first_line_capacity_recovery_signature_counts: BTreeMap<String, usize>,
     story_prefix_whole_story_candidate_count: usize,
@@ -335,8 +340,7 @@ fn story_prefix_whole_story_candidates(
 fn census(
     visual: &ViewerGeometryDocument,
     plans: &[PageRenderPlanV1],
-    fallback_font_bytes: &[u8],
-    fallback_face_index: u32,
+    fallback_font: &ExplicitRenderTextFontResourceV1<'_>,
 ) -> CurrentViewerPlanCensusV1 {
     let mut out = CurrentViewerPlanCensusV1 {
         page_count: plans.len(),
@@ -462,8 +466,8 @@ fn census(
                         && *line_height_emu > 0
                         && resolved_line_count > 0
                         && let Some(natural_extent) = compatible_natural_line_height_emu_v1(
-                            fallback_font_bytes,
-                            fallback_face_index,
+                            fallback_font.bytes,
+                            fallback_font.face_index,
                             LengthEmu::new(*font_size_emu),
                         )
                     {
@@ -527,6 +531,35 @@ fn census(
                             .or_default() += 1;
                         *out.shared_layout_incomplete_spacing_family_binding_counts
                             .entry(format!("{spacing}@{family}@{binding}"))
+                            .or_default() += 1;
+
+                        let cause = classify_shared_layout_incomplete_cause_v1(
+                            visual,
+                            page,
+                            node,
+                            text,
+                            fallback_font,
+                            false,
+                        );
+                        *out.shared_layout_incomplete_path_counts
+                            .entry(cause.path.to_owned())
+                            .or_default() += 1;
+                        *out.shared_layout_incomplete_consumption_counts
+                            .entry(cause.consumption.to_owned())
+                            .or_default() += 1;
+                        *out.shared_layout_incomplete_cause_counts
+                            .entry(cause.cause.to_owned())
+                            .or_default() += 1;
+                        *out.shared_layout_incomplete_cause_authority_counts
+                            .entry(format!(
+                                "{}@{}@{}@{}@{}@{}",
+                                cause.path,
+                                cause.consumption,
+                                cause.cause,
+                                spacing,
+                                family,
+                                binding
+                            ))
                             .or_default() += 1;
                     }
                 }
@@ -626,8 +659,54 @@ fn run(
             bytes: image.bytes.clone(),
         })
         .collect::<Vec<_>>();
-    let mut census = census(&visual, &pages, &font_bytes, font.face_index);
+    let mut census = census(&visual, &pages, &font);
     census.image_resource_count = visual.images.len();
+
+    let shared_layout_incomplete = census
+        .backend_fallback_reason_counts
+        .get("shared_layout_incomplete")
+        .copied()
+        .unwrap_or_default();
+    for (label, covered) in [
+        (
+            "path",
+            census
+                .shared_layout_incomplete_path_counts
+                .values()
+                .copied()
+                .sum::<usize>(),
+        ),
+        (
+            "consumption",
+            census
+                .shared_layout_incomplete_consumption_counts
+                .values()
+                .copied()
+                .sum::<usize>(),
+        ),
+        (
+            "cause",
+            census
+                .shared_layout_incomplete_cause_counts
+                .values()
+                .copied()
+                .sum::<usize>(),
+        ),
+        (
+            "cause-authority",
+            census
+                .shared_layout_incomplete_cause_authority_counts
+                .values()
+                .copied()
+                .sum::<usize>(),
+        ),
+    ] {
+        if covered != shared_layout_incomplete {
+            return Err(format!(
+                "supported-subset SharedLayoutIncomplete {label} census does not cover every residual: covered={covered} residual={shared_layout_incomplete}"
+            ));
+        }
+    }
     census.configured_fallback_font_size_emu = font.default_font_size_emu;
     census.configured_fallback_line_height_emu = font.default_line_height_emu;
 
@@ -666,7 +745,7 @@ fn run(
     .map_err(|error| format!("write {}: {error}", output_path.display()))?;
 
     eprintln!(
-        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={} text_font_bindings={:?} shared_layout_incomplete_spacing={:?} shared_layout_incomplete_family={:?} shared_layout_incomplete_binding={:?} first_line_capacity_recoveries={} first_line_capacity_recovery_signatures={:?} fallback_font_size_emu={} fallback_line_height_emu={}",
+        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={} text_font_bindings={:?} shared_layout_incomplete_spacing={:?} shared_layout_incomplete_family={:?} shared_layout_incomplete_binding={:?} shared_layout_incomplete_paths={:?} shared_layout_incomplete_consumption={:?} shared_layout_incomplete_causes={:?} shared_layout_incomplete_cause_authority={:?} first_line_capacity_recoveries={} first_line_capacity_recovery_signatures={:?} fallback_font_size_emu={} fallback_line_height_emu={}",
         packet.census.page_count,
         packet.census.node_count,
         packet.census.projected_instance_count,
@@ -695,6 +774,10 @@ fn run(
             .census
             .shared_layout_incomplete_family_authority_counts,
         packet.census.shared_layout_incomplete_font_binding_counts,
+        packet.census.shared_layout_incomplete_path_counts,
+        packet.census.shared_layout_incomplete_consumption_counts,
+        packet.census.shared_layout_incomplete_cause_counts,
+        packet.census.shared_layout_incomplete_cause_authority_counts,
         packet.census.first_line_capacity_recovery_count,
         packet.census.first_line_capacity_recovery_signature_counts,
         packet.census.configured_fallback_font_size_emu,
