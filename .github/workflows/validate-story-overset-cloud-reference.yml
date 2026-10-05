@@ -1,0 +1,15 @@
+name: VALIDATION - Story overset Cloud reference
+
+on:
+  pull_request:
+    paths:
+      - "crates/chaptera-viewer-render-plan/**"
+      - "apps/chaptera-server/src/reader_scene_v1.rs"
+      - ".github/workflows/validate-story-overset-cloud-reference.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  cloud-reference:
+    uses: ./.github/workflows/cloud-reader-reference-pairs.yml
