@@ -75,25 +75,81 @@ jobs:
           }
           "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Acquire pinned text-format PUB corpus
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $env:RUNNER_TEMP "chaptera-text-format-fixtures"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $base = "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher"
+          $fixtures = @(
+            @("51318.pub", 88576, "728811c92dff5694520e56b6c020533b29d5295d"),
+            @("60685.pub", 119296, "37d3dce70e1786e948edd5592527f90be1fae2ff"),
+            @("LinkAt0And10.pub", 64512, "c4459fb830ef546d89a8302b4e969c36da412c43"),
+            @("LinkAt10.pub", 64512, "89c4a4427197129d30e085e2cc88ef3fdcb9562f"),
+            @("LinkAt10And20And30.pub", 64512, "5f7f747d5b0bfe2c5faaaadf6eda47244869d703"),
+            @("LinkAt10And20And30And40.pub", 64512, "d19ddc46a34afc5c89f90873283a0bbe501ca39d"),
+            @("LinkAt10Longer.pub", 64512, "8a3dcc277ee3b9393211a1ac151a7fcefc5ed040"),
+            @("LinkAt20.pub", 64512, "091a38c71818bfc6404c82a43681d7fa3a188261"),
+            @("Sample.pub", 72192, "b870168319048c9e8631c2338eb937e6f8f62b5b"),
+            @("Sample2.pub", 72704, "610362c471b81bac36e46166ae98d5f3033a7e5f"),
+            @("Sample2000.pub", 61440, "2c6174e5e89235f08a3e5883c785c4951728d855"),
+            @("Sample2_2010.pub", 73216, "74f4566056a39ee880c847b5dd4b8234762a9489"),
+            @("Sample3.pub", 72192, "4f19bec93d25f3d80501490dd108abef4f09b6cb"),
+            @("Sample3_2010.pub", 72704, "d2982c06bbb6e228951781f23d56ea5928893d2b"),
+            @("Sample4.pub", 72192, "445df85f092970c36d4b3003d375331a707d6b3c"),
+            @("Sample4_2010.pub", 72704, "dd6c25b173680d33678ce1bba7a0be5fef3910f5"),
+            @("Sample98.pub", 61440, "8adffda77aefed96e3afda319e2698d43dd478cb"),
+            @("SampleBrochure.pub", 161792, "00deec14dc6cff6d8a47b120d6d84e7e20c72166"),
+            @("SampleNewsletter.pub", 291840, "94900925af5832c493784f3cb51563f838a64df8"),
+            @("Sample_2010.pub", 72704, "ace1540716820640be5c67d85db6b70f48fbc0d4"),
+            @("Simple.pub", 65536, "2397b9d01cfa159de2f73cf5c990d9698eb69567")
+          )
+          foreach ($row in $fixtures) {
+            $name = $row[0]
+            $expectedBytes = [int64]$row[1]
+            $expectedBlob = $row[2]
+            $fixture = Join-Path $root $name
+            Invoke-WebRequest -Uri "$base/$name" -OutFile $fixture
+            if ((Get-Item $fixture).Length -ne $expectedBytes) {
+              throw "$name byte length mismatch"
+            }
+            $actualBlob = (git hash-object $fixture).Trim()
+            if ($actualBlob -ne $expectedBlob) {
+              throw "$name git blob identity mismatch: $actualBlob"
+            }
+          }
+          "CHAPTERA_TEXT_FORMAT_FIXTURES_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Prove bounded Windows source-font binding
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $environmentReceipt = Join-Path $env:RUNNER_TEMP "desktop-source-font-environment.json"
           $realPubReceipt = Join-Path $env:RUNNER_TEMP "desktop-source-font-real-pub.json"
+          $styledReceipt = Join-Path $env:RUNNER_TEMP "desktop-styled-font-real-pub.json"
           $env:CHAPTERA_SOURCE_FONT_RECEIPT = $environmentReceipt
           $env:CHAPTERA_SOURCE_FONT_REAL_PUB_RECEIPT = $realPubReceipt
+          $env:CHAPTERA_STYLED_FONT_REAL_PUB_RECEIPT = $styledReceipt
 
           cargo test --manifest-path apps/chaptera-desktop/Cargo.toml source_font::tests::windows_environment_font_binds_identical_layout_and_paint_bytes -- --nocapture
           if ($LASTEXITCODE -ne 0) { throw "source-font Windows environment proof failed" }
 
+          cargo test --manifest-path apps/chaptera-desktop/Cargo.toml source_font::tests::windows_environment_font_binds_exact_style_tuple_resources -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "styled source-font Windows environment proof failed" }
+
           cargo test --manifest-path apps/chaptera-desktop/Cargo.toml --features embedded-fixture-tests windows_source_font_real_pub_receipt_compares_shared_layouts -- --nocapture
           if ($LASTEXITCODE -ne 0) { throw "source-font real-PUB layout proof failed" }
 
+          cargo test --manifest-path apps/chaptera-desktop/Cargo.toml font_binding::tests::windows_real_pub_scoped_style_changes_exact_resource_and_roundtrips -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "styled-font scoped real-PUB proof failed" }
+
           if (-not (Test-Path $environmentReceipt)) { throw "source-font environment receipt missing" }
           if (-not (Test-Path $realPubReceipt)) { throw "source-font real-PUB receipt missing" }
+          if (-not (Test-Path $styledReceipt)) { throw "styled-font real-PUB receipt missing" }
           "CHAPTERA_SOURCE_FONT_RECEIPT=$environmentReceipt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CHAPTERA_SOURCE_FONT_REAL_PUB_RECEIPT=$realPubReceipt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_STYLED_FONT_REAL_PUB_RECEIPT=$styledReceipt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Upload source-safe source-font receipts
         uses: actions/upload-artifact@v4
@@ -102,5 +158,6 @@ jobs:
           path: |
             ${{ env.CHAPTERA_SOURCE_FONT_RECEIPT }}
             ${{ env.CHAPTERA_SOURCE_FONT_REAL_PUB_RECEIPT }}
+            ${{ env.CHAPTERA_STYLED_FONT_REAL_PUB_RECEIPT }}
           if-no-files-found: error
           retention-days: 30
