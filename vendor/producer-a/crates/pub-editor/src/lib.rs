@@ -4638,7 +4638,11 @@ impl EditorSession {
         Ok(placements)
     }
 
-    pub fn can_replace_story_text(&self, story_id: StoryId) -> Result<(), EditorError> {
+    fn validate_story_text_session_capability(
+        &self,
+        story_id: StoryId,
+        allow_character_format_history: bool,
+    ) -> Result<(), EditorError> {
         self.validate_source_identity()?;
         if self.story_has_authored_paragraph_alignment_override_v1(story_id)? {
             return Err(EditorError::ParagraphAlignmentLifecycleUnsupported { story_id });
@@ -4650,10 +4654,11 @@ impl EditorSession {
             .get(&story_id)
             .ok_or(EditorError::MissingStory { story_id })?;
 
-        if self
-            .undo
-            .iter()
-            .any(|operation| text_format_operation_story_id_v1(operation) == Some(story_id))
+        if !allow_character_format_history
+            && self
+                .undo
+                .iter()
+                .any(|operation| text_format_operation_story_id_v1(operation) == Some(story_id))
         {
             return Err(EditorError::TextFormatTextMutationConflict { story_id });
         }
@@ -4709,6 +4714,14 @@ impl EditorSession {
         }
 
         Ok(())
+    }
+
+    pub fn can_enter_story_text_session(&self, story_id: StoryId) -> Result<(), EditorError> {
+        self.validate_story_text_session_capability(story_id, true)
+    }
+
+    pub fn can_replace_story_text(&self, story_id: StoryId) -> Result<(), EditorError> {
+        self.validate_story_text_session_capability(story_id, false)
     }
 
     pub fn editable_table_cells_for_story(
