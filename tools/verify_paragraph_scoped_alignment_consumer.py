@@ -59,31 +59,45 @@ def idml_story_path(story_id: str) -> str:
     return f"Stories/Story_us{compact_id(story_id)}.xml"
 
 
-def paragraph_style_table(root: ET.Element) -> dict[str, tuple[str | None, str | None]]:
-    result: dict[str, tuple[str | None, str | None]] = {}
+def style_table(
+    root: ET.Element,
+    family: str,
+) -> dict[str, tuple[str | None, str | None, str | None]]:
+    result: dict[str, tuple[str | None, str | None, str | None]] = {}
     for node in root.iter():
         if local(node.tag) != "style":
             continue
         name = node.attrib.get(f"{{{STYLE_NS}}}name")
-        family = node.attrib.get(f"{{{STYLE_NS}}}family")
-        if not name or family != "paragraph":
+        node_family = node.attrib.get(f"{{{STYLE_NS}}}family")
+        if not name or node_family != family:
             continue
         parent = node.attrib.get(f"{{{STYLE_NS}}}parent-style-name")
-        props = next(
-            (child for child in node.iter() if local(child.tag) == "paragraph-properties"),
-            None,
-        )
         align = None
-        if props is not None:
-            value = props.attrib.get(f"{{{FO_NS}}}text-align")
-            align = value.casefold() if value else None
-        result[name] = (align, parent)
+        writing_mode = None
+        for child in node.iter():
+            kind = local(child.tag)
+            if kind not in {"paragraph-properties", "graphic-properties"}:
+                continue
+            if kind == "paragraph-properties" and align is None:
+                value = child.attrib.get(f"{{{FO_NS}}}text-align")
+                align = value.casefold() if value else None
+            if writing_mode is None:
+                value = child.attrib.get(f"{{{STYLE_NS}}}writing-mode")
+                writing_mode = value.casefold() if value else None
+        result[name] = (align, parent, writing_mode)
     return result
 
 
-def resolve_paragraph_alignment(
-    styles: dict[str, tuple[str | None, str | None]],
+def paragraph_style_table(
+    root: ET.Element,
+) -> dict[str, tuple[str | None, str | None, str | None]]:
+    return style_table(root, "paragraph")
+
+
+def resolve_style_value(
+    styles: dict[str, tuple[str | None, str | None, str | None]],
     style_name: str | None,
+    index: int,
 ) -> str | None:
     seen: set[str] = set()
     current = style_name
@@ -92,14 +106,135 @@ def resolve_paragraph_alignment(
         item = styles.get(current)
         if item is None:
             return None
-        align, parent = item
-        if align:
-            return align
-        current = parent
+        value = item[index]
+        if value:
+            return value
+        current = item[1]
     return None
 
 
-def paragraph_alignment(node: ET.Element, styles: dict[str, tuple[str | None, str | None]]) -> str | None:
+def resolve_paragraph_alignment(
+    styles: dict[str, tuple[str | None, str | None, str | None]],
+    style_name: str | None,
+) -> str | None:
+    return resolve_style_value(styles, style_name, 0)
+
+
+def default_writing_mode(root: ET.Element, family: str) -> str | None:
+    for node in root.iter():
+        if local(node.tag) != "default-style":
+            continue
+        if node.attrib.get(f"{{{STYLE_NS}}}family") != family:
+            continue
+        for child in node.iter():
+            if local(child.tag) not in {"paragraph-properties", "graphic-properties"}:
+                continue
+            value = child.attrib.get(f"{{{STYLE_NS}}}writing-mode")
+            if value:
+                return value.casefold()
+    return None
+
+
+def page_writing_mode(root: ET.Element, frame: ET.Element) -> str | None:
+    page = next(
+        (
+            node
+            for node in root.iter()
+            if local(node.tag) == "page" and any(candidate is frame for candidate in node.iter())
+        ),
+        None,
+    )
+    if page is None:
+        return None
+    master_name = page.attrib.get(f"{{{DRAW_NS}}}master-page-name")
+    if not master_name:
+        return None
+    master = next(
+        (
+            node
+            for node in root.iter()
+            if local(node.tag) == "master-page"
+            and node.attrib.get(f"{{{STYLE_NS}}}name") == master_name
+        ),
+        None,
+    )
+    if master is None:
+        return None
+    layout_name = master.attrib.get(f"{{{STYLE_NS}}}page-layout-name")
+    if not layout_name:
+        return None
+    layout = next(
+        (
+            node
+            for node in root.iter()
+            if local(node.tag) == "page-layout"
+            and node.attrib.get(f"{{{STYLE_NS}}}name") == layout_name
+        ),
+        None,
+    )
+    if layout is None:
+        return None
+    props = next(
+        (child for child in layout.iter() if local(child.tag) == "page-layout-properties"),
+        None,
+    )
+    if props is None:
+        return None
+    value = props.attrib.get(f"{{{STYLE_NS}}}writing-mode")
+    return value.casefold() if value else None
+
+
+def effective_writing_mode(
+    root: ET.Element,
+    frame: ET.Element,
+    paragraph: ET.Element,
+    paragraph_styles: dict[str, tuple[str | None, str | None, str | None]],
+) -> str | None:
+    paragraph_mode = resolve_style_value(
+        paragraph_styles,
+        paragraph.attrib.get(f"{{{TEXT_NS}}}style-name"),
+        2,
+    )
+    if paragraph_mode and paragraph_mode != "page":
+        return paragraph_mode
+
+    graphic_styles = style_table(root, "graphic")
+    frame_mode = resolve_style_value(
+        graphic_styles,
+        frame.attrib.get(f"{{{DRAW_NS}}}style-name"),
+        2,
+    )
+    if frame_mode and frame_mode != "page":
+        return frame_mode
+
+    for family in ("paragraph", "graphic"):
+        mode = default_writing_mode(root, family)
+        if mode and mode != "page":
+            return mode
+
+    page_mode = page_writing_mode(root, frame)
+    if page_mode and page_mode != "page":
+        return page_mode
+    return None
+
+
+def logical_alignment(
+    raw: str | None,
+    writing_mode: str | None,
+) -> str | None:
+    if raw not in {"start", "end"}:
+        return raw
+    if writing_mode in {"lr", "lr-tb"}:
+        return "left" if raw == "start" else "right"
+    if writing_mode in {"rl", "rl-tb"}:
+        return "right" if raw == "start" else "left"
+    return raw
+
+
+def paragraph_alignment(
+    node: ET.Element,
+    styles: dict[str, tuple[str | None, str | None, str | None]],
+) -> str | None:
     direct = node.attrib.get(f"{{{FO_NS}}}text-align")
     if direct:
         return direct.casefold()
@@ -360,18 +495,38 @@ def verify_libreoffice(
         raise AssertionError(
             f"LibreOffice lost exact target frame {frame_name!r}; observed={len(frames)}"
         )
+    frame = frames[0]
     styles = paragraph_style_table(root)
-    paragraphs = frame_paragraphs(frames[0])
+    paragraphs = frame_paragraphs(frame)
     if len(paragraphs) < len(wanted):
         raise AssertionError(
             f"LibreOffice has fewer paragraphs than expected: "
             f"found={len(paragraphs)} expected={len(wanted)}"
         )
-    observed = [paragraph_alignment(node, styles) for node in paragraphs[: len(wanted)]]
+    raw_observed = [
+        paragraph_alignment(node, styles)
+        for node in paragraphs[: len(wanted)]
+    ]
+    writing_modes = [
+        effective_writing_mode(root, frame, node, styles)
+        for node in paragraphs[: len(wanted)]
+    ]
+    observed = [
+        logical_alignment(raw, mode)
+        for raw, mode in zip(raw_observed, writing_modes, strict=True)
+    ]
     if observed != wanted:
         raise AssertionError(
             "LibreOffice ordered paragraph alignment mismatch: "
-            + json.dumps({"expected": wanted, "observed": observed}, sort_keys=True)
+            + json.dumps(
+                {
+                    "expected": wanted,
+                    "raw_observed": raw_observed,
+                    "effective_writing_modes": writing_modes,
+                    "semantic_observed": observed,
+                },
+                sort_keys=True,
+            )
         )
     extras = paragraphs[len(wanted) :]
     if any(
@@ -382,6 +537,8 @@ def verify_libreoffice(
     return {
         "frame_name": frame_name,
         "ordered_alignment_sequence": observed,
+        "raw_alignment_sequence": raw_observed,
+        "effective_writing_modes": writing_modes,
         "paragraph_carrier_count": len(paragraphs),
         "extra_empty_carrier_count": len(extras),
     }
