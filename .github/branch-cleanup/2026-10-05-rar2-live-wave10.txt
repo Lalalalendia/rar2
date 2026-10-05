@@ -1,0 +1,46 @@
+# Rar2 live branch GC wave 10 — 2026-10-05
+# Conservative ordinary merged-head cleanup; evidence-heavy prefixes excluded.
+# 40 refs: live tip exactly matches merged PR head targeting main.
+# Excluded: default/protected refs, open PR heads, open PR bases, moved tips, research/measure/validation/corpus/ops evidence classes.
+# Runtime branch-GC rechecks open heads + exact SHA before deletion.
+# Format: <branch> <expected_sha>
+ci/batch01-reference-surface-stage-1100 9601625c36e43e6ed81f0f907eaa0ba1682454a0
+editor-desktop-v0-schema-013-clean b64927feaa996f2a8b8461b4b75a24472d8db7d8
+reader/borderart-physical-catalog-v1 bb5850d40f447c62ec262aaa47b100eb0151351a
+editor-insert-shape-ui-01 7bf8b44ec47fc662e9576910d0baeb0c46e4a389
+editor-desktop-history-shortcuts-01 6400d2731363e9770420755a6096e41b526c510d
+reader/borderart-assets-v1 4fb4acb7162a2c333257de34e82cd08c86fcf90b
+viewer/borderart-dto-v1 63131e8eaf36f958cf9d1ef9b00f2a57a0b14623
+fix/fixed-pdf-pinned-fallback-font-v2 47a8080d93cb016007e4af0c546a78b4e8ef7038
+editor-desktop-save-shortcut-01 3a0dc928a7ec55675ec60463704e37e36aaa9ce5
+fix/yab259-fixed-pdf-engine-adapter 73020c697c7cae387f670b271aaea7b77ab42055
+ci/batch01-full-page-identity-baseline-1025-v3 952778e13b77b2680c1a0c4f6329f596f22de685
+viewer/borderart-render-plan-v1 7c8b0cdc3a7cc7a9dc9f9f46065ea9e1076767e0
+fix/yab259-repair-bundle-adapter f9c2dc60e65941e9a1a0b671c9f612d959d6a7a7
+editor-desktop-duplicate-restore-01 f0ea774a85ea453d39735d183335abc04856cb0b
+fix/export-vocab-884-v2 7a2330efef30f19c68d64858f6b5fd85988558e0
+ci/batch01-stage-aware-membership-gate-1100-v4 475ae851c263c559fd66d32fdf02e69efd7b68e0
+reader/master-projection-authority-bridge-1113-v3 cd4a8ff25c13bb0ea9589c185c825e872f967240
+editor-history-shortcuts-acceptance-fix-01 640032a33834a8d9c4c5c8413eb149ad37a2783b
+fix/reader-preflight-vendor-pub-model-current-main 76f1e0d84c8c5ce32d7754c26efc99eefb2f91c2
+ci/native-one-shot-direct-trigger-v1 cfbbaad8f061cd6e79139ce010176d20ae08685a
+interaction-resize-constraints-rust-01 9e8c1b44d6b280816d9934492b2559c4bc653ae4
+ci/paragraph-metrics-native-once-v1 4195bbbe81f31ca749d548ed942e0f0baed6e8e2
+fix/native-main-stale-oracle-canceller 8db8a80566c40b6a6be1e7d6aeff2a3109d33307
+fix/quill-oracle-latest-run-wins fb52de23de9c3656c89dabcdc679d5658e813247
+conversion/editable-typography-current-main-02 802017255a89dc9633ba2f2ef4d12df4bad93476
+ci/desktop-mainrs-fanout-02-suite-handoff dbd8d1d684808b13ec4379c515b53fb38f033767
+ci/native-main-canceller-stack-029-v2 632ef24c800134926523a2945883ef723b5b8750
+recover/pub-output-font-plan-03 b3076591978d43d79d145ec9e9759300f11e0165
+ci/desktop-mainrs-continuity-v2-cli 371eabc36bb9f2034861dbd496dbc38d056a6dd1
+ci/desktop-mainrs-selection-keyboard 7a2c814f76c75541a4d8ed0348d25de6617515c9
+ci/ci-desktop-mainrs-fanout-02-windows-cargo-reuse b011227d58b650e9e5dc6005abceeb9b7b27dca1
+fix/yab259-packet-renderer-851 37f8d393617aef3010663763896d101f6d9715fd
+recover/pub-docx-text-first-04 83cf84ebe1c39bf1b9fcc21566762fda14c45247
+editor-desktop-text-interior-activation-01 37b4a49a8a88ed124bd3ea75b0352f756ac0f1ca
+editor-desktop-textbox-restore-01 0e067f0cd39d6361bd0d95c87bdd176415ba87ff
+editor-page-nav-shortcuts-01 2bf8b5925f817969e1edf0c9d3905fea1b79d2e9
+fix/yab259-node-reports-851 86a572179bd68663475ef9bef5496795fc8767c1
+fix/editor-current-image-resources-851-v2 e4d90ae33b703e16427c12d660301cde8a7ba2b0
+ci/desktop-mainrs-text-session-shell-v2 1bda015d2dd1387053b81522603a252c6706e6c7
+ci/sign-preflight-trust-path-fanout-01 73f5454d06d36dd22354da8eeb6a6f233d727c69
