@@ -198,6 +198,209 @@ pub fn add_full_story_paragraph_alignment_to_idml(
     Ok(())
 }
 
+pub fn add_paragraph_scoped_alignment_to_idml(
+    plan: &ExportPlan,
+    package: &mut IdmlPackage,
+    placements: &[IdmlParagraphScopedAlignmentPlacement],
+) -> Result<(), IdmlParagraphAlignmentError> {
+    if package.target.format != "idml" || plan.target.format != "idml" {
+        return Err(IdmlParagraphAlignmentError::NonIdmlPackage);
+    }
+
+    let mut ordered = placements.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|placement| placement.story_id);
+    let mut seen_stories = BTreeSet::new();
+    let mut seen_paragraphs = BTreeSet::new();
+
+    for placement in ordered {
+        if !seen_stories.insert(placement.story_id) {
+            return Err(IdmlParagraphAlignmentError::DuplicateStory {
+                story_id: placement.story_id,
+            });
+        }
+        if !has_planned_feature(plan, placement.story_id.into_canonical()) {
+            return Err(IdmlParagraphAlignmentError::MissingPlannedFeature {
+                story_id: placement.story_id,
+            });
+        }
+        if placement.paragraphs.is_empty() {
+            return Err(IdmlParagraphAlignmentError::EmptyParagraphs {
+                story_id: placement.story_id,
+            });
+        }
+
+        let mut paragraphs = placement.paragraphs.clone();
+        paragraphs.sort_by_key(|paragraph| {
+            (
+                paragraph.range.start,
+                paragraph.range.end,
+                paragraph.paragraph_id,
+            )
+        });
+
+        let scalar_len = u64::try_from(placement.story_text.chars().count()).unwrap();
+        let mut previous_end = 0_u64;
+        for paragraph in &paragraphs {
+            if paragraph.story_id != placement.story_id {
+                return Err(IdmlParagraphAlignmentError::ParagraphStoryMismatch {
+                    story_id: placement.story_id,
+                    paragraph_id: paragraph.paragraph_id,
+                    paragraph_story_id: paragraph.story_id,
+                });
+            }
+            if !seen_paragraphs.insert(paragraph.paragraph_id) {
+                return Err(IdmlParagraphAlignmentError::DuplicateParagraph {
+                    paragraph_id: paragraph.paragraph_id,
+                });
+            }
+            if paragraph.range.start != previous_end || paragraph.range.end < paragraph.range.start {
+                return Err(IdmlParagraphAlignmentError::NonContiguousParagraphRanges {
+                    story_id: placement.story_id,
+                });
+            }
+            previous_end = paragraph.range.end;
+        }
+        if previous_end != scalar_len {
+            return Err(IdmlParagraphAlignmentError::ParagraphCoverageMismatch {
+                story_id: placement.story_id,
+                expected_end: scalar_len,
+                found_end: previous_end,
+            });
+        }
+
+        let path = story_path(placement.story_id);
+        let part = package
+            .parts
+            .iter_mut()
+            .find(|part| part.kind == IdmlPartKind::Story && part.path == path)
+            .ok_or(IdmlParagraphAlignmentError::MissingStoryPart {
+                story_id: placement.story_id,
+            })?;
+        let IdmlPartContent::Text(xml) = &mut part.content else {
+            return Err(IdmlParagraphAlignmentError::BinaryStoryPart {
+                story_id: placement.story_id,
+            });
+        };
+
+        let paragraph_open =
+            "    <ParagraphStyleRange AppliedParagraphStyle=\"ParagraphStyle/$ID/[No paragraph style]\">\n";
+        let paragraph_close = "    </ParagraphStyleRange>\n";
+        if xml.matches(paragraph_open).count() != 1 || xml.matches(paragraph_close).count() != 1 {
+            return Err(IdmlParagraphAlignmentError::UnexpectedStoryMarkup {
+                story_id: placement.story_id,
+            });
+        }
+        let paragraph_start = xml.find(paragraph_open).unwrap();
+        let relative_close = xml[paragraph_start..].find(paragraph_close).unwrap();
+        let paragraph_end = paragraph_start + relative_close + paragraph_close.len();
+        let block = &xml[paragraph_start..paragraph_end];
+
+        let content_open = "<Content>";
+        let content_close = "</Content>";
+        if block.matches(content_open).count() != 1 || block.matches(content_close).count() != 1 {
+            return Err(IdmlParagraphAlignmentError::UnexpectedStoryMarkup {
+                story_id: placement.story_id,
+            });
+        }
+        let content_start = block.find(content_open).unwrap();
+        let content_end = block.find(content_close).unwrap();
+        if content_end < content_start {
+            return Err(IdmlParagraphAlignmentError::UnexpectedStoryMarkup {
+                story_id: placement.story_id,
+            });
+        }
+
+        let char_prefix_start = paragraph_open.len();
+        let char_prefix_end = content_start;
+        let char_prefix = &block[char_prefix_start..char_prefix_end];
+        let char_suffix_start = content_end + content_close.len();
+        let char_suffix_end = block.len() - paragraph_close.len();
+        let char_suffix = &block[char_suffix_start..char_suffix_end];
+
+        let mut replacement = String::new();
+        for (index, paragraph) in paragraphs.iter().enumerate() {
+            let raw = scalar_slice(
+                &placement.story_text,
+                paragraph.range.start,
+                paragraph.range.end,
+            );
+            let is_last = index + 1 == paragraphs.len();
+            let content = paragraph_content_from_canonical_range(
+                placement.story_id,
+                paragraph.paragraph_id,
+                raw,
+                is_last,
+            )?;
+            let escaped = escape_xml_content(content);
+            let justification = match paragraph.alignment {
+                ParagraphScopedAlignmentValueV1::Left => "LeftAlign",
+                ParagraphScopedAlignmentValueV1::Center => "CenterAlign",
+                ParagraphScopedAlignmentValueV1::Right => "RightAlign",
+            };
+            writeln!(
+                replacement,
+                "    <ParagraphStyleRange AppliedParagraphStyle=\"ParagraphStyle/$ID/[No paragraph style]\" Justification=\"{justification}\">"
+            )
+            .unwrap();
+            replacement.push_str(char_prefix);
+            replacement.push_str(content_open);
+            replacement.push_str(&escaped);
+            replacement.push_str(content_close);
+            replacement.push_str(char_suffix);
+            replacement.push_str(paragraph_close);
+        }
+
+        xml.replace_range(paragraph_start..paragraph_end, &replacement);
+    }
+
+    Ok(())
+}
+
+fn scalar_slice(input: &str, start: u64, end: u64) -> String {
+    input
+        .chars()
+        .skip(usize::try_from(start).unwrap())
+        .take(usize::try_from(end - start).unwrap())
+        .collect()
+}
+
+fn paragraph_content_from_canonical_range(
+    story_id: StoryId,
+    paragraph_id: pub_model::ParagraphId,
+    mut raw: String,
+    is_last: bool,
+) -> Result<String, IdmlParagraphAlignmentError> {
+    if !is_last && !raw.ends_with('\r') {
+        return Err(IdmlParagraphAlignmentError::MissingParagraphTerminator {
+            story_id,
+            paragraph_id,
+        });
+    }
+    if raw.ends_with('\r') {
+        raw.pop();
+    }
+    if raw.contains('\r') {
+        return Err(IdmlParagraphAlignmentError::EmbeddedParagraphTerminator {
+            story_id,
+            paragraph_id,
+        });
+    }
+    Ok(raw)
+}
+
+fn escape_xml_content(input: String) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for character in input.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
+}
+
 fn has_planned_feature(plan: &ExportPlan, origin: CanonicalId) -> bool {
     plan.features.iter().any(|planned| {
         planned.request.origin == Some(origin)
