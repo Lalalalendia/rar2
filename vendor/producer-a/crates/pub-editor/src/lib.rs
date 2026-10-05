@@ -3878,9 +3878,9 @@ impl EditorSession {
                         .odg_paragraph_scoped_alignment_placements_v1(&scoped_paragraph_alignments);
                     add_paragraph_scoped_alignment_to_odg(&plan, &mut package, &scoped_placements)
                         .map_err(|error| EditorExportError::Projection {
-                        target,
-                        message: error.to_string(),
-                    })?;
+                            target,
+                            message: error.to_string(),
+                        })?;
                     let paragraph_alignment_placements = self
                         .odg_full_story_paragraph_alignment_placements_v1(&paragraph_alignments);
                     add_full_story_paragraph_alignment_to_odg(
@@ -3953,9 +3953,9 @@ impl EditorSession {
                     .map_err(|message| EditorExportError::Projection { target, message })?;
                 add_paragraph_scoped_alignment_to_idml(&plan, &mut package, &scoped_placements)
                     .map_err(|error| EditorExportError::Projection {
-                    target,
-                    message: error.to_string(),
-                })?;
+                        target,
+                        message: error.to_string(),
+                    })?;
                 add_full_story_paragraph_alignment_to_idml(
                     &plan,
                     &mut package,
@@ -4000,9 +4000,9 @@ impl EditorSession {
                     self.odg_paragraph_scoped_alignment_placements_v1(&scoped_paragraph_alignments);
                 add_paragraph_scoped_alignment_to_odg(&plan, &mut package, &scoped_placements)
                     .map_err(|error| EditorExportError::Projection {
-                    target,
-                    message: error.to_string(),
-                })?;
+                        target,
+                        message: error.to_string(),
+                    })?;
                 let paragraph_alignment_placements =
                     self.odg_full_story_paragraph_alignment_placements_v1(&paragraph_alignments);
                 add_full_story_paragraph_alignment_to_odg(
