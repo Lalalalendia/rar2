@@ -114,7 +114,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 paragraph.paragraph_id,
             )
         });
-        if paragraphs.len() < 3 {
+        if paragraphs.len() < 2 {
             continue;
         }
         let Some(story) = session.graph().stories.get(&alignment.story_id) else {
@@ -132,7 +132,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let (story_id, paragraphs) = selected.ok_or(
-        "Carlton exposes no uniform-Right Story with at least three content-bearing canonical paragraphs",
+        "Carlton exposes no uniform-Right Story with at least two content-bearing canonical paragraphs",
     )?;
     let story = session
         .graph()
