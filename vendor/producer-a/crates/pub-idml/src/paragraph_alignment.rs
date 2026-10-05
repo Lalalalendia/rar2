@@ -1,7 +1,7 @@
 use crate::{IdmlPackage, IdmlPartContent, IdmlPartKind};
 use pub_export::{
-    ExportPlan, FullStoryParagraphAlignmentV1, ParagraphAlignmentV1,
-    STORY_PARAGRAPH_ALIGNMENT_FEATURE,
+    ExportPlan, FullStoryParagraphAlignmentV1, ParagraphAlignmentV1, ParagraphScopedAlignmentV1,
+    ParagraphScopedAlignmentValueV1, STORY_PARAGRAPH_ALIGNMENT_FEATURE,
 };
 use pub_model::{CanonicalId, StoryId};
 use std::collections::BTreeSet;
@@ -9,6 +9,13 @@ use std::fmt;
 use std::fmt::Write as _;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdmlParagraphScopedAlignmentPlacement {
+    pub story_id: StoryId,
+    pub story_text: String,
+    pub paragraphs: Vec<ParagraphScopedAlignmentV1>,
+}
+
 pub enum IdmlParagraphAlignmentError {
     NonIdmlPackage,
     DuplicateStory { story_id: StoryId },
