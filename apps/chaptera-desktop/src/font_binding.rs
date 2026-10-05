@@ -346,16 +346,26 @@ mod tests {
     fn windows_real_pub_scoped_style_changes_exact_resource_and_roundtrips() {
         struct Witness {
             path: PathBuf,
+            fixture_sha256: String,
             page_index: usize,
             node_id: NodeId,
             story_id: StoryId,
+            source_family: String,
             property: FormatPropertyV1,
             toggled_value: bool,
+            before_bold: bool,
+            before_italic: bool,
+            after_bold: bool,
+            after_italic: bool,
             edit_start: u32,
             edit_end: u32,
             outside_scalar: u32,
             before_resource_id: String,
+            before_resource_sha256: String,
+            before_face_index: u32,
             after_resource_id: String,
+            after_resource_sha256: String,
+            after_face_index: u32,
         }
 
         let root = env::var_os("CHAPTERA_TEXT_FORMAT_FIXTURES_DIR")
@@ -376,6 +386,7 @@ mod tests {
         'files: for path in paths {
             let original = fs::read(&path).expect("read candidate PUB");
             let digest = Sha256::digest(&original);
+            let fixture_sha256 = format!("{digest:x}");
             let mut digest_bytes = [0_u8; 32];
             digest_bytes.copy_from_slice(&digest);
             let source_hash = Sha256Digest::from_bytes(digest_bytes);
@@ -420,46 +431,55 @@ mod tests {
                             continue;
                         };
                         let before_resource_id = before_font.resource_id.to_owned();
+                        let before_resource_sha256 = before_font.expected_sha256.to_owned();
+                        let before_face_index = before_font.face_index;
 
                         let mut property = FormatPropertyV1::Bold;
                         let mut toggled_value = !source_bold;
                         let mut toggled = run.clone();
                         toggled.bold = Some(toggled_value);
-                        let mut after_resource_id = registry
-                            .resource_for_typography_run(&toggled)
-                            .map(|font| font.resource_id.to_owned());
+                        let mut after_font = registry.resource_for_typography_run(&toggled);
 
-                        if after_resource_id.as_deref() == Some(before_resource_id.as_str())
-                            || after_resource_id.is_none()
+                        if after_font
+                            .as_ref()
+                            .is_none_or(|font| font.resource_id == before_resource_id)
                         {
                             property = FormatPropertyV1::Italic;
                             toggled_value = !source_italic;
                             toggled = run.clone();
                             toggled.italic = Some(toggled_value);
-                            after_resource_id = registry
-                                .resource_for_typography_run(&toggled)
-                                .map(|font| font.resource_id.to_owned());
+                            after_font = registry.resource_for_typography_run(&toggled);
                         }
 
-                        let Some(after_resource_id) = after_resource_id else {
+                        let Some(after_font) = after_font else {
                             continue;
                         };
-                        if after_resource_id == before_resource_id {
+                        if after_font.resource_id == before_resource_id {
                             continue;
                         }
 
                         selected = Some(Witness {
                             path: path.clone(),
+                            fixture_sha256: fixture_sha256.clone(),
                             page_index,
                             node_id: node.node_id,
                             story_id: fragment.story_id,
+                            source_family: run.source_font_name.clone(),
                             property,
                             toggled_value,
+                            before_bold: source_bold,
+                            before_italic: source_italic,
+                            after_bold: toggled.bold.expect("complete styled Bold"),
+                            after_italic: toggled.italic.expect("complete styled Italic"),
                             edit_start: run.scalar_start,
                             edit_end: run.scalar_start + 1,
                             outside_scalar: run.scalar_start + 1,
                             before_resource_id,
-                            after_resource_id,
+                            before_resource_sha256,
+                            before_face_index,
+                            after_resource_id: after_font.resource_id.to_owned(),
+                            after_resource_sha256: after_font.expected_sha256.to_owned(),
+                            after_face_index: after_font.face_index,
                         });
                         break 'files;
                     }
@@ -592,13 +612,31 @@ mod tests {
         let receipt = serde_json::json!({
             "schema": "chaptera.desktop-styled-font-real-pub.v1",
             "fixture": witness.path.file_name().and_then(|value| value.to_str()),
+            "fixture_sha256": witness.fixture_sha256,
             "story_id": witness.story_id,
             "node_id": witness.node_id,
             "page_index": witness.page_index,
+            "source_family": witness.source_family,
             "property": format!("{:?}", witness.property),
             "edited_range": [witness.edit_start, witness.edit_end],
-            "source_resource_id": witness.before_resource_id,
-            "styled_resource_id": witness.after_resource_id,
+            "before_style": {
+                "bold": witness.before_bold,
+                "italic": witness.before_italic
+            },
+            "after_style": {
+                "bold": witness.after_bold,
+                "italic": witness.after_italic
+            },
+            "source_resource": {
+                "resource_id": witness.before_resource_id,
+                "sha256": witness.before_resource_sha256,
+                "face_index": witness.before_face_index
+            },
+            "styled_resource": {
+                "resource_id": witness.after_resource_id,
+                "sha256": witness.after_resource_sha256,
+                "face_index": witness.after_face_index
+            },
             "resource_change_scoped_to_range": true,
             "undo_restores_source": true,
             "redo_restores_styled": true,
