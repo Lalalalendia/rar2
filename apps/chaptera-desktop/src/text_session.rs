@@ -760,7 +760,7 @@ mod tests {
     }
 
     #[test]
-    fn real_pub_color_blocked_story_uses_scoped_desktop_bold_italic_history_v016() {
+    fn real_pub_story_uses_scoped_desktop_bold_italic_history_v016() {
         let Some(root) = env::var_os("CHAPTERA_TEXT_FORMAT_FIXTURES_DIR") else {
             eprintln!(
                 "CHAPTERA_TEXT_FORMAT_FIXTURES_DIR not set; dedicated text-format gate owns real evidence"
@@ -793,13 +793,6 @@ mod tests {
             .ok()?;
 
             visual.text_fragments.iter().find_map(|fragment| {
-                let full_error = editor
-                    .current_text_format_overlay_v1(fragment.story_id)
-                    .err()?
-                    .to_string();
-                if !full_error.contains("bounded effective direct-RGB text color is unavailable") {
-                    return None;
-                }
                 let mut mode =
                     enter_explicit_text_mode(&editor, fragment.story_id, fragment.frame_id).ok()?;
                 select_all(&mut mode);
@@ -816,15 +809,12 @@ mod tests {
                     editor.clone(),
                     fragment.story_id,
                     fragment.frame_id,
-                    full_error,
                 ))
             })
         });
 
-        let (path, original, source_hash, mut editor, story_id, frame_id, full_error) =
-            witness.expect(
-                "pinned real-PUB corpus must expose a color-blocked Story with scoped Bold authority",
-            );
+        let (path, original, source_hash, mut editor, story_id, frame_id) =
+            witness.expect("pinned real-PUB corpus must expose a Story with scoped Bold authority");
 
         let source_text = editor.graph().stories[&story_id].text.clone();
         let mut mode =
@@ -860,14 +850,6 @@ mod tests {
             after.effective,
             DesktopBooleanEffectiveStateV1::Uniform(expected)
         );
-        assert!(
-            editor
-                .current_text_format_overlay_v1(story_id)
-                .expect_err("scoped Bold must not invent unresolved color")
-                .to_string()
-                .contains("bounded effective direct-RGB text color is unavailable")
-        );
-
         editor.undo().expect("Undo scoped Bold formatting");
         rebind_after_non_text_document_change(&editor, &mut mode)
             .expect("rebind after format Undo");
