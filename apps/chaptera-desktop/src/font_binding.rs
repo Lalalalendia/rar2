@@ -48,8 +48,8 @@ fn bool_value_at(
     let segment = segments
         .iter()
         .find(|segment| segment.start_scalar <= start && end <= segment.end_scalar)?;
-    match segment.value {
-        FormatValueV1::Bool(value) => Some(value),
+    match &segment.value {
+        FormatValueV1::Bool(value) => Some(*value),
         _ => None,
     }
 }
