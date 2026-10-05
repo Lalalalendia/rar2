@@ -3,6 +3,7 @@ name: Editor Duplicate Rectangle V1
 on:
   pull_request:
     paths:
+      - "vendor/producer-a/crates/pub-editor/**"
       - "vendor/producer-a/crates/pub-editor/src/duplicate_authored_rectangle_v1.rs"
       - "vendor/producer-a/crates/pub-editor/src/lib.rs"
       - "vendor/producer-a/crates/pub-editor/tests/duplicate_authored_rectangle_v1.rs"
