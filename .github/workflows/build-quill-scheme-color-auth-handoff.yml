@@ -1,0 +1,107 @@
+name: Build portable Quill scheme-color authority handoff
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/build-quill-scheme-color-auth-handoff.yml"
+      - "tools/portable/quill-scheme-color-auth/**"
+      - "tools/windows/pub-runtime/PubRuntime.psm1"
+      - "tools/acquire_carlton_march_pair.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-quill-scheme-color-auth-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Parse portable PowerShell
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tokens=$null; $errors=$null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "tools/portable/quill-scheme-color-auth/run-native.ps1").Path,[ref]$tokens,[ref]$errors)
+          if($errors.Count -ne 0){$errors | ForEach-Object {Write-Error $_.Message}; throw "portable runner parse failed"}
+
+      - name: Acquire exact public Carlton March PUB
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+          $root = Join-Path $env:RUNNER_TEMP "carlton-scheme-handoff"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          python tools/acquire_carlton_march_pair.py $root
+          if($LASTEXITCODE -ne 0){throw "Carlton acquisition failed"}
+          $pub=Join-Path $root "March-2026.pub"
+          $expected="bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+          $actual=(Get-FileHash -LiteralPath $pub -Algorithm SHA256).Hash.ToLowerInvariant()
+          if($actual -ne $expected){throw "Carlton PUB identity drift: $actual"}
+          "CHAPTERA_CARLTON_PUB=$pub" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Assemble offline bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundle = Join-Path $PWD "portable/QUILL-SCHEME-COLOR-AUTH-V1"
+          New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+
+          Copy-Item "tools/portable/quill-scheme-color-auth/README.txt" (Join-Path $bundle "README.txt")
+          Copy-Item "tools/portable/quill-scheme-color-auth/RUN_NATIVE.cmd" (Join-Path $bundle "RUN_NATIVE.cmd")
+          Copy-Item "tools/portable/quill-scheme-color-auth/run-native.ps1" (Join-Path $bundle "run-native.ps1")
+
+          $runtimeDst = Join-Path $bundle "tools/windows/pub-runtime"
+          New-Item -ItemType Directory -Force -Path $runtimeDst | Out-Null
+          Copy-Item "tools/windows/pub-runtime/PubRuntime.psm1" (Join-Path $runtimeDst "PubRuntime.psm1")
+
+          $fixtureDst = Join-Path $bundle "fixtures"
+          New-Item -ItemType Directory -Force -Path $fixtureDst | Out-Null
+          $fixtureName = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3.pub"
+          Copy-Item $env:CHAPTERA_CARLTON_PUB (Join-Path $fixtureDst $fixtureName)
+
+          $records=@()
+          foreach($file in Get-ChildItem -LiteralPath $bundle -File -Recurse | Sort-Object FullName){
+            if($file.Name -eq "bundle-manifest.json"){continue}
+            $rel=[IO.Path]::GetRelativePath($bundle,$file.FullName).Replace("\","/")
+            $records += [ordered]@{
+              path=$rel
+              bytes=[int64]$file.Length
+              sha256=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+          }
+          [ordered]@{
+            schema="chaptera.quill-scheme-color-portable.v1"
+            source_main_sha="${{ github.event.pull_request.base.sha }}"
+            builder_head_sha="${{ github.event.pull_request.head.sha }}"
+            exact_carlton_sha256="bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+            publisher_file_version="16.0.12527.22145"
+            files=$records
+          } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $bundle "bundle-manifest.json") -Encoding UTF8
+
+          Compress-Archive -Path (Join-Path $bundle "*") -DestinationPath "QUILL-SCHEME-COLOR-AUTH-V1.zip" -CompressionLevel Optimal -Force
+          $sha=(Get-FileHash "QUILL-SCHEME-COLOR-AUTH-V1.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes=(Get-Item "QUILL-SCHEME-COLOR-AUTH-V1.zip").Length
+          [ordered]@{schema="chaptera.quill-scheme-color-portable-zip.v1";sha256=$sha;bytes=[int64]$bytes} | ConvertTo-Json | Set-Content "QUILL-SCHEME-COLOR-AUTH-V1.sha256.json" -Encoding UTF8
+          Write-Host "bundle_sha256=$sha"
+          Write-Host "bundle_bytes=$bytes"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quill-scheme-color-auth-portable-v1
+          path: |
+            QUILL-SCHEME-COLOR-AUTH-V1.zip
+            QUILL-SCHEME-COLOR-AUTH-V1.sha256.json
+          if-no-files-found: error
+          retention-days: 14
