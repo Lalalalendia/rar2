@@ -57,8 +57,6 @@ struct CurrentViewerPlanCensusV1 {
     projected_instance_count: usize,
     duplicate_node_id_count: usize,
     shared_resolved_text_node_count: usize,
-    shared_resolved_partial_story_overset_count: usize,
-    shared_resolved_partial_story_overset_signature_counts: BTreeMap<String, usize>,
     backend_fallback_text_node_count: usize,
     backend_fallback_reason_counts: BTreeMap<String, usize>,
     text_font_binding_counts: BTreeMap<String, usize>,
@@ -449,23 +447,6 @@ fn census(
                     ..
                 } => {
                     out.shared_resolved_text_node_count += 1;
-
-                    if node.projected_scene_instance.is_none()
-                        && let Some(last_consumed_scalar_end) =
-                            layout.lines.last().map(|line| line.consumed_scalar_end)
-                        && last_consumed_scalar_end < text.scalar_end
-                    {
-                        let remaining_scalar_count =
-                            text.scalar_end.saturating_sub(last_consumed_scalar_end);
-                        out.shared_resolved_partial_story_overset_count += 1;
-                        *out.shared_resolved_partial_story_overset_signature_counts
-                            .entry(format!(
-                                "lines={}|remaining_scalars={remaining_scalar_count}",
-                                layout.lines.len()
-                            ))
-                            .or_default() += 1;
-                    }
-
                     if is_story_prefix_candidate {
                         *out.story_prefix_whole_story_candidate_outcome_counts
                             .entry("shared_resolved".to_owned())
@@ -685,15 +666,11 @@ fn run(
     .map_err(|error| format!("write {}: {error}", output_path.display()))?;
 
     eprintln!(
-        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} partial_story_overset={} partial_story_overset_signatures={:?} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={} text_font_bindings={:?} shared_layout_incomplete_spacing={:?} shared_layout_incomplete_family={:?} shared_layout_incomplete_binding={:?} first_line_capacity_recoveries={} first_line_capacity_recovery_signatures={:?} fallback_font_size_emu={} fallback_line_height_emu={}",
+        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={} text_font_bindings={:?} shared_layout_incomplete_spacing={:?} shared_layout_incomplete_family={:?} shared_layout_incomplete_binding={:?} first_line_capacity_recoveries={} first_line_capacity_recovery_signatures={:?} fallback_font_size_emu={} fallback_line_height_emu={}",
         packet.census.page_count,
         packet.census.node_count,
         packet.census.projected_instance_count,
         packet.census.shared_resolved_text_node_count,
-        packet.census.shared_resolved_partial_story_overset_count,
-        packet
-            .census
-            .shared_resolved_partial_story_overset_signature_counts,
         packet.census.backend_fallback_text_node_count,
         packet.census.missing_shaping_evidence_count,
         packet.census.duplicate_node_id_count,
