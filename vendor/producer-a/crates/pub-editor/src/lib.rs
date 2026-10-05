@@ -7903,6 +7903,7 @@ mod asset_reachability_tests {
             font_inherited: true,
             size_inherited: true,
             color_rgb: Some([0x11, 0x22, 0x33]),
+            color_scheme_slot: None,
             color_inherited: true,
             bold: Some(pub_reader::PubTypographyBooleanV1 {
                 local_toggle: true,
@@ -7953,6 +7954,7 @@ mod asset_reachability_tests {
             font_inherited: false,
             size_inherited: false,
             color_rgb: None,
+            color_scheme_slot: None,
             color_inherited: false,
             bold: Some(pub_reader::PubTypographyBooleanV1 {
                 local_toggle: false,
