@@ -27,8 +27,7 @@ use pub_viewer::ViewerProjectedSceneInstanceV1;
 use pub_viewer::{
     ViewerDecorativeBorderSlotV1, ViewerGeometryDocument, ViewerParagraphAlignment,
     ViewerParagraphLineSpacing, ViewerParagraphLineSpacingRun, ViewerScriptFontEntryDisposition,
-    ViewerStoryFrame,
-    ViewerTextVerticalAlignment,
+    ViewerStoryFrame, ViewerTextVerticalAlignment,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -1944,8 +1943,7 @@ fn scale_proportional_line_height_emu_v1(
 ) -> Option<i64> {
     let proven_explicit = matches!(
         point_equivalent_emu,
-        PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1
-            | PUBLISHER_ONE_POINT_FIVE_POINT_EQUIVALENT_EMU_V1
+        PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1 | PUBLISHER_ONE_POINT_FIVE_POINT_EQUIVALENT_EMU_V1
     );
     let proven_default =
         inherited_default && point_equivalent_emu == PUBLISHER_DEFAULT_POINT_EQUIVALENT_EMU_V1;
@@ -3664,8 +3662,8 @@ mod tests {
             source_story_text_sha256: viewer_story_text_sha256(&story_text),
         }];
 
-        let fallback = scaled_line_height_emu(12 * 12_700, 114_300, 142_875)
-            .expect("fallback line height");
+        let fallback =
+            scaled_line_height_emu(12 * 12_700, 114_300, 142_875).expect("fallback line height");
         assert_eq!(
             resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, true),
             Some(fallback),
