@@ -620,9 +620,8 @@ mod tests {
         .expect("source Bold state");
         let source_hash =
             text_format_property_state_hash_v1(&source).expect("source property hash");
-        let after_set =
-            set_text_format_property_state_v1(&source, 0, 4, FormatValueV1::Bool(true))
-                .expect("set scoped Bold");
+        let after_set = set_text_format_property_state_v1(&source, 0, 4, FormatValueV1::Bool(true))
+            .expect("set scoped Bold");
         let set_hash =
             text_format_property_state_hash_v1(&after_set).expect("edited property hash");
         let set_operation = EditOperation::SetTextFormatPropertyScopedV1 {
