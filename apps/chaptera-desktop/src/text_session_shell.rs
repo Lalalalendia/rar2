@@ -4,6 +4,9 @@
 use super::{SceneHitEntry, ViewerApp, text_session};
 use eframe::egui;
 
+#[path = "paragraph_alignment_ui.rs"]
+mod paragraph_alignment_ui;
+
 fn paragraph_alignment_shortcut_v1(
     key: egui::Key,
     modifiers: egui::Modifiers,
@@ -201,7 +204,7 @@ impl ViewerApp {
 
     pub(super) fn canvas_paragraph_alignment_state_v1(
         &self,
-    ) -> Result<text_session::DesktopParagraphAlignmentSelectionStateV1, String> {
+    ) -> Result<paragraph_alignment_ui::DesktopParagraphAlignmentSelectionStateV1, String> {
         let editor = self
             .editor
             .as_ref()
@@ -210,7 +213,7 @@ impl ViewerApp {
             .text_mode
             .as_ref()
             .ok_or_else(|| "Text editing is not active.".to_owned())?;
-        text_session::paragraph_alignment_selection_state_v1(editor, mode)
+        paragraph_alignment_ui::paragraph_alignment_selection_state_v1(editor, mode)
     }
 
     pub(super) fn apply_canvas_paragraph_alignment_v1(
@@ -219,7 +222,7 @@ impl ViewerApp {
     ) {
         let outcome = match (&mut self.editor, &mut self.text_mode) {
             (Some(editor), Some(mode)) => {
-                text_session::apply_paragraph_alignment_v1(editor, mode, value)
+                paragraph_alignment_ui::apply_paragraph_alignment_v1(editor, mode, value)
             }
             _ => return,
         };
@@ -240,7 +243,7 @@ impl ViewerApp {
     pub(super) fn clear_canvas_paragraph_alignment_override_v1(&mut self) {
         let outcome = match (&mut self.editor, &mut self.text_mode) {
             (Some(editor), Some(mode)) => {
-                text_session::clear_paragraph_alignment_override_v1(editor, mode)
+                paragraph_alignment_ui::clear_paragraph_alignment_override_v1(editor, mode)
             }
             _ => return,
         };
@@ -529,16 +532,16 @@ impl ViewerApp {
                                 "unsupported/read-only"
                             } else {
                                 match state.provenance {
-                                    text_session::DesktopParagraphAlignmentProvenanceStateV1::Base => {
+                                    paragraph_alignment_ui::DesktopParagraphAlignmentProvenanceStateV1::Base => {
                                         "source/base"
                                     }
-                                    text_session::DesktopParagraphAlignmentProvenanceStateV1::ChapteraOverride => {
+                                    paragraph_alignment_ui::DesktopParagraphAlignmentProvenanceStateV1::ChapteraOverride => {
                                         "Chaptera override"
                                     }
-                                    text_session::DesktopParagraphAlignmentProvenanceStateV1::Mixed => {
+                                    paragraph_alignment_ui::DesktopParagraphAlignmentProvenanceStateV1::Mixed => {
                                         "mixed provenance"
                                     }
-                                    text_session::DesktopParagraphAlignmentProvenanceStateV1::Unsupported => {
+                                    paragraph_alignment_ui::DesktopParagraphAlignmentProvenanceStateV1::Unsupported => {
                                         "unsupported/read-only"
                                     }
                                 }
