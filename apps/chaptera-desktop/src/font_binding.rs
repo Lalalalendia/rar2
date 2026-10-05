@@ -160,7 +160,8 @@ fn split_render_typography_for_current_booleans_v1(
         let mut boundaries = vec![run.scalar_start, run.scalar_end];
         for segments in [bold, italic].into_iter().flatten() {
             for segment in segments {
-                if run.scalar_start < segment.start_scalar && segment.start_scalar < run.scalar_end {
+                if run.scalar_start < segment.start_scalar && segment.start_scalar < run.scalar_end
+                {
                     boundaries.push(segment.start_scalar);
                 }
                 if run.scalar_start < segment.end_scalar && segment.end_scalar < run.scalar_end {
@@ -180,14 +181,10 @@ fn split_render_typography_for_current_booleans_v1(
             let mut next = run.clone();
             next.scalar_start = scalar_start;
             next.scalar_end = scalar_end;
-            if let Some(value) =
-                boolean_value_for_subrange_v1(bold, scalar_start, scalar_end)?
-            {
+            if let Some(value) = boolean_value_for_subrange_v1(bold, scalar_start, scalar_end)? {
                 next.bold = Some(value);
             }
-            if let Some(value) =
-                boolean_value_for_subrange_v1(italic, scalar_start, scalar_end)?
-            {
+            if let Some(value) = boolean_value_for_subrange_v1(italic, scalar_start, scalar_end)? {
                 next.italic = Some(value);
             }
             out.push(next);
