@@ -409,8 +409,7 @@ mod tests {
         };
         let mut s = scene(vec![source]);
         s.nodes[0].bounds.height = LengthEmu::new(15);
-        let map =
-            build_caret_map_from_shaped_flow_v1(&s, "layout:r1", story(7), 1).unwrap();
+        let map = build_caret_map_from_shaped_flow_v1(&s, "layout:r1", story(7), 1).unwrap();
         assert_eq!(map.lines[0].frame_y_top_emu, 0);
         assert_eq!(map.lines[0].frame_y_bottom_emu, 15);
         assert_eq!(map.lines[0].page_y_top_emu, 200);
