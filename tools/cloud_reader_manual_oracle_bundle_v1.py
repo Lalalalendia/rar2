@@ -1,3 +1,4 @@
+# CI control: prove Reader close cancels an already-registered Cloud reference child.
 #!/usr/bin/env python3
 from __future__ import annotations
 
