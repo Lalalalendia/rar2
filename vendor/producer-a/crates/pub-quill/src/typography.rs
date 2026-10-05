@@ -34,6 +34,7 @@ const PARAGRAPH_ALIGNMENT_ID: u16 = 0x0204;
 const PARAGRAPH_DEFAULT_CHAR_STYLE_ID: u16 = 0x0219;
 const PARAGRAPH_LINE_SPACING_ID: u16 = 0x0234;
 const PARAGRAPH_LINE_SPACING_RAW_UNITS_PER_EMU: u32 = 8;
+const PUBLISHER_DEFAULT_PARAGRAPH_LINE_SPACING_RAW_V1: u32 = 1_450_850;
 
 pub const QUILL_TEXT_SIZE_EMU_PER_POINT: u32 = 12_700;
 
@@ -387,6 +388,7 @@ struct ParagraphDefaultObservation {
     logical_style_index: u32,
     style_source: RawSpan,
     alignment_values: Vec<u32>,
+    line_spacing_values: Vec<u32>,
 }
 
 #[allow(dead_code)]
@@ -801,8 +803,12 @@ pub fn parse_bounded_typography(
         if inheritance_unknown_block_types.is_empty() {
             paragraph_alignments =
                 build_paragraph_alignment_runs(&paragraph_ranges, &story_extents);
-            paragraph_line_spacings =
-                build_paragraph_line_spacing_runs(bytes, &paragraph_ranges, &story_extents)?;
+            paragraph_line_spacings = build_paragraph_line_spacing_runs(
+                bytes,
+                &paragraph_ranges,
+                &paragraph_defaults,
+                &story_extents,
+            )?;
         }
 
         if explicit_run_projection_allowed(&unknown_block_types)
@@ -1134,10 +1140,17 @@ fn decode_explicit_paragraph_line_spacing(raw_value: u32) -> Option<QuillParagra
     }
 }
 
-fn explicit_line_spacing_value_for_range(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalParagraphLineSpacingObservation {
+    Absent,
+    Unique(u32),
+    Unsupported,
+}
+
+fn local_line_spacing_observation_for_range(
     bytes: &[u8],
     range: &ParagraphTypographyRange,
-) -> Result<Option<u32>, QuillTypographyReadError> {
+) -> Result<LocalParagraphLineSpacingObservation, QuillTypographyReadError> {
     let start = usize::try_from(range.style_source.offset)
         .map_err(|_| QuillTypographyReadError::new("FDPP style offset exceeds usize"))?;
     let len = usize::try_from(range.style_source.len)
@@ -1155,40 +1168,78 @@ fn explicit_line_spacing_value_for_range(
         let (block, next) = parse_block(bytes, cursor, end, &mut unknown)?;
         if block.id == PARAGRAPH_LINE_SPACING_ID {
             if block.block_type != 0x20 {
-                return Ok(None);
+                return Ok(LocalParagraphLineSpacingObservation::Unsupported);
             }
-            if let Some(value) = block.value {
-                values.push(value);
-            }
+            let Some(value) = block.value else {
+                return Ok(LocalParagraphLineSpacingObservation::Unsupported);
+            };
+            values.push(value);
         }
         cursor = next;
     }
     if cursor != end || !unknown.is_empty() {
-        return Ok(None);
+        return Ok(LocalParagraphLineSpacingObservation::Unsupported);
     }
     values.sort_unstable();
     values.dedup();
     match values.as_slice() {
-        [] => Ok(None),
-        [value] => Ok(Some(*value)),
-        _ => Ok(None),
+        [] => Ok(LocalParagraphLineSpacingObservation::Absent),
+        [value] => Ok(LocalParagraphLineSpacingObservation::Unique(*value)),
+        _ => Ok(LocalParagraphLineSpacingObservation::Unsupported),
     }
+}
+
+fn bounded_no_selector_style_zero_line_spacing_default(
+    range: &ParagraphTypographyRange,
+    defaults: &[ParagraphDefaultObservation],
+) -> Option<(QuillParagraphLineSpacing, RawSpan)> {
+    if range.default_style_selector_present {
+        return None;
+    }
+    let mut matches = defaults
+        .iter()
+        .filter(|default| default.logical_style_index == 0);
+    let default = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    let [raw_value] = default.line_spacing_values.as_slice() else {
+        return None;
+    };
+    if *raw_value != PUBLISHER_DEFAULT_PARAGRAPH_LINE_SPACING_RAW_V1 {
+        return None;
+    }
+    let line_spacing = decode_explicit_paragraph_line_spacing(*raw_value)?;
+    Some((line_spacing, default.style_source.clone()))
 }
 
 fn build_paragraph_line_spacing_runs(
     bytes: &[u8],
     ranges: &[ParagraphTypographyRange],
+    defaults: &[ParagraphDefaultObservation],
     stories: &[StoryExtent],
 ) -> Result<Vec<QuillParagraphLineSpacingRun>, QuillTypographyReadError> {
     let mut runs = Vec::new();
     for range in ranges {
-        let source_value = explicit_line_spacing_value_for_range(bytes, range)?;
-        let Some(raw_value) = source_value else {
-            continue;
-        };
-        let Some(line_spacing) = decode_explicit_paragraph_line_spacing(raw_value) else {
-            continue;
-        };
+        let (line_spacing, source_value, source_span) =
+            match local_line_spacing_observation_for_range(bytes, range)? {
+                LocalParagraphLineSpacingObservation::Unique(raw_value) => {
+                    let Some(line_spacing) = decode_explicit_paragraph_line_spacing(raw_value)
+                    else {
+                        continue;
+                    };
+                    (line_spacing, Some(raw_value), range.style_source.clone())
+                }
+                LocalParagraphLineSpacingObservation::Unsupported => continue,
+                LocalParagraphLineSpacingObservation::Absent => {
+                    let Some((line_spacing, source_span)) =
+                        bounded_no_selector_style_zero_line_spacing_default(range, defaults)
+                    else {
+                        continue;
+                    };
+                    (line_spacing, None, source_span)
+                }
+            };
 
         for story in stories {
             let start = range.global_start_utf16.max(story.global_start_utf16);
@@ -1205,7 +1256,7 @@ fn build_paragraph_line_spacing_runs(
                 source_value,
                 fdpp_descriptor_ordinal: range.fdpp_descriptor_ordinal,
                 fdpp_style_ordinal: range.fdpp_style_ordinal,
-                fdpp_style_source: range.style_source.clone(),
+                fdpp_style_source: source_span.clone(),
             });
         }
     }
@@ -1294,6 +1345,7 @@ fn parse_stsh1_paragraph_defaults(
         let style_end = checked_end(style_start, style_len, end, "STSH1 paragraph style")?;
         let mut cursor = style_start + 4;
         let mut alignment_values = Vec::new();
+        let mut line_spacing_values = Vec::new();
 
         while cursor < style_end {
             let (block, next) = parse_block(bytes, cursor, style_end, unknown_block_types)?;
@@ -1301,6 +1353,11 @@ fn parse_stsh1_paragraph_defaults(
                 if let Some(value) = block.value {
                     alignment_values.push(value);
                 }
+            } else if block.id == PARAGRAPH_LINE_SPACING_ID
+                && block.block_type == 0x20
+                && let Some(value) = block.value
+            {
+                line_spacing_values.push(value);
             }
             cursor = next;
         }
@@ -1312,6 +1369,8 @@ fn parse_stsh1_paragraph_defaults(
 
         alignment_values.sort_unstable();
         alignment_values.dedup();
+        line_spacing_values.sort_unstable();
+        line_spacing_values.dedup();
         rows.push(ParagraphDefaultObservation {
             logical_style_index: u32::try_from(ordinal / 2)
                 .map_err(|_| QuillTypographyReadError::new("logical style index exceeds u32"))?,
@@ -1321,6 +1380,7 @@ fn parse_stsh1_paragraph_defaults(
                 len: style_len as u64,
             },
             alignment_values,
+            line_spacing_values,
         });
     }
 
@@ -3485,6 +3545,7 @@ mod tests {
                 logical_style_index: 3,
                 style_source: inherited_source.clone(),
                 alignment_values: vec![1],
+                line_spacing_values: Vec::new(),
             },
             ParagraphDefaultObservation {
                 logical_style_index: 4,
@@ -3494,6 +3555,7 @@ mod tests {
                     len: 8,
                 },
                 alignment_values: vec![2],
+                line_spacing_values: Vec::new(),
             },
         ];
         let mut ranges = vec![
@@ -3574,6 +3636,7 @@ mod tests {
                 len: 8,
             },
             alignment_values: vec![1, 2],
+            line_spacing_values: Vec::new(),
         }];
 
         apply_paragraph_alignment_defaults(&mut ranges, &defaults);
@@ -3727,6 +3790,14 @@ mod tests {
             })
         );
         assert_eq!(
+            decode_explicit_paragraph_line_spacing(
+                PUBLISHER_DEFAULT_PARAGRAPH_LINE_SPACING_RAW_V1,
+            ),
+            Some(QuillParagraphLineSpacing::Proportional {
+                point_equivalent_emu: 181_356,
+            })
+        );
+        assert_eq!(
             decode_explicit_paragraph_line_spacing(2_438_401),
             Some(QuillParagraphLineSpacing::Absolute {
                 spacing_emu: 304_800,
@@ -3734,6 +3805,92 @@ mod tests {
         );
         assert_eq!(decode_explicit_paragraph_line_spacing(1_219_200), None);
         assert_eq!(decode_explicit_paragraph_line_spacing(1_219_203), None);
+    }
+
+    #[test]
+    fn no_selector_style_zero_line_spacing_default_is_property_scoped_and_explicit_wins() {
+        let stream = pub_core::StreamPath("/Quill/QuillSub/CONTENTS".into());
+        let story = StoryExtent {
+            story_index: 0,
+            story_syid: QuillSyid(7),
+            global_start_utf16: 0,
+            global_end_utf16: 10,
+        };
+        let base_range = ParagraphTypographyRange {
+            global_start_utf16: 0,
+            global_end_utf16: 10,
+            fdpp_descriptor_ordinal: 1,
+            fdpp_style_ordinal: 0,
+            style_source: RawSpan {
+                stream: stream.clone(),
+                offset: 0,
+                len: 4,
+            },
+            selected_style_index: None,
+            selector_source: None,
+            default_style_selector_present: false,
+            alignment: None,
+            alignment_source_value: None,
+            alignment_source: None,
+        };
+        let default_source = RawSpan {
+            stream: stream.clone(),
+            offset: 100,
+            len: 12,
+        };
+        let defaults = vec![ParagraphDefaultObservation {
+            logical_style_index: 0,
+            style_source: default_source.clone(),
+            alignment_values: Vec::new(),
+            line_spacing_values: vec![PUBLISHER_DEFAULT_PARAGRAPH_LINE_SPACING_RAW_V1],
+        }];
+
+        let inherited = build_paragraph_line_spacing_runs(
+            &[4, 0, 0, 0],
+            std::slice::from_ref(&base_range),
+            &defaults,
+            &[story],
+        )
+        .expect("bounded inherited default");
+        let [run] = inherited.as_slice() else {
+            panic!("expected one inherited default line-spacing run");
+        };
+        assert_eq!(
+            run.line_spacing,
+            QuillParagraphLineSpacing::Proportional {
+                point_equivalent_emu: 181_356,
+            }
+        );
+        assert_eq!(run.source_value, None);
+        assert_eq!(run.fdpp_style_source, default_source);
+
+        let raw = 1_219_202_u32.to_le_bytes();
+        let explicit_bytes = [
+            10, 0, 0, 0, 0x34, 0x22, raw[0], raw[1], raw[2], raw[3],
+        ];
+        let mut explicit_range = base_range.clone();
+        explicit_range.style_source = RawSpan {
+            stream,
+            offset: 0,
+            len: explicit_bytes.len() as u64,
+        };
+        let explicit = build_paragraph_line_spacing_runs(
+            &explicit_bytes,
+            &[explicit_range],
+            &defaults,
+            &[story],
+        )
+        .expect("explicit spacing precedence");
+        let [run] = explicit.as_slice() else {
+            panic!("expected one explicit line-spacing run");
+        };
+        assert_eq!(
+            run.line_spacing,
+            QuillParagraphLineSpacing::Proportional {
+                point_equivalent_emu: 152_400,
+            }
+        );
+        assert_eq!(run.source_value, Some(1_219_202));
     }
 
     #[test]

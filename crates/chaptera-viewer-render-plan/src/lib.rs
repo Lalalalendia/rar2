@@ -26,7 +26,8 @@ use pub_model::{
 use pub_viewer::ViewerProjectedSceneInstanceV1;
 use pub_viewer::{
     ViewerDecorativeBorderSlotV1, ViewerGeometryDocument, ViewerParagraphAlignment,
-    ViewerParagraphLineSpacing, ViewerScriptFontEntryDisposition, ViewerStoryFrame,
+    ViewerParagraphLineSpacing, ViewerParagraphLineSpacingRun, ViewerScriptFontEntryDisposition,
+    ViewerStoryFrame,
     ViewerTextVerticalAlignment,
 };
 use serde::{Deserialize, Serialize};
@@ -1905,11 +1906,12 @@ fn projected_incomplete_layout_is_explicit_overset(
 
 const PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1: u32 = 12 * 12_700;
 const PUBLISHER_ONE_POINT_FIVE_POINT_EQUIVALENT_EMU_V1: u32 = 18 * 12_700;
+const PUBLISHER_DEFAULT_POINT_EQUIVALENT_EMU_V1: u32 = 181_356;
 
-fn source_paragraph_line_spacing_v1(
-    visual: &ViewerGeometryDocument,
+fn source_paragraph_line_spacing_v1<'a>(
+    visual: &'a ViewerGeometryDocument,
     fragment: &RenderTextFragmentV1,
-) -> Option<ViewerParagraphLineSpacing> {
+) -> Option<&'a ViewerParagraphLineSpacingRun> {
     let story = visual
         .document
         .stories
@@ -1932,20 +1934,22 @@ fn source_paragraph_line_spacing_v1(
     {
         return None;
     }
-    Some(run.line_spacing)
+    Some(run)
 }
 
 fn scale_proportional_line_height_emu_v1(
     natural_line_height_emu: i64,
     point_equivalent_emu: u32,
+    inherited_default: bool,
 ) -> Option<i64> {
-    if natural_line_height_emu <= 0
-        || !matches!(
-            point_equivalent_emu,
-            PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1
-                | PUBLISHER_ONE_POINT_FIVE_POINT_EQUIVALENT_EMU_V1
-        )
-    {
+    let proven_explicit = matches!(
+        point_equivalent_emu,
+        PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1
+            | PUBLISHER_ONE_POINT_FIVE_POINT_EQUIVALENT_EMU_V1
+    );
+    let proven_default =
+        inherited_default && point_equivalent_emu == PUBLISHER_DEFAULT_POINT_EQUIVALENT_EMU_V1;
+    if natural_line_height_emu <= 0 || (!proven_explicit && !proven_default) {
         return None;
     }
 
@@ -1963,8 +1967,8 @@ fn resolved_uniform_line_height_emu_v1(
     font: &ExplicitRenderTextFontResourceV1<'_>,
     font_is_source_resolved: bool,
 ) -> Option<i64> {
-    if let Some(line_spacing) = source_paragraph_line_spacing_v1(visual, fragment) {
-        match line_spacing {
+    if let Some(line_spacing_run) = source_paragraph_line_spacing_v1(visual, fragment) {
+        match line_spacing_run.line_spacing {
             ViewerParagraphLineSpacing::Absolute { spacing_emu } if spacing_emu > 0 => {
                 return Some(i64::from(spacing_emu));
             }
@@ -1980,6 +1984,7 @@ fn resolved_uniform_line_height_emu_v1(
                     && let Some(line_height_emu) = scale_proportional_line_height_emu_v1(
                         natural_line_height_emu,
                         point_equivalent_emu,
+                        line_spacing_run.source_value.is_none(),
                     )
                 {
                     return Some(line_height_emu);
@@ -3590,6 +3595,7 @@ mod tests {
             scale_proportional_line_height_emu_v1(
                 natural,
                 PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1,
+                false,
             ),
             Some(natural)
         );
@@ -3597,12 +3603,90 @@ mod tests {
             scale_proportional_line_height_emu_v1(
                 natural,
                 PUBLISHER_ONE_POINT_FIVE_POINT_EQUIVALENT_EMU_V1,
+                false,
             ),
             Some(297_954)
         );
         assert_eq!(
-            scale_proportional_line_height_emu_v1(natural, 24 * 12_700),
+            scale_proportional_line_height_emu_v1(natural, 24 * 12_700, false),
             None
+        );
+        assert_eq!(
+            scale_proportional_line_height_emu_v1(
+                natural,
+                PUBLISHER_DEFAULT_POINT_EQUIVALENT_EMU_V1,
+                false,
+            ),
+            None,
+            "the native 1.19 default is not an admitted explicit arbitrary proportional value"
+        );
+        assert_eq!(
+            scale_proportional_line_height_emu_v1(
+                natural,
+                PUBLISHER_DEFAULT_POINT_EQUIVALENT_EMU_V1,
+                true,
+            ),
+            Some(236_377),
+            "native-grounded omitted/default provenance admits exactly the 1.19 ratio"
+        );
+    }
+
+    #[test]
+    fn inherited_default_line_spacing_provenance_is_required_for_native_one_point_one_nine() {
+        let story_id = StoryId::from_canonical(canonical(3));
+        let mut visual = fixture().document;
+        let story_text = visual
+            .stories
+            .iter()
+            .find(|story| story.id == story_id)
+            .expect("fixture story")
+            .text
+            .clone();
+        let fragment = render_fragment(story_id, &story_text, Vec::new());
+        let font_bytes = chaptera_desktop_fallback_font_resource::bytes();
+        let font = ExplicitRenderTextFontResourceV1 {
+            resource_id: "font:test",
+            expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256,
+            face_index: 0,
+            default_font_size_emu: 114_300,
+            default_line_height_emu: 142_875,
+            bytes: font_bytes,
+        };
+        visual.paragraph_line_spacings = vec![ViewerParagraphLineSpacingRun {
+            story_id,
+            scalar_start: fragment.scalar_start,
+            scalar_end: fragment.scalar_end,
+            line_spacing: ViewerParagraphLineSpacing::Proportional {
+                point_equivalent_emu: PUBLISHER_DEFAULT_POINT_EQUIVALENT_EMU_V1,
+            },
+            source_value: Some(1_450_850),
+            source_story_text_sha256: viewer_story_text_sha256(&story_text),
+        }];
+
+        let fallback = scaled_line_height_emu(12 * 12_700, 114_300, 142_875)
+            .expect("fallback line height");
+        assert_eq!(
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, true),
+            Some(fallback),
+            "an explicit arbitrary 1.19 value is not admitted"
+        );
+
+        visual.paragraph_line_spacings[0].source_value = None;
+        let natural = compatible_natural_line_height_emu_v1(
+            font.bytes,
+            font.face_index,
+            LengthEmu::new(12 * 12_700),
+        )
+        .expect("compatible natural line height")
+        .get();
+        assert_eq!(
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, true),
+            scale_proportional_line_height_emu_v1(
+                natural,
+                PUBLISHER_DEFAULT_POINT_EQUIVALENT_EMU_V1,
+                true,
+            ),
+            "only inherited/default provenance may execute the native 1.19 law"
         );
     }
 

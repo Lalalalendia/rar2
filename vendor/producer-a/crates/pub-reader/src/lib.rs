@@ -2900,7 +2900,14 @@ pub fn build_mature_0x2c_from_streams(
                     &graph.source,
                     &run.fdpp_style_source,
                     Some(quill_story_object_key(syid)),
-                    Some("FDPP/ParagraphLineSpacing".into()),
+                    Some(
+                        if run.source_value.is_some() {
+                            "FDPP/ParagraphLineSpacing"
+                        } else {
+                            "STSH1/ParagraphLineSpacingDefault"
+                        }
+                        .into(),
+                    ),
                     SourceRole::Semantic,
                     AuthorityClass::Authoritative,
                     ReadConfidence::Exact,
