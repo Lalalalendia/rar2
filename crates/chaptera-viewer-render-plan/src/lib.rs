@@ -3862,6 +3862,137 @@ mod tests {
     }
 
     #[test]
+    fn same_family_distinct_resources_route_before_uniform_family_resource() {
+        let mut visual = fixture();
+        let story_id = visual.document.stories[0].id;
+        let node_id = visual.scene.nodes[0].origin;
+        visual.document.stories[0].text = "ABCD".to_owned();
+        visual.text_fragments = vec![ViewerTextFragment {
+            story_id,
+            frame_id: node_id,
+            scalar_start: 0,
+            scalar_end: 4,
+            text: "ABCD".to_owned(),
+            line_count: 1,
+        }];
+        visual.story_frames = vec![pub_viewer::ViewerStoryFrame {
+            story_id,
+            frame_id: node_id,
+            ordinal: 0,
+            text_content_bounds: None,
+            vertical_alignment: None,
+        }];
+        visual.typography_runs = vec![
+            ViewerTypographyRun {
+                story_id,
+                scalar_start: 0,
+                scalar_end: 2,
+                source_font_name: "Same Family".to_owned(),
+                text_size_emu: 152_400,
+                font_inherited: false,
+                size_inherited: false,
+                color_rgb: None,
+                color_inherited: false,
+                bold: Some(pub_viewer::ViewerTypographyBooleanV1 {
+                    local_toggle: false,
+                    inherited_value: false,
+                    effective_value: false,
+                }),
+                italic: Some(pub_viewer::ViewerTypographyBooleanV1 {
+                    local_toggle: false,
+                    inherited_value: false,
+                    effective_value: false,
+                }),
+                source_story_text_sha256: viewer_story_text_sha256("ABCD"),
+            },
+            ViewerTypographyRun {
+                story_id,
+                scalar_start: 2,
+                scalar_end: 4,
+                source_font_name: "Same Family".to_owned(),
+                text_size_emu: 152_400,
+                font_inherited: false,
+                size_inherited: false,
+                color_rgb: None,
+                color_inherited: false,
+                bold: Some(pub_viewer::ViewerTypographyBooleanV1 {
+                    local_toggle: true,
+                    inherited_value: false,
+                    effective_value: true,
+                }),
+                italic: Some(pub_viewer::ViewerTypographyBooleanV1 {
+                    local_toggle: false,
+                    inherited_value: false,
+                    effective_value: false,
+                }),
+                source_story_text_sha256: viewer_story_text_sha256("ABCD"),
+            },
+        ];
+
+        let regular_bytes: &[u8] = font_test_data::AHEM;
+        let bold_bytes: &[u8] = font_test_data::TINOS_SUBSET;
+        let regular_sha = font_fingerprint_sha256(regular_bytes);
+        let bold_sha = font_fingerprint_sha256(bold_bytes);
+        let uniform = ExplicitRenderTextFontResourceV1 {
+            resource_id: "same-family-uniform",
+            expected_sha256: &regular_sha,
+            face_index: 0,
+            default_font_size_emu: 152_400,
+            default_line_height_emu: 190_500,
+            bytes: regular_bytes,
+        };
+        let plan = build_page_render_plan_with_text_layout_resolvers_v1(
+            &visual,
+            0,
+            &uniform,
+            |_| Some(uniform),
+            |_, run| match run.bold {
+                Some(false) => Some(ExplicitRenderTextFontResourceV1 {
+                    resource_id: "same-family-regular",
+                    expected_sha256: &regular_sha,
+                    face_index: 0,
+                    default_font_size_emu: 152_400,
+                    default_line_height_emu: 190_500,
+                    bytes: regular_bytes,
+                }),
+                Some(true) => Some(ExplicitRenderTextFontResourceV1 {
+                    resource_id: "same-family-bold",
+                    expected_sha256: &bold_sha,
+                    face_index: 0,
+                    default_font_size_emu: 152_400,
+                    default_line_height_emu: 190_500,
+                    bytes: bold_bytes,
+                }),
+                None => None,
+            },
+        )
+        .expect("same-family styled plan");
+
+        let fragment = plan.nodes[0].text.as_ref().expect("rendered text");
+        assert_eq!(
+            fragment.backend_font_resource_id,
+            None,
+            "per-span styled resources must win before the uniform family resource"
+        );
+        let layout = fragment.layout.as_ref().expect("shared layout");
+        let spans = layout
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .collect::<Vec<_>>();
+        assert!(spans.iter().any(|span| {
+            span.scalar_start == 0
+                && span.scalar_end == 2
+                && span.font_resource_id.as_deref() == Some("same-family-regular")
+        }));
+        assert!(spans.iter().any(|span| {
+            span.scalar_start == 2
+                && span.scalar_end == 4
+                && span.font_resource_id.as_deref() == Some("same-family-bold")
+        }));
+    }
+
+    #[test]
     fn mixed_family_admission_binds_exact_resource_per_typography_run() {
         let story_id = fixture().document.stories[0].id;
         let fragment = render_fragment(
