@@ -61,20 +61,20 @@ use chaptera_text_format_overlay::{
 };
 use pub_export::{
     CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
-    FormatRepresentability, FullStoryTypographyV1, LossItem, LossKind, LossSeverity,
-    PersistenceCompatibilityAssessment, PersistenceCompatibilityError, PersistenceRequirement,
-    PersistenceRequirements, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
-    STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE,
-    ScopedCapabilityError, ScopedCapabilityOverride, SemanticFeatureRequest,
-    TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
-    assess_persistence_compatibility, build_export_report, plan_export_with_scoped_capabilities,
-    render_human_summary,
+    FormatRepresentability, FullStoryParagraphAlignmentV1, FullStoryTypographyV1, LossItem,
+    LossKind, LossSeverity, ParagraphAlignmentV1, PersistenceCompatibilityAssessment,
+    PersistenceCompatibilityError, PersistenceRequirement, PersistenceRequirements,
+    PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE,
+    STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE, ScopedCapabilityError,
+    ScopedCapabilityOverride, SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile,
+    WriterCapabilityManifest, assess_persistence_compatibility, build_export_report,
+    plan_export_with_scoped_capabilities, render_human_summary,
 };
 use pub_idml::{
     IDML_ADAPTER_VERSION_V0_1, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IMAGE_BYTES_FEATURE,
     IMAGE_CONTENT_TRANSFORM_FEATURE, IMAGE_FRAME_GEOMETRY_FEATURE, IdmlEmbeddedImagePlacement,
-    IdmlWireProfile, add_embedded_images_to_idml, add_full_story_typography_to_idml,
-    project_resolved_graph_to_idml, write_idml_ucf,
+    IdmlWireProfile, add_embedded_images_to_idml, add_full_story_paragraph_alignment_to_idml,
+    add_full_story_typography_to_idml, project_resolved_graph_to_idml, write_idml_ucf,
 };
 use pub_model::{
     Affine2D, EFFECTIVE_TABLE_GRID_V1, EffectiveTableCellV1, EffectiveTableGridV1,
@@ -86,8 +86,9 @@ pub use pub_model::{
 };
 use pub_odg::{
     ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgEmbeddedImagePlacement,
-    OdgFullStoryTypographyPlacement, add_embedded_images_to_odg, add_full_story_typography_to_odg,
-    project_resolved_graph_to_odg, write_odg,
+    OdgFullStoryParagraphAlignmentPlacement, OdgFullStoryTypographyPlacement,
+    add_embedded_images_to_odg, add_full_story_paragraph_alignment_to_odg,
+    add_full_story_typography_to_odg, project_resolved_graph_to_odg, write_odg,
 };
 use pub_reader::{
     PubAssetExportBundle, PubParagraphAlignmentRun, PubResolvedGraph, PubResolvedNodePayload,
@@ -3471,6 +3472,18 @@ impl EditorSession {
                             message: error.to_string(),
                         },
                     )?;
+                    let paragraph_alignments = self
+                        .effective_full_story_paragraph_alignment_v1()
+                        .map_err(EditorExportError::Session)?;
+                    add_full_story_paragraph_alignment_to_idml(
+                        &plan,
+                        &mut package,
+                        &paragraph_alignments,
+                    )
+                    .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
                 }
                 EditorEditableTarget::Odg => {
                     let mut package =
@@ -3491,6 +3504,20 @@ impl EditorSession {
                         self.odg_full_story_typography_placements_v1(&typography);
                     add_full_story_typography_to_odg(&plan, &mut package, &typography_placements)
                         .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
+                    let paragraph_alignments = self
+                        .effective_full_story_paragraph_alignment_v1()
+                        .map_err(EditorExportError::Session)?;
+                    let paragraph_alignment_placements = self
+                        .odg_full_story_paragraph_alignment_placements_v1(&paragraph_alignments);
+                    add_full_story_paragraph_alignment_to_odg(
+                        &plan,
+                        &mut package,
+                        &paragraph_alignment_placements,
+                    )
+                    .map_err(|error| EditorExportError::Projection {
                         target,
                         message: error.to_string(),
                     })?;
@@ -3547,6 +3574,18 @@ impl EditorSession {
                         message: error.to_string(),
                     },
                 )?;
+                let paragraph_alignments = self
+                    .effective_full_story_paragraph_alignment_v1()
+                    .map_err(EditorExportError::Session)?;
+                add_full_story_paragraph_alignment_to_idml(
+                    &plan,
+                    &mut package,
+                    &paragraph_alignments,
+                )
+                .map_err(|error| EditorExportError::Projection {
+                    target,
+                    message: error.to_string(),
+                })?;
                 write_idml_ucf(&package).map_err(|error| EditorExportError::Write {
                     target,
                     message: error.to_string(),
@@ -3575,6 +3614,20 @@ impl EditorSession {
                         target,
                         message: error.to_string(),
                     })?;
+                let paragraph_alignments = self
+                    .effective_full_story_paragraph_alignment_v1()
+                    .map_err(EditorExportError::Session)?;
+                let paragraph_alignment_placements =
+                    self.odg_full_story_paragraph_alignment_placements_v1(&paragraph_alignments);
+                add_full_story_paragraph_alignment_to_odg(
+                    &plan,
+                    &mut package,
+                    &paragraph_alignment_placements,
+                )
+                .map_err(|error| EditorExportError::Projection {
+                    target,
+                    message: error.to_string(),
+                })?;
                 write_odg(&package).map_err(|error| EditorExportError::Write {
                     target,
                     message: error.to_string(),
@@ -3741,6 +3794,131 @@ impl EditorSession {
         result
     }
 
+    pub fn effective_full_story_paragraph_alignment_v1(
+        &self,
+    ) -> Result<Vec<FullStoryParagraphAlignmentV1>, EditorError> {
+        self.validate_source_identity()?;
+
+        let table_story_ids = self
+            .graph
+            .nodes
+            .values()
+            .flat_map(|node| {
+                [
+                    node.payload
+                        .table_story
+                        .as_ref()
+                        .and_then(|owner| owner.story_id),
+                    node.payload.table.as_ref().and_then(|table| table.story_id),
+                ]
+            })
+            .flatten()
+            .collect::<BTreeSet<_>>();
+        let ordinary_story_ids = self
+            .graph
+            .nodes
+            .iter()
+            .filter_map(|(node_id, node)| frame_from_payload(*node_id, &node.payload))
+            .map(|frame| frame.story_id)
+            .filter(|story_id| !table_story_ids.contains(story_id))
+            .collect::<BTreeSet<_>>();
+
+        let mut paragraphs_by_story = BTreeMap::<StoryId, Vec<ParagraphId>>::new();
+        for paragraph in self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+        {
+            if ordinary_story_ids.contains(&paragraph.story_id) {
+                paragraphs_by_story
+                    .entry(paragraph.story_id)
+                    .or_default()
+                    .push(paragraph.paragraph_id);
+            }
+        }
+
+        let mut result = Vec::new();
+        for (story_id, mut paragraph_ids) in paragraphs_by_story {
+            paragraph_ids.sort_unstable();
+            paragraph_ids.dedup();
+            if paragraph_ids.is_empty() {
+                continue;
+            }
+
+            let mut uniform: Option<ParagraphAlignmentV1> = None;
+            let mut valid = true;
+            for paragraph_id in paragraph_ids {
+                let effective = self.effective_paragraph_alignment_v1(paragraph_id)?;
+                let current = match effective.effective {
+                    Some(EffectiveParagraphAlignmentValueV1::Center) => {
+                        ParagraphAlignmentV1::Center
+                    }
+                    Some(EffectiveParagraphAlignmentValueV1::Right) => ParagraphAlignmentV1::Right,
+                    _ => {
+                        valid = false;
+                        break;
+                    }
+                };
+
+                match uniform {
+                    None => uniform = Some(current),
+                    Some(existing) if existing == current => {}
+                    Some(_) => {
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+
+            if valid {
+                if let Some(alignment) = uniform {
+                    result.push(FullStoryParagraphAlignmentV1 {
+                        story_id,
+                        alignment,
+                    });
+                }
+            }
+        }
+
+        result.sort_by_key(|item| item.story_id);
+        Ok(result)
+    }
+
+    fn odg_full_story_paragraph_alignment_placements_v1(
+        &self,
+        alignments: &[FullStoryParagraphAlignmentV1],
+    ) -> Vec<OdgFullStoryParagraphAlignmentPlacement> {
+        let eligible = alignments
+            .iter()
+            .map(|item| item.story_id)
+            .collect::<BTreeSet<_>>();
+        let mut roots = BTreeMap::<StoryId, Vec<NodeId>>::new();
+
+        for (node_id, node) in &self.graph.nodes {
+            let Some(frame) = frame_from_payload(*node_id, &node.payload) else {
+                continue;
+            };
+            if frame.previous.is_none() && eligible.contains(&frame.story_id) {
+                roots
+                    .entry(frame.story_id)
+                    .or_default()
+                    .push(frame.frame_id);
+            }
+        }
+
+        alignments
+            .iter()
+            .filter_map(|item| {
+                let mut frame_ids = roots.get(&item.story_id)?.clone();
+                frame_ids.sort_unstable();
+                frame_ids.dedup();
+                (!frame_ids.is_empty()).then(|| OdgFullStoryParagraphAlignmentPlacement {
+                    alignment: item.clone(),
+                    frame_ids,
+                })
+            })
+            .collect()
+    }
+
     fn odg_full_story_typography_placements_v1(
         &self,
         typography: &[FullStoryTypographyV1],
@@ -3785,6 +3963,9 @@ impl EditorSession {
         self.validate_source_identity()
             .map_err(EditorExportError::Session)?;
         let typography = self.full_story_typography_v1();
+        let paragraph_alignments = self
+            .effective_full_story_paragraph_alignment_v1()
+            .map_err(EditorExportError::Session)?;
         let plan = editable_export_plan(
             target,
             &self.graph,
@@ -3795,6 +3976,7 @@ impl EditorSession {
                 source_typography_size_runs: &self.source_typography_size_runs,
                 source_paragraph_alignments: &self.source_paragraph_alignments,
                 full_story_typography: &typography,
+                effective_full_story_paragraph_alignments: &paragraph_alignments,
             },
         )
         .map_err(|error| EditorExportError::Report(error.to_string()))?;
@@ -5869,6 +6051,7 @@ struct EditableExportTypographyInputs<'a> {
     source_typography_size_runs: &'a [PubTypographySizeRun],
     source_paragraph_alignments: &'a [PubParagraphAlignmentRun],
     full_story_typography: &'a [FullStoryTypographyV1],
+    effective_full_story_paragraph_alignments: &'a [FullStoryParagraphAlignmentV1],
 }
 
 fn editable_export_plan(
@@ -5985,6 +6168,12 @@ fn editable_export_plan(
                 .contains_key(&run.story_id)
                 .then_some(run.story_id)
         })
+        .chain(
+            typography
+                .effective_full_story_paragraph_alignments
+                .iter()
+                .map(|item| item.story_id),
+        )
         .collect::<BTreeSet<_>>();
 
     for story_id in font_family_stories {

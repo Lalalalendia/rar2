@@ -10,6 +10,12 @@ on:
       - "vendor/producer-a/crates/pub-editor/src/imported_paragraphs_v1.rs"
       - "vendor/producer-a/crates/pub-editor/src/lib.rs"
       - "vendor/producer-a/crates/pub-editor/tests/paragraph_alignment_override_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/effective_paragraph_alignment_export_v1.rs"
+      - "vendor/producer-a/crates/pub-export/src/lib.rs"
+      - "vendor/producer-a/crates/pub-idml/src/lib.rs"
+      - "vendor/producer-a/crates/pub-idml/src/paragraph_alignment.rs"
+      - "vendor/producer-a/crates/pub-odg/src/lib.rs"
+      - "vendor/producer-a/crates/pub-odg/src/paragraph_alignment.rs"
       - "vendor/producer-a/crates/pub-reader/src/story_provenance.rs"
   workflow_dispatch:
 
@@ -36,19 +42,30 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Check changed Rust formatting
+      - name: Check paragraph alignment Rust formatting
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cargo fmt --manifest-path vendor/producer-a/crates/pub-editor/Cargo.toml -- --check
-          if ($LASTEXITCODE -ne 0) { throw "pub-editor rustfmt failed" }
+          foreach ($manifest in @(
+            "vendor/producer-a/crates/pub-export/Cargo.toml",
+            "vendor/producer-a/crates/pub-idml/Cargo.toml",
+            "vendor/producer-a/crates/pub-odg/Cargo.toml",
+            "vendor/producer-a/crates/pub-editor/Cargo.toml"
+          )) {
+            cargo fmt --manifest-path $manifest -- --check
+            if ($LASTEXITCODE -ne 0) { throw "paragraph alignment rustfmt failed: $manifest" }
+          }
 
       - name: Run bounded paragraph alignment unit tests
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-idml paragraph_alignment --lib
+          if ($LASTEXITCODE -ne 0) { throw "IDML paragraph alignment unit tests failed" }
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-odg paragraph_alignment --lib
+          if ($LASTEXITCODE -ne 0) { throw "ODG paragraph alignment unit tests failed" }
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor paragraph_alignment --lib
-          if ($LASTEXITCODE -ne 0) { throw "paragraph alignment unit tests failed" }
+          if ($LASTEXITCODE -ne 0) { throw "pub-editor paragraph alignment unit tests failed" }
 
       - name: Install exact acquisition dependency
         run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
@@ -73,3 +90,10 @@ jobs:
           $ErrorActionPreference = "Stop"
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test paragraph_alignment_override_v1 -- --ignored
           if ($LASTEXITCODE -ne 0) { throw "real paragraph alignment override acceptance failed" }
+
+      - name: Prove effective paragraph alignment drives editable output
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test effective_paragraph_alignment_export_v1 -- --ignored
+          if ($LASTEXITCODE -ne 0) { throw "effective paragraph alignment export acceptance failed" }
