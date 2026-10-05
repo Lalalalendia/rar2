@@ -389,6 +389,7 @@ struct ParagraphDefaultObservation {
     style_source: RawSpan,
     alignment_values: Vec<u32>,
     line_spacing_values: Vec<u32>,
+    line_spacing_unsupported: bool,
 }
 
 #[allow(dead_code)]
@@ -1203,6 +1204,9 @@ fn bounded_no_selector_style_zero_line_spacing_default(
     if matches.next().is_some() {
         return None;
     }
+    if default.line_spacing_unsupported {
+        return None;
+    }
     let [raw_value] = default.line_spacing_values.as_slice() else {
         return None;
     };
@@ -1346,6 +1350,7 @@ fn parse_stsh1_paragraph_defaults(
         let mut cursor = style_start + 4;
         let mut alignment_values = Vec::new();
         let mut line_spacing_values = Vec::new();
+        let mut line_spacing_unsupported = false;
 
         while cursor < style_end {
             let (block, next) = parse_block(bytes, cursor, style_end, unknown_block_types)?;
@@ -1353,11 +1358,16 @@ fn parse_stsh1_paragraph_defaults(
                 if let Some(value) = block.value {
                     alignment_values.push(value);
                 }
-            } else if block.id == PARAGRAPH_LINE_SPACING_ID
-                && block.block_type == 0x20
-                && let Some(value) = block.value
-            {
-                line_spacing_values.push(value);
+            } else if block.id == PARAGRAPH_LINE_SPACING_ID {
+                if block.block_type == 0x20 {
+                    if let Some(value) = block.value {
+                        line_spacing_values.push(value);
+                    } else {
+                        line_spacing_unsupported = true;
+                    }
+                } else {
+                    line_spacing_unsupported = true;
+                }
             }
             cursor = next;
         }
@@ -1369,8 +1379,6 @@ fn parse_stsh1_paragraph_defaults(
 
         alignment_values.sort_unstable();
         alignment_values.dedup();
-        line_spacing_values.sort_unstable();
-        line_spacing_values.dedup();
         rows.push(ParagraphDefaultObservation {
             logical_style_index: u32::try_from(ordinal / 2)
                 .map_err(|_| QuillTypographyReadError::new("logical style index exceeds u32"))?,
@@ -1381,6 +1389,7 @@ fn parse_stsh1_paragraph_defaults(
             },
             alignment_values,
             line_spacing_values,
+            line_spacing_unsupported,
         });
     }
 
@@ -3546,6 +3555,7 @@ mod tests {
                 style_source: inherited_source.clone(),
                 alignment_values: vec![1],
                 line_spacing_values: Vec::new(),
+                line_spacing_unsupported: false,
             },
             ParagraphDefaultObservation {
                 logical_style_index: 4,
@@ -3556,6 +3566,7 @@ mod tests {
                 },
                 alignment_values: vec![2],
                 line_spacing_values: Vec::new(),
+                line_spacing_unsupported: false,
             },
         ];
         let mut ranges = vec![
@@ -3637,6 +3648,7 @@ mod tests {
             },
             alignment_values: vec![1, 2],
             line_spacing_values: Vec::new(),
+            line_spacing_unsupported: false,
         }];
 
         apply_paragraph_alignment_defaults(&mut ranges, &defaults);
@@ -3843,6 +3855,7 @@ mod tests {
             style_source: default_source.clone(),
             alignment_values: Vec::new(),
             line_spacing_values: vec![PUBLISHER_DEFAULT_PARAGRAPH_LINE_SPACING_RAW_V1],
+            line_spacing_unsupported: false,
         }];
 
         let inherited = build_paragraph_line_spacing_runs(
@@ -3863,6 +3876,47 @@ mod tests {
         );
         assert_eq!(run.source_value, None);
         assert_eq!(run.fdpp_style_source, default_source);
+
+        let unsupported_default = vec![ParagraphDefaultObservation {
+            logical_style_index: 0,
+            style_source: default_source.clone(),
+            alignment_values: Vec::new(),
+            line_spacing_values: vec![PUBLISHER_DEFAULT_PARAGRAPH_LINE_SPACING_RAW_V1],
+            line_spacing_unsupported: true,
+        }];
+        assert!(
+            build_paragraph_line_spacing_runs(
+                &[4, 0, 0, 0],
+                std::slice::from_ref(&base_range),
+                &unsupported_default,
+                &[story],
+            )
+            .expect("unsupported default stays fail closed")
+            .is_empty(),
+            "same-property unsupported STSH1 representation must block default inheritance"
+        );
+
+        let duplicate_default = vec![ParagraphDefaultObservation {
+            logical_style_index: 0,
+            style_source: default_source.clone(),
+            alignment_values: Vec::new(),
+            line_spacing_values: vec![
+                PUBLISHER_DEFAULT_PARAGRAPH_LINE_SPACING_RAW_V1,
+                PUBLISHER_DEFAULT_PARAGRAPH_LINE_SPACING_RAW_V1,
+            ],
+            line_spacing_unsupported: false,
+        }];
+        assert!(
+            build_paragraph_line_spacing_runs(
+                &[4, 0, 0, 0],
+                std::slice::from_ref(&base_range),
+                &duplicate_default,
+                &[story],
+            )
+            .expect("duplicate default stays fail closed")
+            .is_empty(),
+            "duplicate STSH1 0x234 occurrences must not collapse into one default authority"
+        );
 
         let raw = 1_219_202_u32.to_le_bytes();
         let explicit_bytes = [
