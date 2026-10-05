@@ -1,7 +1,7 @@
 use chaptera_text_format_overlay::{FormatPropertyV1, FormatValueV1};
 use pub_editor::{
-    EDITOR_PROJECT_VERSION_V0_16, EditOperation, EditorProject, Sha256Digest, StoryId,
-    open_mature_0x2c_editor,
+    EDITOR_PROJECT_VERSION_V0_15, EDITOR_PROJECT_VERSION_V0_16, EditOperation, EditorProject,
+    EditorProjectError, Sha256Digest, StoryId, open_mature_0x2c_editor,
 };
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, env, fs, path::PathBuf};
@@ -167,6 +167,15 @@ fn real_pub_color_blocked_story_persists_scoped_bold_history_v016() {
     assert!(matches!(
         &project.operations[0],
         EditOperation::SetTextFormatPropertyScopedV1 { .. }
+    ));
+
+    let mut downgraded = project.clone();
+    downgraded.schema_version = EDITOR_PROJECT_VERSION_V0_15.to_owned();
+    let mut legacy_reopen =
+        open_mature_0x2c_editor(&original, hash).expect("fresh reopen for schema fence");
+    assert!(matches!(
+        legacy_reopen.apply_project(&downgraded),
+        Err(EditorProjectError::LegacyProjectCarriesScopedTextFormatOperation { index: 0 })
     ));
 
     let serialized = serde_json::to_vec(&project).expect("serialize v0.16 scoped project");
