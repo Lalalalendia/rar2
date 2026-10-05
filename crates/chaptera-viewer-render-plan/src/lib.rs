@@ -3990,6 +3990,59 @@ mod tests {
     }
 
     #[test]
+    fn same_family_runs_with_one_exact_resource_do_not_open_styled_span_lane() {
+        let story_id = fixture().document.stories[0].id;
+        let fragment = render_fragment(
+            story_id,
+            "ABCD",
+            vec![
+                RenderTypographyRunV1 {
+                    scalar_start: 0,
+                    scalar_end: 2,
+                    source_font_name: "Arial".to_owned(),
+                    text_size_emu: 152_400,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
+                    bold: Some(false),
+                    italic: Some(false),
+                },
+                RenderTypographyRunV1 {
+                    scalar_start: 2,
+                    scalar_end: 4,
+                    source_font_name: "Arial".to_owned(),
+                    text_size_emu: 152_400,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
+                    bold: Some(true),
+                    italic: Some(false),
+                },
+            ],
+        );
+        let bytes: &[u8] = b"source-free-arial-single-resource";
+        let sha = font_fingerprint_sha256(bytes);
+        let mut resolver =
+            |_: &RenderTextFragmentV1, _: &RenderTypographyRunV1| {
+                Some(ExplicitRenderTextFontResourceV1 {
+                    resource_id: "font-arial-one-resource",
+                    expected_sha256: &sha,
+                    face_index: 0,
+                    default_font_size_emu: 152_400,
+                    default_line_height_emu: 190_500,
+                    bytes,
+                })
+            };
+
+        assert!(
+            admitted_mixed_family_typography_runs_v1(&fragment, &mut resolver).is_none(),
+            "same-family typography must not enter the styled-span lane until exact physical resources actually differ"
+        );
+    }
+
+    #[test]
     fn plan_collects_document_paint_facts_without_backend_state() {
         let visual = fixture();
         let plan = build_page_render_plan_v1(&visual, 0).expect("render plan");
