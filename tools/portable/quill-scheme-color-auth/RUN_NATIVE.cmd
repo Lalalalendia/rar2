@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 echo.
-echo QUILL SCHEME TEXT COLOR AUTHORITY - PORTABLE V1
+echo QUILL SCHEME TEXT COLOR AUTHORITY - PORTABLE V2
 echo No repo, Git, Python, Cargo, PS7, network, or GitHub runner required.
 echo Save and close Publisher documents before continuing.
 echo.
