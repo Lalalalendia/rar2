@@ -1528,6 +1528,8 @@ fn promote_direct_single_frame_prefix_to_whole_story_v1(
                 text_size_emu: run.text_size_emu,
                 font_inherited: run.font_inherited,
                 size_inherited: run.size_inherited,
+                color_rgb: run.color_rgb,
+                color_inherited: run.color_inherited,
             })
         })
         .collect();
@@ -1586,7 +1588,7 @@ where
 
         #[cfg(feature = "projected-scene-instances")]
         let is_projected_target_frame = visual.projected_instances.iter().any(|projected| {
-            projected.target_frame_node_id == node.node_id
+            projected.target_frame_node_id == Some(node.node_id)
                 && projected.scene_instance.target_page_id == page_id.as_canonical().to_string()
         });
         #[cfg(not(feature = "projected-scene-instances"))]
@@ -4425,6 +4427,8 @@ mod tests {
             text_size_emu: 12 * 12_700,
             font_inherited: false,
             size_inherited: false,
+            color_rgb: None,
+            color_inherited: false,
             source_story_text_sha256: viewer_story_text_sha256(story_text),
         }];
 
@@ -4441,6 +4445,8 @@ mod tests {
                 text_size_emu: 12 * 12_700,
                 font_inherited: false,
                 size_inherited: false,
+                color_rgb: None,
+                color_inherited: false,
             }],
             paragraph_alignments: Vec::new(),
             paragraph_line_spacings: Vec::new(),
