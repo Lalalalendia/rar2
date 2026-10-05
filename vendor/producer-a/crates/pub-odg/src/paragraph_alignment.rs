@@ -222,6 +222,205 @@ pub fn add_full_story_paragraph_alignment_to_odg(
     Ok(())
 }
 
+pub fn add_paragraph_scoped_alignment_to_odg(
+    plan: &ExportPlan,
+    package: &mut OdgPackage,
+    placements: &[OdgParagraphScopedAlignmentPlacement],
+) -> Result<(), OdgParagraphAlignmentError> {
+    if package.target.format != "odg" || plan.target.format != "odg" {
+        return Err(OdgParagraphAlignmentError::NonOdgPackage);
+    }
+
+    let content_index = package
+        .parts
+        .iter()
+        .position(|part| part.kind == OdgPartKind::Content && part.path == ODG_CONTENT_PATH)
+        .ok_or(OdgParagraphAlignmentError::MissingContent)?;
+    let mut xml = String::from_utf8(package.parts[content_index].content.clone())
+        .map_err(|_| OdgParagraphAlignmentError::InvalidContentUtf8)?;
+
+    let mut ordered = placements.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|placement| placement.story_id);
+
+    let mut seen_stories = BTreeSet::new();
+    let mut seen_frames = BTreeSet::new();
+    let mut seen_paragraphs = BTreeSet::new();
+    let mut style_xml = String::new();
+
+    for placement in ordered {
+        if !seen_stories.insert(placement.story_id) {
+            return Err(OdgParagraphAlignmentError::DuplicateStory {
+                story_id: placement.story_id,
+            });
+        }
+        if !has_planned_feature(plan, placement.story_id.into_canonical()) {
+            return Err(OdgParagraphAlignmentError::MissingPlannedFeature {
+                story_id: placement.story_id,
+            });
+        }
+        if placement.frame_ids.is_empty() {
+            return Err(OdgParagraphAlignmentError::EmptyFrames {
+                story_id: placement.story_id,
+            });
+        }
+        if placement.paragraphs.is_empty() {
+            return Err(OdgParagraphAlignmentError::EmptyParagraphs {
+                story_id: placement.story_id,
+            });
+        }
+
+        let mut paragraphs = placement.paragraphs.clone();
+        paragraphs.sort_by_key(|paragraph| {
+            (
+                paragraph.range.start,
+                paragraph.range.end,
+                paragraph.paragraph_id,
+            )
+        });
+
+        let mut previous_end = None;
+        for paragraph in &paragraphs {
+            if paragraph.story_id != placement.story_id {
+                return Err(OdgParagraphAlignmentError::ParagraphStoryMismatch {
+                    story_id: placement.story_id,
+                    paragraph_id: paragraph.paragraph_id,
+                    paragraph_story_id: paragraph.story_id,
+                });
+            }
+            if !seen_paragraphs.insert(paragraph.paragraph_id) {
+                return Err(OdgParagraphAlignmentError::DuplicateParagraph {
+                    paragraph_id: paragraph.paragraph_id,
+                });
+            }
+            let contiguous = match previous_end {
+                None => paragraph.range.start == 0,
+                Some(end) => paragraph.range.start == end,
+            };
+            if !contiguous || paragraph.range.end < paragraph.range.start {
+                return Err(OdgParagraphAlignmentError::NonMonotonicParagraphRanges {
+                    story_id: placement.story_id,
+                });
+            }
+            previous_end = Some(paragraph.range.end);
+
+            let style_name = paragraph_style_name(paragraph.paragraph_id);
+            let value = match paragraph.alignment {
+                ParagraphScopedAlignmentValueV1::Left => "left",
+                ParagraphScopedAlignmentValueV1::Center => "center",
+                ParagraphScopedAlignmentValueV1::Right => "right",
+            };
+            writeln!(
+                style_xml,
+                "    <style:style style:name=\"{style_name}\" style:family=\"paragraph\">"
+            )
+            .unwrap();
+            writeln!(
+                style_xml,
+                "      <style:paragraph-properties fo:text-align=\"{value}\"/>"
+            )
+            .unwrap();
+            style_xml.push_str("    </style:style>\n");
+        }
+
+        let mut frame_ids = placement.frame_ids.clone();
+        frame_ids.sort_unstable();
+        frame_ids.dedup();
+        for frame_id in frame_ids {
+            if !seen_frames.insert(frame_id) {
+                return Err(OdgParagraphAlignmentError::DuplicateFrame { node_id: frame_id });
+            }
+            apply_scoped_styles_to_frame(&mut xml, frame_id, &paragraphs)?;
+        }
+    }
+
+    add_automatic_styles(&mut xml, &style_xml)?;
+    package.parts[content_index].content = xml.into_bytes();
+    Ok(())
+}
+
+fn apply_scoped_styles_to_frame(
+    xml: &mut String,
+    frame_id: NodeId,
+    paragraphs: &[ParagraphScopedAlignmentV1],
+) -> Result<(), OdgParagraphAlignmentError> {
+    let marker = format!("<draw:frame draw:name=\"{}\"", frame_name(frame_id));
+    let frame_start = xml
+        .find(&marker)
+        .ok_or(OdgParagraphAlignmentError::MissingFrame { node_id: frame_id })?;
+    let close_marker = "        </draw:frame>";
+    let relative_close = xml[frame_start..]
+        .find(close_marker)
+        .ok_or(OdgParagraphAlignmentError::MissingFrame { node_id: frame_id })?;
+    let frame_end = frame_start + relative_close + close_marker.len();
+
+    let mut block = xml[frame_start..frame_end].to_owned();
+    if block.contains("<text:p text:style-name=") {
+        return Err(OdgParagraphAlignmentError::ExistingParagraphStyle { node_id: frame_id });
+    }
+
+    let carriers = paragraph_carriers(&block, frame_id)?;
+    if carriers.len() < paragraphs.len() || carriers.len() > paragraphs.len() + 1 {
+        return Err(OdgParagraphAlignmentError::ParagraphCarrierCountMismatch {
+            node_id: frame_id,
+            expected: paragraphs.len(),
+            found: carriers.len(),
+        });
+    }
+    if carriers.len() == paragraphs.len() + 1 && !carriers.last().is_some_and(|item| item.2) {
+        return Err(OdgParagraphAlignmentError::UnexpectedExtraParagraphCarrier {
+            node_id: frame_id,
+        });
+    }
+
+    for (index, paragraph) in paragraphs.iter().enumerate().rev() {
+        let (open_start, _, _) = carriers[index];
+        let open_end = open_start + "<text:p>".len();
+        let replacement = format!(
+            "<text:p text:style-name=\"{}\">",
+            paragraph_style_name(paragraph.paragraph_id)
+        );
+        block.replace_range(open_start..open_end, &replacement);
+    }
+
+    xml.replace_range(frame_start..frame_end, &block);
+    Ok(())
+}
+
+fn paragraph_carriers(
+    block: &str,
+    frame_id: NodeId,
+) -> Result<Vec<(usize, usize, bool)>, OdgParagraphAlignmentError> {
+    let mut carriers = Vec::new();
+    let mut cursor = 0;
+    let open_marker = "<text:p>";
+    let close_marker = "</text:p>";
+
+    while let Some(relative_open) = block[cursor..].find(open_marker) {
+        let open_start = cursor + relative_open;
+        let content_start = open_start + open_marker.len();
+        let relative_close = block[content_start..]
+            .find(close_marker)
+            .ok_or(OdgParagraphAlignmentError::MissingTextCarrier { node_id: frame_id })?;
+        let content_end = content_start + relative_close;
+        let carrier_end = content_end + close_marker.len();
+        carriers.push((
+            open_start,
+            carrier_end,
+            block[content_start..content_end].is_empty(),
+        ));
+        cursor = carrier_end;
+    }
+
+    if carriers.is_empty() {
+        return Err(OdgParagraphAlignmentError::MissingTextCarrier { node_id: frame_id });
+    }
+    Ok(carriers)
+}
+
+fn paragraph_style_name(paragraph_id: pub_model::ParagraphId) -> String {
+    stable_name("PubParagraphP", paragraph_id.into_canonical())
+}
+
 fn add_automatic_styles(
     xml: &mut String,
     style_xml: &str,
