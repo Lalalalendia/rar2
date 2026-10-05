@@ -303,7 +303,9 @@ mod tests {
     #[test]
     fn reader_health_smoke_command_uses_exact_program_cwd_and_bounded_environment() {
         let current_exe = std::env::current_exe().expect("current test executable");
-        let current_tree = current_exe.parent().expect("current test executable parent");
+        let current_tree = current_exe
+            .parent()
+            .expect("current test executable parent");
         let prepared =
             PreparedReaderHealthSmoke::prepare(current_tree).expect("prepare health smoke");
         let command = prepared.command().expect("build health smoke command");
@@ -383,7 +385,8 @@ mod tests {
         let copied = root.join(executable_name);
         std::fs::copy(&current_exe, &copied).expect("copy health-smoke executable");
 
-        let prepared = PreparedReaderHealthSmoke::prepare(&root).expect("prepare copied executable");
+        let prepared =
+            PreparedReaderHealthSmoke::prepare(&root).expect("prepare copied executable");
         let mut file = std::fs::OpenOptions::new()
             .append(true)
             .open(&prepared.program)
