@@ -34,7 +34,7 @@ jobs:
           set -euo pipefail
           cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
           cargo fmt --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml -- --check
-          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer -- --check
+          rustfmt --edition 2024 --check vendor/producer-a/crates/pub-viewer/src/lib.rs
           cargo check -p chaptera-desktop --all-targets
           cargo clippy -p chaptera-desktop --all-targets -- -D warnings
 
