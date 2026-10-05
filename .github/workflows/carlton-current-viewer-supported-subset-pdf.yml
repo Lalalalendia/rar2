@@ -337,10 +337,10 @@ jobs:
           if prefix_outcomes != {"fallback:shared_layout_incomplete": 3}:
               raise SystemExit(f"Story-prefix outcome drift: {prefix_outcomes!r}")
 
-          if 7 - current_story_extent != prefix_candidates:
+          if current_story_extent != 1:
               raise SystemExit(
-                  f"StoryExtentMismatch reduction is not exactly the prefix cohort: "
-                  f"story_extent={current_story_extent!r} candidates={prefix_candidates!r}"
+                  f"Cmo marker-equivalence recovery did not leave exactly the true partial StoryExtentMismatch: "
+                  f"story_extent={current_story_extent!r}"
               )
           if current_shared_incomplete - 4 != prefix_candidates:
               raise SystemExit(
@@ -371,7 +371,7 @@ jobs:
 
           expected_fallback = {
               "shared_layout_incomplete": 7,
-              "story_extent_mismatch": 4,
+              "story_extent_mismatch": 1,
           }
           if mapping["backend_fallback_reason_counts"] != expected_fallback:
               raise SystemExit(f"BackendFallback residual drift: {mapping['backend_fallback_reason_counts']!r}")

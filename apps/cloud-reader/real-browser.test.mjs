@@ -259,7 +259,11 @@ try {
       assert.ok(expected);
       assert.equal(line.text, expected.text, "server line breaks/content must survive painting");
       assert.ok(Math.abs(line.font_size - expected.font_size) < 0.001, "real shared font must not be browser-clamped");
-      if (line.text.trim()) assert.ok(line.height >= 5 && line.width >= 1, "shared text must not collapse to tiny specks");
+      // U+200B is the bounded render-only replacement for a projected Cmo
+      // object marker. It is intentionally zero-width, so marker-only lines
+      // are visually empty even though JavaScript trim() retains U+200B.
+      const visibleText = line.text.replaceAll("\u200B", "").trim();
+      if (visibleText) assert.ok(line.height >= 5 && line.width >= 1, "shared text must not collapse to tiny specks");
     }
     await page.locator("#pages").scrollIntoViewIfNeeded();
     await page.screenshot({ path: join(output, fixture.name + "-ui.png") });
