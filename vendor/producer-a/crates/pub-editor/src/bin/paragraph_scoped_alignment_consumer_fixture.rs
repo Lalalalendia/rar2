@@ -207,7 +207,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             },
             "clear": {
                 "alignment_sequence": clear,
-                "wire_contract": "full_story"
+                "wire_contract": "scoped"
             },
             "mixed": {
                 "alignment_sequence": mixed,
