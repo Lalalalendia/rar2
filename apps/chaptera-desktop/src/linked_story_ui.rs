@@ -4,11 +4,8 @@
 //! Topology authority remains in pub-editor/pub-model. This module only
 //! translates recovered frame membership into bounded Desktop UI state.
 
-pub(crate) const LINKED_STORY_UI_SCHEMA_V1: &str = "linked-story-ui-v1";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LinkedStoryUiStateV1 {
-    pub(crate) schema_version: &'static str,
     pub(crate) frame_count: usize,
     pub(crate) chain_membership: Option<String>,
 }
@@ -35,7 +32,6 @@ pub(crate) fn state_for_validated_story_v1(
     };
 
     Ok(LinkedStoryUiStateV1 {
-        schema_version: LINKED_STORY_UI_SCHEMA_V1,
         frame_count: frame_ordinals.len(),
         chain_membership,
     })
@@ -56,7 +52,6 @@ mod tests {
     #[test]
     fn single_frame_story_needs_no_chain_affordance() {
         let state = state_for_validated_story_v1(&[0]).expect("single frame is placed");
-        assert_eq!(state.schema_version, LINKED_STORY_UI_SCHEMA_V1);
         assert_eq!(state.frame_count, 1);
         assert_eq!(state.chain_membership, None);
     }
