@@ -111,7 +111,7 @@ pub(super) fn apply_editor_paragraph_alignment_layout_v1(
             )
         })?;
         if !matches!(
-            layout.disposition,
+            &layout.disposition,
             RenderTextLayoutDispositionV1::SharedResolved { .. }
         ) {
             return Err(format!(
