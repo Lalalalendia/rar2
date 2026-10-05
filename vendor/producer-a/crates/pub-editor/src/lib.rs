@@ -5640,10 +5640,8 @@ impl EditorSession {
                 self.authored_stacks = before_stacks;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_inverse(&mut self.image_replacements, &operation)?;
-            } else if let Some(story_id) = text_format_operation_story_id_v1(&operation) {
-                let before_state = self.current_text_format_overlay_v1(story_id)?;
-                let _after_state =
-                    apply_text_format_history_operation_v1(&before_state, &operation)?;
+            } else if text_format_operation_story_id_v1(&operation).is_some() {
+                self.validate_text_format_operation_against_current_state_v1(&operation)?;
             } else if authored_paragraph_alignment_v1::paragraph_alignment_operation_snapshots_v1(
                 &operation,
             )
@@ -5701,10 +5699,8 @@ impl EditorSession {
                 self.authored_stacks = after_stacks;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_forward(&mut self.image_replacements, &operation)?;
-            } else if let Some(story_id) = text_format_operation_story_id_v1(&operation) {
-                let before_state = self.current_text_format_overlay_v1(story_id)?;
-                let _after_state =
-                    apply_text_format_history_operation_v1(&before_state, &operation)?;
+            } else if text_format_operation_story_id_v1(&operation).is_some() {
+                self.validate_text_format_operation_against_current_state_v1(&operation)?;
             } else if authored_paragraph_alignment_v1::paragraph_alignment_operation_snapshots_v1(
                 &operation,
             )
