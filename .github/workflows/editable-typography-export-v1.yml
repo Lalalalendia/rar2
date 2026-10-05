@@ -108,7 +108,8 @@ jobs:
         run: |
           set -euo pipefail
           sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
-          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus libreoffice-draw xvfb fonts-montserrat
+          # Hosted Ubuntu mirrors can exceed the former 900s install cap; the job itself remains capped at 45 minutes.
+          sudo timeout 1500s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus libreoffice-draw xvfb fonts-montserrat
 
       - name: Reprove exact bounded typography witness
         run: |

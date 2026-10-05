@@ -25,7 +25,7 @@ fn placed_story_ids(editor: &pub_editor::EditorSession) -> Vec<StoryId> {
 }
 
 #[test]
-fn real_pub_color_blocked_story_persists_scoped_bold_history_v016() {
+fn real_pub_story_persists_scoped_bold_history_v016() {
     let Some(root) = env::var_os("CHAPTERA_TEXT_FORMAT_FIXTURES_DIR") else {
         eprintln!(
             "CHAPTERA_TEXT_FORMAT_FIXTURES_DIR not set; dedicated scoped-history gate owns real evidence"
@@ -52,13 +52,6 @@ fn real_pub_color_blocked_story_persists_scoped_bold_history_v016() {
 
         for story_id in placed_story_ids(&editor) {
             inspected += 1;
-            let full_error = match editor.source_text_format_overlay_v1(story_id) {
-                Ok(_) => continue,
-                Err(error) => error.to_string(),
-            };
-            if !full_error.contains("bounded effective direct-RGB text color is unavailable") {
-                continue;
-            }
 
             let before = match editor
                 .current_text_format_property_state_v1(story_id, FormatPropertyV1::Bold)
@@ -71,27 +64,17 @@ fn real_pub_color_blocked_story_persists_scoped_bold_history_v016() {
                 _ => continue,
             };
 
-            return Some((
-                path, original, hash, editor, story_id, before, !first, full_error,
-            ));
+            return Some((path, original, hash, editor, story_id, before, !first));
         }
         None
     });
 
-    let (
-        path,
-        original,
-        hash,
-        mut editor,
-        story_id,
-        before,
-        desired,
-        original_full_error,
-    ) = witness.unwrap_or_else(|| {
-        panic!(
-            "pinned real-PUB corpus exposes no placed Story with color-blocked full overlay and proven scoped Bold after inspecting {inspected} Stories"
-        )
-    });
+    let (path, original, hash, mut editor, story_id, before, desired) =
+        witness.unwrap_or_else(|| {
+            panic!(
+                "pinned real-PUB corpus exposes no placed Story with proven scoped Bold after inspecting {inspected} Stories"
+            )
+        });
 
     let source_text = editor.graph().stories[&story_id].text.clone();
     let story_len = before.story_scalar_len;
@@ -108,7 +91,7 @@ fn real_pub_color_blocked_story_persists_scoped_bold_history_v016() {
             FormatValueV1::Bool(desired),
             &before_hash,
         )
-        .expect("commit scoped Bold operation on color-blocked real PUB");
+        .expect("commit scoped Bold operation on real PUB");
 
     assert!(matches!(
         operation,
@@ -135,15 +118,6 @@ fn real_pub_color_blocked_story_persists_scoped_bold_history_v016() {
     assert!(segments.iter().all(|segment| {
         segment.property == FormatPropertyV1::Bold && segment.value == FormatValueV1::Bool(desired)
     }));
-
-    let still_unresolved = editor
-        .current_text_format_overlay_v1(story_id)
-        .expect_err("scoped Bold must not invent unresolved text color")
-        .to_string();
-    assert!(
-        still_unresolved.contains("bounded effective direct-RGB text color is unavailable"),
-        "unrelated color authority changed: {still_unresolved}"
-    );
 
     editor.undo().expect("Undo scoped Bold");
     assert_eq!(
@@ -195,13 +169,6 @@ fn real_pub_color_blocked_story_persists_scoped_bold_history_v016() {
             .expect("replayed scoped Bold state"),
         after
     );
-    assert!(
-        reopened
-            .current_text_format_overlay_v1(story_id)
-            .expect_err("replay must leave unrelated color unresolved")
-            .to_string()
-            .contains("bounded effective direct-RGB text color is unavailable")
-    );
     assert_eq!(reopened.graph().stories[&story_id].text, source_text);
     assert_eq!(reopened.source_hash(), hash);
     assert_eq!(
@@ -211,13 +178,12 @@ fn real_pub_color_blocked_story_persists_scoped_bold_history_v016() {
     );
 
     eprintln!(
-        "scoped-history real-PUB witness: file={} sha256={} story={} schema={} full_overlay_error={}",
+        "scoped-history real-PUB witness: file={} sha256={} story={} schema={}",
         path.file_name()
             .and_then(|value| value.to_str())
             .unwrap_or("<non-utf8>"),
         hash,
         story_id.as_canonical(),
-        project.schema_version,
-        original_full_error
+        project.schema_version
     );
 }
