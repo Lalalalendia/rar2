@@ -63,10 +63,13 @@ pub use writer_assessment::{
 };
 
 use chaptera_text_format_overlay::{
-    BaseCharacterFormatV1, BaseFormatRunV1, FormatPropertyV1, FormatValueV1,
-    TextFormatOverlayStateV1, build_text_format_overlay_state_v1,
+    BaseCharacterFormatV1, BaseFormatRunV1, build_text_format_overlay_state_v1,
     clear_text_format_property_override_v1 as overlay_clear_text_format_property_override_v1,
     set_text_format_property_v1 as overlay_set_text_format_property_v1, state_hash_v1,
+};
+pub use chaptera_text_format_overlay::{
+    EffectivePropertySegmentV1, EffectivePropertySourceV1, FormatPropertyV1, FormatValueV1,
+    TextFormatOverlayStateV1, effective_property_segments_v1,
 };
 use pub_export::{
     CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
@@ -127,7 +130,8 @@ pub const EDITOR_PROJECT_VERSION_V0_12: &str = "pub-editor-v0.12";
 pub const EDITOR_PROJECT_VERSION_V0_13: &str = "pub-editor-v0.13";
 pub const EDITOR_PROJECT_VERSION_V0_14: &str = "pub-editor-v0.14";
 pub const EDITOR_PROJECT_VERSION_V0_15: &str = "pub-editor-v0.15";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_15;
+pub const EDITOR_PROJECT_VERSION_V0_16: &str = "pub-editor-v0.16";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_16;
 pub const MAX_MOVE_NODES_V1: usize = 1024;
 pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
@@ -1834,62 +1838,132 @@ fn paragraph_alignment_transition_error_to_editor_v1(
     }
 }
 
-fn text_format_operation_story_id_v1(operation: &EditOperation) -> Option<StoryId> {
+fn text_format_operation_parts_v1(
+    operation: &EditOperation,
+) -> Option<(StoryId, FormatPropertyV1, &str, &str)> {
     match operation {
-        EditOperation::SetTextFormatProperty { story_id, .. }
-        | EditOperation::ClearTextFormatPropertyOverride { story_id, .. } => Some(*story_id),
+        EditOperation::SetTextFormatProperty {
+            story_id,
+            property,
+            before_state_hash,
+            after_state_hash,
+            ..
+        }
+        | EditOperation::ClearTextFormatPropertyOverride {
+            story_id,
+            property,
+            before_state_hash,
+            after_state_hash,
+            ..
+        } => Some((*story_id, *property, before_state_hash, after_state_hash)),
         _ => None,
     }
 }
 
-fn apply_text_format_history_operation_v1(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextFormatStateHashDomainV1 {
+    LegacyFullOverlay,
+    PropertyScoped,
+}
+
+fn is_lower_hex_64_v1(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn text_format_state_hash_domain_v1(value: &str) -> Option<TextFormatStateHashDomainV1> {
+    if is_lower_hex_64_v1(value) {
+        return Some(TextFormatStateHashDomainV1::LegacyFullOverlay);
+    }
+    value
+        .strip_prefix("sha256:")
+        .filter(|digest| is_lower_hex_64_v1(digest))
+        .map(|_| TextFormatStateHashDomainV1::PropertyScoped)
+}
+
+fn text_format_operation_hash_domain_v1(
+    operation: &EditOperation,
+) -> Result<TextFormatStateHashDomainV1, EditorError> {
+    let (story_id, _, before_state_hash, after_state_hash) =
+        text_format_operation_parts_v1(operation)
+            .expect("hash-domain classification receives only text-format operations");
+    let before = text_format_state_hash_domain_v1(before_state_hash).ok_or_else(|| {
+        EditorError::TextFormatStateInvalid {
+            story_id,
+            message: "text-format operation before hash has an unknown domain".to_owned(),
+        }
+    })?;
+    let after = text_format_state_hash_domain_v1(after_state_hash).ok_or_else(|| {
+        EditorError::TextFormatStateInvalid {
+            story_id,
+            message: "text-format operation after hash has an unknown domain".to_owned(),
+        }
+    })?;
+    if before != after {
+        return Err(EditorError::TextFormatStateInvalid {
+            story_id,
+            message: "text-format operation changes hash domain".to_owned(),
+        });
+    }
+    Ok(before)
+}
+
+fn is_property_scoped_text_format_operation_v1(operation: &EditOperation) -> bool {
+    text_format_operation_story_id_v1(operation).is_some()
+        && matches!(
+            text_format_operation_hash_domain_v1(operation),
+            Ok(TextFormatStateHashDomainV1::PropertyScoped)
+        )
+}
+
+fn editor_project_identity_schema_version_v1(operations: &[EditOperation]) -> &'static str {
+    if operations
+        .iter()
+        .any(is_property_scoped_text_format_operation_v1)
+    {
+        EDITOR_PROJECT_VERSION_V0_16
+    } else if operations.iter().any(|operation| {
+        matches!(
+            operation,
+            EditOperation::SetParagraphAlignmentOverride { .. }
+                | EditOperation::ClearParagraphAlignmentOverride { .. }
+        )
+    }) {
+        EDITOR_PROJECT_VERSION_V0_15
+    } else if operations.iter().any(|operation| {
+        matches!(
+            operation,
+            EditOperation::SetTextFormatProperty { .. }
+                | EditOperation::ClearTextFormatPropertyOverride { .. }
+        )
+    }) {
+        EDITOR_PROJECT_VERSION_V0_14
+    } else if operations
+        .iter()
+        .any(|operation| matches!(operation, EditOperation::ReorderAuthoredStack { .. }))
+    {
+        EDITOR_PROJECT_VERSION_V0_13
+    } else {
+        EDITOR_PROJECT_VERSION_V0_12
+    }
+}
+
+fn editor_project_schema_supports_property_scoped_text_format_v1(schema_version: &str) -> bool {
+    schema_version == EDITOR_PROJECT_VERSION_V0_16
+}
+
+fn text_format_operation_story_id_v1(operation: &EditOperation) -> Option<StoryId> {
+    text_format_operation_parts_v1(operation).map(|(story_id, _, _, _)| story_id)
+}
+
+fn apply_text_format_history_operation_semantic_v1(
     state: &TextFormatOverlayStateV1,
     operation: &EditOperation,
 ) -> Result<TextFormatOverlayStateV1, EditorError> {
-    let (story_id, before_state_hash, after_state_hash, receipt) = match operation {
-        EditOperation::SetTextFormatProperty {
-            story_id,
-            start_scalar,
-            end_scalar,
-            property,
-            value,
-            before_state_hash,
-            after_state_hash,
-        } => (
-            *story_id,
-            before_state_hash,
-            after_state_hash,
-            overlay_set_text_format_property_v1(
-                state,
-                *start_scalar,
-                *end_scalar,
-                *property,
-                value.clone(),
-                before_state_hash,
-            ),
-        ),
-        EditOperation::ClearTextFormatPropertyOverride {
-            story_id,
-            start_scalar,
-            end_scalar,
-            property,
-            before_state_hash,
-            after_state_hash,
-        } => (
-            *story_id,
-            before_state_hash,
-            after_state_hash,
-            overlay_clear_text_format_property_override_v1(
-                state,
-                *start_scalar,
-                *end_scalar,
-                *property,
-                before_state_hash,
-            ),
-        ),
-        _ => unreachable!("format-history replay admits only text-format operations"),
-    };
-
+    let (story_id, _, _, _) = text_format_operation_parts_v1(operation)
+        .expect("semantic text-format replay receives only text-format operations");
     if state.story_id != story_id.as_canonical().to_string() {
         return Err(EditorError::TextFormatStateInvalid {
             story_id,
@@ -1897,20 +1971,75 @@ fn apply_text_format_history_operation_v1(
         });
     }
 
-    let receipt = receipt.map_err(|error| EditorError::TextFormatStateInvalid {
+    let current_hash = state_hash_v1(state).map_err(|error| EditorError::TextFormatStateInvalid {
         story_id,
         message: error.to_string(),
     })?;
-    if receipt.command.before_state_hash != *before_state_hash
-        || receipt.command.after_state_hash != *after_state_hash
-    {
+    let receipt = match operation {
+        EditOperation::SetTextFormatProperty {
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            ..
+        } => overlay_set_text_format_property_v1(
+            state,
+            *start_scalar,
+            *end_scalar,
+            *property,
+            value.clone(),
+            &current_hash,
+        ),
+        EditOperation::ClearTextFormatPropertyOverride {
+            start_scalar,
+            end_scalar,
+            property,
+            ..
+        } => overlay_clear_text_format_property_override_v1(
+            state,
+            *start_scalar,
+            *end_scalar,
+            *property,
+            &current_hash,
+        ),
+        _ => unreachable!("semantic text-format replay receives only text-format operations"),
+    }
+    .map_err(|error| EditorError::TextFormatStateInvalid {
+        story_id,
+        message: error.to_string(),
+    })?;
+    Ok(receipt.after_state)
+}
+
+fn apply_text_format_history_operation_v1(
+    state: &TextFormatOverlayStateV1,
+    operation: &EditOperation,
+) -> Result<TextFormatOverlayStateV1, EditorError> {
+    let (story_id, _, before_state_hash, after_state_hash) =
+        text_format_operation_parts_v1(operation)
+            .expect("checked text-format replay receives only text-format operations");
+    let current_hash = state_hash_v1(state).map_err(|error| EditorError::TextFormatStateInvalid {
+        story_id,
+        message: error.to_string(),
+    })?;
+    if current_hash != before_state_hash {
+        return Err(EditorError::StaleOperation { story_id });
+    }
+
+    let after = apply_text_format_history_operation_semantic_v1(state, operation)?;
+    let actual_after_hash =
+        state_hash_v1(&after).map_err(|error| EditorError::TextFormatStateInvalid {
+            story_id,
+            message: error.to_string(),
+        })?;
+    if actual_after_hash != after_state_hash {
         return Err(EditorError::TextFormatStateInvalid {
             story_id,
             message: "persisted format operation hashes do not match deterministic replay"
                 .to_owned(),
         });
     }
-    Ok(receipt.after_state)
+    Ok(after)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1955,6 +2084,9 @@ pub enum EditorProjectError {
         index: usize,
     },
     LegacyProjectCarriesTextFormatOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesPropertyScopedTextFormatOperation {
         index: usize,
     },
     LegacyProjectCarriesParagraphAlignmentOperation {
@@ -2008,7 +2140,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, or {EDITOR_PROJECT_VERSION_V0_15:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, or {EDITOR_PROJECT_VERSION_V0_16:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -2063,6 +2195,10 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesTextFormatOperation { index } => write!(
                 formatter,
                 "editor project operation {index} uses text-format overrides but the project schema predates pub-editor-v0.14"
+            ),
+            Self::LegacyProjectCarriesPropertyScopedTextFormatOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses property-scoped text-format hashes but the project schema predates pub-editor-v0.16"
             ),
             Self::LegacyProjectCarriesParagraphAlignmentOperation { index } => write!(
                 formatter,
@@ -2373,6 +2509,42 @@ impl EditorSession {
         )
     }
 
+    pub fn source_text_format_property_state_v1(
+        &self,
+        story_id: StoryId,
+        property: FormatPropertyV1,
+    ) -> Result<TextFormatPropertyStateV1, EditorTextFormatBaseErrorV1> {
+        self.validate_source_identity()
+            .map_err(|_| EditorTextFormatBaseErrorV1::SourceIdentityChanged)?;
+        let story = self
+            .graph
+            .stories
+            .get(&story_id)
+            .ok_or(EditorTextFormatBaseErrorV1::MissingStory { story_id })?;
+        let source_revision_id = self
+            .source_story_state_ids
+            .get(&story_id)
+            .ok_or(EditorTextFormatBaseErrorV1::MissingStory { story_id })?;
+        if story_state_id_v1(story_id, &story.text) != *source_revision_id {
+            return Err(EditorTextFormatBaseErrorV1::StoryChanged { story_id });
+        }
+        let story_scalar_len = u32::try_from(story.text.chars().count()).map_err(|_| {
+            EditorTextFormatBaseErrorV1::UnsupportedBase {
+                story_id,
+                reason: "Story scalar length exceeds u32".to_owned(),
+            }
+        })?;
+
+        build_source_text_format_property_state_v1(
+            story_id,
+            source_revision_id,
+            story_scalar_len,
+            &self.source_typography_runs,
+            property,
+        )
+        .map_err(|reason| EditorTextFormatBaseErrorV1::UnsupportedBase { story_id, reason })
+    }
+
     pub fn current_text_format_overlay_v1(
         &self,
         story_id: StoryId,
@@ -2381,9 +2553,20 @@ impl EditorSession {
             .source_text_format_overlay_v1(story_id)
             .map_err(text_format_base_error_to_editor_v1)?;
         for operation in &self.undo {
-            if text_format_operation_story_id_v1(operation) == Some(story_id) {
-                state = apply_text_format_history_operation_v1(&state, operation)?;
+            if text_format_operation_story_id_v1(operation) != Some(story_id) {
+                continue;
             }
+            state = match text_format_operation_hash_domain_v1(operation)? {
+                TextFormatStateHashDomainV1::LegacyFullOverlay => {
+                    apply_text_format_history_operation_v1(&state, operation)?
+                }
+                TextFormatStateHashDomainV1::PropertyScoped => {
+                    // Scoped hashes are checked against their property state when the
+                    // operation enters history. A complete overlay, when available,
+                    // consumes only the already-admitted semantic intent.
+                    apply_text_format_history_operation_semantic_v1(&state, operation)?
+                }
+            };
         }
         Ok(state)
     }
@@ -2397,6 +2580,157 @@ impl EditorSession {
             story_id,
             message: error.to_string(),
         })
+    }
+
+    pub fn current_text_format_property_state_v1(
+        &self,
+        story_id: StoryId,
+        property: FormatPropertyV1,
+    ) -> Result<TextFormatPropertyStateV1, EditorError> {
+        let state = self
+            .source_text_format_property_state_v1(story_id, property)
+            .map_err(text_format_base_error_to_editor_v1)?;
+        fold_text_format_property_history_v1(state, &self.undo).map_err(|message| {
+            EditorError::TextFormatStateInvalid { story_id, message }
+        })
+    }
+
+    pub fn current_text_format_property_state_hash_v1(
+        &self,
+        story_id: StoryId,
+        property: FormatPropertyV1,
+    ) -> Result<String, EditorError> {
+        let state = self.current_text_format_property_state_v1(story_id, property)?;
+        text_format_property_state_hash_v1(&state).map_err(|message| {
+            EditorError::TextFormatStateInvalid { story_id, message }
+        })
+    }
+
+    pub fn current_text_format_property_segments_v1(
+        &self,
+        story_id: StoryId,
+        property: FormatPropertyV1,
+        start_scalar: u32,
+        end_scalar: u32,
+    ) -> Result<Vec<EffectivePropertySegmentV1>, EditorError> {
+        let state = self.current_text_format_property_state_v1(story_id, property)?;
+        effective_text_format_property_segments_v1(&state, start_scalar, end_scalar).map_err(
+            |message| EditorError::TextFormatStateInvalid { story_id, message },
+        )
+    }
+
+    pub fn set_text_format_property_scoped_v1(
+        &mut self,
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        property: FormatPropertyV1,
+        value: FormatValueV1,
+        expected_state_hash: &str,
+    ) -> Result<EditOperation, EditorError> {
+        let state = self.current_text_format_property_state_v1(story_id, property)?;
+        let before_state_hash = text_format_property_state_hash_v1(&state).map_err(|message| {
+            EditorError::TextFormatStateInvalid {
+                story_id,
+                message,
+            }
+        })?;
+        if before_state_hash != expected_state_hash {
+            return Err(EditorError::StaleOperation { story_id });
+        }
+        let after = set_text_format_property_state_v1(
+            &state,
+            start_scalar,
+            end_scalar,
+            value.clone(),
+        )
+        .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        let after_state_hash = text_format_property_state_hash_v1(&after).map_err(|message| {
+            EditorError::TextFormatStateInvalid {
+                story_id,
+                message,
+            }
+        })?;
+        if before_state_hash == after_state_hash {
+            return Err(EditorError::NoChange { story_id });
+        }
+
+        let operation = EditOperation::SetTextFormatProperty {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            before_state_hash,
+            after_state_hash,
+        };
+        let replayed = apply_text_format_property_operation_checked_v1(&state, &operation)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        if replayed != after {
+            return Err(EditorError::TextFormatStateInvalid {
+                story_id,
+                message: "canonical scoped format command did not reproduce its state".to_owned(),
+            });
+        }
+
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    pub fn clear_text_format_property_override_scoped_v1(
+        &mut self,
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        property: FormatPropertyV1,
+        expected_state_hash: &str,
+    ) -> Result<EditOperation, EditorError> {
+        let state = self.current_text_format_property_state_v1(story_id, property)?;
+        let before_state_hash = text_format_property_state_hash_v1(&state).map_err(|message| {
+            EditorError::TextFormatStateInvalid {
+                story_id,
+                message,
+            }
+        })?;
+        if before_state_hash != expected_state_hash {
+            return Err(EditorError::StaleOperation { story_id });
+        }
+        let after = clear_text_format_property_state_v1(&state, start_scalar, end_scalar)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        let after_state_hash = text_format_property_state_hash_v1(&after).map_err(|message| {
+            EditorError::TextFormatStateInvalid {
+                story_id,
+                message,
+            }
+        })?;
+        if before_state_hash == after_state_hash {
+            return Err(EditorError::NoChange { story_id });
+        }
+
+        let operation = EditOperation::ClearTextFormatPropertyOverride {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            before_state_hash,
+            after_state_hash,
+        };
+        let replayed = apply_text_format_property_operation_checked_v1(&state, &operation)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        if replayed != after {
+            return Err(EditorError::TextFormatStateInvalid {
+                story_id,
+                message: "canonical scoped clear-format command did not reproduce its state"
+                    .to_owned(),
+            });
+        }
+
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
     }
 
     pub fn set_text_format_property_v1(
@@ -2509,6 +2843,27 @@ impl EditorSession {
         self.redo.clear();
         self.validate_source_identity()?;
         Ok(operation)
+    }
+
+    fn validate_text_format_operation_against_current_state_v1(
+        &self,
+        operation: &EditOperation,
+    ) -> Result<(), EditorError> {
+        let (story_id, property, _, _) = text_format_operation_parts_v1(operation)
+            .expect("text-format validation receives only text-format operations");
+
+        match text_format_operation_hash_domain_v1(operation)? {
+            TextFormatStateHashDomainV1::LegacyFullOverlay => {
+                let state = self.current_text_format_overlay_v1(story_id)?;
+                apply_text_format_history_operation_v1(&state, operation)?;
+            }
+            TextFormatStateHashDomainV1::PropertyScoped => {
+                let state = self.current_text_format_property_state_v1(story_id, property)?;
+                apply_text_format_property_operation_checked_v1(&state, operation)
+                    .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+            }
+        }
+        Ok(())
     }
 
     fn current_paragraph_alignment_overrides_v1(
@@ -2991,15 +3346,7 @@ impl EditorSession {
         }
         let (schema_version, identity) = if let Some(identity) = &self.project_identity {
             (
-                if carries_paragraph_alignment {
-                    EDITOR_PROJECT_VERSION_V0_15
-                } else if carries_text_format {
-                    EDITOR_PROJECT_VERSION_V0_14
-                } else if carries_reorder {
-                    EDITOR_PROJECT_VERSION_V0_13
-                } else {
-                    EDITOR_PROJECT_VERSION_V0_12
-                },
+                editor_project_identity_schema_version_v1(&self.undo),
                 Some(identity.clone()),
             )
         } else {
@@ -3122,6 +3469,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
         {
             return Err(EditorProjectError::UnsupportedSchema {
                 found: project.schema_version.clone(),
@@ -3153,6 +3501,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
         {
             if let Some(index) = project
                 .operations
@@ -3173,6 +3522,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
         {
             if let Some(index) = project
                 .operations
@@ -3192,6 +3542,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && !project.table_grids.is_empty()
         {
             return Err(EditorProjectError::LegacyProjectCarriesTableGrids);
@@ -3205,6 +3556,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
@@ -3220,6 +3572,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
         {
             if let Some(index) = project
                 .operations
@@ -3236,6 +3589,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
         {
             if let Some(index) = project
                 .operations
@@ -3251,6 +3605,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
         {
             if let Some(index) = project
                 .operations
@@ -3260,11 +3615,27 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesCreateShapeOperation { index });
             }
         }
+        if !editor_project_schema_supports_property_scoped_text_format_v1(
+            &project.schema_version,
+        ) {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(is_property_scoped_text_format_operation_v1)
+            {
+                return Err(
+                    EditorProjectError::LegacyProjectCarriesPropertyScopedTextFormatOperation {
+                        index,
+                    },
+                );
+            }
+        }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
         {
             if let Some(index) = project
                 .operations
@@ -3280,6 +3651,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
         {
             if let Some(index) = project
                 .operations
@@ -3292,6 +3664,7 @@ impl EditorSession {
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::ReorderAuthoredStack { .. })
@@ -3303,6 +3676,7 @@ impl EditorSession {
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
@@ -3314,7 +3688,9 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesTextFormatOperation { index });
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_15 {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+        {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
                     operation,
@@ -3332,6 +3708,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.identity.is_some()
         {
             return Err(EditorProjectError::LegacyProjectCarriesIdentity);
@@ -3340,7 +3717,8 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_14
-            || project.schema_version == EDITOR_PROJECT_VERSION_V0_15)
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_15
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_16)
             && project.identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
@@ -5366,10 +5744,8 @@ impl EditorSession {
                 self.authored_stacks = before_stacks;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_inverse(&mut self.image_replacements, &operation)?;
-            } else if let Some(story_id) = text_format_operation_story_id_v1(&operation) {
-                let before_state = self.current_text_format_overlay_v1(story_id)?;
-                let _after_state =
-                    apply_text_format_history_operation_v1(&before_state, &operation)?;
+            } else if text_format_operation_story_id_v1(&operation).is_some() {
+                self.validate_text_format_operation_against_current_state_v1(&operation)?;
             } else if authored_paragraph_alignment_v1::paragraph_alignment_operation_snapshots_v1(
                 &operation,
             )
@@ -5427,10 +5803,8 @@ impl EditorSession {
                 self.authored_stacks = after_stacks;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_forward(&mut self.image_replacements, &operation)?;
-            } else if let Some(story_id) = text_format_operation_story_id_v1(&operation) {
-                let before_state = self.current_text_format_overlay_v1(story_id)?;
-                let _after_state =
-                    apply_text_format_history_operation_v1(&before_state, &operation)?;
+            } else if text_format_operation_story_id_v1(&operation).is_some() {
+                self.validate_text_format_operation_against_current_state_v1(&operation)?;
             } else if authored_paragraph_alignment_v1::paragraph_alignment_operation_snapshots_v1(
                 &operation,
             )
@@ -5526,6 +5900,82 @@ fn validated_editor_asset(
         mime,
         bytes,
     })
+}
+
+fn replay_canonical_text_format_operation_v1(
+    session: &mut EditorSession,
+    expected: &EditOperation,
+    index: usize,
+) -> Result<EditOperation, EditorProjectError> {
+    let (story_id, property, before_state_hash, _) = text_format_operation_parts_v1(expected)
+        .expect("canonical text-format replay receives only text-format operations");
+    let domain = text_format_operation_hash_domain_v1(expected)
+        .map_err(|error| EditorProjectError::Operation { index, error })?;
+
+    match (domain, expected) {
+        (
+            TextFormatStateHashDomainV1::LegacyFullOverlay,
+            EditOperation::SetTextFormatProperty {
+                start_scalar,
+                end_scalar,
+                value,
+                ..
+            },
+        ) => session.set_text_format_property_v1(
+            story_id,
+            *start_scalar,
+            *end_scalar,
+            property,
+            value.clone(),
+            before_state_hash,
+        ),
+        (
+            TextFormatStateHashDomainV1::LegacyFullOverlay,
+            EditOperation::ClearTextFormatPropertyOverride {
+                start_scalar,
+                end_scalar,
+                ..
+            },
+        ) => session.clear_text_format_property_override_v1(
+            story_id,
+            *start_scalar,
+            *end_scalar,
+            property,
+            before_state_hash,
+        ),
+        (
+            TextFormatStateHashDomainV1::PropertyScoped,
+            EditOperation::SetTextFormatProperty {
+                start_scalar,
+                end_scalar,
+                value,
+                ..
+            },
+        ) => session.set_text_format_property_scoped_v1(
+            story_id,
+            *start_scalar,
+            *end_scalar,
+            property,
+            value.clone(),
+            before_state_hash,
+        ),
+        (
+            TextFormatStateHashDomainV1::PropertyScoped,
+            EditOperation::ClearTextFormatPropertyOverride {
+                start_scalar,
+                end_scalar,
+                ..
+            },
+        ) => session.clear_text_format_property_override_scoped_v1(
+            story_id,
+            *start_scalar,
+            *end_scalar,
+            property,
+            before_state_hash,
+        ),
+        (_, _) => unreachable!("canonical text-format replay receives only text-format operations"),
+    }
+    .map_err(|error| EditorProjectError::Operation { index, error })
 }
 
 fn replay_canonical_operation(
@@ -5637,40 +6087,10 @@ fn replay_canonical_operation(
         EditOperation::ReorderAuthoredStack { .. } => session
             .consume_canonical_reorder_authored_stack(expected.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
-        EditOperation::SetTextFormatProperty {
-            story_id,
-            start_scalar,
-            end_scalar,
-            property,
-            value,
-            before_state_hash,
-            ..
-        } => session
-            .set_text_format_property_v1(
-                *story_id,
-                *start_scalar,
-                *end_scalar,
-                *property,
-                value.clone(),
-                before_state_hash,
-            )
-            .map_err(|error| EditorProjectError::Operation { index, error }),
-        EditOperation::ClearTextFormatPropertyOverride {
-            story_id,
-            start_scalar,
-            end_scalar,
-            property,
-            before_state_hash,
-            ..
-        } => session
-            .clear_text_format_property_override_v1(
-                *story_id,
-                *start_scalar,
-                *end_scalar,
-                *property,
-                before_state_hash,
-            )
-            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::SetTextFormatProperty { .. }
+        | EditOperation::ClearTextFormatPropertyOverride { .. } => {
+            replay_canonical_text_format_operation_v1(session, expected, index)
+        }
         EditOperation::SetParagraphAlignmentOverride {
             paragraph_ids,
             value,
@@ -7595,6 +8015,99 @@ mod asset_reachability_tests {
                     .all(|item| { item.origin != arial_story.into_canonical() })
             );
         }
+    }
+
+    #[test]
+    fn text_format_hash_domains_are_explicit_and_never_fallback() {
+        let story_id = StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x71; 16]));
+        let operation = |before_state_hash: String, after_state_hash: String| {
+            EditOperation::SetTextFormatProperty {
+                story_id,
+                start_scalar: 0,
+                end_scalar: 1,
+                property: FormatPropertyV1::Bold,
+                value: FormatValueV1::Bool(true),
+                before_state_hash,
+                after_state_hash,
+            }
+        };
+
+        let legacy = operation("a".repeat(64), "b".repeat(64));
+        assert_eq!(
+            text_format_operation_hash_domain_v1(&legacy).expect("legacy hash domain"),
+            TextFormatStateHashDomainV1::LegacyFullOverlay
+        );
+
+        let scoped = operation(
+            format!("sha256:{}", "a".repeat(64)),
+            format!("sha256:{}", "b".repeat(64)),
+        );
+        assert_eq!(
+            text_format_operation_hash_domain_v1(&scoped).expect("scoped hash domain"),
+            TextFormatStateHashDomainV1::PropertyScoped
+        );
+
+        let mixed = operation("a".repeat(64), format!("sha256:{}", "b".repeat(64)));
+        assert!(matches!(
+            text_format_operation_hash_domain_v1(&mixed),
+            Err(EditorError::TextFormatStateInvalid { .. })
+        ));
+
+        let malformed = operation("not-a-hash".to_owned(), "still-not-a-hash".to_owned());
+        assert!(matches!(
+            text_format_operation_hash_domain_v1(&malformed),
+            Err(EditorError::TextFormatStateInvalid { .. })
+        ));
+    }
+
+    #[test]
+    fn property_scoped_text_format_moves_durable_history_to_v016() {
+        let story_id = StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x72; 16]));
+        let legacy = EditOperation::SetTextFormatProperty {
+            story_id,
+            start_scalar: 0,
+            end_scalar: 1,
+            property: FormatPropertyV1::Bold,
+            value: FormatValueV1::Bool(true),
+            before_state_hash: "a".repeat(64),
+            after_state_hash: "b".repeat(64),
+        };
+        let scoped = EditOperation::SetTextFormatProperty {
+            before_state_hash: format!("sha256:{}", "a".repeat(64)),
+            after_state_hash: format!("sha256:{}", "b".repeat(64)),
+            ..legacy.clone()
+        };
+        let paragraph = EditOperation::ClearParagraphAlignmentOverride {
+            paragraph_ids: Vec::new(),
+            before: Vec::new(),
+            after: Vec::new(),
+        };
+
+        assert_eq!(
+            editor_project_identity_schema_version_v1(std::slice::from_ref(&legacy)),
+            EDITOR_PROJECT_VERSION_V0_14
+        );
+        assert_eq!(
+            editor_project_identity_schema_version_v1(&[legacy, paragraph.clone()]),
+            EDITOR_PROJECT_VERSION_V0_15
+        );
+        assert_eq!(
+            editor_project_identity_schema_version_v1(std::slice::from_ref(&scoped)),
+            EDITOR_PROJECT_VERSION_V0_16
+        );
+        assert_eq!(
+            editor_project_identity_schema_version_v1(&[scoped, paragraph]),
+            EDITOR_PROJECT_VERSION_V0_16
+        );
+        assert!(!editor_project_schema_supports_property_scoped_text_format_v1(
+            EDITOR_PROJECT_VERSION_V0_14
+        ));
+        assert!(!editor_project_schema_supports_property_scoped_text_format_v1(
+            EDITOR_PROJECT_VERSION_V0_15
+        ));
+        assert!(editor_project_schema_supports_property_scoped_text_format_v1(
+            EDITOR_PROJECT_VERSION_V0_16
+        ));
     }
 
     #[test]
