@@ -95,12 +95,23 @@ jobs:
           for state in center clear mixed; do
             root="$EVIDENCE_ROOT/$state-scribus"
             mkdir -p "$root"
-            CHAPTERA_SCRIBUS_SLA_OUT="$root/round1.sla"               xvfb-run -a scribus -g -ns               -py tools/ci/scribus_idml_consumer.py --               "$EVIDENCE_ROOT/$state/output.idml"
+            CHAPTERA_SCRIBUS_SLA_OUT="$root/round1.sla" \
+              xvfb-run -a scribus -g -ns \
+              -py tools/ci/scribus_idml_consumer.py -- \
+              "$EVIDENCE_ROOT/$state/output.idml"
             test -s "$root/round1.sla"
-            CHAPTERA_SCRIBUS_SLA_OUT="$root/round2.sla"               xvfb-run -a scribus -g -ns               -py tools/ci/scribus_idml_consumer.py --               "$root/round1.sla"
+            CHAPTERA_SCRIBUS_SLA_OUT="$root/round2.sla" \
+              xvfb-run -a scribus -g -ns \
+              -py tools/ci/scribus_idml_consumer.py -- \
+              "$root/round1.sla"
             test -s "$root/round2.sla"
-            python tools/verify_paragraph_scoped_alignment_consumer.py scribus               --expected "$EVIDENCE_ROOT/expected.json"               --state "$state"               --input "$root/round2.sla"               --receipt "$EVIDENCE_ROOT/$state-scribus.json"
           done
+          python tools/verify_paragraph_scoped_alignment_consumer.py scribus-matrix \
+            --expected "$EVIDENCE_ROOT/expected.json" \
+            --center-input "$EVIDENCE_ROOT/center-scribus/round2.sla" \
+            --clear-input "$EVIDENCE_ROOT/clear-scribus/round2.sla" \
+            --mixed-input "$EVIDENCE_ROOT/mixed-scribus/round2.sla" \
+            --receipt "$EVIDENCE_ROOT/scribus-matrix.json"
 
       - name: LibreOffice import save fresh-reopen save
         run: |
@@ -132,14 +143,15 @@ jobs:
 
           root = Path(os.environ["EVIDENCE_ROOT"])
           expected = json.loads((root / "expected.json").read_text())
+          scribus = json.loads((root / "scribus-matrix.json").read_text())
           checks = {}
           for state in ("center", "clear", "mixed"):
               checks[state] = {
                   mode: json.loads((root / f"{state}-{mode}.json").read_text())
-                  for mode in ("wire", "scribus", "libreoffice")
+                  for mode in ("wire", "libreoffice")
               }
               wanted = expected["states"][state]["alignment_sequence"]
-              assert checks[state]["scribus"]["ordered_alignment_sequence"] == wanted
+              assert scribus["states"][state]["ordered_alignment_sequence"] == wanted
               assert checks[state]["libreoffice"]["ordered_alignment_sequence"] == wanted
 
           assert expected["states"]["center"]["alignment_sequence"]
@@ -155,6 +167,7 @@ jobs:
               "story_id": expected["story_id"],
               "paragraph_count": expected["paragraph_count"],
               "checks": checks,
+              "scribus_matrix": scribus,
               "claims": {
                   "center_scoped_survives_scribus_and_libreoffice_save_reopen": True,
                   "clear_returns_imported_right_and_survives_consumers": True,
@@ -183,7 +196,7 @@ jobs:
             target/paragraph-scoped-alignment-consumer-evidence/expected.json
             target/paragraph-scoped-alignment-consumer-evidence/fixture.json
             target/paragraph-scoped-alignment-consumer-evidence/*-wire.json
-            target/paragraph-scoped-alignment-consumer-evidence/*-scribus.json
+            target/paragraph-scoped-alignment-consumer-evidence/scribus-matrix.json
             target/paragraph-scoped-alignment-consumer-evidence/*-libreoffice.json
             target/paragraph-scoped-alignment-consumer-evidence/receipt.json
           if-no-files-found: warn
