@@ -345,6 +345,50 @@ test("shared resolved text paint plan rejects negative line x offsets", () => {
   }), null);
 });
 
+test("shared resolved text paint plan does not treat baseline advance as first-line height", () => {
+  const oneLine = resolvedTextLinePaintPlan({
+    bounds: { x: 0, y: 0, width: 1000, height: 130 },
+    text_layout: {
+      disposition: "shared_resolved",
+      font_resource_id: "font-1",
+      font_size_emu: 100,
+      line_height_emu: 150,
+      lines: [{
+        line_index: 0,
+        text: "fits",
+        measured_width_emu: 300,
+        line_height_emu: 150
+      }]
+    }
+  });
+  assert.ok(oneLine);
+  assert.equal(oneLine.lines[0].y, 0);
+
+  assert.equal(resolvedTextLinePaintPlan({
+    bounds: { x: 0, y: 0, width: 1000, height: 130 },
+    text_layout: {
+      disposition: "shared_resolved",
+      font_resource_id: "font-1",
+      font_size_emu: 100,
+      line_height_emu: 150,
+      lines: [
+        {
+          line_index: 0,
+          text: "first",
+          measured_width_emu: 300,
+          line_height_emu: 150
+        },
+        {
+          line_index: 1,
+          text: "second",
+          measured_width_emu: 300,
+          line_height_emu: 150
+        }
+      ]
+    }
+  }), null);
+});
+
 test("shared resolved text paint plan preserves server line breaks", () => {
   const plan = resolvedTextLinePaintPlan({
     bounds: { x: 100, y: 200, width: 1000, height: 600 },
