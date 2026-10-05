@@ -2979,11 +2979,6 @@ pub fn build_mature_0x2c_from_streams(
                     run.color_scheme_slot,
                     color_scheme.as_ref().map(|value| &value.scheme),
                 );
-                let color_rgb = bounded_quill_text_rgb(
-                    run.color_rgb,
-                    run.color_scheme_slot,
-                    color_scheme.as_ref().map(|value| &value.scheme),
-                );
                 typography_runs.push(PubTypographyRun {
                     story_id,
                     story_utf16_start: run.story_start_utf16,
@@ -3031,6 +3026,11 @@ pub fn build_mature_0x2c_from_streams(
                     });
                     continue;
                 };
+                let color_rgb = bounded_quill_text_rgb(
+                    run.color_rgb,
+                    run.color_scheme_slot,
+                    color_scheme.as_ref().map(|value| &value.scheme),
+                );
                 typography_runs.push(PubTypographyRun {
                     story_id,
                     story_utf16_start: run.story_start_utf16,
