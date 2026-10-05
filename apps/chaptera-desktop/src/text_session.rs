@@ -330,13 +330,9 @@ fn derive_domain(editor: &EditorSession, story_id: StoryId) -> Result<StoryEditD
 }
 
 pub fn can_enter_text_mode(editor: &EditorSession, story_id: StoryId) -> Result<(), String> {
-    match editor.can_replace_story_text(story_id) {
-        Ok(()) => Ok(()),
-        Err(pub_editor::EditorError::TextFormatTextMutationConflict { .. }) => {
-            derive_domain(editor, story_id).map(|_| ())
-        }
-        Err(error) => Err(error.to_string()),
-    }
+    editor
+        .can_enter_story_text_session(story_id)
+        .map_err(|error| error.to_string())
 }
 
 fn resolve_post_edit_stop(
