@@ -35,6 +35,9 @@ SAFE_DUPLICATE_RECTANGLE_MODULES = {
 SAFE_AUTHORED_STACK_RUNTIME_MODULES = {
     "imported_paragraph_alignment_v1": PUB_EDITOR_PREFIX + "src/imported_paragraph_alignment_v1.rs",
 }
+SAFE_AUTHORED_STACK_LIFECYCLE_MODULES = {
+    "imported_paragraph_alignment_v1": PUB_EDITOR_PREFIX + "src/imported_paragraph_alignment_v1.rs",
+}
 
 DIRECT_CONTINUITY_V2_OWNERS = (
     ".github/workflows/editor-desktop-continuity-v2-windows.yml",
@@ -108,6 +111,17 @@ DIRECT_AUTHORED_STACK_RUNTIME_OWNERS = (
     "vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs",
     "apps/chaptera-server/src/revision_materializer.rs",
     "apps/chaptera-desktop/src/agent.rs",
+)
+
+DIRECT_AUTHORED_STACK_LIFECYCLE_OWNERS = (
+    ".github/workflows/authoring-authored-stack-lifecycle-v1.yml",
+    "tools/ci/pub_editor_pr_fanout.py",
+    "tools/ci/test_pub_editor_pr_fanout.py",
+    "vendor/producer-a/crates/pub-editor/src/authored_stack_lifecycle_v1.rs",
+    "vendor/producer-a/crates/pub-editor/src/create_shape_runtime_v1.rs",
+    "vendor/producer-a/crates/pub-editor/tests/authored_stack_lifecycle_v1.rs",
+    "vendor/producer-a/crates/pub-editor/tests/create_shape_runtime_v1.rs",
+    "vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs",
 )
 
 
@@ -358,6 +372,39 @@ def classify_authored_stack_runtime(
     return False, "proven_non_authored_stack_runtime_pub_editor_slice"
 
 
+def classify_authored_stack_lifecycle(
+    paths: list[str],
+    *,
+    base_lib_source: str | None = None,
+    head_lib_source: str | None = None,
+) -> tuple[bool, str]:
+    if any(matches(path, DIRECT_AUTHORED_STACK_LIFECYCLE_OWNERS) for path in paths):
+        return True, "direct_authored_stack_lifecycle_owner_changed"
+
+    pub_editor_paths = [path for path in paths if path.startswith(PUB_EDITOR_PREFIX)]
+    if not pub_editor_paths:
+        return False, "no_authored_stack_lifecycle_owner_changed"
+
+    allowed_paths = set(SAFE_AUTHORED_STACK_LIFECYCLE_MODULES.values()) | {
+        PUB_EDITOR_LIB
+    }
+    unknown = sorted(set(pub_editor_paths) - allowed_paths)
+    if unknown:
+        return True, "unknown_or_core_pub_editor_path"
+
+    if PUB_EDITOR_LIB in pub_editor_paths:
+        if base_lib_source is None or head_lib_source is None:
+            return True, "lib_changed_without_source_proof"
+        if not facade_change_is_safe(
+            base_lib_source,
+            head_lib_source,
+            safe_modules=SAFE_AUTHORED_STACK_LIFECYCLE_MODULES,
+        ):
+            return True, "pub_editor_lib_core_change"
+
+    return False, "proven_non_authored_stack_lifecycle_pub_editor_slice"
+
+
 def git_show(revision: str, path: str) -> str | None:
     try:
         return subprocess.check_output(
@@ -404,6 +451,11 @@ def main() -> int:
         base_lib_source=base_lib,
         head_lib_source=head_lib,
     )
+    run_authored_lifecycle, authored_lifecycle_reason = classify_authored_stack_lifecycle(
+        paths,
+        base_lib_source=base_lib,
+        head_lib_source=head_lib,
+    )
 
     receipt = {
         "schema": "chaptera.pub-editor-pr-fanout.v1",
@@ -430,6 +482,11 @@ def main() -> int:
         "authored_stack_runtime_reason": authored_stack_reason,
         "safe_authored_stack_runtime_modules": sorted(
             SAFE_AUTHORED_STACK_RUNTIME_MODULES.values()
+        ),
+        "authored_stack_lifecycle": run_authored_lifecycle,
+        "authored_stack_lifecycle_reason": authored_lifecycle_reason,
+        "safe_authored_stack_lifecycle_modules": sorted(
+            SAFE_AUTHORED_STACK_LIFECYCLE_MODULES.values()
         ),
     }
 
@@ -458,6 +515,10 @@ def main() -> int:
                 f"authored_stack_runtime={'true' if run_authored_stack else 'false'}\n"
             )
             handle.write(f"authored_stack_runtime_reason={authored_stack_reason}\n")
+            handle.write(
+                f"authored_stack_lifecycle={'true' if run_authored_lifecycle else 'false'}\n"
+            )
+            handle.write(f"authored_stack_lifecycle_reason={authored_lifecycle_reason}\n")
 
     return 0
 
