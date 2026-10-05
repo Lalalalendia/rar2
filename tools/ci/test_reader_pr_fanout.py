@@ -277,6 +277,7 @@ fn main() -> eframe::Result<()> {
     assert_scope(
         ["apps/chaptera-desktop/src/text_session.rs"],
         tier_a=True,
+        desktop_rustfmt=True,
         editor_windows=True,
         reader_windows_smoke=False,
         reader_windows=False,
@@ -294,6 +295,7 @@ fn main() -> eframe::Result<()> {
     assert_scope(
         ["vendor/producer-a/crates/pub-editor/src/lib.rs"],
         tier_a=True,
+        desktop_rustfmt=False,
         reader_windows_smoke=False,
         reader_windows=False,
         editor_windows=False,
@@ -339,6 +341,7 @@ fn main() -> eframe::Result<()> {
     assert_scope(
         ["apps/chaptera-desktop/src/reader_visual_golden_tests.rs"],
         tier_a=True,
+        desktop_rustfmt=True,
         reader_windows_smoke=False,
         reader_windows=False,
         editor_windows=False,
@@ -421,6 +424,7 @@ fn main() -> eframe::Result<()> {
     assert_scope(
         ["docs/notes.md"],
         tier_a=False,
+        desktop_rustfmt=False,
         reader_windows_smoke=False,
         reader_windows=False,
         editor_windows=False,
