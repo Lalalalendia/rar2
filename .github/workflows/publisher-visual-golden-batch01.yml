@@ -1,4 +1,5 @@
 name: Publisher visual golden Batch 01
+# Measurement-only matched-base control for #1411; no product/runtime semantics changed.
 
 on:
   workflow_call:
