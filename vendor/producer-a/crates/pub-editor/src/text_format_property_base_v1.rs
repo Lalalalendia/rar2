@@ -54,9 +54,7 @@ fn validate_property_value(
         (FormatPropertyV1::FontSizeEmu, _) => {
             Err("font_size_emu must be a positive integer".to_owned())
         }
-        (FormatPropertyV1::TextColorRgb, _) => {
-            Err("text_color_rgb must be #RRGGBB".to_owned())
-        }
+        (FormatPropertyV1::TextColorRgb, _) => Err("text_color_rgb must be #RRGGBB".to_owned()),
     }
 }
 
@@ -94,9 +92,9 @@ fn source_property_value(
             Ok(FormatValueV1::Integer(u64::from(run.text_size_emu)))
         }
         FormatPropertyV1::TextColorRgb => {
-            let [red, green, blue] = run
-                .color_rgb
-                .ok_or_else(|| "bounded effective direct-RGB text color is unavailable".to_owned())?;
+            let [red, green, blue] = run.color_rgb.ok_or_else(|| {
+                "bounded effective direct-RGB text color is unavailable".to_owned()
+            })?;
             Ok(FormatValueV1::String(format!(
                 "#{red:02X}{green:02X}{blue:02X}"
             )))
@@ -415,7 +413,9 @@ fn operation_for_state<'a>(
             before_state_hash,
             after_state_hash,
             ..
-        } if story_id.as_canonical().to_string() == state.story_id && *property == state.property => {
+        } if story_id.as_canonical().to_string() == state.story_id
+            && *property == state.property =>
+        {
             Some((before_state_hash, after_state_hash))
         }
         _ => None,
@@ -434,7 +434,9 @@ pub fn apply_text_format_property_operation_semantic_v1(
             property,
             value,
             ..
-        } if story_id.as_canonical().to_string() == state.story_id && *property == state.property => {
+        } if story_id.as_canonical().to_string() == state.story_id
+            && *property == state.property =>
+        {
             set_text_format_property_state_v1(state, *start_scalar, *end_scalar, value.clone())
         }
         EditOperation::ClearTextFormatPropertyOverride {
@@ -443,7 +445,9 @@ pub fn apply_text_format_property_operation_semantic_v1(
             end_scalar,
             property,
             ..
-        } if story_id.as_canonical().to_string() == state.story_id && *property == state.property => {
+        } if story_id.as_canonical().to_string() == state.story_id
+            && *property == state.property =>
+        {
             clear_text_format_property_state_v1(state, *start_scalar, *end_scalar)
         }
         _ => Err("text-format operation does not target this property state".to_owned()),
@@ -484,8 +488,7 @@ mod tests {
     use pub_reader::PubTypographyBooleanV1;
 
     fn story_id() -> StoryId {
-        serde_json::from_str("\"11111111-1111-5111-8111-111111111111\"")
-            .expect("canonical StoryId")
+        serde_json::from_str("\"11111111-1111-5111-8111-111111111111\"").expect("canonical StoryId")
     }
 
     fn run(
