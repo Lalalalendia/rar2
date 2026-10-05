@@ -429,8 +429,8 @@ fn census(
             *out.text_font_binding_counts
                 .entry(font_binding_class(text).to_owned())
                 .or_default() += 1;
-            let is_story_prefix_candidate =
-                node.projected_scene_instance.is_none() && story_prefix_candidates.contains(&node.node_id);
+            let is_story_prefix_candidate = node.projected_scene_instance.is_none()
+                && story_prefix_candidates.contains(&node.node_id);
             let Some(layout) = &text.layout else {
                 out.missing_text_layout_count += 1;
                 if is_story_prefix_candidate {
