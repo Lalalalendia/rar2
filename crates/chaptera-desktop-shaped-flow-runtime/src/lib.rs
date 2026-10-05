@@ -1,8 +1,6 @@
 use chaptera_caret_layout_feed::build_caret_map_from_shaped_flow_v1;
 use chaptera_text_caret_map_adapter::ResolvedTextCaretMapV1;
-use pub_editor::{
-    EditorCurrentImageResourceV1, EditorSession, EffectiveParagraphAlignmentValueV1,
-};
+use pub_editor::{EditorCurrentImageResourceV1, EditorSession, EffectiveParagraphAlignmentValueV1};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
     BoundedShapingRuntime, font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
@@ -195,7 +193,8 @@ fn current_story_line_offsets_v1(
             story_id,
             line.scalar_start,
             line.consumed_scalar_end,
-        )? else {
+        )?
+        else {
             continue;
         };
         let frame = shaped_flow
