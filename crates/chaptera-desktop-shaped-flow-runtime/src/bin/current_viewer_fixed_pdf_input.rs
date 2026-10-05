@@ -311,7 +311,6 @@ fn story_prefix_whole_story_candidates(
             continue;
         }
 
-        #[cfg(feature = "projected-scene-instances")]
         if visual.projected_instances.iter().any(|projected| {
             projected.target_frame_node_id == Some(fragment.frame_id)
                 && projected.scene_instance.target_page_id == node.parent_origin.to_string()
