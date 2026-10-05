@@ -1,6 +1,7 @@
+use chaptera_text_format_overlay::{FormatPropertyV1, FormatValueV1};
 use pub_editor::{
-    EDITOR_PROJECT_VERSION_V0_16, EditOperation, EditorProject, FormatPropertyV1, FormatValueV1,
-    Sha256Digest, StoryId, open_mature_0x2c_editor,
+    EDITOR_PROJECT_VERSION_V0_16, EditOperation, EditorProject, Sha256Digest, StoryId,
+    open_mature_0x2c_editor,
 };
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, env, fs, path::PathBuf};
