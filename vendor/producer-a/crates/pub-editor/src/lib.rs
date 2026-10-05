@@ -3521,8 +3521,8 @@ impl EditorSession {
                     let (paragraph_alignments, scoped_paragraph_alignments) = self
                         .effective_editable_paragraph_alignment_inputs_v1()
                         .map_err(|message| EditorExportError::Projection { target, message })?;
-                    let scoped_placements =
-                        self.odg_paragraph_scoped_alignment_placements_v1(&scoped_paragraph_alignments);
+                    let scoped_placements = self
+                        .odg_paragraph_scoped_alignment_placements_v1(&scoped_paragraph_alignments);
                     add_paragraph_scoped_alignment_to_odg(&plan, &mut package, &scoped_placements)
                         .map_err(|error| EditorExportError::Projection {
                             target,
