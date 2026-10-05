@@ -4801,7 +4801,8 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_partial_story_overset_requires_non_projected_source_resolved_visible_incomplete_lines() {
+    fn ordinary_partial_story_overset_requires_non_projected_source_resolved_visible_incomplete_lines()
+    {
         let story_id = StoryId::from_canonical(canonical(3));
         let frame_id = NodeId::from_canonical(canonical(9));
         let overset = pub_layout::ResolveDiagnostic {
