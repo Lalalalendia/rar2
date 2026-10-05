@@ -18,6 +18,7 @@ on:
       - "crates/chaptera-desktop-shaped-flow-runtime/src/bin/current_fixed_pdf_input.rs"
       - "crates/chaptera-desktop-shaped-flow-runtime/src/lib.rs"
       - "crates/chaptera-desktop-fallback-font-resource/**"
+      - "vendor/producer-a/crates/pub-editor/**"
       - "vendor/producer-a/crates/pub-editor/src/lib.rs"
       - "vendor/producer-a/crates/pub-layout/src/shaped_flow.rs"
   workflow_dispatch:
