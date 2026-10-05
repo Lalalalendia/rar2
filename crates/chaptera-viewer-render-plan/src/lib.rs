@@ -1503,8 +1503,8 @@ pub fn build_page_render_plan_with_text_layout_resolvers_v1<'a, F, G>(
     visual: &ViewerGeometryDocument,
     page_index: usize,
     fallback_font: &ExplicitRenderTextFontResourceV1<'a>,
-    mut resolve_font: F,
-    mut resolve_span_font: G,
+    resolve_font: F,
+    resolve_span_font: G,
 ) -> Result<PageRenderPlanV1, RenderPlanErrorV1>
 where
     F: FnMut(&RenderTextFragmentV1) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
@@ -1512,6 +1512,32 @@ where
         &RenderTextFragmentV1,
         &RenderTypographyRunV1,
     ) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
+{
+    build_page_render_plan_with_text_layout_and_typography_resolvers_v1(
+        visual,
+        page_index,
+        fallback_font,
+        resolve_font,
+        resolve_span_font,
+        |_| None,
+    )
+}
+
+pub fn build_page_render_plan_with_text_layout_and_typography_resolvers_v1<'a, F, G, H>(
+    visual: &ViewerGeometryDocument,
+    page_index: usize,
+    fallback_font: &ExplicitRenderTextFontResourceV1<'a>,
+    mut resolve_font: F,
+    mut resolve_span_font: G,
+    mut resolve_typography: H,
+) -> Result<PageRenderPlanV1, RenderPlanErrorV1>
+where
+    F: FnMut(&RenderTextFragmentV1) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
+    G: FnMut(
+        &RenderTextFragmentV1,
+        &RenderTypographyRunV1,
+    ) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
+    H: FnMut(&RenderTextFragmentV1) -> Option<Vec<RenderTypographyRunV1>>,
 {
     let mut plan = build_page_render_plan_v1(visual, page_index)?;
     let page_id = plan.page_id;
@@ -1521,6 +1547,10 @@ where
         let Some(fragment) = node.text.as_mut() else {
             continue;
         };
+        if let Some(typography) = resolve_typography(fragment) {
+            fragment.typography = typography;
+        }
+
         let projected_target_frame_node_id = {
             #[cfg(feature = "projected-scene-instances")]
             {
