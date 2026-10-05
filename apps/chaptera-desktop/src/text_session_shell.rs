@@ -184,6 +184,62 @@ impl ViewerApp {
         }
     }
 
+    pub(super) fn canvas_paragraph_alignment_state_v1(
+        &self,
+    ) -> Result<text_session::DesktopParagraphAlignmentSelectionStateV1, String> {
+        let editor = self
+            .editor
+            .as_ref()
+            .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+        let mode = self
+            .text_mode
+            .as_ref()
+            .ok_or_else(|| "Text editing is not active.".to_owned())?;
+        text_session::paragraph_alignment_selection_state_v1(editor, mode)
+    }
+
+    pub(super) fn apply_canvas_paragraph_alignment_v1(
+        &mut self,
+        value: pub_editor::AuthoredParagraphAlignmentValueV1,
+    ) {
+        let outcome = match (&mut self.editor, &mut self.text_mode) {
+            (Some(editor), Some(mode)) => {
+                text_session::apply_paragraph_alignment_v1(editor, mode, value)
+            }
+            _ => return,
+        };
+        match outcome {
+            Ok(Some(_)) => self.finish_authoring_change(
+                "Paragraph alignment committed through one canonical ParagraphId operation.",
+            ),
+            Ok(None) => {
+                self.edit_status =
+                    Some("Selected paragraphs already have that effective alignment.".to_owned());
+            }
+            Err(error) => {
+                self.edit_status = Some(format!("Paragraph alignment rejected: {error}"));
+            }
+        }
+    }
+
+    pub(super) fn clear_canvas_paragraph_alignment_override_v1(&mut self) {
+        let outcome = match (&mut self.editor, &mut self.text_mode) {
+            (Some(editor), Some(mode)) => {
+                text_session::clear_paragraph_alignment_override_v1(editor, mode)
+            }
+            _ => return,
+        };
+        match outcome {
+            Ok(_) => self.finish_authoring_change(
+                "Paragraph alignment Chaptera override cleared; source/base alignment is effective again.",
+            ),
+            Err(error) => {
+                self.edit_status =
+                    Some(format!("Paragraph alignment override clear rejected: {error}"));
+            }
+        }
+    }
+
     fn apply_canvas_text_keyboard(
         &mut self,
         command: chaptera_text_input_adapter::keyboard::KeyboardCommandV1,
@@ -300,6 +356,28 @@ impl ViewerApp {
                         continue;
                     }
 
+                    if (modifiers.ctrl || modifiers.command)
+                        && !modifiers.alt
+                        && !modifiers.shift
+                    {
+                        let alignment = match key {
+                            egui::Key::L => {
+                                Some(pub_editor::AuthoredParagraphAlignmentValueV1::Left)
+                            }
+                            egui::Key::E => {
+                                Some(pub_editor::AuthoredParagraphAlignmentValueV1::Center)
+                            }
+                            egui::Key::R => {
+                                Some(pub_editor::AuthoredParagraphAlignmentValueV1::Right)
+                            }
+                            _ => None,
+                        };
+                        if let Some(alignment) = alignment {
+                            self.apply_canvas_paragraph_alignment_v1(alignment);
+                            continue;
+                        }
+                    }
+
                     if self.process_story_object_keyboard(key, modifiers) {
                         continue;
                     }
@@ -338,6 +416,7 @@ impl ViewerApp {
         let italic = self
             .canvas_boolean_format_state_v1(text_session::DesktopBooleanFormatPropertyV1::Italic)
             .ok();
+        let paragraph = self.canvas_paragraph_alignment_state_v1().ok();
 
         let label = |letter: &str, state: Option<text_session::DesktopBooleanSelectionStateV1>| {
             let Some(state) = state else {
@@ -411,7 +490,81 @@ impl ViewerApp {
                             );
                         }
 
+                        ui.separator();
+                        ui.strong("Paragraph");
+
+                        let paragraph_editable =
+                            paragraph.as_ref().is_some_and(|state| state.is_editable());
+                        for (label, value, shortcut) in [
+                            (
+                                "Left",
+                                pub_editor::AuthoredParagraphAlignmentValueV1::Left,
+                                "Ctrl/Cmd+L",
+                            ),
+                            (
+                                "Center",
+                                pub_editor::AuthoredParagraphAlignmentValueV1::Center,
+                                "Ctrl/Cmd+E",
+                            ),
+                            (
+                                "Right",
+                                pub_editor::AuthoredParagraphAlignmentValueV1::Right,
+                                "Ctrl/Cmd+R",
+                            ),
+                        ] {
+                            let selected =
+                                paragraph.as_ref().is_some_and(|state| state.is_uniform(value));
+                            let response = ui.add_enabled(
+                                paragraph_editable,
+                                egui::SelectableLabel::new(selected, label),
+                            );
+                            response.clone().on_hover_text(format!(
+                                "{label} paragraph alignment. {shortcut}. Commands target canonical ParagraphIds, never visual lines."
+                            ));
+                            if response.clicked() {
+                                self.apply_canvas_paragraph_alignment_v1(value);
+                            }
+                        }
+
+                        if let Some(state) = paragraph.as_ref() {
+                            let status = if !state.is_editable() {
+                                "unsupported/read-only"
+                            } else {
+                                match state.provenance {
+                                    text_session::DesktopParagraphAlignmentProvenanceStateV1::Base => {
+                                        "source/base"
+                                    }
+                                    text_session::DesktopParagraphAlignmentProvenanceStateV1::ChapteraOverride => {
+                                        "Chaptera override"
+                                    }
+                                    text_session::DesktopParagraphAlignmentProvenanceStateV1::Mixed => {
+                                        "mixed provenance"
+                                    }
+                                    text_session::DesktopParagraphAlignmentProvenanceStateV1::Unsupported => {
+                                        "unsupported/read-only"
+                                    }
+                                }
+                            };
+                            ui.small(format!("paragraph: {status}"));
+                        } else {
+                            ui.weak("paragraph unavailable");
+                        }
+
                         ui.menu_button("Revert", |ui| {
+                            let paragraph_enabled = paragraph
+                                .as_ref()
+                                .is_some_and(|state| state.has_chaptera_override);
+                            if ui
+                                .add_enabled(
+                                    paragraph_enabled,
+                                    egui::Button::new("Paragraph alignment to source/base"),
+                                )
+                                .clicked()
+                            {
+                                self.clear_canvas_paragraph_alignment_override_v1();
+                                ui.close_menu();
+                            }
+
                             let bold_enabled =
                                 bold.is_some_and(|state| state.has_chaptera_override());
                             if ui
@@ -441,7 +594,7 @@ impl ViewerApp {
                         });
 
                         if bold.is_none() && italic.is_none() {
-                            ui.weak("Select a non-empty Story range.");
+                            ui.weak("Select a non-empty Story range for Bold/Italic.");
                         }
                     });
                 });
