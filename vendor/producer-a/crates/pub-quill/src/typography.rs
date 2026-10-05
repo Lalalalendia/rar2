@@ -3689,6 +3689,7 @@ mod tests {
             font_name: "Test".to_owned(),
             text_size_emu: 24 * QUILL_TEXT_SIZE_EMU_PER_POINT,
             color_rgb: None,
+            color_scheme_slot: None,
             color_inherited: false,
             fdpc_descriptor_ordinal: 0,
             fdpc_style_ordinal: 0,
