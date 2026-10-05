@@ -1,0 +1,50 @@
+# Rar2 live branch GC wave 14 — 2026-10-06
+# 40 merged main heads + 5 completed execution-only GC owner refs.
+# Every ref was re-read live and exact-SHA compared immediately before manifest creation.
+# Runtime branch-GC rechecks open PR heads + exact remote SHA before deletion.
+# Format: <branch> <expected_sha>
+viewer/story-marker-equiv-01 ceeb36e786d49321a5ad5b17740ea077177bfe9e
+story-prefix-whole-story-post-styled-font-01 4a633b27674ff17c53ac2f6a99bd93824ab04c3d
+desktop-styled-font-resource-03 e933ee9abfb88021df3543301cc76dd4de43af91
+paragraph-align-ui-visibility-03 fc624e1b7a137511f14875f2f22f9b31d2c60a1d
+fix/quill-scheme-text-color-current-04 6e76e332627182b1ceea2457f5e72c37fe253f4c
+writer/bootstrap-new-doc-01 2365cd0d21c79c261f6b7a8669546eeecb742b11
+desktop/paragraph-align-live-layout-02 20d14abb3246de8b2efa488dc2f8b252a5e2aa05
+render-styled-span-substrate-01 b9f4ccc01fa504d53606527c8ba12fb4409b36cb
+text-format-current-boolean-typography-01 85ed0343236a6ef407bd6c4c948f958bf04442da
+conversion/effective-paragraph-align-07 abdce229ef36b1b8355085d57405ab38d79cc39b
+ci/reader-desktop-rustfmt-guard-03 f612b6ee2323b2353ec1eee59bfb1a5ce7248aa0
+ci/reader-close-lifecycle-cancel-02 622e4bb6b032d5a6e1a63edd9a6f1d901f4ea834
+desktop/linked-story-ui-01 27c46309ec1977df0c5d97c36696b00e2260ee99
+desktop-text-format-scoped-ui-01 0e3502ebe9daa8765f1604f9361f8853a8ebce09
+ci/pub-editor-fixed-output-image-resources-selective-01 02fc78d0b0816ae06ff33fa28d9f065bff6e9715
+ci/pub-editor-authored-stack-lifecycle-selective-02 3476b7b7f1bd1b0bab0e152823bce8c6bf370d5e
+ci/pub-editor-authored-stack-runtime-selective-06 47442ffd065a686160ef2aed8d1ff6abad134d9f
+authoring-text-format-property-history-01 7aea8370b58b639d5fd91c44f65e29f1823b06a2
+fix/shared-flow-first-line-fit-01-current 63e7c861f81235c3cc2a8aa26d3bf0db955108d6
+desktop/linked-story-handoff-04 abf373bd4dd688811b3c07dffd7f64053858435b
+fix/reader-visual-golden-rustfmt-01 9dcb73bc54cdf2c5c085ce2fbc5f420420b41ab8
+ci/pr-ready-replay-01 7dd921001741659a19bd571cf7eb2f2735a418a9
+ci/reader-visual-golden-owner-01 78117b2ce065b094bfd925ebda27bbbb681b8d45
+authoring-text-format-property-base-02 f1b8c2ada26de540e89a1dbe2df677675390cb21
+export/paragraph-scoped-alignment-idml-02 5e9e858eae9068717bab051d26cd56cc05f7f6bd
+export/paragraph-scoped-alignment-odg-01 84c70aa681650b4253aef6e219fb42a8c5c1d367
+ci/pub-editor-duplicate-selective-fanout-03 855e90d938dc68fb06c4c4246d6718a966218422
+export/effective-full-story-paragraph-alignment-01 c34e30075ebeb1bae418f60fd9d6790531f23fbe
+authoring/paragraph-align-v015-history-04 b6c852c6f06d8334a30c3b2f7c748cc2f23eed83
+ci/pub-editor-fixed-pdf-selective-fanout-01 122661bb60ee2951d98250ac8d4c31bd11edcad0
+viewer/paragraph-line-height-auth-1139 d1cae37e1601bf23981d01e44bc63bbb893f7b95
+writer/struct-writer-replay-01-clean ce6fafaf9a47cc90ca8d1bdef3b52f59d9da16a6
+ci/pub-editor-textbox-selective-fanout-01 c13671130a45bca60261c554bf2711b0eddd4b49
+authoring/imported-paragraph-base-alignment-05 610c8d73e7ec32811f50adc69a9762cd834601cc
+viewer/inherited-master-bridge-1113-v3 dd5cdfde2e365d25489c9b9fed730912d92e510d
+ci/legacy22-post-page-role-baseline-955 af5c853b53cbbad76a3c637c2f80ebe5bccc4ca2
+fix/mature-quill-story-provenance-reader-03 24257d0ebd77a4d95a8384898a046aa9c5e3eb31
+fix/yab259-alpha-smask-fixed-pdf-1279 27d106e3a4da265a1e995f4eb0ce97d76197467d
+ci/pub-editor-continuity-v2-selective-02 e088ad26ae0d9f68b4327edf77338b540ed23b4e
+editor-text-format-history-05 d5448792c315c959ba8b6a6f25f307fe2d7bd407
+ops/branch-gc-20260929-live-wave4 3cb3fa3a260e300c26f39982971af9bab62b1a00
+ops/branch-gc-20260930-live-wave5 9b61123c9b26842c28ce35d857d0b0d8f076296d
+ops/branch-gc-20261005-live-wave11-obsolete 4695cdc17af6f56cf2ff6eed79ff9dd3e22a9d09
+ops/branch-gc-20261006-live-wave12-evidence 75512ea87a1b03d91da79f12bb35c70fd2cbd899
+ops/branch-gc-20261006-live-wave13-closed fdec84fe4d70308c57c806c26eb65ece062f7836
