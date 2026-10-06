@@ -11,7 +11,7 @@ use pub_reader::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     env, fs,
     io::Cursor,
     path::{Path, PathBuf},
