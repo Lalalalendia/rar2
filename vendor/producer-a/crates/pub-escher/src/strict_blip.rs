@@ -166,8 +166,11 @@ pub fn validate_blip_record(
         });
     }
 
-    if !valid_format_header(grammar.kind, blip_file_data) {
-        return Err(BlipValidationError::InvalidFormatHeader { kind: grammar.kind });
+    let validated_kind = validated_raster_kind(grammar.kind, blip_file_data);
+    if !valid_format_header(validated_kind, blip_file_data) {
+        return Err(BlipValidationError::InvalidFormatHeader {
+            kind: validated_kind,
+        });
     }
 
     let data_offset = record.payload_source.offset + prefix_len as u64;
@@ -183,7 +186,7 @@ pub fn validate_blip_record(
         payload_source,
         rec_type: record.header.rec_type,
         rec_instance: record.header.rec_instance,
-        kind: grammar.kind,
+        kind: validated_kind,
         effective_uid,
         uid_rule: if grammar.uid_count == 2 {
             BlipUidRule::SecondUid
@@ -288,9 +291,20 @@ fn raster_grammar(rec_type: u16, rec_instance: u16) -> Result<RasterGrammar, Bli
     Ok(grammar)
 }
 
+fn validated_raster_kind(declared_kind: BlipKind, data: &[u8]) -> BlipKind {
+    if declared_kind == BlipKind::Png
+        && (data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a"))
+    {
+        BlipKind::Gif
+    } else {
+        declared_kind
+    }
+}
+
 fn valid_format_header(kind: BlipKind, data: &[u8]) -> bool {
     match kind {
         BlipKind::Png => data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]),
+        BlipKind::Gif => data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a"),
         BlipKind::Jpeg => data.starts_with(&[0xFF, 0xD8, 0xFF]),
         BlipKind::Dib => valid_dib_header(data),
         BlipKind::Tiff => {
@@ -360,6 +374,13 @@ mod tests {
             BlipKind::Png => {
                 let mut data = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
                 data.extend_from_slice(b"strict-png");
+                data
+            }
+            BlipKind::Gif => {
+                let mut data = b"GIF89a".to_vec();
+                data.extend_from_slice(&616u16.to_le_bytes());
+                data.extend_from_slice(&354u16.to_le_bytes());
+                data.extend_from_slice(b"strict-gif");
                 data
             }
             BlipKind::Jpeg => vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10, b'J', b'F', b'I', b'F'],
@@ -516,6 +537,38 @@ mod tests {
         assert!(matches!(
             validate_blip_record(&bytes, &record),
             Err(BlipValidationError::InconsistentRecordEnvelope)
+        ));
+    }
+
+    #[test]
+    fn png_typed_gif_preserves_strict_uid_authority() {
+        let bytes = record_bytes(OFFICE_ART_BLIP_PNG, 0x6E0, BlipKind::Gif, false, false);
+        let record = first_record(&bytes);
+        let validated = validate_blip_record(&bytes, &record).expect("strict GIF-under-PNG");
+        assert_eq!(validated.rec_type, OFFICE_ART_BLIP_PNG);
+        assert_eq!(validated.rec_instance, 0x6E0);
+        assert_eq!(validated.kind, BlipKind::Gif);
+        assert_eq!(validated.uid_rule, BlipUidRule::SingleUid);
+        assert!(validated.internal_uid_verified);
+        assert!(validated.format_header_verified);
+    }
+
+    #[test]
+    fn png_typed_gif_two_uid_uses_second_uid() {
+        let bytes = record_bytes(OFFICE_ART_BLIP_PNG, 0x6E1, BlipKind::Gif, true, false);
+        let record = first_record(&bytes);
+        let validated = validate_blip_record(&bytes, &record).expect("two-UID GIF-under-PNG");
+        assert_eq!(validated.kind, BlipKind::Gif);
+        assert_eq!(validated.uid_rule, BlipUidRule::SecondUid);
+    }
+
+    #[test]
+    fn png_typed_gif_with_bad_effective_uid_is_rejected() {
+        let bytes = record_bytes(OFFICE_ART_BLIP_PNG, 0x6E0, BlipKind::Gif, false, true);
+        let record = first_record(&bytes);
+        assert!(matches!(
+            validate_blip_record(&bytes, &record),
+            Err(BlipValidationError::UidMismatch { .. })
         ));
     }
 
