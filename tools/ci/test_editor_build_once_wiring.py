@@ -102,7 +102,8 @@ def main():
     require(
         continuity,
         (
-            "if: inputs.editor_binary_artifact_name == ''",
+            "ARTIFACT_NAME: ${{ inputs.editor_binary_artifact_name }}",
+            "reason=parent_artifact_authoritative",
             "inputs.editor_binary_artifact_name != '' || needs.classify.result != 'success'",
             "Parent-supplied exact artifact means the parent already admitted this consumer.",
         ),
