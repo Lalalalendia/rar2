@@ -229,7 +229,7 @@
           "$ref": "#/$defs/rect"
         },
         "explicit_crop_present": {
-          "const": false
+          "type": "boolean"
         },
         "durable_replace_count": {
           "const": 1
@@ -477,6 +477,13 @@
         },
         "replacement_asset_sha_emitted": {
           "const": false
+        },
+        "wrap_mutation_scope": {
+          "enum": [
+            "not_asserted",
+            "text_frame_non_intersecting",
+            "authority_blocked_not_asserted"
+          ]
         }
       }
     }
