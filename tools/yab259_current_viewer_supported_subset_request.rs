@@ -170,9 +170,15 @@ struct CurrentText {
 struct CurrentTypographyRun {
     scalar_start: u32,
     scalar_end: u32,
+    #[serde(default)]
+    source_font_name: String,
     text_size_emu: u32,
     #[serde(default)]
     color_rgb: Option<[u8; 3]>,
+    #[serde(default)]
+    bold: Option<bool>,
+    #[serde(default)]
+    italic: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -255,6 +261,10 @@ struct MappingSummary {
     table_bounded_text_profile_cell_count: usize,
     table_hard_break_free_profile_cell_count: usize,
     table_single_line_width_fit_cell_count: usize,
+    table_bounded_source_font_profile_count: usize,
+    table_bounded_source_font_missing_or_mixed_count: usize,
+    table_bounded_source_font_family_counts: BTreeMap<String, usize>,
+    table_bounded_source_font_style_counts: BTreeMap<String, usize>,
     derived_table_fill_node_count: usize,
     derived_table_border_node_count: usize,
     derived_table_paint_node_count: usize,
@@ -592,6 +602,30 @@ fn table_cell_single_line_width_fits_v1(
         .is_some_and(|shaped| shaped.total_x_advance.get() <= inner_width_emu)
 }
 
+fn table_cell_source_font_profile_v1(
+    cell: &CurrentTableCell,
+) -> Option<(String, bool, bool)> {
+    let first = cell.typography.first()?;
+    let family_display = first.source_font_name.trim();
+    if family_display.is_empty() {
+        return None;
+    }
+    let family_key = family_display.to_lowercase();
+    let bold = first.bold?;
+    let italic = first.italic?;
+
+    if cell.typography.iter().any(|run| {
+        run.source_font_name.trim().is_empty()
+            || run.source_font_name.trim().to_lowercase() != family_key
+            || run.bold != Some(bold)
+            || run.italic != Some(italic)
+    }) {
+        return None;
+    }
+
+    Some((family_key, bold, italic))
+}
+
 fn observe_table_text_authority_v1(
     table: &CurrentTable,
     font: &CurrentFont,
@@ -667,6 +701,25 @@ fn observe_table_text_authority_v1(
             && table_cell_bounded_text_profile_v1(cell, inset).is_some()
         {
             summary.table_bounded_text_profile_cell_count += 1;
+            if let Some((family, bold, italic)) = table_cell_source_font_profile_v1(cell) {
+                summary.table_bounded_source_font_profile_count += 1;
+                *summary
+                    .table_bounded_source_font_family_counts
+                    .entry(family)
+                    .or_default() += 1;
+                let style = match (bold, italic) {
+                    (false, false) => "regular",
+                    (true, false) => "bold",
+                    (false, true) => "italic",
+                    (true, true) => "bold_italic",
+                };
+                *summary
+                    .table_bounded_source_font_style_counts
+                    .entry(style.into())
+                    .or_default() += 1;
+            } else {
+                summary.table_bounded_source_font_missing_or_mixed_count += 1;
+            }
             if !cell.text.contains(&['\r', '\n'][..]) {
                 summary.table_hard_break_free_profile_cell_count += 1;
                 if table_cell_single_line_width_fits_v1(cell, inset, font) {

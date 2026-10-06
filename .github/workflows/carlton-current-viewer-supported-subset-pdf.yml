@@ -442,6 +442,26 @@ jobs:
                   sort_keys=True,
               )
           )
+          source_font_profile_total = (
+              mapping["table_bounded_source_font_profile_count"]
+              + mapping["table_bounded_source_font_missing_or_mixed_count"]
+          )
+          if source_font_profile_total != mapping["table_bounded_text_profile_cell_count"]:
+              raise SystemExit(
+                  "TABLE bounded source-font census does not partition the bounded text profile"
+              )
+          print(
+              "table_text_source_font_profile="
+              + json.dumps(
+                  {
+                      "resolved_profile": mapping["table_bounded_source_font_profile_count"],
+                      "missing_or_mixed": mapping["table_bounded_source_font_missing_or_mixed_count"],
+                      "families": mapping["table_bounded_source_font_family_counts"],
+                      "styles": mapping["table_bounded_source_font_style_counts"],
+                  },
+                  sort_keys=True,
+              )
+          )
           if mapping["table_cell_paint_state_count"] != 17:
               raise SystemExit(f"TABLE known cell-paint state drift: {mapping['table_cell_paint_state_count']!r}")
           if mapping["derived_table_border_node_count"] != 20:
