@@ -92,6 +92,22 @@ jobs:
             echo "consumer_cap=12" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Assert migration corpus scope contract
+        shell: bash
+        env:
+          MODE: ${{ steps.scope.outputs.mode }}
+          ROUTE_COUNT: ${{ steps.scope.outputs.route_count }}
+          CONSUMER_CAP: ${{ steps.scope.outputs.consumer_cap }}
+        run: |
+          set -euo pipefail
+          if [[ "$MODE" == "smoke" ]]; then
+            test "$ROUTE_COUNT" = "96"
+            test "$CONSUMER_CAP" = "12"
+          else
+            test "$ROUTE_COUNT" = "1050"
+            test "$CONSUMER_CAP" = "96"
+          fi
+
       - name: Download pinned exact 1050 corpus
         uses: actions/download-artifact@v4
         with:
