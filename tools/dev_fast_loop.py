@@ -139,6 +139,45 @@ def resolve_base_ref(root: Path, base: str) -> str | None:
     return None
 
 
+def resolve_commit_sha(root: Path, ref: str) -> str:
+    try:
+        lines = _run_lines(root, ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"])
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"cannot resolve commit ref {ref!r}") from exc
+    if len(lines) != 1:
+        raise RuntimeError(f"commit ref {ref!r} did not resolve to one SHA")
+    return lines[0]
+
+
+def build_pass_receipt(
+    root: Path,
+    *,
+    base: str,
+    head: str | None,
+    mode: str,
+    paths: Sequence[str],
+    checks: Sequence[Check],
+) -> dict:
+    resolved_base = resolve_base_ref(root, base)
+    if resolved_base is None:
+        raise RuntimeError(f"cannot resolve base ref {base!r}")
+    return {
+        "schema": "chaptera.dev-fast-loop-receipt.v1",
+        "status": "PASS",
+        "mode": mode,
+        "base_ref": base,
+        "base_sha": resolve_commit_sha(root, resolved_base),
+        "source_head_sha": resolve_commit_sha(root, head or "HEAD"),
+        "explicit_head": head is not None,
+        "changed_paths": list(paths),
+        "checks": [
+            {"kind": check.kind, "command": list(check.command), "reason": check.reason}
+            for check in checks
+        ],
+        "deep_acceptance_scheduled": False,
+    }
+
+
 def discover_changed_paths(root: Path, *, base: str = "main", head: str | None = None) -> list[str]:
     """Return committed + staged + unstaged + untracked paths for the edit loop."""
     paths: set[str] = set()
@@ -462,7 +501,14 @@ def main() -> int:
     action.add_argument("--run", action="store_true", help="execute the planned fast checks fail-fast")
     parser.add_argument("--json", action="store_true", help="emit the plan as JSON")
     parser.add_argument("--budget-seconds", type=float, default=60.0)
+    parser.add_argument(
+        "--receipt",
+        type=Path,
+        help="write a PASS receipt after --run succeeds; intended for exact-head integration-train boarding",
+    )
     args = parser.parse_args()
+    if args.receipt and not args.run:
+        parser.error("--receipt requires --run")
 
     root = repo_root()
     paths = sorted({_normalize_path(path) for path in args.paths}) if args.paths else discover_changed_paths(
@@ -471,7 +517,23 @@ def main() -> int:
     checks = plan_for_paths(root, paths, mode=args.mode)
     print_plan(paths, checks, mode=args.mode, as_json=args.json)
     if args.run:
-        return execute_plan(root, checks, budget_seconds=args.budget_seconds)
+        code = execute_plan(root, checks, budget_seconds=args.budget_seconds)
+        if code == 0 and args.receipt:
+            receipt = build_pass_receipt(
+                root,
+                base=args.base,
+                head=args.head,
+                mode=args.mode,
+                paths=paths,
+                checks=checks,
+            )
+            args.receipt.parent.mkdir(parents=True, exist_ok=True)
+            args.receipt.write_text(
+                json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            print(f"fast-loop receipt: {args.receipt}")
+        return code
     return 0
 
 

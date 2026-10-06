@@ -44,6 +44,17 @@ def init_repo() -> tuple[tempfile.TemporaryDirectory, Path, str]:
     git(root, "init", "-b", "main")
     git(root, "config", "user.email", "train@example.invalid")
     git(root, "config", "user.name", "Integration Train Test")
+    write(
+        root,
+        "tools/ci/reader_pr_fanout.py",
+        """def classify(paths):
+    return {
+        "visual_oracle": any("visual" in path for path in paths),
+        "typography_golden": any("typography" in path for path in paths),
+        "editor_windows": any("editor_feature" in path for path in paths),
+    }
+""",
+    )
     commit_file(root, "README.md", "base\n", "base")
     base = git(root, "rev-parse", "HEAD", capture=True)
     return temp, root, base
@@ -52,6 +63,26 @@ def init_repo() -> tuple[tempfile.TemporaryDirectory, Path, str]:
 def branch_commit(root: Path, base: str, branch: str, path: str, text: str) -> str:
     git(root, "switch", "-C", branch, base)
     return commit_file(root, path, text, branch)
+
+
+def fast_proof(root: Path, base: str, spec) -> dict:
+    head = mod.resolve_commit(root, spec.ref)
+    paths = mod.changed_paths(root, base, head)
+    return {
+        "schema": mod.FAST_RECEIPT_SCHEMA,
+        "status": "PASS",
+        "mode": "feature",
+        "base_sha": base,
+        "source_head_sha": head,
+        "explicit_head": True,
+        "changed_paths": paths,
+        "checks": [{"kind": "rust-check-package", "command": ["cargo", "check"]}],
+        "deep_acceptance_scheduled": False,
+    }
+
+
+def proofs(root: Path, base: str, specs) -> dict:
+    return {spec.label: fast_proof(root, base, spec) for spec in specs}
 
 
 def expect_rejected(fn, needle: str) -> None:
@@ -66,22 +97,36 @@ def expect_rejected(fn, needle: str) -> None:
 def test_positive_disjoint_plan() -> None:
     temp, root, base = init_repo()
     try:
-        a = branch_commit(root, base, "task-a", "crates/a/src/feature_a.rs", "pub fn a() {}\n")
-        b = branch_commit(root, base, "task-b", "vendor/producer-a/crates/pub-editor/src/feature_b.rs", "pub fn b() {}\n")
+        a = branch_commit(root, base, "task-a", "crates/a/src/visual_a.rs", "pub fn a() {}\n")
+        b = branch_commit(root, base, "task-b", "vendor/producer-a/crates/pub-editor/src/visual_b.rs", "pub fn b() {}\n")
+        specs = [
+            mod.CandidateSpec("TASK-A", "task-a"),
+            mod.CandidateSpec("TASK-B", "task-b"),
+        ]
+
+        git(root, "switch", "-C", "integration", base)
+        git(root, "cherry-pick", a)
+        git(root, "cherry-pick", b)
+        integration = git(root, "rev-parse", "HEAD", capture=True)
+
         plan = mod.plan_train(
             root,
             base_ref=base,
-            candidates=[
-                mod.CandidateSpec("TASK-A", "task-a"),
-                mod.CandidateSpec("TASK-B", "task-b"),
-            ],
+            candidates=specs,
+            fast_proofs=proofs(root, base, specs),
             branch_name="integration/test",
+            integration_ref=integration,
         )
         assert plan["composition_commits"] == [a, b]
         assert plan["candidate_count"] == 2
         assert plan["total_changed_files"] == 2
         assert plan["mutated_repository"] is False
         assert plan["suggested_commands"][-1].startswith("git cherry-pick ")
+        assert plan["heavy_families"] == ["visual_oracle"]
+        assert plan["heavy_execution_baseline_per_candidate"] == 2
+        assert plan["heavy_execution_train_union"] == 1
+        assert plan["heavy_executions_avoided"] == 1
+        assert plan["integration_sha"] == integration
     finally:
         temp.cleanup()
 
@@ -99,6 +144,14 @@ def test_overlapping_path_rejected() -> None:
                     mod.CandidateSpec("A", "task-a"),
                     mod.CandidateSpec("B", "task-b"),
                 ],
+                fast_proofs=proofs(
+                    root,
+                    base,
+                    [
+                        mod.CandidateSpec("A", "task-a"),
+                        mod.CandidateSpec("B", "task-b"),
+                    ],
+                ),
             ),
             "overlapping changed paths",
         )
@@ -119,6 +172,14 @@ def test_forbidden_path_rejected() -> None:
                     mod.CandidateSpec("A", "task-a"),
                     mod.CandidateSpec("B", "task-b"),
                 ],
+                fast_proofs=proofs(
+                    root,
+                    base,
+                    [
+                        mod.CandidateSpec("A", "task-a"),
+                        mod.CandidateSpec("B", "task-b"),
+                    ],
+                ),
             ),
             "train-forbidden path",
         )
@@ -161,6 +222,14 @@ def test_overlapping_commit_ancestry_rejected() -> None:
                     mod.CandidateSpec("A", "task-a"),
                     mod.CandidateSpec("B", "task-b"),
                 ],
+                fast_proofs=proofs(
+                    root,
+                    base,
+                    [
+                        mod.CandidateSpec("A", "task-a"),
+                        mod.CandidateSpec("B", "task-b"),
+                    ],
+                ),
             ),
             "overlapping commit ancestry",
         )
@@ -185,6 +254,14 @@ def test_merge_commit_rejected() -> None:
                     mod.CandidateSpec("A", "task-a"),
                     mod.CandidateSpec("B", "task-b"),
                 ],
+                fast_proofs=proofs(
+                    root,
+                    base,
+                    [
+                        mod.CandidateSpec("A", "task-a"),
+                        mod.CandidateSpec("B", "task-b"),
+                    ],
+                ),
             ),
             "merge commits are not allowed",
         )
@@ -209,6 +286,14 @@ def test_file_limits_rejected() -> None:
                     mod.CandidateSpec("A", "task-a"),
                     mod.CandidateSpec("B", "task-b"),
                 ],
+                fast_proofs=proofs(
+                    root,
+                    base,
+                    [
+                        mod.CandidateSpec("A", "task-a"),
+                        mod.CandidateSpec("B", "task-b"),
+                    ],
+                ),
             ),
             "per-candidate limit",
         )
@@ -233,8 +318,37 @@ def test_total_file_limit_rejected() -> None:
             git(root, "commit", "-m", branch)
             specs.append(mod.CandidateSpec(branch, branch))
         expect_rejected(
-            lambda: mod.plan_train(root, base_ref=base, candidates=specs),
+            lambda: mod.plan_train(
+                root,
+                base_ref=base,
+                candidates=specs,
+                fast_proofs=proofs(root, base, specs),
+            ),
             "changed files; limit is",
+        )
+    finally:
+        temp.cleanup()
+
+
+def test_fast_proof_head_mismatch_rejected() -> None:
+    temp, root, base = init_repo()
+    try:
+        branch_commit(root, base, "task-a", "crates/a/src/feature_a.rs", "pub fn a() {}\n")
+        branch_commit(root, base, "task-b", "crates/b/src/feature_b.rs", "pub fn b() {}\n")
+        specs = [
+            mod.CandidateSpec("A", "task-a"),
+            mod.CandidateSpec("B", "task-b"),
+        ]
+        fast = proofs(root, base, specs)
+        fast["A"]["source_head_sha"] = "0" * 40
+        expect_rejected(
+            lambda: mod.plan_train(
+                root,
+                base_ref=base,
+                candidates=specs,
+                fast_proofs=fast,
+            ),
+            "fast proof head mismatch",
         )
     finally:
         temp.cleanup()
@@ -249,6 +363,7 @@ def main() -> None:
     test_merge_commit_rejected()
     test_file_limits_rejected()
     test_total_file_limit_rejected()
+    test_fast_proof_head_mismatch_rejected()
     print("integration train tests: ok")
 
 

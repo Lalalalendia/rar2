@@ -3,18 +3,38 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import importlib.util
 import json
 from pathlib import Path
 import shlex
 import subprocess
 import sys
-from typing import NamedTuple, Sequence
+from typing import Mapping, NamedTuple, Sequence
 
 
 MIN_CANDIDATES = 2
 MAX_CANDIDATES = 8
 MAX_FILES_PER_CANDIDATE = 25
 MAX_TOTAL_FILES = 80
+FAST_RECEIPT_SCHEMA = "chaptera.dev-fast-loop-receipt.v1"
+READER_CLASSIFIER_PATH = "tools/ci/reader_pr_fanout.py"
+HEAVY_SCOPE_NAMES = (
+    "reader_windows_smoke",
+    "reader_windows",
+    "editor_windows",
+    "visual_oracle",
+    "cloud_reference",
+    "virginia_page_role",
+    "visual_batch01",
+    "typography_golden",
+    "android_core",
+    "android",
+    "web",
+    "local_portable",
+    "installer",
+    "path_identity",
+    "update_accept",
+)
 
 ALLOWED_PATTERNS = (
     "apps/chaptera-desktop/src/*.rs",
@@ -60,6 +80,27 @@ class TrainError(RuntimeError):
 class CandidateSpec(NamedTuple):
     label: str
     ref: str
+
+
+def parse_fast_proof(raw: str) -> tuple[str, Path]:
+    if "=" not in raw:
+        raise TrainError(f"fast proof must be LABEL=PATH, got {raw!r}")
+    label, path = raw.split("=", 1)
+    label = label.strip()
+    path = path.strip()
+    if not label or not path:
+        raise TrainError(f"fast proof must have non-empty LABEL and PATH, got {raw!r}")
+    return label, Path(path)
+
+
+def load_fast_proof(path: Path) -> dict:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TrainError(f"cannot read fast proof {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise TrainError(f"fast proof {path} must contain a JSON object")
+    return payload
 
 
 def run_lines(root: Path, args: Sequence[str]) -> list[str]:
@@ -117,6 +158,60 @@ def changed_paths(root: Path, base_sha: str, head_sha: str) -> list[str]:
     return sorted(set(run_lines(root, ["git", "diff", "--name-only", f"{base_sha}...{head_sha}"])))
 
 
+def validate_fast_proof(
+    label: str,
+    proof: Mapping,
+    *,
+    base_sha: str,
+    head_sha: str,
+    paths: Sequence[str],
+) -> dict:
+    if proof.get("schema") != FAST_RECEIPT_SCHEMA:
+        raise TrainError(f"{label}: fast proof schema mismatch")
+    if proof.get("status") != "PASS":
+        raise TrainError(f"{label}: fast proof is not PASS")
+    if proof.get("mode") != "feature":
+        raise TrainError(f"{label}: fast proof must use feature mode")
+    if proof.get("explicit_head") is not True:
+        raise TrainError(f"{label}: fast proof must bind an explicit head")
+    if proof.get("base_sha") != base_sha:
+        raise TrainError(f"{label}: fast proof base mismatch")
+    if proof.get("source_head_sha") != head_sha:
+        raise TrainError(f"{label}: fast proof head mismatch")
+    proof_paths = proof.get("changed_paths")
+    if not isinstance(proof_paths, list) or sorted(proof_paths) != sorted(paths):
+        raise TrainError(f"{label}: fast proof changed-path set mismatch")
+    checks = proof.get("checks")
+    if not isinstance(checks, list) or not checks:
+        raise TrainError(f"{label}: fast proof has no executed checks")
+    return {
+        "schema": FAST_RECEIPT_SCHEMA,
+        "status": "PASS",
+        "mode": "feature",
+        "base_sha": base_sha,
+        "source_head_sha": head_sha,
+        "check_count": len(checks),
+    }
+
+
+def load_reader_classifier(root: Path):
+    path = root / READER_CLASSIFIER_PATH
+    if not path.is_file():
+        raise TrainError(f"missing heavy-evidence classifier: {READER_CLASSIFIER_PATH}")
+    spec = importlib.util.spec_from_file_location("chaptera_reader_pr_fanout", path)
+    if spec is None or spec.loader is None:
+        raise TrainError(f"cannot load heavy-evidence classifier: {READER_CLASSIFIER_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def heavy_families_for_paths(root: Path, paths: Sequence[str]) -> list[str]:
+    module = load_reader_classifier(root)
+    scopes = module.classify(list(paths))
+    return sorted(name for name in HEAVY_SCOPE_NAMES if scopes.get(name) is True)
+
+
 def candidate_commits(root: Path, base_sha: str, head_sha: str) -> list[str]:
     return run_lines(
         root,
@@ -138,7 +233,9 @@ def plan_train(
     *,
     base_ref: str,
     candidates: Sequence[CandidateSpec],
+    fast_proofs: Mapping[str, Mapping],
     branch_name: str | None = None,
+    integration_ref: str | None = None,
 ) -> dict:
     root = root.resolve()
     if not MIN_CANDIDATES <= len(candidates) <= MAX_CANDIDATES:
@@ -150,6 +247,14 @@ def plan_train(
     labels = [candidate.label for candidate in candidates]
     if len(labels) != len(set(labels)):
         raise TrainError("candidate labels must be unique")
+    if set(fast_proofs) != set(labels):
+        missing = sorted(set(labels) - set(fast_proofs))
+        extra = sorted(set(fast_proofs) - set(labels))
+        raise TrainError(
+            "fast proof labels must exactly match candidates"
+            + (f"; missing={missing}" if missing else "")
+            + (f"; extra={extra}" if extra else "")
+        )
 
     base_sha = resolve_commit(root, base_ref)
     seen_paths: dict[str, str] = {}
@@ -157,6 +262,8 @@ def plan_train(
     total_paths: set[str] = set()
     planned_candidates: list[dict] = []
     composition_commits: list[str] = []
+    heavy_union: set[str] = set()
+    heavy_per_candidate = 0
 
     for candidate in candidates:
         head_sha = resolve_commit(root, candidate.ref)
@@ -192,6 +299,17 @@ def plan_train(
             raise TrainError(
                 f"{candidate.label}: train-forbidden path(s): " + ", ".join(forbidden)
             )
+
+        fast_summary = validate_fast_proof(
+            candidate.label,
+            fast_proofs[candidate.label],
+            base_sha=base_sha,
+            head_sha=head_sha,
+            paths=paths,
+        )
+        heavy_families = heavy_families_for_paths(root, paths)
+        heavy_union.update(heavy_families)
+        heavy_per_candidate += len(heavy_families)
 
         commit_overlap = [
             (commit, seen_commits[commit])
@@ -229,6 +347,8 @@ def plan_train(
                 "head_sha": head_sha,
                 "commits": commits,
                 "changed_paths": paths,
+                "fast_proof": fast_summary,
+                "heavy_families": heavy_families,
             }
         )
 
@@ -236,6 +356,25 @@ def plan_train(
         raise TrainError(
             f"train has {len(total_paths)} changed files; limit is {MAX_TOTAL_FILES}"
         )
+
+    integration_sha = None
+    if integration_ref:
+        integration_sha = resolve_commit(root, integration_ref)
+        if not run_ok(root, ["git", "merge-base", "--is-ancestor", base_sha, integration_sha]):
+            raise TrainError(
+                f"integration ref {integration_sha} does not descend from train base {base_sha}"
+            )
+        integration_paths = changed_paths(root, base_sha, integration_sha)
+        if integration_paths != sorted(total_paths):
+            raise TrainError("integration ref changed-path set does not match train members")
+        for planned in planned_candidates:
+            if not run_ok(
+                root,
+                ["git", "diff", "--quiet", planned["head_sha"], integration_sha, "--", *planned["changed_paths"]],
+            ):
+                raise TrainError(
+                    f"{planned['label']}: integration ref does not preserve candidate-owned file content"
+                )
 
     train_branch = branch_name or f"integration/train-{base_sha[:10]}"
     commands = [
@@ -253,6 +392,11 @@ def plan_train(
         "candidates": planned_candidates,
         "composition_commits": composition_commits,
         "train_branch": train_branch,
+        "heavy_families": sorted(heavy_union),
+        "heavy_execution_baseline_per_candidate": heavy_per_candidate,
+        "heavy_execution_train_union": len(heavy_union),
+        "heavy_executions_avoided": heavy_per_candidate - len(heavy_union),
+        "integration_sha": integration_sha,
         "suggested_commands": commands,
         "mutated_repository": False,
     }
@@ -280,17 +424,34 @@ def main() -> int:
         default=[],
         help="candidate in LABEL=REF form; repeat 2..8 times",
     )
+    parser.add_argument(
+        "--fast-proof",
+        action="append",
+        default=[],
+        help="exact-head feature-loop PASS receipt in LABEL=PATH form; one per candidate",
+    )
     parser.add_argument("--branch-name", help="suggested integration branch name")
+    parser.add_argument(
+        "--integration-ref",
+        help="optional composed integration ref/SHA; verifies aggregate paths and candidate-owned contents",
+    )
     parser.add_argument("--receipt", type=Path, help="optional JSON receipt path")
     args = parser.parse_args()
 
     try:
         specs = [parse_candidate(raw) for raw in args.candidate]
+        proof_specs = [parse_fast_proof(raw) for raw in args.fast_proof]
+        proof_labels = [label for label, _ in proof_specs]
+        if len(proof_labels) != len(set(proof_labels)):
+            raise TrainError("fast proof labels must be unique")
+        fast_proofs = {label: load_fast_proof(path) for label, path in proof_specs}
         plan = plan_train(
             repo_root(),
             base_ref=args.base,
             candidates=specs,
+            fast_proofs=fast_proofs,
             branch_name=args.branch_name,
+            integration_ref=args.integration_ref,
         )
     except TrainError as exc:
         print(f"integration train rejected: {exc}", file=sys.stderr)

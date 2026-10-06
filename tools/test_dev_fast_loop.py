@@ -191,6 +191,45 @@ def test_feature_mode_adds_package_unit_tests_once() -> None:
         assert len(unit) == 1
 
 
+def test_pass_receipt_binds_exact_feature_head() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        git(root, "init", "-b", "main")
+        git(root, "config", "user.email", "fast-loop@example.invalid")
+        git(root, "config", "user.name", "Fast Loop Test")
+        write(root / "tool.py", "VALUE = 1\n")
+        git(root, "add", ".")
+        git(root, "commit", "-m", "base")
+        base_sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+
+        git(root, "checkout", "-b", "feature")
+        write(root / "tool.py", "VALUE = 2\n")
+        git(root, "add", "tool.py")
+        git(root, "commit", "-m", "feature")
+        head_sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+
+        checks = mod.plan_for_paths(root, ["tool.py"], mode="feature")
+        receipt = mod.build_pass_receipt(
+            root,
+            base="main",
+            head=head_sha,
+            mode="feature",
+            paths=["tool.py"],
+            checks=checks,
+        )
+        assert receipt["schema"] == "chaptera.dev-fast-loop-receipt.v1"
+        assert receipt["status"] == "PASS"
+        assert receipt["mode"] == "feature"
+        assert receipt["base_sha"] == base_sha
+        assert receipt["source_head_sha"] == head_sha
+        assert receipt["explicit_head"] is True
+        assert receipt["changed_paths"] == ["tool.py"]
+
+
 def main() -> None:
     test_discover_changed_paths()
     test_plan_routing_and_dedupe()
@@ -198,6 +237,7 @@ def main() -> None:
     test_component_registry_routes_aliases_dedupes_and_ignores_unrelated()
     test_component_registry_malformed_fails_closed()
     test_feature_mode_adds_package_unit_tests_once()
+    test_pass_receipt_binds_exact_feature_head()
     print("dev fast loop tests: ok")
 
 

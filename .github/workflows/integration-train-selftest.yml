@@ -5,6 +5,8 @@ on:
     paths:
       - "tools/integration_train.py"
       - "tools/test_integration_train.py"
+      - "tools/dev_fast_loop.py"
+      - "tools/test_dev_fast_loop.py"
       - "docs/integration-train.md"
       - "AGENTS.md"
       - ".github/workflows/integration-train-selftest.yml"
@@ -28,5 +30,7 @@ jobs:
           python-version: "3.12"
       - name: Test integration-train planner
         run: python tools/test_integration_train.py
+      - name: Test fast-loop receipt contract
+        run: python tools/test_dev_fast_loop.py
       - name: Compile planner
-        run: python -m py_compile tools/integration_train.py tools/test_integration_train.py
+        run: python -m py_compile tools/integration_train.py tools/test_integration_train.py tools/dev_fast_loop.py tools/test_dev_fast_loop.py
