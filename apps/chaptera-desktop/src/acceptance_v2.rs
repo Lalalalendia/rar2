@@ -143,9 +143,7 @@ fn select_resize(
             .iter()
             .filter(|node| node.parent_origin == page_origin)
         {
-            if excluded.contains(&scene_node.origin)
-                || required_node.is_some_and(|node_id| node_id != scene_node.origin)
-            {
+            if excluded.contains(&scene_node.origin) {
                 continue;
             }
             let Some(instance) = direct_instance(editor, &target_page_id, scene_node.origin) else {
@@ -215,7 +213,9 @@ fn select_replace_image(
             .iter()
             .filter(|node| node.parent_origin == page_origin)
         {
-            if excluded.contains(&scene_node.origin) {
+            if excluded.contains(&scene_node.origin)
+                || required_node.is_some_and(|node_id| node_id != scene_node.origin)
+            {
                 continue;
             }
             let Some(instance) = direct_instance(editor, &target_page_id, scene_node.origin) else {
