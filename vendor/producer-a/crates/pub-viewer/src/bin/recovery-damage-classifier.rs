@@ -184,6 +184,13 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
 fn intake_name(value: FailureIntakeClass) -> &'static str {
     match value {
         FailureIntakeClass::PubHighValue => "pub_high_value",
@@ -329,8 +336,27 @@ fn load_rescue_evidence(path: Option<&Path>) -> Result<BTreeMap<String, RescueEv
     let mut rows = BTreeMap::new();
     for row in payload.rows {
         let sha = row.source_sha256.to_ascii_lowercase();
-        if sha.len() != 64 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            bail!("invalid rescue evidence sha256 {sha:?}");
+        if !is_sha256_hex(&sha) {
+            bail!("invalid rescue evidence source sha256 {sha:?}");
+        }
+        for (field, digest) in [
+            ("producer_receipt_sha256", row.producer_receipt_sha256.as_deref()),
+            (
+                "product_validation_sha256",
+                row.product_validation_sha256.as_deref(),
+            ),
+        ] {
+            if let Some(digest) = digest {
+                if !is_sha256_hex(digest) {
+                    bail!("invalid rescue evidence {field} {digest:?} for {sha}");
+                }
+            }
+        }
+        if row.fabricated_bytes.is_some_and(|value| value != 0) {
+            bail!("rescue evidence with fabricated bytes is not admissible for {sha}");
+        }
+        if row.silent_drops.is_some_and(|value| value != 0) {
+            bail!("rescue evidence with silent drops is not admissible for {sha}");
         }
         if rows.insert(sha.clone(), row).is_some() {
             bail!("duplicate rescue evidence sha256 {sha}");
