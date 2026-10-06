@@ -165,7 +165,9 @@ fn source_cells_from_snapshot(
         });
     }
     cells.sort_by_key(|cell| {
-        let coordinates = cell.coordinates.expect("row/column snapshot cells carry coordinates");
+        let coordinates = cell
+            .coordinates
+            .expect("row/column snapshot cells carry coordinates");
         (
             coordinates.start_row,
             coordinates.start_column,
