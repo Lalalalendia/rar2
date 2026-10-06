@@ -64,14 +64,19 @@ def expect_rejected(fn, needle: str) -> None:
 
 
 def test_heavy_family_union() -> None:
-    families = mod.heavy_families_for_paths([
-        "vendor/producer-a/crates/pub-viewer/src/feature.rs",
-        "apps/chaptera-desktop/src/reader_product_ui.rs",
-    ])
+    paths = ["vendor/producer-a/crates/pub-viewer/src/feature.rs"]
+    families = mod.heavy_families_for_paths(paths)
+    jobs = mod.effective_heavy_jobs_for_paths(paths)
+
     assert "visual_oracle" in families
+    assert "reader_windows_smoke" in families
     assert "typography_golden" in families
-    assert "reader_windows" in families
-    assert "editor_windows" not in families
+    assert "android_core" in families
+
+    assert "visual_oracle" in jobs
+    assert "android_core" in jobs
+    assert "reader_windows_smoke" not in jobs
+    assert "typography_golden" not in jobs
 
 
 def test_unrelated_feature_has_no_heavy_family() -> None:
@@ -101,6 +106,8 @@ def test_positive_disjoint_plan() -> None:
         assert plan["mutated_repository"] is False
         assert plan["heavy_families"] == []
         assert plan["heavy_family_members"] == {}
+        assert plan["effective_heavy_jobs"] == []
+        assert plan["effective_heavy_job_members"] == {}
         assert plan["suggested_commands"][-1].startswith("git cherry-pick ")
     finally:
         temp.cleanup()
@@ -128,6 +135,7 @@ def test_verify_composed_head() -> None:
             "vendor/producer-a/crates/pub-editor/src/feature_b.rs",
         ]
         assert verification["heavy_families"] == plan["heavy_families"]
+        assert verification["effective_heavy_jobs"] == plan["effective_heavy_jobs"]
     finally:
         temp.cleanup()
 
