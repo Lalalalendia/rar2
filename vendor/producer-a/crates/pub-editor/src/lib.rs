@@ -6812,6 +6812,153 @@ impl EditorSession {
         Ok(operation)
     }
 
+    pub fn insert_table_row_v1(
+        &mut self,
+        table_id: NodeId,
+        index: u32,
+        row_id: TableRowId,
+        cell_ids: Vec<TableCellId>,
+        extent: LengthEmu,
+    ) -> Result<EditOperation, EditorError> {
+        self.create_table_rowcol_operation_v1(
+            table_id,
+            TableRowColMutationV1::InsertRow {
+                index,
+                row_id,
+                cell_ids,
+                extent,
+            },
+        )
+    }
+
+    pub fn delete_table_row_v1(
+        &mut self,
+        table_id: NodeId,
+        row_id: TableRowId,
+    ) -> Result<EditOperation, EditorError> {
+        self.create_table_rowcol_operation_v1(
+            table_id,
+            TableRowColMutationV1::DeleteRow { row_id },
+        )
+    }
+
+    pub fn insert_table_column_v1(
+        &mut self,
+        table_id: NodeId,
+        index: u32,
+        column_id: TableColumnId,
+        cell_ids: Vec<TableCellId>,
+        extent: LengthEmu,
+    ) -> Result<EditOperation, EditorError> {
+        self.create_table_rowcol_operation_v1(
+            table_id,
+            TableRowColMutationV1::InsertColumn {
+                index,
+                column_id,
+                cell_ids,
+                extent,
+            },
+        )
+    }
+
+    pub fn delete_table_column_v1(
+        &mut self,
+        table_id: NodeId,
+        column_id: TableColumnId,
+    ) -> Result<EditOperation, EditorError> {
+        self.create_table_rowcol_operation_v1(
+            table_id,
+            TableRowColMutationV1::DeleteColumn { column_id },
+        )
+    }
+
+    fn create_table_rowcol_operation_v1(
+        &mut self,
+        table_id: NodeId,
+        mutation: TableRowColMutationV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        if self.has_node_resize_history_v1(table_id) {
+            return Err(EditorError::TableRowColUnsupported { node_id: table_id });
+        }
+        let grid = self
+            .current_table_grid_v1(table_id)
+            .ok_or(EditorError::TableRowColUnsupported { node_id: table_id })?;
+        let bounds = self
+            .current_table_bounds_v1(table_id)
+            .ok_or(EditorError::TableRowColUnsupported { node_id: table_id })?;
+        let before = table_structure_snapshot_from_graph_v1(&self.graph, table_id, grid, bounds)
+            .map_err(|_| EditorError::TableRowColUnsupported { node_id: table_id })?;
+        let history = canonical_table_rowcol_history_v1(&before, mutation)
+            .map_err(|_| EditorError::TableRowColUnsupported { node_id: table_id })?;
+        let operation = match history.mutation {
+            TableRowColMutationV1::InsertRow { .. } => EditOperation::InsertTableRow { history },
+            TableRowColMutationV1::DeleteRow { .. } => EditOperation::DeleteTableRow { history },
+            TableRowColMutationV1::InsertColumn { .. } => {
+                EditOperation::InsertTableColumn { history }
+            }
+            TableRowColMutationV1::DeleteColumn { .. } => {
+                EditOperation::DeleteTableColumn { history }
+            }
+        };
+        self.consume_canonical_table_rowcol_operation_v1(operation)
+    }
+
+    fn consume_canonical_table_rowcol_operation_v1(
+        &mut self,
+        operation: EditOperation,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let history = table_rowcol_history_v1(&operation)
+            .ok_or(EditorError::SourceIdentityChanged)?
+            .clone();
+        if !table_rowcol_operation_matches_mutation_v1(&operation) {
+            return Err(EditorError::TableRowColUnsupported {
+                node_id: history.table_id,
+            });
+        }
+        if self.has_node_resize_history_v1(history.table_id) {
+            return Err(EditorError::TableRowColUnsupported {
+                node_id: history.table_id,
+            });
+        }
+        let grid = self
+            .current_table_grid_v1(history.table_id)
+            .ok_or(EditorError::TableRowColUnsupported {
+                node_id: history.table_id,
+            })?;
+        let bounds = self
+            .current_table_bounds_v1(history.table_id)
+            .ok_or(EditorError::TableRowColUnsupported {
+                node_id: history.table_id,
+            })?;
+        let before =
+            table_structure_snapshot_from_graph_v1(&self.graph, history.table_id, grid, bounds)
+                .map_err(|_| EditorError::StaleTableRowCol {
+                    node_id: history.table_id,
+                })?;
+        let canonical = canonical_table_rowcol_history_v1(&before, history.mutation.clone())
+            .map_err(|_| EditorError::StaleTableRowCol {
+                node_id: history.table_id,
+            })?;
+        if canonical != history {
+            return Err(EditorError::StaleTableRowCol {
+                node_id: history.table_id,
+            });
+        }
+
+        let mut candidate_graph = self.graph.clone();
+        apply_table_structure_snapshot_to_graph_v1(&mut candidate_graph, &history.after)
+            .map_err(|_| EditorError::StaleTableRowCol {
+                node_id: history.table_id,
+            })?;
+        self.graph = candidate_graph;
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
     pub fn undo(&mut self) -> Result<&EditOperation, EditorError> {
         let operation = self.undo.pop().ok_or(EditorError::NothingToUndo)?;
         let result = (|| {
@@ -7216,6 +7363,12 @@ fn replay_canonical_operation(
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::SetTableTrackExtent { history } => session
             .set_table_track_extent_v1(history.table_id, history.target, history.after_extent)
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::InsertTableRow { .. }
+        | EditOperation::DeleteTableRow { .. }
+        | EditOperation::InsertTableColumn { .. }
+        | EditOperation::DeleteTableColumn { .. } => session
+            .consume_canonical_table_rowcol_operation_v1(expected.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::DeleteNode { .. } => session
             .consume_canonical_delete_node(expected.clone())
@@ -7659,6 +7812,47 @@ fn effective_table_grids(graph: &PubResolvedGraph) -> Vec<EffectiveTableGridV1> 
     grids
 }
 
+fn table_rowcol_history_v1(operation: &EditOperation) -> Option<&TableRowColHistoryV1> {
+    match operation {
+        EditOperation::InsertTableRow { history }
+        | EditOperation::DeleteTableRow { history }
+        | EditOperation::InsertTableColumn { history }
+        | EditOperation::DeleteTableColumn { history } => Some(history),
+        _ => None,
+    }
+}
+
+fn table_rowcol_operation_matches_mutation_v1(operation: &EditOperation) -> bool {
+    matches!(
+        operation,
+        EditOperation::InsertTableRow {
+            history:
+                TableRowColHistoryV1 {
+                    mutation: TableRowColMutationV1::InsertRow { .. },
+                    ..
+                },
+        } | EditOperation::DeleteTableRow {
+            history:
+                TableRowColHistoryV1 {
+                    mutation: TableRowColMutationV1::DeleteRow { .. },
+                    ..
+                },
+        } | EditOperation::InsertTableColumn {
+            history:
+                TableRowColHistoryV1 {
+                    mutation: TableRowColMutationV1::InsertColumn { .. },
+                    ..
+                },
+        } | EditOperation::DeleteTableColumn {
+            history:
+                TableRowColHistoryV1 {
+                    mutation: TableRowColMutationV1::DeleteColumn { .. },
+                    ..
+                },
+        }
+    )
+}
+
 fn effective_table_grids_with_history(
     graph: &PubResolvedGraph,
     operations: &[EditOperation],
@@ -7670,9 +7864,30 @@ fn effective_table_grids_with_history(
         .map(|(node_id, node)| (*node_id, node.header.bounds))
         .collect::<BTreeMap<_, _>>();
 
-    for operation in operations {
+    let mut structural_anchors = BTreeMap::<NodeId, (usize, &TableRowColHistoryV1)>::new();
+    for (index, operation) in operations.iter().enumerate() {
+        if let Some(history) = table_rowcol_history_v1(operation) {
+            structural_anchors.insert(history.table_id, (index, history));
+        }
+    }
+    for (table_id, (_, history)) in &structural_anchors {
+        if let Some(target) = grids.iter_mut().find(|grid| grid.table_id == *table_id) {
+            *target = history.after.grid.clone();
+        } else {
+            grids.push(history.after.grid.clone());
+        }
+        bounds.insert(*table_id, history.after.bounds);
+    }
+
+    for (index, operation) in operations.iter().enumerate() {
         match operation {
             EditOperation::CreateTable { table } => {
+                if structural_anchors
+                    .get(&table.node_id)
+                    .is_some_and(|(anchor, _)| index <= *anchor)
+                {
+                    continue;
+                }
                 let plan = build_create_table_plan_v1(table)
                     .expect("accepted CreateTable history must remain canonical");
                 let current = grids
@@ -7698,6 +7913,12 @@ fn effective_table_grids_with_history(
                 bounds.insert(table.node_id, table.bounds);
             }
             EditOperation::SetTableTrackExtent { history } => {
+                if structural_anchors
+                    .get(&history.table_id)
+                    .is_some_and(|(anchor, _)| index <= *anchor)
+                {
+                    continue;
+                }
                 let target = grids
                     .iter_mut()
                     .find(|grid| grid.table_id == history.table_id)
@@ -7724,8 +7945,21 @@ fn effective_table_bounds_with_history(
     operations: &[EditOperation],
     table_id: NodeId,
 ) -> Option<RectEmu> {
-    let mut bounds = graph.nodes.get(&table_id)?.header.bounds;
-    for operation in operations {
+    let mut anchor = None;
+    for (index, operation) in operations.iter().enumerate() {
+        let Some(history) = table_rowcol_history_v1(operation) else {
+            continue;
+        };
+        if history.table_id == table_id {
+            anchor = Some((index, history.after.bounds));
+        }
+    }
+
+    let (start_index, mut bounds) = match anchor {
+        Some((index, bounds)) => (index + 1, bounds),
+        None => (0, graph.nodes.get(&table_id)?.header.bounds),
+    };
+    for operation in operations.iter().skip(start_index) {
         let EditOperation::SetTableTrackExtent { history } = operation else {
             continue;
         };
