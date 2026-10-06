@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 mod partial_root_recovery;
 pub use partial_root_recovery::{
-    DiscoveredPhysicalStream, PhysicalDirectoryEntry, PhysicalDirectoryInventory,
-    RawDirectoryLink, RawPhysicalDirectoryEntry, RawPhysicalDirectoryInventory,
-    RecoveredRegularStreamPrefixBySid, RecoveredRootRegularStreamPrefix, RegularStreamStorageKind,
-    RootRegularStreamPrefixStatus, RootRegularStreamSourceRange, RootRegularStreamTruncationReason,
+    DiscoveredPhysicalStream, PhysicalDirectoryEntry, PhysicalDirectoryInventory, RawDirectoryLink,
+    RawPhysicalDirectoryEntry, RawPhysicalDirectoryInventory, RecoveredRegularStreamPrefixBySid,
+    RecoveredRootRegularStreamPrefix, RegularStreamStorageKind, RootRegularStreamPrefixStatus,
+    RootRegularStreamSourceRange, RootRegularStreamTruncationReason,
     discover_regular_stream_sid_reader, inspect_partial_cfb_physical_directory_reader,
     inspect_partial_cfb_raw_directory_reader, recover_regular_stream_prefix_by_sid_reader,
     recover_regular_stream_prefix_by_sid_reader_with_expected_sha,
