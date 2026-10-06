@@ -1,6 +1,4 @@
-use crate::{
-    SetTableTrackExtentErrorV1, TableTrackTargetV1, plan_table_track_extent_v1,
-};
+use crate::{SetTableTrackExtentErrorV1, TableTrackTargetV1, plan_table_track_extent_v1};
 use pub_model::{EffectiveTableGridV1, LengthEmu, NodeId, RectEmu};
 use serde::{Deserialize, Serialize};
 
