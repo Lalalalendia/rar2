@@ -52,6 +52,23 @@ def fetch_item(item_id: str, timeout: int) -> tuple[dict[str, Any], bytes]:
                 },
                 data,
             )
+    except urllib.error.HTTPError as error:
+        data = error.read()
+        return (
+            {
+                "requested_url": url,
+                "final_url": error.geturl(),
+                "http_status": error.code,
+                "content_type": error.headers.get("Content-Type", ""),
+                "content_disposition": error.headers.get("Content-Disposition", ""),
+                "byte_len": len(data),
+                "sha256": sha256_bytes(data),
+                "magic_hex": data[:8].hex(),
+                "is_cfb": data.startswith(CFB_MAGIC),
+                "fetch_error": f"HTTPError: {error}",
+            },
+            data,
+        )
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         return (
             {
