@@ -199,6 +199,7 @@ pub fn analyze_reader_partial_contents_prefix(
             ambiguous_reference_count: 0,
             referenced_chunk_unavailable_count: 0,
             chunk_parse_failure_count: 0,
+            chunk_crosses_trailer_count: 0,
             missing_tail_len,
         };
     }
@@ -247,6 +248,7 @@ pub fn analyze_reader_partial_contents_prefix(
             ambiguous_reference_count: 0,
             referenced_chunk_unavailable_count: 0,
             chunk_parse_failure_count: 0,
+            chunk_crosses_trailer_count: 0,
             missing_tail_len,
         };
     };
@@ -267,6 +269,7 @@ pub fn analyze_reader_partial_contents_prefix(
             ambiguous_reference_count: 0,
             referenced_chunk_unavailable_count: 0,
             chunk_parse_failure_count: 0,
+            chunk_crosses_trailer_count: 0,
             missing_tail_len,
         };
     };
