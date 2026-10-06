@@ -63,7 +63,6 @@ pub fn build_reader_partial_root_stream_evidence(
     })
 }
 
-
 pub const READER_PARTIAL_CONTENTS_SEMANTIC_EVIDENCE_SCHEMA_V1: &str =
     "chaptera.reader-partial-contents-semantic-evidence.v1";
 
@@ -528,7 +527,10 @@ mod tests {
     }
 
 
-    fn partial_evidence_for_prefix(prefix: Vec<u8>, declared_len: u64) -> ReaderPartialRootStreamEvidence {
+    fn partial_evidence_for_prefix(
+        prefix: Vec<u8>,
+        declared_len: u64,
+    ) -> ReaderPartialRootStreamEvidence {
         ReaderPartialRootStreamEvidence {
             schema_version: READER_PARTIAL_ROOT_STREAM_EVIDENCE_SCHEMA_V1.to_owned(),
             source_sha256: "11".repeat(32),
