@@ -388,12 +388,10 @@ pub fn inspect_validated_delayed_blips_prefix(
 fn rejected_delayed_blip_disposition(rec_type: u16) -> RejectedDelayedBlipDisposition {
     match rec_type {
         OFFICE_ART_BLIP_PICT => RejectedDelayedBlipDisposition::UnsupportedPicture,
-        OFFICE_ART_BLIP_EMF
-        | OFFICE_ART_BLIP_WMF
-        | OFFICE_ART_BLIP_JPEG
-        | OFFICE_ART_BLIP_PNG
-        | OFFICE_ART_BLIP_DIB
-        | OFFICE_ART_BLIP_TIFF => RejectedDelayedBlipDisposition::StrictValidationFailed,
+        OFFICE_ART_BLIP_EMF | OFFICE_ART_BLIP_WMF | OFFICE_ART_BLIP_JPEG | OFFICE_ART_BLIP_PNG
+        | OFFICE_ART_BLIP_DIB | OFFICE_ART_BLIP_TIFF => {
+            RejectedDelayedBlipDisposition::StrictValidationFailed
+        }
         _ => RejectedDelayedBlipDisposition::UnsupportedBlipType,
     }
 }
