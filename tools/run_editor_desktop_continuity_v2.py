@@ -634,6 +634,7 @@ def run_continuity_v2(
     expected_hash: str = SAMPLE_SOURCE_HASH,
     expected_len: int = SAMPLE_SOURCE_BYTE_LEN,
     rar_commit: str | None = None,
+    require_explicit_crop: bool = False,
 ) -> dict[str, Any]:
     fixture = bind_fixture(fixture, expected_hash=expected_hash, expected_len=expected_len)
     replacement, replacement_bytes, replacement_mime, replacement_sha256 = bind_replacement(
@@ -667,6 +668,9 @@ def run_continuity_v2(
     env["CHAPTERA_SOURCE_HASH"] = expected_hash
     env["CHAPTERA_DESKTOP_CONTINUITY_V2"] = "1"
     env["CHAPTERA_REPLACEMENT_BINDING_ID"] = replacement_binding_id
+    env["CHAPTERA_CONTINUITY_REQUIRE_EXPLICIT_CROP"] = (
+        "1" if require_explicit_crop else "0"
+    )
 
     completed = subprocess.run(
         command,
@@ -810,6 +814,9 @@ def main() -> int:
     parser.add_argument("--project-output", required=True, type=pathlib.Path)
     parser.add_argument("--export-output", required=True, type=pathlib.Path)
     parser.add_argument("--receipt-output", required=True, type=pathlib.Path)
+    parser.add_argument("--expected-source-hash", default=SAMPLE_SOURCE_HASH)
+    parser.add_argument("--expected-source-bytes", type=int, default=SAMPLE_SOURCE_BYTE_LEN)
+    parser.add_argument("--require-explicit-crop", action="store_true")
     parser.add_argument("desktop_command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
@@ -825,6 +832,9 @@ def main() -> int:
             export_output=args.export_output,
             receipt_output=args.receipt_output,
             command_template=command,
+            expected_hash=args.expected_source_hash,
+            expected_len=args.expected_source_bytes,
+            require_explicit_crop=args.require_explicit_crop,
         )
     except (ContinuityV2Error, OSError) as error:
         print(str(error), file=sys.stderr)
