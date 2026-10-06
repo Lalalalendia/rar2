@@ -1,0 +1,34 @@
+name: Manual residual source probe build
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-reader/src/bin/source_image_export_probe.rs"
+      - ".github/workflows/manual-residual-source-probe-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Build source image export probe
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin source_image_export_probe
+          mkdir -p target/manual-residual-source-probe
+          cp vendor/producer-a/target/debug/source_image_export_probe target/manual-residual-source-probe/
+          printf '%s\n' "${{ github.sha }}" > target/manual-residual-source-probe/HEAD_SHA.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manual-residual-source-probe-${{ github.sha }}
+          path: target/manual-residual-source-probe
+          if-no-files-found: error
+          retention-days: 7
