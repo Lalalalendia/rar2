@@ -544,7 +544,8 @@ fn census(
                             .or_default() += 1;
                         continue;
                     };
-                    let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end) else {
+                    let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end)
+                    else {
                         *out.table_layout_line_spacing_kind_counts
                             .entry("range_missing".to_owned())
                             .or_default() += 1;
