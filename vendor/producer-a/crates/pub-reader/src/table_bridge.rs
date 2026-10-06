@@ -6,7 +6,10 @@ use pub_contents::{
 use pub_model::{
     RectEmu, SimpleRectangularTable, SimpleTableCell, Story, TableCellAddress, TableCellId,
 };
-use pub_quill::{QuillMcldChunk, QuillStoryCatalog, bounded_mcld_table_metrics};
+use pub_quill::{
+    QuillMcldChunk, QuillStoryCatalog, bounded_mcld_table_metrics,
+    bounded_mcld_table_uniform_text_inset,
+};
 
 pub const RAW_TYPE_TABLE: u16 = 0x10;
 pub const TABLE_NUM_ROWS_ID: u16 = 0x66;
@@ -320,6 +323,17 @@ pub struct PubTableLayoutRelationSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubTableUniformTextInsetSource {
+    /// Exact Story-catalog key selecting the source MCLD record.
+    pub story_layout_key: u32,
+    /// Symmetric TABLE cell text inset admitted only by the unanimous
+    /// multi-child MCLD law.
+    pub inset_emu: LengthEmu,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_refs: Vec<SourceRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubTableLayoutMetricsSource {
     pub story_layout_key: u32,
     pub cell_width: LengthEmu,
@@ -351,6 +365,8 @@ pub struct PubTableSource {
     pub simple_table: Option<SimpleRectangularTable<TableCellId>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout_relation: Option<PubTableLayoutRelationSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uniform_text_inset: Option<PubTableUniformTextInsetSource>,
     pub layout_metrics: Option<PubTableLayoutMetricsSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub border_segments: Vec<PubTableBorderSegmentSource>,
@@ -1485,6 +1501,7 @@ pub(crate) fn build_table_source(
         Vec::new()
     };
     let layout_relation = build_table_layout_relation(context, text_id);
+    let uniform_text_inset = build_table_uniform_text_inset(context, text_id);
     let layout_metrics = build_table_layout_metrics(context, table_seq_num, text_id, diagnostics);
 
     Ok(Some(PubTableSource {
@@ -1497,6 +1514,7 @@ pub(crate) fn build_table_source(
         cells: joined_cells,
         simple_table,
         layout_relation,
+        uniform_text_inset,
         layout_metrics,
         border_segments,
         source_refs: vec![
@@ -1556,6 +1574,42 @@ pub(crate) fn build_table_source(
             ),
         ],
     }))
+}
+
+fn build_table_uniform_text_inset(
+    context: &TableBridgeContext<'_>,
+    text_id: u32,
+) -> Option<PubTableUniformTextInsetSource> {
+    let (layout_key, layout_key_source) = context.story_layout_keys.get(&text_id)?;
+    let mcld = context.mcld?;
+    let inset = bounded_mcld_table_uniform_text_inset(mcld, *layout_key).ok()?;
+
+    let mut source_refs = vec![source_ref(
+        context.source,
+        layout_key_source,
+        Some(format!("contents/0x65/story/{text_id}")),
+        Some("story/layout_key".into()),
+        SourceRole::Relation,
+        AuthorityClass::Authoritative,
+        ReadConfidence::Exact,
+    )];
+    source_refs.extend(inset.sources.iter().map(|source| {
+        source_ref(
+            context.source,
+            source,
+            Some(quill_story_object_key(text_id)),
+            Some("MCLD/table/child/fields06-09-unanimous".into()),
+            SourceRole::Projection,
+            AuthorityClass::Authoritative,
+            ReadConfidence::Exact,
+        )
+    }));
+
+    Some(PubTableUniformTextInsetSource {
+        story_layout_key: *layout_key,
+        inset_emu: LengthEmu::new(i64::from(inset.inset_emu)),
+        source_refs,
+    })
 }
 
 fn build_table_layout_relation(
@@ -2190,6 +2244,7 @@ mod tests {
             cells: vec![source_cell],
             simple_table: Some(simple_table),
             layout_relation: None,
+            uniform_text_inset: None,
             layout_metrics: None,
             border_segments: Vec::new(),
             source_refs: Vec::new(),
@@ -2246,6 +2301,7 @@ mod tests {
             }],
             simple_table: None,
             layout_relation: None,
+            uniform_text_inset: None,
             layout_metrics: None,
             border_segments: Vec::new(),
             source_refs: Vec::new(),
