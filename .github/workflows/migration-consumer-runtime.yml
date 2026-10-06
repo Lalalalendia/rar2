@@ -29,7 +29,7 @@ jobs:
           set -euo pipefail
           mkdir -p target/migration-consumer-runtime
           image_id="$(docker image inspect chaptera-migration-consumers:v1 --format '{{.Id}}')"
-          docker run --rm chaptera-migration-consumers:v1 sh -lc 'scribus --version; libreoffice --version; dpkg-query -W -f="${Package}\t${Version}\n" scribus libreoffice-draw xvfb fonts-montserrat'             > target/migration-consumer-runtime/versions.txt
+          docker run --rm chaptera-migration-consumers:v1 sh -lc 'scribus --version; libreoffice --version; dpkg-query -W scribus libreoffice-draw xvfb fonts-montserrat'             > target/migration-consumer-runtime/versions.txt
           printf '%s\n' "$image_id" > target/migration-consumer-runtime/image-id.txt
 
       - name: Save and compress runtime image
