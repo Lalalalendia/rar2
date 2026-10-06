@@ -573,7 +573,7 @@ fn table_cell_single_line_width_fits_v1(
     else {
         return false;
     };
-    if cell.text.contains(['\r', '\n']) {
+    if cell.text.contains(&['\r', '\n'][..]) {
         return false;
     }
 
@@ -667,7 +667,7 @@ fn observe_table_text_authority_v1(
             && table_cell_bounded_text_profile_v1(cell, inset).is_some()
         {
             summary.table_bounded_text_profile_cell_count += 1;
-            if !cell.text.contains(['\r', '\n']) {
+            if !cell.text.contains(&['\r', '\n'][..]) {
                 summary.table_hard_break_free_profile_cell_count += 1;
                 if table_cell_single_line_width_fits_v1(cell, inset, font) {
                     summary.table_single_line_width_fit_cell_count += 1;
