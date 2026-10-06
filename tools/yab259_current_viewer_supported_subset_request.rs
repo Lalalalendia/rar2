@@ -71,7 +71,17 @@ struct CurrentTable {
     #[serde(default)]
     uniform_cell_text_inset_emu: Option<i64>,
     #[serde(default)]
+    uniform_cell_vertical_alignment: Option<CurrentTableVerticalAlignment>,
+    #[serde(default)]
     borders: Vec<CurrentTableBorderSegment>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CurrentTableVerticalAlignment {
+    Top,
+    Center,
+    Bottom,
 }
 
 #[derive(Debug, Deserialize)]
@@ -241,6 +251,7 @@ struct MappingSummary {
     table_cell_resolved_color_count: usize,
     table_cell_inset_bounds_valid_count: usize,
     table_uniform_cell_text_inset_count: usize,
+    table_uniform_vertical_alignment_count: usize,
     derived_table_fill_node_count: usize,
     derived_table_border_node_count: usize,
     derived_table_paint_node_count: usize,
@@ -516,6 +527,14 @@ fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSu
         .filter(|inset| *inset >= 0);
     if admitted_inset.is_some() {
         summary.table_uniform_cell_text_inset_count += 1;
+    }
+    if let Some(alignment) = table.uniform_cell_vertical_alignment {
+        match alignment {
+            CurrentTableVerticalAlignment::Top
+            | CurrentTableVerticalAlignment::Center
+            | CurrentTableVerticalAlignment::Bottom => {}
+        }
+        summary.table_uniform_vertical_alignment_count += 1;
     }
 
     for cell in &table.cells {
