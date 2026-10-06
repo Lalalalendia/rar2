@@ -3,7 +3,8 @@ use chaptera_scene_instance::{
 };
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, PageRenderPlanV1, RenderTextFragmentV1,
-    RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_v1,
+    RenderTextLayoutDispositionV1, RenderTypographyRunV1,
+    build_page_render_plan_with_text_layout_resolvers_v1,
     classify_shared_layout_incomplete_cause_v1, complete_scalar_source_font_family_v1,
     effective_source_font_family_v1,
 };
@@ -102,7 +103,165 @@ struct CurrentViewerFixedPdfInputV1 {
     pages: Vec<PageRenderPlanV1>,
     images: Vec<CurrentViewerImageAssetV1>,
     font: CurrentViewerFontResourceV1,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    fonts: Vec<CurrentViewerFontResourceV1>,
     census: CurrentViewerPlanCensusV1,
+}
+
+
+#[derive(Debug, Clone)]
+struct ProducerExactFont {
+    family: String,
+    bold: bool,
+    italic: bool,
+    resource_id: String,
+    sha256: String,
+    face_index: u32,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Default)]
+struct ProducerExactFontRegistry {
+    fonts: BTreeMap<(String, bool, bool), ProducerExactFont>,
+}
+
+impl ProducerExactFontRegistry {
+    #[cfg(target_os = "windows")]
+    fn from_visual(visual: &ViewerGeometryDocument) -> Self {
+        let mut database = fontdb::Database::new();
+        database.load_system_fonts();
+        let families = visual
+            .typography_runs
+            .iter()
+            .map(|run| run.source_font_name.trim())
+            .filter(|name| !name.is_empty())
+            .map(normalize_font_family)
+            .collect::<BTreeSet<_>>();
+        let mut out = Self::default();
+        for family in families {
+            for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+                let expected_weight = if bold { fontdb::Weight::BOLD } else { fontdb::Weight::NORMAL };
+                let expected_style = if italic { fontdb::Style::Italic } else { fontdb::Style::Normal };
+                let matches = database
+                    .faces()
+                    .filter(|info| {
+                        info.weight == expected_weight
+                            && info.stretch == fontdb::Stretch::Normal
+                            && info.style == expected_style
+                            && info.families.iter().any(|(name, _)| normalize_font_family(name) == family)
+                    })
+                    .map(|info| info.id)
+                    .collect::<Vec<_>>();
+                let [id] = matches.as_slice() else { continue; };
+                let Some((bytes, face_index)) = database.with_face_data(*id, |bytes, face_index| {
+                    (bytes.to_vec(), face_index)
+                }) else { continue; };
+                if bytes.is_empty() { continue; }
+                let sha256 = sha256_hex(&bytes);
+                let resource_id = format!("chaptera.desktop.environment-font.{}.face{}", sha256, face_index);
+                out.fonts.insert(
+                    (family.clone(), bold, italic),
+                    ProducerExactFont {
+                        family: family.clone(),
+                        bold,
+                        italic,
+                        resource_id,
+                        sha256,
+                        face_index,
+                        bytes,
+                    },
+                );
+            }
+        }
+        out
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn from_visual(_visual: &ViewerGeometryDocument) -> Self {
+        Self::default()
+    }
+
+    fn resource_for_fragment<'a>(
+        &'a self,
+        visual: &ViewerGeometryDocument,
+        fragment: &RenderTextFragmentV1,
+    ) -> Option<ExplicitRenderTextFontResourceV1<'a>> {
+        let family = complete_scalar_source_font_family_v1(fragment)
+            .or_else(|| effective_source_font_family_v1(visual, fragment))?;
+        let (bold, italic) = uniform_fragment_style(fragment)?;
+        self.resource_for_family_style(&family, bold, italic)
+    }
+
+    fn resource_for_typography_run<'a>(
+        &'a self,
+        run: &RenderTypographyRunV1,
+    ) -> Option<ExplicitRenderTextFontResourceV1<'a>> {
+        let family = normalize_font_family(&run.source_font_name);
+        if family.is_empty() {
+            return None;
+        }
+        let bold = run.bold.unwrap_or(false);
+        let italic = run.italic.unwrap_or(false);
+        self.resource_for_family_style(&family, bold, italic)
+    }
+
+    fn resource_for_family_style<'a>(
+        &'a self,
+        family: &str,
+        bold: bool,
+        italic: bool,
+    ) -> Option<ExplicitRenderTextFontResourceV1<'a>> {
+        let key = (normalize_font_family(family), bold, italic);
+        let font = self.fonts.get(&key)?;
+        Some(ExplicitRenderTextFontResourceV1 {
+            resource_id: &font.resource_id,
+            expected_sha256: &font.sha256,
+            face_index: font.face_index,
+            default_font_size_emu: FONT_SIZE_PT * EMU_PER_POINT,
+            default_line_height_emu: LINE_HEIGHT_PT * EMU_PER_POINT,
+            bytes: &font.bytes,
+        })
+    }
+
+    fn packet_resources(&self) -> Vec<CurrentViewerFontResourceV1> {
+        self.fonts
+            .values()
+            .map(|font| CurrentViewerFontResourceV1 {
+                resource_id: font.resource_id.clone(),
+                fingerprint_sha256: font.sha256.clone(),
+                face_index: font.face_index,
+                bytes: font.bytes.clone(),
+            })
+            .collect()
+    }
+}
+
+fn normalize_font_family(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+fn uniform_fragment_style(fragment: &RenderTextFragmentV1) -> Option<(bool, bool)> {
+    if fragment.typography.is_empty() {
+        return Some((false, false));
+    }
+    let mut cursor = fragment.scalar_start;
+    let mut style = None;
+    for run in &fragment.typography {
+        if run.scalar_start != cursor
+            || run.scalar_end <= run.scalar_start
+            || run.scalar_end > fragment.scalar_end
+        {
+            return None;
+        }
+        let current = (run.bold.unwrap_or(false), run.italic.unwrap_or(false));
+        match style {
+            None => style = Some(current),
+            Some(existing) if existing == current => {}
+            Some(_) => return None,
+        }
+        cursor = run.scalar_end;
+    }
+    (cursor == fragment.scalar_end).then_some(style.unwrap_or((false, false)))
 }
 
 fn digest(bytes: &[u8]) -> Sha256Digest {
@@ -637,11 +796,18 @@ fn run(
         bytes: &font_bytes,
     };
 
+    let source_fonts = ProducerExactFontRegistry::from_visual(&visual);
     let mut pages = Vec::with_capacity(visual.document.pages.len());
     for page_index in 0..visual.document.pages.len() {
         pages.push(
-            build_page_render_plan_with_text_layout_v1(&visual, page_index, &font)
-                .map_err(|error| format!("build current Viewer page render plan: {error}"))?,
+            build_page_render_plan_with_text_layout_resolvers_v1(
+                &visual,
+                page_index,
+                &font,
+                |fragment| source_fonts.resource_for_fragment(&visual, fragment),
+                |_, run| source_fonts.resource_for_typography_run(run),
+            )
+            .map_err(|error| format!("build current Viewer page render plan: {error}"))?,
         );
     }
 
@@ -737,6 +903,7 @@ fn run(
             face_index: 0,
             bytes: font_bytes,
         },
+        fonts: source_fonts.packet_resources(),
         census,
     };
 
