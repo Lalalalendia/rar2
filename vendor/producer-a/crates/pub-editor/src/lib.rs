@@ -14,6 +14,7 @@ mod create_shape_runtime_v1;
 mod create_table_runtime_v1;
 mod duplicate_authored_rectangle_v1;
 mod imported_paragraph_alignment_v1;
+mod imported_paragraph_flow_v1;
 mod imported_paragraphs_v1;
 mod table_track_extent_v1;
 mod text_format_property_base_v1;
@@ -60,6 +61,10 @@ pub use duplicate_authored_rectangle_v1::{
 pub use imported_paragraph_alignment_v1::{
     ImportedParagraphAlignmentValueV1, ImportedParagraphBaseAlignmentErrorV1,
     ImportedParagraphBaseAlignmentV1,
+};
+pub use imported_paragraph_flow_v1::{
+    ImportedParagraphFlowConstraintBindingV1, ImportedParagraphFlowConstraintV1,
+    ImportedParagraphFlowErrorV1,
 };
 pub use imported_paragraphs_v1::{ImportedParagraphProjectionErrorV1, ImportedParagraphV1};
 pub use table_track_extent_v1::{
@@ -124,8 +129,8 @@ use pub_odg::{
     add_paragraph_scoped_alignment_to_odg, project_resolved_graph_to_odg, write_odg,
 };
 use pub_reader::{
-    PubAssetExportBundle, PubParagraphAlignmentRun, PubResolvedGraph, PubResolvedNodePayload,
-    PubResolvedStoryFrame, PubTypographyRun, PubTypographySizeRun,
+    PubAssetExportBundle, PubParagraphAlignmentRun, PubParagraphFlowRun, PubResolvedGraph,
+    PubResolvedNodePayload, PubResolvedStoryFrame, PubTypographyRun, PubTypographySizeRun,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
     materialize_bounded_simple_table_cells, resolve_pub_source_graph,
 };
@@ -2476,6 +2481,7 @@ pub fn open_mature_0x2c_editor(
     session.source_typography_runs = source.typography_runs;
     session.source_typography_size_runs = source.typography_size_runs;
     session.source_paragraph_alignments = source.paragraph_alignments;
+    session.source_paragraph_flow_runs = source.paragraph_flow_runs;
     if let Some(bundle) = source_images {
         let (assets, nodes) = source_image_context_from_bundle(bundle);
         session.source_image_assets = assets;
@@ -2608,6 +2614,7 @@ pub struct EditorSession {
     source_typography_runs: Vec<PubTypographyRun>,
     source_typography_size_runs: Vec<PubTypographySizeRun>,
     source_paragraph_alignments: Vec<PubParagraphAlignmentRun>,
+    source_paragraph_flow_runs: Vec<PubParagraphFlowRun>,
     replacement_assets: BTreeMap<Sha256Digest, EditorReplacementAsset>,
     image_replacements: BTreeMap<NodeId, Sha256Digest>,
     authored_shapes: BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
@@ -2640,6 +2647,7 @@ impl EditorSession {
             source_typography_runs: Vec::new(),
             source_typography_size_runs: Vec::new(),
             source_paragraph_alignments: Vec::new(),
+            source_paragraph_flow_runs: Vec::new(),
             replacement_assets: BTreeMap::new(),
             image_replacements: BTreeMap::new(),
             authored_shapes: BTreeMap::new(),

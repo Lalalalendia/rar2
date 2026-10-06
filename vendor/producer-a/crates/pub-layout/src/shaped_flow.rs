@@ -6,7 +6,7 @@ use crate::{
     ResolvedPhysicalNode, ResolvedSurface, SceneOriginMapping, break_policy_for_shaped_text,
     resolve_bounded_geometry, shape_bounded_ltr, shape_bounded_ltr_segment,
 };
-use pub_model::{LengthEmu, NodeId, StoryId};
+use pub_model::{LengthEmu, NodeId, RectEmu, StoryId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -21,6 +21,25 @@ pub struct BoundedShapedFlowRuntime<'a> {
 pub struct BoundedShapedFlowDescriptor {
     pub shaping: BoundedShapingDescriptor,
     pub line_height: LengthEmu,
+}
+
+/// Source-neutral paragraph-flow constraints consumed during Story -> frame
+/// allocation. These carry no Publisher/Quill bytes or inheritance claims.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoundedParagraphFlowConstraint {
+    StartInNextTextBox,
+    KeepLinesTogether,
+    KeepWithNext,
+    WidowControl,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundedParagraphFlowRun {
+    pub story_origin: StoryId,
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub constraint: BoundedParagraphFlowConstraint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +138,252 @@ struct EvaluatedBreak {
     reshaped: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct ParagraphFlowState {
+    scalar_end: usize,
+    start_in_next_text_box: bool,
+    keep_lines_together: bool,
+    keep_with_next: bool,
+    widow_control: bool,
+}
+
+fn paragraph_flow_state_at_cursor(
+    runs: &[BoundedParagraphFlowRun],
+    story_origin: StoryId,
+    cursor: usize,
+    scalar_count: usize,
+) -> Option<ParagraphFlowState> {
+    let cursor_u32 = u32::try_from(cursor).ok()?;
+    let mut state = ParagraphFlowState::default();
+    let mut observed_end = None;
+
+    for run in runs
+        .iter()
+        .filter(|run| run.story_origin == story_origin && run.scalar_start == cursor_u32)
+    {
+        let end = usize::try_from(run.scalar_end).ok()?;
+        if end <= cursor || end > scalar_count {
+            return None;
+        }
+        if observed_end.is_some_and(|current| current != end) {
+            return None;
+        }
+        observed_end = Some(end);
+        match run.constraint {
+            BoundedParagraphFlowConstraint::StartInNextTextBox => {
+                state.start_in_next_text_box = true;
+            }
+            BoundedParagraphFlowConstraint::KeepLinesTogether => {
+                state.keep_lines_together = true;
+            }
+            BoundedParagraphFlowConstraint::KeepWithNext => {
+                state.keep_with_next = true;
+            }
+            BoundedParagraphFlowConstraint::WidowControl => {
+                state.widow_control = true;
+            }
+        }
+    }
+
+    state.scalar_end = observed_end?;
+    Some(state)
+}
+
+fn next_paragraph_end_v1(scalars: &[char], start: usize) -> Option<usize> {
+    if start >= scalars.len() {
+        return None;
+    }
+    for (offset, scalar) in scalars[start..].iter().enumerate() {
+        if matches!(scalar, '\r' | '\n') {
+            return start.checked_add(offset)?.checked_add(1);
+        }
+    }
+    Some(scalars.len())
+}
+
+fn frame_row_capacity_for_bounds_v1(
+    bounds: &RectEmu,
+    runtime: &BoundedShapedFlowRuntime<'_>,
+) -> Result<usize, BoundedShapedFlowError> {
+    if bounds.width.get() <= 0 || bounds.height.get() <= 0 {
+        return Ok(0);
+    }
+    let first_line_extent_emu = crate::compatible_natural_line_height_emu_v1(
+        runtime.shaping.font_bytes,
+        runtime.shaping.face_index,
+        runtime.shaping.font_size_emu,
+    )
+    .map(LengthEmu::get)
+    .map(|extent| extent.min(runtime.line_height.get()))
+    .unwrap_or(runtime.line_height.get());
+    shaped_line_capacity_v1(
+        bounds.height.get(),
+        first_line_extent_emu,
+        runtime.line_height.get(),
+    )
+    .ok_or(BoundedShapedFlowError::MetricOverflow)
+}
+
+fn line_count_to_boundary_v1(
+    scalars: &[char],
+    shaped: &crate::BoundedShapedText,
+    policy: &crate::BoundedBreakPolicy,
+    start: usize,
+    target_end: usize,
+    width: LengthEmu,
+    runtime: &BoundedShapedFlowRuntime<'_>,
+) -> Result<Option<usize>, BoundedShapedFlowError> {
+    if start >= target_end || target_end > scalars.len() {
+        return Ok(None);
+    }
+
+    let scalar_count_u32 =
+        u32::try_from(scalars.len()).map_err(|_| BoundedShapedFlowError::MetricOverflow)?;
+    let mut cursor = start;
+    let mut count = 0usize;
+
+    while cursor < target_end {
+        let cursor_u32 =
+            u32::try_from(cursor).map_err(|_| BoundedShapedFlowError::MetricOverflow)?;
+        let start_safe = boundary_safe(&policy.candidates, cursor_u32, scalar_count_u32);
+        let mut chosen: Option<EvaluatedBreak> = None;
+
+        for candidate in policy.candidates.iter().filter(|candidate| {
+            usize::try_from(candidate.scalar_boundary)
+                .is_ok_and(|end| end > cursor && end <= target_end)
+        }) {
+            let evaluated = evaluate_candidate(
+                scalars,
+                &shaped.glyphs,
+                shaped.units_per_em,
+                cursor,
+                start_safe,
+                candidate,
+                &runtime.shaping,
+            )?;
+            if evaluated.measured_width.get() <= width.get() {
+                chosen = Some(evaluated);
+            }
+            if candidate.kind == BoundedBreakKind::Mandatory {
+                break;
+            }
+        }
+
+        let Some(chosen) = chosen else {
+            return Ok(None);
+        };
+        if chosen.consumed_end <= cursor {
+            return Ok(None);
+        }
+        cursor = chosen.consumed_end;
+        count = count
+            .checked_add(1)
+            .ok_or(BoundedShapedFlowError::MetricOverflow)?;
+    }
+
+    if cursor == target_end {
+        Ok(Some(count))
+    } else {
+        Ok(None)
+    }
+}
+
+// This helper intentionally takes the complete local allocation context so
+// every decision is made from the same shaped Story/frame snapshot.
+#[allow(clippy::too_many_arguments)]
+fn should_defer_paragraph_flow_v1(
+    state: ParagraphFlowState,
+    scalars: &[char],
+    shaped: &crate::BoundedShapedText,
+    policy: &crate::BoundedBreakPolicy,
+    cursor: usize,
+    remaining_rows: usize,
+    current_bounds: &RectEmu,
+    successor_bounds: Option<&RectEmu>,
+    runtime: &BoundedShapedFlowRuntime<'_>,
+) -> Result<bool, BoundedShapedFlowError> {
+    // Native Publisher evidence also covers the no-next-frame arm: once a
+    // non-initial StartInNextTextBox paragraph is reached, the paragraph and
+    // following Story content remain in overflow when no successor exists.
+    if state.start_in_next_text_box {
+        return Ok(true);
+    }
+
+    let Some(successor_bounds) = successor_bounds else {
+        return Ok(false);
+    };
+    let successor_rows = frame_row_capacity_for_bounds_v1(successor_bounds, runtime)?;
+    if successor_rows == 0 {
+        return Ok(false);
+    }
+
+    let current_paragraph_lines = line_count_to_boundary_v1(
+        scalars,
+        shaped,
+        policy,
+        cursor,
+        state.scalar_end,
+        current_bounds.width,
+        runtime,
+    )?;
+    let successor_paragraph_lines = line_count_to_boundary_v1(
+        scalars,
+        shaped,
+        policy,
+        cursor,
+        state.scalar_end,
+        successor_bounds.width,
+        runtime,
+    )?;
+
+    if state.keep_lines_together
+        && current_paragraph_lines.is_some_and(|lines| lines > remaining_rows)
+        && successor_paragraph_lines.is_some_and(|lines| lines <= successor_rows)
+    {
+        return Ok(true);
+    }
+
+    if state.widow_control
+        && remaining_rows == 1
+        && current_paragraph_lines.is_some_and(|lines| lines > 1)
+        && successor_paragraph_lines.is_some_and(|lines| lines <= successor_rows)
+    {
+        return Ok(true);
+    }
+
+    if state.keep_with_next {
+        if let Some(pair_end) = next_paragraph_end_v1(scalars, state.scalar_end) {
+            if pair_end > state.scalar_end {
+                let current_pair_lines = line_count_to_boundary_v1(
+                    scalars,
+                    shaped,
+                    policy,
+                    cursor,
+                    pair_end,
+                    current_bounds.width,
+                    runtime,
+                )?;
+                let successor_pair_lines = line_count_to_boundary_v1(
+                    scalars,
+                    shaped,
+                    policy,
+                    cursor,
+                    pair_end,
+                    successor_bounds.width,
+                    runtime,
+                )?;
+                if current_pair_lines.is_some_and(|lines| lines > remaining_rows)
+                    && successor_pair_lines.is_some_and(|lines| lines <= successor_rows)
+                {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+
+    Ok(false)
+}
+
 fn shaped_line_capacity_v1(
     frame_height_emu: i64,
     first_line_extent_emu: i64,
@@ -149,6 +414,14 @@ fn shaped_line_capacity_v1(
 pub fn resolve_bounded_shaped_flow(
     projection: &BoundedLayoutProjection,
     runtime: &BoundedShapedFlowRuntime<'_>,
+) -> Result<BoundedShapedFlowScene, BoundedShapedFlowError> {
+    resolve_bounded_shaped_flow_with_paragraph_flow(projection, runtime, &[])
+}
+
+pub fn resolve_bounded_shaped_flow_with_paragraph_flow(
+    projection: &BoundedLayoutProjection,
+    runtime: &BoundedShapedFlowRuntime<'_>,
+    paragraph_flow: &[BoundedParagraphFlowRun],
 ) -> Result<BoundedShapedFlowScene, BoundedShapedFlowError> {
     if runtime.line_height.get() <= 0 {
         return Err(BoundedShapedFlowError::NonPositiveLineHeight {
@@ -218,7 +491,7 @@ pub fn resolve_bounded_shaped_flow(
             u32::try_from(scalar_count).map_err(|_| BoundedShapedFlowError::MetricOverflow)?;
         let mut cursor = 0usize;
 
-        for frame_origin in chain {
+        for (chain_index, frame_origin) in chain.iter().copied().enumerate() {
             if cursor == scalar_count {
                 break;
             }
@@ -243,20 +516,7 @@ pub fn resolve_bounded_shaped_flow(
                 continue;
             }
 
-            let first_line_extent_emu = crate::compatible_natural_line_height_emu_v1(
-                runtime.shaping.font_bytes,
-                runtime.shaping.face_index,
-                runtime.shaping.font_size_emu,
-            )
-            .map(LengthEmu::get)
-            .map(|extent| extent.min(runtime.line_height.get()))
-            .unwrap_or(runtime.line_height.get());
-            let row_count = shaped_line_capacity_v1(
-                bounds.height.get(),
-                first_line_extent_emu,
-                runtime.line_height.get(),
-            )
-            .ok_or(BoundedShapedFlowError::MetricOverflow)?;
+            let row_count = frame_row_capacity_for_bounds_v1(bounds, runtime)?;
             if row_count == 0 {
                 diagnostics.push(ResolveDiagnostic {
                     code: "text_frame_has_no_capacity".into(),
@@ -271,6 +531,33 @@ pub fn resolve_bounded_shaped_flow(
             for frame_line_index in 0..row_count {
                 if cursor == scalar_count {
                     break;
+                }
+
+                if frame_line_index > 0 {
+                    if let Some(state) = paragraph_flow_state_at_cursor(
+                        paragraph_flow,
+                        story.origin,
+                        cursor,
+                        scalar_count,
+                    ) {
+                        let successor_bounds = chain
+                            .get(chain_index + 1)
+                            .and_then(|next_frame| geometry.get(next_frame));
+                        let remaining_rows = row_count - frame_line_index;
+                        if should_defer_paragraph_flow_v1(
+                            state,
+                            &scalars,
+                            &shaped,
+                            &policy,
+                            cursor,
+                            remaining_rows,
+                            bounds,
+                            successor_bounds,
+                            runtime,
+                        )? {
+                            break;
+                        }
+                    }
                 }
 
                 let cursor_u32 =
@@ -774,6 +1061,149 @@ mod tests {
         assert!(evaluated.reshaped);
         assert!(evaluated.glyphs.iter().all(|glyph| glyph.cluster >= 4));
         assert!(evaluated.units_per_em > 0);
+    }
+
+    fn flow_run(
+        start: u32,
+        end: u32,
+        constraint: BoundedParagraphFlowConstraint,
+    ) -> BoundedParagraphFlowRun {
+        BoundedParagraphFlowRun {
+            story_origin: story_id(7),
+            scalar_start: start,
+            scalar_end: end,
+            constraint,
+        }
+    }
+
+    #[test]
+    fn start_in_next_text_box_defers_noninitial_paragraph_to_successor_frame() {
+        let font = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let runtime = runtime(font, 200_000);
+        let projection = projection(
+            true,
+            "Hfi\rHfi",
+            LengthEmu::new(2_000_000),
+            LengthEmu::new(400_000),
+        );
+        let flow = [flow_run(
+            4,
+            7,
+            BoundedParagraphFlowConstraint::StartInNextTextBox,
+        )];
+
+        let scene =
+            resolve_bounded_shaped_flow_with_paragraph_flow(&projection, &runtime, &flow).unwrap();
+
+        assert_eq!(scene.lines.len(), 2);
+        assert_eq!(scene.lines[0].frame_origin, node_id(10));
+        assert_eq!(scene.lines[0].text, "Hfi");
+        assert_eq!(scene.lines[1].frame_origin, node_id(11));
+        assert_eq!(scene.lines[1].text, "Hfi");
+        assert_eq!(scene.lines[1].scalar_start, 4);
+    }
+
+    #[test]
+    fn start_in_next_text_box_without_successor_leaves_target_in_overset() {
+        let font = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let runtime = runtime(font, 200_000);
+        let mut authoring = authoring_slice(
+            true,
+            "Hfi\rHfi",
+            LengthEmu::new(2_000_000),
+            LengthEmu::new(400_000),
+        );
+        authoring
+            .story_frames
+            .retain(|frame| frame.frame_id == node_id(10));
+        authoring.story_frames[0].next = None;
+        let projection = project_bounded(authoring);
+        let flow = [flow_run(
+            4,
+            7,
+            BoundedParagraphFlowConstraint::StartInNextTextBox,
+        )];
+
+        let scene =
+            resolve_bounded_shaped_flow_with_paragraph_flow(&projection, &runtime, &flow).unwrap();
+
+        assert_eq!(scene.lines.len(), 1);
+        assert_eq!(scene.lines[0].frame_origin, node_id(10));
+        assert_eq!(scene.lines[0].text, "Hfi");
+        assert!(scene.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "story_overset" && diagnostic.origin == story_id(7).into_canonical()
+        }));
+    }
+
+    #[test]
+    fn keep_lines_together_moves_whole_paragraph_when_successor_can_fit_it() {
+        let font = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let runtime = runtime(font, 200_000);
+        let shaped = shape_bounded_ltr("Hfi ", &runtime.shaping).unwrap();
+        let width = width_for_scalar_range(&shaped.glyphs, 0, 4).unwrap();
+        let projection = projection(true, "Hfi\rHfi Hfi", width, LengthEmu::new(400_000));
+        let flow = [flow_run(
+            4,
+            11,
+            BoundedParagraphFlowConstraint::KeepLinesTogether,
+        )];
+
+        let off = resolve_bounded_shaped_flow(&projection, &runtime).unwrap();
+        let on =
+            resolve_bounded_shaped_flow_with_paragraph_flow(&projection, &runtime, &flow).unwrap();
+
+        assert_eq!(off.lines[1].frame_origin, node_id(10));
+        assert_eq!(off.lines[1].scalar_start, 4);
+        assert_eq!(on.lines[1].frame_origin, node_id(11));
+        assert_eq!(on.lines[1].scalar_start, 4);
+        assert_eq!(on.lines[2].frame_origin, node_id(11));
+    }
+
+    #[test]
+    fn keep_with_next_moves_current_and_following_paragraph_as_one_pair() {
+        let font = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let runtime = runtime(font, 200_000);
+        let projection = projection(
+            true,
+            "Hfi\rHfi\rHfi",
+            LengthEmu::new(2_000_000),
+            LengthEmu::new(400_000),
+        );
+        let flow = [flow_run(4, 8, BoundedParagraphFlowConstraint::KeepWithNext)];
+
+        let off = resolve_bounded_shaped_flow(&projection, &runtime).unwrap();
+        let on =
+            resolve_bounded_shaped_flow_with_paragraph_flow(&projection, &runtime, &flow).unwrap();
+
+        assert_eq!(off.lines[1].frame_origin, node_id(10));
+        assert_eq!(on.lines[1].frame_origin, node_id(11));
+        assert_eq!(on.lines[1].scalar_start, 4);
+        assert_eq!(on.lines[2].frame_origin, node_id(11));
+        assert_eq!(on.lines[2].scalar_start, 8);
+    }
+
+    #[test]
+    fn widow_control_avoids_one_line_paragraph_orphan_at_frame_bottom() {
+        let font = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let runtime = runtime(font, 200_000);
+        let shaped = shape_bounded_ltr("Hfi ", &runtime.shaping).unwrap();
+        let width = width_for_scalar_range(&shaped.glyphs, 0, 4).unwrap();
+        let projection = projection(true, "Hfi\rHfi Hfi", width, LengthEmu::new(400_000));
+        let flow = [flow_run(
+            4,
+            11,
+            BoundedParagraphFlowConstraint::WidowControl,
+        )];
+
+        let off = resolve_bounded_shaped_flow(&projection, &runtime).unwrap();
+        let on =
+            resolve_bounded_shaped_flow_with_paragraph_flow(&projection, &runtime, &flow).unwrap();
+
+        assert_eq!(off.lines[1].frame_origin, node_id(10));
+        assert_eq!(off.lines[1].scalar_start, 4);
+        assert_eq!(on.lines[1].frame_origin, node_id(11));
+        assert_eq!(on.lines[1].scalar_start, 4);
+        assert_eq!(on.lines[2].frame_origin, node_id(11));
     }
 
     #[test]

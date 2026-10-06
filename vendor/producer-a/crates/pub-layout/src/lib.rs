@@ -32,9 +32,10 @@ pub use resolve::{
     resolve_bounded_geometry,
 };
 pub use shaped_flow::{
-    BoundedShapedFlowDescriptor, BoundedShapedFlowError, BoundedShapedFlowRuntime,
-    BoundedShapedFlowScene, BoundedShapedLine, ShapedLineOriginMapping,
-    resolve_bounded_shaped_flow,
+    BoundedParagraphFlowConstraint, BoundedParagraphFlowRun, BoundedShapedFlowDescriptor,
+    BoundedShapedFlowError, BoundedShapedFlowRuntime, BoundedShapedFlowScene, BoundedShapedLine,
+    ShapedLineOriginMapping, resolve_bounded_shaped_flow,
+    resolve_bounded_shaped_flow_with_paragraph_flow,
 };
 pub use shaping::{
     BOUNDED_SHAPER_REVISION, BoundedShapeError, BoundedShapedGlyph, BoundedShapedText,
