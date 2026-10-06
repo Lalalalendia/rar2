@@ -190,8 +190,10 @@ def main() -> int:
         args.origin,
         open_path,
         method="POST",
+        body=b"{}",
         headers={
             TOKEN_HEADER: token,
+            "Content-Type": "application/json",
             "Origin": args.origin,
             "X-CSRF-Token": csrf_token,
         },
