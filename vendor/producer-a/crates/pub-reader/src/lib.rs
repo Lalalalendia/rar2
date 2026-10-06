@@ -3380,9 +3380,8 @@ pub fn build_mature_0x2c_from_streams(
             && exact_story_identity.is_none()
             && image_slot.is_some()
             && grouped_sources.is_empty();
-        let direct_story_candidate = raw_type == Some(RAW_TYPE_SHAPE)
-            && story_frame.is_some()
-            && grouped_sources.is_empty();
+        let direct_story_candidate =
+            raw_type == Some(RAW_TYPE_SHAPE) && story_frame.is_some() && grouped_sources.is_empty();
         let direct_rotation_properties = shape
             .fopts
             .iter()
@@ -3406,11 +3405,7 @@ pub fn build_mature_0x2c_from_streams(
             BoundedDirectImageTransform::Identity
         };
         let direct_story_transform = if direct_story_candidate {
-            bounded_direct_story_transform(
-                &direct_rotation_properties,
-                direct_fsp_flags,
-                bounds,
-            )
+            bounded_direct_story_transform(&direct_rotation_properties, direct_fsp_flags, bounds)
         } else {
             None
         };
@@ -5371,11 +5366,7 @@ mod tests {
 
     #[test]
     fn direct_story_rotation_preserves_exact_cardinal_affine_transform() {
-        for rotation_op in [
-            90u32 << 16,
-            ((-90i32) << 16) as u32,
-            180u32 << 16,
-        ] {
+        for rotation_op in [90u32 << 16, ((-90i32) << 16) as u32, 180u32 << 16] {
             let transform =
                 bounded_direct_story_transform(&[(rotation_op, false, false)], 0, test_bounds())
                     .expect("bounded direct Story rotation should be admitted");
@@ -5410,11 +5401,7 @@ mod tests {
             None
         );
         assert_eq!(
-            bounded_direct_story_transform(
-                &[(90u32 << 16, false, true)],
-                0,
-                test_bounds(),
-            ),
+            bounded_direct_story_transform(&[(90u32 << 16, false, true)], 0, test_bounds(),),
             None
         );
     }
