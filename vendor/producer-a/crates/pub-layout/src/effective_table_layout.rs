@@ -405,7 +405,7 @@ mod tests {
         project_bounded,
     };
     use pub_model::{
-        Affine2D, CanonicalId, DocumentId, EFFECTIVE_TABLE_GRID_V1, EffectiveTableCellV1,
+        Affine2D, CanonicalId, EFFECTIVE_TABLE_GRID_V1, EffectiveTableCellV1,
         EffectiveTableTrackV1, Page, PageId, Size2D, TableCellAddress, TableCellId, TableColumnId,
         TableRowId,
     };
