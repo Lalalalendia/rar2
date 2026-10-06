@@ -7,78 +7,75 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: validation-current-reader-portable-parity-runner-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CARGO_TARGET_DIR: ${{ github.workspace }}/target/parity-runner
-
 jobs:
-  build:
+  package:
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 30
     steps:
       - name: Checkout exact candidate
         uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.94.1"
-
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Build canonical Cloud Reader worker
-        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+      - name: Download already-built exact Reader runner
+        uses: actions/download-artifact@v4
+        with:
+          name: current-reader-portable-parity-runner
+          path: out/current-reader-portable-parity-runner
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 37395236029
 
-      - name: Install portable Playwright runtime
+      - name: Verify exact worker provenance
+        run: |
+          set -euo pipefail
+          test -f out/current-reader-portable-parity-runner/RUNNER-METADATA.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path("out/current-reader-portable-parity-runner/RUNNER-METADATA.json")
+          d=json.loads(p.read_text())
+          assert d["schema"] == "chaptera.current-reader-portable-parity-runner.v1"
+          assert d["repository_commit_sha"] == "d8fda142f29de733562b719c54735916f415a94d"
+          print(d)
+          PY
+          chmod +x out/current-reader-portable-parity-runner/target/debug/chaptera
+          out/current-reader-portable-parity-runner/target/debug/chaptera --help >/dev/null
+
+      - name: Install isolated Playwright Chromium
         run: |
           set -euo pipefail
           npm install --no-save playwright@1.55.0
           npx playwright install chromium
+          rm -rf out/current-reader-portable-parity-runner/ms-playwright
+          cp -R "$HOME/.cache/ms-playwright" out/current-reader-portable-parity-runner/ms-playwright
 
-      - name: Assemble source-safe portable runner
+      - name: Update portable metadata
         run: |
-          set -euo pipefail
-          root="out/current-reader-portable-parity-runner"
-          mkdir -p "$root/target/debug" "$root/apps/cloud-reader" "$root/apps/web" "$root/tools" "$root/node_modules"
-          cp "$CARGO_TARGET_DIR/debug/chaptera" "$root/target/debug/chaptera"
-          cp apps/cloud-reader/index.html "$root/apps/cloud-reader/index.html"
-          cp apps/cloud-reader/reader.css "$root/apps/cloud-reader/reader.css"
-          cp apps/cloud-reader/reader-app.mjs "$root/apps/cloud-reader/reader-app.mjs"
-          cp apps/cloud-reader/reader-model.mjs "$root/apps/cloud-reader/reader-model.mjs"
-          cp apps/cloud-reader/render-v1.mjs "$root/apps/cloud-reader/render-v1.mjs"
-          cp apps/cloud-reader/real-browser.test.mjs "$root/apps/cloud-reader/real-browser.test.mjs"
-          cp apps/web/observability-v1.mjs "$root/apps/web/observability-v1.mjs"
-          cp tools/migration_pdf_worker_isolation.py "$root/tools/migration_pdf_worker_isolation.py"
-          cp -R node_modules/playwright "$root/node_modules/playwright"
-          cp -R node_modules/playwright-core "$root/node_modules/playwright-core"
-          cp -R "$HOME/.cache/ms-playwright" "$root/ms-playwright"
-          cat > "$root/RUNNER-METADATA.json" <<EOF
-          {
-            "schema": "chaptera.current-reader-portable-parity-runner.v1",
-            "repository_commit_sha": "${{ github.sha }}",
-            "runner_os": "ubuntu-22.04",
-            "rust_toolchain": "1.94.1",
-            "node_major": 22,
-            "playwright": "1.55.0",
-            "browser_bytes_included": true,
-            "raw_pub_bytes_included": false,
-            "raw_pdf_bytes_included": false
-          }
-          EOF
-          test -x "$root/target/debug/chaptera"
-          "$root/target/debug/chaptera" --help >/dev/null
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path("out/current-reader-portable-parity-runner/RUNNER-METADATA.json")
+          d=json.loads(p.read_text())
+          d["packaging_commit_sha"] = "${{ github.sha }}"
+          d["browser_bytes_included"] = True
+          p.write_text(json.dumps(d, indent=2, sort_keys=True)+"\n")
+          PY
 
-      - name: Upload portable runner
+      - name: Upload portable runner with isolated Chromium
         uses: actions/upload-artifact@v4
         with:
-          name: current-reader-portable-parity-runner
+          name: current-reader-portable-parity-runner-with-browser
           path: out/current-reader-portable-parity-runner
           retention-days: 1
           if-no-files-found: error
