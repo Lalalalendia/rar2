@@ -72,6 +72,7 @@ assert.ok(Number.isInteger(workerCpuSeconds) && workerCpuSeconds >= 15 && worker
 assert.ok(Number.isInteger(workerAddressSpaceMb) && workerAddressSpaceMb >= 256 && workerAddressSpaceMb <= 1024, "worker address-space limit must be 256..1024 MiB");
 
 const referenceRasterDpi = Number(process.env.READER_REFERENCE_RASTER_DPI ?? "0");
+const corpusDiagnosticMode = process.env.READER_CORPUS_DIAGNOSTIC === "1";
 assert.ok(
   referenceRasterDpi === 0 || (Number.isInteger(referenceRasterDpi) && referenceRasterDpi >= 72 && referenceRasterDpi <= 300),
   "reference raster DPI must be 0 or an integer in 72..300"
@@ -247,13 +248,49 @@ try {
       ? node.text_layout.lines.map((line) => ({ node_id: node.node_id, index: line.line_index, text: line.text, font_size: node.text_layout.font_size_emu / 9525 })) : []);
     const painted = await page.locator('[data-text-authority="server-shared-resolved"]').evaluateAll((lines) => lines.map((line) => {
       const bounds = line.getBoundingClientRect();
-      return { node_id: line.closest("[data-node-id]").dataset.nodeId, index: Number(line.dataset.textLineIndex), text: line.textContent,
-        font_size: parseFloat(getComputedStyle(line).fontSize), height: bounds.height, width: bounds.width };
+      const node = line.closest("[data-node-id]");
+      const svg = line.closest("svg.page");
+      const pageBounds = svg?.getBoundingClientRect();
+      const viewBox = svg?.viewBox?.baseVal ?? null;
+      const pageScreenScale = pageBounds && viewBox && viewBox.width > 0 && viewBox.height > 0
+        ? Math.min(pageBounds.width / viewBox.width, pageBounds.height / viewBox.height)
+        : null;
+      const normalizedWidthPx96 = pageScreenScale && pageScreenScale > 0
+        ? bounds.width / pageScreenScale / 9525
+        : bounds.width;
+      const normalizedHeightPx96 = pageScreenScale && pageScreenScale > 0
+        ? bounds.height / pageScreenScale / 9525
+        : bounds.height;
+      const ctm = typeof line.getCTM === "function" ? line.getCTM() : null;
+      const screenCtm = typeof line.getScreenCTM === "function" ? line.getScreenCTM() : null;
+      return {
+        node_id: node.dataset.nodeId,
+        index: Number(line.dataset.textLineIndex),
+        text: line.textContent,
+        font_size: parseFloat(getComputedStyle(line).fontSize),
+        height: bounds.height,
+        width: bounds.width,
+        normalized_width_px_96: normalizedWidthPx96,
+        normalized_height_px_96: normalizedHeightPx96,
+        page_screen_scale_px_per_emu: pageScreenScale,
+        node_transform: node.getAttribute("transform"),
+        ctm: ctm ? { a: ctm.a, b: ctm.b, c: ctm.c, d: ctm.d, e: ctm.e, f: ctm.f } : null,
+        screen_ctm: screenCtm ? { a: screenCtm.a, b: screenCtm.b, c: screenCtm.c, d: screenCtm.d, e: screenCtm.e, f: screenCtm.f } : null,
+        page: svg ? {
+          page_id: svg.dataset.pageId,
+          width_px: pageBounds?.width ?? null,
+          height_px: pageBounds?.height ?? null,
+          width_attr: svg.getAttribute("width"),
+          height_attr: svg.getAttribute("height"),
+          view_box: svg.getAttribute("viewBox")
+        } : null
+      };
     }));
     assert.equal(painted.length, expectedLines.length, "actual SharedResolved frames must use loaded fonts");
     if (fixture.require_shared_text === true) {
       assert.ok(painted.some((line) => line.text.trim()), "fixture marked require_shared_text must exercise shared text");
     }
+    const visualDegeneracies = [];
     for (const line of painted) {
       const expected = expectedLines.find((candidate) => candidate.node_id === line.node_id && candidate.index === line.index);
       assert.ok(expected);
@@ -263,7 +300,25 @@ try {
       // object marker. It is intentionally zero-width, so marker-only lines
       // are visually empty even though JavaScript trim() retains U+200B.
       const visibleText = line.text.replaceAll("\u200B", "").trim();
-      if (visibleText) assert.ok(line.height >= 5 && line.width >= 1, "shared text must not collapse to tiny specks");
+      if (visibleText && !(line.normalized_height_px_96 >= 5 && line.normalized_width_px_96 >= 1)) {
+        const degeneracy = {
+          code: "shared_text_tiny_speck",
+          node_id: line.node_id,
+          line_index: line.index,
+          width_px: line.width,
+          height_px: line.height,
+          normalized_width_px_96: line.normalized_width_px_96,
+          normalized_height_px_96: line.normalized_height_px_96,
+          page_screen_scale_px_per_emu: line.page_screen_scale_px_per_emu,
+          font_size_px: line.font_size,
+          node_transform: line.node_transform,
+          ctm: line.ctm,
+          screen_ctm: line.screen_ctm,
+          page: line.page
+        };
+        if (corpusDiagnosticMode) visualDegeneracies.push(degeneracy);
+        else assert.fail("shared text must not collapse to tiny specks");
+      }
     }
     await page.locator("#pages").scrollIntoViewIfNeeded();
     await page.screenshot({ path: join(output, fixture.name + "-ui.png") });
@@ -371,6 +426,7 @@ try {
       descriptor_only_resource_count: descriptorOnlyResourceCount, browser_preserved_scene_node_order: true,
       reference_raster_dpi: referenceRasterDpi || null, page_geometry: orderedPageGeometry,
       stories: scene.stories.length, shared_lines: painted.length, nonempty_shared_lines: nonempty.length,
+      visual_degeneracies: visualDegeneracies, visual_degeneracy_count: visualDegeneracies.length,
       shared_line_height_px: nonempty.length > 0
         ? { min: Math.min(...nonempty.map((line) => line.height)), max: Math.max(...nonempty.map((line) => line.height)) }
         : null,
