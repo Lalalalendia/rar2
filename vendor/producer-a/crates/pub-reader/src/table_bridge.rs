@@ -7,8 +7,8 @@ use pub_model::{
     RectEmu, SimpleRectangularTable, SimpleTableCell, Story, TableCellAddress, TableCellId,
 };
 use pub_quill::{
-    QuillMcldChunk, QuillStoryCatalog, bounded_mcld_table_metrics,
-    bounded_mcld_table_uniform_text_inset,
+    QuillMcldChunk, QuillMcldVerticalAlignment, QuillStoryCatalog, bounded_mcld_table_metrics,
+    bounded_mcld_table_uniform_text_inset, bounded_mcld_table_uniform_vertical_alignment,
 };
 
 pub const RAW_TYPE_TABLE: u16 = 0x10;
@@ -318,6 +318,8 @@ pub struct PubTableLayoutRelationSource {
     /// This relation remains valid independently of whether a narrower
     /// geometry-metric consumer can admit that record.
     pub story_layout_key: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uniform_cell_vertical_alignment: Option<PubTextFrameVerticalAlignmentSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<SourceRef>,
 }
@@ -1587,8 +1589,36 @@ fn build_table_layout_relation(
         .iter()
         .find(|record| record.record_id == *layout_key)?;
 
+    let uniform_cell_vertical_alignment =
+        bounded_mcld_table_uniform_vertical_alignment(mcld, *layout_key)
+            .ok()
+            .map(|alignment| PubTextFrameVerticalAlignmentSource {
+                layout_record_id: *layout_key,
+                alignment: match alignment.alignment {
+                    QuillMcldVerticalAlignment::Top => PubTextFrameVerticalAlignment::Top,
+                    QuillMcldVerticalAlignment::Center => PubTextFrameVerticalAlignment::Center,
+                    QuillMcldVerticalAlignment::Bottom => PubTextFrameVerticalAlignment::Bottom,
+                },
+                source_refs: alignment
+                    .sources
+                    .iter()
+                    .map(|source| {
+                        source_ref(
+                            context.source,
+                            source,
+                            Some(quill_story_object_key(text_id)),
+                            Some("MCLD/table/child/field18-unanimous".into()),
+                            SourceRole::Projection,
+                            AuthorityClass::Authoritative,
+                            ReadConfidence::Exact,
+                        )
+                    })
+                    .collect(),
+            });
+
     Some(PubTableLayoutRelationSource {
         story_layout_key: *layout_key,
+        uniform_cell_vertical_alignment,
         source_refs: vec![
             source_ref(
                 context.source,
