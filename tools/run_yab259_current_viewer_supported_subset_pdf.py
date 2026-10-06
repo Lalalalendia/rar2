@@ -18,10 +18,11 @@ RENDERER = ROOT / "tools" / "yab259_fixed_pdf_packet_renderer.rs"
 
 sys.path.insert(0, str(ROOT / "tools"))
 from run_yab259_fixed_pdf_closure import Yab259ClosureError  # noqa: E402
-from yab259_order_preserving_donor import (  # noqa: E402
+from yab259_alpha_smask_donor import (  # noqa: E402
     bind_yab_repository,
-    prepare_order_preserving_pdf_donor,
+    prepare_alpha_smask_pdf_donor,
 )
+from yab259_order_preserving_donor import prepare_order_preserving_pdf_donor  # noqa: E402
 
 INPUT_VERSION = "chaptera.current-viewer-fixed-pdf-input.v1"
 MAPPER_VERSION = "chaptera.current-viewer-yab-supported-request.v1"
@@ -87,6 +88,12 @@ def main() -> int:
     parser.add_argument("--mapping-output", required=True, type=pathlib.Path)
     parser.add_argument("--pdf-output", required=True, type=pathlib.Path)
     parser.add_argument("--renderer-result-output", required=True, type=pathlib.Path)
+    parser.add_argument(
+        "--image-alpha",
+        choices=("smask", "reject"),
+        default="smask",
+        help="smask is the ordinary product path; reject is retained only as a negative-control renderer",
+    )
     args = parser.parse_args()
 
     try:
@@ -98,10 +105,17 @@ def main() -> int:
 
         with tempfile.TemporaryDirectory(prefix="chaptera-yab259-carlton-supported-") as tmp:
             donor = pathlib.Path(tmp) / "donor"
-            base_digest, ordered_digest = prepare_order_preserving_pdf_donor(
-                repository,
-                donor,
-            )
+            if args.image_alpha == "smask":
+                base_digest, ordered_digest, alpha_digest = prepare_alpha_smask_pdf_donor(
+                    repository,
+                    donor,
+                )
+            else:
+                base_digest, ordered_digest = prepare_order_preserving_pdf_donor(
+                    repository,
+                    donor,
+                )
+                alpha_digest = None
             bin_dir = donor / "crates" / "pub-cli" / "src" / "bin"
             bin_dir.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(MAPPER, bin_dir / "current-viewer-supported-request.rs")
@@ -128,6 +142,8 @@ def main() -> int:
                     "schema": "chaptera.current-viewer-yab-supported-mapping.v1",
                     "base_repair_sha256": base_digest,
                     "ordered_repair_sha256": ordered_digest,
+                    "alpha_repair_sha256": alpha_digest,
+                    "image_alpha_mode": args.image_alpha,
                     "binding": binding,
                     "mapping": mapping,
                 },
@@ -150,6 +166,8 @@ def main() -> int:
                     "schema": "chaptera.current-viewer-yab-supported-render.v1",
                     "base_repair_sha256": base_digest,
                     "ordered_repair_sha256": ordered_digest,
+                    "alpha_repair_sha256": alpha_digest,
+                    "image_alpha_mode": args.image_alpha,
                     "renderer_result": renderer,
                 },
             )

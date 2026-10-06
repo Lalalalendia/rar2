@@ -7,6 +7,7 @@ on:
       - "tools/run_yab259_current_viewer_supported_subset_pdf.py"
       - "tools/test_yab259_current_viewer_supported_subset.py"
       - "tools/yab259_order_preserving_donor.py"
+      - "tools/yab259_alpha_smask_donor.py"
       - "tools/yab259_fixed_pdf_packet_renderer.rs"
       - "tools/run_yab259_fixed_pdf_closure.py"
       - "crates/chaptera-desktop-shaped-flow-runtime/**"
@@ -308,21 +309,18 @@ jobs:
           print("supported_subset_significant_fractions=" + json.dumps(fractions))
           if result["page_count"]["match"] is not True:
               raise SystemExit("supported-subset PDF page count differs from Carlton reference")
-          baseline = [
-              0.24110659718275027,
-              0.21899449752797606,
-              0.25260165812078317,
+          expected = [
+              0.11573040878640477,
+              0.10663657159495903,
+              0.1103166863112297,
           ]
           if len(fractions) != 3:
               raise SystemExit(f"Carlton raster page count drift: {fractions!r}")
-          if abs(fractions[0] - baseline[0]) > 1e-12 or abs(fractions[1] - baseline[1]) > 1e-12:
-              raise SystemExit(
-                  f"TABLE paint unexpectedly changed non-table pages: {fractions[:2]!r}"
-              )
-          if not fractions[2] < baseline[2]:
-              raise SystemExit(
-                  f"TABLE fixed-output paint did not improve page 3: {fractions[2]!r} >= {baseline[2]!r}"
-              )
+          for index, (actual, wanted) in enumerate(zip(fractions, expected), 1):
+              if abs(actual - wanted) > 1e-12:
+                  raise SystemExit(
+                      f"exact-alpha Carlton page {index} raster drift: {actual!r} != {wanted!r}"
+                  )
           '@ | python -
           "CHAPTERA_SUPPORTED_DIFF=$diff" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
@@ -444,6 +442,16 @@ jobs:
           summary = renderer_receipt["renderer_result"]["summary"]
           if summary["page_count"] != 3:
               raise SystemExit("Yab renderer did not produce three customer pages")
+          if summary["node_painted"] != 124 or summary["node_partial"] != 0 or summary["node_unsupported"] != 21:
+              raise SystemExit(f"exact-alpha renderer disposition drift: {summary!r}")
+          if "pdf.image.alpha_unsupported" in summary.get("diagnostic_codes", []):
+              raise SystemExit("ordinary fixed-output still rejects non-opaque image alpha")
+          if summary.get("diagnostic_codes") != ["pdf.node.resource_missing"]:
+              raise SystemExit(f"unexpected exact-alpha diagnostic classes: {summary.get('diagnostic_codes')!r}")
+          if mapping_receipt.get("image_alpha_mode") != "smask":
+              raise SystemExit(f"ordinary fixed-output alpha mode drift: {mapping_receipt.get('image_alpha_mode')!r}")
+          if not mapping_receipt.get("alpha_repair_sha256"):
+              raise SystemExit("ordinary fixed-output alpha repair identity is missing")
 
           source_after = sha(os.environ["CHAPTERA_CARLTON_PUB"])
           expected_source = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
@@ -464,6 +472,8 @@ jobs:
               "page_significant_fractions": [page["diff"]["significant_fraction"] for page in diff["pages"]],
               "page_order_preserved": True,
               "node_order_preserved": True,
+              "image_alpha_mode": mapping_receipt["image_alpha_mode"],
+              "alpha_repair_sha256": mapping_receipt["alpha_repair_sha256"],
               "reference_is_pre_edit_published_pdf": True,
               "reference_diff_includes_intentional_story_move_delta": True,
               "private_packet_retained": False,

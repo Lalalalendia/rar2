@@ -142,7 +142,7 @@ jobs:
           $baselineMapping = Join-Path $root "baseline-mapping.json"
           $baselineRenderer = Join-Path $root "baseline-renderer.json"
           $baselinePdf = Join-Path $root "baseline.pdf"
-          python tools/run_yab259_current_viewer_supported_subset_pdf.py --yab-checkout "$env:CHAPTERA_SOURCE259_CHECKOUT" --input "$env:CHAPTERA_CURRENT_VIEWER_PACKET" --request-output "$baselineRequest" --mapping-output "$baselineMapping" --pdf-output "$baselinePdf" --renderer-result-output "$baselineRenderer"
+          python tools/run_yab259_current_viewer_supported_subset_pdf.py --image-alpha reject --yab-checkout "$env:CHAPTERA_SOURCE259_CHECKOUT" --input "$env:CHAPTERA_CURRENT_VIEWER_PACKET" --request-output "$baselineRequest" --mapping-output "$baselineMapping" --pdf-output "$baselinePdf" --renderer-result-output "$baselineRenderer"
           if ($LASTEXITCODE -ne 0) { throw "baseline render failed" }
           $alphaRequest = Join-Path $root "alpha-request.private.json"
           $alphaMapping = Join-Path $root "alpha-mapping.json"
