@@ -1,6 +1,6 @@
 use pub_editor::{
-    apply_authored_stack_transition_forward_v1, plan_create_table_append_v1, AuthoredStackV1,
-    NodeId, PageId,
+    AuthoredStackV1, NodeId, PageId, apply_authored_stack_transition_forward_v1,
+    plan_create_table_append_v1,
 };
 
 fn canonical_id<T: serde::de::DeserializeOwned>(value: &str) -> T {
