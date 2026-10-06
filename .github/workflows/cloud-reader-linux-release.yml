@@ -37,8 +37,25 @@ jobs:
           install -m 0755 tools/migration_pdf_worker_isolation.py dist/tools/migration_pdf_worker_isolation.py
           install -m 0755 tools/run_cloud_reader_host_acceptance.py dist/run_cloud_reader_host_acceptance.py
           printf '%s\n' "${GITHUB_SHA}" > dist/COMMIT_SHA
-          (cd dist && sha256sum chaptera chaptera.reader.prod.example.toml run_cloud_reader_host_acceptance.py COMMIT_SHA > SHA256SUMS)
-          tar -C dist -czf chaptera-cloud-reader-linux-amd64.tar.gz             chaptera chaptera.reader.prod.example.toml             run_cloud_reader_host_acceptance.py COMMIT_SHA SHA256SUMS
+          (cd dist && sha256sum \
+            chaptera \
+            chaptera.reader.prod.example.toml \
+            chaptera-reader.service \
+            chaptera-reader.conf.example \
+            install-reader-host.sh \
+            tools/migration_pdf_worker_isolation.py \
+            run_cloud_reader_host_acceptance.py \
+            COMMIT_SHA > SHA256SUMS)
+          tar -C dist -czf chaptera-cloud-reader-linux-amd64.tar.gz \
+            chaptera \
+            chaptera.reader.prod.example.toml \
+            chaptera-reader.service \
+            chaptera-reader.conf.example \
+            install-reader-host.sh \
+            tools/migration_pdf_worker_isolation.py \
+            run_cloud_reader_host_acceptance.py \
+            COMMIT_SHA \
+            SHA256SUMS
           sha256sum chaptera-cloud-reader-linux-amd64.tar.gz
 
       - uses: actions/upload-artifact@v4
