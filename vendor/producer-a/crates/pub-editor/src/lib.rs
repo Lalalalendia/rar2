@@ -117,7 +117,7 @@ use pub_export::{
     CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
     FormatRepresentability, FullStoryParagraphAlignmentV1, FullStoryTypographyV1, LossItem,
     LossKind, LossSeverity, ParagraphAlignmentV1, ParagraphScopedAlignmentV1,
-    ParagraphScopedAlignmentValueV1, PersistenceCompatibilityAssessment,
+    PersistenceCompatibilityAssessment,
     PersistenceCompatibilityError, PersistenceRequirement, PersistenceRequirements,
     PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE,
     STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE, ScopedCapabilityError,
