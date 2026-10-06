@@ -754,7 +754,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn prefix_retains_complete_blip_before_truncated_terminal_header() {
         let first = strict_png_record(false);
@@ -767,7 +766,10 @@ mod tests {
         assert_eq!(observed.scanned_record_count, 1);
         assert_eq!(observed.rejected_complete_blips.len(), 0);
         assert_eq!(observed.records[0].record_source.offset, 0);
-        assert_eq!(observed.records[0].record_source.end(), Some(first.len() as u64));
+        assert_eq!(
+            observed.records[0].record_source.end(),
+            Some(first.len() as u64)
+        );
         assert!(matches!(
             observed.terminal_gap,
             Some(DelayedBlipPrefixGap::TruncatedHeader {
@@ -879,4 +881,3 @@ mod tests {
         }
     }
 }
-
