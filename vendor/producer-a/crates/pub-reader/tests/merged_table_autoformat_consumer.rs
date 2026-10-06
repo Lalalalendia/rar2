@@ -70,10 +70,13 @@ fn exact_carlton_merged_table_autoformat_consumer() {
         .stories
         .get(&story_id)
         .expect("exact Carlton TABLE Story payload");
-    let materialized =
-        pub_reader::materialize_bounded_table_cells(table, story).expect("materialize Carlton cells");
+    let materialized = pub_reader::materialize_bounded_table_cells(table, story)
+        .expect("materialize Carlton cells");
     assert_eq!(materialized.len(), 17);
-    let nonempty = materialized.iter().filter(|cell| !cell.text.is_empty()).count();
+    let nonempty = materialized
+        .iter()
+        .filter(|cell| !cell.text.is_empty())
+        .count();
     let nonempty_ranged = materialized
         .iter()
         .filter(|cell| !cell.text.is_empty())
