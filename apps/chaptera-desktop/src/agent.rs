@@ -2211,6 +2211,28 @@ fn operation_summary(operation: &EditOperation) -> Value {
             "stroke":stroke,
             "provenance":provenance
         }),
+        EditOperation::CreateTable { table } => json!({
+            "kind":"create_table",
+            "node_id":table.node_id.as_canonical().to_string(),
+            "story_id":table.story_id.as_canonical().to_string(),
+            "page_id":table.page_id.as_canonical().to_string(),
+            "bounds":rect_json(table.bounds),
+            "row_ids":table
+                .row_ids
+                .iter()
+                .map(|id| id.as_canonical().to_string())
+                .collect::<Vec<_>>(),
+            "column_ids":table
+                .column_ids
+                .iter()
+                .map(|id| id.as_canonical().to_string())
+                .collect::<Vec<_>>(),
+            "cell_ids":table
+                .cell_ids
+                .iter()
+                .map(|id| id.as_canonical().to_string())
+                .collect::<Vec<_>>()
+        }),
         EditOperation::DeleteNode {
             node_id,
             page_id,
