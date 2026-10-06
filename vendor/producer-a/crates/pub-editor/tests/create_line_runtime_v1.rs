@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use pub_editor::{
     AuthoredEntityProvenanceV1, AuthoredLineRuntimeV1, AuthoredSolidStrokeV1,
     EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_16, EDITOR_PROJECT_VERSION_V0_17,
-    EditOperation, EditorError, EditorProject, EditorProjectError, EditorSession, LineGeometryV1,
-    PointEmuV1, Srgb8V1, mature_0x2c_pub_persistence_target,
+    EDITOR_PROJECT_VERSION_V0_18, EditOperation, EditorError, EditorProject, EditorProjectError,
+    EditorSession, LineGeometryV1, PointEmuV1, Srgb8V1, mature_0x2c_pub_persistence_target,
 };
 use pub_export::{PersistenceCompatibilityState, WriterCapabilityManifest};
 use pub_model::{
@@ -188,7 +188,7 @@ fn create_line_is_one_v017_history_unit_and_source_graph_stays_immutable() {
     );
 
     let project = session.project();
-    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_17);
+    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_18);
     assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_17);
     assert_eq!(project.operations, vec![operation.clone()]);
     assert_eq!(session.persistence_requirements().len(), 3);

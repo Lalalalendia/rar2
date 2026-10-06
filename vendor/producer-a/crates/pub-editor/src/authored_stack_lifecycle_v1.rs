@@ -225,6 +225,17 @@ pub fn plan_create_line_append_v1(
     plan_created_member_append_v1(stack, line.node_id, line.page_id)
 }
 
+pub fn plan_create_table_append_v1(
+    stack: &AuthoredStackV1,
+    node_id: NodeId,
+    page_id: PageId,
+) -> Result<AuthoredStackLifecycleTransitionV1, AuthoredStackLifecycleErrorV1> {
+    // CreateTable owns TABLE payload/topology validation. AuthoredStack owns
+    // only exact page-local membership and ordering, so tables reuse the same
+    // canonical append transition without pretending to be shapes or lines.
+    plan_created_member_append_v1(stack, node_id, page_id)
+}
+
 pub fn plan_delete_shape_remove_v1(
     stack: &AuthoredStackV1,
     shape: &AuthoredShapeRuntimeV1,
