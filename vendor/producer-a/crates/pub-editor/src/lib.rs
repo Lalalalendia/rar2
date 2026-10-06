@@ -6034,6 +6034,18 @@ impl EditorSession {
         })
     }
 
+    fn has_node_resize_history_v1(&self, node_id: NodeId) -> bool {
+        self.undo.iter().any(|operation| match operation {
+            EditOperation::ResizeNode {
+                node_id: resized, ..
+            } => *resized == node_id,
+            EditOperation::ResizeNodes { entries, .. } => {
+                entries.iter().any(|entry| entry.node_id == node_id)
+            }
+            _ => false,
+        })
+    }
+
     pub fn can_move_node_to(
         &self,
         node_id: NodeId,
@@ -6487,6 +6499,9 @@ impl EditorSession {
         after_extent: LengthEmu,
     ) -> Result<EditOperation, EditorError> {
         self.validate_source_identity()?;
+        if self.has_node_resize_history_v1(table_id) {
+            return Err(EditorError::TableTrackResizeUnsupported { node_id: table_id });
+        }
         let grid = self
             .current_table_grid_v1(table_id)
             .ok_or(EditorError::TableTrackResizeUnsupported { node_id: table_id })?;
