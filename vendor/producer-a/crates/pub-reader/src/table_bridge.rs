@@ -1618,8 +1618,7 @@ fn build_table_uniform_text_inset(
     relation: &PubTableLayoutRelationSource,
 ) -> Option<PubTableUniformTextInsetSource> {
     let mcld = context.mcld?;
-    let inset =
-        bounded_mcld_table_uniform_text_inset(mcld, relation.story_layout_key).ok()?;
+    let inset = bounded_mcld_table_uniform_text_inset(mcld, relation.story_layout_key).ok()?;
 
     let mut source_refs = relation.source_refs.clone();
     source_refs.extend(inset.sources.iter().map(|source| {
