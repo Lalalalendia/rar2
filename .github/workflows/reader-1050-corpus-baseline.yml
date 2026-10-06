@@ -486,12 +486,37 @@ jobs:
               key = row.get("promotion_gap") or "none"
               promotion_gaps[key] = promotion_gaps.get(key, 0) + 1
 
+          tracked_recovery = {
+              "koronavirus": "6eb0a85afb42d329e2241ce060ec3b6957ecd429a5122cfc908b4621ab4884b8",
+              "saudi": "b18c713e04398d2d4b23dd92678c7b5f1b0e25c694520b72de2e7138882ecffa",
+              "thai": "74cfefff12d624865cb1eb9b63a5aa6ed63bfea3e0ce6ad09fdf947f35077242",
+              "fap": "dd44367ac576407fa6313ff8654a0cef053f4bec5489ab5d62c5c02d1305532c",
+              "spring08": "a2d05984c50078e51fd0df236aae6e2790d76c38d786553103da0d75715ee546",
+              "thea": "b4381b1e3662dd468c641c6fbd28e88c16c74833cb8c48a465172c6eeb80b338",
+              "zbirka": "2173c7dd2349c6ced2f838df458cc2503e15606d073cc8d6146706d372dd64d8",
+          }
+          rows_by_sha = {row["source_sha256"]: row for row in payload["rows"]}
+          tracked_rows = {
+              label: {
+                  "present": sha in rows_by_sha,
+                  **({
+                      "reader_outcome": rows_by_sha[sha]["reader_outcome"],
+                      "compact_verdict": rows_by_sha[sha]["compact_verdict"],
+                      "rescue_outcome": rows_by_sha[sha]["rescue_outcome"],
+                      "recovery_class": rows_by_sha[sha].get("recovery_class"),
+                      "promotion_gap": rows_by_sha[sha].get("promotion_gap"),
+                  } if sha in rows_by_sha else {}),
+              }
+              for label, sha in tracked_recovery.items()
+          }
+
           print(json.dumps({
               "verdict_counts": verdicts,
               "reader_outcome_counts": payload["reader_outcome_counts"],
               "rescue_outcome_counts": payload["rescue_outcome_counts"],
               "inferred_rescue_count": len(inferred_rescue),
               "promotion_gap_counts": promotion_gaps,
+              "tracked_recovery_rows": tracked_rows,
           }, indent=2, sort_keys=True))
           PY
 
