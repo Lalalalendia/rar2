@@ -1,4 +1,5 @@
 param(
+    [string]$FixtureRoot = "",
     [string]$OutputRoot = ""
 )
 
@@ -12,9 +13,11 @@ $Packet = Join-Path $RepoRoot "tools/research-runner/experiments/ignore-master-a
 $Operation = Join-Path $RepoRoot "tools/research-runner/operations/publisher_ignore_master_auth_01.ps1"
 $Analyzer = Join-Path $RepoRoot "tools/research-runner/analysis/ignore_master_auth_01_blast_radius.py"
 
-$ExpectedPacketBlob = "5bd3790f430e6d95947142d57cd4b1ea9d0bbcae"
-$ExpectedOperationBlob = "fb519d47a4ae85b68ce891895baec45a9123a01b"
+$ExpectedPacketBlob = "3ad78a8742c40f47f92c7282ff6ff3cca021d3ac"
+$ExpectedOperationBlob = "038fdeb48315e1c6e3a74f47a117dceaa4841bbd"
 $ExpectedAnalyzerBlob = "ae2ce9de0cc30d301cd394490f8737a3f2f2d331"
+$ExpectedFixtureSha256 = "a8598bd40b32491b774df0aad11dda11681cc624c0a6edb22e59b14de8904364"
+$ExpectedFixtureRelativePath = "master2-native-20260924/output/two-master.pub"
 
 foreach ($entry in @(
     [pscustomobject]@{ Path = $Packet; Expected = $ExpectedPacketBlob; Label = "packet" },
@@ -32,6 +35,50 @@ foreach ($entry in @(
 
 python tools/research-runner/validate_packet.py --packet "tools/research-runner/experiments/ignore-master-auth-01.packet.json" --expected-environment publisher-2019
 if ($LASTEXITCODE -ne 0) { throw "T828 packet validation failed." }
+
+$fixtureRoots = New-Object System.Collections.Generic.List[string]
+foreach ($candidate in @(
+    $FixtureRoot,
+    [string]$env:PUB_RESEARCH_FIXTURE_ROOT,
+    (Join-Path $RepoRoot "realtest"),
+    $(if (-not [string]::IsNullOrWhiteSpace([string]$env:USERPROFILE)) { Join-Path $env:USERPROFILE "rar2\realtest" } else { "" })
+)) {
+    if ([string]::IsNullOrWhiteSpace([string]$candidate)) { continue }
+    if (-not [System.IO.Path]::IsPathRooted([string]$candidate)) {
+        $candidate = Join-Path $RepoRoot ([string]$candidate)
+    }
+    if (-not (Test-Path -LiteralPath $candidate -PathType Container)) { continue }
+    $full = (Resolve-Path -LiteralPath $candidate).Path
+    $duplicate = $false
+    foreach ($existing in $fixtureRoots) {
+        if ([string]::Equals($existing, $full, [StringComparison]::OrdinalIgnoreCase)) {
+            $duplicate = $true
+            break
+        }
+    }
+    if (-not $duplicate) { $fixtureRoots.Add($full) }
+}
+
+$resolvedFixtureRoot = $null
+$resolvedFixture = $null
+foreach ($root in $fixtureRoots) {
+    $candidate = Join-Path $root $ExpectedFixtureRelativePath
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+    $sha = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($sha -ne $ExpectedFixtureSha256) {
+        throw "T828 fixture path exists but SHA mismatches: $candidate expected $ExpectedFixtureSha256 got $sha"
+    }
+    $resolvedFixtureRoot = $root
+    $resolvedFixture = (Resolve-Path -LiteralPath $candidate).Path
+    break
+}
+
+if ($null -eq $resolvedFixture) {
+    throw "T828 registered fixture is absent. Pass -FixtureRoot or set PUB_RESEARCH_FIXTURE_ROOT to the root containing $ExpectedFixtureRelativePath."
+}
+
+$env:PUB_RESEARCH_FIXTURE_ROOT = $resolvedFixtureRoot
+Write-Host "T828 fixture verified: $resolvedFixture"
 
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $stamp = [DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss")
