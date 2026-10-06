@@ -114,6 +114,7 @@ pub struct ReaderPartialContentsSemanticEvidence {
     pub ambiguous_reference_count: usize,
     pub referenced_chunk_unavailable_count: usize,
     pub chunk_parse_failure_count: usize,
+    pub chunk_crosses_trailer_count: usize,
     pub missing_tail_len: u64,
 }
 
@@ -146,6 +147,7 @@ pub fn analyze_reader_partial_contents_prefix(
                 ambiguous_reference_count: 0,
                 referenced_chunk_unavailable_count: 0,
                 chunk_parse_failure_count: 0,
+                chunk_crosses_trailer_count: 0,
                 missing_tail_len,
             };
         }
@@ -175,6 +177,7 @@ pub fn analyze_reader_partial_contents_prefix(
                 ambiguous_reference_count: 0,
                 referenced_chunk_unavailable_count: 0,
                 chunk_parse_failure_count: 0,
+                chunk_crosses_trailer_count: 0,
                 missing_tail_len,
             };
         }
@@ -221,6 +224,7 @@ pub fn analyze_reader_partial_contents_prefix(
                 ambiguous_reference_count: 0,
                 referenced_chunk_unavailable_count: 0,
                 chunk_parse_failure_count: 0,
+                chunk_crosses_trailer_count: 0,
                 missing_tail_len,
             };
         }
@@ -271,6 +275,7 @@ pub fn analyze_reader_partial_contents_prefix(
     let mut ambiguous_reference_count = 0usize;
     let mut referenced_chunk_unavailable_count = 0usize;
     let mut chunk_parse_failure_count = 0usize;
+    let mut chunk_crosses_trailer_count = 0usize;
 
     for seq_num in 0..trailer.directory.slots.len() {
         if matches!(
@@ -312,6 +317,12 @@ pub fn analyze_reader_partial_contents_prefix(
             }
         };
 
+        let chunk_end = u64::from(chunk_offset).saturating_add(u64::from(chunk.declared_length));
+        if chunk_end > u64::from(trailer_offset) {
+            chunk_crosses_trailer_count += 1;
+            continue;
+        }
+
         let parent_seq_num = if reference.parent_seq_nums.len() == 1 {
             Some(reference.parent_seq_nums[0].value)
         } else {
@@ -351,6 +362,7 @@ pub fn analyze_reader_partial_contents_prefix(
         ambiguous_reference_count,
         referenced_chunk_unavailable_count,
         chunk_parse_failure_count,
+        chunk_crosses_trailer_count,
         missing_tail_len,
     }
 }
@@ -528,6 +540,18 @@ mod tests {
         assert_eq!(semantic.complete_chunk_facts[0].raw_type, 0x01);
         assert_eq!(semantic.complete_chunk_facts[0].chunk_offset, 64);
         assert_eq!(semantic.complete_chunk_facts[0].chunk_declared_len, 10);
+    }
+
+    #[test]
+    fn referenced_chunk_that_crosses_trailer_is_not_promoted() {
+        let mut prefix = mature_prefix_with_one_complete_chunk();
+        prefix[64..68].copy_from_slice(&80u32.to_le_bytes());
+        let evidence = partial_evidence_for_prefix(prefix, 512);
+        let semantic = analyze_reader_partial_contents_prefix(&evidence);
+
+        assert_eq!(semantic.class, ReaderPartialContentsClass::ForensicOnly);
+        assert!(semantic.complete_chunk_facts.is_empty());
+        assert_eq!(semantic.chunk_crosses_trailer_count, 1);
     }
 
     #[test]
