@@ -926,8 +926,9 @@ mod tests {
 
     #[test]
     fn damaged_cfb_can_admit_image_only_salvage_from_sid_bound_regular_delay() {
-        let bytes =
-            corrupt_first_minifat_entry(synthetic_pub_cfb_with_regular_delay_png_and_mini_contents());
+        let bytes = corrupt_first_minifat_entry(
+            synthetic_pub_cfb_with_regular_delay_png_and_mini_contents(),
+        );
         assert!(pub_cfb::inspect_reader(Cursor::new(bytes.clone())).is_err());
 
         let probe = probe_reader_salvage_candidate(&bytes);
