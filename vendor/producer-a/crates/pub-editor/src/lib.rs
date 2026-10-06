@@ -11,6 +11,7 @@ mod authored_stack_lifecycle_v1;
 mod authored_stack_runtime_v1;
 mod create_line_runtime_v1;
 mod create_shape_runtime_v1;
+mod create_table_runtime_v1;
 mod duplicate_authored_rectangle_v1;
 mod imported_paragraph_alignment_v1;
 mod imported_paragraphs_v1;
@@ -42,6 +43,12 @@ pub use create_shape_runtime_v1::{
     AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1,
     AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
     CreateShapeRuntimeValidationError, Srgb8V1, validate_authored_shape_runtime_v1,
+};
+pub use create_table_runtime_v1::{
+    AUTHORED_TABLE_SENTINEL_CONTENTS_SEQ_NUM_V1, AUTHORED_TABLE_SENTINEL_TEXT_ID_V1,
+    CreateTablePlanV1, CreateTableRuntimeV1, CreateTableRuntimeValidationError,
+    build_create_table_plan_v1, rebuild_authored_table_story_v1,
+    validate_create_table_runtime_v1,
 };
 pub use duplicate_authored_rectangle_v1::{
     DUPLICATE_OFFSET_EMU_V1, DUPLICATE_PLACEMENT_POLICY_V1, DuplicateAuthoredRectangleErrorV1,
