@@ -19,14 +19,13 @@ concurrency:
 jobs:
   classify:
     name: Classify pub-editor Continuity V2 scope
-    # Parent build-once admission is already authoritative when it supplies an exact artifact.
-    if: inputs.editor_binary_artifact_name == ''
     runs-on: ubuntu-latest
     outputs:
       continuity_v2_windows: ${{ steps.scope.outputs.continuity_v2_windows }}
       reason: ${{ steps.scope.outputs.reason }}
     steps:
       - uses: actions/checkout@v5
+        if: inputs.editor_binary_artifact_name == ''
         with:
           # Trust only the base-branch classifier. The PR head is fetched as
           # diff input and cannot teach this job to skip its own Windows proof.
@@ -35,17 +34,19 @@ jobs:
 
       - id: base-authority
         name: Resolve base-branch classifier authority
+        if: inputs.editor_binary_artifact_name == ''
         shell: bash
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Fetch PR head for classification
-        if: ${{ github.event.pull_request.head.sha != '' }}
+        if: ${{ inputs.editor_binary_artifact_name == '' && github.event.pull_request.head.sha != '' }}
         shell: bash
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: git fetch --no-tags origin "$HEAD_SHA"
 
       - name: Test base-authority pub-editor classifier
+        if: inputs.editor_binary_artifact_name == ''
         run: python tools/ci/test_pub_editor_pr_fanout.py
 
       - id: scope
@@ -53,11 +54,18 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
+          ARTIFACT_NAME: ${{ inputs.editor_binary_artifact_name }}
           BASE_SHA: ${{ steps.base-authority.outputs.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           mkdir -p target/pub-editor-pr-fanout
+          if [[ -n "$ARTIFACT_NAME" ]]; then
+            echo "continuity_v2_windows=true" >> "$GITHUB_OUTPUT"
+            echo "reason=parent_artifact_authoritative" >> "$GITHUB_OUTPUT"
+            printf '%s\n' '{"schema":"chaptera.pub-editor-pr-fanout.v1","continuity_v2_windows":true,"reason":"parent_artifact_authoritative"}' > target/pub-editor-pr-fanout/receipt.json
+            exit 0
+          fi
           if [[ "$EVENT_NAME" != "pull_request" ]]; then
             echo "continuity_v2_windows=true" >> "$GITHUB_OUTPUT"
             echo "reason=workflow_dispatch_fail_closed" >> "$GITHUB_OUTPUT"
