@@ -1,0 +1,57 @@
+name: Editor Project Durability V1
+
+on:
+  pull_request:
+    paths:
+      - "apps/chaptera-desktop/src/editor_project_store.rs"
+      - "apps/chaptera-desktop/src/main.rs"
+      - "apps/chaptera-desktop/Cargo.toml"
+      - "crates/chaptera-suite-handoff/**"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - ".github/workflows/editor-project-durability.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: editor-project-durability-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  portable-store:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+      - name: Format desktop durability slice
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+      - name: Check desktop durability integration
+        run: cargo check -p chaptera-desktop --all-targets
+      - name: Clippy desktop durability delta
+        run: >-
+          python tools/ci/check_desktop_clippy_delta.py
+          --base ${{ github.event.pull_request.base.sha }}
+          --head ${{ github.event.pull_request.head.sha }}
+          --path apps/chaptera-desktop/src/editor_project_store.rs
+          --path apps/chaptera-desktop/src/main.rs
+      - name: Prove generation store and recovery
+        run: cargo test -p chaptera-desktop editor_project_store::tests -- --nocapture
+
+  windows-store:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Check Windows durability integration
+        run: cargo check -p chaptera-desktop --all-targets
+      - name: Prove Windows live-handle lock and generation store
+        run: cargo test -p chaptera-desktop editor_project_store::tests -- --nocapture
