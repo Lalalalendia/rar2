@@ -89,3 +89,27 @@ This is intentionally a **union**, not one heavy execution per candidate. The in
 The planner does not invent a second path-to-evidence map. It consumes the same `tools/ci/reader_pr_fanout.py` classification used by hosted Reader selective CI, so routing drift is visible in one authority.
 
 V0 only records the required heavy-family closure. Hosted workflow composition that executes those families exactly once is a separate step and must preserve each family's existing evidence semantics.
+
+
+## Promotion verification
+
+After composing the train branch, verify that the exact integration head contains **only** the planned path union and still resolves to the same heavy-evidence family union:
+
+```bash
+python tools/integration_train.py \
+  --base <exact-base-sha> \
+  --candidate TASK-A=<exact-candidate-sha> \
+  --candidate TASK-B=<exact-candidate-sha> \
+  --verify-head <exact-integration-head-sha> \
+  --receipt target/integration-train.json
+```
+
+A successful receipt includes `composed_verification` with the exact integration head SHA, changed paths and heavy families.
+
+The verifier fails closed when:
+- the composed head does not descend from the planned base;
+- an expected candidate path is missing;
+- an unplanned path appears;
+- the aggregate heavy-family classification differs from the plan.
+
+This is the promotion gate before trusting the train PR's single aggregate hosted acceptance.
