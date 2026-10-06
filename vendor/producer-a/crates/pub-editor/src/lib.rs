@@ -4054,7 +4054,8 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_17
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_18
         {
-            let actual_grids = effective_table_grids_with_history(&candidate.graph, &candidate.undo);
+            let actual_grids =
+                effective_table_grids_with_history(&candidate.graph, &candidate.undo);
             if actual_grids != project.table_grids {
                 return Err(EditorProjectError::TableGridMismatch);
             }
@@ -5650,8 +5651,8 @@ impl EditorSession {
         let before_stack = self.current_authored_stack_v1(table.page_id);
         let transition = plan_create_table_append_v1(&before_stack, table.node_id, table.page_id)
             .map_err(|_| EditorError::StaleAuthoredStack {
-                page_id: table.page_id,
-            })?;
+            page_id: table.page_id,
+        })?;
         let after_stack = apply_authored_stack_transition_forward_v1(&before_stack, &transition)
             .map_err(|_| EditorError::StaleAuthoredStack {
                 page_id: table.page_id,
@@ -6373,11 +6374,11 @@ impl EditorSession {
                         apply_authored_line_inverse(&mut candidate_lines, &operation)?;
                     }
                     EditOperation::CreateTable { table } => {
-                        apply_create_table_inverse_v1(&mut candidate_graph, table).map_err(|_| {
-                            EditorError::TableEditUnsupported {
+                        apply_create_table_inverse_v1(&mut candidate_graph, table).map_err(
+                            |_| EditorError::TableEditUnsupported {
                                 node_id: table.node_id,
-                            }
-                        })?;
+                            },
+                        )?;
                     }
                     EditOperation::DeleteNode { .. } => {
                         apply_authored_shape_delete_inverse(&mut candidate_shapes, &operation)?;
@@ -6463,11 +6464,11 @@ impl EditorSession {
                         candidate_lines.insert(line.node_id, line);
                     }
                     EditOperation::CreateTable { table } => {
-                        apply_create_table_forward_v1(&mut candidate_graph, table).map_err(|_| {
-                            EditorError::TableEditUnsupported {
+                        apply_create_table_forward_v1(&mut candidate_graph, table).map_err(
+                            |_| EditorError::TableEditUnsupported {
                                 node_id: table.node_id,
-                            }
-                        })?;
+                            },
+                        )?;
                     }
                     EditOperation::DeleteNode { .. } => {
                         apply_authored_shape_delete_forward(&mut candidate_shapes, &operation)?;
@@ -8224,9 +8225,11 @@ fn apply_authored_stack_history_forward_v1(
                 .map_err(|_| EditorError::StaleAuthoredStack {
                     page_id: table.page_id,
                 })?;
-            let after = apply_authored_stack_transition_forward_v1(&before, &transition)
-                .map_err(|_| EditorError::StaleAuthoredStack {
-                    page_id: table.page_id,
+            let after =
+                apply_authored_stack_transition_forward_v1(&before, &transition).map_err(|_| {
+                    EditorError::StaleAuthoredStack {
+                        page_id: table.page_id,
+                    }
                 })?;
             install_authored_stack_in_map_v1(stacks, after);
         }
