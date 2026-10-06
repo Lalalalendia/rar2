@@ -1,0 +1,300 @@
+name: W2 long-form fixed-PDF current revision acceptance
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/w2-longform-fixed-pdf-current-revision.yml"
+      - "tools/ci/pub_editor_pr_fanout.py"
+      - "tools/ci/test_pub_editor_pr_fanout.py"
+      - "tools/run_editor_fixed_pdf_current_revision_v2.py"
+      - "tools/run_editor_desktop_continuity_v2.py"
+      - "tools/validate_editor_desktop_continuity_v2_receipt.py"
+      - "tools/run_yab259_current_fixed_pdf_resource_request.py"
+      - "tools/yab259_current_fixed_pdf_resource_request.rs"
+      - "tools/run_yab259_fixed_pdf_packet_renderer.py"
+      - "tools/yab259_fixed_pdf_packet_renderer.rs"
+      - "tools/run_yab259_fixed_pdf_closure.py"
+      - "apps/chaptera-desktop/src/acceptance_v2.rs"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/bin/current_fixed_pdf_input.rs"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/bin/w2_same_document_kernel.rs"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/lib.rs"
+      - "packages/protocol/w2-compound/**"
+      - "tools/build_w2_compound_receipt.py"
+      - "tools/test_build_w2_compound_receipt.py"
+      - "crates/chaptera-desktop-fallback-font-resource/**"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-editor/src/lib.rs"
+      - "vendor/producer-a/crates/pub-layout/src/shaped_flow.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: w2-longform-fixed-pdf-current-revision-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    name: Classify pub-editor fixed-PDF current revision scope
+    runs-on: ubuntu-latest
+    outputs:
+      fixed_pdf_current_revision: ${{ steps.scope.outputs.fixed_pdf_current_revision }}
+      reason: ${{ steps.scope.outputs.fixed_pdf_reason }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.ref || github.sha }}
+          fetch-depth: 0
+
+      - id: base-authority
+        name: Resolve base-branch classifier authority
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch PR head for classification
+        if: ${{ github.event.pull_request.head.sha != '' }}
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags origin "$HEAD_SHA"
+
+      - name: Test base-authority pub-editor classifier
+        run: python tools/ci/test_pub_editor_pr_fanout.py
+
+      - id: scope
+        name: Classify fixed-PDF current revision ownership
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ steps.base-authority.outputs.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/pub-editor-pr-fanout
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "fixed_pdf_current_revision=true" >> "$GITHUB_OUTPUT"
+            echo "fixed_pdf_reason=workflow_dispatch_fail_closed" >> "$GITHUB_OUTPUT"
+            printf '%s\n' '{"schema":"chaptera.pub-editor-pr-fanout.v1","fixed_pdf_current_revision":true,"fixed_pdf_reason":"workflow_dispatch_fail_closed"}' > target/pub-editor-pr-fanout/receipt.json
+            exit 0
+          fi
+          python tools/ci/pub_editor_pr_fanout.py \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --receipt target/pub-editor-pr-fanout/receipt.json \
+            --github-output "$GITHUB_OUTPUT"
+          if ! grep -q '^fixed_pdf_current_revision=' "$GITHUB_OUTPUT"; then
+            echo "fixed_pdf_current_revision=true" >> "$GITHUB_OUTPUT"
+            echo "fixed_pdf_reason=base_classifier_missing_fixed_pdf_output" >> "$GITHUB_OUTPUT"
+            python -c 'import json, pathlib; p=pathlib.Path("target/pub-editor-pr-fanout/receipt.json"); d=json.loads(p.read_text()); d["fixed_pdf_current_revision"]=True; d["fixed_pdf_reason"]="base_classifier_missing_fixed_pdf_output"; p.write_text(json.dumps(d, indent=2, sort_keys=True) + "\n")'
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: pub-editor-fixed-pdf-current-revision-scope-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/pub-editor-pr-fanout/receipt.json
+          if-no-files-found: warn
+
+  validate:
+    needs: classify
+    if: ${{ !cancelled() && always() }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Preflight acceptance scripts
+        run: |
+          python -m pip install "jsonschema==4.23.0"
+          python -m py_compile tools/run_editor_fixed_pdf_current_revision_v2.py
+          python -m py_compile tools/run_editor_desktop_continuity_v2.py
+          python -m py_compile tools/validate_editor_desktop_continuity_v2_receipt.py
+
+      - name: Acquire exact May 2023 recurring newsletter
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture = Join-Path $env:RUNNER_TEMP "may-2023-newsletter.pub"
+          $url = "https://raw.githubusercontent.com/Lalalalendia/lalamu/main/pub-corpus/corpus/native/unclassified/aeac4c03181582008c18655ad77b90a957b00eeddcc0b1c45f6d40ca88c765eb.pub"
+          Invoke-WebRequest -Uri $url -OutFile $fixture
+          $hash = (Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item $fixture).Length
+          if ($hash -ne "aeac4c03181582008c18655ad77b90a957b00eeddcc0b1c45f6d40ca88c765eb") {
+            throw "May 2023 newsletter SHA-256 mismatch: $hash"
+          }
+          if ($bytes -ne 4286464) {
+            throw "May 2023 newsletter byte length mismatch: $bytes"
+          }
+          "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Generate deterministic replacement PNG witness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $replacement = Join-Path $env:RUNNER_TEMP "continuity-v2-replacement.png"
+          $env:CHAPTERA_CONTINUITY_REPLACEMENT = $replacement
+          @'
+          import binascii
+          import os
+          import pathlib
+          import struct
+          import zlib
+
+          def chunk(kind, data):
+              body = kind + data
+              return struct.pack(">I", len(data)) + body + struct.pack(">I", binascii.crc32(body) & 0xffffffff)
+
+          width = 2
+          height = 2
+          ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+          row0 = b"\x00" + bytes([0x18, 0x62, 0xA0, 0xFF, 0xF2, 0xC1, 0x4E, 0xFF])
+          row1 = b"\x00" + bytes([0x51, 0xA8, 0x54, 0xFF, 0xD9, 0x50, 0x50, 0xFF])
+          png = (
+              b"\x89PNG\r\n\x1a\n"
+              + chunk(b"IHDR", ihdr)
+              + chunk(b"IDAT", zlib.compress(row0 + row1, 9))
+              + chunk(b"IEND", b"")
+          )
+          pathlib.Path(os.environ["CHAPTERA_CONTINUITY_REPLACEMENT"]).write_bytes(png)
+          '@ | python -
+          if (-not (Test-Path $replacement)) { throw "replacement PNG was not generated" }
+          if ((Get-Item $replacement).Length -le 32) { throw "replacement PNG is unexpectedly small" }
+          "CHAPTERA_CONTINUITY_REPLACEMENT=$replacement" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build Stage 0.1 producer and current W2 output adapters
+        run: |
+          cargo build -p chaptera-desktop --release --bin chaptera-editor
+          cargo build --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml --release --bin current_fixed_pdf_input --bin w2_same_document_kernel --target-dir target
+
+      - name: Reproduce accepted Stage 0.1 fresh-reopen project
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $out = Join-Path $env:RUNNER_TEMP "chaptera-editor-fixed-pdf-current-revision"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $project = Join-Path $out "continuity-v2.project.json"
+          $export = Join-Path $out "continuity-v2.edited.odg"
+          $receipt = Join-Path $out "editor-desktop-continuity-v2.real.json"
+          python tools/run_editor_desktop_continuity_v2.py --fixture "$env:CHAPTERA_SAMPLE_NEWSLETTER" --replacement "$env:CHAPTERA_CONTINUITY_REPLACEMENT" --project-output "$project" --export-output "$export" --receipt-output "$receipt" --expected-source-hash "aeac4c03181582008c18655ad77b90a957b00eeddcc0b1c45f6d40ca88c765eb" --expected-source-bytes 4286464 -- target/release/chaptera-editor.exe --desktop-acceptance-v2 "{fixture}" "{replacement}" "{project}" "{export}"
+          python tools/validate_editor_desktop_continuity_v2_receipt.py "$receipt"
+          "CHAPTERA_STAGE02_OUT=$out" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_STAGE01_PROJECT=$project" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_STAGE01_RECEIPT=$receipt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Materialize pinned fixed-output font
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $font = Join-Path $env:RUNNER_TEMP "chaptera-fixed-output-font.ttf"
+          cargo run --quiet -p chaptera-desktop-fallback-font-resource --bin materialize-fallback-font -- "$font"
+          if (-not (Test-Path $font)) { throw "pinned fixed-output font was not materialized" }
+          $bytes = (Get-Item $font).Length
+          $hash = (Get-FileHash $font -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($bytes -ne 361676) { throw "pinned fixed-output font byte length mismatch: $bytes" }
+          if ($hash -ne "80307b8da7649aa4ee4d484b232140e3ce1ec0ca093073d3c53c8f5a5ced7a70") {
+            throw "pinned fixed-output font SHA-256 mismatch: $hash"
+          }
+          "CHAPTERA_FIXED_OUTPUT_FONT=$font" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prove same-document previous issue to independent next issue
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $nextProject = Join-Path $env:CHAPTERA_STAGE02_OUT "w2-next-issue.project.json"
+          $nextOdg = Join-Path $env:CHAPTERA_STAGE02_OUT "w2-next-issue.edited.odg"
+          $kernel = Join-Path $env:CHAPTERA_STAGE02_OUT "w2-same-document-kernel.real.json"
+          target/release/w2_same_document_kernel.exe "$env:CHAPTERA_SAMPLE_NEWSLETTER" "$env:CHAPTERA_STAGE01_PROJECT" "$env:CHAPTERA_CONTINUITY_REPLACEMENT" "$env:CHAPTERA_FIXED_OUTPUT_FONT" "$nextProject" "$nextOdg" "$kernel"
+          if (-not (Test-Path $nextProject)) { throw "forked next-issue project was not written" }
+          if (-not (Test-Path $nextOdg)) { throw "forked next-issue ODG was not written" }
+          if (-not (Test-Path $kernel)) { throw "same-document W2 kernel receipt was not written" }
+          $kernelRaw = Get-Content $kernel -Raw
+          $replacementSha = (Get-FileHash $env:CHAPTERA_CONTINUITY_REPLACEMENT -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($kernelRaw.Contains($replacementSha)) { throw "W2 kernel receipt leaked replacement asset SHA" }
+          if ($kernelRaw.Contains((Resolve-Path $env:CHAPTERA_SAMPLE_NEWSLETTER).Path)) { throw "W2 kernel receipt leaked local source path" }
+          if ($kernelRaw.Contains((Resolve-Path $env:CHAPTERA_CONTINUITY_REPLACEMENT).Path)) { throw "W2 kernel receipt leaked local replacement path" }
+          "CHAPTERA_W2_KERNEL_RECEIPT=$kernel" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Assemble fresh-reopened current Editor resource input
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $input = Join-Path $env:CHAPTERA_STAGE02_OUT "current-fixed-pdf-resource-input.json"
+          target/release/current_fixed_pdf_input.exe "$env:CHAPTERA_SAMPLE_NEWSLETTER" "$env:CHAPTERA_STAGE01_PROJECT" "$env:CHAPTERA_CONTINUITY_REPLACEMENT" "$env:CHAPTERA_FIXED_OUTPUT_FONT" "$input"
+          if (-not (Test-Path $input)) { throw "current fixed-PDF resource input was not written" }
+          "CHAPTERA_CURRENT_FIXED_PDF_INPUT=$input" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Acquire exact public Yab 259 donor
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $yab = Join-Path $env:RUNNER_TEMP "yab259-editor-fixed-output"
+          git clone --quiet https://github.com/HeisLuka/yab "$yab"
+          git -C "$yab" cat-file -e "4f5d8a57abc089d1ed8eb1326cf9bed602281f7e^{commit}"
+          "CHAPTERA_YAB259_CHECKOUT=$yab" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Render and validate real current-revision PDF
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $request = Join-Path $env:CHAPTERA_STAGE02_OUT "fixed-pdf-render-request.json"
+          $renderer = Join-Path $env:CHAPTERA_STAGE02_OUT "fixed-pdf-render-result.json"
+          $pdf = Join-Path $env:CHAPTERA_STAGE02_OUT "editor-fixed-pdf-current-revision.real.pdf"
+          $receipt = Join-Path $env:CHAPTERA_STAGE02_OUT "editor-fixed-pdf-current-revision.real.json"
+          python tools/run_editor_fixed_pdf_current_revision_v2.py --source "$env:CHAPTERA_SAMPLE_NEWSLETTER" --project "$env:CHAPTERA_STAGE01_PROJECT" --replacement "$env:CHAPTERA_CONTINUITY_REPLACEMENT" --stage01-receipt "$env:CHAPTERA_STAGE01_RECEIPT" --resource-input "$env:CHAPTERA_CURRENT_FIXED_PDF_INPUT" --yab-checkout "$env:CHAPTERA_YAB259_CHECKOUT" --request-output "$request" --renderer-result-output "$renderer" --pdf-output "$pdf" --receipt-output "$receipt"
+          if (-not (Test-Path $pdf)) { throw "current-revision PDF was not written" }
+          if (-not (Test-Path $receipt)) { throw "current-revision receipt was not written" }
+          $header = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($pdf)[0..7])
+          if (-not $header.StartsWith("%PDF-")) { throw "current-revision artifact is not PDF" }
+          "CHAPTERA_STAGE02_PDF=$pdf" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_STAGE02_RECEIPT=$receipt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Verify retained Stage 0.2 evidence is source-safe
+        shell: pwsh
+        run: |
+          $receipt = Get-Content "$env:CHAPTERA_STAGE02_RECEIPT" -Raw
+          $replacementSha = (Get-FileHash $env:CHAPTERA_CONTINUITY_REPLACEMENT -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($receipt.Contains($replacementSha)) { throw "Stage 0.2 receipt leaked replacement asset SHA" }
+          if ($receipt.Contains((Resolve-Path $env:CHAPTERA_SAMPLE_NEWSLETTER).Path)) { throw "Stage 0.2 receipt leaked local source path" }
+          if ($receipt.Contains((Resolve-Path $env:CHAPTERA_CONTINUITY_REPLACEMENT).Path)) { throw "Stage 0.2 receipt leaked local replacement path" }
+          if ($receipt.Contains("replacement_text")) { throw "Stage 0.2 receipt leaked raw replacement text" }
+          Copy-Item "$env:CHAPTERA_STAGE01_RECEIPT" "target/release/editor-desktop-continuity-v2.real.json"
+          Copy-Item "$env:CHAPTERA_STAGE02_RECEIPT" "target/release/editor-fixed-pdf-current-revision.real.json"
+          Copy-Item "$env:CHAPTERA_STAGE02_PDF" "target/release/editor-fixed-pdf-current-revision.real.pdf"
+          $fixed = Get-Content "$env:CHAPTERA_STAGE02_RECEIPT" -Raw | ConvertFrom-Json
+          if ($fixed.source.sha256 -ne "aeac4c03181582008c18655ad77b90a957b00eeddcc0b1c45f6d40ca88c765eb") { throw "W2 fixed-output source identity mismatch" }
+          if ($fixed.renderer.summary.page_count -ne 10) { throw "W2 fixed-output renderer page count mismatch: $($fixed.renderer.summary.page_count)" }
+
+      - name: Build final same-document W2 compound receipt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $compound = "target/release/w2-compound.real.json"
+          python tools/build_w2_compound_receipt.py --kernel "$env:CHAPTERA_W2_KERNEL_RECEIPT" --fixed-output "$env:CHAPTERA_STAGE02_RECEIPT" --output "$compound"
+          if (-not (Test-Path $compound)) { throw "W2 compound receipt was not written" }
+          Copy-Item "$env:CHAPTERA_W2_KERNEL_RECEIPT" "target/release/w2-same-document-kernel.real.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: w2-longform-fixed-pdf-current-revision-real
+          path: |
+            target/release/editor-desktop-continuity-v2.real.json
+            target/release/editor-fixed-pdf-current-revision.real.json
+            target/release/editor-fixed-pdf-current-revision.real.pdf
+            target/release/w2-same-document-kernel.real.json
+            target/release/w2-compound.real.json
+          if-no-files-found: error
