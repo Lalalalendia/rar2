@@ -139,11 +139,11 @@ try {
     "ordinary line stroke must not paint when decorative BorderArt is present"
   );
 
-  const before = await page.locator("svg").getAttribute("viewBox");
+  const before = await page.locator("#pages > svg.page").getAttribute("viewBox");
   const sharedMatrixBefore = await page.locator('[data-text-authority="server-shared-resolved"]').first().evaluate((element) => {
     const matrix = element.getScreenCTM(); return [matrix.a, matrix.b, matrix.c, matrix.d];
   });
-  await page.locator("svg").evaluate((svg) => { svg.setAttribute("width", 300); svg.setAttribute("height", 200); });
+  await page.locator("#pages > svg.page").evaluate((svg) => { svg.setAttribute("width", 300); svg.setAttribute("height", 200); });
   const scaledHeight = await page.locator("foreignObject").first().evaluate((element) => {
     const range = document.createRange(); range.selectNodeContents(element.firstElementChild); return range.getBoundingClientRect().height;
   });
@@ -158,7 +158,7 @@ try {
   // including headless Chromium, which otherwise hints these extents.
   assert.ok(Math.abs(scaledSharedHeight * 2 - shared[0].height) < 0.1,
     "shared glyph geometry must follow zoom: " + JSON.stringify({ before: shared[0].height, after: scaledSharedHeight }));
-  assert.equal(await page.locator("svg").getAttribute("viewBox"), before);
+  assert.equal(await page.locator("#pages > svg.page").getAttribute("viewBox"), before);
   const receipt = { protocol: "chaptera.cloud-reader-preview-scale.v1", scope: "synthetic renderer readability only; excludes source typography and real-PUB reference parity",
     repository_commit_sha: process.env.REPOSITORY_COMMIT_SHA ?? "local-uncommitted", browser: await browser.version(), measurements,
     shared_lines: shared, loaded_fallback_font_sha256: fontSha, shared_zoom: { before_height_px: shared[0].height,
