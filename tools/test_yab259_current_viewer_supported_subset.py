@@ -46,6 +46,8 @@ class CurrentViewerSupportedSubsetSourceTests(unittest.TestCase):
         self.assertIn("complete_table_cell_typography_v1", text)
         self.assertIn("table_cell_inset_fits_bounds_v1", text)
         self.assertIn("table_uniform_cell_text_inset_count", text)
+        self.assertIn("table_uniform_vertical_alignment_count", text)
+        self.assertIn("uniform_cell_vertical_alignment: Option<CurrentTableVerticalAlignment>", text)
         self.assertIn("observe_table_text_authority_v1", text)
         self.assertIn("uniform_cell_text_inset_emu", text)
         self.assertIn("story_scalar_start", text)
