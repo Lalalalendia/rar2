@@ -221,6 +221,10 @@ impl ProducerExactFontRegistry {
     }
 }
 
+fn normalize_font_family(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
 fn digest(bytes: &[u8]) -> Sha256Digest {
     let raw = Sha256::digest(bytes);
     let mut value = [0_u8; 32];
