@@ -89,6 +89,10 @@ on:
       - ".github/workflows/reader-consumer-preflight.yml"
       - ".github/workflows/chaptera-reader-windows.yml"
       - ".github/workflows/chaptera-reader-windows-smoke.yml"
+      - ".github/workflows/chaptera-reader-windows-binary.yml"
+      - "tools/ci/validate_reader_binary_artifact.py"
+      - "tools/ci/test_validate_reader_binary_artifact.py"
+      - "tools/ci/test_reader_build_once_wiring.py"
       - ".github/workflows/chaptera-desktop-windows.yml"
       - ".github/workflows/chaptera-local-portable-windows.yml"
       - ".github/workflows/carlton-reader-visual-oracle.yml"
@@ -212,6 +216,9 @@ jobs:
           required_composition_markers = [
               "needs.classify.outputs.reader_windows_smoke == 'true' && needs.classify.outputs.visual_oracle != 'true'",
               "run_windows_shared_core_smoke: $" + "{{ needs.classify.outputs.reader_windows_smoke == 'true' }}",
+              "reader-windows-binary:",
+              "artifact_name: chaptera-reader-windows-binary-$" + "{{ github.sha }}",
+              "reader_binary_artifact_name: chaptera-reader-windows-binary-$" + "{{ github.sha }}",
           ]
           missing_composition = [
               marker for marker in required_composition_markers if marker not in workflow
@@ -293,17 +300,29 @@ jobs:
       - name: Check Chaptera Desktop formatting
         run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
 
+  reader-windows-binary:
+    name: Reader Windows exact-candidate binary
+    needs: [classify, tier-a]
+    if: ${{ !cancelled() && always() && (needs.classify.outputs.reader_windows == 'true' || needs.classify.outputs.reader_windows_smoke == 'true') && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-reader-windows-binary.yml
+    with:
+      artifact_name: chaptera-reader-windows-binary-${{ github.sha }}
+
   reader-windows-smoke:
     name: Reader Windows shared-core smoke
-    needs: [classify, tier-a]
-    if: ${{ !cancelled() && always() && needs.classify.outputs.reader_windows_smoke == 'true' && needs.classify.outputs.visual_oracle != 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    needs: [classify, tier-a, reader-windows-binary]
+    if: ${{ !cancelled() && always() && needs.classify.outputs.reader_windows_smoke == 'true' && needs.classify.outputs.visual_oracle != 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') && needs.reader-windows-binary.result == 'success' }}
     uses: ./.github/workflows/chaptera-reader-windows-smoke.yml
+    with:
+      reader_binary_artifact_name: chaptera-reader-windows-binary-${{ github.sha }}
 
   reader-windows:
     name: Reader Windows product
-    needs: [classify, tier-a]
-    if: ${{ !cancelled() && always() && needs.classify.outputs.reader_windows == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    needs: [classify, tier-a, reader-windows-binary]
+    if: ${{ !cancelled() && always() && needs.classify.outputs.reader_windows == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') && needs.reader-windows-binary.result == 'success' }}
     uses: ./.github/workflows/chaptera-reader-windows.yml
+    with:
+      reader_binary_artifact_name: chaptera-reader-windows-binary-${{ github.sha }}
 
   editor-windows:
     name: Editor Windows product
@@ -313,12 +332,13 @@ jobs:
 
   visual-oracle:
     name: Reader visual oracle
-    needs: [classify, tier-a]
-    if: ${{ !cancelled() && always() && needs.classify.outputs.visual_oracle == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    needs: [classify, tier-a, reader-windows-binary]
+    if: ${{ !cancelled() && always() && needs.classify.outputs.visual_oracle == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') && (needs.classify.outputs.reader_windows_smoke != 'true' || needs.reader-windows-binary.result == 'success') }}
     uses: ./.github/workflows/carlton-reader-visual-oracle.yml
     with:
       run_typography_golden: ${{ needs.classify.outputs.typography_golden == 'true' }}
       run_windows_shared_core_smoke: ${{ needs.classify.outputs.reader_windows_smoke == 'true' }}
+      reader_binary_artifact_name: chaptera-reader-windows-binary-${{ github.sha }}
 
   cloud-reference:
     name: Cloud exact PUB-PDF reference

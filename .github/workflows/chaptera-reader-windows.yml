@@ -2,6 +2,11 @@ name: Chaptera Reader Windows V0
 
 on:
   workflow_call:
+    inputs:
+      reader_binary_artifact_name:
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
 
 permissions:
@@ -45,6 +50,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Download exact-candidate Reader binary
+        if: inputs.reader_binary_artifact_name != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.reader_binary_artifact_name }}
+          path: ${{ runner.temp }}/chaptera-reader-prebuilt
+
+      - name: Validate exact-candidate Reader binary
+        if: inputs.reader_binary_artifact_name != ''
+        run: python tools/ci/validate_reader_binary_artifact.py --artifact-dir "${{ runner.temp }}/chaptera-reader-prebuilt" --expected-candidate-sha "${{ github.sha }}"
+
       - name: Test Reader portable packager
         run: python -m unittest tools/test_package_reader_portable.py -v
 
@@ -68,15 +84,21 @@ jobs:
           cargo test -p chaptera-desktop --features reader-only failed_replacement_open -- --nocapture
 
       - name: Build Reader-only desktop source
+        if: inputs.reader_binary_artifact_name == ''
         run: cargo build -p chaptera-desktop --release --features reader-only
 
       - name: Stage canonical Reader executable
         shell: pwsh
         run: |
-          $built = "target/release/chaptera-editor.exe"
+          if ("${{ inputs.reader_binary_artifact_name }}" -ne "") {
+            $built = Join-Path "${{ runner.temp }}/chaptera-reader-prebuilt" "chaptera-reader.exe"
+          } else {
+            $built = "target/release/chaptera-editor.exe"
+          }
           $reader = "target/release/chaptera-reader.exe"
+          New-Item -ItemType Directory -Force -Path "target/release" | Out-Null
           if (-not (Test-Path $built)) {
-            throw "reader-only desktop build did not produce the current shared desktop binary"
+            throw "Reader-only binary is missing: $built"
           }
           Copy-Item $built $reader -Force
           $hash = (Get-FileHash $reader -Algorithm SHA256).Hash.ToLowerInvariant()
