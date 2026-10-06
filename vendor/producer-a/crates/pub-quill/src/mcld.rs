@@ -94,6 +94,13 @@ pub struct QuillMcldTextFrameVerticalAlignment {
     pub source: RawSpan,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillMcldTableVerticalAlignment {
+    pub record_id: u32,
+    pub alignment: QuillMcldVerticalAlignment,
+    pub sources: Vec<RawSpan>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuillMcldReadError {
     MissingMcldDescriptor,
@@ -433,6 +440,74 @@ pub fn bounded_mcld_table_uniform_text_inset(
     Ok(QuillMcldUniformTextInset {
         record_id,
         inset_emu: expected_record_inset.expect("non-empty child cohort"),
+        sources,
+    })
+}
+
+/// Promotes a unanimous multi-child TABLE vertical-alignment field.
+///
+/// Every child must carry exactly one u32 field 0x18, every value must be one
+/// of the already-grounded Publisher values 0=Top, 1=Center, 2=Bottom, and the
+/// complete child cohort must agree. Mixed or incomplete records fail closed.
+pub fn bounded_mcld_table_uniform_vertical_alignment(
+    mcld: &QuillMcldChunk,
+    record_id: u32,
+) -> Result<QuillMcldTableVerticalAlignment, QuillMcldReadError> {
+    let record = mcld
+        .records
+        .iter()
+        .find(|record| record.record_id == record_id)
+        .ok_or(QuillMcldReadError::RecordIdNotFound { record_id })?;
+
+    if record.children.is_empty() {
+        return Err(QuillMcldReadError::MissingRequiredField {
+            record_id,
+            child_index: 0,
+            field_id: 0x18,
+        });
+    }
+
+    let mut expected_raw = None;
+    let mut expected_alignment = None;
+    let mut sources = Vec::with_capacity(record.children.len());
+
+    for (child_index, child) in record.children.iter().enumerate() {
+        let child_index = u32::try_from(child_index).unwrap_or(u32::MAX);
+        let (value, source) = required_u32_field(record_id, child_index, child, 0x18)?;
+        let alignment = match value {
+            0 => QuillMcldVerticalAlignment::Top,
+            1 => QuillMcldVerticalAlignment::Center,
+            2 => QuillMcldVerticalAlignment::Bottom,
+            value => {
+                return Err(QuillMcldReadError::UnsupportedVerticalAlignmentValue {
+                    record_id,
+                    value,
+                });
+            }
+        };
+
+        match expected_raw {
+            None => {
+                expected_raw = Some(value);
+                expected_alignment = Some(alignment);
+            }
+            Some(expected) if expected == value => {}
+            Some(expected) => {
+                return Err(QuillMcldReadError::NonUniformRequiredField {
+                    record_id,
+                    field_id: 0x18,
+                    expected,
+                    found: value,
+                    child_index,
+                });
+            }
+        }
+        sources.push(source);
+    }
+
+    Ok(QuillMcldTableVerticalAlignment {
+        record_id,
+        alignment: expected_alignment.expect("non-empty child cohort"),
         sources,
     })
 }
@@ -888,6 +963,14 @@ mod tests {
         }
     }
 
+    fn alignment_child(value: u32, child_index: u64) -> QuillMcldChild {
+        let base = child_index * 10;
+        QuillMcldChild {
+            source: test_span(base),
+            fields: vec![inset_field(0x18, value, base + 1)],
+        }
+    }
+
     fn inset_child(values: [u32; 4], child_index: u64) -> QuillMcldChild {
         let base = child_index * 10;
         QuillMcldChild {
@@ -975,6 +1058,40 @@ mod tests {
                 child_index: 0,
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn table_vertical_alignment_accepts_unanimous_top_children() {
+        let chunk = test_chunk(vec![alignment_child(0, 0), alignment_child(0, 1)]);
+
+        let alignment = bounded_mcld_table_uniform_vertical_alignment(&chunk, 77)
+            .expect("unanimous TABLE vertical alignment");
+        assert_eq!(alignment.alignment, QuillMcldVerticalAlignment::Top);
+        assert_eq!(alignment.sources.len(), 2);
+    }
+
+    #[test]
+    fn table_vertical_alignment_rejects_mixed_children() {
+        let chunk = test_chunk(vec![alignment_child(0, 0), alignment_child(1, 1)]);
+
+        assert!(matches!(
+            bounded_mcld_table_uniform_vertical_alignment(&chunk, 77),
+            Err(QuillMcldReadError::NonUniformRequiredField {
+                field_id: 0x18,
+                child_index: 1,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn table_vertical_alignment_rejects_unsupported_value() {
+        let chunk = test_chunk(vec![alignment_child(3, 0)]);
+
+        assert!(matches!(
+            bounded_mcld_table_uniform_vertical_alignment(&chunk, 77),
+            Err(QuillMcldReadError::UnsupportedVerticalAlignmentValue { value: 3, .. })
         ));
     }
 }
