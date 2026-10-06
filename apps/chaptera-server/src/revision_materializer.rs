@@ -186,17 +186,21 @@ impl EditorReplayEngine for PubEditorReplayEngine {
         }
 
         let mut session = Self::open(source_bytes, source_sha256)?;
-        session.apply_project(project).map_err(|error| {
+        let mut local_replay = project.clone();
+        if local_replay.identity.is_none() {
+            local_replay.identity = session.project().identity;
+        }
+        session.apply_project(&local_replay).map_err(|error| {
             RevisionMaterializerError::new(
                 "editor_replay_rejected",
                 format!("canonical EditorSession rejected persisted project replay: {error}"),
             )
         })?;
-        let replayed = session.project();
+        let replayed = cloud_revision_project(&session.project());
         if replayed != *project {
             return Err(RevisionMaterializerError::new(
                 "editor_replay_mismatch",
-                "canonical EditorSession replay did not reproduce the exact persisted EditorProject",
+                "canonical EditorSession replay did not reproduce the exact Cloud semantic EditorProject",
             ));
         }
         Ok(replayed)
