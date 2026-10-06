@@ -31,6 +31,14 @@ struct CohortManifest {
 #[derive(Debug, Deserialize)]
 struct CohortSource {
     source_sha256: String,
+    #[serde(default)]
+    expected_stream_sid: Option<u32>,
+    #[serde(default)]
+    expected_declared_len: Option<u64>,
+    #[serde(default)]
+    expected_available_prefix_len: Option<u64>,
+    #[serde(default)]
+    expected_prefix_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -250,10 +258,14 @@ fn main() -> Result<()> {
         );
     }
 
-    let mut expected = BTreeSet::new();
-    for source in manifest.sources {
+    let mut expected = BTreeMap::<String, CohortSource>::new();
+    for mut source in manifest.sources {
         let sha = validate_sha256(&source.source_sha256)?;
-        if !expected.insert(sha.clone()) {
+        source.source_sha256 = sha.clone();
+        if let Some(prefix) = source.expected_prefix_sha256.as_deref() {
+            source.expected_prefix_sha256 = Some(validate_sha256(prefix)?);
+        }
+        if expected.insert(sha.clone(), source).is_some() {
             bail!("duplicate source_sha256 in manifest: {sha}");
         }
     }
@@ -266,13 +278,13 @@ fn main() -> Result<()> {
     for path in paths {
         let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
         let sha = sha256_hex(&bytes);
-        if expected.contains(&sha) {
+        if expected.contains_key(&sha) {
             located.entry(sha).or_default().push(path);
         }
     }
 
     let mut rows = Vec::with_capacity(EXPECTED_DENOMINATOR);
-    for source_sha256 in expected {
+    for (source_sha256, expected_source) in expected {
         let Some(copies) = located.get(&source_sha256) else {
             rows.push(blank_row(source_sha256, 0));
             continue;
@@ -316,6 +328,18 @@ fn main() -> Result<()> {
         {
             bail!("physical discovery identity mismatch for {source_sha256}");
         }
+        if expected_source
+            .expected_stream_sid
+            .is_some_and(|expected_sid| expected_sid != discovered.stream_sid)
+        {
+            bail!("historical stream SID mismatch for {source_sha256}");
+        }
+        if expected_source
+            .expected_declared_len
+            .is_some_and(|expected_len| expected_len != discovered.declared_len)
+        {
+            bail!("historical declared length mismatch for {source_sha256}");
+        }
         row.stream_sid = Some(discovered.stream_sid);
         row.declared_len = Some(discovered.declared_len);
 
@@ -335,6 +359,19 @@ fn main() -> Result<()> {
                 continue;
             }
         };
+        if expected_source
+            .expected_available_prefix_len
+            .is_some_and(|expected_len| expected_len != recovered.available_prefix_len)
+        {
+            bail!("historical available prefix length mismatch for {source_sha256}");
+        }
+        if expected_source
+            .expected_prefix_sha256
+            .as_deref()
+            .is_some_and(|expected_sha| expected_sha != recovered.prefix_sha256)
+        {
+            bail!("historical prefix SHA mismatch for {source_sha256}");
+        }
         row.available_prefix_len = Some(recovered.available_prefix_len);
         row.prefix_sha256 = Some(recovered.prefix_sha256.clone());
         row.physical_status = Some(format!("{:?}", recovered.status).to_ascii_lowercase());
