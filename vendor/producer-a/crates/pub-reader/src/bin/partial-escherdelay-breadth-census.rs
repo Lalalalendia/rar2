@@ -676,6 +676,7 @@ mod tests {
         for source in manifest.sources {
             let source_sha = validate_sha256(&source.source_sha256).expect("source SHA-256");
             assert!(unique_sources.insert(source_sha));
+            assert!(source.expected_stream_sid.is_some_and(|value| value > 0));
             assert!(source.expected_declared_len.is_some_and(|value| value > 0));
             assert!(source
                 .expected_available_prefix_len
