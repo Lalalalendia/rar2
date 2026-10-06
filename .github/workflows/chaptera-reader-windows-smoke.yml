@@ -2,6 +2,11 @@ name: Chaptera Reader Windows Shared-Core Smoke V1
 
 on:
   workflow_call:
+    inputs:
+      reader_binary_artifact_name:
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
 
 permissions:
@@ -19,6 +24,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
+
+      - name: Download exact-candidate Reader binary
+        if: inputs.reader_binary_artifact_name != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.reader_binary_artifact_name }}
+          path: ${{ runner.temp }}/chaptera-reader-prebuilt
+
+      - name: Validate exact-candidate Reader binary
+        if: inputs.reader_binary_artifact_name != ''
+        shell: pwsh
+        run: python tools/ci/validate_reader_binary_artifact.py --artifact-dir "${{ runner.temp }}/chaptera-reader-prebuilt" --expected-candidate-sha "${{ github.sha }}"
 
       - name: Build Windows fidelity Cargo cache key
         id: fidelity-cache-key
@@ -38,6 +55,7 @@ jobs:
           key: ${{ steps.fidelity-cache-key.outputs.key }}
 
       - name: Build Reader-only Windows smoke binary
+        if: inputs.reader_binary_artifact_name == ''
         run: cargo build -p chaptera-desktop --features reader-only
 
       - name: Run bounded Reader product and real-PUB smoke
@@ -47,10 +65,16 @@ jobs:
           $out = "target/reader-windows-shared-core-smoke"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
 
-          $built = "target/reader-fidelity-win/debug/chaptera-editor.exe"
+          if ("${{ inputs.reader_binary_artifact_name }}" -ne "") {
+            $built = Join-Path "${{ runner.temp }}/chaptera-reader-prebuilt" "chaptera-reader.exe"
+            $profile = "release"
+          } else {
+            $built = "target/reader-fidelity-win/debug/chaptera-editor.exe"
+            $profile = "debug"
+          }
           $exe = Join-Path $out "chaptera-reader.exe"
           if (-not (Test-Path $built)) {
-            throw "reader-only Windows build did not produce target/debug/chaptera-editor.exe"
+            throw "Reader shared-core binary is missing: $built"
           }
           Copy-Item $built $exe -Force
 
@@ -111,7 +135,7 @@ jobs:
             schema_version = "chaptera.reader-windows-shared-core-smoke.v1"
             product_id = "chaptera.reader"
             target = "x86_64-pc-windows-msvc"
-            profile = "debug"
+            profile = $profile
             binary_sha256 = $binaryHash
             binary_byte_len = $binaryBytes
             product_smoke_passed = $true
