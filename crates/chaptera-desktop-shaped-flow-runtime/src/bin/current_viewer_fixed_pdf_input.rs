@@ -578,7 +578,9 @@ fn census(
                             point_equivalent_emu,
                         } => format!("proportional:{point_equivalent_emu}"),
                     };
-                    *out.table_layout_line_spacing_kind_counts.entry(key).or_default() += 1;
+                    *out.table_layout_line_spacing_kind_counts
+                        .entry(key)
+                        .or_default() += 1;
                 }
             }
             if node.image.is_some() {
