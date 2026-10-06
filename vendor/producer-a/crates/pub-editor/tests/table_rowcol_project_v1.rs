@@ -3,8 +3,7 @@ use std::collections::BTreeMap;
 use pub_editor::{
     CreateTableRuntimeV1, EDITOR_PROJECT_VERSION_V0_20, EDITOR_PROJECT_VERSION_V0_21,
     EditOperation, EditorError, EditorProjectError, EditorSession, LengthEmu, NodeId, PageId,
-    ParagraphId, RectEmu, StoryId, TableCellId, TableTrackTargetV1,
-    apply_create_table_forward_v1,
+    ParagraphId, RectEmu, StoryId, TableCellId, TableTrackTargetV1, apply_create_table_forward_v1,
 };
 use pub_model::{
     Document, DocumentId, ResolvedGraph, Sha256Digest, Size2D, SourceDescriptor, TableColumnId,
