@@ -1,0 +1,50 @@
+name: Carlton TABLE MCLD relation probe
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-reader/tests/carlton_table_mcld_relation_probe.rs"
+      - "tools/acquire_carlton_march_pair.py"
+      - ".github/workflows/carlton-table-mcld-relation-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: carlton-table-mcld-relation-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Acquire exact public Carlton March pair
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/carlton-table-mcld-relation"
+          mkdir -p "${root}"
+          python tools/acquire_carlton_march_pair.py "${root}"
+          pub="${root}/March-2026.pub"
+          echo "CHAPTERA_GOLDEN_CARLTON_MARCH=${pub}" >> "${GITHUB_ENV}"
+          actual="$(sha256sum "${pub}" | awk '{print $1}')"
+          test "${actual}" = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+
+      - name: Measure exact TABLE Story/TCD to MCLD relation candidates
+        run: |
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader \
+            --test carlton_table_mcld_relation_probe \
+            -- --ignored --nocapture
