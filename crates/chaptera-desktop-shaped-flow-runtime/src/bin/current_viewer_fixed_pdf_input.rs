@@ -221,6 +221,7 @@ impl ProducerExactFontRegistry {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn normalize_font_family(name: &str) -> String {
     name.trim().to_lowercase()
 }
