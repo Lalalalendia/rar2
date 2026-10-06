@@ -89,7 +89,23 @@ jobs:
             echo "consumer_cap=96" >> "$GITHUB_OUTPUT"
           else
             echo "route_count=96" >> "$GITHUB_OUTPUT"
-            echo "consumer_cap=96" >> "$GITHUB_OUTPUT"
+            echo "consumer_cap=12" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Assert migration corpus scope contract
+        shell: bash
+        env:
+          MODE: ${{ steps.scope.outputs.mode }}
+          ROUTE_COUNT: ${{ steps.scope.outputs.route_count }}
+          CONSUMER_CAP: ${{ steps.scope.outputs.consumer_cap }}
+        run: |
+          set -euo pipefail
+          if [[ "$MODE" == "smoke" ]]; then
+            test "$ROUTE_COUNT" = "96"
+            test "$CONSUMER_CAP" = "12"
+          else
+            test "$ROUTE_COUNT" = "1050"
+            test "$CONSUMER_CAP" = "96"
           fi
 
       - name: Download pinned exact 1050 corpus
@@ -348,7 +364,7 @@ jobs:
               "$dir/scribus-home/runtime"
             chmod 700 "$dir/scribus-home/runtime"
             echo "::notice::Scribus validating $idml"
-            timeout 180s env \
+            timeout --signal=TERM --kill-after=10s 60s env \
               HOME="$dir/scribus-home" \
               XDG_CONFIG_HOME="$dir/scribus-home/.config" \
               XDG_CACHE_HOME="$dir/scribus-home/.cache" \
@@ -367,7 +383,8 @@ jobs:
           for odg in "$EVIDENCE_ROOT"/consumer/*/output.odg; do
             dir="$(dirname "$odg")"
             mkdir -p "$dir/libreoffice"
-            libreoffice --headless               --convert-to fodg               --outdir "$dir/libreoffice"               "$odg"
+            timeout --signal=TERM --kill-after=10s 60s \
+              libreoffice --headless               --convert-to fodg               --outdir "$dir/libreoffice"               "$odg"
             test -s "$dir/libreoffice/output.fodg"
           done
 
