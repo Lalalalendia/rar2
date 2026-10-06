@@ -87,6 +87,9 @@ struct CurrentViewerPlanCensusV1 {
     shaped_span_count: usize,
     missing_shaping_evidence_count: usize,
     table_node_count: usize,
+    table_layout_present_cell_count: usize,
+    table_layout_line_spacing_covered_cell_count: usize,
+    table_layout_line_spacing_kind_counts: BTreeMap<String, usize>,
     image_resource_count: usize,
     image_node_count: usize,
     image_source_window_count: usize,
@@ -526,8 +529,57 @@ fn census(
             {
                 out.projected_instance_count += 1;
             }
-            if node.table.is_some() {
+            if let Some(table) = &node.table {
                 out.table_node_count += 1;
+                let story = visual
+                    .document
+                    .stories
+                    .iter()
+                    .find(|story| story.id == table.story_id);
+                for cell in table.cells.iter().filter(|cell| !cell.text.is_empty() && cell.layout.is_some()) {
+                    out.table_layout_present_cell_count += 1;
+                    let Some(story) = story else {
+                        *out.table_layout_line_spacing_kind_counts
+                            .entry("story_missing".to_owned())
+                            .or_default() += 1;
+                        continue;
+                    };
+                    let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end) else {
+                        *out.table_layout_line_spacing_kind_counts
+                            .entry("range_missing".to_owned())
+                            .or_default() += 1;
+                        continue;
+                    };
+                    let mut matching = visual
+                        .paragraph_line_spacings
+                        .iter()
+                        .filter(|run| run.story_id == table.story_id)
+                        .filter(|run| run.applies_to_story_text(&story.text))
+                        .filter(|run| run.scalar_end > start && run.scalar_start < end)
+                        .filter(|run| run.scalar_start <= start && run.scalar_end >= end);
+                    let Some(run) = matching.next() else {
+                        *out.table_layout_line_spacing_kind_counts
+                            .entry("missing".to_owned())
+                            .or_default() += 1;
+                        continue;
+                    };
+                    if matching.next().is_some() {
+                        *out.table_layout_line_spacing_kind_counts
+                            .entry("ambiguous".to_owned())
+                            .or_default() += 1;
+                        continue;
+                    }
+                    out.table_layout_line_spacing_covered_cell_count += 1;
+                    let key = match run.line_spacing {
+                        ViewerParagraphLineSpacing::Absolute { spacing_emu } => {
+                            format!("absolute:{spacing_emu}")
+                        }
+                        ViewerParagraphLineSpacing::Proportional {
+                            point_equivalent_emu,
+                        } => format!("proportional:{point_equivalent_emu}"),
+                    };
+                    *out.table_layout_line_spacing_kind_counts.entry(key).or_default() += 1;
+                }
             }
             if node.image.is_some() {
                 out.image_node_count += 1;
@@ -897,6 +949,9 @@ fn run(
         packet.census.missing_shaping_evidence_count,
         packet.census.duplicate_node_id_count,
         packet.census.table_node_count,
+        packet.census.table_layout_present_cell_count,
+        packet.census.table_layout_line_spacing_covered_cell_count,
+        packet.census.table_layout_line_spacing_kind_counts,
         packet.census.image_resource_count,
         packet.census.image_node_count,
         packet.census.image_source_window_count,
