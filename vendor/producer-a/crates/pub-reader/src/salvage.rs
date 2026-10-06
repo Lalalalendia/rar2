@@ -320,7 +320,8 @@ pub fn build_reader_partial_escherdelay_evidence(
     }
 
     let discovered =
-        pub_cfb::discover_regular_stream_sid_reader(Cursor::new(bytes), ESCHER_DELAY_STREAM).ok()?;
+        pub_cfb::discover_regular_stream_sid_reader(Cursor::new(bytes), ESCHER_DELAY_STREAM)
+            .ok()?;
     if discovered.source_sha256 != probe.source_sha256
         || discovered.source_byte_len != bytes.len() as u64
         || discovered.logical_path != ESCHER_DELAY_STREAM
@@ -1087,8 +1088,14 @@ mod tests {
     #[test]
     fn logical_payload_span_maps_across_physical_ranges() {
         let ranges = vec![
-            pub_cfb::RootRegularStreamSourceRange { offset: 1024, len: 8 },
-            pub_cfb::RootRegularStreamSourceRange { offset: 4096, len: 8 },
+            pub_cfb::RootRegularStreamSourceRange {
+                offset: 1024,
+                len: 8,
+            },
+            pub_cfb::RootRegularStreamSourceRange {
+                offset: 4096,
+                len: 8,
+            },
         ];
         let span = pub_core::RawSpan {
             stream: StreamPath(ESCHER_DELAY_STREAM.into()),
@@ -1100,8 +1107,14 @@ mod tests {
         assert_eq!(
             mapped,
             vec![
-                pub_cfb::RootRegularStreamSourceRange { offset: 1030, len: 2 },
-                pub_cfb::RootRegularStreamSourceRange { offset: 4096, len: 4 },
+                pub_cfb::RootRegularStreamSourceRange {
+                    offset: 1030,
+                    len: 2
+                },
+                pub_cfb::RootRegularStreamSourceRange {
+                    offset: 4096,
+                    len: 4
+                },
             ]
         );
     }
@@ -1133,5 +1146,4 @@ mod tests {
         };
         assert!(map_logical_span_to_physical_ranges(&ranges, &span, 8).is_none());
     }
-
 }
