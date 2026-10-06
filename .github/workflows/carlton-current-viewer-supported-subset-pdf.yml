@@ -423,6 +423,33 @@ jobs:
               raise SystemExit("table residual drift")
           if mapping["table_cell_paint_state_count"] != 17:
               raise SystemExit(f"TABLE known cell-paint state drift: {mapping['table_cell_paint_state_count']!r}")
+          if mapping.get("table_source_regular_resource_count") != 1:
+              raise SystemExit(
+                  f"Carlton carried source Regular resource drift: "
+                  f"{mapping.get('table_source_regular_resource_count')!r}"
+              )
+          if mapping.get("table_source_bounded_text_profile_cell_count") != 13:
+              raise SystemExit(
+                  f"Carlton source-font bounded TABLE profile drift: "
+                  f"{mapping.get('table_source_bounded_text_profile_cell_count')!r}"
+              )
+          if mapping.get("table_source_hard_break_free_profile_cell_count") != 13:
+              raise SystemExit(
+                  f"Carlton source-font hard-break-free TABLE profile drift: "
+                  f"{mapping.get('table_source_hard_break_free_profile_cell_count')!r}"
+              )
+          print(
+              "table_source_font_single_line_fit="
+              + json.dumps(
+                  {
+                      "source_regular_resources": mapping["table_source_regular_resource_count"],
+                      "bounded_profile": mapping["table_source_bounded_text_profile_cell_count"],
+                      "hard_break_free": mapping["table_source_hard_break_free_profile_cell_count"],
+                      "single_line_width_fit": mapping["table_source_single_line_width_fit_cell_count"],
+                  },
+                  sort_keys=True,
+              )
+          )
           if mapping["derived_table_border_node_count"] != 20:
               raise SystemExit(f"TABLE border paint primitive drift: {mapping['derived_table_border_node_count']!r}")
           if mapping["table_paint_incomplete_node_count"] != 0:
