@@ -133,7 +133,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $env:CHAPTERA_GOLDEN_CARLTON_MARCH = $env:CHAPTERA_CARLTON_PUB
-          cargo test -p pub-quill --test carlton_mcld_cell_inset_profile -- --ignored --nocapture
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-quill --test carlton_mcld_cell_inset_profile -- --ignored --nocapture
 
       - name: Build current Editor and Viewer packet producer
         shell: pwsh
