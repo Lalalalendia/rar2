@@ -10,7 +10,8 @@ use pub_layout::{
     BoundedBreakKind, BoundedLayoutEnvironment, BoundedLayoutProjection, BoundedShapedFlowRuntime,
     BoundedShapedGlyph, BoundedShapingDescriptor, BoundedShapingRuntime, ProjectedNodeGeometry,
     ProjectedPage, ProjectedStory, ProjectedStoryFrame, break_policy_for_shaped_text,
-    compatible_natural_line_height_emu_v1, font_fingerprint_sha256, resolve_bounded_shaped_flow,
+    compatible_natural_baseline_ascent_emu_v1, compatible_natural_line_height_emu_v1,
+    font_fingerprint_sha256, resolve_bounded_shaped_flow,
     shape_bounded_ltr_segment,
 };
 use pub_line_placement::{
@@ -149,6 +150,8 @@ pub struct RenderTableCellV1 {
     pub layout: Option<RenderTextLayoutV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub single_line_natural_extent_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub single_line_baseline_ascent_emu: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<RectEmu>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1516,6 +1519,7 @@ pub fn build_page_render_plan_v1(
                             ),
                             layout: None,
                             single_line_natural_extent_emu: None,
+                            single_line_baseline_ascent_emu: None,
                             bounds: cell.bounds,
                             fill_rgb: cell.fill_rgb,
                             fill_visible: cell.fill_visible,
@@ -1641,6 +1645,7 @@ pub fn build_page_render_plan_v1(
                             ),
                             layout: None,
                             single_line_natural_extent_emu: None,
+                            single_line_baseline_ascent_emu: None,
                             bounds: cell.bounds,
                             fill_rgb: cell.fill_rgb,
                             fill_visible: cell.fill_visible,
@@ -2191,6 +2196,7 @@ where
         for cell in &mut table.cells {
             cell.layout = None;
             cell.single_line_natural_extent_emu = None;
+            cell.single_line_baseline_ascent_emu = None;
             let Some(bounds) = cell.bounds else {
                 continue;
             };
@@ -2211,8 +2217,20 @@ where
                     font,
                 )
             {
+                let baseline_ascent_emu = match &layout.disposition {
+                    RenderTextLayoutDispositionV1::SharedResolved { font_size_emu, .. } => {
+                        compatible_natural_baseline_ascent_emu_v1(
+                            font.bytes,
+                            font.face_index,
+                            LengthEmu::new(*font_size_emu),
+                        )
+                        .map(LengthEmu::get)
+                    }
+                    RenderTextLayoutDispositionV1::BackendFallback { .. } => None,
+                };
                 cell.layout = Some(layout);
                 cell.single_line_natural_extent_emu = Some(natural_extent_emu);
+                cell.single_line_baseline_ascent_emu = baseline_ascent_emu;
             }
         }
     }
