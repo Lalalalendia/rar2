@@ -271,10 +271,7 @@ mod tests {
         assert_eq!(result.useful_fact_count, 1);
 
         let result = predict(signature(ReaderAdmission::TypedSalvage));
-        assert_eq!(
-            result.predicted_outcome,
-            PredictedOutcome::NoSafeRecovery
-        );
+        assert_eq!(result.predicted_outcome, PredictedOutcome::NoSafeRecovery);
     }
 
     #[test]
@@ -350,9 +347,6 @@ mod tests {
     fn diagnostic_only_without_facts_is_not_rescue() {
         let mut input = signature(ReaderAdmission::UntypedDamaged);
         input.repair_authority = RepairAuthority::DiagnosticOnly;
-        assert_eq!(
-            predict(input).predicted_outcome,
-            PredictedOutcome::NoSafeRecovery
-        );
+        assert_eq!(predict(input).predicted_outcome, PredictedOutcome::NoSafeRecovery);
     }
 }
