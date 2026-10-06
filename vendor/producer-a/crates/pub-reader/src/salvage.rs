@@ -334,6 +334,8 @@ pub fn build_reader_partial_escherdelay_evidence(
         return None;
     }
 
+    let terminal_parser_gap = inventory.terminal_gap.clone();
+    let rejected_complete_blip_count = inventory.rejected_complete_blips.len();
     let mut validated_images = Vec::new();
     for validated in inventory.records {
         let payload_physical_ranges = map_logical_span_to_physical_ranges(
@@ -347,6 +349,7 @@ pub fn build_reader_partial_escherdelay_evidence(
             return None;
         }
 
+        let byte_len = validated.payload_source.len;
         validated_images.push(ReaderPartialEscherDelayImageEvidence {
             record_source: validated.record_source,
             payload_source: validated.payload_source,
@@ -359,7 +362,7 @@ pub fn build_reader_partial_escherdelay_evidence(
                 .collect(),
             uid_rule: format!("{:?}", validated.uid_rule).to_ascii_lowercase(),
             payload_sha256: validated.payload_sha256,
-            byte_len: validated.payload_source.len,
+            byte_len,
         });
     }
 
@@ -373,8 +376,8 @@ pub fn build_reader_partial_escherdelay_evidence(
         physical_stream_status: recovered.status,
         truncation_reason: recovered.truncation_reason,
         stream_source_ranges: recovered.source_ranges,
-        terminal_parser_gap: inventory.terminal_gap,
-        rejected_complete_blip_count: inventory.rejected_complete_blips.len(),
+        terminal_parser_gap,
+        rejected_complete_blip_count,
         validated_images,
     })
 }
