@@ -528,14 +528,41 @@ pub fn uniform_text_color_rgb_v1(fragment: &RenderTextFragmentV1) -> Option<[u8;
         return None;
     }
 
-    let mut cursor = fragment.scalar_start;
-    let mut resolved = None;
+    // Typography coverage remains strict over the complete Story fragment,
+    // including Publisher's structurally significant final paragraph mark.
+    let mut coverage_cursor = fragment.scalar_start;
     for run in &fragment.typography {
-        if run.scalar_start != cursor
+        if run.scalar_start != coverage_cursor
             || run.scalar_end <= run.scalar_start
             || run.scalar_end > fragment.scalar_end
         {
             return None;
+        }
+        coverage_cursor = run.scalar_end;
+    }
+    if coverage_cursor != fragment.scalar_end {
+        return None;
+    }
+
+    // A terminal U+000D paragraph mark is structural, not a painted glyph.
+    // When the fragment text and scalar range agree exactly, exclude only that
+    // one terminal scalar from uniform glyph-color authority. Interior marks,
+    // malformed ranges and all other terminal characters remain unchanged.
+    let scalar_len = u32::try_from(fragment.text.chars().count()).ok()?;
+    let expected_len = fragment.scalar_end.checked_sub(fragment.scalar_start)?;
+    let paint_end = if scalar_len == expected_len && fragment.text.ends_with('\r') {
+        fragment.scalar_end.checked_sub(1)?
+    } else {
+        fragment.scalar_end
+    };
+    if paint_end <= fragment.scalar_start {
+        return None;
+    }
+
+    let mut resolved = None;
+    for run in &fragment.typography {
+        if run.scalar_start >= paint_end {
+            break;
         }
         let color = run.color_rgb?;
         match resolved {
@@ -543,12 +570,8 @@ pub fn uniform_text_color_rgb_v1(fragment: &RenderTextFragmentV1) -> Option<[u8;
             Some(existing) if existing == color => {}
             Some(_) => return None,
         }
-        cursor = run.scalar_end;
     }
-
-    (cursor == fragment.scalar_end)
-        .then_some(resolved)
-        .flatten()
+    resolved
 }
 
 fn normalize_source_font_family_v1(name: &str) -> String {
@@ -4123,6 +4146,50 @@ mod tests {
         let mut gap = uniform;
         gap.typography[1].scalar_start = 3;
         assert_eq!(uniform_text_color_rgb_v1(&gap), None);
+    }
+
+    #[test]
+    fn uniform_text_color_ignores_only_unpainted_terminal_paragraph_mark() {
+        let story_id = fixture().document.stories[0].id;
+        let fragment = render_fragment(
+            story_id,
+            "visible\r",
+            vec![
+                RenderTypographyRunV1 {
+                    scalar_start: 0,
+                    scalar_end: 7,
+                    source_font_name: "Arial".to_owned(),
+                    text_size_emu: 152_400,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: Some([209, 18, 66]),
+                    color_inherited: false,
+                    bold: None,
+                    italic: None,
+                },
+                RenderTypographyRunV1 {
+                    scalar_start: 7,
+                    scalar_end: 8,
+                    source_font_name: "Arial".to_owned(),
+                    text_size_emu: 152_400,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
+                    bold: None,
+                    italic: None,
+                },
+            ],
+        );
+        assert_eq!(uniform_text_color_rgb_v1(&fragment), Some([209, 18, 66]));
+
+        let mut interior_missing = fragment.clone();
+        interior_missing.text = "vis\rible".to_owned();
+        assert_eq!(uniform_text_color_rgb_v1(&interior_missing), None);
+
+        let mut coverage_gap = fragment;
+        coverage_gap.typography[1].scalar_start = 6;
+        assert_eq!(uniform_text_color_rgb_v1(&coverage_gap), None);
     }
 
     #[test]
