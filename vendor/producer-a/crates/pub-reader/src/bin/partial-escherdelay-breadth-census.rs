@@ -233,14 +233,11 @@ fn main() -> Result<()> {
             .context("usage: partial-escherdelay-breadth-census CORPUS_DIR MANIFEST.json OUTPUT.json")?,
     );
     if args.next().is_some() {
-        bail!(
-            "partial-escherdelay-breadth-census accepts CORPUS_DIR MANIFEST.json OUTPUT.json"
-        );
+        bail!("partial-escherdelay-breadth-census accepts CORPUS_DIR MANIFEST.json OUTPUT.json");
     }
 
     let manifest: CohortManifest = serde_json::from_slice(
-        &fs::read(&manifest_path)
-            .with_context(|| format!("read {}", manifest_path.display()))?,
+        &fs::read(&manifest_path).with_context(|| format!("read {}", manifest_path.display()))?,
     )
     .with_context(|| format!("parse {}", manifest_path.display()))?;
     if manifest.schema != INPUT_SCHEMA {
@@ -291,7 +288,8 @@ fn main() -> Result<()> {
         };
 
         let path = &copies[0];
-        let bytes = fs::read(path).with_context(|| format!("read admitted source {}", source_sha256))?;
+        let bytes =
+            fs::read(path).with_context(|| format!("read admitted source {}", source_sha256))?;
         if sha256_hex(&bytes) != source_sha256 {
             bail!("source changed between scan and census: {source_sha256}");
         }
