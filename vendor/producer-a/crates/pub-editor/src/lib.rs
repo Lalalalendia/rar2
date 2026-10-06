@@ -6872,6 +6872,49 @@ impl EditorSession {
         Ok(operation)
     }
 
+    fn table_story_has_unremapped_range_metadata_v1(&self, story_id: StoryId) -> bool {
+        self.source_typography_runs
+            .iter()
+            .any(|run| run.story_id == story_id)
+            || self
+                .source_typography_size_runs
+                .iter()
+                .any(|run| run.story_id == story_id)
+            || self
+                .source_paragraph_alignments
+                .iter()
+                .any(|run| run.story_id == story_id)
+            || self
+                .source_paragraph_flow_runs
+                .iter()
+                .any(|run| run.story_id == story_id)
+            || self
+                .undo
+                .iter()
+                .any(|operation| text_format_operation_story_id_v1(operation) == Some(story_id))
+    }
+
+    fn validate_table_rowcol_story_metadata_v1(
+        &self,
+        table_id: NodeId,
+        story_id: StoryId,
+    ) -> Result<(), EditorError> {
+        let current_story_id = self
+            .graph
+            .nodes
+            .get(&table_id)
+            .and_then(|node| node.payload.table.as_ref())
+            .and_then(|table| table.story_id)
+            .ok_or(EditorError::TableRowColUnsupported { node_id: table_id })?;
+        if current_story_id != story_id
+            || self.table_story_has_unremapped_range_metadata_v1(story_id)
+            || self.story_has_paragraph_alignment_history_v1(story_id)?
+        {
+            return Err(EditorError::TableRowColUnsupported { node_id: table_id });
+        }
+        Ok(())
+    }
+
     pub fn insert_table_row_v1(
         &mut self,
         table_id: NodeId,
@@ -6938,6 +6981,14 @@ impl EditorSession {
         if self.has_node_resize_history_v1(table_id) {
             return Err(EditorError::TableRowColUnsupported { node_id: table_id });
         }
+        let story_id = self
+            .graph
+            .nodes
+            .get(&table_id)
+            .and_then(|node| node.payload.table.as_ref())
+            .and_then(|table| table.story_id)
+            .ok_or(EditorError::TableRowColUnsupported { node_id: table_id })?;
+        self.validate_table_rowcol_story_metadata_v1(table_id, story_id)?;
         let grid = self
             .current_table_grid_v1(table_id)
             .ok_or(EditorError::TableRowColUnsupported { node_id: table_id })?;
@@ -6979,6 +7030,7 @@ impl EditorSession {
                 node_id: history.table_id,
             });
         }
+        self.validate_table_rowcol_story_metadata_v1(history.table_id, history.story_id)?;
         let grid = self.current_table_grid_v1(history.table_id).ok_or(
             EditorError::TableRowColUnsupported {
                 node_id: history.table_id,
