@@ -6247,6 +6247,27 @@ impl EditorSession {
         Ok(operation)
     }
 
+    fn has_table_track_extent_history_v1(&self, node_id: NodeId) -> bool {
+        self.undo.iter().any(|operation| {
+            matches!(
+                operation,
+                EditOperation::SetTableTrackExtent { history } if history.table_id == node_id
+            )
+        })
+    }
+
+    fn has_node_resize_history_v1(&self, node_id: NodeId) -> bool {
+        self.undo.iter().any(|operation| match operation {
+            EditOperation::ResizeNode {
+                node_id: resized, ..
+            } => *resized == node_id,
+            EditOperation::ResizeNodes { entries, .. } => {
+                entries.iter().any(|entry| entry.node_id == node_id)
+            }
+            _ => false,
+        })
+    }
+
     pub fn can_move_node_to(
         &self,
         node_id: NodeId,
@@ -6254,6 +6275,9 @@ impl EditorSession {
         y: LengthEmu,
     ) -> Result<(), EditorError> {
         self.validate_source_identity()?;
+        if self.has_table_track_extent_history_v1(node_id) {
+            return Err(EditorError::NodeMoveUnsupported { node_id });
+        }
 
         let node = self
             .graph
@@ -6404,6 +6428,13 @@ impl EditorSession {
         self.validate_source_identity()?;
 
         entries.sort_by_key(|entry| entry.node_id);
+        for entry in &entries {
+            if self.has_table_track_extent_history_v1(entry.node_id) {
+                return Err(EditorError::NodeResizeUnsupported {
+                    node_id: entry.node_id,
+                });
+            }
+        }
         validate_resize_nodes_transition(&self.graph, page_id, &entries, true)?;
 
         let operation = EditOperation::ResizeNodes { page_id, entries };
@@ -6416,6 +6447,9 @@ impl EditorSession {
 
     pub fn can_resize_node(&self, node_id: NodeId) -> Result<(), EditorError> {
         self.validate_source_identity()?;
+        if self.has_table_track_extent_history_v1(node_id) {
+            return Err(EditorError::NodeResizeUnsupported { node_id });
+        }
 
         let node = self
             .graph
@@ -6670,6 +6704,41 @@ impl EditorSession {
         self.replace_story_range(story_id, 0, scalar_len, before, replacement)
     }
 
+    pub fn current_table_grid_v1(&self, table_id: NodeId) -> Option<EffectiveTableGridV1> {
+        effective_table_grids_with_history(&self.graph, &self.undo)
+            .into_iter()
+            .find(|grid| grid.table_id == table_id)
+    }
+
+    pub fn current_table_bounds_v1(&self, table_id: NodeId) -> Option<RectEmu> {
+        effective_table_bounds_with_history(&self.graph, &self.undo, table_id)
+    }
+
+    pub fn set_table_track_extent_v1(
+        &mut self,
+        table_id: NodeId,
+        target: TableTrackTargetV1,
+        after_extent: LengthEmu,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        if self.has_node_resize_history_v1(table_id) {
+            return Err(EditorError::TableTrackResizeUnsupported { node_id: table_id });
+        }
+        let grid = self
+            .current_table_grid_v1(table_id)
+            .ok_or(EditorError::TableTrackResizeUnsupported { node_id: table_id })?;
+        let bounds = self
+            .current_table_bounds_v1(table_id)
+            .ok_or(EditorError::TableTrackResizeUnsupported { node_id: table_id })?;
+        let history = canonical_table_track_extent_history_v1(&grid, bounds, target, after_extent)
+            .map_err(|_| EditorError::TableTrackResizeUnsupported { node_id: table_id })?;
+        let operation = EditOperation::SetTableTrackExtent { history };
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
     pub fn undo(&mut self) -> Result<&EditOperation, EditorError> {
         let operation = self.undo.pop().ok_or(EditorError::NothingToUndo)?;
         let result = (|| {
@@ -6711,6 +6780,23 @@ impl EditorSession {
                 self.authored_lines = candidate_lines;
                 self.graph = candidate_graph;
                 self.authored_stacks = before_stacks;
+            } else if let EditOperation::SetTableTrackExtent { history } = &operation {
+                let grid = effective_table_grids_with_history(&self.graph, &self.undo)
+                    .into_iter()
+                    .find(|grid| grid.table_id == history.table_id)
+                    .ok_or(EditorError::StaleTableTrackResize {
+                        node_id: history.table_id,
+                    })?;
+                let bounds =
+                    effective_table_bounds_with_history(&self.graph, &self.undo, history.table_id)
+                        .ok_or(EditorError::StaleTableTrackResize {
+                            node_id: history.table_id,
+                        })?;
+                apply_table_track_extent_history_forward_v1(&grid, bounds, history).map_err(
+                    |_| EditorError::StaleTableTrackResize {
+                        node_id: history.table_id,
+                    },
+                )?;
             } else if matches!(operation, EditOperation::SetImageCrop { .. }) {
                 apply_crop_inverse(&self.graph, &mut self.image_crop_overrides, &operation)?;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
@@ -6804,6 +6890,23 @@ impl EditorSession {
                 self.authored_lines = candidate_lines;
                 self.graph = candidate_graph;
                 self.authored_stacks = after_stacks;
+            } else if let EditOperation::SetTableTrackExtent { history } = &operation {
+                let grid = effective_table_grids_with_history(&self.graph, &self.undo)
+                    .into_iter()
+                    .find(|grid| grid.table_id == history.table_id)
+                    .ok_or(EditorError::StaleTableTrackResize {
+                        node_id: history.table_id,
+                    })?;
+                let bounds =
+                    effective_table_bounds_with_history(&self.graph, &self.undo, history.table_id)
+                        .ok_or(EditorError::StaleTableTrackResize {
+                            node_id: history.table_id,
+                        })?;
+                apply_table_track_extent_history_forward_v1(&grid, bounds, history).map_err(
+                    |_| EditorError::StaleTableTrackResize {
+                        node_id: history.table_id,
+                    },
+                )?;
             } else if matches!(operation, EditOperation::SetImageCrop { .. }) {
                 apply_crop_forward(&self.graph, &mut self.image_crop_overrides, &operation)?;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
@@ -7037,6 +7140,9 @@ fn replay_canonical_operation(
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::CreateTable { .. } => session
             .consume_canonical_create_table(expected.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::SetTableTrackExtent { history } => session
+            .set_table_track_extent_v1(history.table_id, history.target, history.after_extent)
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::DeleteNode { .. } => session
             .consume_canonical_delete_node(expected.clone())
@@ -7485,37 +7591,79 @@ fn effective_table_grids_with_history(
     operations: &[EditOperation],
 ) -> Vec<EffectiveTableGridV1> {
     let mut grids = effective_table_grids(graph);
+    let mut bounds = graph
+        .nodes
+        .iter()
+        .map(|(node_id, node)| (*node_id, node.header.bounds))
+        .collect::<BTreeMap<_, _>>();
 
     for operation in operations {
-        let EditOperation::CreateTable { table } = operation else {
-            continue;
-        };
-        let plan = build_create_table_plan_v1(table)
-            .expect("accepted CreateTable history must remain canonical");
-        let current = grids
-            .iter()
-            .find(|grid| grid.table_id == table.node_id)
-            .cloned()
-            .expect("accepted CreateTable must materialize one effective table grid");
-        let target = grids
-            .iter_mut()
-            .find(|grid| grid.table_id == table.node_id)
-            .expect("accepted CreateTable grid is present");
+        match operation {
+            EditOperation::CreateTable { table } => {
+                let plan = build_create_table_plan_v1(table)
+                    .expect("accepted CreateTable history must remain canonical");
+                let current = grids
+                    .iter()
+                    .find(|grid| grid.table_id == table.node_id)
+                    .cloned()
+                    .expect("accepted CreateTable must materialize one effective table grid");
+                let target = grids
+                    .iter_mut()
+                    .find(|grid| grid.table_id == table.node_id)
+                    .expect("accepted CreateTable grid is present");
 
-        *target = plan.grid;
-        for cell in &mut target.cells {
-            let current_cell = current
-                .cells
-                .iter()
-                .find(|candidate| candidate.id == cell.id)
-                .expect("created table cell identity remains stable");
-            cell.utf16_start = current_cell.utf16_start;
-            cell.utf16_end = current_cell.utf16_end;
+                *target = plan.grid;
+                for cell in &mut target.cells {
+                    let current_cell = current
+                        .cells
+                        .iter()
+                        .find(|candidate| candidate.id == cell.id)
+                        .expect("created table cell identity remains stable");
+                    cell.utf16_start = current_cell.utf16_start;
+                    cell.utf16_end = current_cell.utf16_end;
+                }
+                bounds.insert(table.node_id, table.bounds);
+            }
+            EditOperation::SetTableTrackExtent { history } => {
+                let target = grids
+                    .iter_mut()
+                    .find(|grid| grid.table_id == history.table_id)
+                    .expect("accepted track-resize history must target one effective table grid");
+                let before_bounds = *bounds
+                    .get(&history.table_id)
+                    .expect("accepted track-resize history must target one table bounds record");
+                let (after_grid, after_bounds) =
+                    apply_table_track_extent_history_forward_v1(target, before_bounds, history)
+                        .expect("accepted track-resize history must remain canonical");
+                *target = after_grid;
+                bounds.insert(history.table_id, after_bounds);
+            }
+            _ => {}
         }
     }
 
     grids.sort_by_key(|grid| grid.table_id);
     grids
+}
+
+fn effective_table_bounds_with_history(
+    graph: &PubResolvedGraph,
+    operations: &[EditOperation],
+    table_id: NodeId,
+) -> Option<RectEmu> {
+    let mut bounds = graph.nodes.get(&table_id)?.header.bounds;
+    for operation in operations {
+        let EditOperation::SetTableTrackExtent { history } = operation else {
+            continue;
+        };
+        if history.table_id == table_id {
+            if history.before_bounds != bounds {
+                return None;
+            }
+            bounds = history.after_bounds;
+        }
+    }
+    Some(bounds)
 }
 
 fn frame_from_payload(
@@ -8226,6 +8374,9 @@ fn apply_forward(
         EditOperation::CreateTable { .. } => {
             unreachable!("CreateTable is applied atomically with the authored-stack lane")
         }
+        EditOperation::SetTableTrackExtent { .. } => {
+            unreachable!("table track extents are derived from editor history")
+        }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is applied to the authored overlay state")
         }
@@ -8486,6 +8637,9 @@ fn apply_inverse(
         }
         EditOperation::CreateTable { .. } => {
             unreachable!("CreateTable is reverted atomically with the authored-stack lane")
+        }
+        EditOperation::SetTableTrackExtent { .. } => {
+            unreachable!("table track extents are derived from editor history")
         }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is reverted in the authored overlay state")
