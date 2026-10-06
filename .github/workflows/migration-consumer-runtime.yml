@@ -2,6 +2,9 @@ name: Migration consumer runtime producer
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - ci/migration-consumer-runtime-measurement
 
 permissions:
   contents: read
