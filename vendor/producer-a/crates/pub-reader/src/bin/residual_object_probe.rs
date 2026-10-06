@@ -1,5 +1,12 @@
+use pub_core::StreamPath;
+use pub_escher::{
+    inspect_sp_containers, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS,
+    PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS,
+};
 use pub_model::Sha256Digest;
-use pub_reader::{build_mature_0x2c_source_graph, PubBridgeDiagnostic};
+use pub_reader::{
+    build_mature_0x2c_source_graph, PubBridgeDiagnostic, ESCHER_STREAM_PATH,
+};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, env, error::Error, fs, io::Cursor};
@@ -72,6 +79,82 @@ fn main() -> Result<(), Box<dyn Error>> {
     let bytes = fs::read(&input)?;
     let hash = source_hash(&bytes);
     let source = build_mature_0x2c_source_graph(Cursor::new(&bytes), hash)?;
+
+    let escher_bytes =
+        pub_cfb::read_stream_reader(Cursor::new(&bytes), ESCHER_STREAM_PATH)?;
+    let escher_inventory = inspect_sp_containers(
+        StreamPath(ESCHER_STREAM_PATH.into()),
+        &escher_bytes,
+    )?;
+    let mut raw_escher_shapes = escher_inventory
+        .shapes
+        .iter()
+        .map(|shape| {
+            let publisher_shape_ids = shape
+                .client_data
+                .as_ref()
+                .map(|record| record.values(PUBLISHER_FIELD_SHAPE_ID).collect::<Vec<_>>())
+                .unwrap_or_default();
+            let rotation_properties = shape
+                .fopts
+                .iter()
+                .flat_map(|record| record.properties.iter())
+                .filter(|property| property.property_id() == 0x0004)
+                .map(|property| {
+                    json!({
+                        "op_u32": property.op,
+                        "signed_16_16_raw": property.op as i32,
+                        "f_bid": property.f_bid(),
+                        "f_complex": property.f_complex(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            let blip_properties = shape
+                .fopts
+                .iter()
+                .flat_map(|record| record.properties.iter())
+                .filter(|property| property.op_is_blip_id())
+                .map(|property| {
+                    json!({
+                        "property_id": property.property_id(),
+                        "slot": property.op,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let anchor = shape.client_anchor.as_ref().map(|record| {
+                json!({
+                    "xs": record.values(PUBLISHER_FIELD_XS).collect::<Vec<_>>(),
+                    "ys": record.values(PUBLISHER_FIELD_YS).collect::<Vec<_>>(),
+                    "xe": record.values(PUBLISHER_FIELD_XE).collect::<Vec<_>>(),
+                    "ye": record.values(PUBLISHER_FIELD_YE).collect::<Vec<_>>(),
+                })
+            });
+
+            json!({
+                "publisher_shape_ids": publisher_shape_ids,
+                "officeart_spid": shape.fsp.as_ref().map(|fsp| fsp.spid),
+                "officeart_shape_type": shape.fsp.as_ref().map(|fsp| fsp.shape_type),
+                "fsp_flags": shape.fsp.as_ref().map(|fsp| fsp.flags),
+                "grouped": shape.parent_group_shape_source.is_some(),
+                "client_textbox_present": shape.client_textbox.is_some(),
+                "client_anchor": anchor,
+                "child_anchor": shape.child_anchor.as_ref().map(|anchor| json!({
+                    "x_left": anchor.x_left,
+                    "y_top": anchor.y_top,
+                    "x_right": anchor.x_right,
+                    "y_bottom": anchor.y_bottom,
+                })),
+                "rotation_properties": rotation_properties,
+                "blip_properties": blip_properties,
+            })
+        })
+        .collect::<Vec<_>>();
+    raw_escher_shapes.sort_by(|left, right| {
+        left["publisher_shape_ids"]
+            .to_string()
+            .cmp(&right["publisher_shape_ids"].to_string())
+            .then_with(|| left["officeart_spid"].as_u64().cmp(&right["officeart_spid"].as_u64()))
+    });
 
     let mut page_membership = BTreeMap::<String, Vec<String>>::new();
     for (page_id, page) in &source.graph.pages {
@@ -168,6 +251,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "node_count": nodes.len(),
             "pages": pages,
             "nodes": nodes,
+            "raw_escher_shapes": raw_escher_shapes,
             "relevant_diagnostics": diagnostics,
             "source_page_paint_orders": source.source_page_paint_orders,
             "claims": {
