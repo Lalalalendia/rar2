@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::io::{Read, Seek, SeekFrom};
 
@@ -51,6 +52,7 @@ pub struct RecoveredRootRegularStreamPrefix {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RecoveredRegularStreamPrefixBySid {
     pub bytes: Vec<u8>,
+    pub source_sha256: String,
     pub stream_sid: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub descriptive_name: Option<String>,
@@ -408,6 +410,7 @@ fn recover_regular_stream_prefix_from_entry(
 
     let complete = bytes.len() == stream_len_usize && truncation_reason.is_none();
     Ok(RecoveredRegularStreamPrefixBySid {
+        source_sha256: sha256_hex(source),
         stream_sid,
         descriptive_name: directory_name(entry).ok(),
         available_prefix_len: u64::try_from(bytes.len())
@@ -536,6 +539,13 @@ fn sector_if_available(source: &[u8], sector_len: usize, sector_id: u32) -> Opti
 fn read_sector(source: &[u8], sector_len: usize, sector_id: u32) -> Result<&[u8]> {
     sector_if_available(source, sector_len, sector_id)
         .with_context(|| format!("sector {sector_id} lies outside CFB"))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
@@ -871,6 +881,7 @@ mod tests {
             recover_regular_stream_prefix_by_sid_reader(Cursor::new(source), sid)
                 .expect("recover nested regular stream by SID");
         assert_eq!(recovered.stream_sid, sid);
+        assert_eq!(recovered.source_sha256, sha256_hex(&source));
         assert_eq!(recovered.descriptive_name.as_deref(), Some("EscherDelayStm"));
         assert_eq!(recovered.status, RootRegularStreamPrefixStatus::Complete);
         assert_eq!(recovered.bytes, expected);
