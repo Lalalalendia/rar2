@@ -236,6 +236,9 @@ fn map_logical_span_to_physical_ranges(
     span: &pub_core::RawSpan,
     available_prefix_len: u64,
 ) -> Option<Vec<pub_cfb::RootRegularStreamSourceRange>> {
+    if span.stream != StreamPath(ESCHER_DELAY_STREAM.into()) {
+        return None;
+    }
     let span_end = span.offset.checked_add(span.len)?;
     if span_end > available_prefix_len {
         return None;
@@ -1085,6 +1088,20 @@ mod tests {
                 pub_cfb::RootRegularStreamSourceRange { offset: 4096, len: 4 },
             ]
         );
+    }
+
+    #[test]
+    fn logical_payload_span_from_wrong_stream_fails_closed() {
+        let ranges = vec![pub_cfb::RootRegularStreamSourceRange {
+            offset: 1024,
+            len: 16,
+        }];
+        let span = pub_core::RawSpan {
+            stream: StreamPath("/Escher/EscherStm".into()),
+            offset: 0,
+            len: 8,
+        };
+        assert!(map_logical_span_to_physical_ranges(&ranges, &span, 16).is_none());
     }
 
     #[test]
