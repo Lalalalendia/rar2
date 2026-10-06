@@ -140,8 +140,16 @@ impl ProducerExactFontRegistry {
         let mut out = Self::default();
         for family in families {
             for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
-                let expected_weight = if bold { fontdb::Weight::BOLD } else { fontdb::Weight::NORMAL };
-                let expected_style = if italic { fontdb::Style::Italic } else { fontdb::Style::Normal };
+                let expected_weight = if bold {
+                    fontdb::Weight::BOLD
+                } else {
+                    fontdb::Weight::NORMAL
+                };
+                let expected_style = if italic {
+                    fontdb::Style::Italic
+                } else {
+                    fontdb::Style::Normal
+                };
                 let matches = database
                     .faces()
                     .filter(|info| {
