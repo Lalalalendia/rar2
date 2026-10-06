@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
 use pub_editor::{
-    CreateTableRuntimeV1, EDITOR_PROJECT_VERSION_V0_18, EDITOR_PROJECT_VERSION_V0_20,
+    CreateTableRuntimeV1, EDITOR_PROJECT_VERSION_V0_18, EDITOR_PROJECT_VERSION_V0_19,
+    EDITOR_PROJECT_VERSION_V0_20,
     EditOperation, EditorError, EditorProjectAsset, EditorProjectError, EditorSession, LengthEmu,
     NodeId, PageId, RectEmu, ResizeNodeBatchEntry, StoryId, TableCellId, TableTrackTargetV1,
 };
@@ -201,7 +202,7 @@ fn track_resize_is_v020_history_with_exact_undo_redo_and_fresh_replay() {
 }
 
 #[test]
-fn v018_project_cannot_smuggle_track_resize_history() {
+fn pre_v020_projects_cannot_smuggle_track_resize_history() {
     let mut producer = EditorSession::new(graph()).expect("producer");
     producer.create_table(runtime()).expect("CreateTable");
     producer
@@ -211,15 +212,21 @@ fn v018_project_cannot_smuggle_track_resize_history() {
             LengthEmu::new(350_000),
         )
         .expect("resize column");
-    let mut legacy = producer.project();
-    legacy.schema_version = EDITOR_PROJECT_VERSION_V0_18.to_owned();
 
-    let mut target = EditorSession::new(graph()).expect("target");
-    assert!(matches!(
-        target.apply_project(&legacy),
-        Err(EditorProjectError::LegacyProjectCarriesTableTrackExtentOperation { index: 1 })
-    ));
-    assert!(target.operations().is_empty());
+    for schema_version in [
+        EDITOR_PROJECT_VERSION_V0_18,
+        EDITOR_PROJECT_VERSION_V0_19,
+    ] {
+        let mut legacy = producer.project();
+        legacy.schema_version = schema_version.to_owned();
+
+        let mut target = EditorSession::new(graph()).expect("target");
+        assert!(matches!(
+            target.apply_project(&legacy),
+            Err(EditorProjectError::LegacyProjectCarriesTableTrackExtentOperation { index: 1 })
+        ));
+        assert!(target.operations().is_empty());
+    }
 }
 
 #[test]
@@ -343,7 +350,6 @@ fn geometry_after_track_resize_fails_closed_until_composition_is_defined() {
     ));
     assert!(reopened.operations().is_empty());
 }
-
 
 #[test]
 fn resize_before_track_resize_fails_closed_but_move_before_track_resize_is_allowed() {
