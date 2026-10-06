@@ -60,3 +60,32 @@ After a valid plan:
 The train PR is a promotion carrier. It does not become a second implementation owner for the tasks inside it.
 
 If deep evidence fails, stop the train and bisect the bounded candidate set. Do not keep adding candidates to a red train.
+
+
+## Heavy-evidence union
+
+The train planner reuses the canonical Reader PR fanout classifier to compute the expensive hosted evidence families touched by each candidate and by the train as a whole.
+
+The receipt now records:
+
+```json
+{
+  "candidates": [
+    {
+      "label": "TASK-A",
+      "heavy_families": ["visual_oracle", "typography_golden"]
+    }
+  ],
+  "heavy_families": ["visual_oracle", "typography_golden"],
+  "heavy_family_members": {
+    "visual_oracle": ["TASK-A"],
+    "typography_golden": ["TASK-A"]
+  }
+}
+```
+
+This is intentionally a **union**, not one heavy execution per candidate. The integration SHA is the authority that pays for each selected heavy family once.
+
+The planner does not invent a second path-to-evidence map. It consumes the same `tools/ci/reader_pr_fanout.py` classification used by hosted Reader selective CI, so routing drift is visible in one authority.
+
+V0 only records the required heavy-family closure. Hosted workflow composition that executes those families exactly once is a separate step and must preserve each family's existing evidence semantics.

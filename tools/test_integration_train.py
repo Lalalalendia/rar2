@@ -63,6 +63,24 @@ def expect_rejected(fn, needle: str) -> None:
         raise AssertionError(f"expected TrainError containing {needle!r}")
 
 
+def test_heavy_family_union() -> None:
+    families = mod.heavy_families_for_paths([
+        "vendor/producer-a/crates/pub-viewer/src/feature.rs",
+        "apps/chaptera-desktop/src/reader_product_ui.rs",
+    ])
+    assert "visual_oracle" in families
+    assert "typography_golden" in families
+    assert "reader_windows" in families
+    assert "editor_windows" not in families
+
+
+def test_unrelated_feature_has_no_heavy_family() -> None:
+    families = mod.heavy_families_for_paths([
+        "vendor/producer-a/crates/pub-editor/src/paragraph_alignment_v1.rs",
+    ])
+    assert families == []
+
+
 def test_positive_disjoint_plan() -> None:
     temp, root, base = init_repo()
     try:
@@ -81,6 +99,8 @@ def test_positive_disjoint_plan() -> None:
         assert plan["candidate_count"] == 2
         assert plan["total_changed_files"] == 2
         assert plan["mutated_repository"] is False
+        assert plan["heavy_families"] == []
+        assert plan["heavy_family_members"] == {}
         assert plan["suggested_commands"][-1].startswith("git cherry-pick ")
     finally:
         temp.cleanup()
@@ -241,6 +261,8 @@ def test_total_file_limit_rejected() -> None:
 
 
 def main() -> None:
+    test_heavy_family_union()
+    test_unrelated_feature_has_no_heavy_family()
     test_positive_disjoint_plan()
     test_overlapping_path_rejected()
     test_forbidden_path_rejected()
