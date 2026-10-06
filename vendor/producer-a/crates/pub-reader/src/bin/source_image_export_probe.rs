@@ -39,6 +39,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         .assets
         .iter()
         .map(|asset| {
+            let signature_probe = asset.blip_record_source.as_ref().and_then(|span| {
+                let stream = if span.stream.0 == ESCHER_DELAY_STREAM_PATH {
+                    delayed.as_slice()
+                } else if span.stream.0 == ESCHER_STREAM_PATH {
+                    escher.as_slice()
+                } else {
+                    return None;
+                };
+                let start = usize::try_from(span.offset).ok()?;
+                let len = usize::try_from(span.len).ok()?;
+                let end = start.checked_add(len)?;
+                let record = stream.get(start..end)?;
+                let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+                let jpeg = [0xFF, 0xD8, 0xFF];
+                Some(json!({
+                    "record_len": record.len(),
+                    "png_signature_offset": record.windows(png.len()).position(|window| window == png),
+                    "jpeg_signature_offset": record.windows(jpeg.len()).position(|window| window == jpeg),
+                }))
+            });
             json!({
                 "slot": asset.slot,
                 "use_count": asset.uses.len(),
@@ -47,6 +67,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "image_payload_present": asset.image_payload_source.is_some(),
                 "payload_sha256_present": asset.payload_sha256.is_some(),
                 "payload_len": asset.payload_len,
+                "signature_probe": signature_probe,
             })
         })
         .collect::<Vec<_>>();
