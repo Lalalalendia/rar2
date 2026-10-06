@@ -69,12 +69,22 @@ struct CurrentNode {
 struct CurrentTable {
     cells: Vec<CurrentTableCell>,
     #[serde(default)]
+    uniform_cell_text_inset_emu: Option<i64>,
+    #[serde(default)]
     borders: Vec<CurrentTableBorderSegment>,
 }
 
 #[derive(Debug, Deserialize)]
 struct CurrentTableCell {
     id: TableCellId,
+    #[serde(default)]
+    story_scalar_start: Option<u32>,
+    #[serde(default)]
+    story_scalar_end: Option<u32>,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    typography: Vec<CurrentTypographyRun>,
     #[serde(default)]
     bounds: Option<RectEmu>,
     #[serde(default)]
@@ -223,6 +233,10 @@ struct MappingSummary {
     cropped_image_use_count: usize,
     table_node_count: usize,
     table_cell_paint_state_count: usize,
+    table_nonempty_cell_text_count: usize,
+    table_cell_story_range_count: usize,
+    table_cell_typography_present_count: usize,
+    table_uniform_cell_text_inset_count: usize,
     derived_table_fill_node_count: usize,
     derived_table_border_node_count: usize,
     derived_table_paint_node_count: usize,
@@ -458,6 +472,35 @@ fn table_border_rect_v1(segment: &CurrentTableBorderSegment) -> Result<RectEmu> 
     bail!("TABLE border segment must be positive axis-aligned geometry")
 }
 
+fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSummary) {
+    if table
+        .uniform_cell_text_inset_emu
+        .is_some_and(|inset| inset >= 0)
+    {
+        summary.table_uniform_cell_text_inset_count += 1;
+    }
+
+    for cell in &table.cells {
+        if cell.text.is_empty() {
+            continue;
+        }
+        summary.table_nonempty_cell_text_count += 1;
+
+        if let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end)
+            && start <= end
+            && u32::try_from(cell.text.chars().count())
+                .ok()
+                .is_some_and(|len| start.checked_add(len) == Some(end))
+        {
+            summary.table_cell_story_range_count += 1;
+        }
+
+        if !cell.typography.is_empty() {
+            summary.table_cell_typography_present_count += 1;
+        }
+    }
+}
+
 fn append_table_paint_nodes_v1(
     table: &CurrentTable,
     owner: NodeId,
@@ -632,6 +675,7 @@ fn main() -> Result<()> {
             }
             if let Some(table) = &node.table {
                 summary.table_node_count += 1;
+                observe_table_text_authority_v1(table, &mut summary);
                 let table_paint_mapped = append_table_paint_nodes_v1(
                     table,
                     resolved_node_id,
