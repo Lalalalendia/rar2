@@ -145,13 +145,18 @@ def main() -> int:
     if "content-security-policy" not in headers:
         raise AcceptanceError("Reader response is missing Content-Security-Policy")
 
+    csrf_token = "chaptera-host-acceptance"
     create_body = json.dumps({"expected_byte_len": len(fixture)}).encode("utf-8")
     status, _, issued = request_json(
         args.origin,
         "/v1/reader/guest-sessions",
         method="POST",
         body=create_body,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Origin": args.origin,
+            "X-CSRF-Token": csrf_token,
+        },
     )
     if status != 200 or issued.get("protocol_version") != GUEST_PROTOCOL:
         raise AcceptanceError(f"guest session creation failed: HTTP {status}")
@@ -168,6 +173,8 @@ def main() -> int:
         TOKEN_HEADER: token,
         "Content-Type": "application/octet-stream",
         "Content-Length": str(len(fixture)),
+        "Origin": args.origin,
+        "X-CSRF-Token": csrf_token,
     }
     status, _, uploaded = request_json(
         args.origin,
@@ -183,7 +190,11 @@ def main() -> int:
         args.origin,
         open_path,
         method="POST",
-        headers={TOKEN_HEADER: token},
+        headers={
+            TOKEN_HEADER: token,
+            "Origin": args.origin,
+            "X-CSRF-Token": csrf_token,
+        },
     )
     classification = opened.get("classification")
     if status != 200 or classification not in {"supported", "partial", "salvage"}:
