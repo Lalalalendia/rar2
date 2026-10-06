@@ -251,27 +251,16 @@ fn delete_row_undo_restores_exact_ids_text_and_replays() {
     let mut reopened = EditorSession::new(graph()).expect("fresh session");
     reopened.apply_project(&project).expect("replay");
     assert_eq!(reopened.project(), project);
-    assert_eq!(
-        materialized_text(&reopened, cell_ids()[2]),
-        "survivor row"
-    );
+    assert_eq!(materialized_text(&reopened, cell_ids()[2]), "survivor row");
 
     reopened.undo().expect("undo delete row");
     let restored = reopened
         .current_table_grid_v1(table_id())
         .expect("restored");
     assert_eq!(restored, before_grid);
-    assert!(
-        restored
-            .rows
-            .iter()
-            .any(|row| row.id == removed_row)
-    );
+    assert!(restored.rows.iter().any(|row| row.id == removed_row));
     assert_eq!(materialized_text(&reopened, cell_ids()[0]), "removed row");
-    assert_eq!(
-        materialized_text(&reopened, cell_ids()[2]),
-        "survivor row"
-    );
+    assert_eq!(materialized_text(&reopened, cell_ids()[2]), "survivor row");
 
     reopened.redo().expect("redo delete row");
     assert_eq!(reopened.project(), project);
