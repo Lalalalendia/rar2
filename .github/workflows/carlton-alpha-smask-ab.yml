@@ -200,8 +200,17 @@ jobs:
           mapping = baseline_mapping["mapping"]
           if mapping.get("input_node_count") != 108 or mapping.get("semantic_duplicate_node_id_count") != 2:
               raise SystemExit(f"current inherited-master Carlton census drift: {mapping!r}")
-          if b.keys() != a.keys() or len(b) != mapping["input_node_count"]:
+          if b.keys() != a.keys():
               raise SystemExit("baseline/alpha node report identity set drift")
+          expected_report_count = (
+              mapping["input_node_count"]
+              + mapping.get("derived_table_paint_node_count", 0)
+          )
+          if len(b) != expected_report_count:
+              raise SystemExit(
+                  "baseline/alpha node report cardinality drift: "
+                  f"reports={len(b)!r}, expected={expected_report_count!r}, mapping={mapping!r}"
+              )
           changed = [(node_id, b[node_id], a[node_id]) for node_id in b if b[node_id] != a[node_id]]
           if len(changed) != 33:
               raise SystemExit(f"expected 33 alpha-only node transitions, got {len(changed)}")

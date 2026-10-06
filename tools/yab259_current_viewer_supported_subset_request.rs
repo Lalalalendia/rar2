@@ -4,7 +4,9 @@ use pub_layout::{
     BoundedShapingDescriptor, ResolvedPhysicalNode, ResolvedSurface, SceneOriginMapping,
     font_fingerprint_sha256,
 };
-use pub_model::{Affine2D, CanonicalId, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D};
+use pub_model::{
+    Affine2D, CanonicalId, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D, TableCellId,
+};
 use pub_output::{
     ExplicitFontResource, FixedOutputFontProfile, FontIdentity, OutputFontRequest,
     PreferredEmbedding, plan_output_fonts, read_opentype_embedding_flags,
@@ -15,6 +17,7 @@ use pub_pdf::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read};
 
@@ -59,7 +62,35 @@ struct CurrentNode {
     #[serde(default)]
     text: Option<CurrentText>,
     #[serde(default)]
-    table: Option<Value>,
+    table: Option<CurrentTable>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentTable {
+    cells: Vec<CurrentTableCell>,
+    #[serde(default)]
+    borders: Vec<CurrentTableBorderSegment>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentTableCell {
+    id: TableCellId,
+    #[serde(default)]
+    bounds: Option<RectEmu>,
+    #[serde(default)]
+    fill_rgb: Option<[u8; 3]>,
+    #[serde(default)]
+    fill_visible: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentTableBorderSegment {
+    x1_emu: i64,
+    y1_emu: i64,
+    x2_emu: i64,
+    y2_emu: i64,
+    rgb: [u8; 3],
+    width_emu: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,6 +222,11 @@ struct MappingSummary {
     backend_fallback_reason_counts: BTreeMap<String, usize>,
     cropped_image_use_count: usize,
     table_node_count: usize,
+    table_cell_paint_state_count: usize,
+    derived_table_fill_node_count: usize,
+    derived_table_border_node_count: usize,
+    derived_table_paint_node_count: usize,
+    table_paint_incomplete_node_count: usize,
     decorative_border_node_count: usize,
     non_identity_transform_node_count: usize,
     shaped_span_line_count: usize,
@@ -363,6 +399,138 @@ fn hex_nibble(byte: u8) -> Option<u8> {
     }
 }
 
+fn derived_table_paint_node_id_v1(
+    owner: NodeId,
+    kind: &[u8],
+    ordinal: usize,
+    semantic_identity: Option<CanonicalId>,
+) -> Result<NodeId> {
+    let ordinal = u64::try_from(ordinal).context("table paint ordinal does not fit u64")?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"chaptera.current-viewer.table-paint.v1");
+    hasher.update(owner.as_canonical().as_bytes());
+    hasher.update([0]);
+    hasher.update(kind);
+    hasher.update([0]);
+    hasher.update(ordinal.to_be_bytes());
+    if let Some(identity) = semantic_identity {
+        hasher.update(identity.as_bytes());
+    }
+    let digest = hasher.finalize();
+
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    // Keep output-only identities in a UUID-shaped deterministic namespace.
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Ok(NodeId::from_canonical(CanonicalId::from_bytes(bytes)))
+}
+
+fn table_border_rect_v1(segment: &CurrentTableBorderSegment) -> Result<RectEmu> {
+    if segment.width_emu <= 0 {
+        bail!("TABLE border width must be positive");
+    }
+    let half = segment.width_emu / 2;
+    if segment.y1_emu == segment.y2_emu && segment.x1_emu < segment.x2_emu {
+        return Ok(RectEmu::new(
+            LengthEmu::new(checked_sub(segment.x1_emu, 0, "TABLE border x")?),
+            LengthEmu::new(checked_sub(segment.y1_emu, half, "TABLE border y")?),
+            LengthEmu::new(checked_sub(
+                segment.x2_emu,
+                segment.x1_emu,
+                "TABLE border width",
+            )?),
+            LengthEmu::new(segment.width_emu),
+        ));
+    }
+    if segment.x1_emu == segment.x2_emu && segment.y1_emu < segment.y2_emu {
+        return Ok(RectEmu::new(
+            LengthEmu::new(checked_sub(segment.x1_emu, half, "TABLE border x")?),
+            LengthEmu::new(checked_sub(segment.y1_emu, 0, "TABLE border y")?),
+            LengthEmu::new(segment.width_emu),
+            LengthEmu::new(checked_sub(
+                segment.y2_emu,
+                segment.y1_emu,
+                "TABLE border height",
+            )?),
+        ));
+    }
+    bail!("TABLE border segment must be positive axis-aligned geometry")
+}
+
+fn append_table_paint_nodes_v1(
+    table: &CurrentTable,
+    owner: NodeId,
+    page_id: PageId,
+    owner_transform: &Affine2D,
+    seen_nodes: &mut BTreeSet<NodeId>,
+    nodes: &mut Vec<ResolvedPhysicalNode>,
+    node_paints: &mut Vec<FixedNodePaint>,
+    summary: &mut MappingSummary,
+) -> Result<bool> {
+    if owner_transform != &Affine2D::identity() {
+        summary.table_paint_incomplete_node_count += 1;
+        return Ok(false);
+    }
+
+    let mut candidates = Vec::<(NodeId, RectEmu, [u8; 3], bool)>::new();
+    let mut complete = true;
+
+    for (index, cell) in table.cells.iter().enumerate() {
+        match (cell.bounds, cell.fill_visible, cell.fill_rgb) {
+            (Some(bounds), Some(true), Some(rgb)) => {
+                summary.table_cell_paint_state_count += 1;
+                let id = derived_table_paint_node_id_v1(
+                    owner,
+                    b"cell-fill",
+                    index,
+                    Some(cell.id.into_canonical()),
+                )?;
+                candidates.push((id, bounds, rgb, true));
+            }
+            (Some(_), Some(false), Some(_)) => {
+                summary.table_cell_paint_state_count += 1;
+            }
+            _ => complete = false,
+        }
+    }
+
+    for (index, border) in table.borders.iter().enumerate() {
+        let id = derived_table_paint_node_id_v1(owner, b"border", index, None)?;
+        let bounds = table_border_rect_v1(border)?;
+        candidates.push((id, bounds, border.rgb, false));
+    }
+
+    if !complete {
+        summary.table_paint_incomplete_node_count += 1;
+        return Ok(false);
+    }
+
+    for (id, bounds, rgb, is_fill) in candidates {
+        if !seen_nodes.insert(id) {
+            bail!("derived TABLE paint NodeId collides with another output node");
+        }
+        nodes.push(ResolvedPhysicalNode {
+            origin: id,
+            parent_origin: page_id.into_canonical(),
+            bounds,
+            transform: Affine2D::identity(),
+        });
+        node_paints.push(FixedNodePaint {
+            node_id: id,
+            fill_rgb: Some(rgb),
+            stroke: None,
+        });
+        summary.derived_table_paint_node_count += 1;
+        if is_fill {
+            summary.derived_table_fill_node_count += 1;
+        } else {
+            summary.derived_table_border_node_count += 1;
+        }
+    }
+    Ok(true)
+}
+
 fn resolved_output_node_id_v1(node: &CurrentNode) -> Result<NodeId> {
     let Some(instance) = node.projected_scene_instance.as_ref() else {
         return Ok(node.node_id);
@@ -455,6 +623,35 @@ fn main() -> Result<()> {
             if !seen_nodes.insert(resolved_node_id) {
                 bail!("current Viewer packet contains duplicate resolved output NodeId");
             }
+
+            if node.transform != Affine2D::identity() {
+                summary.non_identity_transform_node_count += 1;
+            }
+            if node.decorative_border.is_some() {
+                summary.decorative_border_node_count += 1;
+            }
+            if let Some(table) = &node.table {
+                summary.table_node_count += 1;
+                let table_paint_mapped = append_table_paint_nodes_v1(
+                    table,
+                    resolved_node_id,
+                    page.page_id,
+                    &node.transform,
+                    &mut seen_nodes,
+                    &mut nodes,
+                    &mut node_paints,
+                    &mut summary,
+                )?;
+                residual_reasons
+                    .entry(resolved_node_id)
+                    .or_default()
+                    .insert(if table_paint_mapped {
+                        "table_text".into()
+                    } else {
+                        "table".into()
+                    });
+            }
+
             nodes.push(ResolvedPhysicalNode {
                 origin: resolved_node_id,
                 parent_origin: page.page_id.into_canonical(),
@@ -465,20 +662,6 @@ fn main() -> Result<()> {
                 authoring_origin: node.node_id.into_canonical(),
                 resolved_node_origin: resolved_node_id,
             });
-
-            if node.transform != Affine2D::identity() {
-                summary.non_identity_transform_node_count += 1;
-            }
-            if node.decorative_border.is_some() {
-                summary.decorative_border_node_count += 1;
-            }
-            if node.table.is_some() {
-                summary.table_node_count += 1;
-                residual_reasons
-                    .entry(resolved_node_id)
-                    .or_default()
-                    .insert("table".into());
-            }
 
             if node.solid_fill_rgb.is_some() || node.solid_line.is_some() {
                 node_paints.push(FixedNodePaint {
@@ -850,6 +1033,14 @@ fn main() -> Result<()> {
         .sum::<usize>();
     if residual_total + mapped_resource_nodes.len() != actual_node_count {
         bail!("current Viewer residual partition does not cover every node exactly once");
+    }
+    if summary.derived_table_fill_node_count + summary.derived_table_border_node_count
+        != summary.derived_table_paint_node_count
+    {
+        bail!("derived TABLE paint census does not partition fill and border primitives");
+    }
+    if nodes.len() != actual_node_count + summary.derived_table_paint_node_count {
+        bail!("derived TABLE paint node cardinality drift");
     }
 
     let image_resources = image_uses
