@@ -17,6 +17,7 @@ mod imported_paragraph_alignment_v1;
 mod imported_paragraph_flow_v1;
 mod imported_paragraphs_v1;
 mod table_track_extent_v1;
+mod table_track_history_v1;
 mod text_format_property_base_v1;
 mod writer_assessment;
 
@@ -70,6 +71,11 @@ pub use imported_paragraphs_v1::{ImportedParagraphProjectionErrorV1, ImportedPar
 pub use table_track_extent_v1::{
     SetTableTrackExtentErrorV1, TableTrackExtentPlanV1, TableTrackTargetV1,
     plan_table_track_extent_v1, set_table_track_extent_v1,
+};
+pub use table_track_history_v1::{
+    SetTableTrackExtentHistoryV1, TABLE_TRACK_EXTENT_HISTORY_V1, TableTrackExtentHistoryErrorV1,
+    apply_table_track_extent_history_forward_v1, apply_table_track_extent_history_inverse_v1,
+    canonical_table_track_extent_history_v1,
 };
 pub use text_format_property_base_v1::{
     TEXT_FORMAT_PROPERTY_STATE_V1, TextFormatPropertyBaseRunV1, TextFormatPropertyOverrideRunV1,
@@ -160,7 +166,8 @@ pub const EDITOR_PROJECT_VERSION_V0_16: &str = "pub-editor-v0.16";
 pub const EDITOR_PROJECT_VERSION_V0_17: &str = "pub-editor-v0.17";
 pub const EDITOR_PROJECT_VERSION_V0_18: &str = "pub-editor-v0.18";
 pub const EDITOR_PROJECT_VERSION_V0_19: &str = "pub-editor-v0.19";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_19;
+pub const EDITOR_PROJECT_VERSION_V0_20: &str = "pub-editor-v0.20";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_20;
 pub const MAX_MOVE_NODES_V1: usize = 1024;
 pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
@@ -388,6 +395,9 @@ pub enum EditOperation {
     CreateTable {
         table: CreateTableRuntimeV1,
     },
+    SetTableTrackExtent {
+        history: SetTableTrackExtentHistoryV1,
+    },
     DeleteNode {
         node_id: NodeId,
         page_id: PageId,
@@ -479,6 +489,7 @@ impl EditOperation {
             | Self::CreateShape { .. }
             | Self::CreateLine { .. }
             | Self::CreateTable { .. }
+            | Self::SetTableTrackExtent { .. }
             | Self::DeleteNode { .. }
             | Self::ReorderAuthoredStack { .. }
             | Self::SetTextFormatProperty { .. }
@@ -651,6 +662,18 @@ impl PersistenceRequirements for EditOperation {
                 PersistenceRequirement {
                     feature: "node.geometry.bounds".into(),
                     origin: Some(table.node_id.into_canonical()),
+                    property_path: Some("node.bounds".into()),
+                },
+            ],
+            Self::SetTableTrackExtent { history } => vec![
+                PersistenceRequirement {
+                    feature: "table.track_extent".into(),
+                    origin: Some(history.table_id.into_canonical()),
+                    property_path: Some("table.grid.track.extent".into()),
+                },
+                PersistenceRequirement {
+                    feature: "node.geometry.bounds".into(),
+                    origin: Some(history.table_id.into_canonical()),
                     property_path: Some("node.bounds".into()),
                 },
             ],
@@ -1131,6 +1154,12 @@ pub enum EditorError {
         node_id: NodeId,
         cell_id: TableCellId,
     },
+    TableTrackResizeUnsupported {
+        node_id: NodeId,
+    },
+    StaleTableTrackResize {
+        node_id: NodeId,
+    },
     ImageReplaceUnsupported {
         node_id: NodeId,
     },
@@ -1400,6 +1429,16 @@ impl fmt::Display for EditorError {
                 "replacement text for table node {} cell {} is identical to current text",
                 node_id.as_canonical(),
                 cell_id.as_canonical()
+            ),
+            Self::TableTrackResizeUnsupported { node_id } => write!(
+                formatter,
+                "table node {} is outside the bounded track-resize slice",
+                node_id.as_canonical()
+            ),
+            Self::StaleTableTrackResize { node_id } => write!(
+                formatter,
+                "table node {} track-resize state no longer matches persisted history",
+                node_id.as_canonical()
             ),
             Self::ImageReplaceUnsupported { node_id } => write!(
                 formatter,
@@ -1795,6 +1834,8 @@ impl EditorError {
             Self::NodeResizeNonPositive { .. } => "node_resize_non_positive",
             Self::NodeResizeOverflow { .. } => "node_resize_overflow",
             Self::StaleNodeResize { .. } => "stale_node_resize",
+            Self::TableTrackResizeUnsupported { .. } => "table_track_resize_unsupported",
+            Self::StaleTableTrackResize { .. } => "stale_table_track_resize",
             Self::NoChange { .. } => "no_change",
             Self::StaleOperation { .. } => "stale_operation",
             Self::TextFormatUnsupported { .. } => "text_format_unsupported",
@@ -2090,6 +2131,11 @@ fn is_scoped_text_format_operation_v1(operation: &EditOperation) -> bool {
 
 fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
     if operations
+        .iter()
+        .any(|operation| matches!(operation, EditOperation::SetTableTrackExtent { .. }))
+    {
+        EDITOR_PROJECT_VERSION_V0_20
+    } else if operations
         .iter()
         .any(|operation| matches!(operation, EditOperation::SetImageCrop { .. }))
     {
