@@ -288,7 +288,6 @@ fn v019_project_rejects_tampered_effective_table_grid() {
     assert!(target.operations().is_empty());
 }
 
-
 #[test]
 fn geometry_after_track_resize_fails_closed_until_composition_is_defined() {
     let mut session = EditorSession::new(graph()).expect("session");
