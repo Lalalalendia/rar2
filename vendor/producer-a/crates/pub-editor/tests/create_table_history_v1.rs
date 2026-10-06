@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use pub_editor::{
-    CreateTableRuntimeV1, EDITOR_PROJECT_VERSION_V0_18, EditOperation, EditorSession, LengthEmu,
-    NodeId, PageId, RectEmu, StoryId, TableCellId,
+    CreateTableRuntimeV1, EDITOR_PROJECT_VERSION_V0_17, EDITOR_PROJECT_VERSION_V0_18,
+    EditOperation, EditorProjectError, EditorSession, LengthEmu, NodeId, PageId, RectEmu, StoryId,
+    TableCellId,
 };
 use pub_model::{
     Document, DocumentId, ResolvedGraph, Sha256Digest, Size2D, SourceDescriptor, TableColumnId,
@@ -188,4 +189,20 @@ fn create_table_and_cell_edit_survive_undo_redo_and_fresh_project_replay() {
         .find(|cell| cell.cell_id == target_cell)
         .expect("edited cell after reopen");
     assert_eq!(target.text, "hello");
+}
+
+#[test]
+fn v017_project_cannot_smuggle_create_table_history() {
+    let mut producer = EditorSession::new(graph()).expect("producer");
+    producer.create_table(runtime()).expect("CreateTable");
+    let mut legacy = producer.project();
+    legacy.schema_version = EDITOR_PROJECT_VERSION_V0_17.to_owned();
+
+    let mut target = EditorSession::new(graph()).expect("target");
+    assert!(matches!(
+        target.apply_project(&legacy),
+        Err(EditorProjectError::LegacyProjectCarriesCreateTableOperation { index: 0 })
+    ));
+    assert!(target.operations().is_empty());
+    assert!(!target.graph().nodes.contains_key(&node_id()));
 }
