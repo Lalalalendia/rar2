@@ -15,7 +15,6 @@ on:
       - "apps/chaptera-server/src/revision_materializer.rs"
       - "apps/chaptera-desktop/src/agent.rs"
       - "tools/ci/pub_editor_pr_fanout.py"
-      - "tools/ci/test_pub_editor_pr_fanout.py"
       - ".github/workflows/authoring-authored-stack-runtime-v1.yml"
   push:
     branches:

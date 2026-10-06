@@ -11,7 +11,6 @@ on:
       - "vendor/producer-a/crates/pub-editor/tests/create_shape_runtime_v1.rs"
       - "vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs"
       - "tools/ci/pub_editor_pr_fanout.py"
-      - "tools/ci/test_pub_editor_pr_fanout.py"
       - ".github/workflows/authoring-authored-stack-lifecycle-v1.yml"
   push:
     branches:
