@@ -131,3 +131,17 @@ The committed source-free evidence file currently binds one real natural damaged
 - native validation = inconclusive.
 
 This row may produce compact `rescue` when those exact source bytes are present in an input corpus. It does not change Reader admission.
+
+
+## Additional exact natural Recovery witnesses
+
+The committed Rescue evidence registry now also binds:
+
+- Saudi `Publication1.pub` / `b18c713e…` — complete Contents + partial EscherDelay, missing Quill/Escher → research `salvage_only`.
+- Thai `letter_011937.pub` / `74cfefff…` — partial Contents + partial Delay + physical OOB → research `salvage_only`.
+- FAPinsideEdited / `dd44367a…` — complete Contents + preview, missing Quill/Escher, partial Delay → research `salvage_only`.
+- Spring08Flyer / `a2d05984…` — complete Contents + preview, Quill unavailable → research `salvage_only`.
+- THEAFlyer / `b4381b1e…` — complete Contents + preview, Quill unavailable → research `salvage_only`.
+- `zbirka_ato.pub` / `2173c7dd…` — partial Delay but no verified useful payload in the tested prefix → `diagnostic_only`.
+
+Research-level salvage rows retain `promotion_gap=research_bundle_not_product_validated`. They can establish broader Rescue capability for exact bytes but never change current Reader admission.
