@@ -109,7 +109,10 @@ pub enum DelayedBlipPrefixGap {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ValidatedDelayedBlipPrefixInventory {
     pub stream: StreamPath,
-    pub stream_len: u64,
+    /// Bytes physically supplied to this prefix parser. This is not the
+    /// directory-declared stream length and must not be used as completeness
+    /// evidence.
+    pub available_prefix_len: u64,
     pub scanned_record_count: u32,
     pub rejected_complete_blip_count: u32,
     pub records: Vec<ValidatedBlip>,
@@ -350,7 +353,7 @@ pub fn inspect_validated_delayed_blips_prefix(
 
     ValidatedDelayedBlipPrefixInventory {
         stream,
-        stream_len: bytes.len() as u64,
+        available_prefix_len: bytes.len() as u64,
         scanned_record_count,
         rejected_complete_blip_count,
         records,
@@ -784,6 +787,20 @@ mod tests {
             observed.records[1].record_source.offset,
             (first.len() + bad.len()) as u64
         );
+    }
+
+    #[test]
+    fn exact_record_boundary_does_not_claim_complete_stream() {
+        let bytes = strict_png_record(false);
+        let observed =
+            inspect_validated_delayed_blips_prefix(stream("/Escher/EscherDelayStm"), &bytes);
+
+        assert_eq!(observed.available_prefix_len, bytes.len() as u64);
+        assert_eq!(observed.records.len(), 1);
+        assert!(observed.terminal_gap.is_none());
+        // Absence of a parser-visible terminal gap means only that the supplied
+        // bytes end on a complete record boundary. Physical stream completeness
+        // belongs to the CFB prefix evidence, not this parser.
     }
 
     #[test]
