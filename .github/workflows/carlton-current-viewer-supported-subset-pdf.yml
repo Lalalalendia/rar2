@@ -421,6 +421,11 @@ jobs:
               raise SystemExit("cropped-image residual drift")
           if mapping["table_node_count"] != 1:
               raise SystemExit("table residual drift")
+          if mapping.get("table_uniform_vertical_alignment_count") != 1:
+              raise SystemExit(
+                  f"Carlton TABLE vertical-alignment authority drift: "
+                  f"{mapping.get('table_uniform_vertical_alignment_count')!r}"
+              )
           if mapping["table_cell_paint_state_count"] != 17:
               raise SystemExit(f"TABLE known cell-paint state drift: {mapping['table_cell_paint_state_count']!r}")
           if mapping["derived_table_border_node_count"] != 20:
