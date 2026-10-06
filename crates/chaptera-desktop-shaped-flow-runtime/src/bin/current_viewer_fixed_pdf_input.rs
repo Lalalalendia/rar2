@@ -115,6 +115,9 @@ struct CurrentViewerFixedPdfInputV1 {
 
 #[derive(Debug, Clone)]
 struct ProducerExactFont {
+    family: String,
+    bold: bool,
+    italic: bool,
     resource_id: String,
     sha256: String,
     face_index: u32,
@@ -183,6 +186,9 @@ impl ProducerExactFontRegistry {
                 out.fonts.insert(
                     (family.clone(), bold, italic),
                     ProducerExactFont {
+                        family: family.clone(),
+                        bold,
+                        italic,
                         resource_id,
                         sha256,
                         face_index,
