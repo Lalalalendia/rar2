@@ -160,6 +160,7 @@ struct CurrentText {
 struct CurrentTypographyRun {
     scalar_start: u32,
     scalar_end: u32,
+    source_font_name: String,
     text_size_emu: u32,
     #[serde(default)]
     color_rgb: Option<[u8; 3]>,
@@ -236,6 +237,10 @@ struct MappingSummary {
     table_nonempty_cell_text_count: usize,
     table_cell_story_range_count: usize,
     table_cell_typography_present_count: usize,
+    table_cell_typography_complete_count: usize,
+    table_cell_uniform_size_count: usize,
+    table_cell_uniform_color_count: usize,
+    table_cell_uniform_source_family_count: usize,
     table_uniform_cell_text_inset_count: usize,
     derived_table_fill_node_count: usize,
     derived_table_border_node_count: usize,
@@ -486,17 +491,71 @@ fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSu
         }
         summary.table_nonempty_cell_text_count += 1;
 
-        if let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end)
-            && start <= end
+        let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end) else {
+            continue;
+        };
+        let range_matches_text = start <= end
             && u32::try_from(cell.text.chars().count())
                 .ok()
-                .is_some_and(|len| start.checked_add(len) == Some(end))
-        {
-            summary.table_cell_story_range_count += 1;
+                .is_some_and(|len| start.checked_add(len) == Some(end));
+        if !range_matches_text {
+            continue;
+        }
+        summary.table_cell_story_range_count += 1;
+
+        if cell.typography.is_empty() {
+            continue;
+        }
+        summary.table_cell_typography_present_count += 1;
+
+        let mut cursor = start;
+        let mut sizes = BTreeSet::<u32>::new();
+        let mut colors = BTreeSet::<[u8; 3]>::new();
+        let mut families = BTreeSet::<String>::new();
+        let mut missing_color = false;
+        let mut missing_family = false;
+        let mut valid = true;
+
+        for run in &cell.typography {
+            if run.scalar_end <= start || run.scalar_start >= end {
+                continue;
+            }
+            if run.scalar_end <= run.scalar_start {
+                valid = false;
+                break;
+            }
+            let run_start = run.scalar_start.max(start);
+            let run_end = run.scalar_end.min(end);
+            if run_start != cursor || run.text_size_emu == 0 {
+                valid = false;
+                break;
+            }
+            sizes.insert(run.text_size_emu);
+            if let Some(color) = run.color_rgb {
+                colors.insert(color);
+            } else {
+                missing_color = true;
+            }
+            if run.source_font_name.is_empty() {
+                missing_family = true;
+            } else {
+                families.insert(run.source_font_name.clone());
+            }
+            cursor = run_end;
         }
 
-        if !cell.typography.is_empty() {
-            summary.table_cell_typography_present_count += 1;
+        if !valid || cursor != end {
+            continue;
+        }
+        summary.table_cell_typography_complete_count += 1;
+        if sizes.len() == 1 {
+            summary.table_cell_uniform_size_count += 1;
+        }
+        if !missing_color && colors.len() == 1 {
+            summary.table_cell_uniform_color_count += 1;
+        }
+        if !missing_family && families.len() == 1 {
+            summary.table_cell_uniform_source_family_count += 1;
         }
     }
 }
