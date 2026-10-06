@@ -145,6 +145,8 @@ def summarize(pairs_csv: Path, browser_receipt: Path, out: Path) -> dict:
             "this_is_not_visual_parity": True,
             "publisher_pdf_sha_is_identity_only_until_reference_fingerprint_bytes_are_available": True,
             "open_render_and_page_count_are_current_reader_execution_evidence": True,
+            "publisher_pdf_page_count_is_not_logical_page_membership_authority": True,
+            "surface_stage_must_be_classified_before_count_mismatch_is_semantic": True,
         },
         "pairs": results,
         "unsupported_pairs": unsupported,
