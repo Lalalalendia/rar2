@@ -5,7 +5,7 @@ use crate::family_classifier::classify_pub_family;
 use crate::salvage_authority::{ReaderSalvageAuthority, typed_corruption_authority};
 use pub_contents::ContentsFamily;
 use pub_core::StreamPath;
-use pub_escher::inspect_delayed_blips;
+use pub_escher::{parse_officeart_stream, validate_blip_record};
 use pub_quill::{QuillStoryReadError, parse_confirmed_story_catalog};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -267,29 +267,16 @@ pub fn build_reader_partial_source_graph(
         && u64::try_from(delay.len())
             .ok()
             .is_some_and(|len| len <= READER_SALVAGE_MAX_STREAM_BYTES)
-        && let Ok(inventory) = inspect_delayed_blips(StreamPath(ESCHER_DELAY_STREAM.into()), &delay)
+        && let Ok(parsed) = parse_officeart_stream(StreamPath(ESCHER_DELAY_STREAM.into()), &delay)
     {
-        for record in inventory.records {
-            let Some(source) = record.image_payload_source else {
+        for (ordinal, record) in parsed.records.iter().enumerate() {
+            let Ok(validated) = validate_blip_record(&delay, record) else {
                 continue;
             };
-            let Some(start) = usize::try_from(source.offset).ok() else {
-                continue;
-            };
-            let Some(len) = usize::try_from(source.len).ok() else {
-                continue;
-            };
-            let Some(end) = start.checked_add(len) else {
-                continue;
-            };
-            let Some(payload) = delay.get(start..end) else {
-                continue;
-            };
-            let sha256 = source_sha256(payload);
             facts.push(ReaderPartialSourceFact::VerifiedImage {
-                resource_key: format!("escher-delay:{}:{sha256}", record.ordinal),
-                sha256,
-                byte_len: payload.len() as u64,
+                resource_key: format!("escher-delay:{ordinal}:{}", validated.payload_sha256),
+                sha256: validated.payload_sha256,
+                byte_len: validated.payload_source.len,
             });
             verified_image_count += 1;
         }
@@ -581,6 +568,10 @@ mod tests {
     }
 
     fn synthetic_pub_cfb_with_delay_png() -> Vec<u8> {
+        synthetic_pub_cfb_with_delay_png_uid(true)
+    }
+
+    fn synthetic_pub_cfb_with_delay_png_uid(valid_uid: bool) -> Vec<u8> {
         let mut compound =
             cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("synthetic Publisher CFB");
         compound.create_storage("/Escher").expect("Escher storage");
@@ -593,9 +584,21 @@ mod tests {
             .write_all(&contents)
             .expect("write Contents");
 
-        let mut payload = vec![0_u8; 17];
-        payload.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
-        payload.extend_from_slice(b"salvage-image");
+        use md4::{Digest, Md4};
+
+        let mut image = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        image.extend_from_slice(b"salvage-image");
+        let digest = Md4::digest(&image);
+        let mut uid = [0u8; 16];
+        uid.copy_from_slice(&digest);
+        if !valid_uid {
+            uid[0] ^= 0x5a;
+        }
+
+        let mut payload = Vec::with_capacity(17 + image.len());
+        payload.extend_from_slice(&uid);
+        payload.push(0xff);
+        payload.extend_from_slice(&image);
         let mut record = Vec::new();
         record.extend_from_slice(&0x6e00u16.to_le_bytes());
         record.extend_from_slice(&pub_escher::OFFICE_ART_BLIP_PNG.to_le_bytes());
@@ -745,6 +748,33 @@ mod tests {
             graph
                 .gaps
                 .contains(&ReaderPartialSourceGap::GeometryFactsUnavailable)
+        );
+    }
+
+    #[test]
+    fn partial_source_graph_rejects_signature_only_image_with_bad_uid() {
+        let bytes = synthetic_pub_cfb_with_delay_png_uid(false);
+        let probe = probe_reader_salvage_candidate_with_trigger(
+            &bytes,
+            ReaderSalvageTrigger::ProvenStructuralCorruption,
+        );
+        assert_eq!(
+            probe.subsystems.escher_delay,
+            ReaderSalvageStreamState::Readable
+        );
+
+        let graph =
+            build_reader_partial_source_graph(&bytes, &probe).expect("partial salvage graph");
+        assert!(
+            !graph
+                .facts
+                .iter()
+                .any(|fact| matches!(fact, ReaderPartialSourceFact::VerifiedImage { .. }))
+        );
+        assert!(
+            graph
+                .gaps
+                .contains(&ReaderPartialSourceGap::ImageFactsUnavailable)
         );
     }
 
