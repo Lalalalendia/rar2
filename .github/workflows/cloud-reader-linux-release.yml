@@ -1,0 +1,45 @@
+name: Cloud Reader Linux release packet
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-reader-linux-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Build canonical release binary
+        run: cargo build --locked --release -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Assemble deployment packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          install -m 0755 target/release/chaptera dist/chaptera
+          install -m 0644 deploy/config/chaptera.reader.prod.example.toml dist/chaptera.reader.prod.example.toml
+          install -m 0755 tools/run_cloud_reader_host_acceptance.py dist/run_cloud_reader_host_acceptance.py
+          printf '%s\n' "${GITHUB_SHA}" > dist/COMMIT_SHA
+          (cd dist && sha256sum chaptera chaptera.reader.prod.example.toml run_cloud_reader_host_acceptance.py COMMIT_SHA > SHA256SUMS)
+          tar -C dist -czf chaptera-cloud-reader-linux-amd64.tar.gz             chaptera chaptera.reader.prod.example.toml             run_cloud_reader_host_acceptance.py COMMIT_SHA SHA256SUMS
+          sha256sum chaptera-cloud-reader-linux-amd64.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chaptera-cloud-reader-linux-amd64-${{ github.sha }}
+          path: chaptera-cloud-reader-linux-amd64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
