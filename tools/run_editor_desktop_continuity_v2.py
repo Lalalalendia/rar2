@@ -528,7 +528,9 @@ def verify_geometry(
             ),
         )
     except (AssertionError, KeyError, TypeError, ValueError, zipfile.BadZipFile) as error:
-        raise ContinuityV2Error(f"edited export does not reproduce {label} geometry") from error
+        raise ContinuityV2Error(
+            f"edited export does not reproduce {label} geometry: {error}"
+        ) from error
     if proof.get("geometry_matches_edit") is not True:
         raise ContinuityV2Error(f"edited export {label} geometry proof is not affirmative")
 
