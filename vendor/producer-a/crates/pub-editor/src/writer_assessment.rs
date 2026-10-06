@@ -143,6 +143,10 @@ impl EditorSession {
                 | EditOperation::CreateLine { .. }
                 | EditOperation::CreateTable { .. }
                 | EditOperation::SetTableTrackExtent { .. }
+                | EditOperation::InsertTableRow { .. }
+                | EditOperation::DeleteTableRow { .. }
+                | EditOperation::InsertTableColumn { .. }
+                | EditOperation::DeleteTableColumn { .. }
                 | EditOperation::DeleteNode { .. }
                 | EditOperation::ReorderAuthoredStack { .. }
                 | EditOperation::SetTextFormatProperty { .. }
@@ -249,6 +253,10 @@ impl EditorSession {
                 | EditOperation::CreateLine { .. }
                 | EditOperation::CreateTable { .. }
                 | EditOperation::SetTableTrackExtent { .. }
+                | EditOperation::InsertTableRow { .. }
+                | EditOperation::DeleteTableRow { .. }
+                | EditOperation::InsertTableColumn { .. }
+                | EditOperation::DeleteTableColumn { .. }
                 | EditOperation::DeleteNode { .. }
                 | EditOperation::ReorderAuthoredStack { .. }
                 | EditOperation::SetTextFormatProperty { .. }
