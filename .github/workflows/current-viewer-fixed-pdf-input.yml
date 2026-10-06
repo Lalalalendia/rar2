@@ -45,7 +45,7 @@ jobs:
           fi
           grep -q 'refresh_text_projection_from_resolved' "$file"
           grep -q 'geometry_sync_policy_v1' "$file"
-          grep -q 'build_page_render_plan_with_text_layout_v1' "$file"
+          grep -Eq 'build_page_render_plan_with_text_layout_(v1|resolvers_v1)' "$file"
 
   carlton-census:
     needs: validate
