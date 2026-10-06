@@ -5620,6 +5620,58 @@ impl EditorSession {
         }
     }
 
+    pub fn create_table(
+        &mut self,
+        table: CreateTableRuntimeV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.consume_canonical_create_table(EditOperation::CreateTable { table })
+    }
+
+    fn consume_canonical_create_table(
+        &mut self,
+        operation: EditOperation,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let EditOperation::CreateTable { table } = &operation else {
+            unreachable!("consume_canonical_create_table receives CreateTable");
+        };
+
+        if self.authored_shapes.contains_key(&table.node_id)
+            || self.authored_lines.contains_key(&table.node_id)
+        {
+            return Err(EditorError::TableEditUnsupported {
+                node_id: table.node_id,
+            });
+        }
+        build_create_table_plan_v1(table).map_err(|_| EditorError::TableEditUnsupported {
+            node_id: table.node_id,
+        })?;
+
+        let before_stack = self.current_authored_stack_v1(table.page_id);
+        let transition = plan_create_table_append_v1(&before_stack, table.node_id, table.page_id)
+            .map_err(|_| EditorError::StaleAuthoredStack {
+                page_id: table.page_id,
+            })?;
+        let after_stack = apply_authored_stack_transition_forward_v1(&before_stack, &transition)
+            .map_err(|_| EditorError::StaleAuthoredStack {
+                page_id: table.page_id,
+            })?;
+
+        let mut candidate_graph = self.graph.clone();
+        apply_create_table_forward_v1(&mut candidate_graph, table).map_err(|_| {
+            EditorError::TableEditUnsupported {
+                node_id: table.node_id,
+            }
+        })?;
+
+        self.graph = candidate_graph;
+        self.install_authored_stack_v1(after_stack);
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
     pub fn create_line(
         &mut self,
         node_id: NodeId,
@@ -6312,12 +6364,20 @@ impl EditorSession {
 
                 let mut candidate_shapes = self.authored_shapes.clone();
                 let mut candidate_lines = self.authored_lines.clone();
+                let mut candidate_graph = self.graph.clone();
                 match &operation {
                     EditOperation::CreateShape { .. } => {
                         apply_authored_shape_inverse(&mut candidate_shapes, &operation)?;
                     }
                     EditOperation::CreateLine { .. } => {
                         apply_authored_line_inverse(&mut candidate_lines, &operation)?;
+                    }
+                    EditOperation::CreateTable { table } => {
+                        apply_create_table_inverse_v1(&mut candidate_graph, table).map_err(|_| {
+                            EditorError::TableEditUnsupported {
+                                node_id: table.node_id,
+                            }
+                        })?;
                     }
                     EditOperation::DeleteNode { .. } => {
                         apply_authored_shape_delete_inverse(&mut candidate_shapes, &operation)?;
@@ -6327,6 +6387,7 @@ impl EditorSession {
                 }
                 self.authored_shapes = candidate_shapes;
                 self.authored_lines = candidate_lines;
+                self.graph = candidate_graph;
                 self.authored_stacks = before_stacks;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_inverse(&mut self.image_replacements, &operation)?;
@@ -6387,6 +6448,7 @@ impl EditorSession {
 
                 let mut candidate_shapes = self.authored_shapes.clone();
                 let mut candidate_lines = self.authored_lines.clone();
+                let mut candidate_graph = self.graph.clone();
                 match &operation {
                     EditOperation::CreateShape { .. } => {
                         let shape = authored_shape_from_operation(&operation)
@@ -6400,6 +6462,13 @@ impl EditorSession {
                         self.validate_create_line_candidate(&line)?;
                         candidate_lines.insert(line.node_id, line);
                     }
+                    EditOperation::CreateTable { table } => {
+                        apply_create_table_forward_v1(&mut candidate_graph, table).map_err(|_| {
+                            EditorError::TableEditUnsupported {
+                                node_id: table.node_id,
+                            }
+                        })?;
+                    }
                     EditOperation::DeleteNode { .. } => {
                         apply_authored_shape_delete_forward(&mut candidate_shapes, &operation)?;
                     }
@@ -6409,6 +6478,7 @@ impl EditorSession {
 
                 self.authored_shapes = candidate_shapes;
                 self.authored_lines = candidate_lines;
+                self.graph = candidate_graph;
                 self.authored_stacks = after_stacks;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_forward(&mut self.image_replacements, &operation)?;
@@ -7071,6 +7141,44 @@ fn effective_table_grids(graph: &PubResolvedGraph) -> Vec<EffectiveTableGridV1> 
         grid.validate()
             .expect("grounded simple table must produce valid EffectiveTableGridV1");
         grids.push(grid);
+    }
+
+    grids.sort_by_key(|grid| grid.table_id);
+    grids
+}
+
+fn effective_table_grids_with_history(
+    graph: &PubResolvedGraph,
+    operations: &[EditOperation],
+) -> Vec<EffectiveTableGridV1> {
+    let mut grids = effective_table_grids(graph);
+
+    for operation in operations {
+        let EditOperation::CreateTable { table } = operation else {
+            continue;
+        };
+        let plan = build_create_table_plan_v1(table)
+            .expect("accepted CreateTable history must remain canonical");
+        let current = grids
+            .iter()
+            .find(|grid| grid.table_id == table.node_id)
+            .cloned()
+            .expect("accepted CreateTable must materialize one effective table grid");
+        let target = grids
+            .iter_mut()
+            .find(|grid| grid.table_id == table.node_id)
+            .expect("accepted CreateTable grid is present");
+
+        *target = plan.grid;
+        for cell in &mut target.cells {
+            let current_cell = current
+                .cells
+                .iter()
+                .find(|candidate| candidate.id == cell.id)
+                .expect("created table cell identity remains stable");
+            cell.utf16_start = current_cell.utf16_start;
+            cell.utf16_end = current_cell.utf16_end;
+        }
     }
 
     grids.sort_by_key(|grid| grid.table_id);
