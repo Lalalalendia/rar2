@@ -603,53 +603,78 @@ pub struct ViewerTableCell {
     pub fill_visible: Option<bool>,
 }
 
+fn unique_table_column_boundary(
+    cells: &[ViewerTableCell],
+    column: u32,
+    columns: u32,
+) -> Option<i64> {
+    if columns == 0 || column > columns {
+        return None;
+    }
+
+    let mut boundary = None;
+    for cell in cells {
+        let end = cell.address.column.checked_add(cell.column_span)?;
+        let starts_here = cell.address.column == column;
+        let ends_here = end == column;
+        if !starts_here && !ends_here {
+            continue;
+        }
+        let bounds = cell.bounds?;
+        let candidate = if starts_here {
+            bounds.x.get()
+        } else {
+            bounds.x.get().checked_add(bounds.width.get())?
+        };
+        match boundary {
+            None => boundary = Some(candidate),
+            Some(existing) if existing == candidate => {}
+            Some(_) => return None,
+        }
+    }
+    boundary
+}
+
+fn unique_table_row_boundary(cells: &[ViewerTableCell], row: u32, rows: u32) -> Option<i64> {
+    if rows == 0 || row > rows {
+        return None;
+    }
+
+    let mut boundary = None;
+    for cell in cells {
+        let end = cell.address.row.checked_add(cell.row_span)?;
+        let starts_here = cell.address.row == row;
+        let ends_here = end == row;
+        if !starts_here && !ends_here {
+            continue;
+        }
+        let bounds = cell.bounds?;
+        let candidate = if starts_here {
+            bounds.y.get()
+        } else {
+            bounds.y.get().checked_add(bounds.height.get())?
+        };
+        match boundary {
+            None => boundary = Some(candidate),
+            Some(existing) if existing == candidate => {}
+            Some(_) => return None,
+        }
+    }
+    boundary
+}
+
 fn viewer_table_border_segments(
     source: &pub_reader::PubTableSource,
     cells: &[ViewerTableCell],
 ) -> Vec<ViewerTableBorderSegment> {
-    let boundary_x = |column: u32| -> Option<i64> {
-        if column > source.columns || source.columns == 0 {
-            return None;
-        }
-        if column == source.columns {
-            let cell = cells
-                .iter()
-                .find(|cell| cell.address.row == 0 && cell.address.column + 1 == source.columns)?;
-            let bounds = cell.bounds?;
-            return bounds.x.get().checked_add(bounds.width.get());
-        }
-        cells
-            .iter()
-            .find(|cell| cell.address.row == 0 && cell.address.column == column)
-            .and_then(|cell| cell.bounds)
-            .map(|bounds| bounds.x.get())
-    };
-    let boundary_y = |row: u32| -> Option<i64> {
-        if row > source.rows || source.rows == 0 {
-            return None;
-        }
-        if row == source.rows {
-            let cell = cells
-                .iter()
-                .find(|cell| cell.address.column == 0 && cell.address.row + 1 == source.rows)?;
-            let bounds = cell.bounds?;
-            return bounds.y.get().checked_add(bounds.height.get());
-        }
-        cells
-            .iter()
-            .find(|cell| cell.address.column == 0 && cell.address.row == row)
-            .and_then(|cell| cell.bounds)
-            .map(|bounds| bounds.y.get())
-    };
-
     source
         .border_segments
         .iter()
         .filter_map(|segment| match segment.axis {
             pub_reader::PubTableBorderAxis::Horizontal => {
-                let y = boundary_y(segment.row_start)?;
-                let x1 = boundary_x(segment.column_start)?;
-                let x2 = boundary_x(segment.column_end)?;
+                let y = unique_table_row_boundary(cells, segment.row_start, source.rows)?;
+                let x1 = unique_table_column_boundary(cells, segment.column_start, source.columns)?;
+                let x2 = unique_table_column_boundary(cells, segment.column_end, source.columns)?;
                 (x1 < x2).then_some(ViewerTableBorderSegment {
                     x1_emu: x1,
                     y1_emu: y,
@@ -660,9 +685,9 @@ fn viewer_table_border_segments(
                 })
             }
             pub_reader::PubTableBorderAxis::Vertical => {
-                let x = boundary_x(segment.column_start)?;
-                let y1 = boundary_y(segment.row_start)?;
-                let y2 = boundary_y(segment.row_end)?;
+                let x = unique_table_column_boundary(cells, segment.column_start, source.columns)?;
+                let y1 = unique_table_row_boundary(cells, segment.row_start, source.rows)?;
+                let y2 = unique_table_row_boundary(cells, segment.row_end, source.rows)?;
                 (y1 < y2).then_some(ViewerTableBorderSegment {
                     x1_emu: x,
                     y1_emu: y1,
@@ -4870,6 +4895,39 @@ mod tests {
             LengthEmu::new(1),
         );
         assert!(legacy_noquill_structural_point_group_ids(&graph, &[page_id]).is_empty());
+    }
+
+    #[test]
+    fn merged_table_boundaries_resolve_from_exact_spanning_cell_edges() {
+        let cell =
+            |byte, row, column, row_span, column_span, x, y, width, height| ViewerTableCell {
+                id: TableCellId::from_canonical(id(byte)),
+                address: TableCellAddress { row, column },
+                row_span,
+                column_span,
+                text: String::new(),
+                bounds: Some(RectEmu::new(
+                    LengthEmu::new(x),
+                    LengthEmu::new(y),
+                    LengthEmu::new(width),
+                    LengthEmu::new(height),
+                )),
+                fill_rgb: None,
+                fill_visible: None,
+            };
+
+        let cells = vec![
+            cell(1, 0, 0, 1, 2, 100, 200, 400, 100),
+            cell(2, 1, 0, 1, 1, 100, 300, 200, 100),
+            cell(3, 1, 1, 1, 1, 300, 300, 200, 100),
+        ];
+
+        assert_eq!(unique_table_column_boundary(&cells, 0, 2), Some(100));
+        assert_eq!(unique_table_column_boundary(&cells, 1, 2), Some(300));
+        assert_eq!(unique_table_column_boundary(&cells, 2, 2), Some(500));
+        assert_eq!(unique_table_row_boundary(&cells, 0, 2), Some(200));
+        assert_eq!(unique_table_row_boundary(&cells, 1, 2), Some(300));
+        assert_eq!(unique_table_row_boundary(&cells, 2, 2), Some(400));
     }
 
     #[test]
