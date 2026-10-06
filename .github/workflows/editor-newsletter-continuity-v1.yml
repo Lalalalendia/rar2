@@ -105,11 +105,11 @@ jobs:
           $project = Join-Path $out "newsletter.project.json"
           $export = Join-Path $out "newsletter.edited.odg"
           $receipt = Join-Path $out "newsletter-continuity.real.json"
-          python tools/run_editor_desktop_continuity_v2.py --fixture "$env:CHAPTERA_SAMPLE_NEWSLETTER" --replacement "$env:CHAPTERA_NEWSLETTER_REPLACEMENT" --project-output "$project" --export-output "$export" --receipt-output "$receipt" --require-wrap-irrelevant-mutations -- target/release/chaptera-editor.exe --desktop-acceptance-v2 "{fixture}" "{replacement}" "{project}" "{export}"
+          python tools/run_editor_desktop_continuity_v2.py --fixture "$env:CHAPTERA_SAMPLE_NEWSLETTER" --replacement "$env:CHAPTERA_NEWSLETTER_REPLACEMENT" --project-output "$project" --export-output "$export" --receipt-output "$receipt" --newsletter-two-object-mode -- target/release/chaptera-editor.exe --desktop-acceptance-v2 "{fixture}" "{replacement}" "{project}" "{export}"
           python tools/validate_editor_desktop_continuity_v2_receipt.py "$receipt"
           $value = Get-Content $receipt -Raw | ConvertFrom-Json
-          if ($value.invariants.wrap_mutation_scope -ne "text_frame_non_intersecting") {
-            throw "newsletter receipt did not prove wrap-irrelevant mutation scope"
+          if ($value.invariants.wrap_mutation_scope -ne "authority_blocked_not_asserted") {
+            throw "newsletter receipt did not report blocked wrap authority explicitly"
           }
           if ($value.image_replace.explicit_crop_present -ne $false) {
             throw "SampleNewsletter unexpectedly changed public crop baseline"
