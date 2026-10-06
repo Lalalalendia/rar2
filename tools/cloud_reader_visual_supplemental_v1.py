@@ -39,10 +39,15 @@ def load_reference(reference_path: Path) -> dict:
     reference = json.loads(reference_path.read_text(encoding="utf-8"))
     if reference.get("schema") != REFERENCE_SCHEMA:
         raise ValueError(f"unsupported supplemental reference schema: {reference.get('schema')!r}")
-    if reference.get("pair_count") != 15 or reference.get("reference_page_count") != 34:
-        raise ValueError("available supplemental reference identity drift")
-    if reference.get("claims", {}).get("partial_supplemental_reference_set") is not True:
-        raise ValueError("supplemental reference must declare partial reference coverage")
+    if reference.get("pair_count") != 31 or reference.get("reference_page_count") != 59:
+        raise ValueError("complete supplemental reference identity drift")
+    claims = reference.get("claims", {})
+    if claims.get("partial_supplemental_reference_set") is not False:
+        raise ValueError("supplemental reference must declare complete reference coverage")
+    if claims.get("available_reference_pair_count") != 31:
+        raise ValueError("supplemental available-reference pair count drift")
+    if claims.get("missing_registered_reference_pair_count") != 0:
+        raise ValueError("supplemental reference unexpectedly reports missing registered pairs")
     return reference
 
 
@@ -101,10 +106,10 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
         pair for pair in reference["pairs"]
         if pair["basename"] not in by_name
     ]
-    if len(hosted_reference_pairs) != 8:
-        raise ValueError(f"expected 8 hosted reference pairs, got {len(hosted_reference_pairs)}")
-    if sum(int(pair["reference_pages"]) for pair in hosted_reference_pairs) != 27:
-        raise ValueError("hosted available-reference page count drift")
+    if len(hosted_reference_pairs) != 24:
+        raise ValueError(f"expected 24 hosted reference pairs, got {len(hosted_reference_pairs)}")
+    if sum(int(pair["reference_pages"]) for pair in hosted_reference_pairs) != 52:
+        raise ValueError("hosted complete-reference page count drift")
     if len(external_reference_pairs) != 7:
         raise ValueError(f"expected 7 external reference pairs, got {len(external_reference_pairs)}")
 
@@ -283,7 +288,7 @@ def summarize(pairs_csv: Path, browser_receipt: Path, reference_path: Path, out:
         "font_warning_pair_count": sum(bool(x["warning_state"]) for x in results),
         "external_manual_reduction_pair_count": 7,
         "external_manual_reduction_reference_page_count": 7,
-        "visual_reference_fingerprint_state": "AVAILABLE_FOR_8_OF_24_HOSTED_PAIRS",
+        "visual_reference_fingerprint_state": "COMPLETE_FOR_24_HOSTED_PAIRS_SURFACE_BLOCKED_3",
         "missing_hosted_reference_pair_count": len(missing_hosted_reference_rows),
         "missing_hosted_reference_pairs": [
             {
@@ -297,6 +302,8 @@ def summarize(pairs_csv: Path, browser_receipt: Path, reference_path: Path, out:
         "visual": visual,
         "claims": {
             "partial_visual_measurement_only": True,
+            "complete_registered_reference_material": True,
+            "surface_stage_blocks_three_hosted_pairs": True,
             "publisher_pdf_sha_is_identity_only_when_reference_grid_is_missing": True,
             "open_render_and_page_count_are_current_reader_execution_evidence": True,
             "publisher_pdf_page_count_is_not_logical_page_membership_authority": True,
