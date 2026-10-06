@@ -816,10 +816,26 @@ mod tests {
             validated.logical_payload_sha256.as_deref(),
             Some(validated.payload_sha256.as_str())
         );
-        assert!(validated.logical_payload_len.unwrap() > 0);
+        assert_eq!(
+            validated.logical_payload_len,
+            Some(b"synthetic-emf-logical-payload".len() as u64)
+        );
         assert_eq!(
             validated.payload_source.end(),
             record.payload_source.end()
+        );
+
+        let stored = span_slice(&bytes, &validated.payload_source).expect("stored EMF source span");
+        assert_eq!(
+            validated.payload_sha256,
+            hex_lower(&Sha256::digest(stored))
+        );
+        assert_eq!(
+            validated.logical_payload_sha256.as_deref(),
+            Some(
+                hex_lower(&Sha256::digest(b"synthetic-emf-logical-payload"))
+                    .as_str()
+            )
         );
     }
 
