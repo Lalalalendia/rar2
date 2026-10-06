@@ -142,7 +142,7 @@ use pub_quill::{
     QuillMcldVerticalAlignment, QuillParagraphAlignment, QuillParagraphFlowConstraint,
     QuillParagraphLineSpacing, QuillScriptFontEntryDisposition, QuillStoryReadError,
     QuillTypographyValueSource, bounded_mcld_text_frame_vertical_alignment,
-    bounded_mcld_uniform_text_inset, parse_bounded_fdpp_exact_story_catalog, parse_bounded_mcld,
+    bounded_mcld_text_insets, parse_bounded_fdpp_exact_story_catalog, parse_bounded_mcld,
     parse_bounded_typography, parse_confirmed_story_catalog,
 };
 pub use resolve::{
@@ -738,7 +738,10 @@ pub struct PubLegacyOleSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubTextFrameInsetSource {
     pub layout_record_id: u32,
-    pub uniform_emu: u32,
+    pub top_emu: u32,
+    pub left_emu: u32,
+    pub bottom_emu: u32,
+    pub right_emu: u32,
     pub source_refs: Vec<SourceRef>,
 }
 
@@ -3400,7 +3403,7 @@ pub fn build_mature_0x2c_from_streams(
         let text_frame_inset = story_frame.as_ref().and_then(|frame| {
             let (layout_record_id, layout_key_source) = story_layout_keys.get(&frame.text_id)?;
             let mcld = mcld.as_ref()?;
-            let inset = bounded_mcld_uniform_text_inset(mcld, *layout_record_id).ok()?;
+            let inset = bounded_mcld_text_insets(mcld, *layout_record_id).ok()?;
             let object_key = quill_story_object_key(frame.text_id);
             let mut source_refs = vec![source_ref(
                 &graph.source,
@@ -3424,7 +3427,10 @@ pub fn build_mature_0x2c_from_streams(
             }));
             Some(PubTextFrameInsetSource {
                 layout_record_id: *layout_record_id,
-                uniform_emu: inset.inset_emu,
+                top_emu: inset.top_emu,
+                left_emu: inset.left_emu,
+                bottom_emu: inset.bottom_emu,
+                right_emu: inset.right_emu,
                 source_refs,
             })
         });
