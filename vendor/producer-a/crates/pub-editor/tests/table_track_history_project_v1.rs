@@ -343,3 +343,62 @@ fn geometry_after_track_resize_fails_closed_until_composition_is_defined() {
     ));
     assert!(reopened.operations().is_empty());
 }
+
+
+#[test]
+fn resize_before_track_resize_fails_closed_but_move_before_track_resize_is_allowed() {
+    let mut resized = EditorSession::new(graph()).expect("resized session");
+    resized.create_table(runtime()).expect("CreateTable");
+    resized
+        .resize_node_to(
+            node_id(),
+            RectEmu::new(
+                LengthEmu::new(100_000),
+                LengthEmu::new(200_000),
+                LengthEmu::new(650_000),
+                LengthEmu::new(400_000),
+            ),
+        )
+        .expect("generic resize");
+    assert!(matches!(
+        resized.set_table_track_extent_v1(
+            node_id(),
+            TableTrackTargetV1::Column(column_ids()[0]),
+            LengthEmu::new(350_000),
+        ),
+        Err(EditorError::TableTrackResizeUnsupported { node_id: rejected }) if rejected == node_id()
+    ));
+
+    resized.undo().expect("undo generic resize");
+    resized
+        .set_table_track_extent_v1(
+            node_id(),
+            TableTrackTargetV1::Column(column_ids()[0]),
+            LengthEmu::new(350_000),
+        )
+        .expect("track resize after undo");
+
+    let mut moved = EditorSession::new(graph()).expect("moved session");
+    moved.create_table(runtime()).expect("CreateTable");
+    moved
+        .move_node_to(node_id(), LengthEmu::new(125_000), LengthEmu::new(225_000))
+        .expect("move table");
+    moved
+        .set_table_track_extent_v1(
+            node_id(),
+            TableTrackTargetV1::Row(row_ids()[0]),
+            LengthEmu::new(250_000),
+        )
+        .expect("track resize after move");
+    assert_eq!(
+        moved
+            .current_table_bounds_v1(node_id())
+            .expect("moved track bounds"),
+        RectEmu::new(
+            LengthEmu::new(125_000),
+            LengthEmu::new(225_000),
+            LengthEmu::new(600_000),
+            LengthEmu::new(450_000),
+        )
+    );
+}
