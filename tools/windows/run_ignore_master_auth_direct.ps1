@@ -13,7 +13,7 @@ $Operation = Join-Path $RepoRoot "tools/research-runner/operations/publisher_ign
 $Analyzer = Join-Path $RepoRoot "tools/research-runner/analysis/ignore_master_auth_01_blast_radius.py"
 
 $ExpectedPacketBlob = "5bd3790f430e6d95947142d57cd4b1ea9d0bbcae"
-$ExpectedOperationBlob = "852da228c8653d2b3ef45314c43647b42889eaef"
+$ExpectedOperationBlob = "fb519d47a4ae85b68ce891895baec45a9123a01b"
 $ExpectedAnalyzerBlob = "01a7b2bbb225c8f052f6bec3f44d92a1e31e19d5"
 
 foreach ($entry in @(
