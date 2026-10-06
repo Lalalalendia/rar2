@@ -15,6 +15,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const AUTHORED_TABLE_SENTINEL_TEXT_ID_V1: u32 = 0;
 pub const AUTHORED_TABLE_SENTINEL_CONTENTS_SEQ_NUM_V1: u32 = 0;
 
+pub type AuthoredTableStoryRangesV1 = BTreeMap<TableCellId, (u32, u32)>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateTableRuntimeV1 {
     pub node_id: NodeId,
@@ -60,7 +62,7 @@ fn checked_uuid_v7<T>(id: &T, bytes: impl Fn(&T) -> &[u8; 16]) -> bool {
 
 fn authored_table_story_v1(
     ordered_cells: &[(TableCellId, String)],
-) -> Result<(String, BTreeMap<TableCellId, (u32, u32)>), CreateTableRuntimeValidationError> {
+) -> Result<(String, AuthoredTableStoryRangesV1), CreateTableRuntimeValidationError> {
     let mut utf16 = Vec::<u16>::new();
     let mut ranges = BTreeMap::new();
 
@@ -98,7 +100,7 @@ fn authored_table_story_v1(
 
 pub fn rebuild_authored_table_story_v1(
     ordered_cells: &[(TableCellId, String)],
-) -> Result<(String, BTreeMap<TableCellId, (u32, u32)>), CreateTableRuntimeValidationError> {
+) -> Result<(String, AuthoredTableStoryRangesV1), CreateTableRuntimeValidationError> {
     authored_table_story_v1(ordered_cells)
 }
 
