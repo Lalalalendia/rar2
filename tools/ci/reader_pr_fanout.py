@@ -437,6 +437,16 @@ UPDATE_ACCEPT = (
     ".github/workstream-scopes/chaptera-win-update-accept-01.md",
 )
 
+RUST_INTEGRATION_TEST_PATTERNS = (
+    "crates/*/tests/**",
+    "vendor/producer-a/crates/*/tests/**",
+)
+
+
+def is_rust_integration_test_path(path: str) -> bool:
+    return any(fnmatch.fnmatchcase(path, pattern) for pattern in RUST_INTEGRATION_TEST_PATTERNS)
+
+
 SHARED_DESKTOP_FILES = {
     "apps/chaptera-desktop/src/main.rs",
     "apps/chaptera-desktop/src/render_backend.rs",
@@ -528,6 +538,13 @@ def classify(
 ) -> dict[str, bool]:
     evidence_only = EVIDENCE_ONLY_PATHS | (dynamic_evidence_only_paths or set())
     semantic_paths = [path for path in paths if path not in evidence_only]
+    # Standalone Rust integration tests are development/evidence surfaces, not
+    # shipped product inputs. Keep them in Tier A so they still compile/lint
+    # against the Reader graph, but do not admit expensive product/render/
+    # corpus gates solely because a crate-level ** glob also covers tests/.
+    product_paths = [
+        path for path in semantic_paths if not is_rust_integration_test_path(path)
+    ]
     mapping = {
         "tier_a": TIER_A,
         "desktop_rustfmt": DESKTOP_RUSTFMT,
@@ -548,14 +565,21 @@ def classify(
         "update_accept": UPDATE_ACCEPT,
     }
     result = {
-        scope: any(matches(path, patterns) for path in semantic_paths)
+        scope: any(
+            matches(path, patterns)
+            for path in (
+                semantic_paths
+                if scope in {"tier_a", "desktop_rustfmt"}
+                else product_paths
+            )
+        )
         for scope, patterns in mapping.items()
     }
     # Golden tests still call ViewerApp and paint helpers owned by main.rs.
     # A path alone cannot prove those dependencies unchanged. Only an exact
     # standalone-comment proof may suppress their visual/typography allocation.
     visual_paths = [
-        path for path in semantic_paths
+        path for path in product_paths
         if path != DESKTOP_MAIN or path not in (visual_neutral_paths or set())
     ]
     result["visual_oracle"] = any(matches(path, VISUAL_ORACLE) for path in visual_paths)
@@ -564,7 +588,7 @@ def classify(
     # Preserve that boundary after routing it through the central PR DAG.
     virginia_paths = [
         path
-        for path in semantic_paths
+        for path in product_paths
         if not path.startswith("vendor/producer-a/crates/pub-reader/src/bin/")
         and not path.startswith("vendor/producer-a/crates/pub-viewer/src/bin/")
     ]
@@ -581,7 +605,7 @@ def classify(
     if any(
         path.startswith("apps/chaptera-desktop/")
         and path not in SHARED_DESKTOP_FILES
-        for path in semantic_paths
+        for path in product_paths
     ):
         result["editor_windows"] = True
     return result
