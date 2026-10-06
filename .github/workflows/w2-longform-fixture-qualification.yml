@@ -1,0 +1,66 @@
+name: W2 long-form fixture qualification
+
+on:
+  pull_request:
+    paths:
+      - "tools/qualify_w2_longform_fixture.py"
+      - ".github/workflows/w2-longform-fixture-qualification.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: w2-longform-fixture-qualification-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Build current Chaptera producer
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p chaptera-producer-a
+
+      - name: Qualify official Klickitat historical candidates
+        run: |
+          set -euo pipefail
+          mkdir -p target/w2-longform-fixture
+          python tools/qualify_w2_longform_fixture.py \
+            --producer vendor/producer-a/target/debug/chaptera-producer-a \
+            --output target/w2-longform-fixture/qualification.json \
+            --workdir target/w2-longform-fixture/files \
+            285 288 299
+          cat target/w2-longform-fixture/qualification.json
+
+      - name: Assert report is explicit and fail-closed
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          p = Path("target/w2-longform-fixture/qualification.json")
+          data = json.loads(p.read_text())
+          assert data["schema"] == "chaptera.w2-longform-fixture-qualification.v1"
+          assert data["cfb_magic_required"] == "d0cf11e0a1b11ae1"
+          assert data["minimum_page_count"] == 10
+          assert [row["item_id"] for row in data["candidates"]] == ["285", "288", "299"]
+          for row in data["candidates"]:
+              if row["longform_pub_qualified"]:
+                  assert row["is_cfb"] is True
+                  assert row["chaptera_open_status"] == "opened"
+                  assert row["page_count"] >= 10
+              if not row["is_cfb"]:
+                  assert row["longform_pub_qualified"] is False
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: w2-longform-fixture-qualification-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/w2-longform-fixture/qualification.json
+          if-no-files-found: error
