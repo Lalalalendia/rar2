@@ -735,7 +735,11 @@ def run_continuity_v2(
         expected_wrap_mutation_scope=(
             "text_frame_non_intersecting"
             if require_wrap_irrelevant_mutations
-            else "not_asserted"
+            else (
+                "authority_blocked_not_asserted"
+                if newsletter_two_object_mode
+                else "not_asserted"
+            )
         ),
     )
 
