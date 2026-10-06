@@ -265,6 +265,13 @@ struct MappingSummary {
     table_bounded_source_font_missing_or_mixed_count: usize,
     table_bounded_source_font_family_counts: BTreeMap<String, usize>,
     table_bounded_source_font_style_counts: BTreeMap<String, usize>,
+    table_bounded_source_family_profile_count: usize,
+    table_bounded_source_family_missing_or_mixed_count: usize,
+    table_bounded_source_family_counts: BTreeMap<String, usize>,
+    table_bounded_source_style_explicit_uniform_count: usize,
+    table_bounded_source_style_absent_uniform_count: usize,
+    table_bounded_source_style_partial_or_mixed_count: usize,
+    table_bounded_source_style_explicit_counts: BTreeMap<String, usize>,
     derived_table_fill_node_count: usize,
     derived_table_border_node_count: usize,
     derived_table_paint_node_count: usize,
@@ -626,6 +633,60 @@ fn table_cell_source_font_profile_v1(
     Some((family_key, bold, italic))
 }
 
+fn table_cell_source_family_profile_v1(cell: &CurrentTableCell) -> Option<String> {
+    let first = cell.typography.first()?;
+    let family_display = first.source_font_name.trim();
+    if family_display.is_empty() {
+        return None;
+    }
+    let family_key = family_display.to_lowercase();
+    if cell.typography.iter().any(|run| {
+        run.source_font_name.trim().is_empty()
+            || run.source_font_name.trim().to_lowercase() != family_key
+    }) {
+        return None;
+    }
+    Some(family_key)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TableCellSourceStyleProfileV1 {
+    Explicit(bool, bool),
+    Absent,
+    PartialOrMixed,
+}
+
+fn table_cell_source_style_profile_v1(cell: &CurrentTableCell) -> TableCellSourceStyleProfileV1 {
+    let mut explicit = None::<(bool, bool)>;
+    let mut saw_absent = false;
+    for run in &cell.typography {
+        match (run.bold, run.italic) {
+            (Some(bold), Some(italic)) => {
+                if saw_absent {
+                    return TableCellSourceStyleProfileV1::PartialOrMixed;
+                }
+                match explicit {
+                    None => explicit = Some((bold, italic)),
+                    Some(existing) if existing == (bold, italic) => {}
+                    Some(_) => return TableCellSourceStyleProfileV1::PartialOrMixed,
+                }
+            }
+            (None, None) => {
+                if explicit.is_some() {
+                    return TableCellSourceStyleProfileV1::PartialOrMixed;
+                }
+                saw_absent = true;
+            }
+            _ => return TableCellSourceStyleProfileV1::PartialOrMixed,
+        }
+    }
+    match (explicit, saw_absent) {
+        (Some((bold, italic)), false) => TableCellSourceStyleProfileV1::Explicit(bold, italic),
+        (None, true) => TableCellSourceStyleProfileV1::Absent,
+        _ => TableCellSourceStyleProfileV1::PartialOrMixed,
+    }
+}
+
 fn observe_table_text_authority_v1(
     table: &CurrentTable,
     font: &CurrentFont,
@@ -719,6 +780,36 @@ fn observe_table_text_authority_v1(
                     .or_default() += 1;
             } else {
                 summary.table_bounded_source_font_missing_or_mixed_count += 1;
+            }
+            if let Some(family) = table_cell_source_family_profile_v1(cell) {
+                summary.table_bounded_source_family_profile_count += 1;
+                *summary
+                    .table_bounded_source_family_counts
+                    .entry(family)
+                    .or_default() += 1;
+            } else {
+                summary.table_bounded_source_family_missing_or_mixed_count += 1;
+            }
+            match table_cell_source_style_profile_v1(cell) {
+                TableCellSourceStyleProfileV1::Explicit(bold, italic) => {
+                    summary.table_bounded_source_style_explicit_uniform_count += 1;
+                    let style = match (bold, italic) {
+                        (false, false) => "regular",
+                        (true, false) => "bold",
+                        (false, true) => "italic",
+                        (true, true) => "bold_italic",
+                    };
+                    *summary
+                        .table_bounded_source_style_explicit_counts
+                        .entry(style.into())
+                        .or_default() += 1;
+                }
+                TableCellSourceStyleProfileV1::Absent => {
+                    summary.table_bounded_source_style_absent_uniform_count += 1;
+                }
+                TableCellSourceStyleProfileV1::PartialOrMixed => {
+                    summary.table_bounded_source_style_partial_or_mixed_count += 1;
+                }
             }
             if !cell.text.contains(&['\r', '\n'][..]) {
                 summary.table_hard_break_free_profile_cell_count += 1;
