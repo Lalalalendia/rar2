@@ -122,7 +122,13 @@ jobs:
           Invoke-WebRequest -Uri "$base/$name.zip" -OutFile $zip
           Invoke-WebRequest -Uri "$base/$name.sha256" -OutFile $publishedPath
 
-          $published = ((Get-Content -Raw $publishedPath).Trim() -split "\\s+")[0].ToLowerInvariant()
+          $publishedLine = Get-Content $publishedPath |
+            Where-Object { $_ -match ([regex]::Escape("$name.zip") + '$') } |
+            Select-Object -First 1
+          if (-not $publishedLine) {
+            throw "published cargo-nextest checksum entry for $name.zip not found"
+          }
+          $published = (($publishedLine.Trim() -split "\\s+")[0]).ToLowerInvariant()
           if ($published -ne $env:NEXTEST_WINDOWS_X64_SHA256) {
             throw "published cargo-nextest SHA drift: $published"
           }
@@ -197,7 +203,13 @@ jobs:
           $publishedPath = Join-Path $root "$name.sha256"
           Invoke-WebRequest -Uri "$base/$name.zip" -OutFile $zip
           Invoke-WebRequest -Uri "$base/$name.sha256" -OutFile $publishedPath
-          $published = ((Get-Content -Raw $publishedPath).Trim() -split "\\s+")[0].ToLowerInvariant()
+          $publishedLine = Get-Content $publishedPath |
+            Where-Object { $_ -match ([regex]::Escape("$name.zip") + '$') } |
+            Select-Object -First 1
+          if (-not $publishedLine) {
+            throw "published cargo-nextest checksum entry for $name.zip not found"
+          }
+          $published = (($publishedLine.Trim() -split "\\s+")[0]).ToLowerInvariant()
           $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($published -ne $env:NEXTEST_WINDOWS_X64_SHA256 -or $actual -ne $env:NEXTEST_WINDOWS_X64_SHA256) {
             throw "cargo-nextest identity mismatch"
@@ -255,7 +267,13 @@ jobs:
           $publishedPath = Join-Path $root "$name.sha256"
           Invoke-WebRequest -Uri "$base/$name.zip" -OutFile $zip
           Invoke-WebRequest -Uri "$base/$name.sha256" -OutFile $publishedPath
-          $published = ((Get-Content -Raw $publishedPath).Trim() -split "\\s+")[0].ToLowerInvariant()
+          $publishedLine = Get-Content $publishedPath |
+            Where-Object { $_ -match ([regex]::Escape("$name.zip") + '$') } |
+            Select-Object -First 1
+          if (-not $publishedLine) {
+            throw "published cargo-nextest checksum entry for $name.zip not found"
+          }
+          $published = (($publishedLine.Trim() -split "\\s+")[0]).ToLowerInvariant()
           $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($published -ne $env:NEXTEST_WINDOWS_X64_SHA256 -or $actual -ne $env:NEXTEST_WINDOWS_X64_SHA256) {
             throw "cargo-nextest identity mismatch"
