@@ -49,6 +49,15 @@ fn exact_carlton_merged_table_autoformat_consumer() {
         table.layout_metrics.is_none(),
         "non-uniform Carlton MCLD metrics must remain fail-closed"
     );
+    let text_inset = table
+        .uniform_cell_text_inset
+        .as_ref()
+        .expect("exact Carlton TABLE must retain its unanimous text inset independently");
+    assert_eq!(text_inset.inset_emu.get(), 36_576);
+    assert!(
+        !text_inset.source_refs.is_empty(),
+        "TABLE text inset must retain exact source provenance"
+    );
     assert_eq!((table.rows, table.columns), (9, 2));
     assert_eq!(table.cells.len(), 17);
     assert!(
