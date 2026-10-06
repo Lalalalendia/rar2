@@ -74,6 +74,17 @@ pub struct RecoveredRegularStreamPrefixBySid {
     pub source_modified: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PartialCfbPhysicalContext {
+    major: u16,
+    sector_len: usize,
+    num_sectors: usize,
+    mini_stream_cutoff: u64,
+    fat: Vec<u32>,
+    directory: Vec<u8>,
+}
+
+
 /// Returns only physically proven prefix bytes for one direct-root regular
 /// CFB stream.
 ///
@@ -168,10 +179,7 @@ fn recover_regular_stream_prefix_by_sid_reader_inner<R: Read + Seek>(
     Ok(recovered)
 }
 
-fn recover_root_regular_stream_prefix_from_bytes(
-    source: &[u8],
-    stream_name: &str,
-) -> Result<RecoveredRootRegularStreamPrefix> {
+fn build_partial_cfb_physical_context(source: &[u8]) -> Result<PartialCfbPhysicalContext> {
     if source.len() < 512 || source.get(..8) != Some(CFB_SIGNATURE.as_slice()) {
         anyhow::bail!("not a CFB container");
     }
@@ -216,6 +224,26 @@ fn recover_root_regular_stream_prefix_from_bytes(
     if directory.len() < DIR_ENTRY_LEN {
         anyhow::bail!("missing CFB root directory entry");
     }
+    if directory[66] != 5 {
+        anyhow::bail!("first CFB directory entry is not root");
+    }
+
+    Ok(PartialCfbPhysicalContext {
+        major,
+        sector_len,
+        num_sectors,
+        mini_stream_cutoff,
+        fat,
+        directory,
+    })
+}
+
+fn recover_root_regular_stream_prefix_from_bytes(
+    source: &[u8],
+    stream_name: &str,
+) -> Result<RecoveredRootRegularStreamPrefix> {
+    let context = build_partial_cfb_physical_context(source)?;
+    let directory = &context.directory;
 
     let root = &directory[..DIR_ENTRY_LEN];
     if root[66] != 5 {
@@ -266,11 +294,11 @@ fn recover_root_regular_stream_prefix_from_bytes(
     let entry = &directory[start..start + DIR_ENTRY_LEN];
     let recovered = recover_regular_stream_prefix_from_entry(
         source,
-        major,
-        sector_len,
-        num_sectors,
-        mini_stream_cutoff,
-        &fat,
+        context.major,
+        context.sector_len,
+        context.num_sectors,
+        context.mini_stream_cutoff,
+        &context.fat,
         stream_sid,
         entry,
         &format!("root stream {stream_name}"),
@@ -292,53 +320,8 @@ fn recover_regular_stream_prefix_by_sid_from_bytes(
     source: &[u8],
     stream_sid: u32,
 ) -> Result<RecoveredRegularStreamPrefixBySid> {
-    if source.len() < 512 || source.get(..8) != Some(CFB_SIGNATURE.as_slice()) {
-        anyhow::bail!("not a CFB container");
-    }
-
-    let major = read_u16(source, 26)?;
-    let byte_order = read_u16(source, 28)?;
-    if byte_order != 0xfffe {
-        anyhow::bail!("unsupported CFB byte order {byte_order:#06x}");
-    }
-    let sector_shift = read_u16(source, 30)?;
-    let sector_len = match (major, sector_shift) {
-        (3, 9) => 512usize,
-        (4, 12) => 4096usize,
-        _ => anyhow::bail!("unsupported CFB major/sector pair {major}/{sector_shift}"),
-    };
-    if read_u16(source, 32)? != 6 {
-        anyhow::bail!("unsupported CFB mini-sector size");
-    }
-    if source.len() < sector_len || source.len() % sector_len != 0 {
-        anyhow::bail!("unaligned CFB partial recovery input");
-    }
-
-    let num_sectors = source.len() / sector_len - 1;
-    let num_fat_sectors = read_u32(source, 44)? as usize;
-    let first_directory_sector = read_u32(source, 48)?;
-    let mini_stream_cutoff = read_u32(source, 56)? as u64;
-    if mini_stream_cutoff != MINI_STREAM_CUTOFF {
-        anyhow::bail!("unexpected mini-stream cutoff {mini_stream_cutoff}");
-    }
-
-    let fat = read_fat(source, sector_len, num_sectors, num_fat_sectors)?;
-    let directory_sector_ids =
-        fat_chain_to_end(first_directory_sector, &fat, num_sectors, "directory")?;
-    if directory_sector_ids.is_empty() {
-        anyhow::bail!("empty CFB directory chain");
-    }
-
-    let mut directory = Vec::with_capacity(directory_sector_ids.len() * sector_len);
-    for sector_id in directory_sector_ids {
-        directory.extend_from_slice(read_sector(source, sector_len, sector_id)?);
-    }
-    if directory.len() < DIR_ENTRY_LEN {
-        anyhow::bail!("missing CFB root directory entry");
-    }
-    if directory[66] != 5 {
-        anyhow::bail!("first CFB directory entry is not root");
-    }
+    let context = build_partial_cfb_physical_context(source)?;
+    let directory = &context.directory;
 
     let entry_count = directory.len() / DIR_ENTRY_LEN;
     let sid = usize::try_from(stream_sid).context("stream SID does not fit usize")?;
@@ -355,11 +338,11 @@ fn recover_regular_stream_prefix_by_sid_from_bytes(
 
     recover_regular_stream_prefix_from_entry(
         source,
-        major,
-        sector_len,
-        num_sectors,
-        mini_stream_cutoff,
-        &fat,
+        context.major,
+        context.sector_len,
+        context.num_sectors,
+        context.mini_stream_cutoff,
+        &context.fat,
         stream_sid,
         entry,
         &format!("stream SID {stream_sid}"),
