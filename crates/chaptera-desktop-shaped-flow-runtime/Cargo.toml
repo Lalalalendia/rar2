@@ -24,3 +24,6 @@ font-test-data = "=0.8.0"
 
 [workspace]
 resolver = "2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+fontdb = "=0.24.0"
