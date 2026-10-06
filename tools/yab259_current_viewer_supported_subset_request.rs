@@ -2,7 +2,8 @@ use anyhow::{Context, Result, bail};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedResolvedScene, BoundedShapedGlyph, BoundedShapedText,
     BoundedShapingDescriptor, BoundedShapingRuntime, ResolvedPhysicalNode, ResolvedSurface,
-    SceneOriginMapping, font_fingerprint_sha256, shape_bounded_ltr_segment,
+    SceneOriginMapping, compatible_natural_line_height_emu_v1, font_fingerprint_sha256,
+    shape_bounded_ltr_segment,
 };
 use pub_model::{
     Affine2D, CanonicalId, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D, TableCellId,
@@ -84,6 +85,22 @@ enum CurrentTableVerticalAlignment {
     Bottom,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CurrentParagraphAlignment {
+    Center,
+    Right,
+    InterWord,
+    Distribute,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentParagraphAlignmentRun {
+    scalar_start: u32,
+    scalar_end: u32,
+    alignment: CurrentParagraphAlignment,
+}
+
 #[derive(Debug, Deserialize)]
 struct CurrentTableCell {
     id: TableCellId,
@@ -95,6 +112,8 @@ struct CurrentTableCell {
     text: String,
     #[serde(default)]
     typography: Vec<CurrentTypographyRun>,
+    #[serde(default)]
+    paragraph_alignments: Vec<CurrentParagraphAlignmentRun>,
     #[serde(default)]
     bounds: Option<RectEmu>,
     #[serde(default)]
@@ -255,6 +274,9 @@ struct MappingSummary {
     table_bounded_text_profile_cell_count: usize,
     table_hard_break_free_profile_cell_count: usize,
     table_single_line_width_fit_cell_count: usize,
+    mapped_table_text_cell_count: usize,
+    mapped_table_text_run_count: usize,
+    table_text_residual_cell_count: usize,
     derived_table_fill_node_count: usize,
     derived_table_border_node_count: usize,
     derived_table_paint_node_count: usize,
@@ -677,6 +699,183 @@ fn observe_table_text_authority_v1(
     }
 }
 
+
+fn table_cell_single_line_x_offset_v1(
+    cell: &CurrentTableCell,
+    measured_width_emu: i64,
+    inner_width_emu: i64,
+) -> Option<i64> {
+    if measured_width_emu < 0 || measured_width_emu > inner_width_emu {
+        return None;
+    }
+    if cell.paragraph_alignments.is_empty() {
+        return Some(0);
+    }
+    if cell.paragraph_alignments.len() != 1 {
+        return None;
+    }
+    let run = &cell.paragraph_alignments[0];
+    let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end) else {
+        return None;
+    };
+    if run.scalar_start != start || run.scalar_end != end || start >= end {
+        return None;
+    }
+    let remaining = inner_width_emu.checked_sub(measured_width_emu)?;
+    match run.alignment {
+        CurrentParagraphAlignment::Center => Some(remaining / 2),
+        CurrentParagraphAlignment::Right => Some(remaining),
+        CurrentParagraphAlignment::InterWord | CurrentParagraphAlignment::Distribute => None,
+    }
+}
+
+fn table_cell_single_line_vertical_offset_v1(
+    table: &CurrentTable,
+    cell: &CurrentTableCell,
+    inset: i64,
+    font_size_emu: i64,
+    font: &CurrentFont,
+) -> Option<i64> {
+    let alignment = table.uniform_cell_vertical_alignment?;
+    let bounds = cell.bounds?;
+    let inner_height_emu = bounds.height.get().checked_sub(inset.checked_mul(2)?)?;
+    if inner_height_emu <= 0 {
+        return None;
+    }
+    let line_extent_emu = compatible_natural_line_height_emu_v1(
+        &font.bytes,
+        font.face_index,
+        LengthEmu::new(font_size_emu),
+    )?
+    .get();
+    if line_extent_emu <= 0 || line_extent_emu > inner_height_emu {
+        return None;
+    }
+    let remaining = inner_height_emu.checked_sub(line_extent_emu)?;
+    Some(match alignment {
+        CurrentTableVerticalAlignment::Top => 0,
+        CurrentTableVerticalAlignment::Center => remaining / 2,
+        CurrentTableVerticalAlignment::Bottom => remaining,
+    })
+}
+
+fn table_cell_single_line_fixed_text_run_v1(
+    table: &CurrentTable,
+    cell: &CurrentTableCell,
+    owner: NodeId,
+    owner_bounds: RectEmu,
+    owner_transform: &Affine2D,
+    font: &CurrentFont,
+) -> Option<FixedTextRun> {
+    if owner_transform != &Affine2D::identity() {
+        return None;
+    }
+    let inset = table.uniform_cell_text_inset_emu.filter(|value| *value >= 0)?;
+    let (font_size_emu, color, inner_width_emu) =
+        table_cell_bounded_text_profile_v1(cell, inset)?;
+    if cell.text.contains(&['\r', '\n'][..]) {
+        return None;
+    }
+    let scalar_start = cell.story_scalar_start?;
+    let scalar_end = cell.story_scalar_end?;
+    if scalar_start >= scalar_end {
+        return None;
+    }
+
+    let runtime = BoundedShapingRuntime {
+        layout: BoundedLayoutEnvironment {
+            engine_revision: "chaptera.table-text-single-line-output.v1".into(),
+            font_set_fingerprint: font.fingerprint_sha256.clone(),
+            resource_fingerprint: font.resource_id.clone(),
+        },
+        face_index: font.face_index,
+        font_size_emu: LengthEmu::new(i64::from(font_size_emu)),
+        font_bytes: &font.bytes,
+    };
+    let shaped = shape_bounded_ltr_segment(&cell.text, scalar_start, &runtime).ok()?;
+    if shaped.units_per_em == 0
+        || shaped.glyphs.is_empty()
+        || shaped.glyphs.iter().any(|glyph| glyph.glyph_id == 0)
+        || shaped.total_x_advance.get() > inner_width_emu
+    {
+        return None;
+    }
+    if shaped
+        .glyphs
+        .iter()
+        .any(|glyph| glyph.cluster < scalar_start || glyph.cluster >= scalar_end)
+    {
+        return None;
+    }
+
+    let x_offset_emu =
+        table_cell_single_line_x_offset_v1(cell, shaped.total_x_advance.get(), inner_width_emu)?;
+    let vertical_offset_emu = table_cell_single_line_vertical_offset_v1(
+        table,
+        cell,
+        inset,
+        i64::from(font_size_emu),
+        font,
+    )?;
+    let bounds = cell.bounds?;
+    let base_x = bounds
+        .x
+        .get()
+        .checked_add(inset)?
+        .checked_sub(owner_bounds.x.get())?;
+    let base_y = bounds
+        .y
+        .get()
+        .checked_add(inset)?
+        .checked_sub(owner_bounds.y.get())?;
+    let baseline_x = base_x.checked_add(x_offset_emu)?;
+    let baseline_y = base_y
+        .checked_add(vertical_offset_emu)?
+        .checked_add(i64::from(font_size_emu))?;
+
+    Some(FixedTextRun {
+        node_id: owner,
+        scalar_base: scalar_start,
+        logical_text: cell.text.clone(),
+        shaped,
+        baseline_x: LengthEmu::new(baseline_x),
+        baseline_y: LengthEmu::new(baseline_y),
+        fill_rgb: color,
+    })
+}
+
+fn append_table_text_runs_v1(
+    table: &CurrentTable,
+    owner: NodeId,
+    owner_bounds: RectEmu,
+    owner_transform: &Affine2D,
+    font: &CurrentFont,
+    text_runs: &mut Vec<FixedTextRun>,
+    used_glyph_ids: &mut BTreeSet<u32>,
+    summary: &mut MappingSummary,
+) -> bool {
+    let mut mapped_any = false;
+    for cell in table.cells.iter().filter(|cell| !cell.text.is_empty()) {
+        let Some(run) = table_cell_single_line_fixed_text_run_v1(
+            table,
+            cell,
+            owner,
+            owner_bounds,
+            owner_transform,
+            font,
+        ) else {
+            summary.table_text_residual_cell_count += 1;
+            continue;
+        };
+        used_glyph_ids.extend(run.shaped.glyphs.iter().map(|glyph| glyph.glyph_id));
+        text_runs.push(run);
+        summary.mapped_table_text_cell_count += 1;
+        summary.mapped_table_text_run_count += 1;
+        mapped_any = true;
+    }
+    mapped_any
+}
+
 fn append_table_paint_nodes_v1(
     table: &CurrentTable,
     owner: NodeId,
@@ -862,14 +1061,28 @@ fn main() -> Result<()> {
                     &mut node_paints,
                     &mut summary,
                 )?;
-                residual_reasons
-                    .entry(resolved_node_id)
-                    .or_default()
-                    .insert(if table_paint_mapped {
-                        "table_text".into()
-                    } else {
-                        "table".into()
-                    });
+                let table_text_mapped = append_table_text_runs_v1(
+                    table,
+                    resolved_node_id,
+                    node.bounds,
+                    &node.transform,
+                    &input.font,
+                    &mut text_runs,
+                    &mut used_glyph_ids,
+                    &mut summary,
+                );
+                if table_text_mapped {
+                    mapped_resource_nodes.insert(resolved_node_id);
+                } else {
+                    residual_reasons
+                        .entry(resolved_node_id)
+                        .or_default()
+                        .insert(if table_paint_mapped {
+                            "table_text".into()
+                        } else {
+                            "table".into()
+                        });
+                }
             }
 
             nodes.push(ResolvedPhysicalNode {
