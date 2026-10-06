@@ -1791,8 +1791,9 @@ mod tests {
     use chaptera_scene_instance::SceneProjectionKindV1;
     use chaptera_viewer_render_plan::{
         RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
-        build_page_render_plan_with_text_layout_v1, effective_source_font_family_v1,
-        uniform_text_color_rgb_v1,
+        build_page_render_plan_with_text_layout_resolvers_v1,
+        build_page_render_plan_with_text_layout_v1, classify_shared_layout_incomplete_cause_v1,
+        effective_source_font_family_v1, uniform_text_color_rgb_v1,
     };
     use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
     use sha2::{Digest, Sha256};
@@ -2445,11 +2446,138 @@ mod tests {
         let mut projected_text_bounds_nodes = 0_usize;
         let mut projected_uniform_insets_emu = BTreeMap::<i64, usize>::new();
         let mut projected_measured_width_total_emu = 0_i128;
+        let mut sli_probe_path_counts = BTreeMap::<&'static str, usize>::new();
+        let mut sli_probe_consumption_counts = BTreeMap::<&'static str, usize>::new();
+        let mut sli_probe_cause_counts = BTreeMap::<&'static str, usize>::new();
+        let mut fallback_sli_probe_path_counts = BTreeMap::<&'static str, usize>::new();
+        let mut fallback_sli_probe_consumption_counts = BTreeMap::<&'static str, usize>::new();
+        let mut fallback_sli_probe_cause_counts = BTreeMap::<&'static str, usize>::new();
+
+        let configured_probe = (actual_sha256
+            == "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3")
+            .then(|| ReaderConfiguredFontResourceV1 {
+                source_family: "Arial".to_owned(),
+                resource_id: format!(
+                    "chaptera.cloud.configured-font.{}.face0",
+                    chaptera_desktop_fallback_font_resource::EXPECTED_SHA256
+                ),
+                expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256
+                    .to_owned(),
+                face_index: 0,
+                mime: SHARED_FALLBACK_FONT_MIME.to_owned(),
+                bytes: chaptera_desktop_fallback_font_resource::bytes().to_vec(),
+            });
 
         for page_index in 0..bundle.geometry.document.pages.len() {
             let plan =
                 build_page_render_plan_with_text_layout_v1(&bundle.geometry, page_index, &font)
                     .expect("exact reference render plan must build");
+
+            let diagnostic_plan = build_page_render_plan_with_text_layout_resolvers_v1(
+                &bundle.geometry,
+                page_index,
+                &font,
+                |fragment| {
+                    let configured = configured_probe.as_ref()?;
+                    let source_family =
+                        effective_source_font_family_v1(&bundle.geometry, fragment)?;
+                    source_family
+                        .trim()
+                        .eq_ignore_ascii_case(configured.source_family.as_str())
+                        .then(|| configured.explicit_resource())
+                },
+                |_, run| {
+                    let configured = configured_probe.as_ref()?;
+                    run.source_font_name
+                        .trim()
+                        .eq_ignore_ascii_case(configured.source_family.as_str())
+                        .then(|| configured.explicit_resource())
+                },
+            )
+            .expect("exact product-font diagnostic render plan must build");
+
+            for node in &diagnostic_plan.nodes {
+                let Some(text) = node.text.as_ref() else {
+                    continue;
+                };
+                let Some(layout) = text.layout.as_ref() else {
+                    continue;
+                };
+                let RenderTextLayoutDispositionV1::BackendFallback { reason } = &layout.disposition
+                else {
+                    continue;
+                };
+                if reason.code() != "shared_layout_incomplete" {
+                    continue;
+                }
+
+                let resolved_font = configured_probe.as_ref().and_then(|configured| {
+                    let source_family = effective_source_font_family_v1(&bundle.geometry, text)?;
+                    source_family
+                        .trim()
+                        .eq_ignore_ascii_case(configured.source_family.as_str())
+                        .then(|| configured.explicit_resource())
+                });
+                let cause = if let Some(resolved_font) = resolved_font.as_ref() {
+                    classify_shared_layout_incomplete_cause_v1(
+                        &bundle.geometry,
+                        &diagnostic_plan,
+                        node,
+                        text,
+                        resolved_font,
+                        true,
+                    )
+                } else {
+                    let fallback_font = shared_text_font_resource();
+                    classify_shared_layout_incomplete_cause_v1(
+                        &bundle.geometry,
+                        &diagnostic_plan,
+                        node,
+                        text,
+                        &fallback_font,
+                        false,
+                    )
+                };
+                *sli_probe_path_counts.entry(cause.path).or_default() += 1;
+                *sli_probe_consumption_counts
+                    .entry(cause.consumption)
+                    .or_default() += 1;
+                *sli_probe_cause_counts.entry(cause.cause).or_default() += 1;
+            }
+
+            for node in &plan.nodes {
+                let Some(text) = node.text.as_ref() else {
+                    continue;
+                };
+                let Some(layout) = text.layout.as_ref() else {
+                    continue;
+                };
+                let RenderTextLayoutDispositionV1::BackendFallback { reason } = &layout.disposition
+                else {
+                    continue;
+                };
+                if reason.code() != "shared_layout_incomplete" {
+                    continue;
+                }
+
+                let cause = classify_shared_layout_incomplete_cause_v1(
+                    &bundle.geometry,
+                    &plan,
+                    node,
+                    text,
+                    &font,
+                    false,
+                );
+                *fallback_sli_probe_path_counts
+                    .entry(cause.path)
+                    .or_default() += 1;
+                *fallback_sli_probe_consumption_counts
+                    .entry(cause.consumption)
+                    .or_default() += 1;
+                *fallback_sli_probe_cause_counts
+                    .entry(cause.cause)
+                    .or_default() += 1;
+            }
 
             for node in plan.nodes {
                 let projected = node
@@ -2579,6 +2707,28 @@ mod tests {
             .expect("serialize projected line heights");
         let projected_uniform_insets_json = serde_json::to_string(&projected_uniform_insets_emu)
             .expect("serialize projected uniform text insets");
+        let sli_probe_path_json =
+            serde_json::to_string(&sli_probe_path_counts).expect("serialize SLI path census");
+        let sli_probe_consumption_json = serde_json::to_string(&sli_probe_consumption_counts)
+            .expect("serialize SLI consumption census");
+        let sli_probe_cause_json =
+            serde_json::to_string(&sli_probe_cause_counts).expect("serialize SLI cause census");
+        let fallback_sli_probe_path_json = serde_json::to_string(&fallback_sli_probe_path_counts)
+            .expect("serialize fallback-only SLI path census");
+        let fallback_sli_probe_consumption_json =
+            serde_json::to_string(&fallback_sli_probe_consumption_counts)
+                .expect("serialize fallback-only SLI consumption census");
+        let fallback_sli_probe_cause_json = serde_json::to_string(&fallback_sli_probe_cause_counts)
+            .expect("serialize fallback-only SLI cause census");
+
+        assert_eq!(
+            fallback_sli_probe_cause_counts.values().sum::<usize>(),
+            backend_fallbacks
+                .get("shared_layout_incomplete")
+                .copied()
+                .unwrap_or_default(),
+            "fallback-only SLI causal partition must cover every SharedLayoutIncomplete node"
+        );
 
         match actual_sha256.as_str() {
             "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" => {
@@ -2603,6 +2753,11 @@ mod tests {
                     projected_line_total, 31,
                     "exact Carlton projected source-backed line count drift"
                 );
+                assert_eq!(
+                    sli_probe_cause_counts.values().sum::<usize>(),
+                    3,
+                    "post-#1498 exact Carlton product-font SLI diagnostic population drift"
+                );
             }
             "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e" => {
                 assert_eq!(
@@ -2617,9 +2772,25 @@ mod tests {
                     projected_uniform_insets_emu.is_empty(),
                     "Virginia Devinettes must not acquire projected carrier inset authority"
                 );
+                assert_eq!(
+                    sli_probe_cause_counts.values().sum::<usize>(),
+                    1,
+                    "Virginia Devinettes SLI control population drift"
+                );
             }
             _ => {}
         }
+
+        println!(
+            "CLOUD_READER_SLI_CAUSE_CENSUS source_sha256={} configured_paths={} configured_consumption={} configured_causes={} fallback_paths={} fallback_consumption={} fallback_causes={}",
+            actual_sha256,
+            sli_probe_path_json,
+            sli_probe_consumption_json,
+            sli_probe_cause_json,
+            fallback_sli_probe_path_json,
+            fallback_sli_probe_consumption_json,
+            fallback_sli_probe_cause_json,
+        );
 
         println!(
             "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={}",
