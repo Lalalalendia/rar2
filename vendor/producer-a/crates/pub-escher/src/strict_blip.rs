@@ -830,12 +830,11 @@ mod tests {
             validated.payload_sha256,
             hex_lower(&Sha256::digest(stored))
         );
+        let expected_logical_sha =
+            hex_lower(&Sha256::digest(b"synthetic-emf-logical-payload"));
         assert_eq!(
             validated.logical_payload_sha256.as_deref(),
-            Some(
-                hex_lower(&Sha256::digest(b"synthetic-emf-logical-payload"))
-                    .as_str()
-            )
+            Some(expected_logical_sha.as_str())
         );
     }
 
