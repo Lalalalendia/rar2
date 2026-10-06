@@ -236,6 +236,10 @@ struct MappingSummary {
     table_nonempty_cell_text_count: usize,
     table_cell_story_range_count: usize,
     table_cell_typography_present_count: usize,
+    table_cell_typography_complete_count: usize,
+    table_cell_uniform_size_count: usize,
+    table_cell_resolved_color_count: usize,
+    table_cell_inset_bounds_valid_count: usize,
     table_uniform_cell_text_inset_count: usize,
     derived_table_fill_node_count: usize,
     derived_table_border_node_count: usize,
@@ -472,11 +476,45 @@ fn table_border_rect_v1(segment: &CurrentTableBorderSegment) -> Result<RectEmu> 
     bail!("TABLE border segment must be positive axis-aligned geometry")
 }
 
+fn complete_table_cell_typography_v1(cell: &CurrentTableCell) -> bool {
+    let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end) else {
+        return false;
+    };
+    if start >= end || cell.typography.is_empty() {
+        return false;
+    }
+    let mut cursor = start;
+    for run in &cell.typography {
+        if run.scalar_start != cursor
+            || run.scalar_end <= run.scalar_start
+            || run.scalar_end > end
+            || run.text_size_emu == 0
+        {
+            return false;
+        }
+        cursor = run.scalar_end;
+    }
+    cursor == end
+}
+
+fn table_cell_inset_fits_bounds_v1(cell: &CurrentTableCell, inset: i64) -> bool {
+    if inset < 0 {
+        return false;
+    }
+    let Some(bounds) = cell.bounds else {
+        return false;
+    };
+    let Some(double_inset) = inset.checked_mul(2) else {
+        return false;
+    };
+    bounds.width.get() > double_inset && bounds.height.get() > double_inset
+}
+
 fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSummary) {
-    if table
+    let admitted_inset = table
         .uniform_cell_text_inset_emu
-        .is_some_and(|inset| inset >= 0)
-    {
+        .filter(|inset| *inset >= 0);
+    if admitted_inset.is_some() {
         summary.table_uniform_cell_text_inset_count += 1;
     }
 
@@ -486,17 +524,49 @@ fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSu
         }
         summary.table_nonempty_cell_text_count += 1;
 
-        if let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end)
-            && start <= end
-            && u32::try_from(cell.text.chars().count())
-                .ok()
-                .is_some_and(|len| start.checked_add(len) == Some(end))
+        let exact_range = if let (Some(start), Some(end)) =
+            (cell.story_scalar_start, cell.story_scalar_end)
         {
+            start <= end
+                && u32::try_from(cell.text.chars().count())
+                    .ok()
+                    .is_some_and(|len| start.checked_add(len) == Some(end))
+        } else {
+            false
+        };
+        if exact_range {
             summary.table_cell_story_range_count += 1;
         }
 
         if !cell.typography.is_empty() {
             summary.table_cell_typography_present_count += 1;
+        }
+
+        let typography_complete = exact_range && complete_table_cell_typography_v1(cell);
+        if typography_complete {
+            summary.table_cell_typography_complete_count += 1;
+            let first_size = cell.typography[0].text_size_emu;
+            if cell
+                .typography
+                .iter()
+                .all(|run| run.text_size_emu == first_size)
+            {
+                summary.table_cell_uniform_size_count += 1;
+            }
+            if let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end)
+                && matches!(
+                    color_range_disposition(&cell.typography, start, end),
+                    ColorRangeDisposition::Resolved(_)
+                )
+            {
+                summary.table_cell_resolved_color_count += 1;
+            }
+        }
+
+        if let Some(inset) = admitted_inset
+            && table_cell_inset_fits_bounds_v1(cell, inset)
+        {
+            summary.table_cell_inset_bounds_valid_count += 1;
         }
     }
 }
