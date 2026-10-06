@@ -1,5 +1,5 @@
 use pub_editor::{
-    EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_19, EditOperation, EditorError,
+    EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_19, EDITOR_PROJECT_VERSION_V0_20, EditOperation, EditorError,
     ImageCropStateV1, NodeId,
 };
 
@@ -18,7 +18,7 @@ fn crop(top: u32, bottom: u32, left: u32, right: u32) -> ImageCropStateV1 {
 
 #[test]
 fn set_image_crop_has_canonical_wire_shape_and_v0_19_fence() {
-    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_19);
+    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_20);
     assert_eq!(EDITOR_PROJECT_VERSION_V0_19, "pub-editor-v0.19");
 
     let operation = EditOperation::SetImageCrop {
