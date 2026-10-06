@@ -106,8 +106,11 @@ fn cell_text_map(
     snapshot: &TableStructureSnapshotV1,
 ) -> Result<BTreeMap<TableCellId, String>, TableRowColHistoryErrorV1> {
     let mut by_id = BTreeMap::new();
+    let mut stored_indices = BTreeSet::new();
     for cell in &snapshot.cells {
-        if by_id.insert(cell.cell_id, cell.text.clone()).is_some() {
+        if by_id.insert(cell.cell_id, cell.text.clone()).is_some()
+            || !stored_indices.insert(cell.stored_record_index)
+        {
             return Err(TableRowColHistoryErrorV1::CellContentMismatch);
         }
     }
@@ -122,6 +125,21 @@ fn cell_text_map(
         return Err(TableRowColHistoryErrorV1::CellContentMismatch);
     }
     Ok(by_id)
+}
+
+fn require_known_track_extents(
+    snapshot: &TableStructureSnapshotV1,
+) -> Result<(), TableRowColHistoryErrorV1> {
+    if snapshot.grid.rows.iter().any(|track| track.extent.is_none())
+        || snapshot
+            .grid
+            .columns
+            .iter()
+            .any(|track| track.extent.is_none())
+    {
+        return Err(TableRowColHistoryErrorV1::UnknownTrackExtent);
+    }
+    Ok(())
 }
 
 pub fn validate_table_structure_snapshot_v1(
@@ -202,6 +220,83 @@ fn reindex_columns(
         column.index = checked_track_count(index)?;
     }
     Ok(())
+}
+
+fn next_stored_record_indices(
+    before: &TableStructureSnapshotV1,
+    count: usize,
+) -> Result<Vec<u32>, TableRowColHistoryErrorV1> {
+    let start = before
+        .cells
+        .iter()
+        .map(|cell| cell.stored_record_index)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or(TableRowColHistoryErrorV1::CountOverflow)?;
+    (0..count)
+        .map(|offset| {
+            start
+                .checked_add(
+                    u32::try_from(offset).map_err(|_| TableRowColHistoryErrorV1::CountOverflow)?,
+                )
+                .ok_or(TableRowColHistoryErrorV1::CountOverflow)
+        })
+        .collect()
+}
+
+fn effective_cell_bounds(
+    grid: &EffectiveTableGridV1,
+    bounds: RectEmu,
+    address: TableCellAddress,
+) -> Result<RectEmu, TableRowColHistoryErrorV1> {
+    let row_index =
+        usize::try_from(address.row).map_err(|_| TableRowColHistoryErrorV1::InvalidGrid)?;
+    let column_index =
+        usize::try_from(address.column).map_err(|_| TableRowColHistoryErrorV1::InvalidGrid)?;
+    let row = grid
+        .rows
+        .get(row_index)
+        .ok_or(TableRowColHistoryErrorV1::InvalidGrid)?;
+    let column = grid
+        .columns
+        .get(column_index)
+        .ok_or(TableRowColHistoryErrorV1::InvalidGrid)?;
+    let height = row
+        .extent
+        .ok_or(TableRowColHistoryErrorV1::UnknownTrackExtent)?;
+    let width = column
+        .extent
+        .ok_or(TableRowColHistoryErrorV1::UnknownTrackExtent)?;
+
+    let mut x = bounds.x.get();
+    for track in grid.columns.iter().take(column_index) {
+        x = x
+            .checked_add(
+                track
+                    .extent
+                    .ok_or(TableRowColHistoryErrorV1::UnknownTrackExtent)?
+                    .get(),
+            )
+            .ok_or(TableRowColHistoryErrorV1::BoundsOverflow)?;
+    }
+    let mut y = bounds.y.get();
+    for track in grid.rows.iter().take(row_index) {
+        y = y
+            .checked_add(
+                track
+                    .extent
+                    .ok_or(TableRowColHistoryErrorV1::UnknownTrackExtent)?
+                    .get(),
+            )
+            .ok_or(TableRowColHistoryErrorV1::BoundsOverflow)?;
+    }
+    Ok(RectEmu::new(
+        LengthEmu::new(x),
+        LengthEmu::new(y),
+        width,
+        height,
+    ))
 }
 
 fn grow_bounds(
@@ -308,6 +403,16 @@ fn canonicalize_story(
         cell.utf16_start = Some(start);
         cell.utf16_end = Some(end);
     }
+    for content in &mut snapshot.cells {
+        let address = snapshot
+            .grid
+            .cells
+            .iter()
+            .find(|cell| cell.id == content.cell_id)
+            .ok_or(TableRowColHistoryErrorV1::CellContentMismatch)?
+            .address;
+        content.bounds = Some(effective_cell_bounds(&snapshot.grid, snapshot.bounds, address)?);
+    }
     snapshot.cells.sort_by_key(|content| {
         snapshot
             .grid
@@ -344,6 +449,7 @@ fn insert_row(
         cell_ids.iter().map(|id| *id.as_canonical().as_bytes()),
     )?;
 
+    let new_stored_indices = next_stored_record_indices(before, cell_ids.len())?;
     let mut after = before.clone();
     after.grid.rows.insert(
         index_usize,
@@ -363,11 +469,12 @@ fn insert_row(
                 .ok_or(TableRowColHistoryErrorV1::CountOverflow)?;
         }
     }
-    for (column, (column_track, cell_id)) in after
+    for (column, ((column_track, cell_id), stored_record_index)) in after
         .grid
         .columns
         .iter()
         .zip(cell_ids.iter().copied())
+        .zip(new_stored_indices.into_iter())
         .enumerate()
     {
         after.grid.cells.push(EffectiveTableCellV1 {
@@ -387,6 +494,10 @@ fn insert_row(
         after.cells.push(TableCellContentSnapshotV1 {
             cell_id,
             text: String::new(),
+            stored_record_index,
+            bounds: None,
+            paint: None,
+            source_refs: Vec::new(),
         });
     }
     after.bounds = grow_bounds(before.bounds, true, extent)?;
@@ -415,6 +526,7 @@ fn insert_column(
         cell_ids.iter().map(|id| *id.as_canonical().as_bytes()),
     )?;
 
+    let new_stored_indices = next_stored_record_indices(before, cell_ids.len())?;
     let mut after = before.clone();
     after.grid.columns.insert(
         index_usize,
@@ -434,11 +546,12 @@ fn insert_column(
                 .ok_or(TableRowColHistoryErrorV1::CountOverflow)?;
         }
     }
-    for (row, (row_track, cell_id)) in after
+    for (row, ((row_track, cell_id), stored_record_index)) in after
         .grid
         .rows
         .iter()
         .zip(cell_ids.iter().copied())
+        .zip(new_stored_indices.into_iter())
         .enumerate()
     {
         after.grid.cells.push(EffectiveTableCellV1 {
@@ -458,6 +571,10 @@ fn insert_column(
         after.cells.push(TableCellContentSnapshotV1 {
             cell_id,
             text: String::new(),
+            stored_record_index,
+            bounds: None,
+            paint: None,
+            source_refs: Vec::new(),
         });
     }
     after.bounds = grow_bounds(before.bounds, false, extent)?;
@@ -554,6 +671,7 @@ pub fn plan_table_rowcol_mutation_v1(
     mutation: &TableRowColMutationV1,
 ) -> Result<TableStructureSnapshotV1, TableRowColHistoryErrorV1> {
     validate_table_structure_snapshot_v1(before)?;
+    require_known_track_extents(before)?;
     match mutation {
         TableRowColMutationV1::InsertRow {
             index,
@@ -750,18 +868,34 @@ mod tests {
             TableCellContentSnapshotV1 {
                 cell_id: ids[0],
                 text: "A".into(),
+                stored_record_index: 0,
+                bounds: None,
+                paint: None,
+                source_refs: Vec::new(),
             },
             TableCellContentSnapshotV1 {
                 cell_id: ids[1],
                 text: "B".into(),
+                stored_record_index: 1,
+                bounds: None,
+                paint: None,
+                source_refs: Vec::new(),
             },
             TableCellContentSnapshotV1 {
                 cell_id: ids[2],
                 text: "C".into(),
+                stored_record_index: 2,
+                bounds: None,
+                paint: None,
+                source_refs: Vec::new(),
             },
             TableCellContentSnapshotV1 {
                 cell_id: ids[3],
                 text: "D".into(),
+                stored_record_index: 3,
+                bounds: None,
+                paint: None,
+                source_refs: Vec::new(),
             },
         ];
         let ordered = cells
@@ -775,7 +909,7 @@ mod tests {
             entry.utf16_start = Some(start);
             entry.utf16_end = Some(end);
         }
-        TableStructureSnapshotV1 {
+        let mut snapshot = TableStructureSnapshotV1 {
             grid,
             bounds: RectEmu::new(
                 LengthEmu::new(100),
@@ -786,7 +920,9 @@ mod tests {
             story_id,
             story_text,
             cells,
-        }
+        };
+        canonicalize_story(&mut snapshot).expect("canonical preservation snapshot");
+        snapshot
     }
 
     #[test]
