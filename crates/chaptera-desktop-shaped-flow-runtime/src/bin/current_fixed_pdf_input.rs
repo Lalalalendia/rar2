@@ -229,11 +229,11 @@ fn exact_project_targets(project: &EditorProject) -> Result<ProjectTargets, Stri
                 replacement_node_id,
                 ..
             } = &targets
-                && (move_node_id == resize_node_id
-                    || move_node_id == replacement_node_id
-                    || resize_node_id == replacement_node_id)
+                && (move_node_id == resize_node_id || move_node_id == replacement_node_id)
             {
-                return Err("Stage-0 object mutation targets must be distinct".into());
+                return Err(
+                    "Stage-0 MoveNode target must be distinct from resized/replaced target".into(),
+                );
             }
             Ok(targets)
         }
@@ -430,6 +430,17 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn stage02_target_topology_allows_resize_then_replace_same_frame() {
+        let move_node: NodeId =
+            serde_json::from_str("\"11111111-1111-4111-8111-111111111111\"").unwrap();
+        let photo_node: NodeId =
+            serde_json::from_str("\"22222222-2222-4222-8222-222222222222\"").unwrap();
+
+        assert_ne!(move_node, photo_node);
+        assert_eq!(photo_node, photo_node);
     }
 
     #[test]
