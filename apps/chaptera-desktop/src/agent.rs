@@ -2258,6 +2258,38 @@ fn operation_summary(operation: &EditOperation) -> Value {
             "before_bounds":rect_json(history.before_bounds),
             "after_bounds":rect_json(history.after_bounds)
         }),
+        EditOperation::InsertTableRow { history } => json!({
+            "kind":"insert_table_row",
+            "table_id":history.table_id.as_canonical().to_string(),
+            "story_id":history.story_id.as_canonical().to_string(),
+            "mutation":history.mutation,
+            "before_bounds":rect_json(history.before.bounds),
+            "after_bounds":rect_json(history.after.bounds)
+        }),
+        EditOperation::DeleteTableRow { history } => json!({
+            "kind":"delete_table_row",
+            "table_id":history.table_id.as_canonical().to_string(),
+            "story_id":history.story_id.as_canonical().to_string(),
+            "mutation":history.mutation,
+            "before_bounds":rect_json(history.before.bounds),
+            "after_bounds":rect_json(history.after.bounds)
+        }),
+        EditOperation::InsertTableColumn { history } => json!({
+            "kind":"insert_table_column",
+            "table_id":history.table_id.as_canonical().to_string(),
+            "story_id":history.story_id.as_canonical().to_string(),
+            "mutation":history.mutation,
+            "before_bounds":rect_json(history.before.bounds),
+            "after_bounds":rect_json(history.after.bounds)
+        }),
+        EditOperation::DeleteTableColumn { history } => json!({
+            "kind":"delete_table_column",
+            "table_id":history.table_id.as_canonical().to_string(),
+            "story_id":history.story_id.as_canonical().to_string(),
+            "mutation":history.mutation,
+            "before_bounds":rect_json(history.before.bounds),
+            "after_bounds":rect_json(history.after.bounds)
+        }),
         EditOperation::DeleteNode {
             node_id,
             page_id,
