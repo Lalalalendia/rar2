@@ -1,4 +1,7 @@
-use crate::{OfficeArtBody, OfficeArtReadError, OfficeArtRecord, parse_officeart_stream};
+use crate::{
+    OfficeArtBody, OfficeArtReadError, OfficeArtRecord, ValidatedBlip, parse_officeart_stream,
+    parse_record_at, validate_blip_record,
+};
 use pub_core::{RawSpan, StreamPath};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -81,6 +84,59 @@ pub struct DelayedBlip {
 pub struct DelayedBlipInventory {
     pub stream: StreamPath,
     pub records: Vec<DelayedBlip>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DelayedBlipPrefixGap {
+    TruncatedHeader {
+        offset: u64,
+        available: u64,
+    },
+    DeclaredRecordOutOfBounds {
+        offset: u64,
+        rec_type: u16,
+        declared_len: u32,
+        available: u64,
+    },
+    RecordParseFailure {
+        offset: u64,
+    },
+    NonAdvancingRecord {
+        offset: u64,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RejectedDelayedBlipDisposition {
+    UnsupportedMetafile,
+    UnsupportedPicture,
+    UnsupportedBlipType,
+    StrictValidationFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RejectedDelayedBlip {
+    pub record_source: RawSpan,
+    pub rec_type: u16,
+    pub rec_instance: u16,
+    pub kind: BlipKind,
+    pub disposition: RejectedDelayedBlipDisposition,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidatedDelayedBlipPrefixInventory {
+    pub stream: StreamPath,
+    /// Bytes physically supplied to this prefix parser. This is not the
+    /// directory-declared stream length and must not be used as completeness
+    /// evidence.
+    pub available_prefix_len: u64,
+    pub scanned_record_count: u32,
+    pub rejected_complete_blips: Vec<RejectedDelayedBlip>,
+    pub records: Vec<ValidatedBlip>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_gap: Option<DelayedBlipPrefixGap>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,6 +258,144 @@ pub fn inspect_delayed_blips(
     }
 
     Ok(DelayedBlipInventory { stream, records })
+}
+
+/**
+Reads a physically available EscherDelay prefix without pretending the
+available bytes form a complete stream.
+
+Only complete OfficeArt records are traversed. A terminal short header or a
+record whose declared payload crosses the available prefix becomes an explicit
+terminal gap while already validated BLIPs remain available. V1 never scans or
+resynchronizes beyond a broken record boundary.
+
+Complete records that are outside the current strict BLIP validator (or fail
+its integrity checks) are not promoted, but their exact declared record extent
+may still be traversed to reach the next sequential record.
+*/
+pub fn inspect_validated_delayed_blips_prefix(
+    stream: StreamPath,
+    bytes: &[u8],
+) -> ValidatedDelayedBlipPrefixInventory {
+    let mut offset = 0usize;
+    let mut scanned_record_count = 0u32;
+    let mut rejected_complete_blips = Vec::new();
+    let mut records = Vec::new();
+    let mut terminal_gap = None;
+
+    while offset < bytes.len() {
+        let available = bytes.len() - offset;
+        if available < 8 {
+            terminal_gap = Some(DelayedBlipPrefixGap::TruncatedHeader {
+                offset: offset as u64,
+                available: available as u64,
+            });
+            break;
+        }
+
+        let rec_type = read_u16(bytes, offset + 2);
+        let rec_len = read_u32(bytes, offset + 4);
+        let payload_len = match usize::try_from(rec_len) {
+            Ok(value) => value,
+            Err(_) => {
+                terminal_gap = Some(DelayedBlipPrefixGap::DeclaredRecordOutOfBounds {
+                    offset: offset as u64,
+                    rec_type,
+                    declared_len: rec_len,
+                    available: available as u64,
+                });
+                break;
+            }
+        };
+        let Some(record_end) = offset
+            .checked_add(8)
+            .and_then(|start| start.checked_add(payload_len))
+        else {
+            terminal_gap = Some(DelayedBlipPrefixGap::DeclaredRecordOutOfBounds {
+                offset: offset as u64,
+                rec_type,
+                declared_len: rec_len,
+                available: available as u64,
+            });
+            break;
+        };
+        if record_end > bytes.len() {
+            terminal_gap = Some(DelayedBlipPrefixGap::DeclaredRecordOutOfBounds {
+                offset: offset as u64,
+                rec_type,
+                declared_len: rec_len,
+                available: available as u64,
+            });
+            break;
+        }
+
+        let record = match parse_record_at(bytes, &stream, offset, bytes.len()) {
+            Ok(record) => record,
+            Err(_) => {
+                terminal_gap = Some(DelayedBlipPrefixGap::RecordParseFailure {
+                    offset: offset as u64,
+                });
+                break;
+            }
+        };
+
+        let next = record
+            .sibling_tail_source
+            .as_ref()
+            .unwrap_or(&record.source)
+            .end()
+            .and_then(|value| usize::try_from(value).ok());
+        let Some(next) = next else {
+            terminal_gap = Some(DelayedBlipPrefixGap::RecordParseFailure {
+                offset: offset as u64,
+            });
+            break;
+        };
+        if next <= offset {
+            terminal_gap = Some(DelayedBlipPrefixGap::NonAdvancingRecord {
+                offset: offset as u64,
+            });
+            break;
+        }
+
+        if (0xF018..=0xF117).contains(&rec_type) {
+            match validate_blip_record(bytes, &record) {
+                Ok(validated) => records.push(validated),
+                Err(_) => rejected_complete_blips.push(RejectedDelayedBlip {
+                    record_source: record.source.clone(),
+                    rec_type: record.header.rec_type,
+                    rec_instance: record.header.rec_instance,
+                    kind: blip_kind(record.header.rec_type),
+                    disposition: rejected_delayed_blip_disposition(record.header.rec_type),
+                }),
+            }
+        }
+
+        scanned_record_count = scanned_record_count.saturating_add(1);
+        offset = next;
+    }
+
+    ValidatedDelayedBlipPrefixInventory {
+        stream,
+        available_prefix_len: bytes.len() as u64,
+        scanned_record_count,
+        rejected_complete_blips,
+        records,
+        terminal_gap,
+    }
+}
+
+fn rejected_delayed_blip_disposition(rec_type: u16) -> RejectedDelayedBlipDisposition {
+    match rec_type {
+        OFFICE_ART_BLIP_EMF | OFFICE_ART_BLIP_WMF => {
+            RejectedDelayedBlipDisposition::UnsupportedMetafile
+        }
+        OFFICE_ART_BLIP_PICT => RejectedDelayedBlipDisposition::UnsupportedPicture,
+        OFFICE_ART_BLIP_JPEG | OFFICE_ART_BLIP_PNG | OFFICE_ART_BLIP_DIB | OFFICE_ART_BLIP_TIFF => {
+            RejectedDelayedBlipDisposition::StrictValidationFailed
+        }
+        _ => RejectedDelayedBlipDisposition::UnsupportedBlipType,
+    }
 }
 
 /// Resolves a one-based BStore slot through its exact foDelay offset.
@@ -443,6 +637,25 @@ mod tests {
         bytes
     }
 
+    fn strict_png_record(corrupt_uid: bool) -> Vec<u8> {
+        use md4::{Digest, Md4};
+
+        let mut data = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        data.extend_from_slice(b"prefix-salvage");
+        let digest = Md4::digest(&data);
+        let mut uid = [0u8; 16];
+        uid.copy_from_slice(&digest);
+        if corrupt_uid {
+            uid[0] ^= 0x5A;
+        }
+
+        let mut payload = Vec::with_capacity(17 + data.len());
+        payload.extend_from_slice(&uid);
+        payload.push(0xFF);
+        payload.extend_from_slice(&data);
+        record(0x6E00, OFFICE_ART_BLIP_PNG, &payload)
+    }
+
     #[test]
     fn reads_fbse_slot_without_collapsing_identity() {
         let mut fbse = vec![0_u8; 36];
@@ -585,5 +798,132 @@ mod tests {
                 .map(|span| span.offset),
             Some(25)
         );
+    }
+
+    #[test]
+    fn prefix_retains_complete_blip_before_truncated_terminal_header() {
+        let first = strict_png_record(false);
+        let mut bytes = first.clone();
+        bytes.extend_from_slice(&[0x00, 0x6E, 0x1E, 0xF0]);
+
+        let observed =
+            inspect_validated_delayed_blips_prefix(stream("/Escher/EscherDelayStm"), &bytes);
+        assert_eq!(observed.records.len(), 1);
+        assert_eq!(observed.scanned_record_count, 1);
+        assert_eq!(observed.rejected_complete_blips.len(), 0);
+        assert_eq!(observed.records[0].record_source.offset, 0);
+        assert_eq!(
+            observed.records[0].record_source.end(),
+            Some(first.len() as u64)
+        );
+        assert!(matches!(
+            observed.terminal_gap,
+            Some(DelayedBlipPrefixGap::TruncatedHeader {
+                offset,
+                available: 4
+            }) if offset == first.len() as u64
+        ));
+    }
+
+    #[test]
+    fn prefix_retains_complete_blip_before_declared_record_oob() {
+        let first = strict_png_record(false);
+        let mut bytes = first.clone();
+        bytes.extend_from_slice(&0x6E00u16.to_le_bytes());
+        bytes.extend_from_slice(&OFFICE_ART_BLIP_PNG.to_le_bytes());
+        bytes.extend_from_slice(&100u32.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 12]);
+
+        let observed =
+            inspect_validated_delayed_blips_prefix(stream("/Escher/EscherDelayStm"), &bytes);
+        assert_eq!(observed.records.len(), 1);
+        assert_eq!(observed.scanned_record_count, 1);
+        assert!(matches!(
+            observed.terminal_gap,
+            Some(DelayedBlipPrefixGap::DeclaredRecordOutOfBounds {
+                offset,
+                rec_type: OFFICE_ART_BLIP_PNG,
+                declared_len: 100,
+                ..
+            }) if offset == first.len() as u64
+        ));
+    }
+
+    #[test]
+    fn complete_emf_is_preserved_as_explicit_unsupported_metafile() {
+        let emf = record(0x3D40, OFFICE_ART_BLIP_EMF, &[0u8; 50]);
+        let observed =
+            inspect_validated_delayed_blips_prefix(stream("/Escher/EscherDelayStm"), &emf);
+
+        assert_eq!(observed.scanned_record_count, 1);
+        assert!(observed.records.is_empty());
+        assert!(observed.terminal_gap.is_none());
+        assert_eq!(observed.rejected_complete_blips.len(), 1);
+        let rejected = &observed.rejected_complete_blips[0];
+        assert_eq!(rejected.record_source.offset, 0);
+        assert_eq!(rejected.record_source.len, emf.len() as u64);
+        assert_eq!(rejected.rec_type, OFFICE_ART_BLIP_EMF);
+        assert_eq!(rejected.rec_instance, 0x3D4);
+        assert_eq!(rejected.kind, BlipKind::Emf);
+        assert_eq!(
+            rejected.disposition,
+            RejectedDelayedBlipDisposition::UnsupportedMetafile
+        );
+    }
+
+    #[test]
+    fn complete_bad_uid_record_is_rejected_without_resync_or_losing_neighbors() {
+        let first = strict_png_record(false);
+        let bad = strict_png_record(true);
+        let third = strict_png_record(false);
+        let mut bytes = first.clone();
+        bytes.extend_from_slice(&bad);
+        bytes.extend_from_slice(&third);
+
+        let observed =
+            inspect_validated_delayed_blips_prefix(stream("/Escher/EscherDelayStm"), &bytes);
+        assert_eq!(observed.scanned_record_count, 3);
+        assert_eq!(observed.rejected_complete_blips.len(), 1);
+        assert_eq!(observed.records.len(), 2);
+        assert!(observed.terminal_gap.is_none());
+        assert_eq!(observed.records[0].record_source.offset, 0);
+        assert_eq!(
+            observed.records[1].record_source.offset,
+            (first.len() + bad.len()) as u64
+        );
+    }
+
+    #[test]
+    fn exact_record_boundary_does_not_claim_complete_stream() {
+        let bytes = strict_png_record(false);
+        let observed =
+            inspect_validated_delayed_blips_prefix(stream("/Escher/EscherDelayStm"), &bytes);
+
+        assert_eq!(observed.available_prefix_len, bytes.len() as u64);
+        assert_eq!(observed.records.len(), 1);
+        assert!(observed.terminal_gap.is_none());
+        // Absence of a parser-visible terminal gap means only that the supplied
+        // bytes end on a complete record boundary. Physical stream completeness
+        // belongs to the CFB prefix evidence, not this parser.
+    }
+
+    #[test]
+    fn complete_supported_prefix_matches_strict_record_boundaries() {
+        let first = strict_png_record(false);
+        let second = strict_png_record(false);
+        let mut bytes = first.clone();
+        bytes.extend_from_slice(&second);
+
+        let strict = inspect_delayed_blips(stream("/Escher/EscherDelayStm"), &bytes)
+            .expect("complete delay stream");
+        let prefix =
+            inspect_validated_delayed_blips_prefix(stream("/Escher/EscherDelayStm"), &bytes);
+
+        assert_eq!(strict.records.len(), 2);
+        assert_eq!(prefix.records.len(), 2);
+        assert!(prefix.terminal_gap.is_none());
+        for (strict_record, validated_record) in strict.records.iter().zip(&prefix.records) {
+            assert_eq!(strict_record.record_source, validated_record.record_source);
+        }
     }
 }
