@@ -32,7 +32,10 @@ fn equal_contents_seq_and_quill_syid_do_not_share_canonical_id() {
     let story = derive_pub_story_id(&hash, numeric).expect("story id");
 
     assert_ne!(node.as_canonical(), story.as_canonical());
-    assert_ne!(contents_object_key(numeric), quill_story_object_key(numeric));
+    assert_ne!(
+        contents_object_key(numeric),
+        quill_story_object_key(numeric)
+    );
 }
 
 #[test]
@@ -75,10 +78,13 @@ fn changing_only_semantic_role_changes_source_derived_identity() {
     let page = derive_pub_page_id(&hash, numeric).expect("page id");
     let node = derive_pub_node_id(&hash, numeric).expect("node id");
 
-    let ids = [document.as_canonical(), page.as_canonical(), node.as_canonical()];
+    let ids = [
+        document.as_canonical(),
+        page.as_canonical(),
+        node.as_canonical(),
+    ];
     assert!(ids[0] != ids[1] && ids[0] != ids[2] && ids[1] != ids[2]);
 }
-
 
 #[test]
 fn same_role_different_source_scalars_do_not_share_canonical_id() {
