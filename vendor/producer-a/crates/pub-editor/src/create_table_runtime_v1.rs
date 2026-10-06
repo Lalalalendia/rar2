@@ -76,8 +76,8 @@ fn authored_table_story_v1(
             if utf16.is_empty() {
                 utf16.push(0x000D);
             }
-            let start =
-                u32::try_from(utf16.len()).map_err(|_| CreateTableRuntimeValidationError::RangeOverflow)?;
+            let start = u32::try_from(utf16.len())
+                .map_err(|_| CreateTableRuntimeValidationError::RangeOverflow)?;
             utf16.push(0x000D);
             start
         };
@@ -86,8 +86,8 @@ fn authored_table_story_v1(
         if index + 1 == ordered_cells.len() {
             utf16.push(0x000D);
         }
-        let end =
-            u32::try_from(utf16.len()).map_err(|_| CreateTableRuntimeValidationError::RangeOverflow)?;
+        let end = u32::try_from(utf16.len())
+            .map_err(|_| CreateTableRuntimeValidationError::RangeOverflow)?;
         ranges.insert(*cell_id, (start, end));
     }
 
@@ -148,12 +148,7 @@ pub fn validate_create_table_runtime_v1(
     let mut identities = BTreeSet::<[u8; 16]>::new();
     for id in std::iter::once(*table.node_id.as_canonical().as_bytes())
         .chain(std::iter::once(*table.story_id.as_canonical().as_bytes()))
-        .chain(
-            table
-                .row_ids
-                .iter()
-                .map(|id| *id.as_canonical().as_bytes()),
-        )
+        .chain(table.row_ids.iter().map(|id| *id.as_canonical().as_bytes()))
         .chain(
             table
                 .column_ids
@@ -254,14 +249,13 @@ pub fn build_create_table_plan_v1(
     let mut effective_cells = Vec::with_capacity(table.cell_ids.len());
 
     for (index, cell_id) in table.cell_ids.iter().copied().enumerate() {
-        let row = u32::try_from(index / table.column_ids.len())
-            .expect("validated cell row fits u32");
-        let column = u32::try_from(index % table.column_ids.len())
-            .expect("validated cell column fits u32");
+        let row =
+            u32::try_from(index / table.column_ids.len()).expect("validated cell row fits u32");
+        let column =
+            u32::try_from(index % table.column_ids.len()).expect("validated cell column fits u32");
         let address = TableCellAddress { row, column };
         let row_id = row_tracks[usize::try_from(row).expect("row u32 fits usize")].id;
-        let column_id =
-            column_tracks[usize::try_from(column).expect("column u32 fits usize")].id;
+        let column_id = column_tracks[usize::try_from(column).expect("column u32 fits usize")].id;
         let (utf16_start, utf16_end) = ranges[&cell_id];
 
         let x = table
