@@ -5,6 +5,11 @@ on:
     paths:
       - ".github/workflows/publisher-supplemental-native-surface-once.yml"
       - "tools/windows/run_publisher_supplemental_native_surface_probe.ps1"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/publisher-supplemental-native-surface-once.yml"
+      - "tools/windows/run_publisher_supplemental_native_surface_probe.ps1"
   workflow_dispatch:
 
 permissions:
@@ -58,7 +63,7 @@ jobs:
 
   native:
     needs: contract
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     environment: pub-native-lab
     runs-on:
       - self-hosted
