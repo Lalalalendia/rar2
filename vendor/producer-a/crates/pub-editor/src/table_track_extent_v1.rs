@@ -1,6 +1,4 @@
-use pub_model::{
-    EffectiveTableGridV1, LengthEmu, RectEmu, TableColumnId, TableRowId,
-};
+use pub_model::{EffectiveTableGridV1, LengthEmu, RectEmu, TableColumnId, TableRowId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableTrackTargetV1 {
