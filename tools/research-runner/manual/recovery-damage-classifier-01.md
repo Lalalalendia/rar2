@@ -72,6 +72,13 @@ Schema:
       "rescue_outcome": "bounded_repair_candidate",
       "repair_gate": "quill_donor",
       "repair_native_status": "pass",
+      "recovery_route": null,
+      "recovery_class": null,
+      "producer_receipt_sha256": null,
+      "product_validation_sha256": null,
+      "artifact_count": null,
+      "fabricated_bytes": 0,
+      "silent_drops": 0,
       "evidence_level": "controlled_native",
       "confidence": "high",
       "promotion_gap": null
@@ -108,3 +115,19 @@ Hard gate:
 For the four current Reader rejects, the workflow reports how many become theoretical `rescue` because current recovery primitives already expose useful facts but typed production admission is missing.
 
 That count is diagnostic, not automatically a new product claim.
+
+
+## Current natural Rescue seed
+
+The committed source-free evidence file currently binds one real natural damaged witness:
+
+- source SHA `6eb0a85afb42d329e2241ce060ec3b6957ecd429a5122cfc908b4621ab4884b8`;
+- route/class `partially_recovered / partial_salvage`;
+- producer receipt `1bbdaf7fd5fa47cbadc50b152d72d7227fca716468fc1de53bf003f02a5ceed8`;
+- product validation `12d558a4fe1a699420e7b4a09e4616d0b045aaf36c95df575792593d1046bc02`;
+- 12 verified media artifacts;
+- fabricated bytes = 0;
+- silent drops = 0;
+- native validation = inconclusive.
+
+This row may produce compact `rescue` when those exact source bytes are present in an input corpus. It does not change Reader admission.
