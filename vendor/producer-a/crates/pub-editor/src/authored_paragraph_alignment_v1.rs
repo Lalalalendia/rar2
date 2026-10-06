@@ -33,9 +33,7 @@ pub(crate) fn paragraph_scoped_alignment_value_v1(
     effective: Option<EffectiveParagraphAlignmentValueV1>,
 ) -> Result<ParagraphScopedAlignmentValueV1, ParagraphScopedAlignmentProjectionErrorV1> {
     match effective {
-        Some(EffectiveParagraphAlignmentValueV1::Left) => {
-            Ok(ParagraphScopedAlignmentValueV1::Left)
-        }
+        Some(EffectiveParagraphAlignmentValueV1::Left) => Ok(ParagraphScopedAlignmentValueV1::Left),
         Some(EffectiveParagraphAlignmentValueV1::Center) => {
             Ok(ParagraphScopedAlignmentValueV1::Center)
         }
