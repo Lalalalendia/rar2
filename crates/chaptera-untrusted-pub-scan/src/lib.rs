@@ -303,7 +303,7 @@ fn inspect_cfb_firewall(bytes: &[u8]) -> Result<(), CfbFirewallViolation> {
             "CFB mini-sector shift must be 6",
         ));
     }
-    if bytes.len() < sector_len || bytes.len() % sector_len != 0 {
+    if bytes.len() < sector_len || !bytes.len().is_multiple_of(sector_len) {
         return Err(firewall_violation(
             "file_alignment_invalid",
             format!(
