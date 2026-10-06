@@ -967,14 +967,8 @@ fn text_content_bounds(
     let left = i64::from(left_emu);
     let bottom = i64::from(bottom_emu);
     let right = i64::from(right_emu);
-    let width = bounds
-        .width
-        .get()
-        .checked_sub(left.checked_add(right)?)?;
-    let height = bounds
-        .height
-        .get()
-        .checked_sub(top.checked_add(bottom)?)?;
+    let width = bounds.width.get().checked_sub(left.checked_add(right)?)?;
+    let height = bounds.height.get().checked_sub(top.checked_add(bottom)?)?;
     if width <= 0 || height <= 0 {
         return None;
     }
