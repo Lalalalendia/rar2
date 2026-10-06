@@ -3,14 +3,14 @@ use pub_contents::{
 };
 use pub_core::StreamPath;
 use pub_escher::{
-    PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE,
-    PUBLISHER_FIELD_YS, inspect_sp_containers,
+    inspect_sp_containers, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS,
+    PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS,
 };
 use pub_model::Sha256Digest;
 use pub_reader::{
-    CONTENTS_STREAM_PATH, ESCHER_STREAM_PATH, PubBridgeDiagnostic, build_mature_0x2c_source_graph,
+    build_mature_0x2c_source_graph, PubBridgeDiagnostic, CONTENTS_STREAM_PATH, ESCHER_STREAM_PATH,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, env, error::Error, fs, io::Cursor};
 
