@@ -1786,6 +1786,228 @@ fn promote_direct_single_frame_prefix_to_whole_story_v1(
     true
 }
 
+fn table_cell_text_content_bounds_v1(bounds: RectEmu, inset_emu: i64) -> Option<RectEmu> {
+    if inset_emu < 0 {
+        return None;
+    }
+    let double_inset = inset_emu.checked_mul(2)?;
+    let width = bounds.width.get().checked_sub(double_inset)?;
+    let height = bounds.height.get().checked_sub(double_inset)?;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    Some(RectEmu::new(
+        LengthEmu::new(bounds.x.get().checked_add(inset_emu)?),
+        LengthEmu::new(bounds.y.get().checked_add(inset_emu)?),
+        LengthEmu::new(width),
+        LengthEmu::new(height),
+    ))
+}
+
+fn table_cell_render_fragment_v1(
+    story_id: StoryId,
+    cell: &RenderTableCellV1,
+) -> Option<RenderTextFragmentV1> {
+    let scalar_start = cell.story_scalar_start?;
+    let scalar_end = cell.story_scalar_end?;
+    let scalar_len = u32::try_from(cell.text.chars().count()).ok()?;
+    if cell.text.is_empty()
+        || scalar_start >= scalar_end
+        || scalar_start.checked_add(scalar_len) != Some(scalar_end)
+        || cell.typography.is_empty()
+    {
+        return None;
+    }
+    Some(RenderTextFragmentV1 {
+        story_id,
+        scalar_start,
+        scalar_end,
+        text: cell.text.clone(),
+        line_count: 0,
+        typography: cell.typography.clone(),
+        paragraph_alignments: cell.paragraph_alignments.clone(),
+        backend_font_resource_id: None,
+        layout: None,
+    })
+}
+
+fn table_cell_paragraph_alignment_admissible_v1(fragment: &RenderTextFragmentV1) -> bool {
+    let mut previous_end = fragment.scalar_start;
+    for run in &fragment.paragraph_alignments {
+        if run.scalar_start < fragment.scalar_start
+            || run.scalar_end > fragment.scalar_end
+            || run.scalar_start >= run.scalar_end
+            || run.scalar_start < previous_end
+            || matches!(
+                run.alignment,
+                RenderParagraphAlignmentV1::InterWord | RenderParagraphAlignmentV1::Distribute
+            )
+        {
+            return false;
+        }
+        previous_end = run.scalar_end;
+    }
+    true
+}
+
+fn resolve_uniform_table_cell_text_layout_v1(
+    fragment: &RenderTextFragmentV1,
+    node_id: NodeId,
+    bounds: RectEmu,
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+) -> Option<RenderTextLayoutV1> {
+    if uniform_text_color_rgb_v1(fragment).is_none()
+        || !table_cell_paragraph_alignment_admissible_v1(fragment)
+        || font.resource_id.is_empty()
+        || font.bytes.is_empty()
+        || font.default_font_size_emu <= 0
+        || font.default_line_height_emu <= 0
+    {
+        return None;
+    }
+
+    let fingerprint = font_fingerprint_sha256(font.bytes);
+    if font.expected_sha256.is_empty() || fingerprint != font.expected_sha256 {
+        return None;
+    }
+
+    let font_size_emu = admitted_font_size_emu(fragment, font.default_font_size_emu).ok()?;
+    let line_height_emu = scaled_line_height_emu(
+        font_size_emu,
+        font.default_font_size_emu,
+        font.default_line_height_emu,
+    )?;
+
+    let local_scalars = fragment.text.chars().collect::<Vec<_>>();
+    let local_scalar_len = u32::try_from(local_scalars.len()).ok()?;
+    if fragment.scalar_start.checked_add(local_scalar_len) != Some(fragment.scalar_end) {
+        return None;
+    }
+
+    let local_runtime = BoundedShapingRuntime {
+        layout: BoundedLayoutEnvironment {
+            engine_revision: SHARED_TEXT_LAYOUT_REVISION_V1.to_owned(),
+            font_set_fingerprint: fingerprint.clone(),
+            resource_fingerprint: font.resource_id.to_owned(),
+        },
+        face_index: font.face_index,
+        font_size_emu: LengthEmu::new(font_size_emu),
+        font_bytes: font.bytes,
+    };
+    let local_shape = shape_bounded_ltr_segment(&fragment.text, 0, &local_runtime).ok()?;
+    let policy = break_policy_for_shaped_text(&fragment.text, &local_shape.glyphs).ok()?;
+
+    let mut cursor = 0_u32;
+    let mut used_height_emu = 0_i64;
+    let mut line_index = 0_u32;
+    let mut lines = Vec::new();
+
+    while cursor < local_scalar_len {
+        let mut chosen = None;
+        for candidate in policy
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.scalar_boundary > cursor)
+        {
+            let consumed_end = candidate.scalar_boundary;
+            let mut visible_end = consumed_end;
+            if candidate.kind == BoundedBreakKind::Mandatory {
+                while visible_end > cursor {
+                    let index = usize::try_from(visible_end - 1).ok()?;
+                    if !matches!(local_scalars.get(index).copied(), Some('\r' | '\n')) {
+                        break;
+                    }
+                    visible_end -= 1;
+                }
+            }
+
+            let start = usize::try_from(cursor).ok()?;
+            let end = usize::try_from(visible_end).ok()?;
+            if start > end || end > local_scalars.len() {
+                return None;
+            }
+            let line_text = local_scalars[start..end].iter().collect::<String>();
+            let global_start = fragment.scalar_start.checked_add(cursor)?;
+            let global_end = fragment.scalar_start.checked_add(visible_end)?;
+            let global_consumed_end = fragment.scalar_start.checked_add(consumed_end)?;
+
+            let shaping = if line_text.is_empty() {
+                None
+            } else {
+                Some(shape_bounded_ltr_segment(&line_text, global_start, &local_runtime).ok()?)
+            };
+            let measured_width_emu = shaping
+                .as_ref()
+                .map(|shaped| shaped.total_x_advance.get())
+                .unwrap_or(0);
+            let fits_width = measured_width_emu <= bounds.width.get();
+            let fits_height = used_height_emu
+                .checked_add(line_height_emu)
+                .is_some_and(|height| height <= bounds.height.get());
+            if fits_width && fits_height {
+                chosen = Some((
+                    global_start,
+                    global_end,
+                    global_consumed_end,
+                    line_text,
+                    measured_width_emu,
+                    shaping,
+                ));
+            }
+            if candidate.kind == BoundedBreakKind::Mandatory {
+                break;
+            }
+        }
+
+        let (global_start, global_end, global_consumed_end, text, measured_width_emu, shaping) =
+            chosen?;
+        let x_offset_emu = if global_start < global_end {
+            resolved_line_x_offset_emu_v1(
+                fragment,
+                node_id,
+                &bounds,
+                line_index,
+                global_start..global_end,
+                measured_width_emu,
+                &fingerprint,
+            )
+        } else {
+            0
+        };
+        let shaping = shaping.map(|shaped| RenderResolvedShapingV1 {
+            environment: shaped.environment,
+            units_per_em: shaped.units_per_em,
+            glyphs: shaped.glyphs,
+        });
+        lines.push(RenderResolvedTextLineV1 {
+            line_index,
+            scalar_start: global_start,
+            scalar_end: global_end,
+            consumed_scalar_end: global_consumed_end,
+            text,
+            measured_width_emu,
+            line_height_emu,
+            x_offset_emu,
+            spans: Vec::new(),
+            shaping,
+        });
+        used_height_emu = used_height_emu.checked_add(line_height_emu)?;
+        cursor = global_consumed_end.checked_sub(fragment.scalar_start)?;
+        line_index = line_index.checked_add(1)?;
+    }
+
+    (cursor == local_scalar_len).then(|| RenderTextLayoutV1 {
+        disposition: RenderTextLayoutDispositionV1::SharedResolved {
+            font_resource_id: font.resource_id.to_owned(),
+            font_fingerprint_sha256: fingerprint,
+            font_size_emu,
+            line_height_emu,
+        },
+        vertical_offset_emu: 0,
+        lines,
+    })
+}
+
 #[derive(Clone)]
 struct RenderTextLayoutTargetV1 {
     page_id: PageId,
@@ -1958,6 +2180,35 @@ where
             font,
             font_is_source_resolved,
         ));
+    }
+
+    for node in &mut plan.nodes {
+        let Some(table) = node.table.as_mut() else {
+            continue;
+        };
+        let Some(inset_emu) = table.uniform_cell_text_inset_emu else {
+            continue;
+        };
+        for cell in &mut table.cells {
+            cell.layout = None;
+            let Some(bounds) = cell.bounds else {
+                continue;
+            };
+            let Some(content_bounds) = table_cell_text_content_bounds_v1(bounds, inset_emu) else {
+                continue;
+            };
+            let Some(fragment) = table_cell_render_fragment_v1(table.story_id, cell) else {
+                continue;
+            };
+            let resolved_font = resolve_font(&fragment);
+            let font = resolved_font.as_ref().unwrap_or(fallback_font);
+            cell.layout = resolve_uniform_table_cell_text_layout_v1(
+                &fragment,
+                node.node_id,
+                content_bounds,
+                font,
+            );
+        }
     }
 
     Ok(plan)
@@ -4064,6 +4315,40 @@ mod tests {
             scale_proportional_line_height_emu_v1(natural, 24 * 12_700),
             None
         );
+    }
+
+    #[test]
+    fn table_cell_alignment_admission_rejects_non_executable_and_overlapping_ranges() {
+        let story_id = StoryId::from_canonical(canonical(3));
+        let mut fragment = render_fragment(story_id, "hello", Vec::new());
+        assert!(table_cell_paragraph_alignment_admissible_v1(&fragment));
+
+        fragment.paragraph_alignments = vec![RenderParagraphAlignmentRunV1 {
+            scalar_start: 0,
+            scalar_end: 5,
+            alignment: RenderParagraphAlignmentV1::Center,
+            source_value: 1,
+        }];
+        assert!(table_cell_paragraph_alignment_admissible_v1(&fragment));
+
+        fragment.paragraph_alignments[0].alignment = RenderParagraphAlignmentV1::InterWord;
+        assert!(!table_cell_paragraph_alignment_admissible_v1(&fragment));
+
+        fragment.paragraph_alignments = vec![
+            RenderParagraphAlignmentRunV1 {
+                scalar_start: 0,
+                scalar_end: 4,
+                alignment: RenderParagraphAlignmentV1::Center,
+                source_value: 1,
+            },
+            RenderParagraphAlignmentRunV1 {
+                scalar_start: 3,
+                scalar_end: 5,
+                alignment: RenderParagraphAlignmentV1::Right,
+                source_value: 2,
+            },
+        ];
+        assert!(!table_cell_paragraph_alignment_admissible_v1(&fragment));
     }
 
     #[test]
