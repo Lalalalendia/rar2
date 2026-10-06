@@ -86,6 +86,8 @@ struct CurrentTableCell {
     #[serde(default)]
     typography: Vec<CurrentTypographyRun>,
     #[serde(default)]
+    paragraph_alignments: Vec<CurrentParagraphAlignmentRun>,
+    #[serde(default)]
     bounds: Option<RectEmu>,
     #[serde(default)]
     fill_rgb: Option<[u8; 3]>,
@@ -165,6 +167,22 @@ struct CurrentTypographyRun {
     color_rgb: Option<[u8; 3]>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CurrentParagraphAlignment {
+    Center,
+    Right,
+    InterWord,
+    Distribute,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentParagraphAlignmentRun {
+    scalar_start: u32,
+    scalar_end: u32,
+    alignment: CurrentParagraphAlignment,
+}
+
 #[derive(Debug, Deserialize)]
 struct CurrentTextLayout {
     disposition: CurrentTextLayoutDisposition,
@@ -241,6 +259,10 @@ struct MappingSummary {
     table_cell_resolved_color_count: usize,
     table_cell_inset_bounds_valid_count: usize,
     table_uniform_cell_text_inset_count: usize,
+    table_cell_size_color_signature_counts: BTreeMap<String, usize>,
+    table_cell_alignment_profile_counts: BTreeMap<String, usize>,
+    table_cell_uniform_v1_ready_count: usize,
+    table_cell_mixed_size_ready_count: usize,
     derived_table_fill_node_count: usize,
     derived_table_border_node_count: usize,
     derived_table_paint_node_count: usize,
@@ -510,6 +532,50 @@ fn table_cell_inset_fits_bounds_v1(cell: &CurrentTableCell, inset: i64) -> bool 
     bounds.width.get() > double_inset && bounds.height.get() > double_inset
 }
 
+fn table_cell_size_profile_tag_v1(cell: &CurrentTableCell) -> &'static str {
+    if !complete_table_cell_typography_v1(cell) {
+        return "size_profile_unknown";
+    }
+    let sizes = cell
+        .typography
+        .iter()
+        .map(|run| run.text_size_emu)
+        .collect::<BTreeSet<_>>();
+    match sizes.len() {
+        1 => "uniform_size",
+        n if n > 1 => "mixed_size",
+        _ => "size_profile_unknown",
+    }
+}
+
+fn table_cell_alignment_profile_tag_v1(cell: &CurrentTableCell) -> &'static str {
+    let (Some(cell_start), Some(cell_end)) = (cell.story_scalar_start, cell.story_scalar_end) else {
+        return "range_unknown";
+    };
+    if cell_start >= cell_end {
+        return "range_unknown";
+    }
+    if cell.paragraph_alignments.is_empty() {
+        return "leading";
+    }
+
+    for run in &cell.paragraph_alignments {
+        if run.scalar_start >= run.scalar_end
+            || run.scalar_start < cell_start
+            || run.scalar_end > cell_end
+        {
+            return "invalid";
+        }
+        if matches!(
+            run.alignment,
+            CurrentParagraphAlignment::InterWord | CurrentParagraphAlignment::Distribute
+        ) {
+            return "preserved_non_executable";
+        }
+    }
+    "center_right_ranges"
+}
+
 fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSummary) {
     let admitted_inset = table
         .uniform_cell_text_inset_emu
@@ -545,28 +611,62 @@ fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSu
         let typography_complete = exact_range && complete_table_cell_typography_v1(cell);
         if typography_complete {
             summary.table_cell_typography_complete_count += 1;
-            let first_size = cell.typography[0].text_size_emu;
-            if cell
-                .typography
-                .iter()
-                .all(|run| run.text_size_emu == first_size)
-            {
-                summary.table_cell_uniform_size_count += 1;
-            }
-            if let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end)
-                && matches!(
-                    color_range_disposition(&cell.typography, start, end),
-                    ColorRangeDisposition::Resolved(_)
-                )
-            {
-                summary.table_cell_resolved_color_count += 1;
-            }
         }
 
-        if let Some(inset) = admitted_inset
-            && table_cell_inset_fits_bounds_v1(cell, inset)
-        {
+        let size_tag = if typography_complete {
+            table_cell_size_profile_tag_v1(cell)
+        } else {
+            "size_profile_unknown"
+        };
+        if size_tag == "uniform_size" {
+            summary.table_cell_uniform_size_count += 1;
+        }
+
+        let color_disposition = if exact_range && typography_complete {
+            let start = cell.story_scalar_start.expect("exact TABLE cell range start");
+            let end = cell.story_scalar_end.expect("exact TABLE cell range end");
+            color_range_disposition(&cell.typography, start, end)
+        } else {
+            ColorRangeDisposition::InvalidRange
+        };
+        if matches!(color_disposition, ColorRangeDisposition::Resolved(_)) {
+            summary.table_cell_resolved_color_count += 1;
+        }
+
+        let inset_valid = admitted_inset
+            .is_some_and(|inset| table_cell_inset_fits_bounds_v1(cell, inset));
+        if inset_valid {
             summary.table_cell_inset_bounds_valid_count += 1;
+        }
+
+        let alignment_tag = table_cell_alignment_profile_tag_v1(cell);
+        *summary
+            .table_cell_alignment_profile_counts
+            .entry(alignment_tag.to_owned())
+            .or_default() += 1;
+
+        let signature = format!(
+            "size={size_tag}|color={}|align={alignment_tag}|inset={}",
+            color_disposition.code(),
+            if inset_valid { "valid" } else { "invalid" }
+        );
+        *summary
+            .table_cell_size_color_signature_counts
+            .entry(signature)
+            .or_default() += 1;
+
+        let alignment_executable = matches!(alignment_tag, "leading" | "center_right_ranges");
+        let resolved_color = matches!(color_disposition, ColorRangeDisposition::Resolved(_));
+        if exact_range
+            && typography_complete
+            && inset_valid
+            && alignment_executable
+            && resolved_color
+        {
+            summary.table_cell_mixed_size_ready_count += 1;
+            if size_tag == "uniform_size" {
+                summary.table_cell_uniform_v1_ready_count += 1;
+            }
         }
     }
 }
