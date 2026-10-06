@@ -119,9 +119,8 @@ fn compatible_legacy_windows_ascent_units_v1(
         return None;
     }
     let descender_magnitude = hhea_descender.checked_neg()?;
-    (hhea_ascender == i64::from(win_ascent)
-        && descender_magnitude == i64::from(win_descent))
-    .then_some(hhea_ascender)
+    (hhea_ascender == i64::from(win_ascent) && descender_magnitude == i64::from(win_descent))
+        .then_some(hhea_ascender)
 }
 
 pub fn compatible_natural_baseline_ascent_emu_v1(
