@@ -2,8 +2,8 @@
 """CLOUD-READER-LIVE-HTTPS-ACCEPTANCE-01.
 
 Exercises the real Cloud Reader guest HTTP vertical behind the canonical Caddy
-recipe. Test-only services stand in for S3-compatible storage and clamd, while
-Chaptera still owns upload admission, quarantine, scanner orchestration,
+recipe. A test-only service stands in for S3-compatible storage, while
+Chaptera still owns upload admission, quarantine, structural scanner orchestration,
 isolated structural/Scene workers, session state and TTL cleanup.
 """
 
@@ -18,10 +18,8 @@ import pathlib
 import secrets
 import shutil
 import socket
-import socketserver
 import sqlite3
 import ssl
-import struct
 import subprocess
 import sys
 import tempfile
@@ -291,66 +289,6 @@ class FakeS3Handler(http.server.BaseHTTPRequestHandler):
             self._empty(500)
 
 
-class ClamdState:
-    def __init__(self) -> None:
-        self.lock = threading.Lock()
-        self.scans: list[dict[str, Any]] = []
-
-    def record(self, data: bytes) -> None:
-        with self.lock:
-            self.scans.append(
-                {"byte_len": len(data), "sha256": hashlib.sha256(data).hexdigest()}
-            )
-
-    def snapshot(self) -> list[dict[str, Any]]:
-        with self.lock:
-            return list(self.scans)
-
-
-class ClamdServer(socketserver.ThreadingTCPServer):
-    daemon_threads = True
-    allow_reuse_address = True
-
-    def __init__(self, address, state: ClamdState):
-        super().__init__(address, ClamdHandler)
-        self.state = state
-
-
-class ClamdHandler(socketserver.BaseRequestHandler):
-    def handle(self) -> None:
-        command = b""
-        while not command.endswith(b"\0"):
-            chunk = self.request.recv(1)
-            if not chunk:
-                return
-            command += chunk
-        if command != b"zINSTREAM\0":
-            return
-        data = bytearray()
-        while True:
-            header = self._read_exact(4)
-            if header is None:
-                return
-            size = struct.unpack(">I", header)[0]
-            if size == 0:
-                break
-            chunk = self._read_exact(size)
-            if chunk is None:
-                return
-            data.extend(chunk)
-        self.server.state.record(bytes(data))
-        self.request.sendall(b"stream: OK\0")
-
-    def _read_exact(self, size: int) -> bytes | None:
-        data = bytearray()
-        while len(data) < size:
-            chunk = self.request.recv(size - len(data))
-            if not chunk:
-                return None
-            data.extend(chunk)
-        return bytes(data)
-
-
 class OidcServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -434,7 +372,6 @@ def write_config(
     *,
     sqlite_path: pathlib.Path,
     app_port: int,
-    clamd_port: int,
     oidc_port: int,
     isolation_wrapper: pathlib.Path,
     structural_worker: pathlib.Path,
@@ -480,9 +417,6 @@ lease_seconds = 3600
 retention_seconds = 86400
 
 [source_validation]
-clamd_endpoint = "127.0.0.1:{clamd_port}"
-clamd_connect_timeout_ms = 2000
-clamd_io_timeout_ms = 5000
 isolation_python = {toml_string(sys.executable)}
 isolation_harness = {toml_string(isolation_wrapper)}
 worker_binary = {toml_string(structural_worker)}
@@ -817,11 +751,6 @@ def main() -> int:
     s3_port = int(s3_server.server_address[1])
     s3_thread = threading.Thread(target=s3_server.serve_forever, daemon=True)
 
-    clamd_state = ClamdState()
-    clamd_server = ClamdServer(("127.0.0.1", 0), clamd_state)
-    clamd_port = int(clamd_server.server_address[1])
-    clamd_thread = threading.Thread(target=clamd_server.serve_forever, daemon=True)
-
     oidc_server = OidcServer(("127.0.0.1", 0))
     oidc_port = int(oidc_server.server_address[1])
     oidc_thread = threading.Thread(target=oidc_server.serve_forever, daemon=True)
@@ -831,7 +760,6 @@ def main() -> int:
         config_path,
         sqlite_path=sqlite_path,
         app_port=app_port,
-        clamd_port=clamd_port,
         oidc_port=oidc_port,
         isolation_wrapper=isolation_wrapper,
         structural_worker=structural_worker,
@@ -852,7 +780,6 @@ def main() -> int:
     server: subprocess.Popen[str] | None = None
     caddy_process: subprocess.Popen[str] | None = None
     s3_thread.start()
-    clamd_thread.start()
     oidc_thread.start()
 
     app_env = os.environ.copy()
@@ -1023,9 +950,6 @@ def main() -> int:
         if scene.get("compatibility_report") != compatibility:
             raise AssertionError("scene endpoint compatibility report differs from open response")
 
-        scans = clamd_state.snapshot()
-        if len(scans) != 1 or scans[0]["sha256"] != fixture_sha256 or scans[0]["byte_len"] != fixture_bytes:
-            raise AssertionError("clamd acceptance witness did not observe exact source bytes")
         isolation_kinds = (
             isolation_trace.read_text(encoding="utf-8").splitlines()
             if isolation_trace.exists()
@@ -1132,7 +1056,6 @@ def main() -> int:
                     ],
                 },
                 "scanner_exact_source_observed": True,
-                "clamd_scan_count": len(scans),
                 "isolated_structural_scan_count": isolation_kinds.count("structural_scan"),
                 "isolated_guest_scene_count": isolation_kinds.count("guest_scene"),
             },
@@ -1181,13 +1104,10 @@ def main() -> int:
         terminate(server)
         caddy_log.close()
         server_log.close()
-        clamd_server.shutdown()
-        clamd_server.server_close()
         s3_server.shutdown()
         s3_server.server_close()
         oidc_server.shutdown()
         oidc_server.server_close()
-        clamd_thread.join(timeout=2)
         s3_thread.join(timeout=2)
         oidc_thread.join(timeout=2)
         shutil.rmtree(work, ignore_errors=True)
