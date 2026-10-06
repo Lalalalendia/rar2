@@ -9,7 +9,10 @@ pub use assets::{
     RejectedDelayedBlipDisposition, ValidatedDelayedBlipPrefixInventory, inspect_bstore,
     inspect_delayed_blips, inspect_validated_delayed_blips_prefix, resolve_delayed_blip,
 };
-pub use strict_blip::{BlipUidRule, BlipValidationError, ValidatedBlip, validate_blip_record};
+pub use strict_blip::{
+    BlipMetafileCompression, BlipUidRule, BlipValidationError, ValidatedBlip,
+    validate_blip_record,
+};
 
 use pub_core::{RawSpan, StreamPath};
 use serde::{Deserialize, Serialize};
