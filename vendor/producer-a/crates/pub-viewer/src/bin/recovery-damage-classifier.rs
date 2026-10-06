@@ -86,6 +86,20 @@ struct RescueEvidenceRow {
     repair_gate: Option<String>,
     #[serde(default)]
     repair_native_status: Option<String>,
+    #[serde(default)]
+    recovery_route: Option<String>,
+    #[serde(default)]
+    recovery_class: Option<String>,
+    #[serde(default)]
+    producer_receipt_sha256: Option<String>,
+    #[serde(default)]
+    product_validation_sha256: Option<String>,
+    #[serde(default)]
+    artifact_count: Option<usize>,
+    #[serde(default)]
+    fabricated_bytes: Option<u64>,
+    #[serde(default)]
+    silent_drops: Option<u64>,
     evidence_level: EvidenceLevel,
     confidence: Confidence,
     #[serde(default)]
@@ -130,6 +144,20 @@ struct ClassifierRow {
     repair_gate: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     repair_native_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_route: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    producer_receipt_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    product_validation_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    artifact_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fabricated_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    silent_drops: Option<u64>,
     evidence_level: EvidenceLevel,
     confidence: Confidence,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -358,6 +386,13 @@ fn apply_external_rescue(
     row.rescue_outcome = evidence.rescue_outcome;
     row.repair_gate = evidence.repair_gate.clone();
     row.repair_native_status = evidence.repair_native_status.clone();
+    row.recovery_route = evidence.recovery_route.clone();
+    row.recovery_class = evidence.recovery_class.clone();
+    row.producer_receipt_sha256 = evidence.producer_receipt_sha256.clone();
+    row.product_validation_sha256 = evidence.product_validation_sha256.clone();
+    row.artifact_count = evidence.artifact_count;
+    row.fabricated_bytes = evidence.fabricated_bytes;
+    row.silent_drops = evidence.silent_drops;
     row.evidence_level = evidence.evidence_level;
     row.confidence = evidence.confidence;
     row.promotion_gap = evidence.promotion_gap.clone();
@@ -415,6 +450,13 @@ fn classify(bytes: &[u8], rescue_evidence: Option<&RescueEvidenceRow>) -> Classi
                 rescue_outcome: RescueOutcome::NoneNeeded,
                 repair_gate: None,
                 repair_native_status: None,
+                recovery_route: None,
+                recovery_class: None,
+                producer_receipt_sha256: None,
+                product_validation_sha256: None,
+                artifact_count: None,
+                fabricated_bytes: None,
+                silent_drops: None,
                 evidence_level: EvidenceLevel::Production,
                 confidence: Confidence::High,
                 promotion_gap: None,
@@ -464,6 +506,13 @@ fn classify(bytes: &[u8], rescue_evidence: Option<&RescueEvidenceRow>) -> Classi
                 rescue_outcome: RescueOutcome::SalvageOnly,
                 repair_gate: None,
                 repair_native_status: None,
+                recovery_route: None,
+                recovery_class: None,
+                producer_receipt_sha256: None,
+                product_validation_sha256: None,
+                artifact_count: None,
+                fabricated_bytes: None,
+                silent_drops: None,
                 evidence_level: if probe.authority.is_some() {
                     EvidenceLevel::ExactShaAuthority
                 } else {
@@ -566,6 +615,13 @@ fn classify(bytes: &[u8], rescue_evidence: Option<&RescueEvidenceRow>) -> Classi
                 },
                 repair_gate: None,
                 repair_native_status: None,
+                recovery_route: None,
+                recovery_class: None,
+                producer_receipt_sha256: None,
+                product_validation_sha256: None,
+                artifact_count: None,
+                fabricated_bytes: None,
+                silent_drops: None,
                 evidence_level: if existing_format_owner {
                     EvidenceLevel::ExactShaAuthority
                 } else if has_forced_recovery {
