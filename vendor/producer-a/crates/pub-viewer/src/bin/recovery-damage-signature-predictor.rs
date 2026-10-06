@@ -316,10 +316,7 @@ mod tests {
         input.images = FactState::Proven;
         input.identity_ambiguous = true;
         let result = predict(input);
-        assert_eq!(
-            result.predicted_outcome,
-            PredictedOutcome::NoSafeRecovery
-        );
+        assert_eq!(result.predicted_outcome, PredictedOutcome::NoSafeRecovery);
         assert_eq!(result.reason, "carrier_or_object_identity_ambiguous");
     }
 
