@@ -18,19 +18,40 @@ Each feature agent:
 The coordinator then validates all candidates without mutating the repository:
 
 ```bash
+python tools/dev_fast_loop.py \
+  --base <exact-base-sha> \
+  --head <exact-candidate-sha> \
+  --mode feature \
+  --run \
+  --receipt .chaptera-local/dev-fast-loop/TASK-A.json
+
 python tools/integration_train.py \
   --base <exact-base-sha> \
   --candidate TASK-A=feature/task-a \
   --candidate TASK-B=feature/task-b \
+  --fast-receipt TASK-A=.chaptera-local/dev-fast-loop/TASK-A.json \
+  --fast-receipt TASK-B=.chaptera-local/dev-fast-loop/TASK-B.json \
   --branch-name integration/train-42 \
   --receipt target/integration-train-42.json
 ```
 
-The receipt contains exact candidate SHAs, changed paths, unique commits and shell-safe suggested cherry-pick commands. V0 never executes those commands itself.
+The receipt contains exact candidate SHAs, changed paths, unique commits, verified fast-loop receipt summaries and shell-safe suggested cherry-pick commands. V0 never executes those commands itself.
 
 ## V0 admission
 
-A train contains 2–8 candidates. Every candidate must:
+A train contains 2–8 candidates. Every production candidate must carry one green standalone fast-loop receipt from `--mode feature --run`.
+
+The planner verifies that each receipt:
+- uses schema `chaptera.dev-fast-loop-run.v1`;
+- is green with exit code 0;
+- was produced in `feature` mode;
+- names the exact candidate head SHA;
+- covers exactly the candidate's changed-path set;
+- contains only successful executed checks.
+
+A controlled measurement/research pilot may use `--allow-unreceipted-candidates` only when the owning Notion assignment explicitly records the waiver. This is intentionally noisy in the train receipt and is not the production default.
+
+Every candidate must:
 
 - descend from the exact common train base;
 - contain no merge commits;
