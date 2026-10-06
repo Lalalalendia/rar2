@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 
@@ -19,8 +20,19 @@ ROOT = Path(
 )
 
 
+def repo_text(relative_path: str) -> str:
+    head_sha = os.environ.get("HEAD_SHA")
+    if head_sha:
+        return subprocess.check_output(
+            ["git", "show", f"{head_sha}:{relative_path}"],
+            cwd=ROOT,
+            text=True,
+        )
+    return (ROOT / relative_path).read_text(encoding="utf-8")
+
+
 def pull_request_event_block(relative_path: str) -> str:
-    content = (ROOT / relative_path).read_text(encoding="utf-8")
+    content = repo_text(relative_path)
     start = content.index("  pull_request:\n")
     tail = content[start + 1 :]
     boundaries = [
