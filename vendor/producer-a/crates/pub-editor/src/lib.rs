@@ -6025,6 +6025,15 @@ impl EditorSession {
         Ok(operation)
     }
 
+    fn has_table_track_extent_history_v1(&self, node_id: NodeId) -> bool {
+        self.undo.iter().any(|operation| {
+            matches!(
+                operation,
+                EditOperation::SetTableTrackExtent { history } if history.table_id == node_id
+            )
+        })
+    }
+
     pub fn can_move_node_to(
         &self,
         node_id: NodeId,
@@ -6032,6 +6041,9 @@ impl EditorSession {
         y: LengthEmu,
     ) -> Result<(), EditorError> {
         self.validate_source_identity()?;
+        if self.has_table_track_extent_history_v1(node_id) {
+            return Err(EditorError::NodeMoveUnsupported { node_id });
+        }
 
         let node = self
             .graph
@@ -6182,6 +6194,13 @@ impl EditorSession {
         self.validate_source_identity()?;
 
         entries.sort_by_key(|entry| entry.node_id);
+        for entry in &entries {
+            if self.has_table_track_extent_history_v1(entry.node_id) {
+                return Err(EditorError::NodeResizeUnsupported {
+                    node_id: entry.node_id,
+                });
+            }
+        }
         validate_resize_nodes_transition(&self.graph, page_id, &entries, true)?;
 
         let operation = EditOperation::ResizeNodes { page_id, entries };
@@ -6194,6 +6213,9 @@ impl EditorSession {
 
     pub fn can_resize_node(&self, node_id: NodeId) -> Result<(), EditorError> {
         self.validate_source_identity()?;
+        if self.has_table_track_extent_history_v1(node_id) {
+            return Err(EditorError::NodeResizeUnsupported { node_id });
+        }
 
         let node = self
             .graph
