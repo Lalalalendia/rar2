@@ -148,6 +148,8 @@ pub struct RenderTableCellV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<RenderTextLayoutV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub single_line_natural_extent_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<RectEmu>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill_rgb: Option<[u8; 3]>,
@@ -1513,6 +1515,7 @@ pub fn build_page_render_plan_v1(
                                 cell.story_scalar_end,
                             ),
                             layout: None,
+                            single_line_natural_extent_emu: None,
                             bounds: cell.bounds,
                             fill_rgb: cell.fill_rgb,
                             fill_visible: cell.fill_visible,
@@ -1637,6 +1640,7 @@ pub fn build_page_render_plan_v1(
                                 cell.story_scalar_end,
                             ),
                             layout: None,
+                            single_line_natural_extent_emu: None,
                             bounds: cell.bounds,
                             fill_rgb: cell.fill_rgb,
                             fill_visible: cell.fill_visible,
@@ -1904,7 +1908,7 @@ fn resolve_single_line_table_cell_text_layout_v1(
     bounds: RectEmu,
     vertical_alignment: Option<RenderTableVerticalAlignmentV1>,
     font: &ExplicitRenderTextFontResourceV1<'_>,
-) -> Option<RenderTextLayoutV1> {
+) -> Option<(RenderTextLayoutV1, i64)> {
     if fragment.text.contains(&['\r', '\n'][..])
         || uniform_text_color_rgb_v1(fragment).is_none()
         || !table_cell_paragraph_alignment_admissible_v1(fragment)
@@ -1972,7 +1976,7 @@ fn resolve_single_line_table_cell_text_layout_v1(
         first_line_extent_emu,
     );
 
-    Some(RenderTextLayoutV1 {
+    Some((RenderTextLayoutV1 {
         disposition: RenderTextLayoutDispositionV1::SharedResolved {
             font_resource_id: font.resource_id.to_owned(),
             font_fingerprint_sha256: fingerprint,
@@ -1996,7 +2000,7 @@ fn resolve_single_line_table_cell_text_layout_v1(
                 glyphs: shaped.glyphs,
             }),
         }],
-    })
+    }, first_line_extent_emu))
 }
 
 #[derive(Clone)]
@@ -2183,6 +2187,7 @@ where
         let vertical_alignment = table.uniform_cell_vertical_alignment;
         for cell in &mut table.cells {
             cell.layout = None;
+            cell.single_line_natural_extent_emu = None;
             let Some(bounds) = cell.bounds else {
                 continue;
             };
@@ -2194,13 +2199,18 @@ where
             };
             let resolved_font = resolve_font(&fragment);
             let font = resolved_font.as_ref().unwrap_or(fallback_font);
-            cell.layout = resolve_single_line_table_cell_text_layout_v1(
-                &fragment,
-                node.node_id,
-                content_bounds,
-                vertical_alignment,
-                font,
-            );
+            if let Some((layout, natural_extent_emu)) =
+                resolve_single_line_table_cell_text_layout_v1(
+                    &fragment,
+                    node.node_id,
+                    content_bounds,
+                    vertical_alignment,
+                    font,
+                )
+            {
+                cell.layout = Some(layout);
+                cell.single_line_natural_extent_emu = Some(natural_extent_emu);
+            }
         }
     }
 
