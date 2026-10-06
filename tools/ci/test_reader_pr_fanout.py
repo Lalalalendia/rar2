@@ -192,6 +192,45 @@ fn main() -> eframe::Result<()> {
         web=False,
     )
 
+    assert mod.is_rust_integration_test_path(
+        "vendor/producer-a/crates/pub-reader/tests/identity_domain_collision_guard.rs"
+    )
+    assert mod.is_rust_integration_test_path(
+        "vendor/producer-a/crates/pub-viewer/tests/picture_recolor_reference_census.rs"
+    )
+    assert_scope(
+        ["vendor/producer-a/crates/pub-reader/tests/identity_domain_collision_guard.rs"],
+        tier_a=True,
+        reader_windows_smoke=False,
+        reader_windows=False,
+        editor_windows=False,
+        visual_oracle=False,
+        cloud_reference=False,
+        virginia_page_role=False,
+        visual_batch01=False,
+        typography_golden=False,
+        android_core=False,
+        android=False,
+        web=False,
+        local_portable=False,
+    )
+    assert_scope(
+        ["vendor/producer-a/crates/pub-viewer/tests/picture_recolor_reference_census.rs"],
+        tier_a=True,
+        reader_windows_smoke=False,
+        reader_windows=False,
+        editor_windows=False,
+        visual_oracle=False,
+        cloud_reference=False,
+        virginia_page_role=False,
+        visual_batch01=False,
+        typography_golden=False,
+        android_core=False,
+        android=False,
+        web=False,
+        local_portable=False,
+    )
+
     assert_scope(
         ["vendor/producer-a/crates/pub-contents/src/palette.rs"],
         tier_a=True,
