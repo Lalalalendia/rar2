@@ -164,7 +164,16 @@ fn source_cells_from_snapshot(
             source_refs: preserved.source_refs.clone(),
         });
     }
-    cells.sort_by_key(|cell| cell.stored_record_index);
+    cells.sort_by_key(|cell| {
+        let coordinates = cell.coordinates.expect("row/column snapshot cells carry coordinates");
+        (
+            coordinates.start_row,
+            coordinates.start_column,
+            coordinates.end_row,
+            coordinates.end_column,
+            cell.id,
+        )
+    });
     Ok(cells)
 }
 
