@@ -30,7 +30,6 @@ use pub_editor::{
     EditOperation, EditorProject, EditorProjectIdentity, LengthEmu, NodeId, RectEmu, Sha256Digest,
     StoryId, TableCellId, TableTrackTargetV1, open_mature_0x2c_editor,
 };
-use pub_model::{TableColumnId, TableRowId};
 use sha2::{Digest, Sha256};
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 
@@ -823,21 +822,21 @@ async fn real_sample_newsletter_materializes_exact_historical_revision() {
         serde_json::from_str("\"01890f47-5000-7abc-8def-0123456789ab\"").unwrap();
     let story_id: StoryId =
         serde_json::from_str("\"01890f47-5001-7abc-8def-0123456789ab\"").unwrap();
-    let row_ids: Vec<TableRowId> = [
+    let row_ids = [
         "01890f47-5010-7abc-8def-0123456789ab",
         "01890f47-5011-7abc-8def-0123456789ab",
     ]
     .into_iter()
     .map(|value| serde_json::from_str(&format!("\"{value}\"")).unwrap())
     .collect();
-    let column_ids: Vec<TableColumnId> = [
+    let column_ids = [
         "01890f47-5020-7abc-8def-0123456789ab",
         "01890f47-5021-7abc-8def-0123456789ab",
     ]
     .into_iter()
     .map(|value| serde_json::from_str(&format!("\"{value}\"")).unwrap())
-    .collect();
-    let cell_ids: Vec<TableCellId> = [
+    .collect::<Vec<_>>();
+    let cell_ids = [
         "01890f47-5030-7abc-8def-0123456789ab",
         "01890f47-5031-7abc-8def-0123456789ab",
         "01890f47-5032-7abc-8def-0123456789ab",
