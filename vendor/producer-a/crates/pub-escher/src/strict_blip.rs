@@ -197,17 +197,20 @@ fn validate_record_envelope(
     bytes: &[u8],
     record: &OfficeArtRecord,
 ) -> Result<(), BlipValidationError> {
+    let Some(payload_offset) = record.source.offset.checked_add(8) else {
+        return Err(BlipValidationError::InconsistentRecordEnvelope);
+    };
+    let Some(record_len) = 8u64.checked_add(u64::from(record.header.rec_len)) else {
+        return Err(BlipValidationError::InconsistentRecordEnvelope);
+    };
+
     if record.header.source.stream != record.source.stream
         || record.payload_source.stream != record.source.stream
         || record.header.source.offset != record.source.offset
         || record.header.source.len != 8
-        || record
-            .record_source_payload_offset()
-            .is_none_or(|offset| record.payload_source.offset != offset)
+        || record.payload_source.offset != payload_offset
         || record.payload_source.len != u64::from(record.header.rec_len)
-        || record
-            .record_source_declared_len()
-            .is_none_or(|len| record.source.len != len)
+        || record.source.len != record_len
         || record.header.source.end() != Some(record.payload_source.offset)
         || record.source.end() != record.payload_source.end()
     {
@@ -232,31 +235,6 @@ fn validate_record_envelope(
     }
 
     Ok(())
-}
-
-trait OfficeArtRecordEnvelopeExt {
-    fn record_source_payload_offset(&self) -> Option<u64>;
-    fn record_source_declared_len(&self) -> Option<u64>;
-}
-
-impl OfficeArtRecordEnvelopeExt for OfficeArtRecord {
-    fn record_source_payload_offset(&self) -> Option<u64> {
-        self.record_source_offset_plus(8)
-    }
-
-    fn record_source_declared_len(&self) -> Option<u64> {
-        8u64.checked_add(u64::from(self.header.rec_len))
-    }
-}
-
-trait RawRecordOffsetExt {
-    fn record_source_offset_plus(&self, delta: u64) -> Option<u64>;
-}
-
-impl RawRecordOffsetExt for OfficeArtRecord {
-    fn record_source_offset_plus(&self, delta: u64) -> Option<u64> {
-        self.source.offset.checked_add(delta)
-    }
 }
 
 fn raster_grammar(rec_type: u16, rec_instance: u16) -> Result<RasterGrammar, BlipValidationError> {
