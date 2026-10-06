@@ -87,6 +87,8 @@ For ordinary repository code/workflow changes, GitHub Actions is not the develop
 - If the local environment genuinely cannot execute a selected check, record the exact missing runtime/tool in the task/PR instead of silently skipping it or pushing speculative fixes.
 - Do not push a head that is already known to fail the local fast loop solely to obtain hosted diagnostics.
 - A green fast loop is development evidence only. It does not replace the task's declared product, visual, native, integration, security, packaging, or release acceptance.
+- When `sccache` is installed, the fast loop automatically reuses the shared compiler-object cache across sibling git worktrees; do not replace this with a shared `CARGO_TARGET_DIR`.
+- Do not delete `.chaptera-local/dev-fast-loop/history.jsonl` merely to make a task look faster. It is ignored local telemetry for finding the actual p50/p95 development bottleneck.
 
 The purpose is to permit many local implementation iterations per hosted head while preserving the existing acceptance law.
 

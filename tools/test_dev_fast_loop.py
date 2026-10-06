@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 MODULE = Path(__file__).with_name("dev_fast_loop.py")
@@ -176,6 +178,135 @@ def test_component_registry_malformed_fails_closed() -> None:
             raise AssertionError("malformed component registry must fail closed")
 
 
+def test_rust_cache_auto_off_require_and_git_common_dir() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw) / "main"
+        root.mkdir()
+        git(root, "init", "-b", "main")
+        git(root, "config", "user.email", "fast-loop@example.invalid")
+        git(root, "config", "user.name", "Fast Loop Test")
+        write(root / "README.md", "base\n")
+        git(root, "add", ".")
+        git(root, "commit", "-m", "base")
+        git(root, "branch", "side")
+
+        worktree = Path(raw) / "side-worktree"
+        subprocess.run(
+            ["git", "worktree", "add", str(worktree), "side"],
+            cwd=root,
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        assert mod.git_common_dir(root) == mod.git_common_dir(worktree)
+
+        off, off_env = mod.configure_rust_cache(
+            root,
+            "off",
+            which=lambda _: "/fake/sccache",
+            environ={},
+        )
+        assert off.enabled is False
+        assert "RUSTC_WRAPPER" not in off_env
+
+        auto_missing, auto_missing_env = mod.configure_rust_cache(
+            root,
+            "auto",
+            which=lambda _: None,
+            environ={},
+        )
+        assert auto_missing.enabled is False
+        assert "RUSTC_WRAPPER" not in auto_missing_env
+
+        try:
+            mod.configure_rust_cache(
+                root,
+                "require",
+                which=lambda _: None,
+                environ={},
+            )
+        except RuntimeError as exc:
+            assert "required but not installed" in str(exc)
+        else:
+            raise AssertionError("require mode must reject a missing sccache")
+
+        fake = str(Path(raw) / "bin" / "sccache")
+        root_cache, root_env = mod.configure_rust_cache(
+            root,
+            "auto",
+            which=lambda _: fake,
+            environ={},
+        )
+        worktree_cache, worktree_env = mod.configure_rust_cache(
+            worktree,
+            "auto",
+            which=lambda _: fake,
+            environ={},
+        )
+        assert root_cache.enabled is True
+        assert root_cache.directory == worktree_cache.directory
+        assert root_env["RUSTC_WRAPPER"] == fake
+        assert worktree_env["RUSTC_WRAPPER"] == fake
+        assert root_env["SCCACHE_DIR"] == worktree_env["SCCACHE_DIR"]
+        assert "CARGO_TARGET_DIR" not in root_env
+        assert "CARGO_INCREMENTAL" not in root_env
+
+
+def test_run_receipt_records_timings_and_cache_state() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        git(root, "init", "-b", "main")
+        git(root, "config", "user.email", "fast-loop@example.invalid")
+        git(root, "config", "user.name", "Fast Loop Test")
+        write(root / "README.md", "base\n")
+        git(root, "add", ".")
+        git(root, "commit", "-m", "base")
+
+        rust_cache, env = mod.configure_rust_cache(
+            root,
+            "off",
+            which=lambda _: None,
+            environ={},
+        )
+        receipt_path = Path("receipts") / "fast-loop.json"
+        exit_code, receipt = mod.execute_plan(
+            root,
+            [
+                mod.Check(
+                    "synthetic",
+                    (sys.executable, "-c", "print('ok')"),
+                    "receipt contract",
+                )
+            ],
+            paths=["README.md"],
+            mode="edit",
+            budget_seconds=60.0,
+            rust_cache=rust_cache,
+            env=env,
+            standalone_receipt=receipt_path,
+            write_history=True,
+        )
+        assert exit_code == 0
+        assert receipt["schema"] == "chaptera.dev-fast-loop-run.v1"
+        assert receipt["success"] is True
+        assert receipt["head_sha"]
+        assert receipt["changed_paths"] == ["README.md"]
+        assert receipt["rust_cache"]["enabled"] is False
+        assert receipt["checks"][0]["kind"] == "synthetic"
+        assert receipt["checks"][0]["seconds"] >= 0.0
+
+        standalone = json.loads((root / receipt_path).read_text(encoding="utf-8"))
+        assert standalone["schema"] == receipt["schema"]
+
+        history = root / ".chaptera-local" / "dev-fast-loop" / "history.jsonl"
+        history_rows = [
+            json.loads(line)
+            for line in history.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert len(history_rows) == 1
+        assert history_rows[0]["head_sha"] == receipt["head_sha"]
+
+
 def test_feature_mode_adds_package_unit_tests_once() -> None:
     with tempfile.TemporaryDirectory() as raw:
         root = Path(raw)
@@ -197,6 +328,8 @@ def main() -> None:
     test_same_stem_rust_source_discovers_exact_integration_test()
     test_component_registry_routes_aliases_dedupes_and_ignores_unrelated()
     test_component_registry_malformed_fails_closed()
+    test_rust_cache_auto_off_require_and_git_common_dir()
+    test_run_receipt_records_timings_and_cache_state()
     test_feature_mode_adds_package_unit_tests_once()
     print("dev fast loop tests: ok")
 
