@@ -174,8 +174,8 @@ fn recover_root_regular_stream_prefix_from_bytes(
 
     let stream_sid =
         matching_stream_sid.with_context(|| format!("root stream {stream_name} is absent"))?;
-    let start = usize::try_from(stream_sid).context("stream SID does not fit usize")?
-        * DIR_ENTRY_LEN;
+    let start =
+        usize::try_from(stream_sid).context("stream SID does not fit usize")? * DIR_ENTRY_LEN;
     let entry = &directory[start..start + DIR_ENTRY_LEN];
     let start_sector = read_u32(entry, 116)?;
     let low_len = read_u32(entry, 120)? as u64;
@@ -220,9 +220,10 @@ fn recover_root_regular_stream_prefix_from_bytes(
 
         let remaining = stream_len_usize.saturating_sub(bytes.len());
         let take = remaining.min(sector_len);
-        let source_offset = (usize::try_from(current).context("sector index does not fit usize")? + 1)
-            .checked_mul(sector_len)
-            .context("sector source offset overflow")?;
+        let source_offset =
+            (usize::try_from(current).context("sector index does not fit usize")? + 1)
+                .checked_mul(sector_len)
+                .context("sector source offset overflow")?;
         bytes.extend_from_slice(&sector[..take]);
         source_ranges.push(RootRegularStreamSourceRange {
             offset: u64::try_from(source_offset).context("source offset does not fit u64")?,
@@ -306,10 +307,7 @@ fn read_fat(
         }
         difat_sector = read_u32(sector, sector_len - 4)?;
     }
-    if num_difat_sectors > 0
-        && difat_sector != END_OF_CHAIN
-        && difat_sector != FREE_SECTOR
-    {
+    if num_difat_sectors > 0 && difat_sector != END_OF_CHAIN && difat_sector != FREE_SECTOR {
         anyhow::bail!("DIFAT chain did not terminate");
     }
     if fat_sector_ids.len() < num_fat_sectors {
@@ -336,12 +334,7 @@ fn read_fat(
     Ok(fat)
 }
 
-fn fat_chain_to_end(
-    start: u32,
-    fat: &[u32],
-    num_sectors: usize,
-    label: &str,
-) -> Result<Vec<u32>> {
+fn fat_chain_to_end(start: u32, fat: &[u32], num_sectors: usize, label: &str) -> Result<Vec<u32>> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
     let mut current = start;
@@ -362,8 +355,10 @@ fn fat_chain_to_end(
 }
 
 fn is_regular_sector(sector: u32, num_sectors: usize) -> bool {
-    !matches!(sector, FREE_SECTOR | END_OF_CHAIN | FAT_SECTOR | DIFAT_SECTOR)
-        && sector <= MAX_REGULAR_SECTOR
+    !matches!(
+        sector,
+        FREE_SECTOR | END_OF_CHAIN | FAT_SECTOR | DIFAT_SECTOR
+    ) && sector <= MAX_REGULAR_SECTOR
         && usize::try_from(sector)
             .ok()
             .is_some_and(|value| value < num_sectors)
@@ -474,8 +469,9 @@ mod tests {
     }
 
     fn root_contents_start_sector(source: &[u8]) -> u32 {
-        let full = recover_root_regular_stream_prefix_reader(Cursor::new(source.to_vec()), "/Contents")
-            .expect("complete root Contents evidence");
+        let full =
+            recover_root_regular_stream_prefix_reader(Cursor::new(source.to_vec()), "/Contents")
+                .expect("complete root Contents evidence");
         let first_range = full.source_ranges.first().expect("first source range");
         let sector_len = 1usize << u16::from_le_bytes([source[30], source[31]]);
         u32::try_from((usize::try_from(first_range.offset).unwrap() / sector_len) - 1).unwrap()
@@ -544,9 +540,8 @@ mod tests {
     #[test]
     fn complete_control_returns_complete_without_changing_contract() {
         let source = regular_root_fixture();
-        let recovered =
-            recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Contents")
-                .expect("complete Contents");
+        let recovered = recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Contents")
+            .expect("complete Contents");
         assert_eq!(recovered.status, RootRegularStreamPrefixStatus::Complete);
         assert!(recovered.stream_sid > 0);
         assert_eq!(recovered.available_prefix_len, recovered.declared_len);
@@ -558,9 +553,8 @@ mod tests {
     #[test]
     fn broken_fat_link_returns_only_physically_proven_prefix() {
         let source = break_contents_chain_after_first_sector(regular_root_fixture());
-        let recovered =
-            recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Contents")
-                .expect("partial Contents evidence");
+        let recovered = recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Contents")
+            .expect("partial Contents evidence");
 
         assert_eq!(recovered.status, RootRegularStreamPrefixStatus::Partial);
         assert_eq!(
@@ -579,18 +573,16 @@ mod tests {
     #[test]
     fn stream_chain_cycle_fails_closed() {
         let source = cycle_contents_chain_after_first_sector(regular_root_fixture());
-        let error =
-            recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Contents")
-                .expect_err("stream chain cycle must fail closed");
+        let error = recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Contents")
+            .expect_err("stream chain cycle must fail closed");
         assert!(format!("{error:#}").contains("cycle in root stream"));
     }
 
     #[test]
     fn root_directory_cycle_fails_closed() {
         let source = cycle_root_directory_sibling(regular_root_fixture());
-        let error =
-            recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Contents")
-                .expect_err("directory sibling cycle must fail closed");
+        let error = recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Contents")
+            .expect_err("directory sibling cycle must fail closed");
         assert!(format!("{error:#}").contains("cycle in root directory sibling tree"));
     }
 
@@ -616,9 +608,8 @@ mod tests {
     #[test]
     fn case_colliding_root_names_fail_closed() {
         let source = case_colliding_root_fixture();
-        let error =
-            recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Contents")
-                .expect_err("case-colliding root stream names must fail closed");
+        let error = recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Contents")
+            .expect_err("case-colliding root stream names must fail closed");
         assert!(format!("{error:#}").contains("duplicate root stream name"));
     }
 
@@ -633,9 +624,8 @@ mod tests {
         .expect_err("nested recovery path must be rejected");
         assert!(format!("{nested:#}").contains("direct root stream"));
 
-        let missing =
-            recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Missing")
-                .expect_err("missing root stream must be rejected");
+        let missing = recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Missing")
+            .expect_err("missing root stream must be rejected");
         assert!(format!("{missing:#}").contains("is absent"));
     }
 }
