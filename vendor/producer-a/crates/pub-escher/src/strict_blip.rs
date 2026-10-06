@@ -148,8 +148,10 @@ pub fn validate_blip_record(
     effective_uid.copy_from_slice(&payload[uid_offset..uid_offset + 16]);
 
     let blip_file_data = &payload[prefix_len..];
-    let observed_uid = Md4::digest(blip_file_data);
-    if observed_uid[..] != effective_uid {
+    let digest = Md4::digest(blip_file_data);
+    let mut observed_uid = [0u8; 16];
+    observed_uid.copy_from_slice(&digest);
+    if observed_uid != effective_uid {
         return Err(BlipValidationError::UidMismatch {
             rec_type: record.header.rec_type,
             rec_instance: record.header.rec_instance,
