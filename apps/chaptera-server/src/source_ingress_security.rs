@@ -1,6 +1,5 @@
 use std::{
     fmt,
-    net::SocketAddr,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -15,7 +14,6 @@ use sha2::{Digest, Sha256};
 use tokio::{
     fs,
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
     process::Command,
     time::timeout,
 };
@@ -28,14 +26,10 @@ use crate::{
 };
 
 pub const SOURCE_SECURITY_PROFILE_V1: &str = "chaptera-source-ingress-security-v1";
-const CLAMD_MAX_REPLY_BYTES: usize = 64 * 1024;
 const STREAM_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct SourceSecurityScannerConfig {
-    pub clamd_endpoint: SocketAddr,
-    pub clamd_connect_timeout: Duration,
-    pub clamd_io_timeout: Duration,
     pub isolation_python: PathBuf,
     pub isolation_harness: PathBuf,
     pub worker_binary: PathBuf,
@@ -50,19 +44,10 @@ pub struct SourceSecurityScannerConfig {
 
 impl SourceSecurityScannerConfig {
     pub fn validate(&self) -> Result<(), IngressError> {
-        if !self.clamd_endpoint.ip().is_loopback() {
+        if self.worker_wall_timeout.is_zero() {
             return Err(IngressError::new(
                 "source_scanner_config_invalid",
-                "clamd endpoint must be loopback",
-            ));
-        }
-        if self.clamd_connect_timeout.is_zero()
-            || self.clamd_io_timeout.is_zero()
-            || self.worker_wall_timeout.is_zero()
-        {
-            return Err(IngressError::new(
-                "source_scanner_config_invalid",
-                "scanner timeouts must be positive",
+                "worker timeout must be positive",
             ));
         }
         if self.worker_address_space_mb < 64
@@ -236,7 +221,6 @@ impl fmt::Debug for ProductionSourceSecurityScanner {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ProductionSourceSecurityScanner")
-            .field("clamd_endpoint", &self.config.clamd_endpoint)
             .field("policy", &self.config.policy)
             .finish_non_exhaustive()
     }
@@ -271,42 +255,6 @@ impl ProductionSourceSecurityScanner {
             IngressError::new(
                 "source_scanner_temp_failed",
                 "scanner could not create bounded private input",
-            )
-        })?;
-
-        let mut clamd = timeout(
-            self.config.clamd_connect_timeout,
-            TcpStream::connect(self.config.clamd_endpoint),
-        )
-        .await
-        .map_err(|_| {
-            IngressError::new(
-                "source_malware_scanner_unavailable",
-                "clamd connection timed out",
-            )
-        })?
-        .map_err(|_| {
-            IngressError::new(
-                "source_malware_scanner_unavailable",
-                "clamd connection failed",
-            )
-        })?;
-
-        timeout(
-            self.config.clamd_io_timeout,
-            clamd.write_all(b"zINSTREAM\0"),
-        )
-        .await
-        .map_err(|_| {
-            IngressError::new(
-                "source_malware_scanner_timeout",
-                "clamd command write timed out",
-            )
-        })?
-        .map_err(|_| {
-            IngressError::new(
-                "source_malware_scanner_failed",
-                "clamd command write failed",
             )
         })?;
 
@@ -345,44 +293,6 @@ impl ProductionSourceSecurityScanner {
                     "scanner could not materialize bounded private input",
                 )
             })?;
-
-            let length = u32::try_from(count).map_err(|_| {
-                IngressError::new(
-                    "source_malware_scanner_failed",
-                    "clamd INSTREAM chunk length overflow",
-                )
-            })?;
-            timeout(
-                self.config.clamd_io_timeout,
-                clamd.write_all(&length.to_be_bytes()),
-            )
-            .await
-            .map_err(|_| {
-                IngressError::new(
-                    "source_malware_scanner_timeout",
-                    "clamd chunk header write timed out",
-                )
-            })?
-            .map_err(|_| {
-                IngressError::new(
-                    "source_malware_scanner_failed",
-                    "clamd chunk header write failed",
-                )
-            })?;
-            timeout(self.config.clamd_io_timeout, clamd.write_all(chunk))
-                .await
-                .map_err(|_| {
-                    IngressError::new(
-                        "source_malware_scanner_timeout",
-                        "clamd payload write timed out",
-                    )
-                })?
-                .map_err(|_| {
-                    IngressError::new(
-                        "source_malware_scanner_failed",
-                        "clamd payload write failed",
-                    )
-                })?;
         }
 
         file.flush().await.map_err(|_| {
@@ -393,34 +303,6 @@ impl ProductionSourceSecurityScanner {
         })?;
         drop(file);
 
-        timeout(
-            self.config.clamd_io_timeout,
-            clamd.write_all(&0_u32.to_be_bytes()),
-        )
-        .await
-        .map_err(|_| {
-            IngressError::new(
-                "source_malware_scanner_timeout",
-                "clamd terminator write timed out",
-            )
-        })?
-        .map_err(|_| {
-            IngressError::new(
-                "source_malware_scanner_failed",
-                "clamd terminator write failed",
-            )
-        })?;
-
-        let malware = read_clamd_reply(&mut clamd, self.config.clamd_io_timeout).await?;
-        match malware {
-            ClamdOutcome::Clean => {}
-            ClamdOutcome::Detected => {
-                return Ok(SourceSecurityScanOutcome::Rejected {
-                    code: "malware_detected",
-                });
-            }
-        }
-
         let source_sha256 = format!("{:x}", hasher.finalize());
         let structural = self
             .structural
@@ -430,7 +312,7 @@ impl ProductionSourceSecurityScanner {
         if structural.byte_len != total || structural.sha256 != source_sha256 {
             return Err(IngressError::new(
                 "source_structural_scan_identity_mismatch",
-                "isolated PUB worker receipt does not match the malware-scanned bytes",
+                "isolated PUB worker receipt does not match the admitted source bytes",
             ));
         }
         if !structural.filesystem_confinement {
@@ -464,68 +346,6 @@ impl AsyncSourceSecurityScanner for ProductionSourceSecurityScanner {
     ) -> Result<SourceSecurityScanOutcome, IngressError> {
         self.scan_inner(input).await
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClamdOutcome {
-    Clean,
-    Detected,
-}
-
-async fn read_clamd_reply(
-    stream: &mut TcpStream,
-    io_timeout: Duration,
-) -> Result<ClamdOutcome, IngressError> {
-    let reply = timeout(io_timeout, async {
-        let mut bytes = Vec::new();
-        let mut one = [0_u8; 1];
-        loop {
-            let count = stream.read(&mut one).await?;
-            if count == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "clamd reply ended before NUL",
-                ));
-            }
-            if one[0] == 0 {
-                break;
-            }
-            if bytes.len() >= CLAMD_MAX_REPLY_BYTES {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "clamd reply too large",
-                ));
-            }
-            bytes.push(one[0]);
-        }
-        Ok::<Vec<u8>, std::io::Error>(bytes)
-    })
-    .await
-    .map_err(|_| IngressError::new("source_malware_scanner_timeout", "clamd reply timed out"))?
-    .map_err(|_| {
-        IngressError::new(
-            "source_malware_scanner_failed",
-            "clamd reply was unavailable or malformed",
-        )
-    })?;
-
-    let reply = String::from_utf8(reply).map_err(|_| {
-        IngressError::new(
-            "source_malware_scanner_failed",
-            "clamd reply was not valid UTF-8",
-        )
-    })?;
-    let trimmed = reply.trim();
-    if trimmed == "stream: OK" {
-        return Ok(ClamdOutcome::Clean);
-    }
-    if trimmed.starts_with("stream: ") && trimmed.ends_with(" FOUND") {
-        return Ok(ClamdOutcome::Detected);
-    }
-    Err(IngressError::new(
-        "source_malware_scanner_failed",
-        "clamd returned an unsupported result",
-    ))
 }
 
 struct ScanTempDir {
@@ -599,18 +419,12 @@ mod tests {
         },
     };
 
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt, duplex},
-        net::TcpListener,
-    };
+    use tokio::io::{AsyncWriteExt, duplex};
 
     use super::*;
 
-    fn base_config(endpoint: SocketAddr, temp_root: PathBuf) -> SourceSecurityScannerConfig {
+    fn base_config(temp_root: PathBuf) -> SourceSecurityScannerConfig {
         SourceSecurityScannerConfig {
-            clamd_endpoint: endpoint,
-            clamd_connect_timeout: Duration::from_secs(2),
-            clamd_io_timeout: Duration::from_secs(2),
             isolation_python: PathBuf::from("python3"),
             isolation_harness: PathBuf::from("tools/migration_pdf_worker_isolation.py"),
             worker_binary: PathBuf::from("target/debug/chaptera-untrusted-pub-worker"),
@@ -622,33 +436,6 @@ mod tests {
             policy: PubScanPolicyV1::default(),
             temp_root,
         }
-    }
-
-    async fn spawn_clamd(reply: &'static [u8], expected: Vec<u8>) -> SocketAddr {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut command = [0_u8; 10];
-            stream.read_exact(&mut command).await.unwrap();
-            assert_eq!(&command, b"zINSTREAM\0");
-
-            let mut payload = Vec::new();
-            loop {
-                let mut length = [0_u8; 4];
-                stream.read_exact(&mut length).await.unwrap();
-                let length = u32::from_be_bytes(length) as usize;
-                if length == 0 {
-                    break;
-                }
-                let start = payload.len();
-                payload.resize(start + length, 0);
-                stream.read_exact(&mut payload[start..]).await.unwrap();
-            }
-            assert_eq!(payload, expected);
-            stream.write_all(reply).await.unwrap();
-        });
-        address
     }
 
     struct FakeStructuralRunner {
@@ -690,26 +477,15 @@ mod tests {
         result
     }
 
-    #[test]
-    fn non_loopback_clamd_is_rejected() {
-        let temp = env::temp_dir();
-        let config = base_config("192.0.2.1:3310".parse().unwrap(), temp);
-        assert_eq!(
-            config.validate().unwrap_err().code,
-            "source_scanner_config_invalid"
-        );
-    }
-
     #[tokio::test]
-    async fn clean_clamd_plus_confined_structural_accepts_exact_stream() {
+    async fn confined_structural_worker_accepts_exact_stream() {
         let bytes = b"exact Publisher payload".to_vec();
-        let endpoint = spawn_clamd(b"stream: OK\0", bytes.clone()).await;
         let runner = Arc::new(FakeStructuralRunner {
             status: PubScanStatusV1::AcceptedCfb,
             calls: AtomicUsize::new(0),
         });
         let scanner = ProductionSourceSecurityScanner::with_runner(
-            base_config(endpoint, env::temp_dir()),
+            base_config(env::temp_dir()),
             runner.clone(),
         )
         .unwrap();
@@ -725,24 +501,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn malware_detection_rejects_before_structural_worker() {
-        let bytes = b"eicar-like-test-payload".to_vec();
-        let endpoint = spawn_clamd(b"stream: Eicar-Test-Signature FOUND\0", bytes.clone()).await;
+    async fn input_size_limit_rejects_before_structural_worker() {
+        let bytes = b"too-large".to_vec();
         let runner = Arc::new(FakeStructuralRunner {
             status: PubScanStatusV1::AcceptedCfb,
             calls: AtomicUsize::new(0),
         });
-        let scanner = ProductionSourceSecurityScanner::with_runner(
-            base_config(endpoint, env::temp_dir()),
-            runner.clone(),
-        )
-        .unwrap();
+        let mut config = base_config(env::temp_dir());
+        config.policy.max_file_bytes = 4;
+        let scanner = ProductionSourceSecurityScanner::with_runner(config, runner.clone()).unwrap();
 
         let outcome = scan_bytes(&scanner, &bytes).await.unwrap();
         assert!(matches!(
             outcome,
             SourceSecurityScanOutcome::Rejected {
-                code: "malware_detected"
+                code: "pub_size_limit"
             }
         ));
         assert_eq!(runner.calls.load(Ordering::SeqCst), 0);
@@ -751,16 +524,13 @@ mod tests {
     #[tokio::test]
     async fn structural_parse_failure_is_bounded_rejection() {
         let bytes = b"invalid Publisher payload".to_vec();
-        let endpoint = spawn_clamd(b"stream: OK\0", bytes.clone()).await;
         let runner = Arc::new(FakeStructuralRunner {
             status: PubScanStatusV1::ParseFailed,
             calls: AtomicUsize::new(0),
         });
-        let scanner = ProductionSourceSecurityScanner::with_runner(
-            base_config(endpoint, env::temp_dir()),
-            runner,
-        )
-        .unwrap();
+        let scanner =
+            ProductionSourceSecurityScanner::with_runner(base_config(env::temp_dir()), runner)
+                .unwrap();
 
         let outcome = scan_bytes(&scanner, &bytes).await.unwrap();
         assert!(matches!(
@@ -769,26 +539,6 @@ mod tests {
                 code: "pub_structure_invalid"
             }
         ));
-    }
-
-    #[tokio::test]
-    async fn unsupported_clamd_reply_fails_closed() {
-        let bytes = b"payload".to_vec();
-        let endpoint = spawn_clamd(b"stream: scanner unavailable ERROR\0", bytes.clone()).await;
-        let runner = Arc::new(FakeStructuralRunner {
-            status: PubScanStatusV1::AcceptedCfb,
-            calls: AtomicUsize::new(0),
-        });
-        let scanner = ProductionSourceSecurityScanner::with_runner(
-            base_config(endpoint, env::temp_dir()),
-            runner,
-        )
-        .unwrap();
-
-        assert_eq!(
-            scan_bytes(&scanner, &bytes).await.unwrap_err().code,
-            "source_malware_scanner_failed"
-        );
     }
 
     #[tokio::test]
@@ -805,11 +555,10 @@ mod tests {
         let root = ScanTempDir::create(&env::temp_dir()).await.unwrap();
         let output = root.path().join("result");
         let config = SourceSecurityScannerConfig {
-            clamd_endpoint: "127.0.0.1:3310".parse().unwrap(),
             isolation_python: PathBuf::from("python3"),
             isolation_harness: PathBuf::from(harness),
             worker_binary: PathBuf::from(worker),
-            ..base_config("127.0.0.1:3310".parse().unwrap(), env::temp_dir())
+            ..base_config(env::temp_dir())
         };
 
         let evidence = IsolatedPubWorkerRunner

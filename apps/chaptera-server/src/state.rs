@@ -62,14 +62,25 @@ impl RuntimePorts {
     }
 
     pub fn readiness_report(&self) -> ReadinessReport {
+        self.readiness_report_for(ReadinessProfile::Cloud)
+    }
+
+    fn readiness_report_for(&self, profile: ReadinessProfile) -> ReadinessReport {
+        let authenticated_cloud = matches!(profile, ReadinessProfile::Cloud);
         let mut components = BTreeMap::new();
-        components.insert("authn".to_owned(), snapshot(&self.authn, true));
-        components.insert("authz".to_owned(), snapshot(&self.authz, true));
+        components.insert(
+            "authn".to_owned(),
+            snapshot(&self.authn, authenticated_cloud),
+        );
+        components.insert(
+            "authz".to_owned(),
+            snapshot(&self.authz, authenticated_cloud),
+        );
         components.insert(
             "revision_stream".to_owned(),
             snapshot(&self.revision_stream, true),
         );
-        components.insert("jobs".to_owned(), snapshot(&self.jobs, true));
+        components.insert("jobs".to_owned(), snapshot(&self.jobs, authenticated_cloud));
         components.insert("blob_store".to_owned(), snapshot(&self.blob_store, true));
         components.insert(
             "observability".to_owned(),
@@ -143,17 +154,34 @@ pub struct ReadinessReport {
     pub components: BTreeMap<String, ComponentStatus>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadinessProfile {
+    Cloud,
+    GuestReader,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     ports: RuntimePorts,
+    readiness_profile: ReadinessProfile,
 }
 
 impl AppState {
     pub fn new(ports: RuntimePorts) -> Self {
-        Self { ports }
+        Self {
+            ports,
+            readiness_profile: ReadinessProfile::Cloud,
+        }
+    }
+
+    pub fn new_guest_reader(ports: RuntimePorts) -> Self {
+        Self {
+            ports,
+            readiness_profile: ReadinessProfile::GuestReader,
+        }
     }
 
     pub fn readiness_report(&self) -> ReadinessReport {
-        self.ports.readiness_report()
+        self.ports.readiness_report_for(self.readiness_profile)
     }
 }

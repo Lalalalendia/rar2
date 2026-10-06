@@ -126,7 +126,6 @@ def main() -> int:
     require(config, "tenant_concurrent_cap = 8", "config")
     require(config, "max_single_upload_bytes = 268435456", "config")
     require(config, "[source_validation]", "config")
-    require(config, 'clamd_endpoint = "127.0.0.1:3310"', "config")
     require(config, 'isolation_python = "/usr/bin/python3"', "config")
     require(
         config,

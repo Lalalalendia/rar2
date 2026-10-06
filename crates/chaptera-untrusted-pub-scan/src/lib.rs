@@ -7,6 +7,16 @@ pub const DEFAULT_MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 pub const DEFAULT_MAX_CFB_ENTRIES: u64 = 8_192;
 pub const DEFAULT_MAX_DECLARED_STREAM_BYTES: u64 = 512 * 1024 * 1024;
 
+const CFB_SIGNATURE: [u8; 8] = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+const CFB_FREE_SECTOR: u32 = 0xffff_ffff;
+const CFB_END_OF_CHAIN: u32 = 0xffff_fffe;
+const CFB_FAT_SECTOR: u32 = 0xffff_fffd;
+const CFB_DIFAT_SECTOR: u32 = 0xffff_fffc;
+const CFB_MAX_REGULAR_SECTOR: u32 = 0xffff_fffa;
+const CFB_MINI_STREAM_CUTOFF: u32 = 4096;
+const CFB_HEADER_DIFAT_ENTRIES: usize = 109;
+const CFB_MAX_PATH_DEPTH: usize = 32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubScanPolicyV1 {
     pub max_file_bytes: u64,
@@ -101,6 +111,18 @@ pub fn inspect_pub_bytes_v1(
         );
     }
 
+    if let Err(violation) = inspect_cfb_firewall(bytes) {
+        return result(
+            bytes,
+            PubScanStatusV1::ParseFailed,
+            None,
+            None,
+            filesystem_confinement,
+            Some(format!("cfb_firewall:{}", violation.code)),
+            Some(violation.message),
+        );
+    }
+
     let compound = match cfb::CompoundFile::open(Cursor::new(bytes)) {
         Ok(compound) => compound,
         Err(error) => {
@@ -148,7 +170,38 @@ pub fn inspect_pub_bytes_v1(
             );
         }
 
+        let path_depth = entry.path().components().count();
+        if path_depth > CFB_MAX_PATH_DEPTH {
+            return result(
+                bytes,
+                PubScanStatusV1::RejectedByPolicy,
+                Some(entry_count),
+                Some(declared_stream_bytes),
+                filesystem_confinement,
+                Some(format!(
+                    "cfb_path_depth_limit: {path_depth} > {CFB_MAX_PATH_DEPTH}"
+                )),
+                Some("CFB path depth exceeds admitted limit".to_owned()),
+            );
+        }
+
         if entry.is_stream() {
+            if entry.len() > byte_len {
+                return result(
+                    bytes,
+                    PubScanStatusV1::ParseFailed,
+                    Some(entry_count),
+                    Some(declared_stream_bytes),
+                    filesystem_confinement,
+                    Some("cfb_firewall:stream_length_exceeds_file".to_owned()),
+                    Some(format!(
+                        "CFB stream {:?} declares {} bytes in a {} byte file",
+                        entry.path(),
+                        entry.len(),
+                        byte_len
+                    )),
+                );
+            }
             declared_stream_bytes = match declared_stream_bytes.checked_add(entry.len()) {
                 Some(value) => value,
                 None => {
@@ -189,6 +242,255 @@ pub fn inspect_pub_bytes_v1(
         None,
         None,
     )
+}
+
+#[derive(Debug)]
+struct CfbFirewallViolation {
+    code: &'static str,
+    message: String,
+}
+
+fn firewall_violation(code: &'static str, message: impl Into<String>) -> CfbFirewallViolation {
+    CfbFirewallViolation {
+        code,
+        message: message.into(),
+    }
+}
+
+fn inspect_cfb_firewall(bytes: &[u8]) -> Result<(), CfbFirewallViolation> {
+    if bytes.len() < 512 {
+        return Err(firewall_violation(
+            "header_truncated",
+            "CFB input is shorter than the 512-byte header",
+        ));
+    }
+    if bytes.get(..8) != Some(CFB_SIGNATURE.as_slice()) {
+        return Err(firewall_violation(
+            "signature_invalid",
+            "CFB signature does not match the Compound File Binary format",
+        ));
+    }
+
+    let major = cfb_u16(bytes, 26)?;
+    if !matches!(major, 3 | 4) {
+        return Err(firewall_violation(
+            "major_version_invalid",
+            format!("unsupported CFB major version {major}"),
+        ));
+    }
+    let byte_order = cfb_u16(bytes, 28)?;
+    if byte_order != 0xfffe {
+        return Err(firewall_violation(
+            "byte_order_invalid",
+            format!("unsupported CFB byte order {byte_order:#06x}"),
+        ));
+    }
+
+    let sector_shift = cfb_u16(bytes, 30)?;
+    let sector_len = match (major, sector_shift) {
+        (3, 9) => 512usize,
+        (4, 12) => 4096usize,
+        _ => {
+            return Err(firewall_violation(
+                "sector_size_invalid",
+                format!("unsupported CFB major/sector pair {major}/{sector_shift}"),
+            ));
+        }
+    };
+    if cfb_u16(bytes, 32)? != 6 {
+        return Err(firewall_violation(
+            "mini_sector_size_invalid",
+            "CFB mini-sector shift must be 6",
+        ));
+    }
+    if bytes.len() < sector_len || !bytes.len().is_multiple_of(sector_len) {
+        return Err(firewall_violation(
+            "file_alignment_invalid",
+            format!(
+                "CFB byte length {} is not aligned to sector size {sector_len}",
+                bytes.len()
+            ),
+        ));
+    }
+
+    let num_sectors = bytes.len() / sector_len - 1;
+    let num_directory_sectors = cfb_u32(bytes, 40)? as usize;
+    if major == 3 && num_directory_sectors != 0 {
+        return Err(firewall_violation(
+            "v3_directory_sector_count_invalid",
+            "CFB version 3 must declare zero directory sectors in the header",
+        ));
+    }
+
+    let num_fat_sectors = cfb_u32(bytes, 44)? as usize;
+    if num_fat_sectors > num_sectors {
+        return Err(firewall_violation(
+            "fat_sector_count_exceeds_file",
+            format!(
+                "CFB declares {num_fat_sectors} FAT sectors for only {num_sectors} physical sectors"
+            ),
+        ));
+    }
+    let fat_entries_per_sector = sector_len / 4;
+    if num_fat_sectors
+        .checked_mul(fat_entries_per_sector)
+        .is_none_or(|capacity| capacity < num_sectors)
+    {
+        return Err(firewall_violation(
+            "fat_capacity_too_small",
+            "declared FAT sectors cannot address all physical sectors",
+        ));
+    }
+
+    require_regular_sector(
+        cfb_u32(bytes, 48)?,
+        num_sectors,
+        "directory",
+        "directory_sector_invalid",
+    )?;
+
+    if cfb_u32(bytes, 56)? != CFB_MINI_STREAM_CUTOFF {
+        return Err(firewall_violation(
+            "mini_stream_cutoff_invalid",
+            "CFB mini-stream cutoff must be 4096 bytes",
+        ));
+    }
+
+    let first_mini_fat = cfb_u32(bytes, 60)?;
+    let num_mini_fat = cfb_u32(bytes, 64)? as usize;
+    if num_mini_fat > num_sectors {
+        return Err(firewall_violation(
+            "mini_fat_sector_count_exceeds_file",
+            "CFB MiniFAT sector count exceeds physical sector count",
+        ));
+    }
+    if num_mini_fat > 0 {
+        require_regular_sector(
+            first_mini_fat,
+            num_sectors,
+            "MiniFAT",
+            "mini_fat_sector_invalid",
+        )?;
+    } else if !matches!(first_mini_fat, CFB_END_OF_CHAIN | CFB_FREE_SECTOR) {
+        return Err(firewall_violation(
+            "mini_fat_empty_chain_invalid",
+            "CFB with zero MiniFAT sectors has a non-terminal MiniFAT start",
+        ));
+    }
+
+    let first_difat = cfb_u32(bytes, 68)?;
+    let num_difat = cfb_u32(bytes, 72)? as usize;
+    if num_difat > num_sectors {
+        return Err(firewall_violation(
+            "difat_sector_count_exceeds_file",
+            "CFB DIFAT sector count exceeds physical sector count",
+        ));
+    }
+    if num_difat > 0 {
+        require_regular_sector(first_difat, num_sectors, "DIFAT", "difat_sector_invalid")?;
+    } else if !matches!(first_difat, CFB_END_OF_CHAIN | CFB_FREE_SECTOR) {
+        return Err(firewall_violation(
+            "difat_empty_chain_invalid",
+            "CFB with zero DIFAT sectors has a non-terminal DIFAT start",
+        ));
+    }
+
+    let difat_slots_per_sector = fat_entries_per_sector.saturating_sub(1);
+    let max_fat_sector_ids = CFB_HEADER_DIFAT_ENTRIES
+        .checked_add(
+            num_difat
+                .checked_mul(difat_slots_per_sector)
+                .ok_or_else(|| {
+                    firewall_violation(
+                        "difat_capacity_overflow",
+                        "CFB DIFAT capacity overflowed usize",
+                    )
+                })?,
+        )
+        .ok_or_else(|| {
+            firewall_violation(
+                "difat_capacity_overflow",
+                "CFB DIFAT capacity overflowed usize",
+            )
+        })?;
+    if num_fat_sectors > max_fat_sector_ids {
+        return Err(firewall_violation(
+            "difat_capacity_too_small",
+            "CFB DIFAT cannot name the declared number of FAT sectors",
+        ));
+    }
+
+    let mut header_fat_ids = std::collections::BTreeSet::new();
+    for index in 0..CFB_HEADER_DIFAT_ENTRIES {
+        let sector = cfb_u32(bytes, 76 + index * 4)?;
+        if sector == CFB_FREE_SECTOR {
+            continue;
+        }
+        require_regular_sector(
+            sector,
+            num_sectors,
+            "header DIFAT",
+            "header_fat_sector_invalid",
+        )?;
+        if !header_fat_ids.insert(sector) {
+            return Err(firewall_violation(
+                "duplicate_header_fat_sector",
+                format!("CFB header names FAT sector {sector} more than once"),
+            ));
+        }
+    }
+    if header_fat_ids.len() > num_fat_sectors {
+        return Err(firewall_violation(
+            "header_fat_count_exceeds_declared",
+            "CFB header names more FAT sectors than num_fat_sectors declares",
+        ));
+    }
+
+    Ok(())
+}
+
+fn cfb_u16(bytes: &[u8], offset: usize) -> Result<u16, CfbFirewallViolation> {
+    let raw = bytes.get(offset..offset + 2).ok_or_else(|| {
+        firewall_violation(
+            "header_truncated",
+            format!("CFB u16 field at offset {offset} lies outside the header"),
+        )
+    })?;
+    Ok(u16::from_le_bytes([raw[0], raw[1]]))
+}
+
+fn cfb_u32(bytes: &[u8], offset: usize) -> Result<u32, CfbFirewallViolation> {
+    let raw = bytes.get(offset..offset + 4).ok_or_else(|| {
+        firewall_violation(
+            "header_truncated",
+            format!("CFB u32 field at offset {offset} lies outside the header"),
+        )
+    })?;
+    Ok(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
+}
+
+fn require_regular_sector(
+    sector: u32,
+    num_sectors: usize,
+    label: &str,
+    code: &'static str,
+) -> Result<(), CfbFirewallViolation> {
+    let valid = sector <= CFB_MAX_REGULAR_SECTOR
+        && !matches!(
+            sector,
+            CFB_FREE_SECTOR | CFB_END_OF_CHAIN | CFB_FAT_SECTOR | CFB_DIFAT_SECTOR
+        )
+        && usize::try_from(sector)
+            .ok()
+            .is_some_and(|value| value < num_sectors);
+    if valid {
+        Ok(())
+    } else {
+        Err(firewall_violation(
+            code,
+            format!("{label} references invalid physical sector {sector}"),
+        ))
+    }
 }
 
 fn result(
@@ -399,6 +701,49 @@ mod tests {
                 .security_event
                 .as_deref()
                 .is_some_and(|value| value.starts_with("input_size_limit:"))
+        );
+    }
+
+    #[test]
+    fn firewall_rejects_impossible_fat_count_before_cfb_parser() {
+        let mut bytes = vec![0_u8; 512];
+        bytes[..8].copy_from_slice(&CFB_SIGNATURE);
+        bytes[26..28].copy_from_slice(&3_u16.to_le_bytes());
+        bytes[28..30].copy_from_slice(&0xfffe_u16.to_le_bytes());
+        bytes[30..32].copy_from_slice(&9_u16.to_le_bytes());
+        bytes[32..34].copy_from_slice(&6_u16.to_le_bytes());
+        bytes[44..48].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[48..52].copy_from_slice(&0_u32.to_le_bytes());
+        bytes[56..60].copy_from_slice(&CFB_MINI_STREAM_CUTOFF.to_le_bytes());
+        bytes[60..64].copy_from_slice(&CFB_END_OF_CHAIN.to_le_bytes());
+        bytes[68..72].copy_from_slice(&CFB_END_OF_CHAIN.to_le_bytes());
+        for index in 0..CFB_HEADER_DIFAT_ENTRIES {
+            let offset = 76 + index * 4;
+            bytes[offset..offset + 4].copy_from_slice(&CFB_FREE_SECTOR.to_le_bytes());
+        }
+
+        let result = inspect_pub_bytes_v1(&bytes, PubScanPolicyV1::default(), false);
+        assert_eq!(result.status, PubScanStatusV1::ParseFailed);
+        assert_eq!(
+            result.security_event.as_deref(),
+            Some("cfb_firewall:fat_sector_count_exceeds_file")
+        );
+    }
+
+    #[test]
+    fn firewall_rejects_unaligned_cfb_before_cfb_parser() {
+        let mut bytes = vec![0_u8; 513];
+        bytes[..8].copy_from_slice(&CFB_SIGNATURE);
+        bytes[26..28].copy_from_slice(&3_u16.to_le_bytes());
+        bytes[28..30].copy_from_slice(&0xfffe_u16.to_le_bytes());
+        bytes[30..32].copy_from_slice(&9_u16.to_le_bytes());
+        bytes[32..34].copy_from_slice(&6_u16.to_le_bytes());
+
+        let result = inspect_pub_bytes_v1(&bytes, PubScanPolicyV1::default(), false);
+        assert_eq!(result.status, PubScanStatusV1::ParseFailed);
+        assert_eq!(
+            result.security_event.as_deref(),
+            Some("cfb_firewall:file_alignment_invalid")
         );
     }
 

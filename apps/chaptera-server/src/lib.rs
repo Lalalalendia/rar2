@@ -16,6 +16,7 @@ pub mod doctor;
 pub mod edge;
 pub mod export_executor;
 pub mod export_publication;
+pub mod filesystem_blob_provider;
 pub mod guest_intake_classifier;
 pub mod guest_reader_http;
 pub mod guest_reader_worker;
