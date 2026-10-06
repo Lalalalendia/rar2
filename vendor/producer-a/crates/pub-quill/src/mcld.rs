@@ -365,6 +365,78 @@ pub fn bounded_mcld_uniform_text_inset(
     })
 }
 
+/// Promotes one record-level TABLE text inset only when every child is
+/// individually symmetric and the entire multi-child record is unanimous.
+///
+/// This deliberately avoids any child-to-cell ordinal claim: when every child
+/// carries the same exact inset, mapping order is irrelevant. Missing,
+/// duplicate, wrong-typed, asymmetric, or cross-child-disagreeing state fails
+/// closed.
+pub fn bounded_mcld_table_uniform_text_inset(
+    mcld: &QuillMcldChunk,
+    record_id: u32,
+) -> Result<QuillMcldUniformTextInset, QuillMcldReadError> {
+    let record = mcld
+        .records
+        .iter()
+        .find(|record| record.record_id == record_id)
+        .ok_or(QuillMcldReadError::RecordIdNotFound { record_id })?;
+
+    if record.children.is_empty() {
+        return Err(QuillMcldReadError::MissingRequiredField {
+            record_id,
+            child_index: 0,
+            field_id: 0x06,
+        });
+    }
+
+    let mut expected_record_inset = None;
+    let mut sources = Vec::with_capacity(record.children.len() * 4);
+
+    for (child_index, child) in record.children.iter().enumerate() {
+        let child_index = u32::try_from(child_index).unwrap_or(u32::MAX);
+        let values = [0x06_u8, 0x07, 0x08, 0x09]
+            .into_iter()
+            .map(|field_id| required_u32_field(record_id, child_index, child, field_id))
+            .collect::<Result<Vec<_>, _>>()?;
+        let child_inset = values[0].0;
+
+        for (index, (found, _)) in values.iter().enumerate().skip(1) {
+            if *found != child_inset {
+                return Err(QuillMcldReadError::NonUniformRequiredField {
+                    record_id,
+                    field_id: [0x06_u8, 0x07, 0x08, 0x09][index],
+                    expected: child_inset,
+                    found: *found,
+                    child_index,
+                });
+            }
+        }
+
+        match expected_record_inset {
+            None => expected_record_inset = Some(child_inset),
+            Some(expected) if expected == child_inset => {}
+            Some(expected) => {
+                return Err(QuillMcldReadError::NonUniformRequiredField {
+                    record_id,
+                    field_id: 0x06,
+                    expected,
+                    found: child_inset,
+                    child_index,
+                });
+            }
+        }
+
+        sources.extend(values.into_iter().map(|(_, source)| source));
+    }
+
+    Ok(QuillMcldUniformTextInset {
+        record_id,
+        inset_emu: expected_record_inset.expect("non-empty child cohort"),
+        sources,
+    })
+}
+
 /// Promotes the confirmed ordinary-TextFrame MCLD vertical-alignment field.
 ///
 /// The admitted profile is deliberately narrow: one keyed child, exactly one
@@ -784,5 +856,125 @@ fn span(stream: StreamPath, offset: usize, len: usize) -> RawSpan {
         stream,
         offset: offset as u64,
         len: len as u64,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_span(offset: u64) -> RawSpan {
+        RawSpan {
+            stream: StreamPath("test".into()),
+            offset,
+            len: 1,
+        }
+    }
+
+    fn decoded_u32(value: u32, offset: u64) -> Decoded<u32> {
+        Decoded {
+            value,
+            source: test_span(offset),
+            raw: value.to_le_bytes().to_vec(),
+        }
+    }
+
+    fn inset_field(id: u8, value: u32, offset: u64) -> QuillMcldField {
+        QuillMcldField {
+            id,
+            wire_type: 0x22,
+            source: test_span(offset),
+            value: QuillMcldFieldValue::U32(value),
+        }
+    }
+
+    fn inset_child(values: [u32; 4], child_index: u64) -> QuillMcldChild {
+        let base = child_index * 10;
+        QuillMcldChild {
+            source: test_span(base),
+            fields: vec![
+                inset_field(0x06, values[0], base + 1),
+                inset_field(0x07, values[1], base + 2),
+                inset_field(0x08, values[2], base + 3),
+                inset_field(0x09, values[3], base + 4),
+            ],
+        }
+    }
+
+    fn test_chunk(children: Vec<QuillMcldChild>) -> QuillMcldChunk {
+        let child_count = u32::try_from(children.len()).unwrap();
+        QuillMcldChunk {
+            source: test_span(0),
+            record_count: decoded_u32(1, 1),
+            record_id_count: decoded_u32(1, 2),
+            record_ids: vec![decoded_u32(77, 3)],
+            records: vec![QuillMcldRecord {
+                record_id: 77,
+                source: test_span(4),
+                header_source: test_span(5),
+                child_count: decoded_u32(child_count, 6),
+                children,
+            }],
+        }
+    }
+
+    #[test]
+    fn table_uniform_text_inset_accepts_unanimous_multi_child_record() {
+        let chunk = test_chunk(vec![
+            inset_child([42, 42, 42, 42], 0),
+            inset_child([42, 42, 42, 42], 1),
+        ]);
+
+        let inset =
+            bounded_mcld_table_uniform_text_inset(&chunk, 77).expect("unanimous TABLE inset");
+        assert_eq!(inset.inset_emu, 42);
+        assert_eq!(inset.sources.len(), 8);
+    }
+
+    #[test]
+    fn table_uniform_text_inset_rejects_asymmetric_child() {
+        let chunk = test_chunk(vec![inset_child([42, 42, 41, 42], 0)]);
+
+        assert!(matches!(
+            bounded_mcld_table_uniform_text_inset(&chunk, 77),
+            Err(QuillMcldReadError::NonUniformRequiredField {
+                field_id: 0x08,
+                child_index: 0,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn table_uniform_text_inset_rejects_cross_child_disagreement() {
+        let chunk = test_chunk(vec![
+            inset_child([42, 42, 42, 42], 0),
+            inset_child([43, 43, 43, 43], 1),
+        ]);
+
+        assert!(matches!(
+            bounded_mcld_table_uniform_text_inset(&chunk, 77),
+            Err(QuillMcldReadError::NonUniformRequiredField {
+                field_id: 0x06,
+                child_index: 1,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn table_uniform_text_inset_rejects_missing_side() {
+        let mut child = inset_child([42, 42, 42, 42], 0);
+        child.fields.retain(|field| field.id != 0x09);
+        let chunk = test_chunk(vec![child]);
+
+        assert!(matches!(
+            bounded_mcld_table_uniform_text_inset(&chunk, 77),
+            Err(QuillMcldReadError::MissingRequiredField {
+                field_id: 0x09,
+                child_index: 0,
+                ..
+            })
+        ));
     }
 }
