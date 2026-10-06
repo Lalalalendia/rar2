@@ -623,15 +623,27 @@ export function presetShapePaintGeometry(node) {
   const height = safeInteger(bounds.height, "node.bounds.height");
   if (width <= 0 || height <= 0) return null;
 
-  if (node.paint?.preset_shape !== "round_rect") {
-    return Object.freeze({ tag: "rect", attrs: Object.freeze({ x, y, width, height }) });
+  if (node.paint?.preset_shape === "ellipse") {
+    return Object.freeze({
+      tag: "ellipse",
+      attrs: Object.freeze({
+        cx: x + width / 2,
+        cy: y + height / 2,
+        rx: width / 2,
+        ry: height / 2
+      })
+    });
   }
 
-  const radius = Math.round(Math.min(width, height) * 16667 / 100000);
-  return Object.freeze({
-    tag: "rect",
-    attrs: Object.freeze({ x, y, width, height, rx: radius, ry: radius })
-  });
+  if (node.paint?.preset_shape === "round_rect") {
+    const radius = Math.round(Math.min(width, height) * 16667 / 100000);
+    return Object.freeze({
+      tag: "rect",
+      attrs: Object.freeze({ x, y, width, height, rx: radius, ry: radius })
+    });
+  }
+
+  return Object.freeze({ tag: "rect", attrs: Object.freeze({ x, y, width, height }) });
 }
 
 function renderNode(svg, defs, node, resources, fonts, index) {

@@ -2,11 +2,12 @@ use chaptera_caret_layout_feed::build_caret_map_from_shaped_flow_v1;
 use chaptera_text_caret_map_adapter::ResolvedTextCaretMapV1;
 use pub_editor::{
     EditOperation, EditorCurrentImageResourceV1, EditorSession, EffectiveParagraphAlignmentValueV1,
-    FormatPropertyV1, FormatValueV1,
+    FormatPropertyV1, FormatValueV1, ImportedParagraphFlowConstraintV1,
 };
 use pub_layout::{
-    BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
-    BoundedShapingRuntime, font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
+    BoundedLayoutEnvironment, BoundedParagraphFlowConstraint, BoundedParagraphFlowRun,
+    BoundedShapedFlowRuntime, BoundedShapedFlowScene, BoundedShapingRuntime,
+    font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow_with_paragraph_flow,
 };
 use pub_line_placement::{
     LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
@@ -438,6 +439,69 @@ fn apply_line_offsets_to_caret_map_v1(
     Ok(())
 }
 
+fn current_story_paragraph_flow_v1(
+    editor: &EditorSession,
+    story_id: StoryId,
+) -> Result<Vec<BoundedParagraphFlowRun>, DesktopShapedFlowRuntimeError> {
+    let bindings = editor
+        .imported_paragraph_flow_constraints_v1()
+        .map_err(|error| {
+            DesktopShapedFlowRuntimeError::new(
+                "paragraph_flow_unavailable",
+                format!("imported paragraph-flow authority is unavailable: {error}"),
+            )
+        })?;
+
+    let mut runs = Vec::new();
+    for binding in bindings
+        .into_iter()
+        .filter(|binding| binding.story_id == story_id)
+    {
+        let scalar_start = u32::try_from(binding.range.start).map_err(|_| {
+            DesktopShapedFlowRuntimeError::new(
+                "paragraph_flow_range_overflow",
+                "paragraph-flow scalar start exceeds the V1 u32 domain",
+            )
+        })?;
+        let scalar_end = u32::try_from(binding.range.end).map_err(|_| {
+            DesktopShapedFlowRuntimeError::new(
+                "paragraph_flow_range_overflow",
+                "paragraph-flow scalar end exceeds the V1 u32 domain",
+            )
+        })?;
+        let constraint = match binding.constraint {
+            ImportedParagraphFlowConstraintV1::StartInNextTextBox => {
+                BoundedParagraphFlowConstraint::StartInNextTextBox
+            }
+            ImportedParagraphFlowConstraintV1::KeepLinesTogether => {
+                BoundedParagraphFlowConstraint::KeepLinesTogether
+            }
+            ImportedParagraphFlowConstraintV1::KeepWithNext => {
+                BoundedParagraphFlowConstraint::KeepWithNext
+            }
+            ImportedParagraphFlowConstraintV1::WidowControl => {
+                BoundedParagraphFlowConstraint::WidowControl
+            }
+        };
+        runs.push(BoundedParagraphFlowRun {
+            story_origin: binding.story_id,
+            scalar_start,
+            scalar_end,
+            constraint,
+        });
+    }
+
+    runs.sort_by_key(|run| {
+        (
+            run.story_origin,
+            run.scalar_start,
+            run.scalar_end,
+            run.constraint,
+        )
+    });
+    Ok(runs)
+}
+
 pub fn build_current_story_layout_v1(
     editor: &EditorSession,
     story_id: StoryId,
@@ -466,6 +530,7 @@ pub fn build_current_story_layout_v1(
 
     let fingerprint = validate_explicit_font_resource_v1(font)?;
     let current_boolean_typography = current_story_boolean_typography_v1(editor, story_id)?;
+    let current_paragraph_flow = current_story_paragraph_flow_v1(editor, story_id)?;
     let authoring =
         pub_viewer::bounded_authoring_slice_from_resolved(editor.graph()).map_err(|error| {
             DesktopShapedFlowRuntimeError::new(
@@ -489,7 +554,12 @@ pub fn build_current_story_layout_v1(
         line_height: font.line_height_emu,
     };
 
-    let shaped_flow = resolve_bounded_shaped_flow(&projection, &runtime).map_err(|error| {
+    let shaped_flow = resolve_bounded_shaped_flow_with_paragraph_flow(
+        &projection,
+        &runtime,
+        &current_paragraph_flow,
+    )
+    .map_err(|error| {
         DesktopShapedFlowRuntimeError::new(
             "shaped_flow_failed",
             format!("authoritative bounded shaped flow failed: {error}"),
