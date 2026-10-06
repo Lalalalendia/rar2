@@ -233,6 +233,9 @@ struct MappingSummary {
     missing_shaping_line_count: usize,
     unresolved_text_color_line_count: usize,
     residual_node_signature_counts: BTreeMap<String, usize>,
+    residual_signature_bounds_area_emu2: BTreeMap<String, u64>,
+    residual_signature_max_bounds_area_emu2: BTreeMap<String, u64>,
+    residual_signature_page_counts: BTreeMap<String, usize>,
     residual_projection_lane_counts: BTreeMap<String, usize>,
     residual_signature_lane_counts: BTreeMap<String, usize>,
 }
@@ -353,6 +356,19 @@ fn text_size_profile_tag(text: &CurrentText) -> &'static str {
         n if n > 1 => "mixed_size",
         _ => "size_profile_unknown",
     }
+}
+
+fn positive_rect_area_emu2(rect: RectEmu) -> Result<u64> {
+    let width = rect.width.get();
+    let height = rect.height.get();
+    if width <= 0 || height <= 0 {
+        return Ok(0);
+    }
+    let width = u64::try_from(width).context("positive rectangle width does not fit u64")?;
+    let height = u64::try_from(height).context("positive rectangle height does not fit u64")?;
+    width
+        .checked_mul(height)
+        .context("positive rectangle area overflow")
 }
 
 fn text_cooccurrence_tag(node: &CurrentNode) -> String {
@@ -986,7 +1002,7 @@ fn main() -> Result<()> {
         bail!("current Viewer SharedResolved line outcomes do not partition every line exactly once");
     }
 
-    for page in &input.pages {
+    for (page_index, page) in input.pages.iter().enumerate() {
         for node in &page.nodes {
             let resolved_node_id = resolved_output_node_id_v1(node)?;
             if mapped_resource_nodes.contains(&resolved_node_id) {
@@ -1008,6 +1024,24 @@ fn main() -> Result<()> {
             *summary
                 .residual_node_signature_counts
                 .entry(signature.clone())
+                .or_default() += 1;
+
+            let bounds_area = positive_rect_area_emu2(node.bounds)?;
+            let total_area = summary
+                .residual_signature_bounds_area_emu2
+                .entry(signature.clone())
+                .or_default();
+            *total_area = total_area
+                .checked_add(bounds_area)
+                .context("residual signature bounds-area total overflow")?;
+            summary
+                .residual_signature_max_bounds_area_emu2
+                .entry(signature.clone())
+                .and_modify(|current| *current = (*current).max(bounds_area))
+                .or_insert(bounds_area);
+            *summary
+                .residual_signature_page_counts
+                .entry(format!("{signature}@page{}", page_index + 1))
                 .or_default() += 1;
 
             let lane = node
