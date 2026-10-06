@@ -8996,7 +8996,7 @@ mod image_crop_authoring_tests {
     }
 
     #[test]
-    fn crop_is_v0_14_overlay_with_exact_history_replay_and_independent_axes() {
+    fn crop_is_v0_19_overlay_with_exact_history_replay_and_independent_axes() {
         let (graph, node_id, resource_id) = crop_graph();
         let source_bounds = graph.nodes[&node_id].header.bounds;
         let mut session = EditorSession::new(graph).expect("session");
@@ -9018,7 +9018,7 @@ mod image_crop_authoring_tests {
         assert_eq!(session.graph.nodes[&node_id].header.bounds, source_bounds);
         assert_eq!(
             session.project().schema_version,
-            EDITOR_PROJECT_VERSION_V0_14
+            EDITOR_PROJECT_VERSION_V0_19
         );
 
         assert!(matches!(
