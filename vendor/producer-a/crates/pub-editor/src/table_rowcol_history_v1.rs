@@ -1,8 +1,9 @@
 use crate::rebuild_authored_table_story_v1;
 use pub_model::{
     EffectiveTableCellV1, EffectiveTableGridV1, EffectiveTableTrackV1, LengthEmu, NodeId, RectEmu,
-    StoryId, TableCellAddress, TableCellId, TableColumnId, TableRowId,
+    SourceRef, StoryId, TableCellAddress, TableCellId, TableColumnId, TableRowId,
 };
+use pub_reader::PubTableCellPaintSource;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -12,6 +13,13 @@ pub const TABLE_ROWCOL_HISTORY_V1: &str = "chaptera.table-rowcol-history.v1";
 pub struct TableCellContentSnapshotV1 {
     pub cell_id: TableCellId,
     pub text: String,
+    pub stored_record_index: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<RectEmu>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint: Option<PubTableCellPaintSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_refs: Vec<SourceRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
