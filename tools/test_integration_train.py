@@ -106,6 +106,56 @@ def test_positive_disjoint_plan() -> None:
         temp.cleanup()
 
 
+def test_verify_composed_head() -> None:
+    temp, root, base = init_repo()
+    try:
+        a = branch_commit(root, base, "task-a", "crates/a/src/feature_a.rs", "pub fn a() {}\n")
+        b = branch_commit(root, base, "task-b", "vendor/producer-a/crates/pub-editor/src/feature_b.rs", "pub fn b() {}\n")
+        plan = mod.plan_train(
+            root,
+            base_ref=base,
+            candidates=[
+                mod.CandidateSpec("TASK-A", a),
+                mod.CandidateSpec("TASK-B", b),
+            ],
+        )
+        git(root, "switch", "-C", "integration/test", base)
+        git(root, "cherry-pick", *plan["composition_commits"])
+        verification = mod.verify_composed_head(root, plan, "integration/test")
+        assert verification["verified"] is True
+        assert verification["changed_paths"] == [
+            "crates/a/src/feature_a.rs",
+            "vendor/producer-a/crates/pub-editor/src/feature_b.rs",
+        ]
+        assert verification["heavy_families"] == plan["heavy_families"]
+    finally:
+        temp.cleanup()
+
+
+def test_verify_composed_head_rejects_extra_path() -> None:
+    temp, root, base = init_repo()
+    try:
+        a = branch_commit(root, base, "task-a", "crates/a/src/feature_a.rs", "pub fn a() {}\n")
+        b = branch_commit(root, base, "task-b", "crates/b/src/feature_b.rs", "pub fn b() {}\n")
+        plan = mod.plan_train(
+            root,
+            base_ref=base,
+            candidates=[
+                mod.CandidateSpec("TASK-A", a),
+                mod.CandidateSpec("TASK-B", b),
+            ],
+        )
+        git(root, "switch", "-C", "integration/test", base)
+        git(root, "cherry-pick", *plan["composition_commits"])
+        commit_file(root, "crates/extra/src/unplanned.rs", "pub fn extra() {}\n", "unplanned")
+        expect_rejected(
+            lambda: mod.verify_composed_head(root, plan, "integration/test"),
+            "path set does not match plan",
+        )
+    finally:
+        temp.cleanup()
+
+
 def test_overlapping_path_rejected() -> None:
     temp, root, base = init_repo()
     try:
@@ -264,6 +314,8 @@ def main() -> None:
     test_heavy_family_union()
     test_unrelated_feature_has_no_heavy_family()
     test_positive_disjoint_plan()
+    test_verify_composed_head()
+    test_verify_composed_head_rejects_extra_path()
     test_overlapping_path_rejected()
     test_forbidden_path_rejected()
     test_non_descendant_rejected()
