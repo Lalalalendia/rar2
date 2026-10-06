@@ -379,6 +379,46 @@ fn bounded_direct_image_transform(
         .unwrap_or(BoundedDirectImageTransform::Unsupported)
 }
 
+fn bounded_direct_story_cardinal_transform(
+    rotation_properties: &[(u32, bool, bool)],
+    fsp_flags: u32,
+    bounds: RectEmu,
+) -> BoundedDirectImageTransform {
+    if fsp_flags & (FSP_FLIP_H | FSP_FLIP_V) != 0
+        || rotation_properties
+            .iter()
+            .any(|(_, f_bid, f_complex)| *f_bid || *f_complex)
+        || rotation_properties.len() > 1
+    {
+        return BoundedDirectImageTransform::Unsupported;
+    }
+
+    let Some((rotation_op, _, _)) = rotation_properties.first().copied() else {
+        return BoundedDirectImageTransform::Identity;
+    };
+
+    const FULL_TURN_UNITS: i64 = 360 * 65_536;
+    const HALF_TURN_UNITS: i64 = 180 * 65_536;
+    const QUARTER_TURN_UNITS: i64 = 90 * 65_536;
+    let mut signed_angle = i64::from(rotation_op as i32) % FULL_TURN_UNITS;
+    if signed_angle > HALF_TURN_UNITS {
+        signed_angle -= FULL_TURN_UNITS;
+    } else if signed_angle < -HALF_TURN_UNITS {
+        signed_angle += FULL_TURN_UNITS;
+    }
+
+    if signed_angle == 0 {
+        return BoundedDirectImageTransform::Identity;
+    }
+    if !matches!(signed_angle.abs(), QUARTER_TURN_UNITS | HALF_TURN_UNITS) {
+        return BoundedDirectImageTransform::Unsupported;
+    }
+
+    affine_rotation_about_bounds(rotation_op, bounds)
+        .map(BoundedDirectImageTransform::Applied)
+        .unwrap_or(BoundedDirectImageTransform::Unsupported)
+}
+
 pub fn format_profile()
 -> Result<pub_format_registry::FormatProfileEntry, pub_format_registry::RegistryError> {
     pub_format_registry::resolve(PUB_FORMAT_PROFILE_ID)
@@ -3381,11 +3421,46 @@ pub fn build_mature_0x2c_from_streams(
             } else {
                 None
             };
-        let (node_transform, direct_image_rotation_applied) = match direct_image_transform {
+        let (image_node_transform, direct_image_rotation_applied) = match direct_image_transform {
             BoundedDirectImageTransform::Identity | BoundedDirectImageTransform::Unsupported => {
                 (Affine2D::identity(), false)
             }
             BoundedDirectImageTransform::Applied(transform) => (transform, true),
+        };
+
+        // Manual Publisher oracle test2 proves that an ordinary Story-backed
+        // text frame can carry one exact cardinal OfficeArt rotation while
+        // remaining horizontal writing (PDF wmode=0). Keep this law separate
+        // from image-content rotation and from CJK vertical-writing semantics.
+        let direct_story_candidate = raw_type == Some(RAW_TYPE_SHAPE)
+            && exact_story_identity.is_some()
+            && story_frame.is_some()
+            && grouped_sources.is_empty();
+        let direct_story_rotation_properties = if direct_story_candidate {
+            shape
+                .fopts
+                .iter()
+                .flat_map(|record| record.properties.iter())
+                .filter(|property| property.property_id() == OFFICE_ART_PROPERTY_ROTATION)
+                .map(|property| (property.op, property.f_bid(), property.f_complex()))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let direct_story_transform = if direct_story_candidate {
+            bounded_direct_story_cardinal_transform(
+                &direct_story_rotation_properties,
+                shape.fsp.as_ref().map(|fsp| fsp.flags).unwrap_or(0),
+                bounds,
+            )
+        } else {
+            BoundedDirectImageTransform::Identity
+        };
+        let (node_transform, direct_story_rotation_applied) = match direct_story_transform {
+            BoundedDirectImageTransform::Applied(transform) => (transform, true),
+            BoundedDirectImageTransform::Identity | BoundedDirectImageTransform::Unsupported => {
+                (image_node_transform, false)
+            }
         };
 
         let object_key = contents_object_key(seq_num);
@@ -3422,7 +3497,10 @@ pub fn build_mature_0x2c_from_streams(
                 ReadConfidence::Exact,
             ));
         }
-        if direct_image_rotation_applied || direct_image_cardinal_rotation_degrees.is_some() {
+        if direct_image_rotation_applied
+            || direct_image_cardinal_rotation_degrees.is_some()
+            || direct_story_rotation_applied
+        {
             source_refs.push(source_ref(
                 &graph.source,
                 &shape.source,
@@ -5422,6 +5500,58 @@ mod tests {
         );
         assert_eq!(
             bounded_direct_image_transform(&[(1, false, true)], 0, test_bounds()),
+            BoundedDirectImageTransform::Unsupported
+        );
+    }
+
+    #[test]
+    fn direct_story_cardinal_rotation_becomes_node_transform() {
+        for rotation_op in [90u32 << 16, 180u32 << 16, 270u32 << 16] {
+            let transform =
+                bounded_direct_story_cardinal_transform(&[(rotation_op, false, false)], 0, test_bounds());
+            let BoundedDirectImageTransform::Applied(transform) = transform else {
+                panic!("cardinal Story rotation must be admitted");
+            };
+            assert_ne!(transform, Affine2D::identity());
+        }
+    }
+
+    #[test]
+    fn direct_story_rotation_keeps_unmeasured_states_fail_closed() {
+        assert_eq!(
+            bounded_direct_story_cardinal_transform(&[], 0, test_bounds()),
+            BoundedDirectImageTransform::Identity
+        );
+        assert_eq!(
+            bounded_direct_story_cardinal_transform(
+                &[(32_768, false, false)],
+                0,
+                test_bounds(),
+            ),
+            BoundedDirectImageTransform::Unsupported
+        );
+        assert_eq!(
+            bounded_direct_story_cardinal_transform(
+                &[(90u32 << 16, false, false)],
+                FSP_FLIP_H,
+                test_bounds(),
+            ),
+            BoundedDirectImageTransform::Unsupported
+        );
+        assert_eq!(
+            bounded_direct_story_cardinal_transform(
+                &[(90u32 << 16, false, true)],
+                0,
+                test_bounds(),
+            ),
+            BoundedDirectImageTransform::Unsupported
+        );
+        assert_eq!(
+            bounded_direct_story_cardinal_transform(
+                &[(90u32 << 16, false, false), (180u32 << 16, false, false)],
+                0,
+                test_bounds(),
+            ),
             BoundedDirectImageTransform::Unsupported
         );
     }
