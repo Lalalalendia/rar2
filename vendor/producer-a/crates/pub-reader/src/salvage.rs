@@ -929,6 +929,25 @@ mod tests {
         record.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         record.extend_from_slice(&payload);
 
+        // Include a strict uncompressed EMF in the same recovered prefix.
+        // The shared #1656 validator must admit the resource envelope, while
+        // ReaderPartialEscherDelayEvidence remains raster-only until #1659.
+        let metafile = b"synthetic-emf-resource";
+        let metafile_uid = Md4::digest(metafile);
+        let mut metafile_payload = Vec::with_capacity(50 + metafile.len());
+        metafile_payload.extend_from_slice(&metafile_uid);
+        metafile_payload.extend_from_slice(&(metafile.len() as u32).to_le_bytes());
+        metafile_payload.extend_from_slice(&[0u8; 16]); // rcBounds
+        metafile_payload.extend_from_slice(&[0u8; 8]); // ptSize
+        metafile_payload.extend_from_slice(&(metafile.len() as u32).to_le_bytes());
+        metafile_payload.push(0xfe); // uncompressed
+        metafile_payload.push(0xfe); // filter
+        metafile_payload.extend_from_slice(metafile);
+        record.extend_from_slice(&0x3d40u16.to_le_bytes());
+        record.extend_from_slice(&pub_escher::OFFICE_ART_BLIP_EMF.to_le_bytes());
+        record.extend_from_slice(&(metafile_payload.len() as u32).to_le_bytes());
+        record.extend_from_slice(&metafile_payload);
+
         // Keep EscherDelay on the regular FAT path so the damaged-CFB
         // recovery arm exercises the exact-SID regular-stream substrate.
         record.extend_from_slice(&0x0000u16.to_le_bytes());
@@ -974,7 +993,15 @@ mod tests {
 
         let evidence =
             build_reader_partial_escherdelay_evidence(&bytes, &probe).expect("delay evidence");
-        assert_eq!(evidence.validated_images.len(), 1);
+        assert_eq!(
+            evidence.rejected_complete_blip_count, 0,
+            "strict EMF must validate upstream rather than being rejected"
+        );
+        assert_eq!(
+            evidence.validated_images.len(),
+            1,
+            "strict EMF must not leak into raster-shaped Reader evidence"
+        );
         assert_eq!(evidence.source_sha256, source_sha256(&bytes));
         assert!(!evidence.stream_source_ranges.is_empty());
         let image = &evidence.validated_images[0];
