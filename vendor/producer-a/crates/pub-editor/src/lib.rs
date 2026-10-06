@@ -8796,7 +8796,9 @@ fn apply_forward(
         | EditOperation::DeleteTableRow { .. }
         | EditOperation::InsertTableColumn { .. }
         | EditOperation::DeleteTableColumn { .. } => {
-            unreachable!("table row/column lifecycle is applied through the structural snapshot bridge")
+            unreachable!(
+                "table row/column lifecycle is applied through the structural snapshot bridge"
+            )
         }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is applied to the authored overlay state")
@@ -9066,7 +9068,9 @@ fn apply_inverse(
         | EditOperation::DeleteTableRow { .. }
         | EditOperation::InsertTableColumn { .. }
         | EditOperation::DeleteTableColumn { .. } => {
-            unreachable!("table row/column lifecycle is applied through the structural snapshot bridge")
+            unreachable!(
+                "table row/column lifecycle is applied through the structural snapshot bridge"
+            )
         }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is reverted in the authored overlay state")
