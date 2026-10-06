@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{env, fs, path::PathBuf};
 
@@ -204,12 +204,14 @@ fn predict(signature: DamageSignatureV1) -> DamagePredictionV1 {
 
 fn main() -> Result<()> {
     let mut args = env::args_os().skip(1);
-    let input = PathBuf::from(args.next().context(
-        "usage: recovery-damage-signature-predictor INPUT.json OUTPUT.json",
-    )?);
-    let output = PathBuf::from(args.next().context(
-        "usage: recovery-damage-signature-predictor INPUT.json OUTPUT.json",
-    )?);
+    let input = PathBuf::from(
+        args.next()
+            .context("usage: recovery-damage-signature-predictor INPUT.json OUTPUT.json")?,
+    );
+    let output = PathBuf::from(
+        args.next()
+            .context("usage: recovery-damage-signature-predictor INPUT.json OUTPUT.json")?,
+    );
     if args.next().is_some() {
         bail!("recovery-damage-signature-predictor accepts INPUT.json OUTPUT.json");
     }
@@ -305,10 +307,7 @@ mod tests {
         input.text = FactState::Proven;
         input.repair_authority = RepairAuthority::SalvageOnly;
         let result = predict(input);
-        assert_eq!(
-            result.predicted_outcome,
-            PredictedOutcome::NoSafeRecovery
-        );
+        assert_eq!(result.predicted_outcome, PredictedOutcome::NoSafeRecovery);
     }
 
     #[test]
@@ -347,6 +346,9 @@ mod tests {
     fn diagnostic_only_without_facts_is_not_rescue() {
         let mut input = signature(ReaderAdmission::UntypedDamaged);
         input.repair_authority = RepairAuthority::DiagnosticOnly;
-        assert_eq!(predict(input).predicted_outcome, PredictedOutcome::NoSafeRecovery);
+        assert_eq!(
+            predict(input).predicted_outcome,
+            PredictedOutcome::NoSafeRecovery
+        );
     }
 }
