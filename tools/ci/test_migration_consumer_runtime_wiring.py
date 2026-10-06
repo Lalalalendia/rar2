@@ -64,6 +64,10 @@ def main() -> int:
             "- pinned",
             "- apt",
             "docker run --rm",
+            'echo "route_count=96" >> "$GITHUB_OUTPUT"',
+            'echo "consumer_cap=12" >> "$GITHUB_OUTPUT"',
+            'echo "route_count=1050" >> "$GITHUB_OUTPUT"',
+            'echo "consumer_cap=96" >> "$GITHUB_OUTPUT"',
         ),
         "Migration 1050 pinned consumer runtime",
     )
