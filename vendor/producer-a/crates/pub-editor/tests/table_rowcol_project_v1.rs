@@ -192,7 +192,7 @@ fn insert_row_is_v021_and_composes_with_prior_track_resize_and_cell_text() {
     );
 
     session
-        .replace_table_cell_text(table_id(), new_cells[0], "new row".into())
+        .replace_table_cell_text(table_id(), new_cells[0], "new row")
         .expect("edit inserted cell");
     assert_eq!(materialized_text(&session, new_cells[0]), "new row");
 
@@ -225,7 +225,7 @@ fn delete_column_undo_restores_exact_ids_and_text() {
     let mut session = EditorSession::new(graph()).expect("session");
     session.create_table(runtime()).expect("CreateTable");
     session
-        .replace_table_cell_text(table_id(), cell_ids()[1], "survivor".into())
+        .replace_table_cell_text(table_id(), cell_ids()[1], "survivor")
         .expect("edit survivor");
     session
         .replace_table_cell_text(table_id(), cell_ids()[0], "removed".into())
