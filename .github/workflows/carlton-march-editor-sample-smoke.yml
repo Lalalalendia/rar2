@@ -1,6 +1,12 @@
 name: Carlton March Editor sample smoke
 
 on:
+  workflow_call:
+    inputs:
+      editor_binary_artifact_name:
+        required: false
+        type: string
+        default: ""
   pull_request:
     paths:
       - ".github/workflows/carlton-march-editor-sample-smoke.yml"
@@ -31,6 +37,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Download exact-candidate Editor binary
+        if: inputs.editor_binary_artifact_name != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.editor_binary_artifact_name }}
+          path: ${{ runner.temp }}/chaptera-editor-prebuilt
+
+      - name: Validate exact-candidate Editor binary
+        if: inputs.editor_binary_artifact_name != ''
+        run: python tools/ci/validate_editor_binary_artifact.py --artifact-dir "${{ runner.temp }}/chaptera-editor-prebuilt" --expected-candidate-sha "${{ github.sha }}"
+
+      - name: Stage exact-candidate Editor binary
+        if: inputs.editor_binary_artifact_name != ''
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "target/release" | Out-Null
+          Copy-Item "${{ runner.temp }}/chaptera-editor-prebuilt/chaptera-editor.exe" "target/release/chaptera-editor.exe" -Force
 
       - name: Install exact acquisition dependency
         run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
@@ -63,6 +87,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Carlton paragraph base-alignment seam failed" }
 
       - name: Build current Editor acceptance binary
+        if: inputs.editor_binary_artifact_name == ''
         run: cargo build -p chaptera-desktop --release --bin chaptera-editor
 
       - name: Run exact two-operation Carlton continuity witness
