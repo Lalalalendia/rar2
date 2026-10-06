@@ -21,6 +21,7 @@ pub enum BlipKind {
     Pict,
     Jpeg,
     Png,
+    Gif,
     Dib,
     Tiff,
     Unknown,
@@ -187,14 +188,16 @@ pub fn inspect_delayed_blips(
             continue;
         }
 
+        let image_payload_source = detect_image_payload(bytes, record)?;
+        let kind = exact_image_payload_kind(bytes, record, image_payload_source.as_ref())?;
         records.push(DelayedBlip {
             ordinal: ordinal as u32,
             record_source: record.source.clone(),
             payload_source: record.payload_source.clone(),
             rec_type: record.header.rec_type,
             rec_instance: record.header.rec_instance,
-            kind: blip_kind(record.header.rec_type),
-            image_payload_source: detect_image_payload(bytes, record)?,
+            kind,
+            image_payload_source,
         });
     }
 
@@ -317,9 +320,12 @@ fn detect_image_payload(
     let prefix = &payload[..search_len];
 
     let signature = match record.header.rec_type {
-        OFFICE_ART_BLIP_PNG => {
-            find_bytes(prefix, &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
-        }
+        OFFICE_ART_BLIP_PNG => find_bytes(
+            prefix,
+            &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        )
+        .or_else(|| find_bytes(prefix, b"GIF87a"))
+        .or_else(|| find_bytes(prefix, b"GIF89a"))
         OFFICE_ART_BLIP_JPEG => find_bytes(prefix, &[0xFF, 0xD8, 0xFF]),
         OFFICE_ART_BLIP_DIB => find_dib_header(prefix),
         _ => None,
@@ -330,6 +336,26 @@ fn detect_image_payload(
         offset: record.payload_source.offset + relative as u64,
         len: record.payload_source.len - relative as u64,
     }))
+}
+
+fn exact_image_payload_kind(
+    bytes: &[u8],
+    record: &OfficeArtRecord,
+    image_payload_source: Option<&RawSpan>,
+) -> Result<BlipKind, AssetReadError> {
+    let record_kind = blip_kind(record.header.rec_type);
+    let Some(source) = image_payload_source else {
+        return Ok(record_kind);
+    };
+
+    if record.header.rec_type == OFFICE_ART_BLIP_PNG {
+        let payload = span_slice(bytes, source)?;
+        if payload.starts_with(b"GIF87a") || payload.starts_with(b"GIF89a") {
+            return Ok(BlipKind::Gif);
+        }
+    }
+
+    Ok(record_kind)
 }
 
 fn blip_kind(rec_type: u16) -> BlipKind {
@@ -516,6 +542,27 @@ mod tests {
             .expect("non-empty delayed slot");
         assert_eq!(resolved.record_source.offset, 0);
         assert_eq!(resolved.kind, BlipKind::Png);
+    }
+
+    #[test]
+    fn preserves_gif_payload_under_png_typed_blip() {
+        let mut gif_payload = vec![0_u8; 17];
+        gif_payload.extend_from_slice(b"GIF87a");
+        gif_payload.extend_from_slice(&616u16.to_le_bytes());
+        gif_payload.extend_from_slice(&354u16.to_le_bytes());
+        gif_payload.extend_from_slice(b"payload");
+        let gif = record(0x6E00, OFFICE_ART_BLIP_PNG, &gif_payload);
+
+        let delayed = inspect_delayed_blips(stream("/Escher/EscherDelayStm"), &gif)
+            .expect("GIF-bearing PNG-typed delay record should parse");
+        assert_eq!(delayed.records.len(), 1);
+        let blip = &delayed.records[0];
+        assert_eq!(blip.rec_type, OFFICE_ART_BLIP_PNG);
+        assert_eq!(blip.kind, BlipKind::Gif);
+        assert_eq!(
+            blip.image_payload_source.as_ref().map(|span| span.offset),
+            Some(25)
+        );
     }
 
     #[test]
