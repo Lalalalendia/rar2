@@ -130,7 +130,11 @@ fn cell_text_map(
 fn require_known_track_extents(
     snapshot: &TableStructureSnapshotV1,
 ) -> Result<(), TableRowColHistoryErrorV1> {
-    if snapshot.grid.rows.iter().any(|track| track.extent.is_none())
+    if snapshot
+        .grid
+        .rows
+        .iter()
+        .any(|track| track.extent.is_none())
         || snapshot
             .grid
             .columns
@@ -411,7 +415,11 @@ fn canonicalize_story(
             .find(|cell| cell.id == content.cell_id)
             .ok_or(TableRowColHistoryErrorV1::CellContentMismatch)?
             .address;
-        content.bounds = Some(effective_cell_bounds(&snapshot.grid, snapshot.bounds, address)?);
+        content.bounds = Some(effective_cell_bounds(
+            &snapshot.grid,
+            snapshot.bounds,
+            address,
+        )?);
     }
     snapshot.cells.sort_by_key(|content| {
         snapshot
