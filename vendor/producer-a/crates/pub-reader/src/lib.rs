@@ -1045,6 +1045,16 @@ pub enum PubBridgeDiagnostic {
         seq_num: u32,
         reason: String,
     },
+    GroupedPrimitiveProjected {
+        seq_num: u32,
+        shape_type: u16,
+        depth: usize,
+    },
+    GroupedPrimitiveProjectionUnavailable {
+        seq_num: u32,
+        shape_type: u16,
+        reason: String,
+    },
     GroupedTableProjected {
         seq_num: u32,
         depth: usize,
@@ -3205,9 +3215,20 @@ pub fn build_mature_0x2c_from_streams(
         };
         let image_slot = exact_image_slot(shape, seq_num, &mut diagnostics);
         let exact_grouped_image_identity = raw_type == Some(RAW_TYPE_SHAPE) && image_slot.is_some();
+        let exact_grouped_primitive_shape_type = if raw_type == Some(RAW_TYPE_SHAPE)
+            && exact_story_identity.is_none()
+            && image_slot.is_none()
+            && has_default_ellipse_geometry(shape)
+        {
+            Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
+        } else {
+            None
+        };
         let grouped_projection = if direct_page.is_none()
             && references.get(&parent_seq).and_then(single_raw_type) == Some(RAW_TYPE_GROUP)
-            && (exact_story_identity.is_some() || exact_grouped_image_identity)
+            && (exact_story_identity.is_some()
+                || exact_grouped_image_identity
+                || exact_grouped_primitive_shape_type.is_some())
         {
             match project_grouped_object_shape(
                 parent_seq,
@@ -3229,6 +3250,12 @@ pub fn build_mature_0x2c_from_streams(
                             seq_num,
                             depth: projection.depth,
                         }
+                    } else if let Some(shape_type) = exact_grouped_primitive_shape_type {
+                        PubBridgeDiagnostic::GroupedPrimitiveProjected {
+                            seq_num,
+                            shape_type,
+                            depth: projection.depth,
+                        }
                     } else {
                         PubBridgeDiagnostic::GroupedImageProjected {
                             seq_num,
@@ -3247,6 +3274,12 @@ pub fn build_mature_0x2c_from_streams(
                     } else if exact_story_identity.is_some() {
                         PubBridgeDiagnostic::GroupedStoryProjectionUnavailable {
                             seq_num,
+                            reason: error.to_string(),
+                        }
+                    } else if let Some(shape_type) = exact_grouped_primitive_shape_type {
+                        PubBridgeDiagnostic::GroupedPrimitiveProjectionUnavailable {
+                            seq_num,
+                            shape_type,
                             reason: error.to_string(),
                         }
                     } else {
@@ -3506,6 +3539,17 @@ pub fn build_mature_0x2c_from_streams(
                 &shape.source,
                 Some(format!("escher/client-data-shape-id/{seq_num}")),
                 Some("SpContainer/FSP/default-roundrect".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ));
+        }
+        if has_default_ellipse_geometry(shape) {
+            source_refs.push(source_ref(
+                &graph.source,
+                &shape.source,
+                Some(format!("escher/client-data-shape-id/{seq_num}")),
+                Some("SpContainer/FSP/default-ellipse".into()),
                 SourceRole::Projection,
                 AuthorityClass::Authoritative,
                 ReadConfidence::Exact,
@@ -4339,6 +4383,7 @@ const LINE_USE_LINE_BIT: u32 = 1 << 19;
 const LINE_LINE_BIT: u32 = 1 << 3;
 const OFFICEART_FSP_CONNECTOR_BIT: u32 = 1 << 8;
 const OFFICEART_SHAPE_TYPE_NOT_PRIMITIVE: u16 = 0x0000;
+const OFFICEART_SHAPE_TYPE_ELLIPSE: u16 = 0x0003;
 const OFFICEART_SHAPE_TYPE_LINE: u16 = 0x0014;
 
 // MS-ODRAW normative property defaults for the bounded solid 2-D paint surface.
@@ -4370,6 +4415,10 @@ fn has_default_roundrect_geometry(shape: &pub_escher::SpContainerObservation) ->
         .iter()
         .flat_map(|record| record.properties.iter())
         .any(|property| property.property_id() == OFFICE_ART_ADJUST_VALUE)
+}
+
+fn has_default_ellipse_geometry(shape: &pub_escher::SpContainerObservation) -> bool {
+    shape.fsp.as_ref().map(|fsp| fsp.shape_type) == Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
 }
 
 fn has_explicit_officeart_paint_observation(shape: &pub_escher::SpContainerObservation) -> bool {
