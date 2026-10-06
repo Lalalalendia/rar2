@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use pub_editor::{
     AuthoredEntityProvenanceV1, AuthoredLineRuntimeV1, AuthoredSolidStrokeV1,
-    EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_16, EDITOR_PROJECT_VERSION_V0_17, EDITOR_PROJECT_VERSION_V0_18,
-    EditOperation, EditorError, EditorProject, EditorProjectError, EditorSession, LineGeometryV1,
+    EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_16, EDITOR_PROJECT_VERSION_V0_17,
+    EDITOR_PROJECT_VERSION_V0_18, EditOperation, EditorError, EditorProject, EditorProjectError,
+    EditorSession, LineGeometryV1,
     PointEmuV1, Srgb8V1, mature_0x2c_pub_persistence_target,
 };
 use pub_export::{PersistenceCompatibilityState, WriterCapabilityManifest};
