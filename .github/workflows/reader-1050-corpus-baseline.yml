@@ -146,7 +146,8 @@ jobs:
             -p pub-viewer \
             --release \
             --bin corpus-reader-receipt \
-            --bin corpus-reader-salvage-acceptance
+            --bin corpus-reader-salvage-acceptance \
+            --bin recovery-damage-classifier
 
       - name: Save Reader 1050 Cargo build cache
         if: steps.reader-1050-cargo-cache.outputs.cache-hit != 'true'
@@ -434,6 +435,49 @@ jobs:
                       "32b857475ae5ca8207942a40dc708d63153c9140bb06ee740d7e235944c0a027",
                   ]
               },
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Classify exact 1050 recovery damage outcomes
+        run: |
+          set -euo pipefail
+          "${CARGO_TARGET_DIR}/release/recovery-damage-classifier" \
+            out/materialized/native \
+            out/reader1050/recovery-damage-classifier.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("out/reader1050/recovery-damage-classifier.json").read_text())
+          assert payload["schema"] == "chaptera.recovery-damage-classifier.v1", payload["schema"]
+          assert payload["file_count"] == 1050, payload["file_count"]
+          assert payload["reader_outcome_counts"] == {
+              "normal_open": 1041,
+              "salvage_open": 5,
+              "cannot_safely_display": 4,
+          }, payload["reader_outcome_counts"]
+
+          verdicts = payload["verdict_counts"]
+          assert verdicts.get("open", 0) == 1041, verdicts
+          assert verdicts.get("open_partial", 0) == 5, verdicts
+          assert verdicts.get("rescue", 0) + verdicts.get("no_safe_recovery", 0) == 4, verdicts
+
+          inferred_rescue = [
+              row for row in payload["rows"]
+              if row["compact_verdict"] == "rescue"
+          ]
+          promotion_gaps = {}
+          for row in inferred_rescue:
+              key = row.get("promotion_gap") or "none"
+              promotion_gaps[key] = promotion_gaps.get(key, 0) + 1
+
+          print(json.dumps({
+              "verdict_counts": verdicts,
+              "reader_outcome_counts": payload["reader_outcome_counts"],
+              "rescue_outcome_counts": payload["rescue_outcome_counts"],
+              "inferred_rescue_count": len(inferred_rescue),
+              "promotion_gap_counts": promotion_gaps,
           }, indent=2, sort_keys=True))
           PY
 
