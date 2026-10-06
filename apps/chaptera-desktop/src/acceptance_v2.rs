@@ -10,7 +10,7 @@ use pub_interaction::{
     DocumentPoint, MoveTransaction, ResizeHandle, ResizeTransaction, ResizeUpdate,
 };
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -59,7 +59,7 @@ fn select_move(
     editor: &EditorSession,
     visual: &pub_viewer::ViewerGeometryDocument,
     require_wrap_irrelevant: bool,
-    required_export_image_asset: Option<Sha256Digest>,
+    required_export_image_nodes: Option<&BTreeSet<NodeId>>,
 ) -> Option<(SceneInstanceV1, NodeId, RectEmu, MoveTransaction)> {
     const DELTAS: &[(i64, i64)] = &[
         (127_000, 254_000),
@@ -86,9 +86,8 @@ fn select_move(
                 || admission.origin_node_id.as_deref() != Some(origin_node_id.as_str())
                 || geometry_sync_policy_v1(&instance)
                     != GeometrySyncPolicyV1::ApplyAuthoredOriginGeometry
-                || required_export_image_asset.is_some_and(|asset| {
-                    editor.can_replace_image(scene_node.origin, asset).is_err()
-                })
+                || required_export_image_nodes
+                    .is_some_and(|nodes| !nodes.contains(&scene_node.origin))
             {
                 continue;
             }
@@ -144,7 +143,9 @@ fn select_resize(
             .iter()
             .filter(|node| node.parent_origin == page_origin)
         {
-            if excluded.contains(&scene_node.origin) {
+            if excluded.contains(&scene_node.origin)
+                || required_node.is_some_and(|node_id| node_id != scene_node.origin)
+            {
                 continue;
             }
             let Some(instance) = direct_instance(editor, &target_page_id, scene_node.origin) else {
@@ -203,6 +204,7 @@ fn select_replace_image(
     excluded: &[NodeId],
     require_explicit_crop: bool,
     require_wrap_irrelevant: bool,
+    required_node: Option<NodeId>,
 ) -> Option<(SceneInstanceV1, NodeId, RectEmu, Option<ImageCropStateV1>)> {
     for page in &visual.document.pages {
         let page_origin = page.id.into_canonical();
@@ -346,6 +348,24 @@ pub fn run(
         .import_replacement_asset(replacement_mime, replacement_bytes.clone())
         .map_err(|error| format!("import replacement asset: {error}"))?;
 
+    let export_image_nodes = if require_wrap_irrelevant {
+        let resources = editor
+            .current_image_resources_v1()
+            .map_err(|error| format!("resolve current exact image resources: {error}"))?;
+        let nodes = resources
+            .into_iter()
+            .flat_map(|resource| resource.node_ids)
+            .collect::<BTreeSet<_>>();
+        if nodes.is_empty() {
+            return Err(
+                "newsletter acceptance has no exact source image geometry witness".to_owned(),
+            );
+        }
+        Some(nodes)
+    } else {
+        None
+    };
+
     let (story_id, start_scalar, expected_before) = select_story_edit(&editor)
         .ok_or_else(|| "no capability-approved ordinary Story".to_owned())?;
     let end_scalar = start_scalar
@@ -376,7 +396,7 @@ pub fn run(
             &editor,
             &visual,
             require_wrap_irrelevant,
-            require_wrap_irrelevant.then_some(replacement_asset),
+            export_image_nodes.as_ref(),
         )
         .ok_or_else(|| {
             if require_wrap_irrelevant {
@@ -428,23 +448,31 @@ pub fn run(
     }
     let after_resize_state_id = state_id(&editor)?;
 
+    let replace_excluded = if require_wrap_irrelevant {
+        vec![moved_node_id]
+    } else {
+        vec![moved_node_id, resized_node_id]
+    };
     let (replace_instance, replaced_node_id, replace_frame, replace_crop_before) =
         select_replace_image(
-        &editor,
-        &visual,
-        replacement_asset,
-        &[moved_node_id, resized_node_id],
-        require_explicit_crop,
-        require_wrap_irrelevant,
-    )
-    .ok_or_else(|| {
-        if require_explicit_crop {
-            "no distinct admitted direct page-local ReplaceImage target with explicit source crop"
-                .to_owned()
-        } else {
-            "no distinct admitted direct page-local ReplaceImage target".to_owned()
-        }
-    })?;
+            &editor,
+            &visual,
+            replacement_asset,
+            &replace_excluded,
+            require_explicit_crop,
+            require_wrap_irrelevant,
+            require_wrap_irrelevant.then_some(resized_node_id),
+        )
+        .ok_or_else(|| {
+            if require_explicit_crop {
+                "no admitted direct page-local ReplaceImage target with explicit source crop"
+                    .to_owned()
+            } else if require_wrap_irrelevant {
+                "resized newsletter image is not an admitted ReplaceImage target".to_owned()
+            } else {
+                "no distinct admitted direct page-local ReplaceImage target".to_owned()
+            }
+        })?;
     let before_asset = editor.image_replacement_for(replaced_node_id);
     let operations_before_replace = editor.operations().len();
     editor
