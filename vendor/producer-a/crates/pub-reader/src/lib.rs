@@ -151,8 +151,9 @@ pub use resolve::{
 };
 pub use salvage::{
     READER_PARTIAL_SOURCE_GRAPH_SCHEMA_V1, READER_SALVAGE_PROBE_SCHEMA_V1,
-    ReaderPartialEscherDelayEvidence, ReaderPartialEscherDelayImageEvidence,
-    ReaderPartialSourceFact, ReaderPartialSourceGap, ReaderPartialSourceGraph,
+    ReaderPartialEscherDelayEvidence, ReaderPartialEscherDelayIdentityAuthority,
+    ReaderPartialEscherDelayImageEvidence, ReaderPartialSourceFact, ReaderPartialSourceGap,
+    ReaderPartialSourceGraph,
     ReaderPartialSourceGraphError, ReaderSalvageCorruptionEvidence, ReaderSalvageEligibility,
     ReaderSalvageProbe, ReaderSalvageStreamState, ReaderSalvageSubsystemProbe,
     ReaderSalvageTrigger, build_reader_partial_escherdelay_evidence,
