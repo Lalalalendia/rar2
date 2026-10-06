@@ -132,20 +132,6 @@ fn collect_pub_paths(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-fn eligibility_name(value: ReaderSalvageEligibility) -> &'static str {
-    use ReaderSalvageEligibility::*;
-    match value {
-        EligibleDamagedPublisher => "eligible_damaged_publisher",
-        EligibleKnownPublisherCorruption => "eligible_known_publisher_corruption",
-        AwaitingTypedCorruptionEvidence => "awaiting_typed_corruption_evidence",
-        IneligibleUnproven => "ineligible_unproven",
-        IneligibleArchive => "ineligible_archive",
-        IneligibleForeign => "ineligible_foreign",
-        IneligibleSuspicious => "ineligible_suspicious",
-        IneligibleResourceLimit => "ineligible_resource_limit",
-    }
-}
-
 fn outcome_name(value: &CensusOutcome) -> &'static str {
     match value {
         CensusOutcome::ImageSalvagePositive => "image_salvage_positive",
