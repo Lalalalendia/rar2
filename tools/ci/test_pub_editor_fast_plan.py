@@ -18,13 +18,17 @@ PREFIX = "vendor/producer-a/crates/pub-editor/src/"
 
 
 def is_pub_editor_test(command: tuple[str, ...]) -> bool:
-    return (
-        command
-        and command[0] == "cargo"
-        and "test" in command
-        and "-p" in command
-        and "pub-editor" in command
-    )
+    if not command or command[0] != "cargo" or "test" not in command:
+        return False
+    if "-p" in command and "pub-editor" in command:
+        return True
+    if "--manifest-path" in command:
+        index = command.index("--manifest-path")
+        if index + 1 < len(command):
+            return command[index + 1].replace("\\", "/").endswith(
+                "/pub-editor/Cargo.toml"
+            )
+    return False
 
 
 def is_bounded_test(command: tuple[str, ...]) -> bool:
