@@ -1,0 +1,177 @@
+name: T828 IgnoreMaster Native One-Shot
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/t828-ignore-master-native-once.yml"
+      - "tools/research-runner/experiments/ignore-master-auth-01.packet.json"
+      - "tools/research-runner/operations/publisher_ignore_master_auth_01.ps1"
+      - "tools/research-runner/analysis/ignore_master_auth_01_blast_radius.py"
+      - "tools/windows/run_ignore_master_auth_direct.ps1"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/t828-ignore-master-native-once.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: t828-ignore-master-native-once-publisher-2019
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    outputs:
+      trusted_sha: ${{ steps.trust.outputs.trusted_sha }}
+    steps:
+      - name: Bind trusted source
+        id: trust
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            "trusted_sha=${{ github.event.pull_request.head.sha }}" >> $env:GITHUB_OUTPUT
+          } else {
+            if ("${{ github.ref }}" -ne "refs/heads/main") {
+              throw "T828 native one-shot push must come from refs/heads/main."
+            }
+            "trusted_sha=${{ github.sha }}" >> $env:GITHUB_OUTPUT
+          }
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.trust.outputs.trusted_sha }}
+          persist-credentials: false
+
+      - name: Validate T828 packet
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/research-runner/validate_packet.py `
+            --packet tools/research-runner/experiments/ignore-master-auth-01.packet.json `
+            --expected-environment publisher-2019
+          if ($LASTEXITCODE -ne 0) { throw "T828 packet validation failed." }
+
+      - name: Parse bounded PowerShell
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($path in @(
+            "tools/research-runner/operations/publisher_ignore_master_auth_01.ps1",
+            "tools/windows/run_ignore_master_auth_direct.ps1"
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -ne 0) {
+              $errors | ForEach-Object { Write-Error "${path}: $($_.Message)" }
+              throw "PowerShell parser rejected $path"
+            }
+          }
+
+      - name: Enforce exact T828 blobs and fixture contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $expected = @{
+            "tools/research-runner/experiments/ignore-master-auth-01.packet.json" = "3ad78a8742c40f47f92c7282ff6ff3cca021d3ac"
+            "tools/research-runner/operations/publisher_ignore_master_auth_01.ps1" = "038fdeb48315e1c6e3a74f47a117dceaa4841bbd"
+            "tools/research-runner/analysis/ignore_master_auth_01_blast_radius.py" = "ae2ce9de0cc30d301cd394490f8737a3f2f2d331"
+            "tools/windows/run_ignore_master_auth_direct.ps1" = "7a71eb84a773bdc2822ebcc9e9fbe340939e4bab"
+          }
+          foreach ($path in $expected.Keys) {
+            $actual = (git hash-object -- $path).Trim()
+            if ($actual -ne $expected[$path]) {
+              throw "T828 exact-blob mismatch for $path expected $($expected[$path]) got $actual"
+            }
+          }
+
+          $packet = Get-Content tools/research-runner/experiments/ignore-master-auth-01.packet.json -Raw | ConvertFrom-Json
+          if ([string]$packet.fixture.source -ne "runner-root") { throw "T828 fixture must be runner-root." }
+          if ([string]$packet.fixture.relative_path -ne "master2-native-20260924/output/two-master.pub") {
+            throw "Unexpected T828 fixture relative path."
+          }
+          if ([string]$packet.fixture.sha256 -ne "a8598bd40b32491b774df0aad11dda11681cc624c0a6edb22e59b14de8904364") {
+            throw "Unexpected T828 fixture SHA."
+          }
+
+  native:
+    needs: contract
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: pub-native-lab
+    runs-on:
+      - self-hosted
+      - Windows
+      - pub-research
+      - publisher-2019
+    timeout-minutes: 45
+    env:
+      PUB_RESEARCH_PROFILE_ID: publisher-2019
+      OUTPUT_ROOT: ${{ github.workspace }}\out\pub-research\t828-ignore-master-native-once-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.contract.outputs.trusted_sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Verify exact trusted checkout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $actual = (git rev-parse HEAD).Trim()
+          $expected = "${{ needs.contract.outputs.trusted_sha }}"
+          if ($actual -ne $expected) {
+            throw "T828 trusted checkout mismatch: expected $expected got $actual"
+          }
+
+      - name: Run T828 native discriminator
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          pwsh -NoProfile -File tools/windows/run_ignore_master_auth_direct.ps1 `
+            -OutputRoot "$env:OUTPUT_ROOT"
+
+      - name: Publish T828 verdict
+        if: always()
+        shell: pwsh
+        run: |
+          "## IGNORE-MASTER-AUTH-01 / PUB-T-828" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "- trusted SHA: ${{ needs.contract.outputs.trusted_sha }}" >> $env:GITHUB_STEP_SUMMARY
+          "- runner: publisher-2019" >> $env:GITHUB_STEP_SUMMARY
+
+          $analysis = Join-Path $env:OUTPUT_ROOT "analysis\ignore-master-auth-01-blast-radius.json"
+          if (-not (Test-Path -LiteralPath $analysis -PathType Leaf)) {
+            "- verdict: analysis receipt missing" >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          $doc = Get-Content -LiteralPath $analysis -Raw | ConvertFrom-Json
+          "- classification: $($doc.classification)" >> $env:GITHUB_STEP_SUMMARY
+          "- law71_confirmed: $($doc.law71_confirmed)" >> $env:GITHUB_STEP_SUMMARY
+          "- IgnoreMaster=True preserves 0x0D relation multiset: $($doc.raw_persistence_checks.ignore_true_preserves_0x0d_master_ref_multiset)" >> $env:GITHUB_STEP_SUMMARY
+          "- rebind while ignored moves one 0x0D M1->M2: $($doc.raw_persistence_checks.rebind_while_true_moves_one_0x0d_ref_m1_to_m2)" >> $env:GITHUB_STEP_SUMMARY
+          foreach ($property in $doc.projection_region_checks.PSObject.Properties) {
+            "- projection $($property.Name): $($property.Value)" >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Upload source-free T828 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t828-ignore-master-native-once-${{ github.run_id }}
+          path: |
+            out/pub-research/t828-ignore-master-native-once-${{ github.run_id }}/environment.json
+            out/pub-research/t828-ignore-master-native-once-${{ github.run_id }}/evidence-manifest.json
+            out/pub-research/t828-ignore-master-native-once-${{ github.run_id }}/logs/**
+            out/pub-research/t828-ignore-master-native-once-${{ github.run_id }}/analysis/**
+          if-no-files-found: warn
+          retention-days: 30
