@@ -4,10 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/pub-editor-selective-fanout-contract.yml"
-      - ".github/workflows/editor-heavy-pr-ci.yml"
       - ".github/workflows/chaptera-editor-windows-binary.yml"
-      - "tools/ci/editor_heavy_pr_fanout.py"
-      - "tools/ci/test_editor_heavy_pr_fanout.py"
       - "tools/ci/validate_editor_binary_artifact.py"
       - "tools/ci/test_validate_editor_binary_artifact.py"
       - "tools/ci/test_editor_build_once_wiring.py"
@@ -40,7 +37,5 @@ jobs:
 
       - name: Test conservative pub-editor scope classifier
         run: python tools/ci/test_pub_editor_pr_fanout.py
-      - name: Test Editor heavy classifier
-        run: python tools/ci/test_editor_heavy_pr_fanout.py
       - name: Guard Editor build-once wiring
         run: python tools/ci/test_editor_build_once_wiring.py
