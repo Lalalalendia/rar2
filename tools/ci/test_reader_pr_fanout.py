@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import subprocess
 
 MODULE = Path(__file__).with_name("reader_pr_fanout.py")
 spec = importlib.util.spec_from_file_location("reader_pr_fanout", MODULE)
@@ -10,7 +11,12 @@ mod = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
 spec.loader.exec_module(mod)
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(
+    subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"],
+        text=True,
+    ).strip()
+)
 
 
 def pull_request_event_block(relative_path: str) -> str:
