@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use pub_editor::{
     CreateTableRuntimeV1, EDITOR_PROJECT_VERSION_V0_18, EDITOR_PROJECT_VERSION_V0_19,
-    EditOperation, EditorProjectAsset, EditorProjectError, EditorSession, LengthEmu, NodeId,
-    PageId, RectEmu, StoryId, TableCellId, TableTrackTargetV1,
+    EditOperation, EditorError, EditorProjectAsset, EditorProjectError, EditorSession, LengthEmu,
+    NodeId, PageId, RectEmu, ResizeNodeBatchEntry, StoryId, TableCellId, TableTrackTargetV1,
 };
 use pub_model::{
     Document, DocumentId, ResolvedGraph, Sha256Digest, Size2D, SourceDescriptor, TableColumnId,
@@ -286,4 +286,61 @@ fn v019_project_rejects_tampered_effective_table_grid() {
         Err(EditorProjectError::TableGridMismatch)
     ));
     assert!(target.operations().is_empty());
+}
+
+
+#[test]
+fn geometry_after_track_resize_fails_closed_until_composition_is_defined() {
+    let mut session = EditorSession::new(graph()).expect("session");
+    session.create_table(runtime()).expect("CreateTable");
+    session
+        .set_table_track_extent_v1(
+            node_id(),
+            TableTrackTargetV1::Row(row_ids()[0]),
+            LengthEmu::new(250_000),
+        )
+        .expect("resize row");
+
+    assert!(matches!(
+        session.move_node_to(node_id(), LengthEmu::new(125_000), LengthEmu::new(225_000)),
+        Err(EditorError::NodeMoveUnsupported { node_id: rejected }) if rejected == node_id()
+    ));
+    assert!(matches!(
+        session.resize_node_to(
+            node_id(),
+            RectEmu::new(
+                LengthEmu::new(100_000),
+                LengthEmu::new(200_000),
+                LengthEmu::new(650_000),
+                LengthEmu::new(450_000),
+            ),
+        ),
+        Err(EditorError::NodeResizeUnsupported { node_id: rejected }) if rejected == node_id()
+    ));
+
+    let mut persisted = session.project();
+    let source_bounds = runtime().bounds;
+    persisted.operations.push(EditOperation::ResizeNodes {
+        page_id: page_id(),
+        entries: vec![ResizeNodeBatchEntry {
+            node_id: node_id(),
+            before: source_bounds,
+            after: RectEmu::new(
+                source_bounds.x,
+                source_bounds.y,
+                LengthEmu::new(650_000),
+                LengthEmu::new(450_000),
+            ),
+        }],
+    });
+
+    let mut reopened = EditorSession::new(graph()).expect("reopen");
+    assert!(matches!(
+        reopened.apply_project(&persisted),
+        Err(EditorProjectError::Operation {
+            index: 2,
+            error: EditorError::NodeResizeUnsupported { node_id: rejected },
+        }) if rejected == node_id()
+    ));
+    assert!(reopened.operations().is_empty());
 }
