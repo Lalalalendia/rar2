@@ -111,3 +111,24 @@ fn exact_reference_recolor_admission_census() {
     )
     .expect("write census");
 }
+
+
+#[test]
+fn recolor_census_receipt_json_shape_is_stable() {
+    let receipt = FixtureReceipt {
+        fixture: "Synthetic",
+        pages: vec![PageReceipt {
+            page: 2,
+            scene_nodes: 7,
+            image_bound_nodes: 3,
+            admitted_recolor_placements: 1,
+        }],
+    };
+
+    let value = serde_json::to_value(receipt).expect("serialize synthetic receipt");
+    assert_eq!(value["fixture"], "Synthetic");
+    assert_eq!(value["pages"][0]["page"], 2);
+    assert_eq!(value["pages"][0]["scene_nodes"], 7);
+    assert_eq!(value["pages"][0]["image_bound_nodes"], 3);
+    assert_eq!(value["pages"][0]["admitted_recolor_placements"], 1);
+}
