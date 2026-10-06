@@ -1,3 +1,6 @@
+use pub_contents::{
+    parse_0x2c_header, parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
+};
 use pub_core::StreamPath;
 use pub_escher::{
     inspect_sp_containers, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS,
@@ -5,7 +8,8 @@ use pub_escher::{
 };
 use pub_model::Sha256Digest;
 use pub_reader::{
-    build_mature_0x2c_source_graph, PubBridgeDiagnostic, ESCHER_STREAM_PATH,
+    build_mature_0x2c_source_graph, PubBridgeDiagnostic, CONTENTS_STREAM_PATH,
+    ESCHER_STREAM_PATH,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -79,6 +83,36 @@ fn main() -> Result<(), Box<dyn Error>> {
     let bytes = fs::read(&input)?;
     let hash = source_hash(&bytes);
     let source = build_mature_0x2c_source_graph(Cursor::new(&bytes), hash)?;
+
+    let contents_bytes =
+        pub_cfb::read_stream_reader(Cursor::new(&bytes), CONTENTS_STREAM_PATH)?;
+    let contents_stream = StreamPath(CONTENTS_STREAM_PATH.into());
+    let contents_header = parse_0x2c_header(contents_stream.clone(), &contents_bytes)?;
+    let contents_trailer =
+        parse_confirmed_0x2c_trailer_root(&contents_bytes, &contents_header)?;
+    let mut contents_references = Vec::new();
+    for seq_num in 0..contents_trailer.directory.slots.len() {
+        let Some(reference) = parse_confirmed_chunk_reference(
+            &contents_bytes,
+            &contents_trailer.directory,
+            seq_num,
+        )? else {
+            continue;
+        };
+        contents_references.push(json!({
+            "seq_num": seq_num,
+            "raw_types": reference
+                .raw_types
+                .iter()
+                .map(|field| field.value)
+                .collect::<Vec<_>>(),
+            "parent_seq_nums": reference
+                .parent_seq_nums
+                .iter()
+                .map(|field| field.value)
+                .collect::<Vec<_>>(),
+        }));
+    }
 
     let escher_bytes =
         pub_cfb::read_stream_reader(Cursor::new(&bytes), ESCHER_STREAM_PATH)?;
@@ -250,6 +284,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "page_count": pages.len(),
             "node_count": nodes.len(),
             "pages": pages,
+            "contents_references": contents_references,
             "nodes": nodes,
             "raw_escher_shapes": raw_escher_shapes,
             "relevant_diagnostics": diagnostics,
