@@ -623,6 +623,21 @@ export function presetShapePaintGeometry(node) {
   const height = safeInteger(bounds.height, "node.bounds.height");
   if (width <= 0 || height <= 0) return null;
 
+  if (node.paint?.preset_shape === "line" || node.paint?.preset_shape === "line_dash_gel") {
+    return Object.freeze({
+      tag: "line",
+      attrs: Object.freeze({ x1: x, y1: y, x2: x + width, y2: y + height })
+    });
+  }
+
+  if (node.paint?.preset_shape === "round_rect") {
+    const radius = Math.round(Math.min(width, height) * 16667 / 100000);
+    return Object.freeze({
+      tag: "rect",
+      attrs: Object.freeze({ x, y, width, height, rx: radius, ry: radius })
+    });
+  }
+
   if (node.paint?.preset_shape === "ellipse") {
     return Object.freeze({
       tag: "ellipse",
@@ -632,14 +647,6 @@ export function presetShapePaintGeometry(node) {
         rx: width / 2,
         ry: height / 2
       })
-    });
-  }
-
-  if (node.paint?.preset_shape === "round_rect") {
-    const radius = Math.round(Math.min(width, height) * 16667 / 100000);
-    return Object.freeze({
-      tag: "rect",
-      attrs: Object.freeze({ x, y, width, height, rx: radius, ry: radius })
     });
   }
 
@@ -700,11 +707,15 @@ function renderNode(svg, defs, node, resources, fonts, index) {
   const line = node.paint?.line;
   const stroke = rgb(line?.rgb);
   if (!hasDecorativeBorder && stroke && Number(line.width_emu) > 0 && shapeGeometry) {
+    const widthEmu = safeInteger(line.width_emu, "line.width_emu");
     group.appendChild(svgNode(shapeGeometry.tag, {
       ...shapeGeometry.attrs,
       fill: "none",
       stroke,
-      "stroke-width": safeInteger(line.width_emu, "line.width_emu")
+      "stroke-width": widthEmu,
+      "stroke-dasharray": node.paint?.preset_shape === "line_dash_gel"
+        ? (widthEmu * 4) + " " + (widthEmu * 3)
+        : null
     }));
   }
 
