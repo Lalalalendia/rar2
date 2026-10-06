@@ -640,10 +640,11 @@ impl ChapteraConfig {
 
         match (&self.auth, self.environment) {
             (Some(auth), mode) => validate_auth(mode, auth)?,
+            (None, EnvironmentMode::Prod) if self.cloud_reader_guest.is_some() => {}
             (None, EnvironmentMode::Prod) => {
                 return Err(ConfigError::new(
                     "prod_auth_required",
-                    "prod configuration requires auth.oidc",
+                    "prod configuration requires auth.oidc unless cloud_reader_guest is configured",
                 ));
             }
             (None, _) => {}
@@ -1509,6 +1510,41 @@ client_secret = {secret_source}
         config.validate().unwrap();
         assert_eq!(config.environment, EnvironmentMode::Prod);
         assert_eq!(config.runtime_config().listen, DEFAULT_LISTEN);
+    }
+
+    #[test]
+    fn production_guest_reader_can_run_without_oidc() {
+        let source = prod_toml(r#"{ source = "systemd", name = "oidc_client_secret" }"#);
+        let auth_index = source.find("\n[auth]\n").unwrap();
+        let source = format!(
+            "{}{}",
+            &source[..auth_index],
+            r#"
+[cloud_reader_guest]
+session_ttl_seconds = 600
+max_file_bytes = 8388608
+max_concurrent_uploads = 1
+max_reserved_bytes = 8388608
+
+[cloud_reader_guest.rate_subject_secret]
+source = "systemd"
+name = "reader_rate_subject_secret"
+"#
+        );
+        let config: ChapteraConfig = toml::from_str(&source).unwrap();
+
+        config.validate().unwrap();
+        assert!(config.auth.is_none());
+        assert!(config.cloud_reader_guest.is_some());
+    }
+
+    #[test]
+    fn production_without_auth_or_guest_still_fails_closed() {
+        let source = prod_toml(r#"{ source = "systemd", name = "oidc_client_secret" }"#);
+        let auth_index = source.find("\n[auth]\n").unwrap();
+        let config: ChapteraConfig = toml::from_str(&source[..auth_index]).unwrap();
+
+        assert_eq!(config.validate().unwrap_err().code, "prod_auth_required");
     }
 
     #[test]
