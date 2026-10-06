@@ -1,5 +1,8 @@
 use anyhow::{Context, Result, bail};
-use pub_cfb::RootRegularStreamPrefixStatus;
+use pub_cfb::{
+    RootRegularStreamPrefixStatus, RootRegularStreamSourceRange,
+    RootRegularStreamTruncationReason,
+};
 use pub_reader::{
     ReaderPartialContentsClass, analyze_reader_partial_contents_prefix,
     build_reader_partial_root_stream_evidence,
@@ -22,6 +25,8 @@ struct CensusRow {
     declared_len: u64,
     available_prefix_len: u64,
     missing_tail_len: u64,
+    truncation_reason: Option<RootRegularStreamTruncationReason>,
+    source_ranges: Vec<RootRegularStreamSourceRange>,
     family: Option<String>,
     boundary: String,
     class: String,
@@ -191,6 +196,8 @@ fn main() -> Result<()> {
             declared_len: semantic.declared_len,
             available_prefix_len: semantic.available_prefix_len,
             missing_tail_len: semantic.missing_tail_len,
+            truncation_reason: evidence.truncation_reason,
+            source_ranges: evidence.source_ranges.clone(),
             family: semantic.family,
             boundary: boundary_name(semantic.boundary).to_owned(),
             class,
