@@ -3752,7 +3752,12 @@ fn bounded_legacy_noquill_authoring_slice_from_resolved_pages(
     Ok(authoring)
 }
 
-fn bounded_authoring_slice_from_resolved_pages(
+/// Projects the grounded semantic subset for an explicit qualified page set.
+///
+/// This is the page-role-safe variant for downstream consumers that already
+/// hold an authoritative customer-visible PageId projection. It deliberately
+/// does not infer page roles from the resolved graph.
+pub fn bounded_authoring_slice_from_resolved_pages(
     graph: &PubResolvedGraph,
     page_ids: &[PageId],
 ) -> Result<BoundedAuthoringSlice> {
