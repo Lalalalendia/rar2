@@ -82,11 +82,8 @@ def main() -> int:
         "ExecStart=/opt/chaptera/current/chaptera --config /etc/chaptera/chaptera.toml worker",
         "worker",
     )
-    require(
-        web,
-        "LoadCredential=oidc_client_secret:/etc/chaptera/credentials/oidc_client_secret",
-        "web",
-    )
+    require(web, "LoadCredential=oidc_client_secret", "web")
+    require(web, "LoadCredential=reader_rate_subject_secret", "web")
     if "LoadCredential=oidc_client_secret" in worker:
         raise AssertionError("worker must not receive the web/OIDC client secret")
     require(worker, "MemoryHigh=384M", "worker")
@@ -179,7 +176,7 @@ def main() -> int:
             "heavy_worker_concurrency": 1,
             "explicit_worker_quota_budgets": True,
             "typed_production_config": True,
-            "web_oidc_secret_via_systemd_credential": True,
+            "web_named_secrets_via_systemd_credentials": True,
             "worker_has_no_oidc_credential": True,
             "one_target_starts_web_and_worker": True,
             "service_account_declared": True,
