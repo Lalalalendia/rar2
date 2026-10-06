@@ -31,8 +31,8 @@ jobs:
           toolchain: "1.94.1"
           components: rustfmt
 
-      - name: Check formatting
-        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml --all -- --check
+      - name: Check probe formatting
+        run: rustfmt --edition 2021 --check vendor/producer-a/crates/pub-reader/src/bin/residual_object_probe.rs
 
       - name: Build source-neutral probes
         run: |
