@@ -108,7 +108,6 @@ struct CurrentViewerFixedPdfInputV1 {
     census: CurrentViewerPlanCensusV1,
 }
 
-
 #[derive(Debug, Clone)]
 struct ProducerExactFont {
     family: String,
