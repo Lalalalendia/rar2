@@ -967,11 +967,18 @@ mod tests {
         let (source, project) = source_and_project(&root);
 
         let source_before = fs::read(&source).expect("read source before save");
+        let source_identity_before =
+            identify_existing_path(&source).expect("identify source before save");
         let receipt = commit(&source, &project, &BTreeMap::new()).expect("commit");
         assert_eq!(
             fs::read(&source).expect("read source after save"),
             source_before,
             "EditorProject durability must not mutate source PUB bytes"
+        );
+        assert_eq!(
+            identify_existing_path(&source).expect("identify source after save"),
+            source_identity_before,
+            "EditorProject durability must preserve exact source PUB file identity"
         );
         assert_eq!(receipt.generation, 1);
         assert!(receipt.visible_path.is_file());
