@@ -5507,8 +5507,11 @@ mod tests {
     #[test]
     fn direct_story_cardinal_rotation_becomes_node_transform() {
         for rotation_op in [90u32 << 16, 180u32 << 16, 270u32 << 16] {
-            let transform =
-                bounded_direct_story_cardinal_transform(&[(rotation_op, false, false)], 0, test_bounds());
+            let transform = bounded_direct_story_cardinal_transform(
+                &[(rotation_op, false, false)],
+                0,
+                test_bounds(),
+            );
             let BoundedDirectImageTransform::Applied(transform) = transform else {
                 panic!("cardinal Story rotation must be admitted");
             };
