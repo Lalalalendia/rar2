@@ -11,7 +11,8 @@ on:
       - "apps/chaptera-server/src/reader_scene_v1.rs"
       - "apps/chaptera-server/src/guest_reader_worker.rs"
       - "crates/chaptera-viewer-render-plan/**"
-      - "vendor/producer-a/crates/pub-viewer/**"
+      - "vendor/producer-a/crates/pub-viewer/Cargo.toml"
+      - "vendor/producer-a/crates/pub-viewer/src/**"
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
   workflow_dispatch:
   push:
