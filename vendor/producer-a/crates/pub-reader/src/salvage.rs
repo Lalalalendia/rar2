@@ -6,7 +6,9 @@ use crate::salvage_authority::{ReaderSalvageAuthority, typed_corruption_authorit
 use pub_contents::ContentsFamily;
 use pub_core::StreamPath;
 use pub_escher::inspect_delayed_blips;
-use pub_quill::{QuillStoryReadError, parse_confirmed_story_catalog};
+use pub_quill::{
+    QuillStoryReadError, parse_confirmed_story_catalog, parse_confirmed_story_catalog_prefix,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
@@ -197,6 +199,133 @@ impl std::fmt::Display for ReaderPartialSourceGraphError {
 }
 
 impl std::error::Error for ReaderPartialSourceGraphError {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReaderPartialQuillProjection {
+    pub source_sha256: String,
+    pub stream_sid: u32,
+    pub prefix_sha256: String,
+    pub declared_len: u64,
+    pub available_prefix_len: u64,
+    pub missing_tail_len: u64,
+    pub facts: Vec<ReaderPartialSourceFact>,
+    pub gaps: Vec<ReaderPartialSourceGap>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReaderPartialQuillProjectionError {
+    SourceModified,
+    PrefixLengthMismatch { recorded: u64, actual: u64 },
+    PrefixHashMismatch,
+    PrefixLongerThanDeclared { available: u64, declared: u64 },
+    Quill(QuillStoryReadError),
+}
+
+impl std::fmt::Display for ReaderPartialQuillProjectionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl std::error::Error for ReaderPartialQuillProjectionError {}
+
+impl From<QuillStoryReadError> for ReaderPartialQuillProjectionError {
+    fn from(value: QuillStoryReadError) -> Self {
+        Self::Quill(value)
+    }
+}
+
+/// Projects source-neutral Reader text facts from an already SID-bound,
+/// physically proven Quill stream prefix.
+///
+/// The exact-SID CFB recovery layer owns physical identity. This layer
+/// revalidates the prefix digest/length before interpreting Quill semantics.
+/// It never discovers a stream by name, pads a missing tail, or infers
+/// page/frame/layout ownership from surviving text.
+pub fn project_reader_text_from_recovered_quill_prefix(
+    recovered: &pub_cfb::RecoveredRegularStreamPrefixBySid,
+) -> Result<ReaderPartialQuillProjection, ReaderPartialQuillProjectionError> {
+    if recovered.source_modified {
+        return Err(ReaderPartialQuillProjectionError::SourceModified);
+    }
+
+    let actual_len = u64::try_from(recovered.bytes.len()).map_err(|_| {
+        ReaderPartialQuillProjectionError::PrefixLengthMismatch {
+            recorded: recovered.available_prefix_len,
+            actual: u64::MAX,
+        }
+    })?;
+    if actual_len != recovered.available_prefix_len {
+        return Err(ReaderPartialQuillProjectionError::PrefixLengthMismatch {
+            recorded: recovered.available_prefix_len,
+            actual: actual_len,
+        });
+    }
+    if actual_len > recovered.declared_len {
+        return Err(
+            ReaderPartialQuillProjectionError::PrefixLongerThanDeclared {
+                available: actual_len,
+                declared: recovered.declared_len,
+            },
+        );
+    }
+    if source_sha256(&recovered.bytes) != recovered.prefix_sha256 {
+        return Err(ReaderPartialQuillProjectionError::PrefixHashMismatch);
+    }
+
+    let catalog = parse_confirmed_story_catalog_prefix(
+        StreamPath(QUILL_STREAM.into()),
+        &recovered.bytes,
+        recovered.declared_len,
+    )?;
+
+    let mut facts = Vec::new();
+    let mut gaps = Vec::new();
+    for story in catalog.stories {
+        let mut units = Vec::with_capacity(story.utf16le.len() / 2);
+        let mut chunks = story.utf16le.chunks_exact(2);
+        units.extend(
+            chunks
+                .by_ref()
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]])),
+        );
+        if !chunks.remainder().is_empty() {
+            gaps.push(ReaderPartialSourceGap::TextSemanticAmbiguity);
+            continue;
+        }
+        let Ok(text) = String::from_utf16(&units) else {
+            gaps.push(ReaderPartialSourceGap::TextSemanticAmbiguity);
+            continue;
+        };
+        facts.push(ReaderPartialSourceFact::TextRange {
+            story_key: format!("quill-syid:{:08x}", story.syid.0),
+            utf16_start: 0,
+            utf16_end: story.utf16_code_units,
+            text,
+        });
+    }
+    if facts.is_empty() && gaps.is_empty() {
+        gaps.push(ReaderPartialSourceGap::TextUnavailable);
+    }
+    gaps.sort_by_key(|gap| match gap {
+        ReaderPartialSourceGap::TextUnavailable => 0,
+        ReaderPartialSourceGap::TextSemanticAmbiguity => 1,
+        ReaderPartialSourceGap::ImageFactsUnavailable => 2,
+        ReaderPartialSourceGap::GeometryFactsUnavailable => 3,
+    });
+    gaps.dedup();
+
+    Ok(ReaderPartialQuillProjection {
+        source_sha256: recovered.source_sha256.clone(),
+        stream_sid: recovered.stream_sid,
+        prefix_sha256: recovered.prefix_sha256.clone(),
+        declared_len: recovered.declared_len,
+        available_prefix_len: recovered.available_prefix_len,
+        missing_tail_len: recovered.declared_len - recovered.available_prefix_len,
+        facts,
+        gaps,
+    })
+}
 
 pub fn build_reader_partial_source_graph(
     bytes: &[u8],
@@ -556,6 +685,133 @@ fn contents_family_name(family: ContentsFamily) -> String {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    fn w16(bytes: &mut [u8], offset: usize, value: u16) {
+        bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn w32(bytes: &mut [u8], offset: usize, value: u32) {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn quill_descriptor(
+        bytes: &mut [u8],
+        offset: usize,
+        name: [u8; 4],
+        data_offset: u32,
+        data_length: u32,
+    ) {
+        w16(bytes, offset, pub_quill::QUILL_DESCRIPTOR_PRESENCE_MARKER);
+        bytes[offset + 2..offset + 6].copy_from_slice(&name);
+        w16(bytes, offset + 6, 0);
+        w16(bytes, offset + 8, 0);
+        w16(bytes, offset + 10, 0);
+        bytes[offset + 12..offset + 16].copy_from_slice(&name);
+        w32(bytes, offset + 16, data_offset);
+        w32(bytes, offset + 20, data_length);
+    }
+
+    fn recovered_partial_quill_prefix() -> pub_cfb::RecoveredRegularStreamPrefixBySid {
+        let mut full = vec![0; 0x180];
+        w16(&mut full, 0x18, 0x18);
+        w16(&mut full, 0x1a, 4);
+        w32(&mut full, 0x1c, pub_quill::QUILL_DESCRIPTOR_LIST_END);
+        quill_descriptor(&mut full, 0x20, *b"SYID", 0x100, 16);
+        quill_descriptor(&mut full, 0x38, *b"STRS", 0x120, 20);
+        quill_descriptor(&mut full, 0x50, *b"TEXT", 0x150, 6);
+        quill_descriptor(&mut full, 0x68, *b"TCD ", 0x160, 20);
+
+        w32(&mut full, 0x100, 0xaabb_ccdd);
+        w32(&mut full, 0x104, 2);
+        w32(&mut full, 0x108, 11);
+        w32(&mut full, 0x10c, 22);
+        w32(&mut full, 0x120, 2);
+        w32(&mut full, 0x124, 8);
+        full[0x128..0x12c].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+        w32(&mut full, 0x12c, 2);
+        w32(&mut full, 0x130, 1);
+        full[0x150..0x156].copy_from_slice(&[b'A', 0, b'B', 0, b'C', 0]);
+
+        let bytes = full[..0x160].to_vec();
+        pub_cfb::RecoveredRegularStreamPrefixBySid {
+            source_sha256: "11".repeat(32),
+            source_byte_len: 9_216,
+            stream_sid: 7,
+            descriptive_name: Some("CONTENTS".to_owned()),
+            storage_kind: pub_cfb::RegularStreamStorageKind::FatRegular,
+            declared_len: full.len() as u64,
+            available_prefix_len: bytes.len() as u64,
+            prefix_sha256: source_sha256(&bytes),
+            status: pub_cfb::RootRegularStreamPrefixStatus::Partial,
+            truncation_reason: Some(
+                pub_cfb::RootRegularStreamTruncationReason::UnexpectedEndOfChain,
+            ),
+            source_ranges: vec![pub_cfb::RootRegularStreamSourceRange {
+                offset: 512,
+                len: bytes.len() as u64,
+            }],
+            bytes,
+            source_modified: false,
+        }
+    }
+
+    #[test]
+    fn sid_bound_partial_quill_prefix_projects_only_proven_story_text() {
+        let recovered = recovered_partial_quill_prefix();
+        let projection =
+            project_reader_text_from_recovered_quill_prefix(&recovered).expect("text projection");
+
+        assert_eq!(projection.source_sha256, recovered.source_sha256);
+        assert_eq!(projection.stream_sid, 7);
+        assert_eq!(projection.available_prefix_len, 0x160);
+        assert_eq!(projection.missing_tail_len, 0x20);
+        assert!(projection.gaps.is_empty());
+
+        let text = projection
+            .facts
+            .iter()
+            .map(|fact| match fact {
+                ReaderPartialSourceFact::TextRange {
+                    story_key,
+                    utf16_end,
+                    text,
+                    ..
+                } => (story_key.as_str(), *utf16_end, text.as_str()),
+                _ => panic!("partial Quill projection must emit text only"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            text,
+            vec![
+                ("quill-syid:0000000b", 2, "AB"),
+                ("quill-syid:00000016", 1, "C"),
+            ]
+        );
+    }
+
+    #[test]
+    fn sid_bound_partial_quill_prefix_rejects_tampered_evidence() {
+        let mut recovered = recovered_partial_quill_prefix();
+        recovered.bytes[0x150] = b'Z';
+        assert_eq!(
+            project_reader_text_from_recovered_quill_prefix(&recovered),
+            Err(ReaderPartialQuillProjectionError::PrefixHashMismatch)
+        );
+
+        let mut recovered = recovered_partial_quill_prefix();
+        recovered.available_prefix_len += 1;
+        assert!(matches!(
+            project_reader_text_from_recovered_quill_prefix(&recovered),
+            Err(ReaderPartialQuillProjectionError::PrefixLengthMismatch { .. })
+        ));
+
+        let mut recovered = recovered_partial_quill_prefix();
+        recovered.source_modified = true;
+        assert_eq!(
+            project_reader_text_from_recovered_quill_prefix(&recovered),
+            Err(ReaderPartialQuillProjectionError::SourceModified)
+        );
+    }
 
     fn synthetic_pub_cfb() -> Vec<u8> {
         let mut compound =
