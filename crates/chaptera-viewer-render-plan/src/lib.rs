@@ -133,6 +133,10 @@ pub struct RenderTableCellV1 {
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub typography: Vec<RenderTypographyRunV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paragraph_alignments: Vec<RenderParagraphAlignmentRunV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<RenderTextLayoutV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<RectEmu>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1087,6 +1091,43 @@ fn render_table_cell_typography_v1(
         .collect()
 }
 
+fn render_table_cell_paragraph_alignments_v1(
+    visual: &ViewerGeometryDocument,
+    story_id: StoryId,
+    cell_text: &str,
+    scalar_start: Option<u32>,
+    scalar_end: Option<u32>,
+) -> Vec<RenderParagraphAlignmentRunV1> {
+    let (Some(scalar_start), Some(scalar_end)) = (scalar_start, scalar_end) else {
+        return Vec::new();
+    };
+    let Some(story) = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == story_id)
+    else {
+        return Vec::new();
+    };
+    let story_scalars = story.text.chars().collect::<Vec<_>>();
+    let (Ok(start), Ok(end)) = (usize::try_from(scalar_start), usize::try_from(scalar_end)) else {
+        return Vec::new();
+    };
+    if start > end
+        || end > story_scalars.len()
+        || story_scalars[start..end].iter().collect::<String>() != cell_text
+    {
+        return Vec::new();
+    }
+    render_paragraph_alignment_runs_v1(
+        visual,
+        story_id,
+        &story.text,
+        scalar_start,
+        scalar_end,
+    )
+}
+
 fn render_paragraph_alignment_runs_v1(
     visual: &ViewerGeometryDocument,
     story_id: StoryId,
@@ -1460,6 +1501,14 @@ pub fn build_page_render_plan_v1(
                                 cell.story_scalar_start,
                                 cell.story_scalar_end,
                             ),
+                            paragraph_alignments: render_table_cell_paragraph_alignments_v1(
+                                visual,
+                                table.story_id,
+                                &cell.text,
+                                cell.story_scalar_start,
+                                cell.story_scalar_end,
+                            ),
+                            layout: None,
                             bounds: cell.bounds,
                             fill_rgb: cell.fill_rgb,
                             fill_visible: cell.fill_visible,
@@ -1565,6 +1614,14 @@ pub fn build_page_render_plan_v1(
                                 cell.story_scalar_start,
                                 cell.story_scalar_end,
                             ),
+                            paragraph_alignments: render_table_cell_paragraph_alignments_v1(
+                                visual,
+                                table.story_id,
+                                &cell.text,
+                                cell.story_scalar_start,
+                                cell.story_scalar_end,
+                            ),
+                            layout: None,
                             bounds: cell.bounds,
                             fill_rgb: cell.fill_rgb,
                             fill_visible: cell.fill_visible,
@@ -5050,6 +5107,8 @@ mod tests {
         assert_eq!(table.cells[0].typography[0].scalar_start, 0);
         assert_eq!(table.cells[0].typography[0].scalar_end, 2);
         assert_eq!(table.cells[0].typography[0].source_font_name, "Source Font");
+        assert!(table.cells[0].paragraph_alignments.is_empty());
+        assert!(table.cells[0].layout.is_none());
         assert_eq!(table.cells[0].bounds, Some(cell_bounds));
         assert_eq!(table.cells[0].fill_rgb, Some([10, 20, 30]));
         assert_eq!(table.cells[0].fill_visible, Some(true));
