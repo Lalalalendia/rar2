@@ -187,7 +187,6 @@
         "frame_before",
         "frame_after",
         "explicit_crop_present",
-        "crop_preserved",
         "durable_replace_count"
       ],
       "properties": {
@@ -230,10 +229,7 @@
           "$ref": "#/$defs/rect"
         },
         "explicit_crop_present": {
-          "const": true
-        },
-        "crop_preserved": {
-          "const": true
+          "type": "boolean"
         },
         "durable_replace_count": {
           "const": 1
