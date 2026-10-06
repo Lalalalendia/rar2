@@ -36,10 +36,11 @@ jobs:
       - name: Build canonical Cloud Reader worker
         run: cargo build -p chaptera-server --bin chaptera --jobs 2
 
-      - name: Install portable Playwright JS runtime only
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
-        run: npm install --no-save playwright@1.55.0
+      - name: Install portable Playwright runtime
+        run: |
+          set -euo pipefail
+          npm install --no-save playwright@1.55.0
+          npx playwright install chromium
 
       - name: Assemble source-safe portable runner
         run: |
@@ -57,6 +58,7 @@ jobs:
           cp tools/migration_pdf_worker_isolation.py "$root/tools/migration_pdf_worker_isolation.py"
           cp -R node_modules/playwright "$root/node_modules/playwright"
           cp -R node_modules/playwright-core "$root/node_modules/playwright-core"
+          cp -R "$HOME/.cache/ms-playwright" "$root/ms-playwright"
           cat > "$root/RUNNER-METADATA.json" <<EOF
           {
             "schema": "chaptera.current-reader-portable-parity-runner.v1",
@@ -65,7 +67,7 @@ jobs:
             "rust_toolchain": "1.94.1",
             "node_major": 22,
             "playwright": "1.55.0",
-            "browser_bytes_included": false,
+            "browser_bytes_included": true,
             "raw_pub_bytes_included": false,
             "raw_pdf_bytes_included": false
           }
