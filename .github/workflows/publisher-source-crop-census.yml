@@ -1,0 +1,64 @@
+name: Publisher source crop corpus census
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-editor/examples/crop_census.rs"
+      - ".github/workflows/publisher-source-crop-census.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Acquire pinned Apache POI Publisher corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher"
+          mkdir -p target/apache-publisher-crop-census
+          files=(
+            51318.pub 60685.pub
+            LinkAt0And10.pub LinkAt10.pub LinkAt10And20And30.pub
+            LinkAt10And20And30And40.pub LinkAt10Longer.pub LinkAt20.pub
+            Sample.pub Sample2.pub Sample2000.pub Sample2_2010.pub
+            Sample3.pub Sample3_2010.pub Sample4.pub Sample4_2010.pub
+            Sample98.pub SampleBrochure.pub SampleNewsletter.pub Sample_2010.pub
+            Simple.pub
+          )
+          for file in "${files[@]}"; do
+            curl -fsSL --retry 3 --retry-delay 2 "$base/$file"               -o "target/apache-publisher-crop-census/$file"
+          done
+      - name: Build and run source crop census
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml             -p pub-editor --example crop_census --             target/apache-publisher-crop-census/*.pub             > target/apache-publisher-crop-census/census.json
+          cat target/apache-publisher-crop-census/census.json
+      - name: Require at least one hosted cropped ReplaceImage witness
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          p = Path("target/apache-publisher-crop-census/census.json")
+          rows = json.loads(p.read_text(encoding="utf-8"))
+          hits = [
+              row for row in rows
+              if row.get("replace_eligible_nonzero_crop_count", 0) > 0
+          ]
+          print("eligible_nonzero_crop_files=", [row["file"] for row in hits])
+          if not hits:
+              raise SystemExit("no Apache Publisher fixture has a nonzero source crop eligible for ReplaceImage")
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: publisher-source-crop-census-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/apache-publisher-crop-census/census.json
+          if-no-files-found: warn
