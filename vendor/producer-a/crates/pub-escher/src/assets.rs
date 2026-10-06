@@ -387,11 +387,9 @@ pub fn inspect_validated_delayed_blips_prefix(
 
 fn rejected_delayed_blip_disposition(rec_type: u16) -> RejectedDelayedBlipDisposition {
     match rec_type {
-        OFFICE_ART_BLIP_EMF | OFFICE_ART_BLIP_WMF => {
-            RejectedDelayedBlipDisposition::UnsupportedMetafile
-        }
         OFFICE_ART_BLIP_PICT => RejectedDelayedBlipDisposition::UnsupportedPicture,
-        OFFICE_ART_BLIP_JPEG | OFFICE_ART_BLIP_PNG | OFFICE_ART_BLIP_DIB | OFFICE_ART_BLIP_TIFF => {
+        OFFICE_ART_BLIP_EMF | OFFICE_ART_BLIP_WMF | OFFICE_ART_BLIP_JPEG | OFFICE_ART_BLIP_PNG
+        | OFFICE_ART_BLIP_DIB | OFFICE_ART_BLIP_TIFF => {
             RejectedDelayedBlipDisposition::StrictValidationFailed
         }
         _ => RejectedDelayedBlipDisposition::UnsupportedBlipType,
@@ -656,6 +654,37 @@ mod tests {
         record(0x6E00, OFFICE_ART_BLIP_PNG, &payload)
     }
 
+    fn strict_compressed_emf_record(corrupt_uid: bool) -> Vec<u8> {
+        use flate2::Compression;
+        use flate2::write::ZlibEncoder;
+        use md4::{Digest, Md4};
+        use std::io::Write;
+
+        let logical = b"prefix-strict-compressed-emf".to_vec();
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&logical).expect("zlib EMF input");
+        let stored = encoder.finish().expect("zlib EMF finish");
+
+        let digest = Md4::digest(&logical);
+        let mut uid = [0u8; 16];
+        uid.copy_from_slice(&digest);
+        if corrupt_uid {
+            uid[0] ^= 0x5A;
+        }
+
+        let mut header = [0u8; 34];
+        header[0..4].copy_from_slice(&(logical.len() as u32).to_le_bytes());
+        header[28..32].copy_from_slice(&(stored.len() as u32).to_le_bytes());
+        header[32] = 0x00;
+        header[33] = 0xFE;
+
+        let mut payload = Vec::with_capacity(16 + header.len() + stored.len());
+        payload.extend_from_slice(&uid);
+        payload.extend_from_slice(&header);
+        payload.extend_from_slice(&stored);
+        record(0x3D40, OFFICE_ART_BLIP_EMF, &payload)
+    }
+
     #[test]
     fn reads_fbse_slot_without_collapsing_identity() {
         let mut fbse = vec![0_u8; 36];
@@ -850,8 +879,28 @@ mod tests {
     }
 
     #[test]
-    fn complete_emf_is_preserved_as_explicit_unsupported_metafile() {
-        let emf = record(0x3D40, OFFICE_ART_BLIP_EMF, &[0u8; 50]);
+    fn complete_strict_emf_is_promoted_by_prefix_inventory() {
+        let emf = strict_compressed_emf_record(false);
+        let observed =
+            inspect_validated_delayed_blips_prefix(stream("/Escher/EscherDelayStm"), &emf);
+
+        assert_eq!(observed.scanned_record_count, 1);
+        assert_eq!(observed.records.len(), 1);
+        assert!(observed.terminal_gap.is_none());
+        assert!(observed.rejected_complete_blips.is_empty());
+        let validated = &observed.records[0];
+        assert_eq!(validated.record_source.offset, 0);
+        assert_eq!(validated.record_source.len, emf.len() as u64);
+        assert_eq!(validated.rec_type, OFFICE_ART_BLIP_EMF);
+        assert_eq!(validated.rec_instance, 0x3D4);
+        assert_eq!(validated.kind, BlipKind::Emf);
+        assert!(validated.logical_payload_sha256.is_some());
+        assert!(validated.logical_payload_len.is_some());
+    }
+
+    #[test]
+    fn complete_bad_uid_emf_is_strict_rejection_not_unsupported() {
+        let emf = strict_compressed_emf_record(true);
         let observed =
             inspect_validated_delayed_blips_prefix(stream("/Escher/EscherDelayStm"), &emf);
 
@@ -860,14 +909,11 @@ mod tests {
         assert!(observed.terminal_gap.is_none());
         assert_eq!(observed.rejected_complete_blips.len(), 1);
         let rejected = &observed.rejected_complete_blips[0];
-        assert_eq!(rejected.record_source.offset, 0);
-        assert_eq!(rejected.record_source.len, emf.len() as u64);
         assert_eq!(rejected.rec_type, OFFICE_ART_BLIP_EMF);
-        assert_eq!(rejected.rec_instance, 0x3D4);
         assert_eq!(rejected.kind, BlipKind::Emf);
         assert_eq!(
             rejected.disposition,
-            RejectedDelayedBlipDisposition::UnsupportedMetafile
+            RejectedDelayedBlipDisposition::StrictValidationFailed
         );
     }
 
