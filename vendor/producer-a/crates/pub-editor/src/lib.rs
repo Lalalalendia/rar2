@@ -180,7 +180,8 @@ pub const EDITOR_PROJECT_VERSION_V0_17: &str = "pub-editor-v0.17";
 pub const EDITOR_PROJECT_VERSION_V0_18: &str = "pub-editor-v0.18";
 pub const EDITOR_PROJECT_VERSION_V0_19: &str = "pub-editor-v0.19";
 pub const EDITOR_PROJECT_VERSION_V0_20: &str = "pub-editor-v0.20";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_20;
+pub const EDITOR_PROJECT_VERSION_V0_21: &str = "pub-editor-v0.21";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_21;
 pub const MAX_MOVE_NODES_V1: usize = 1024;
 pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
@@ -411,6 +412,18 @@ pub enum EditOperation {
     SetTableTrackExtent {
         history: SetTableTrackExtentHistoryV1,
     },
+    InsertTableRow {
+        history: TableRowColHistoryV1,
+    },
+    DeleteTableRow {
+        history: TableRowColHistoryV1,
+    },
+    InsertTableColumn {
+        history: TableRowColHistoryV1,
+    },
+    DeleteTableColumn {
+        history: TableRowColHistoryV1,
+    },
     DeleteNode {
         node_id: NodeId,
         page_id: PageId,
@@ -503,6 +516,10 @@ impl EditOperation {
             | Self::CreateLine { .. }
             | Self::CreateTable { .. }
             | Self::SetTableTrackExtent { .. }
+            | Self::InsertTableRow { .. }
+            | Self::DeleteTableRow { .. }
+            | Self::InsertTableColumn { .. }
+            | Self::DeleteTableColumn { .. }
             | Self::DeleteNode { .. }
             | Self::ReorderAuthoredStack { .. }
             | Self::SetTextFormatProperty { .. }
@@ -683,6 +700,26 @@ impl PersistenceRequirements for EditOperation {
                     feature: "table.track_extent".into(),
                     origin: Some(history.table_id.into_canonical()),
                     property_path: Some("table.grid.track.extent".into()),
+                },
+                PersistenceRequirement {
+                    feature: "node.geometry.bounds".into(),
+                    origin: Some(history.table_id.into_canonical()),
+                    property_path: Some("node.bounds".into()),
+                },
+            ],
+            Self::InsertTableRow { history }
+            | Self::DeleteTableRow { history }
+            | Self::InsertTableColumn { history }
+            | Self::DeleteTableColumn { history } => vec![
+                PersistenceRequirement {
+                    feature: "table.structure".into(),
+                    origin: Some(history.table_id.into_canonical()),
+                    property_path: Some("table.grid".into()),
+                },
+                PersistenceRequirement {
+                    feature: "story.text".into(),
+                    origin: Some(history.story_id.into_canonical()),
+                    property_path: Some("story.text".into()),
                 },
                 PersistenceRequirement {
                     feature: "node.geometry.bounds".into(),
@@ -1173,6 +1210,12 @@ pub enum EditorError {
     StaleTableTrackResize {
         node_id: NodeId,
     },
+    TableRowColUnsupported {
+        node_id: NodeId,
+    },
+    StaleTableRowCol {
+        node_id: NodeId,
+    },
     ImageReplaceUnsupported {
         node_id: NodeId,
     },
@@ -1451,6 +1494,16 @@ impl fmt::Display for EditorError {
             Self::StaleTableTrackResize { node_id } => write!(
                 formatter,
                 "table node {} track-resize state no longer matches persisted history",
+                node_id.as_canonical()
+            ),
+            Self::TableRowColUnsupported { node_id } => write!(
+                formatter,
+                "table node {} is outside the bounded row/column lifecycle slice",
+                node_id.as_canonical()
+            ),
+            Self::StaleTableRowCol { node_id } => write!(
+                formatter,
+                "table node {} row/column state no longer matches persisted history",
                 node_id.as_canonical()
             ),
             Self::ImageReplaceUnsupported { node_id } => write!(
@@ -2377,6 +2430,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesTableTrackExtentOperation {
         index: usize,
     },
+    LegacyProjectCarriesTableRowColOperation {
+        index: usize,
+    },
     LegacyProjectCarriesCreateTextBoxOperation {
         index: usize,
     },
@@ -2497,6 +2553,10 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesTableTrackExtentOperation { index } => write!(
                 formatter,
                 "editor project operation {index} uses SetTableTrackExtent but the project schema predates pub-editor-v0.20"
+            ),
+            Self::LegacyProjectCarriesTableRowColOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses table row/column lifecycle but the project schema predates pub-editor-v0.21"
             ),
             Self::LegacyProjectCarriesCreateTextBoxOperation { index } => write!(
                 formatter,
