@@ -725,6 +725,8 @@ pub struct ViewerNodePaint {
 pub enum ViewerPresetShape {
     RoundRect,
     Ellipse,
+    Line,
+    LineDashGel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -794,7 +796,13 @@ fn viewer_preset_shape_from_canonical(
                 && matches!(source_ref.role, SourceRole::Projection)
         })
     };
-    if authoritative_projection("SpContainer/FSP/default-roundrect") {
+    if authoritative_projection("SpContainer/FOPT/line-dashing-dash-gel")
+        && authoritative_projection("SpContainer/FSP/default-line")
+    {
+        Some(ViewerPresetShape::LineDashGel)
+    } else if authoritative_projection("SpContainer/FSP/default-line") {
+        Some(ViewerPresetShape::Line)
+    } else if authoritative_projection("SpContainer/FSP/default-roundrect") {
         Some(ViewerPresetShape::RoundRect)
     } else if authoritative_projection("SpContainer/FSP/default-ellipse") {
         Some(ViewerPresetShape::Ellipse)
