@@ -453,9 +453,54 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         Command::Doctor => {
             if let Some(config) = explicit_config.as_ref() {
                 let secrets = config.resolve_required_secrets(&SecretResolver::from_process())?;
-                drop(secrets);
+                let busy_timeout = Duration::from_millis(config.sqlite.busy_timeout_ms);
+                let revision_stream = SqliteRevisionStore::open(
+                    &config.sqlite.path,
+                    config.sqlite.pool_max,
+                    busy_timeout,
+                )
+                .await?;
+
+                if config.auth.is_some() {
+                    let auth_runtime = AuthRuntime::open(config, &secrets).await?;
+                    let authz = SqliteAuthzAuthority::open(
+                        &config.sqlite.path,
+                        config.sqlite.pool_max,
+                        busy_timeout,
+                    )
+                    .await?;
+                    let jobs = JobsRuntime::open_with_authz(
+                        &config.sqlite.path,
+                        config.sqlite.pool_max,
+                        busy_timeout,
+                        authz.clone(),
+                    )
+                    .await?;
+                    let blob_store = BlobStoreRuntime::open(config).await?;
+                    drop(secrets);
+
+                    let assembled = ports_with_configured_serve(
+                        revision_stream,
+                        auth_runtime,
+                        authz,
+                        jobs,
+                        blob_store,
+                    );
+                    doctor::run(&AppState::new(assembled.ports))?;
+                } else if config.cloud_reader_guest.is_some() {
+                    let blob_store = BlobStoreRuntime::open(config).await?;
+                    drop(secrets);
+
+                    let assembled = ports_with_guest_reader(revision_stream, blob_store);
+                    doctor::run(&AppState::new_guest_reader(assembled.ports))?;
+                } else {
+                    drop(secrets);
+                    let assembled = ports_with_revision_stream(revision_stream);
+                    doctor::run(&AppState::new(assembled.ports))?;
+                }
+            } else {
+                doctor::run(&AppState::new(RuntimePorts::unconfigured()))?;
             }
-            doctor::run(&AppState::new(RuntimePorts::unconfigured()))?;
         }
         Command::UntrustedPubInspect { .. } => unreachable!(
             "untrusted-pub-inspect is dispatched synchronously before Tokio runtime creation"
