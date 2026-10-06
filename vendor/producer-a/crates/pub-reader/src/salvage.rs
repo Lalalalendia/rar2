@@ -213,11 +213,20 @@ pub struct ReaderPartialEscherDelayImageEvidence {
     pub byte_len: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReaderPartialEscherDelayIdentityAuthority {
+    LogicalPathExactSid,
+    OrphanRawDirectorySidStrictGrammar,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReaderPartialEscherDelayEvidence {
     pub source_sha256: String,
     pub stream_sid: u32,
-    pub logical_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logical_path: Option<String>,
+    pub identity_authority: ReaderPartialEscherDelayIdentityAuthority,
     pub declared_len: u64,
     pub available_prefix_len: u64,
     pub prefix_sha256: String,
@@ -235,8 +244,9 @@ fn map_logical_span_to_physical_ranges(
     source_ranges: &[pub_cfb::RootRegularStreamSourceRange],
     span: &pub_core::RawSpan,
     available_prefix_len: u64,
+    expected_stream: &StreamPath,
 ) -> Option<Vec<pub_cfb::RootRegularStreamSourceRange>> {
-    if span.stream != StreamPath(ESCHER_DELAY_STREAM.into()) {
+    if &span.stream != expected_stream {
         return None;
     }
     let span_end = span.offset.checked_add(span.len)?;
@@ -291,55 +301,27 @@ fn sha256_physical_ranges(
     )
 }
 
-/// Builds strict image evidence from a physically proven SID-bound
-/// EscherDelay prefix when normal CFB access cannot provide the stream.
-///
-/// Stream discovery and physical recovery are independently hash/SID-bound.
-/// Only complete BLIP records accepted by the strict prefix validator can
-/// become Reader image facts. No BStore/page/shape/layout ownership is inferred.
-pub fn build_reader_partial_escherdelay_evidence(
+const READER_SALVAGE_MAX_ORPHAN_ESCHERDELAY_CANDIDATES: usize = 16;
+
+fn build_reader_partial_escherdelay_evidence_from_recovered(
     bytes: &[u8],
     probe: &ReaderSalvageProbe,
+    recovered: pub_cfb::RecoveredRegularStreamPrefixBySid,
+    semantic_stream: StreamPath,
+    logical_path: Option<String>,
+    identity_authority: ReaderPartialEscherDelayIdentityAuthority,
 ) -> Option<ReaderPartialEscherDelayEvidence> {
-    if !probe.eligibility.is_eligible()
-        || probe.subsystems.escher_delay == ReaderSalvageStreamState::Readable
-        || probe.source_sha256 != source_sha256(bytes)
-        || bytes.len() > READER_SALVAGE_MAX_INPUT_BYTES
-    {
-        return None;
-    }
-
-    let discovered =
-        pub_cfb::discover_regular_stream_sid_reader(Cursor::new(bytes), ESCHER_DELAY_STREAM)
-            .ok()?;
-    if discovered.source_sha256 != probe.source_sha256
-        || discovered.source_byte_len != bytes.len() as u64
-        || discovered.logical_path != ESCHER_DELAY_STREAM
-        || discovered.declared_len > READER_SALVAGE_MAX_STREAM_BYTES
-    {
-        return None;
-    }
-
-    let recovered = pub_cfb::recover_regular_stream_prefix_by_sid_reader_with_expected_sha(
-        Cursor::new(bytes),
-        discovered.stream_sid,
-        &probe.source_sha256,
-    )
-    .ok()?;
     if recovered.source_modified
-        || recovered.stream_sid != discovered.stream_sid
-        || recovered.source_byte_len != discovered.source_byte_len
-        || recovered.declared_len != discovered.declared_len
+        || recovered.source_sha256 != probe.source_sha256
+        || recovered.source_byte_len != bytes.len() as u64
+        || recovered.declared_len > READER_SALVAGE_MAX_STREAM_BYTES
         || recovered.available_prefix_len > READER_SALVAGE_MAX_STREAM_BYTES
         || recovered.bytes.len() as u64 != recovered.available_prefix_len
     {
         return None;
     }
 
-    let inventory = inspect_validated_delayed_blips_prefix(
-        StreamPath(ESCHER_DELAY_STREAM.into()),
-        &recovered.bytes,
-    );
+    let inventory = inspect_validated_delayed_blips_prefix(semantic_stream.clone(), &recovered.bytes);
     if inventory.available_prefix_len != recovered.available_prefix_len {
         return None;
     }
@@ -352,6 +334,7 @@ pub fn build_reader_partial_escherdelay_evidence(
             &recovered.source_ranges,
             &validated.payload_source,
             recovered.available_prefix_len,
+            &semantic_stream,
         )?;
         if sha256_physical_ranges(bytes, &payload_physical_ranges).as_deref()
             != Some(validated.payload_sha256.as_str())
@@ -378,8 +361,9 @@ pub fn build_reader_partial_escherdelay_evidence(
 
     Some(ReaderPartialEscherDelayEvidence {
         source_sha256: probe.source_sha256.clone(),
-        stream_sid: discovered.stream_sid,
-        logical_path: discovered.logical_path,
+        stream_sid: recovered.stream_sid,
+        logical_path,
+        identity_authority,
         declared_len: recovered.declared_len,
         available_prefix_len: recovered.available_prefix_len,
         prefix_sha256: recovered.prefix_sha256,
@@ -390,6 +374,129 @@ pub fn build_reader_partial_escherdelay_evidence(
         rejected_complete_blip_count,
         validated_images,
     })
+}
+
+fn build_reader_orphan_escherdelay_evidence(
+    bytes: &[u8],
+    probe: &ReaderSalvageProbe,
+) -> Option<ReaderPartialEscherDelayEvidence> {
+    let raw = pub_cfb::inspect_partial_cfb_raw_directory_reader(Cursor::new(bytes)).ok()?;
+    if raw.source_sha256 != probe.source_sha256 || raw.source_byte_len != bytes.len() as u64 {
+        return None;
+    }
+
+    let candidates = raw
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.object_type == 2
+                && entry.descriptive_name.as_deref() == Some("EscherDelayStm")
+                && entry.declared_len >= 4096
+                && entry.declared_len <= READER_SALVAGE_MAX_STREAM_BYTES
+        })
+        .collect::<Vec<_>>();
+    if candidates.len() > READER_SALVAGE_MAX_ORPHAN_ESCHERDELAY_CANDIDATES {
+        return None;
+    }
+
+    let mut accepted = None;
+    for entry in candidates {
+        let Ok(recovered) = pub_cfb::recover_regular_stream_prefix_by_sid_reader_with_expected_sha(
+            Cursor::new(bytes),
+            entry.sid,
+            &probe.source_sha256,
+        ) else {
+            continue;
+        };
+        if recovered.stream_sid != entry.sid || recovered.declared_len != entry.declared_len {
+            continue;
+        }
+
+        // Parser provenance only. This string is not a reconstructed CFB path.
+        // Durable identity remains exact source SHA + exact directory SID.
+        let semantic_stream = StreamPath(format!("@cfb-sid:{}/EscherDelayStm", entry.sid));
+        let Some(evidence) = build_reader_partial_escherdelay_evidence_from_recovered(
+            bytes,
+            probe,
+            recovered,
+            semantic_stream,
+            None,
+            ReaderPartialEscherDelayIdentityAuthority::OrphanRawDirectorySidStrictGrammar,
+        ) else {
+            continue;
+        };
+
+        // Match current product semantics: unsupported metafiles/PICT/unknown
+        // do not make an orphan stream Reader-useful in raster-only V1.
+        if !evidence
+            .validated_images
+            .iter()
+            .any(|image| reader_partial_image_kind_admitted_v1(image.kind))
+        {
+            continue;
+        }
+        if accepted.is_some() {
+            // Two same-class grammar-valid candidates have ambiguous ownership.
+            return None;
+        }
+        accepted = Some(evidence);
+    }
+
+    accepted
+}
+
+/// Builds strict image evidence from a physically proven SID-bound
+/// EscherDelay prefix when normal CFB access cannot provide the stream.
+///
+/// Logical path discovery remains first authority. When only the raw physical
+/// directory entry array survives, V1 may use an exact-name `EscherDelayStm`
+/// entry only as a candidate hint. Exact source SHA + SID recovery + strict
+/// BLIP grammar + physical payload re-hash are the actual authority. Multiple
+/// grammar-valid orphan candidates fail closed and no logical path is invented.
+pub fn build_reader_partial_escherdelay_evidence(
+    bytes: &[u8],
+    probe: &ReaderSalvageProbe,
+) -> Option<ReaderPartialEscherDelayEvidence> {
+    if !probe.eligibility.is_eligible()
+        || probe.subsystems.escher_delay == ReaderSalvageStreamState::Readable
+        || probe.source_sha256 != source_sha256(bytes)
+        || bytes.len() > READER_SALVAGE_MAX_INPUT_BYTES
+    {
+        return None;
+    }
+
+    match pub_cfb::discover_regular_stream_sid_reader(Cursor::new(bytes), ESCHER_DELAY_STREAM) {
+        Ok(discovered) => {
+            if discovered.source_sha256 != probe.source_sha256
+                || discovered.source_byte_len != bytes.len() as u64
+                || discovered.logical_path != ESCHER_DELAY_STREAM
+                || discovered.declared_len > READER_SALVAGE_MAX_STREAM_BYTES
+            {
+                return None;
+            }
+            let recovered =
+                pub_cfb::recover_regular_stream_prefix_by_sid_reader_with_expected_sha(
+                    Cursor::new(bytes),
+                    discovered.stream_sid,
+                    &probe.source_sha256,
+                )
+                .ok()?;
+            if recovered.stream_sid != discovered.stream_sid
+                || recovered.declared_len != discovered.declared_len
+            {
+                return None;
+            }
+            build_reader_partial_escherdelay_evidence_from_recovered(
+                bytes,
+                probe,
+                recovered,
+                StreamPath(ESCHER_DELAY_STREAM.into()),
+                Some(discovered.logical_path),
+                ReaderPartialEscherDelayIdentityAuthority::LogicalPathExactSid,
+            )
+        }
+        Err(_) => build_reader_orphan_escherdelay_evidence(bytes, probe),
+    }
 }
 
 fn reader_partial_image_kind_admitted_v1(kind: BlipKind) -> bool {
@@ -812,7 +919,8 @@ mod tests {
             offset: 6,
             len: 6,
         };
-        let mapped = map_logical_span_to_physical_ranges(&ranges, &span, 16)
+        let expected_stream = StreamPath(ESCHER_DELAY_STREAM.into());
+        let mapped = map_logical_span_to_physical_ranges(&ranges, &span, 16, &expected_stream)
             .expect("logical span must map exactly");
         assert_eq!(
             mapped,
@@ -840,7 +948,10 @@ mod tests {
             offset: 0,
             len: 8,
         };
-        assert!(map_logical_span_to_physical_ranges(&ranges, &span, 16).is_none());
+        let expected_stream = StreamPath(ESCHER_DELAY_STREAM.into());
+        assert!(
+            map_logical_span_to_physical_ranges(&ranges, &span, 16, &expected_stream).is_none()
+        );
     }
 
     #[test]
@@ -854,7 +965,8 @@ mod tests {
             offset: 6,
             len: 4,
         };
-        assert!(map_logical_span_to_physical_ranges(&ranges, &span, 8).is_none());
+        let expected_stream = StreamPath(ESCHER_DELAY_STREAM.into());
+        assert!(map_logical_span_to_physical_ranges(&ranges, &span, 8, &expected_stream).is_none());
     }
 
     fn synthetic_pub_cfb() -> Vec<u8> {
@@ -885,9 +997,19 @@ mod tests {
     }
 
     fn synthetic_pub_cfb_with_delay_png_uid(valid_uid: bool) -> Vec<u8> {
+        synthetic_pub_cfb_with_delay_png_uid_and_duplicate(valid_uid, false)
+    }
+
+    fn synthetic_pub_cfb_with_delay_png_uid_and_duplicate(
+        valid_uid: bool,
+        duplicate_delay: bool,
+    ) -> Vec<u8> {
         let mut compound =
             cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("synthetic Publisher CFB");
         compound.create_storage("/Escher").expect("Escher storage");
+        if duplicate_delay {
+            compound.create_storage("/Other").expect("Other storage");
+        }
         compound
             .create_storage("/Objects")
             .expect("Objects storage");
@@ -938,9 +1060,27 @@ mod tests {
             .expect("Escher delay stream")
             .write_all(&record)
             .expect("write Escher delay");
+        if duplicate_delay {
+            compound
+                .create_stream("/Other/EscherDelayStm")
+                .expect("duplicate Escher delay stream")
+                .write_all(&record)
+                .expect("write duplicate Escher delay");
+        }
 
         compound.flush().expect("flush synthetic CFB");
         compound.into_inner().into_inner()
+    }
+
+    fn corrupt_root_child_link(mut bytes: Vec<u8>) -> Vec<u8> {
+        let sector_shift = u16::from_le_bytes([bytes[30], bytes[31]]);
+        let sector_len = 1usize << sector_shift;
+        let directory_sector =
+            u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]);
+        let root_entry_offset = (directory_sector as usize + 1) * sector_len;
+        bytes[root_entry_offset + 76..root_entry_offset + 80]
+            .copy_from_slice(&0x0000_ffffu32.to_le_bytes());
+        bytes
     }
 
     fn corrupt_first_minifat_entry(mut bytes: Vec<u8>) -> Vec<u8> {
@@ -950,6 +1090,78 @@ mod tests {
         let offset = (minifat_sector as usize + 1) * sector_len;
         bytes[offset..offset + 4].copy_from_slice(&0x1234_5678u32.to_le_bytes());
         bytes
+    }
+
+    #[test]
+    fn broken_directory_topology_recovers_one_strict_orphan_delay_candidate() {
+        let bytes = corrupt_root_child_link(synthetic_pub_cfb_with_delay_png());
+        assert!(pub_cfb::inspect_reader(Cursor::new(bytes.clone())).is_err());
+        assert!(
+            pub_cfb::discover_regular_stream_sid_reader(
+                Cursor::new(bytes.clone()),
+                ESCHER_DELAY_STREAM,
+            )
+            .is_err()
+        );
+
+        let raw =
+            pub_cfb::inspect_partial_cfb_raw_directory_reader(Cursor::new(bytes.clone()))
+                .expect("raw physical directory");
+        assert!(raw.entries.iter().any(|entry| {
+            entry.object_type == 2
+                && entry.descriptive_name.as_deref() == Some("EscherDelayStm")
+        }));
+
+        let probe = probe_reader_salvage_candidate(&bytes);
+        assert_eq!(
+            probe.eligibility,
+            ReaderSalvageEligibility::EligibleDamagedPublisher
+        );
+        let evidence =
+            build_reader_partial_escherdelay_evidence(&bytes, &probe).expect("orphan evidence");
+        assert_eq!(
+            evidence.identity_authority,
+            ReaderPartialEscherDelayIdentityAuthority::OrphanRawDirectorySidStrictGrammar
+        );
+        assert!(evidence.logical_path.is_none());
+        assert_eq!(evidence.validated_images.len(), 1);
+        assert!(reader_partial_image_kind_admitted_v1(
+            evidence.validated_images[0].kind
+        ));
+
+        let graph = build_reader_partial_source_graph(&bytes, &probe).expect("partial graph");
+        assert!(graph.facts.iter().any(|fact| matches!(
+            fact,
+            ReaderPartialSourceFact::VerifiedImage { .. }
+        )));
+    }
+
+    #[test]
+    fn two_strict_orphan_delay_candidates_fail_closed_as_ambiguous() {
+        let bytes = corrupt_root_child_link(
+            synthetic_pub_cfb_with_delay_png_uid_and_duplicate(true, true),
+        );
+        assert!(pub_cfb::inspect_reader(Cursor::new(bytes.clone())).is_err());
+
+        let raw =
+            pub_cfb::inspect_partial_cfb_raw_directory_reader(Cursor::new(bytes.clone()))
+                .expect("raw physical directory");
+        assert_eq!(
+            raw.entries
+                .iter()
+                .filter(|entry| {
+                    entry.object_type == 2
+                        && entry.descriptive_name.as_deref() == Some("EscherDelayStm")
+                })
+                .count(),
+            2
+        );
+
+        let probe = probe_reader_salvage_candidate(&bytes);
+        assert!(
+            build_reader_partial_escherdelay_evidence(&bytes, &probe).is_none(),
+            "two grammar-valid same-class orphan candidates must remain ambiguous"
+        );
     }
 
     #[test]
