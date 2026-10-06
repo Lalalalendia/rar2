@@ -1818,7 +1818,6 @@ fn promote_direct_single_frame_prefix_to_whole_story_v1(
     true
 }
 
-
 fn table_cell_text_content_bounds_v1(bounds: RectEmu, inset_emu: i64) -> Option<RectEmu> {
     if inset_emu < 0 {
         return None;
@@ -1943,8 +1942,7 @@ fn resolve_single_line_table_cell_text_layout_v1(
         font_size_emu: LengthEmu::new(font_size_emu),
         font_bytes: font.bytes,
     };
-    let shaped =
-        shape_bounded_ltr_segment(&fragment.text, fragment.scalar_start, &runtime).ok()?;
+    let shaped = shape_bounded_ltr_segment(&fragment.text, fragment.scalar_start, &runtime).ok()?;
     if shaped.total_x_advance.get() > bounds.width.get()
         || line_height_emu > bounds.height.get()
         || shaped.glyphs.iter().any(|glyph| glyph.glyph_id == 0)
