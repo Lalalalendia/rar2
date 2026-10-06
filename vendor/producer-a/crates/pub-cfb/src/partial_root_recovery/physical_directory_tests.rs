@@ -23,9 +23,13 @@ fn directory_sector_ids(source: &[u8]) -> (usize, Vec<u32>) {
     let first_directory_sector =
         u32::from_le_bytes([source[48], source[49], source[50], source[51]]);
     let fat = read_fat(source, sector_len, num_sectors, num_fat_sectors).expect("fixture FAT");
-    let directory_sector_ids =
-        fat_chain_to_end(first_directory_sector, &fat, num_sectors, "fixture directory")
-            .expect("fixture directory chain");
+    let directory_sector_ids = fat_chain_to_end(
+        first_directory_sector,
+        &fat,
+        num_sectors,
+        "fixture directory",
+    )
+    .expect("fixture directory chain");
     (sector_len, directory_sector_ids)
 }
 
@@ -111,11 +115,9 @@ fn physical_directory_inventory_preserves_exact_nested_sids() {
 fn nested_path_discovery_binds_sid_and_exact_stream_read() {
     let (source, expected_bytes) = nested_regular_fixture();
     let expected_sid = sid_by_name(&source, "EscherDelayStm", 2);
-    let discovered = discover_regular_stream_sid_reader(
-        Cursor::new(source.clone()),
-        "/Escher/EscherDelayStm",
-    )
-    .expect("discover nested stream SID");
+    let discovered =
+        discover_regular_stream_sid_reader(Cursor::new(source.clone()), "/Escher/EscherDelayStm")
+            .expect("discover nested stream SID");
 
     assert_eq!(discovered.source_sha256, sha256_hex(&source));
     assert_eq!(discovered.source_byte_len, source.len() as u64);
@@ -138,11 +140,9 @@ fn discovery_does_not_require_target_stream_chain_to_be_valid() {
     let delay_sid = sid_by_name(&source, "EscherDelayStm", 2);
     corrupt_first_fat_link_for_stream(&mut source, delay_sid);
 
-    let discovered = discover_regular_stream_sid_reader(
-        Cursor::new(source.clone()),
-        "/Escher/EscherDelayStm",
-    )
-    .expect("directory discovery must not consume target stream chain");
+    let discovered =
+        discover_regular_stream_sid_reader(Cursor::new(source.clone()), "/Escher/EscherDelayStm")
+            .expect("directory discovery must not consume target stream chain");
     assert_eq!(discovered.stream_sid, delay_sid);
 
     let recovered = recover_regular_stream_prefix_by_sid_reader_with_expected_sha(
@@ -181,11 +181,8 @@ fn duplicate_case_colliding_child_component_fails_closed() {
     let second_sid = sid_by_name(&source, "EscherDelayStn", 2);
     patch_directory_name(&mut source, second_sid, "ESCHERDELAYSTM");
 
-    let error = discover_regular_stream_sid_reader(
-        Cursor::new(source),
-        "/Escher/EscherDelayStm",
-    )
-    .expect_err("case-colliding nested candidates must fail closed");
+    let error = discover_regular_stream_sid_reader(Cursor::new(source), "/Escher/EscherDelayStm")
+        .expect_err("case-colliding nested candidates must fail closed");
     assert!(format!("{error:#}").contains("ambiguous case-insensitive directory component"));
 }
 
@@ -195,11 +192,8 @@ fn nested_sibling_cycle_fails_closed() {
     let delay_sid = sid_by_name(&source, "EscherDelayStm", 2);
     patch_directory_u32(&mut source, delay_sid, 68, delay_sid);
 
-    let error = discover_regular_stream_sid_reader(
-        Cursor::new(source),
-        "/Escher/EscherDelayStm",
-    )
-    .expect_err("nested sibling cycle must fail closed");
+    let error = discover_regular_stream_sid_reader(Cursor::new(source), "/Escher/EscherDelayStm")
+        .expect_err("nested sibling cycle must fail closed");
     assert!(format!("{error:#}").contains("cycle in directory sibling tree"));
 }
 
@@ -219,18 +213,14 @@ fn out_of_range_nested_child_sid_fails_closed() {
     let escher_sid = sid_by_name(&source, "Escher", 1);
     patch_directory_u32(&mut source, escher_sid, 76, u32::MAX - 1);
 
-    let error = discover_regular_stream_sid_reader(
-        Cursor::new(source),
-        "/Escher/EscherDelayStm",
-    )
-    .expect_err("out-of-range child SID must fail closed");
+    let error = discover_regular_stream_sid_reader(Cursor::new(source), "/Escher/EscherDelayStm")
+        .expect_err("out-of-range child SID must fail closed");
     assert!(format!("{error:#}").contains("out-of-range SID"));
 }
 
 #[test]
 fn same_named_streams_under_distinct_storages_remain_distinct() {
-    let mut compound =
-        cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("same-name CFB");
+    let mut compound = cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("same-name CFB");
     compound.create_storage("/A").expect("A storage");
     compound.create_storage("/B").expect("B storage");
     let a_bytes = vec![0x31; 9_000];
