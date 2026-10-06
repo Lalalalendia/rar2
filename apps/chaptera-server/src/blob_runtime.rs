@@ -1,11 +1,12 @@
-use std::{fmt::Write as _, sync::Arc, time::Duration};
+use std::{fmt::Write as _, path::Path, sync::Arc, time::Duration};
 
 use aws_config::BehaviorVersion;
 use rand::{RngCore, rngs::OsRng};
 
 use crate::{
-    blob_store::{BlobIdGenerator, BlobStoreError, BlobStoreService},
+    blob_store::{BlobIdGenerator, BlobProvider, BlobStoreError, BlobStoreService},
     config::ChapteraConfig,
+    filesystem_blob_provider::FilesystemBlobProvider,
     s3_blob_provider::S3BlobProvider,
     sqlite_blob_metadata::SqliteBlobBindingRepository,
 };
@@ -33,8 +34,6 @@ pub struct BlobStoreRuntime {
 
 impl BlobStoreRuntime {
     pub async fn open(config: &ChapteraConfig) -> Result<Self, BlobStoreError> {
-        require_s3_compatible(&config.storage.provider)?;
-
         let metadata = SqliteBlobBindingRepository::open(
             &config.sqlite.path,
             config.sqlite.pool_max,
@@ -42,20 +41,50 @@ impl BlobStoreRuntime {
         )
         .await?;
 
-        let shared_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
-        let client = aws_sdk_s3::Client::new(&shared_config);
-        let provider = S3BlobProvider::new(
-            client,
-            config.storage.quarantine_namespace.clone(),
-            config.storage.private_namespace.clone(),
-            None,
-        )
-        .map_err(|error| {
-            BlobStoreError::new("blob_provider_config_invalid", bounded_message(&error.code))
-        })?;
+        let provider: Arc<dyn BlobProvider> = match config.storage.provider.as_str() {
+            "s3-compatible" => {
+                let shared_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+                let client = aws_sdk_s3::Client::new(&shared_config);
+                let provider = S3BlobProvider::new(
+                    client,
+                    config.storage.quarantine_namespace.clone(),
+                    config.storage.private_namespace.clone(),
+                    None,
+                )
+                .map_err(|error| {
+                    BlobStoreError::new(
+                        "blob_provider_config_invalid",
+                        bounded_message(&error.code),
+                    )
+                })?;
+                Arc::new(provider)
+            }
+            "filesystem" => {
+                let sqlite_parent = config
+                    .sqlite
+                    .path
+                    .parent()
+                    .filter(|path| !path.as_os_str().is_empty())
+                    .unwrap_or_else(|| Path::new("."));
+                let provider = FilesystemBlobProvider::new(sqlite_parent.join("blob-store"))
+                    .map_err(|error| {
+                        BlobStoreError::new(
+                            "blob_provider_config_invalid",
+                            bounded_message(&error.code),
+                        )
+                    })?;
+                Arc::new(provider)
+            }
+            provider => {
+                return Err(BlobStoreError::new(
+                    "storage_provider_unsupported",
+                    format!("configured storage provider {provider:?} is unsupported"),
+                ));
+            }
+        };
 
         let service = BlobStoreService::new(
-            Arc::new(provider),
+            provider,
             Arc::new(metadata.clone()),
             Arc::new(SystemBlobIdGenerator),
         );
@@ -73,17 +102,6 @@ impl BlobStoreRuntime {
 
     pub async fn close(&self) {
         self.metadata.close().await;
-    }
-}
-
-fn require_s3_compatible(provider: &str) -> Result<(), BlobStoreError> {
-    if provider == "s3-compatible" {
-        Ok(())
-    } else {
-        Err(BlobStoreError::new(
-            "storage_provider_unsupported",
-            format!("configured storage provider {provider:?} is unsupported by Cloud V0 runtime"),
-        ))
     }
 }
 
@@ -142,9 +160,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn unsupported_storage_provider_fails_closed_before_runtime_construction() {
-        let error = require_s3_compatible("filesystem").unwrap_err();
-        assert_eq!(error.code, "storage_provider_unsupported");
-    }
 }
