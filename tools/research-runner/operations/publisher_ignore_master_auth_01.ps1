@@ -70,6 +70,21 @@ function Get-FileSummary([string]$Path) {
 }
 
 function Find-RegisteredFixture {
+    $prepared = [string]$env:PUB_RESEARCH_FIXTURE
+    if (-not [string]::IsNullOrWhiteSpace($prepared)) {
+        if (-not (Test-Path -LiteralPath $prepared -PathType Leaf)) {
+            throw "PUB_RESEARCH_FIXTURE does not exist: $prepared"
+        }
+        $preparedSha = Get-Sha256 $prepared
+        if ($preparedSha -ne $ExpectedFixtureSha256) {
+            throw "PUB_RESEARCH_FIXTURE SHA mismatch: expected $ExpectedFixtureSha256 got $preparedSha"
+        }
+        return (Resolve-Path -LiteralPath $prepared).Path
+    }
+
+    # Compatibility fallback for a direct checkout that already carries the
+    # historical registered fixture. Canonical packet execution should reach
+    # this function with PUB_RESEARCH_FIXTURE set by prepare_native_run.ps1.
     $candidate = Join-Path $repoRoot "realtest/master2-native-20260924/output/two-master.pub"
     if (Test-Path -LiteralPath $candidate -PathType Leaf) {
         if ((Get-Sha256 $candidate) -eq $ExpectedFixtureSha256) {
@@ -77,19 +92,7 @@ function Find-RegisteredFixture {
         }
     }
 
-    $realtest = Join-Path $repoRoot "realtest"
-    if (Test-Path -LiteralPath $realtest -PathType Container) {
-        foreach ($file in Get-ChildItem -LiteralPath $realtest -Filter *.pub -File -Recurse) {
-            try {
-                if ((Get-Sha256 $file.FullName) -eq $ExpectedFixtureSha256) {
-                    return $file.FullName
-                }
-            }
-            catch {}
-        }
-    }
-
-    throw "Registered PUB-T-462 fixture not found under realtest. Expected SHA-256 $ExpectedFixtureSha256."
+    throw "Registered PUB-T-462 fixture is unavailable. Run prepare_native_run.ps1 with the packet-bound runner-root fixture first."
 }
 
 function Find-PublicationPageById {
