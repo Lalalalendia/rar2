@@ -6,8 +6,8 @@ use crate::salvage_authority::{ReaderSalvageAuthority, typed_corruption_authorit
 use pub_contents::ContentsFamily;
 use pub_core::StreamPath;
 use pub_escher::{
-    DelayedBlipPrefixGap, inspect_validated_delayed_blips_prefix, parse_officeart_stream,
-    validate_blip_record,
+    BlipKind, BlipUidRule, DelayedBlipPrefixGap, inspect_validated_delayed_blips_prefix,
+    parse_officeart_stream, validate_blip_record,
 };
 use pub_quill::{QuillStoryReadError, parse_confirmed_story_catalog};
 use serde::{Deserialize, Serialize};
@@ -206,9 +206,9 @@ pub struct ReaderPartialEscherDelayImageEvidence {
     pub record_source: pub_core::RawSpan,
     pub payload_source: pub_core::RawSpan,
     pub payload_physical_ranges: Vec<pub_cfb::RootRegularStreamSourceRange>,
-    pub kind: String,
+    pub kind: BlipKind,
     pub effective_uid_hex: String,
-    pub uid_rule: String,
+    pub uid_rule: BlipUidRule,
     pub payload_sha256: String,
     pub byte_len: u64,
 }
@@ -310,7 +310,8 @@ pub fn build_reader_partial_escherdelay_evidence(
     }
 
     let discovered =
-        pub_cfb::discover_regular_stream_sid_reader(Cursor::new(bytes), ESCHER_DELAY_STREAM).ok()?;
+        pub_cfb::discover_regular_stream_sid_reader(Cursor::new(bytes), ESCHER_DELAY_STREAM)
+            .ok()?;
     if discovered.source_sha256 != probe.source_sha256
         || discovered.source_byte_len != bytes.len() as u64
         || discovered.logical_path != ESCHER_DELAY_STREAM
@@ -363,13 +364,13 @@ pub fn build_reader_partial_escherdelay_evidence(
             record_source: validated.record_source,
             payload_source: validated.payload_source,
             payload_physical_ranges,
-            kind: format!("{:?}", validated.kind).to_ascii_lowercase(),
+            kind: validated.kind,
             effective_uid_hex: validated
                 .effective_uid
                 .iter()
                 .map(|byte| format!("{byte:02x}"))
                 .collect(),
-            uid_rule: format!("{:?}", validated.uid_rule).to_ascii_lowercase(),
+            uid_rule: validated.uid_rule,
             payload_sha256: validated.payload_sha256,
             byte_len,
         });
@@ -940,7 +941,7 @@ mod tests {
         assert_eq!(evidence.source_sha256, source_sha256(&bytes));
         assert!(!evidence.stream_source_ranges.is_empty());
         let image = &evidence.validated_images[0];
-        assert_eq!(image.kind, "png");
+        assert_eq!(image.kind, BlipKind::Png);
         assert!(!image.payload_physical_ranges.is_empty());
         assert_eq!(image.byte_len, 21);
 
