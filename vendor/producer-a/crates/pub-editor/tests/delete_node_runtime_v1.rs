@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use pub_editor::{
     AuthoredEntityProvenanceV1, AuthoredShapePaintV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
     EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_11, EDITOR_PROJECT_VERSION_V0_12,
-    EDITOR_PROJECT_VERSION_V0_18, EditOperation, EditorError,
-    EditorProjectError, EditorSession, LengthEmu, RectEmu, Srgb8V1, authored_shape_state_id_v1,
+    EDITOR_PROJECT_VERSION_V0_18, EditOperation, EditorError, EditorProjectError, EditorSession,
+    LengthEmu, RectEmu, Srgb8V1, authored_shape_state_id_v1,
 };
 use pub_model::{
     Affine2D, Document, DocumentId, Node, NodeHeader, NodeId, NodeKind, Page, PageId,
