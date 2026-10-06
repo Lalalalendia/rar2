@@ -112,6 +112,35 @@ fn main() -> Result<(), Box<dyn Error>> {
     let escher_bytes = pub_cfb::read_stream_reader(Cursor::new(&bytes), ESCHER_STREAM_PATH)?;
     let escher_inventory =
         inspect_sp_containers(StreamPath(ESCHER_STREAM_PATH.into()), &escher_bytes)?;
+    let delayed_bytes = match pub_cfb::read_stream_reader(
+        Cursor::new(&bytes),
+        ESCHER_DELAY_STREAM_PATH,
+    ) {
+        Ok(bytes) => bytes,
+        Err(_) => Vec::new(),
+    };
+    let asset_manifest =
+        build_pub_asset_manifest(&source.graph, &escher_bytes, &delayed_bytes)?;
+    let asset_entries = asset_manifest
+        .assets
+        .iter()
+        .map(|asset| {
+            json!({
+                "slot": asset.slot,
+                "c_ref": asset.c_ref,
+                "blip_kind": asset.blip_kind,
+                "payload_exact": asset.payload_sha256.is_some()
+                    && asset.image_payload_source.is_some(),
+                "payload_len": asset.payload_len,
+                "use_count": asset.uses.len(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let asset_diagnostics = asset_manifest
+        .diagnostics
+        .iter()
+        .map(|diagnostic| serde_json::to_value(diagnostic))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut raw_escher_shapes = escher_inventory
         .shapes
         .iter()
@@ -283,6 +312,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             "contents_references": contents_references,
             "nodes": nodes,
             "raw_escher_shapes": raw_escher_shapes,
+            "asset_entries": asset_entries,
+            "asset_diagnostics": asset_diagnostics,
             "relevant_diagnostics": diagnostics,
             "source_page_paint_orders": source.source_page_paint_orders,
             "claims": {
