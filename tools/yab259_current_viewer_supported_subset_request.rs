@@ -150,6 +150,7 @@ struct CurrentText {
 struct CurrentTypographyRun {
     scalar_start: u32,
     scalar_end: u32,
+    source_font_name: String,
     text_size_emu: u32,
     #[serde(default)]
     color_rgb: Option<[u8; 3]>,
@@ -232,6 +233,8 @@ struct MappingSummary {
     shaped_span_line_count: usize,
     missing_shaping_line_count: usize,
     unresolved_text_color_line_count: usize,
+    missing_rgb_line_source_shape_counts: BTreeMap<String, usize>,
+    missing_rgb_run_source_shape_counts: BTreeMap<String, usize>,
     residual_node_signature_counts: BTreeMap<String, usize>,
     residual_projection_lane_counts: BTreeMap<String, usize>,
     residual_signature_lane_counts: BTreeMap<String, usize>,
@@ -320,6 +323,41 @@ fn color_range_disposition(
         1 => ColorRangeDisposition::Resolved(*colors.iter().next().expect("one color exists")),
         0 => ColorRangeDisposition::MissingRgb,
         _ => ColorRangeDisposition::MixedRgb,
+    }
+}
+
+fn missing_rgb_source_shape_tag(
+    runs: &[CurrentTypographyRun],
+    scalar_start: u32,
+    scalar_end: u32,
+    run_shape_counts: &mut BTreeMap<String, usize>,
+) -> &'static str {
+    let mut saw_named = false;
+    let mut saw_blank = false;
+
+    for run in runs {
+        if run.scalar_end <= scalar_start || run.scalar_start >= scalar_end || run.color_rgb.is_some()
+        {
+            continue;
+        }
+        if run.source_font_name.trim().is_empty() {
+            saw_blank = true;
+            *run_shape_counts
+                .entry("blank_source_font".into())
+                .or_default() += 1;
+        } else {
+            saw_named = true;
+            *run_shape_counts
+                .entry("named_source_font".into())
+                .or_default() += 1;
+        }
+    }
+
+    match (saw_named, saw_blank) {
+        (true, false) => "named_source_font_only",
+        (false, true) => "blank_source_font_only",
+        (true, true) => "mixed_named_blank",
+        (false, false) => "no_missing_rgb_run",
     }
 }
 
@@ -846,6 +884,18 @@ fn main() -> Result<()> {
                             ColorRangeDisposition::Resolved(color) => color,
                             disposition => {
                                 summary.unresolved_text_color_line_count += 1;
+                                if disposition == ColorRangeDisposition::MissingRgb {
+                                    let source_shape = missing_rgb_source_shape_tag(
+                                        &text.typography,
+                                        line.scalar_start,
+                                        line.scalar_end,
+                                        &mut summary.missing_rgb_run_source_shape_counts,
+                                    );
+                                    *summary
+                                        .missing_rgb_line_source_shape_counts
+                                        .entry(source_shape.into())
+                                        .or_default() += 1;
+                                }
                                 let tag = format!(
                                     "unresolved_text_color:{}",
                                     disposition.code()
