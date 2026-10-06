@@ -6,7 +6,7 @@ use pub_model::{
     TableColumnId, TableRowId,
 };
 use pub_reader::{
-    PubExplicitShapePaintSource, PubResolvedNodePayload, PubTableCellCoordinates,
+    PubExplicitShapePaintSource, PubResolvedGraph, PubResolvedNodePayload, PubTableCellCoordinates,
     PubTableCellSource, PubTableLayoutMetricsSource, PubTableSource, PubTableStoryOwnershipSource,
 };
 use serde::{Deserialize, Serialize};
@@ -50,6 +50,10 @@ pub enum CreateTableRuntimeValidationError {
     NonUniformBounds,
     RangeOverflow,
     InvalidGrid,
+    PageMissing,
+    NodeIdCollision,
+    StoryIdCollision,
+    StaleGraphState,
 }
 
 fn is_editor_created_uuid_v7(bytes: &[u8; 16]) -> bool {
@@ -382,4 +386,63 @@ pub fn build_create_table_plan_v1(
     };
 
     Ok(CreateTablePlanV1 { node, story, grid })
+}
+
+pub fn apply_create_table_forward_v1(
+    graph: &mut PubResolvedGraph,
+    table: &CreateTableRuntimeV1,
+) -> Result<(), CreateTableRuntimeValidationError> {
+    if !graph.pages.contains_key(&table.page_id) {
+        return Err(CreateTableRuntimeValidationError::PageMissing);
+    }
+    if graph.nodes.contains_key(&table.node_id)
+        || graph
+            .pages
+            .values()
+            .any(|page| page.children.contains(&table.node_id))
+    {
+        return Err(CreateTableRuntimeValidationError::NodeIdCollision);
+    }
+    if graph.stories.contains_key(&table.story_id) {
+        return Err(CreateTableRuntimeValidationError::StoryIdCollision);
+    }
+
+    let plan = build_create_table_plan_v1(table)?;
+    graph
+        .pages
+        .get_mut(&table.page_id)
+        .expect("CreateTable page was validated")
+        .children
+        .push(table.node_id);
+    graph.stories.insert(table.story_id, plan.story);
+    graph.nodes.insert(table.node_id, plan.node);
+    Ok(())
+}
+
+pub fn apply_create_table_inverse_v1(
+    graph: &mut PubResolvedGraph,
+    table: &CreateTableRuntimeV1,
+) -> Result<(), CreateTableRuntimeValidationError> {
+    let plan = build_create_table_plan_v1(table)?;
+    let exact_child_count = graph
+        .pages
+        .get(&table.page_id)
+        .map(|page| page.children.iter().filter(|id| **id == table.node_id).count())
+        .unwrap_or(0);
+    if graph.nodes.get(&table.node_id) != Some(&plan.node)
+        || graph.stories.get(&table.story_id) != Some(&plan.story)
+        || exact_child_count != 1
+    {
+        return Err(CreateTableRuntimeValidationError::StaleGraphState);
+    }
+
+    graph.nodes.remove(&table.node_id);
+    graph.stories.remove(&table.story_id);
+    graph
+        .pages
+        .get_mut(&table.page_id)
+        .expect("CreateTable inverse validated page")
+        .children
+        .retain(|id| *id != table.node_id);
+    Ok(())
 }
