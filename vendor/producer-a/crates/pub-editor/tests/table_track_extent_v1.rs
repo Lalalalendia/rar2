@@ -67,12 +67,12 @@ fn grid() -> EffectiveTableGridV1 {
     ];
     let mut cells = Vec::new();
     let mut n = 1;
-    for row in 0..2 {
-        for column in 0..2 {
+    for (row, row_track) in rows.iter().enumerate() {
+        for (column, column_track) in columns.iter().enumerate() {
             cells.push(EffectiveTableCellV1 {
                 id: cell_id(n),
-                row_id: rows[row].id,
-                column_id: columns[column].id,
+                row_id: row_track.id,
+                column_id: column_track.id,
                 address: TableCellAddress {
                     row: row as u32,
                     column: column as u32,
