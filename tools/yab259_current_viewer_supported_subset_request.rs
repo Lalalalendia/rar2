@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedResolvedScene, BoundedShapedGlyph, BoundedShapedText,
     BoundedShapingDescriptor, ResolvedPhysicalNode, ResolvedSurface, SceneOriginMapping,
-    compatible_natural_line_height_emu_v1, font_fingerprint_sha256,
+    font_fingerprint_sha256,
 };
 use pub_model::{
     Affine2D, CanonicalId, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D, TableCellId,
@@ -97,6 +97,8 @@ struct CurrentTableCell {
     typography: Vec<CurrentTypographyRun>,
     #[serde(default)]
     layout: Option<CurrentTextLayout>,
+    #[serde(default)]
+    single_line_natural_extent_emu: Option<i64>,
     #[serde(default)]
     bounds: Option<RectEmu>,
     #[serde(default)]
@@ -680,13 +682,7 @@ fn append_single_line_table_text_runs_v1(
             summary.table_text_residual_cell_count += 1;
             continue;
         }
-        let Some(natural_line_extent_emu) = compatible_natural_line_height_emu_v1(
-            &font.bytes,
-            font.face_index,
-            LengthEmu::new(*font_size_emu),
-        )
-        .map(LengthEmu::get)
-        else {
+        let Some(natural_line_extent_emu) = cell.single_line_natural_extent_emu else {
             summary.table_text_residual_cell_count += 1;
             continue;
         };
