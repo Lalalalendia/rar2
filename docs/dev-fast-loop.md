@@ -39,6 +39,8 @@ python tools/dev_fast_loop.py --mode feature --run
 
 This is still not release acceptance. It is the second, slightly wider local loop.
 
+Agents should keep iterating locally until the edit loop is green. Before publishing a coherent semantic slice as a new hosted head, run the feature loop once. Do not push a known local fast-loop failure merely to ask GitHub Actions for the same answer.
+
 ## Explicit paths
 
 Agents can ask what a proposed change would cost without creating a git commit:

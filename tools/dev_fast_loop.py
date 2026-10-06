@@ -160,6 +160,24 @@ def node_companion_tests(root: Path, repo_path: str) -> list[str]:
     return sorted({_rel(root, item) for item in candidates if item.exists()})
 
 
+def rust_same_stem_integration_target(
+    root: Path,
+    manifest: Path,
+    repo_path: str,
+) -> str | None:
+    """Return tests/<source-stem>.rs when the changed Rust source owns one."""
+    source = (root / repo_path).resolve()
+    package_root = manifest.resolve().parent
+    try:
+        relative = source.relative_to(package_root)
+    except ValueError:
+        return None
+    if source.suffix != RUST_SUFFIX or not relative.parts or relative.parts[0] != "src":
+        return None
+    candidate = package_root / "tests" / f"{source.stem}.rs"
+    return source.stem if candidate.is_file() else None
+
+
 def _dedupe(checks: Iterable[Check]) -> list[Check]:
     seen: set[tuple[str, ...]] = set()
     result: list[Check] = []
@@ -216,6 +234,9 @@ def plan_for_paths(root: Path, paths: Iterable[str], *, mode: str = "edit") -> l
                 parts = Path(path).parts
                 if "tests" in parts and Path(path).parent.name == "tests":
                     rust_test_targets.add((manifest_rel, Path(path).stem))
+                companion = rust_same_stem_integration_target(root, manifest, path)
+                if companion:
+                    rust_test_targets.add((manifest_rel, companion))
         elif Path(path).name == "Cargo.toml" and disk_path.exists():
             kind = manifest_kind(disk_path)
             if kind == "package":
@@ -261,7 +282,7 @@ def plan_for_paths(root: Path, paths: Iterable[str], *, mode: str = "edit") -> l
         checks.append(Check(
             "rust-micro-test",
             ("cargo", "test", "--manifest-path", manifest, "--test", target, "--no-fail-fast"),
-            f"changed integration test target: {target}",
+            f"exact integration micro-test for affected Rust component: {target}",
         ))
 
     priority = {
