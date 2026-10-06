@@ -266,6 +266,46 @@ fn delete_column_undo_restores_exact_ids_and_text() {
 }
 
 #[test]
+fn insert_column_is_immediately_cell_editable_and_replays() {
+    let mut session = EditorSession::new(graph()).expect("session");
+    session.create_table(runtime()).expect("CreateTable");
+
+    let new_cells = inserted_column_cells();
+    session
+        .insert_table_column_v1(
+            table_id(),
+            1,
+            inserted_column_id(),
+            new_cells.clone(),
+            LengthEmu::new(275_000),
+        )
+        .expect("insert column");
+
+    session
+        .replace_table_cell_text(table_id(), new_cells[0], "new column")
+        .expect("edit inserted column cell");
+    assert_eq!(materialized_text(&session, new_cells[0]), "new column");
+
+    let project = session.project();
+    assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_21);
+
+    let mut reopened = EditorSession::new(graph()).expect("fresh session");
+    reopened.apply_project(&project).expect("replay");
+    assert_eq!(reopened.project(), project);
+    assert_eq!(materialized_text(&reopened, new_cells[0]), "new column");
+
+    reopened.undo().expect("undo cell text");
+    reopened.undo().expect("undo insert column");
+    let before = reopened.current_table_grid_v1(table_id()).expect("before");
+    assert_eq!(before.columns.len(), 2);
+    assert!(!before.cells.iter().any(|cell| cell.id == new_cells[0]));
+
+    reopened.redo().expect("redo insert column");
+    reopened.redo().expect("redo cell text");
+    assert_eq!(reopened.project(), project);
+}
+
+#[test]
 fn pre_v021_project_cannot_smuggle_table_rowcol_history() {
     let mut producer = EditorSession::new(graph()).expect("producer");
     producer.create_table(runtime()).expect("CreateTable");
