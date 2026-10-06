@@ -187,7 +187,9 @@ impl EditorReplayEngine for PubEditorReplayEngine {
 
         let mut session = Self::open(source_bytes, source_sha256)?;
         let mut local_replay = project.clone();
-        if local_replay.identity.is_none() {
+        if local_replay.identity.is_none()
+            && cloud_replay_requires_local_identity(&local_replay.schema_version)
+        {
             local_replay.identity = session.project().identity;
         }
         session.apply_project(&local_replay).map_err(|error| {
@@ -482,6 +484,22 @@ pub fn cloud_revision_project(project: &EditorProject) -> EditorProject {
     projected
 }
 
+fn cloud_replay_requires_local_identity(schema_version: &str) -> bool {
+    [
+        EDITOR_PROJECT_VERSION_V0_11,
+        EDITOR_PROJECT_VERSION_V0_12,
+        EDITOR_PROJECT_VERSION_V0_13,
+        EDITOR_PROJECT_VERSION_V0_14,
+        EDITOR_PROJECT_VERSION_V0_15,
+        EDITOR_PROJECT_VERSION_V0_16,
+        EDITOR_PROJECT_VERSION_V0_17,
+        EDITOR_PROJECT_VERSION_V0_18,
+        EDITOR_PROJECT_VERSION_V0_19,
+        EDITOR_PROJECT_VERSION_V0_20,
+    ]
+    .contains(&schema_version)
+}
+
 fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
     let mut rank = if project.table_grids.is_empty() {
         2_u8
@@ -689,4 +707,26 @@ fn sha256_hex(bytes: &[u8]) -> String {
         write!(&mut out, "{byte:02x}").expect("writing SHA-256 hex into String cannot fail");
     }
     out
+}
+
+
+#[cfg(test)]
+mod replay_identity_tests {
+    use super::*;
+
+    #[test]
+    fn local_identity_rehydration_starts_at_v011() {
+        assert!(!cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_2
+        ));
+        assert!(!cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_10
+        ));
+        assert!(cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_11
+        ));
+        assert!(cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_20
+        ));
+    }
 }
