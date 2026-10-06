@@ -518,13 +518,7 @@ pub fn build_current_story_layout_v1(
     layout_revision_id: &str,
     font: &ExplicitDesktopFontResourceV1<'_>,
 ) -> Result<DesktopStoryLayoutV1, DesktopShapedFlowRuntimeError> {
-    build_current_story_layout_with_pages_v1(
-        editor,
-        story_id,
-        layout_revision_id,
-        font,
-        None,
-    )
+    build_current_story_layout_with_pages_v1(editor, story_id, layout_revision_id, font, None)
 }
 
 fn build_current_story_layout_with_pages_v1(
@@ -558,10 +552,9 @@ fn build_current_story_layout_with_pages_v1(
     let current_boolean_typography = current_story_boolean_typography_v1(editor, story_id)?;
     let current_paragraph_flow = current_story_paragraph_flow_v1(editor, story_id)?;
     let authoring = match page_ids {
-        Some(page_ids) => pub_viewer::bounded_authoring_slice_from_resolved_pages(
-            editor.graph(),
-            page_ids,
-        ),
+        Some(page_ids) => {
+            pub_viewer::bounded_authoring_slice_from_resolved_pages(editor.graph(), page_ids)
+        }
         None => pub_viewer::bounded_authoring_slice_from_resolved(editor.graph()),
     }
     .map_err(|error| {
@@ -764,7 +757,10 @@ mod tests {
         digest_bytes.copy_from_slice(&digest);
         let source_hash = Sha256Digest::from_bytes(digest_bytes);
         let editor = open_mature_0x2c_editor(bytes, source_hash);
-        assert!(editor.is_err(), "test precondition: invalid source stays invalid");
+        assert!(
+            editor.is_err(),
+            "test precondition: invalid source stays invalid"
+        );
 
         // The page-set guard is intentionally before layout projection; keep a
         // direct source-free assertion on the stable error contract by using a
