@@ -25,6 +25,8 @@ struct CensusRow {
     boundary: String,
     class: String,
     complete_chunk_fact_count: usize,
+    fully_decoded_chunk_fact_count: usize,
+    raw_type_counts: BTreeMap<String, usize>,
     ambiguous_reference_count: usize,
     referenced_chunk_unavailable_count: usize,
     chunk_parse_failure_count: usize,
@@ -38,6 +40,8 @@ struct ContextSemanticSignature {
     boundary: String,
     class: String,
     complete_chunk_fact_count: usize,
+    fully_decoded_chunk_fact_count: usize,
+    raw_type_counts: BTreeMap<String, usize>,
     ambiguous_reference_count: usize,
     referenced_chunk_unavailable_count: usize,
     chunk_parse_failure_count: usize,
@@ -166,6 +170,18 @@ fn main() -> Result<()> {
         let class = class_name(semantic.class).to_owned();
         *source_class_counts.entry(class.clone()).or_default() += 1;
 
+        let fully_decoded_chunk_fact_count = semantic
+            .complete_chunk_facts
+            .iter()
+            .filter(|fact| fact.fully_decoded)
+            .count();
+        let mut raw_type_counts = BTreeMap::<String, usize>::new();
+        for fact in &semantic.complete_chunk_facts {
+            *raw_type_counts
+                .entry(format!("0x{:04x}", fact.raw_type))
+                .or_default() += 1;
+        }
+
         rows.push(CensusRow {
             source_sha256: semantic.source_sha256,
             prefix_sha256: semantic.prefix_sha256,
@@ -176,6 +192,8 @@ fn main() -> Result<()> {
             boundary: boundary_name(semantic.boundary).to_owned(),
             class,
             complete_chunk_fact_count: semantic.complete_chunk_facts.len(),
+            fully_decoded_chunk_fact_count,
+            raw_type_counts,
             ambiguous_reference_count: semantic.ambiguous_reference_count,
             referenced_chunk_unavailable_count: semantic.referenced_chunk_unavailable_count,
             chunk_parse_failure_count: semantic.chunk_parse_failure_count,
@@ -201,6 +219,8 @@ fn main() -> Result<()> {
             boundary: row.boundary.clone(),
             class: row.class.clone(),
             complete_chunk_fact_count: row.complete_chunk_fact_count,
+            fully_decoded_chunk_fact_count: row.fully_decoded_chunk_fact_count,
+            raw_type_counts: row.raw_type_counts.clone(),
             ambiguous_reference_count: row.ambiguous_reference_count,
             referenced_chunk_unavailable_count: row.referenced_chunk_unavailable_count,
             chunk_parse_failure_count: row.chunk_parse_failure_count,
