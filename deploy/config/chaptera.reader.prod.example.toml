@@ -41,9 +41,6 @@ lease_seconds = 3600
 retention_seconds = 604800
 
 [source_validation]
-clamd_endpoint = "127.0.0.1:3310"
-clamd_connect_timeout_ms = 2000
-clamd_io_timeout_ms = 5000
 isolation_python = "/usr/bin/python3"
 isolation_harness = "/opt/chaptera/current/tools/migration_pdf_worker_isolation.py"
 worker_binary = "/opt/chaptera/current/chaptera"
