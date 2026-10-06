@@ -1,11 +1,10 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use pub_cfb::{
-    RootRegularStreamPrefixStatus, RootRegularStreamSourceRange,
-    RootRegularStreamTruncationReason,
+    RootRegularStreamPrefixStatus, RootRegularStreamSourceRange, RootRegularStreamTruncationReason,
 };
 use pub_reader::{
-    ReaderPartialContentsClass, analyze_reader_partial_contents_prefix,
-    build_reader_partial_root_stream_evidence,
+    analyze_reader_partial_contents_prefix, build_reader_partial_root_stream_evidence,
+    ReaderPartialContentsClass,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -219,8 +218,7 @@ fn main() -> Result<()> {
     });
     errors.sort_by(|left, right| left.source_sha256.cmp(&right.source_sha256));
 
-    let mut context_map =
-        BTreeMap::<(String, u64), (usize, ContextSemanticSignature)>::new();
+    let mut context_map = BTreeMap::<(String, u64), (usize, ContextSemanticSignature)>::new();
     for row in &rows {
         let key = (row.prefix_sha256.clone(), row.declared_len);
         let signature = ContextSemanticSignature {
@@ -256,17 +254,19 @@ fn main() -> Result<()> {
     let mut context_class_counts = BTreeMap::<String, usize>::new();
     let contexts = context_map
         .into_iter()
-        .map(|((prefix_sha256, declared_len), (source_count, semantic))| {
-            *context_class_counts
-                .entry(semantic.class.clone())
-                .or_default() += 1;
-            CensusContext {
-                prefix_sha256,
-                declared_len,
-                source_count,
-                semantic,
-            }
-        })
+        .map(
+            |((prefix_sha256, declared_len), (source_count, semantic))| {
+                *context_class_counts
+                    .entry(semantic.class.clone())
+                    .or_default() += 1;
+                CensusContext {
+                    prefix_sha256,
+                    declared_len,
+                    source_count,
+                    semantic,
+                }
+            },
+        )
         .collect::<Vec<_>>();
 
     let summary = CensusSummary {
