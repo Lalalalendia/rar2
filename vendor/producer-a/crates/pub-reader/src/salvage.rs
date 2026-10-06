@@ -1065,4 +1065,41 @@ mod tests {
             ReaderSalvageEligibility::IneligibleSuspicious
         );
     }
+    #[test]
+    fn logical_payload_span_maps_across_physical_ranges() {
+        let ranges = vec![
+            pub_cfb::RootRegularStreamSourceRange { offset: 1024, len: 8 },
+            pub_cfb::RootRegularStreamSourceRange { offset: 4096, len: 8 },
+        ];
+        let span = pub_core::RawSpan {
+            stream: StreamPath(ESCHER_DELAY_STREAM.into()),
+            offset: 6,
+            len: 6,
+        };
+        let mapped = map_logical_span_to_physical_ranges(&ranges, &span, 16)
+            .expect("logical span must map exactly");
+        assert_eq!(
+            mapped,
+            vec![
+                pub_cfb::RootRegularStreamSourceRange { offset: 1030, len: 2 },
+                pub_cfb::RootRegularStreamSourceRange { offset: 4096, len: 4 },
+            ]
+        );
+    }
+
+    #[test]
+    fn logical_payload_span_crossing_missing_tail_fails_closed() {
+        let ranges = vec![pub_cfb::RootRegularStreamSourceRange {
+            offset: 1024,
+            len: 8,
+        }];
+        let span = pub_core::RawSpan {
+            stream: StreamPath(ESCHER_DELAY_STREAM.into()),
+            offset: 6,
+            len: 4,
+        };
+        assert!(map_logical_span_to_physical_ranges(&ranges, &span, 8).is_none());
+    }
+
+
 }
