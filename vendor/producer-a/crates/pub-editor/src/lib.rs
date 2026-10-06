@@ -160,7 +160,8 @@ pub const EDITOR_PROJECT_VERSION_V0_15: &str = "pub-editor-v0.15";
 pub const EDITOR_PROJECT_VERSION_V0_16: &str = "pub-editor-v0.16";
 pub const EDITOR_PROJECT_VERSION_V0_17: &str = "pub-editor-v0.17";
 pub const EDITOR_PROJECT_VERSION_V0_18: &str = "pub-editor-v0.18";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_18;
+pub const EDITOR_PROJECT_VERSION_V0_19: &str = "pub-editor-v0.19";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_19;
 pub const MAX_MOVE_NODES_V1: usize = 1024;
 pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
@@ -375,6 +376,9 @@ pub enum EditOperation {
     CreateTable {
         table: CreateTableRuntimeV1,
     },
+    SetTableTrackExtent {
+        history: SetTableTrackExtentHistoryV1,
+    },
     DeleteNode {
         node_id: NodeId,
         page_id: PageId,
@@ -465,6 +469,7 @@ impl EditOperation {
             | Self::CreateShape { .. }
             | Self::CreateLine { .. }
             | Self::CreateTable { .. }
+            | Self::SetTableTrackExtent { .. }
             | Self::DeleteNode { .. }
             | Self::ReorderAuthoredStack { .. }
             | Self::SetTextFormatProperty { .. }
@@ -632,6 +637,18 @@ impl PersistenceRequirements for EditOperation {
                 PersistenceRequirement {
                     feature: "node.geometry.bounds".into(),
                     origin: Some(table.node_id.into_canonical()),
+                    property_path: Some("node.bounds".into()),
+                },
+            ],
+            Self::SetTableTrackExtent { history } => vec![
+                PersistenceRequirement {
+                    feature: "table.track_extent".into(),
+                    origin: Some(history.table_id.into_canonical()),
+                    property_path: Some("table.grid.track.extent".into()),
+                },
+                PersistenceRequirement {
+                    feature: "node.geometry.bounds".into(),
+                    origin: Some(history.table_id.into_canonical()),
                     property_path: Some("node.bounds".into()),
                 },
             ],
@@ -1105,6 +1122,12 @@ pub enum EditorError {
         node_id: NodeId,
         cell_id: TableCellId,
     },
+    TableTrackResizeUnsupported {
+        node_id: NodeId,
+    },
+    StaleTableTrackResize {
+        node_id: NodeId,
+    },
     ImageReplaceUnsupported {
         node_id: NodeId,
     },
@@ -1365,6 +1388,16 @@ impl fmt::Display for EditorError {
                 "replacement text for table node {} cell {} is identical to current text",
                 node_id.as_canonical(),
                 cell_id.as_canonical()
+            ),
+            Self::TableTrackResizeUnsupported { node_id } => write!(
+                formatter,
+                "table node {} is outside the bounded track-resize slice",
+                node_id.as_canonical()
+            ),
+            Self::StaleTableTrackResize { node_id } => write!(
+                formatter,
+                "table node {} track-resize state no longer matches persisted history",
+                node_id.as_canonical()
             ),
             Self::ImageReplaceUnsupported { node_id } => write!(
                 formatter,
@@ -2038,6 +2071,11 @@ fn is_scoped_text_format_operation_v1(operation: &EditOperation) -> bool {
 fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
     if operations
         .iter()
+        .any(|operation| matches!(operation, EditOperation::SetTableTrackExtent { .. }))
+    {
+        EDITOR_PROJECT_VERSION_V0_19
+    } else if operations
+        .iter()
         .any(|operation| matches!(operation, EditOperation::CreateTable { .. }))
     {
         EDITOR_PROJECT_VERSION_V0_18
@@ -2257,6 +2295,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesCreateTableOperation {
         index: usize,
     },
+    LegacyProjectCarriesTableTrackExtentOperation {
+        index: usize,
+    },
     LegacyProjectCarriesCreateTextBoxOperation {
         index: usize,
     },
@@ -2323,7 +2364,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, or {EDITOR_PROJECT_VERSION_V0_18:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, {EDITOR_PROJECT_VERSION_V0_18:?}, or {EDITOR_PROJECT_VERSION_V0_19:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -2370,6 +2411,10 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesCreateTableOperation { index } => write!(
                 formatter,
                 "editor project operation {index} uses CreateTable but the project schema predates pub-editor-v0.18"
+            ),
+            Self::LegacyProjectCarriesTableTrackExtentOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses SetTableTrackExtent but the project schema predates pub-editor-v0.19"
             ),
             Self::LegacyProjectCarriesCreateTextBoxOperation { index } => write!(
                 formatter,
@@ -3522,11 +3567,16 @@ impl EditorSession {
             .undo
             .iter()
             .any(|operation| matches!(operation, EditOperation::CreateTable { .. }));
+        let carries_table_track_extent = self
+            .undo
+            .iter()
+            .any(|operation| matches!(operation, EditOperation::SetTableTrackExtent { .. }));
         if (carries_reorder
             || carries_text_format
             || carries_paragraph_alignment
             || carries_create_line
-            || carries_create_table)
+            || carries_create_table
+            || carries_table_track_extent)
             && self.project_identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
@@ -3538,6 +3588,12 @@ impl EditorSession {
             )
         } else {
             let legacy_schema = if self
+                .undo
+                .iter()
+                .any(|operation| matches!(operation, EditOperation::SetTableTrackExtent { .. }))
+            {
+                EDITOR_PROJECT_VERSION_V0_19
+            } else if self
                 .undo
                 .iter()
                 .any(|operation| matches!(operation, EditOperation::CreateTable { .. }))
@@ -3671,6 +3727,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             return Err(EditorProjectError::UnsupportedSchema {
                 found: project.schema_version.clone(),
@@ -3705,6 +3762,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3728,6 +3786,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3750,6 +3809,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && !project.table_grids.is_empty()
         {
             return Err(EditorProjectError::LegacyProjectCarriesTableGrids);
@@ -3766,6 +3826,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
@@ -3784,6 +3845,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3803,6 +3865,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3821,6 +3884,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3832,6 +3896,7 @@ impl EditorSession {
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3841,13 +3906,26 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesCreateLineOperation { index });
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_18 {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+        {
             if let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::CreateTable { .. }))
             {
                 return Err(EditorProjectError::LegacyProjectCarriesCreateTableOperation { index });
+            }
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_19 {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(|operation| matches!(operation, EditOperation::SetTableTrackExtent { .. }))
+            {
+                return Err(EditorProjectError::LegacyProjectCarriesTableTrackExtentOperation {
+                    index,
+                });
             }
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
@@ -3858,6 +3936,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3876,6 +3955,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3891,6 +3971,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::ReorderAuthoredStack { .. })
@@ -3905,6 +3986,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3917,6 +3999,7 @@ impl EditorSession {
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3932,6 +4015,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
@@ -3953,6 +4037,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.identity.is_some()
         {
             return Err(EditorProjectError::LegacyProjectCarriesIdentity);
@@ -6360,6 +6445,39 @@ impl EditorSession {
         self.replace_story_range(story_id, 0, scalar_len, before, replacement)
     }
 
+    pub fn current_table_grid_v1(&self, table_id: NodeId) -> Option<EffectiveTableGridV1> {
+        effective_table_grids_with_history(&self.graph, &self.undo)
+            .into_iter()
+            .find(|grid| grid.table_id == table_id)
+    }
+
+    pub fn current_table_bounds_v1(&self, table_id: NodeId) -> Option<RectEmu> {
+        effective_table_bounds_with_history(&self.graph, &self.undo, table_id)
+    }
+
+    pub fn set_table_track_extent_v1(
+        &mut self,
+        table_id: NodeId,
+        target: TableTrackTargetV1,
+        after_extent: LengthEmu,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let grid = self
+            .current_table_grid_v1(table_id)
+            .ok_or(EditorError::TableTrackResizeUnsupported { node_id: table_id })?;
+        let bounds = self
+            .current_table_bounds_v1(table_id)
+            .ok_or(EditorError::TableTrackResizeUnsupported { node_id: table_id })?;
+        let history =
+            canonical_table_track_extent_history_v1(&grid, bounds, target, after_extent)
+                .map_err(|_| EditorError::TableTrackResizeUnsupported { node_id: table_id })?;
+        let operation = EditOperation::SetTableTrackExtent { history };
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
     pub fn undo(&mut self) -> Result<&EditOperation, EditorError> {
         let operation = self.undo.pop().ok_or(EditorError::NothingToUndo)?;
         let result = (|| {
@@ -6401,6 +6519,23 @@ impl EditorSession {
                 self.authored_lines = candidate_lines;
                 self.graph = candidate_graph;
                 self.authored_stacks = before_stacks;
+            } else if let EditOperation::SetTableTrackExtent { history } = &operation {
+                let grid = effective_table_grids_with_history(&self.graph, &self.undo)
+                    .into_iter()
+                    .find(|grid| grid.table_id == history.table_id)
+                    .ok_or(EditorError::StaleTableTrackResize {
+                        node_id: history.table_id,
+                    })?;
+                let bounds =
+                    effective_table_bounds_with_history(&self.graph, &self.undo, history.table_id)
+                        .ok_or(EditorError::StaleTableTrackResize {
+                            node_id: history.table_id,
+                        })?;
+                apply_table_track_extent_history_forward_v1(&grid, bounds, history).map_err(
+                    |_| EditorError::StaleTableTrackResize {
+                        node_id: history.table_id,
+                    },
+                )?;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_inverse(&mut self.image_replacements, &operation)?;
             } else if let Some(story_id) = text_format_operation_story_id_v1(&operation) {
@@ -6492,6 +6627,23 @@ impl EditorSession {
                 self.authored_lines = candidate_lines;
                 self.graph = candidate_graph;
                 self.authored_stacks = after_stacks;
+            } else if let EditOperation::SetTableTrackExtent { history } = &operation {
+                let grid = effective_table_grids_with_history(&self.graph, &self.undo)
+                    .into_iter()
+                    .find(|grid| grid.table_id == history.table_id)
+                    .ok_or(EditorError::StaleTableTrackResize {
+                        node_id: history.table_id,
+                    })?;
+                let bounds =
+                    effective_table_bounds_with_history(&self.graph, &self.undo, history.table_id)
+                        .ok_or(EditorError::StaleTableTrackResize {
+                            node_id: history.table_id,
+                        })?;
+                apply_table_track_extent_history_forward_v1(&grid, bounds, history).map_err(
+                    |_| EditorError::StaleTableTrackResize {
+                        node_id: history.table_id,
+                    },
+                )?;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_forward(&mut self.image_replacements, &operation)?;
             } else if let Some(story_id) = text_format_operation_story_id_v1(&operation) {
@@ -6716,6 +6868,9 @@ fn replay_canonical_operation(
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::CreateTable { .. } => session
             .consume_canonical_create_table(expected.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::SetTableTrackExtent { history } => session
+            .set_table_track_extent_v1(history.table_id, history.target, history.after_extent)
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::DeleteNode { .. } => session
             .consume_canonical_delete_node(expected.clone())
@@ -7164,37 +7319,79 @@ fn effective_table_grids_with_history(
     operations: &[EditOperation],
 ) -> Vec<EffectiveTableGridV1> {
     let mut grids = effective_table_grids(graph);
+    let mut bounds = graph
+        .nodes
+        .iter()
+        .map(|(node_id, node)| (*node_id, node.header.bounds))
+        .collect::<BTreeMap<_, _>>();
 
     for operation in operations {
-        let EditOperation::CreateTable { table } = operation else {
-            continue;
-        };
-        let plan = build_create_table_plan_v1(table)
-            .expect("accepted CreateTable history must remain canonical");
-        let current = grids
-            .iter()
-            .find(|grid| grid.table_id == table.node_id)
-            .cloned()
-            .expect("accepted CreateTable must materialize one effective table grid");
-        let target = grids
-            .iter_mut()
-            .find(|grid| grid.table_id == table.node_id)
-            .expect("accepted CreateTable grid is present");
+        match operation {
+            EditOperation::CreateTable { table } => {
+                let plan = build_create_table_plan_v1(table)
+                    .expect("accepted CreateTable history must remain canonical");
+                let current = grids
+                    .iter()
+                    .find(|grid| grid.table_id == table.node_id)
+                    .cloned()
+                    .expect("accepted CreateTable must materialize one effective table grid");
+                let target = grids
+                    .iter_mut()
+                    .find(|grid| grid.table_id == table.node_id)
+                    .expect("accepted CreateTable grid is present");
 
-        *target = plan.grid;
-        for cell in &mut target.cells {
-            let current_cell = current
-                .cells
-                .iter()
-                .find(|candidate| candidate.id == cell.id)
-                .expect("created table cell identity remains stable");
-            cell.utf16_start = current_cell.utf16_start;
-            cell.utf16_end = current_cell.utf16_end;
+                *target = plan.grid;
+                for cell in &mut target.cells {
+                    let current_cell = current
+                        .cells
+                        .iter()
+                        .find(|candidate| candidate.id == cell.id)
+                        .expect("created table cell identity remains stable");
+                    cell.utf16_start = current_cell.utf16_start;
+                    cell.utf16_end = current_cell.utf16_end;
+                }
+                bounds.insert(table.node_id, table.bounds);
+            }
+            EditOperation::SetTableTrackExtent { history } => {
+                let target = grids
+                    .iter_mut()
+                    .find(|grid| grid.table_id == history.table_id)
+                    .expect("accepted track-resize history must target one effective table grid");
+                let before_bounds = *bounds
+                    .get(&history.table_id)
+                    .expect("accepted track-resize history must target one table bounds record");
+                let (after_grid, after_bounds) =
+                    apply_table_track_extent_history_forward_v1(target, before_bounds, history)
+                        .expect("accepted track-resize history must remain canonical");
+                *target = after_grid;
+                bounds.insert(history.table_id, after_bounds);
+            }
+            _ => {}
         }
     }
 
     grids.sort_by_key(|grid| grid.table_id);
     grids
+}
+
+fn effective_table_bounds_with_history(
+    graph: &PubResolvedGraph,
+    operations: &[EditOperation],
+    table_id: NodeId,
+) -> Option<RectEmu> {
+    let mut bounds = graph.nodes.get(&table_id)?.header.bounds;
+    for operation in operations {
+        let EditOperation::SetTableTrackExtent { history } = operation else {
+            continue;
+        };
+        if history.table_id == table_id {
+            if history.before_bounds != bounds {
+                return None;
+            }
+            bounds = history.after_bounds;
+        }
+    }
+    Some(bounds)
 }
 
 fn frame_from_payload(
@@ -7896,6 +8093,9 @@ fn apply_forward(
         EditOperation::CreateTable { .. } => {
             unreachable!("CreateTable is applied atomically with the authored-stack lane")
         }
+        EditOperation::SetTableTrackExtent { .. } => {
+            unreachable!("table track extents are derived from editor history")
+        }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is applied to the authored overlay state")
         }
@@ -8153,6 +8353,9 @@ fn apply_inverse(
         }
         EditOperation::CreateTable { .. } => {
             unreachable!("CreateTable is reverted atomically with the authored-stack lane")
+        }
+        EditOperation::SetTableTrackExtent { .. } => {
+            unreachable!("table track extents are derived from editor history")
         }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is reverted in the authored overlay state")
