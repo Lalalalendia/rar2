@@ -85,7 +85,7 @@ jobs:
           from pathlib import Path
           path = Path("tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json")
           digest = hashlib.sha256(path.read_bytes()).hexdigest()
-          assert digest == "ec3efb6e393899ade89eb96f76c6b9281c0a025f49da4f11263e69a6a40fe60d", digest
+          assert digest == "fb9768bc5f00cd470e3e8a379e9fd3548fb893aa5334abdde769110aaf372565", digest
           print("supplemental reference fingerprint:", digest)
           PY
 
@@ -184,9 +184,16 @@ jobs:
           # the stage classifier instead of forcing Reader logical-page mutation.
           assert data["claims"]["publisher_pdf_page_count_is_not_logical_page_membership_authority"] is True
           assert data["visual_degeneracy_count"] == 0, "new hosted corpus has page-space collapsed shared-text geometry"
-          assert data["visual"]["compared_pair_count"] == 8, "expected 8 hosted pairs with exact Publisher reference fingerprints"
-          assert data["visual"]["compared_page_count"] == 27, "expected 27 hosted pages with exact Publisher reference fingerprints"
-          assert data["visual"]["unavailable_pair_count"] == 0, "available Publisher references failed to compare"
+          assert data["missing_hosted_reference_pair_count"] == 0, "all 24 hosted Publisher reference fingerprints must be present"
+          assert data["visual_reference_fingerprint_state"] == "COMPLETE_FOR_24_HOSTED_PAIRS_SURFACE_BLOCKED_3"
+          assert data["visual"]["compared_pair_count"] == 21, "expected 21 hosted pairs to compare after surface-stage fail-closed exclusions"
+          assert data["visual"]["compared_page_count"] == 47, "expected 47 hosted pages to compare after surface-stage fail-closed exclusions"
+          assert data["visual"]["unavailable_pair_count"] == 3, "expected only the three known surface-stage mismatches to remain unavailable"
+          assert {row["fixture"] for row in data["visual"]["unavailable_pairs"]} == {
+              "083_5eb5055bc75918ca",
+              "086_248596cea8019134",
+              "095_1e7f38b3ce1d0d95",
+          }, data["visual"]["unavailable_pairs"]
           PY
 
       - name: Upload source-free supplemental receipt
