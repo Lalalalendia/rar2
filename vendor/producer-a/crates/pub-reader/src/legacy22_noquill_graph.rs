@@ -914,6 +914,7 @@ fn build_legacy_table_projection(
         cells,
         simple_table,
         layout_relation: None,
+        uniform_cell_text_inset: None,
         layout_metrics: None,
         border_segments: Vec::new(),
         source_refs: vec![
