@@ -45,4 +45,4 @@ jobs:
 
       - name: Measure source-safe per-child inset profile
         run: |
-          cargo test -p pub-quill             --test carlton_mcld_cell_inset_profile             -- --ignored --nocapture
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-quill             --test carlton_mcld_cell_inset_profile             -- --ignored --nocapture
