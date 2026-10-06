@@ -348,6 +348,9 @@ pub fn build_reader_partial_escherdelay_evidence(
     let rejected_complete_blip_count = inventory.rejected_complete_blips.len();
     let mut validated_images = Vec::new();
     for validated in inventory.records {
+        if !reader_partial_image_kind_admitted_v1(validated.kind) {
+            continue;
+        }
         let payload_physical_ranges = map_logical_span_to_physical_ranges(
             &recovered.source_ranges,
             &validated.payload_source,
