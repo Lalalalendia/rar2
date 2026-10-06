@@ -97,8 +97,18 @@ pub struct RenderTableV1 {
     pub cells: Vec<RenderTableCellV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uniform_cell_text_inset_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uniform_cell_vertical_alignment: Option<RenderTableVerticalAlignmentV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub borders: Vec<RenderTableBorderSegmentV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RenderTableVerticalAlignmentV1 {
+    Top,
+    Center,
+    Bottom,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,6 +143,8 @@ pub struct RenderTableCellV1 {
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub typography: Vec<RenderTypographyRunV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paragraph_alignments: Vec<RenderParagraphAlignmentRunV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<RectEmu>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1117,6 +1129,44 @@ fn render_paragraph_alignment_runs_v1(
         .collect()
 }
 
+fn render_table_cell_paragraph_alignments_v1(
+    visual: &ViewerGeometryDocument,
+    story_id: StoryId,
+    cell_text: &str,
+    scalar_start: Option<u32>,
+    scalar_end: Option<u32>,
+) -> Vec<RenderParagraphAlignmentRunV1> {
+    let (Some(scalar_start), Some(scalar_end)) = (scalar_start, scalar_end) else {
+        return Vec::new();
+    };
+    let Some(story) = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == story_id)
+    else {
+        return Vec::new();
+    };
+    let story_scalars = story.text.chars().collect::<Vec<_>>();
+    let (Ok(start), Ok(end)) = (usize::try_from(scalar_start), usize::try_from(scalar_end)) else {
+        return Vec::new();
+    };
+    if start > end
+        || end > story_scalars.len()
+        || story_scalars[start..end].iter().collect::<String>() != cell_text
+    {
+        return Vec::new();
+    }
+
+    render_paragraph_alignment_runs_v1(
+        visual,
+        story_id,
+        &story.text,
+        scalar_start,
+        scalar_end,
+    )
+}
+
 #[cfg(feature = "projected-scene-instances")]
 fn projected_text(
     visual: &ViewerGeometryDocument,
@@ -1460,12 +1510,30 @@ pub fn build_page_render_plan_v1(
                                 cell.story_scalar_start,
                                 cell.story_scalar_end,
                             ),
+                            paragraph_alignments: render_table_cell_paragraph_alignments_v1(
+                                visual,
+                                table.story_id,
+                                &cell.text,
+                                cell.story_scalar_start,
+                                cell.story_scalar_end,
+                            ),
                             bounds: cell.bounds,
                             fill_rgb: cell.fill_rgb,
                             fill_visible: cell.fill_visible,
                         })
                         .collect(),
                     uniform_cell_text_inset_emu: table.uniform_cell_text_inset_emu,
+                    uniform_cell_vertical_alignment: table
+                        .uniform_cell_vertical_alignment
+                        .map(|alignment| match alignment {
+                            ViewerTextVerticalAlignment::Top => RenderTableVerticalAlignmentV1::Top,
+                            ViewerTextVerticalAlignment::Center => {
+                                RenderTableVerticalAlignmentV1::Center
+                            }
+                            ViewerTextVerticalAlignment::Bottom => {
+                                RenderTableVerticalAlignmentV1::Bottom
+                            }
+                        }),
                     borders: table
                         .borders
                         .iter()
@@ -1565,12 +1633,30 @@ pub fn build_page_render_plan_v1(
                                 cell.story_scalar_start,
                                 cell.story_scalar_end,
                             ),
+                            paragraph_alignments: render_table_cell_paragraph_alignments_v1(
+                                visual,
+                                table.story_id,
+                                &cell.text,
+                                cell.story_scalar_start,
+                                cell.story_scalar_end,
+                            ),
                             bounds: cell.bounds,
                             fill_rgb: cell.fill_rgb,
                             fill_visible: cell.fill_visible,
                         })
                         .collect(),
                     uniform_cell_text_inset_emu: table.uniform_cell_text_inset_emu,
+                    uniform_cell_vertical_alignment: table
+                        .uniform_cell_vertical_alignment
+                        .map(|alignment| match alignment {
+                            ViewerTextVerticalAlignment::Top => RenderTableVerticalAlignmentV1::Top,
+                            ViewerTextVerticalAlignment::Center => {
+                                RenderTableVerticalAlignmentV1::Center
+                            }
+                            ViewerTextVerticalAlignment::Bottom => {
+                                RenderTableVerticalAlignmentV1::Bottom
+                            }
+                        }),
                     borders: table
                         .borders
                         .iter()
@@ -5020,6 +5106,7 @@ mod tests {
                 fill_visible: Some(true),
             }],
             uniform_cell_text_inset_emu: Some(36_576),
+            uniform_cell_vertical_alignment: Some(ViewerTextVerticalAlignment::Top),
             borders: vec![pub_viewer::ViewerTableBorderSegment {
                 x1_emu: 10,
                 y1_emu: 20,
@@ -5050,10 +5137,15 @@ mod tests {
         assert_eq!(table.cells[0].typography[0].scalar_start, 0);
         assert_eq!(table.cells[0].typography[0].scalar_end, 2);
         assert_eq!(table.cells[0].typography[0].source_font_name, "Source Font");
+        assert!(table.cells[0].paragraph_alignments.is_empty());
         assert_eq!(table.cells[0].bounds, Some(cell_bounds));
         assert_eq!(table.cells[0].fill_rgb, Some([10, 20, 30]));
         assert_eq!(table.cells[0].fill_visible, Some(true));
         assert_eq!(table.uniform_cell_text_inset_emu, Some(36_576));
+        assert_eq!(
+            table.uniform_cell_vertical_alignment,
+            Some(RenderTableVerticalAlignmentV1::Top)
+        );
         assert_eq!(table.borders.len(), 1);
         assert_eq!(table.borders[0].x1_emu, 10);
         assert_eq!(table.borders[0].y1_emu, 20);
