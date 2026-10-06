@@ -162,6 +162,13 @@ pub struct Contents0x2cHeader {
     pub trailer_offset_source: RawSpan,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Contents0x2cHeaderPrefix {
+    pub preamble: ContentsPreamble,
+    pub trailer_offset: u32,
+    pub trailer_offset_source: RawSpan,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContentsReadError {
     TooShort {
@@ -254,10 +261,10 @@ pub fn parse_preamble(
 /// на начало trailer. Здесь значение только извлекается и проверяется на
 /// попадание внутрь исходного потока; внутренняя грамматика trailer этим
 /// вызовом не интерпретируется.
-pub fn parse_0x2c_header(
+pub fn parse_0x2c_header_prefix(
     stream: StreamPath,
     bytes: &[u8],
-) -> Result<Contents0x2cHeader, ContentsReadError> {
+) -> Result<Contents0x2cHeaderPrefix, ContentsReadError> {
     let preamble = parse_preamble(stream.clone(), bytes)?;
     if preamble.family != ContentsFamily::Family0x2c {
         return Err(ContentsReadError::UnexpectedFamily {
@@ -270,17 +277,30 @@ pub fn parse_0x2c_header(
     cursor.take(0x1A)?;
     let (trailer_offset, trailer_offset_source) = cursor.read_u32_le()?;
 
-    if u64::from(trailer_offset) >= bytes.len() as u64 {
+    Ok(Contents0x2cHeaderPrefix {
+        preamble,
+        trailer_offset,
+        trailer_offset_source,
+    })
+}
+
+pub fn parse_0x2c_header(
+    stream: StreamPath,
+    bytes: &[u8],
+) -> Result<Contents0x2cHeader, ContentsReadError> {
+    let prefix = parse_0x2c_header_prefix(stream, bytes)?;
+
+    if u64::from(prefix.trailer_offset) >= bytes.len() as u64 {
         return Err(ContentsReadError::TrailerOffsetOutOfBounds {
-            offset: trailer_offset,
+            offset: prefix.trailer_offset,
             stream_len: bytes.len(),
         });
     }
 
     Ok(Contents0x2cHeader {
-        preamble,
-        trailer_offset,
-        trailer_offset_source,
+        preamble: prefix.preamble,
+        trailer_offset: prefix.trailer_offset,
+        trailer_offset_source: prefix.trailer_offset_source,
     })
 }
 
@@ -491,6 +511,29 @@ mod tests {
                 offset: 12,
                 requested: 2,
                 available: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn header_prefix_preserves_trailer_pointer_beyond_available_prefix() {
+        let stream = StreamPath("/Contents".into());
+        let mut bytes = vec![0; 0x1E];
+        bytes[0..4].copy_from_slice(&CONTENTS_0X2C_MAGIC);
+        bytes[12..14].copy_from_slice(&0x0015u16.to_le_bytes());
+        bytes[0x1A..0x1E].copy_from_slice(&0x1234u32.to_le_bytes());
+
+        let prefix = parse_0x2c_header_prefix(stream.clone(), &bytes)
+            .expect("physical header fields should survive without trailer bytes");
+        assert_eq!(prefix.trailer_offset, 0x1234);
+        assert_eq!(prefix.trailer_offset_source.offset, 0x1A);
+        assert_eq!(prefix.trailer_offset_source.len, 4);
+
+        assert_eq!(
+            parse_0x2c_header(stream, &bytes),
+            Err(ContentsReadError::TrailerOffsetOutOfBounds {
+                offset: 0x1234,
+                stream_len: bytes.len(),
             })
         );
     }
