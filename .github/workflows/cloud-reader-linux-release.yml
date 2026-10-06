@@ -32,6 +32,7 @@ jobs:
           install -m 0755 target/release/chaptera dist/chaptera
           install -m 0644 deploy/config/chaptera.reader.prod.example.toml dist/chaptera.reader.prod.example.toml
           install -m 0644 deploy/systemd/chaptera-reader.service dist/chaptera-reader.service
+          install -m 0644 deploy/nginx/chaptera-reader.conf.example dist/chaptera-reader.conf.example
           install -m 0755 tools/run_cloud_reader_host_acceptance.py dist/run_cloud_reader_host_acceptance.py
           printf '%s\n' "${GITHUB_SHA}" > dist/COMMIT_SHA
           (cd dist && sha256sum chaptera chaptera.reader.prod.example.toml run_cloud_reader_host_acceptance.py COMMIT_SHA > SHA256SUMS)
