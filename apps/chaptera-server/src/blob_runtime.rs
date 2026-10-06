@@ -159,5 +159,4 @@ mod tests {
             assert!(bindings.insert(binding_id));
         }
     }
-
 }
