@@ -25,10 +25,11 @@ use chaptera_scene_instance::{
     inherited_master_instance_v1,
 };
 use pub_layout::{
-    BoundedAuthoringSlice, BoundedLayoutProjection, BoundedNodeGeometryInput, BoundedTableInput,
+    BoundedAuthoringSlice, BoundedLayoutProjection, BoundedNodeGeometryInput,
+    BoundedParagraphFlowConstraint, BoundedParagraphFlowRun, BoundedTableInput,
     BoundedTextFlowEnvironment, BoundedTextMetrics, BoundedUniformTableMetrics,
     ProjectedStoryFrame, ProjectionDiagnostic, ResolveDiagnostic, ResolvedPhysicalNode,
-    project_bounded, resolve_bounded_geometry, resolve_bounded_text_flow,
+    project_bounded, resolve_bounded_geometry, resolve_bounded_text_flow_with_paragraph_flow,
     resolve_bounded_uniform_table_cells,
 };
 pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
@@ -81,15 +82,16 @@ use pub_reader::{
     FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
     LegacyOleCachedPresentationSelection, MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
     PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
-    PubExplicitImageCropSource, PubParagraphAlignment, PubParagraphLineSpacing,
-    PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild, PubResolvedNodePayload,
-    PubScriptFontEntryDisposition, PubSourceGraphBuild, PubSourcePagePaintOrderV1,
-    PubTextFrameVerticalAlignment, WmfPreviewRgba, analyze_legacy_0x22_page_roles,
-    analyze_mature_0x2c_page_roles, build_failure_envelope, build_legacy_0x22_noquill_source_graph,
-    build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
-    build_mature_0x2c_source_graph, build_mature_0x2c_wmf_preview_bundle_from_bytes,
-    derive_pub_page_id, materialize_bounded_table_cells, rasterize_wmf_preview,
-    read_legacy_0x22_image_wmfs, resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
+    PubExplicitImageCropSource, PubParagraphAlignment, PubParagraphFlowConstraint,
+    PubParagraphFlowRun, PubParagraphLineSpacing, PubResolveDiagnostic, PubResolvedGraph,
+    PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
+    PubSourceGraphBuild, PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
+    analyze_legacy_0x22_page_roles, analyze_mature_0x2c_page_roles, build_failure_envelope,
+    build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
+    build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
+    build_mature_0x2c_wmf_preview_bundle_from_bytes, derive_pub_page_id,
+    materialize_bounded_table_cells, rasterize_wmf_preview, read_legacy_0x22_image_wmfs,
+    resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
     select_unambiguous_legacy_ole_cached_presentation,
 };
 #[cfg(feature = "cmo-slot-compose")]
@@ -260,6 +262,8 @@ pub struct ViewerGeometryDocument {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_line_spacings: Vec<ViewerParagraphLineSpacingRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paragraph_flow_runs: Vec<ViewerParagraphFlowRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub script_font_maps: Vec<ViewerScriptFontMap>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tables: Vec<ViewerTable>,
@@ -395,7 +399,20 @@ impl ViewerGeometryDocument {
             .collect::<Vec<_>>();
         let authoring = bounded_authoring_slice_from_resolved_pages(graph, &effective_page_ids)?;
         let projection = project_bounded(authoring);
-        let (text_fragments, text_flow_diagnostics) = resolve_viewer_text_fragments(&projection)?;
+        let applicable_paragraph_flow_runs = self
+            .paragraph_flow_runs
+            .iter()
+            .filter(|run| {
+                graph
+                    .stories
+                    .get(&run.story_id)
+                    .is_some_and(|story| run.applies_to_story_text(&story.text))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let paragraph_flow = viewer_paragraph_flow_for_layout(&applicable_paragraph_flow_runs);
+        let (text_fragments, text_flow_diagnostics) =
+            resolve_viewer_text_fragments_with_paragraph_flow(&projection, &paragraph_flow)?;
         let (tables, table_diagnostics) = viewer_tables_from_resolved(graph, &projection);
 
         let stories = graph
@@ -417,6 +434,11 @@ impl ViewerGeometryDocument {
             .retain(|diagnostic| !is_refreshable_text_flow_diagnostic(diagnostic.code.as_str()));
         diagnostics.extend(text_flow_diagnostics.iter().map(map_scene_diagnostic));
         diagnostics.extend(table_diagnostics);
+        if !paragraph_flow.is_empty() {
+            diagnostics.push(viewer_paragraph_flow_policy_applied_diagnostic(
+                paragraph_flow.len(),
+            ));
+        }
         if !text_fragments.is_empty() {
             diagnostics.push(viewer_fallback_flow_metrics_diagnostic());
         }
@@ -1068,6 +1090,31 @@ pub struct ViewerParagraphLineSpacingRun {
 }
 
 impl ViewerParagraphLineSpacingRun {
+    pub fn applies_to_story_text(&self, text: &str) -> bool {
+        self.source_story_text_sha256 == viewer_story_text_sha256(text)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerParagraphFlowConstraint {
+    StartInNextTextBox,
+    KeepLinesTogether,
+    KeepWithNext,
+    WidowControl,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerParagraphFlowRun {
+    pub story_id: StoryId,
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub constraint: ViewerParagraphFlowConstraint,
+    pub source_value: u32,
+    pub source_story_text_sha256: Sha256Digest,
+}
+
+impl ViewerParagraphFlowRun {
     pub fn applies_to_story_text(&self, text: &str) -> bool {
         self.source_story_text_sha256 == viewer_story_text_sha256(text)
     }
@@ -2265,6 +2312,7 @@ fn open_legacy_0x22_noquill_bundle(
         typography_runs: Vec::new(),
         paragraph_alignments: Vec::new(),
         paragraph_line_spacings: Vec::new(),
+        paragraph_flow_runs: Vec::new(),
         script_font_maps: Vec::new(),
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
@@ -2395,6 +2443,7 @@ fn open_legacy_0x22_quill_bundle(
         typography_runs: Vec::new(),
         paragraph_alignments: Vec::new(),
         paragraph_line_spacings: Vec::new(),
+        paragraph_flow_runs: Vec::new(),
         script_font_maps: Vec::new(),
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
@@ -2459,10 +2508,23 @@ fn open_mature_0x2c_bundle(
         .map(|frame| viewer_story_frame_from_projection(frame, &pipeline.resolved.graph))
         .collect::<Vec<_>>();
 
-    let (text_fragments, text_flow_diagnostics) = resolve_viewer_text_fragments(&projection)?;
+    let paragraph_flow_runs = viewer_paragraph_flow_runs_from_source(
+        &pipeline.source.paragraph_flow_runs,
+        &pipeline.resolved.graph,
+    );
+    let paragraph_flow = viewer_paragraph_flow_for_layout(&paragraph_flow_runs);
+    let (text_fragments, text_flow_diagnostics) =
+        resolve_viewer_text_fragments_with_paragraph_flow(&projection, &paragraph_flow)?;
     document
         .diagnostics
         .extend(text_flow_diagnostics.iter().map(map_scene_diagnostic));
+    if !paragraph_flow.is_empty() {
+        document
+            .diagnostics
+            .push(viewer_paragraph_flow_policy_applied_diagnostic(
+                paragraph_flow.len(),
+            ));
+    }
     if !text_fragments.is_empty() {
         document
             .diagnostics
@@ -2989,6 +3051,7 @@ fn open_mature_0x2c_bundle(
         typography_runs,
         paragraph_alignments,
         paragraph_line_spacings,
+        paragraph_flow_runs,
         script_font_maps,
         tables,
         #[cfg(feature = "cmo-slot-compose")]
@@ -3027,6 +3090,16 @@ fn viewer_fallback_flow_metrics_diagnostic() -> ViewerDiagnostic {
     }
 }
 
+fn viewer_paragraph_flow_policy_applied_diagnostic(count: usize) -> ViewerDiagnostic {
+    ViewerDiagnostic {
+        code: "viewer.text.paragraph_flow_policy_applied".to_owned(),
+        severity: ViewerDiagnosticSeverity::Info,
+        message: format!(
+            "{count} explicit source paragraph-flow constraint(s) participate in bounded fallback linked-frame allocation. Fallback font metrics remain non-authoritative for Publisher-exact line breaks."
+        ),
+    }
+}
+
 fn is_refreshable_text_flow_diagnostic(code: &str) -> bool {
     matches!(
         code,
@@ -3036,22 +3109,34 @@ fn is_refreshable_text_flow_diagnostic(code: &str) -> bool {
             | "viewer.text.frame_capacity_partial"
             | "viewer.text.fallback_metrics_unavailable"
             | "viewer.text.fallback_flow_metrics"
+            | "viewer.text.paragraph_flow_policy_applied"
     )
 }
 
 fn resolve_viewer_text_fragments(
     projection: &pub_layout::BoundedLayoutProjection,
 ) -> Result<(Vec<ViewerTextFragment>, Vec<ResolveDiagnostic>)> {
-    let flow = resolve_bounded_text_flow(projection, viewer_fallback_text_flow_environment_v0_1())
-        .map_err(|blocked| {
-            let codes = blocked
-                .projection_errors
-                .iter()
-                .map(|diagnostic| diagnostic.code.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            anyhow!("Viewer text-flow resolution blocked by layout projection errors: {codes}")
-        })?;
+    resolve_viewer_text_fragments_with_paragraph_flow(projection, &[])
+}
+
+fn resolve_viewer_text_fragments_with_paragraph_flow(
+    projection: &pub_layout::BoundedLayoutProjection,
+    paragraph_flow: &[BoundedParagraphFlowRun],
+) -> Result<(Vec<ViewerTextFragment>, Vec<ResolveDiagnostic>)> {
+    let flow = resolve_bounded_text_flow_with_paragraph_flow(
+        projection,
+        viewer_fallback_text_flow_environment_v0_1(),
+        paragraph_flow,
+    )
+    .map_err(|blocked| {
+        let codes = blocked
+            .projection_errors
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow!("Viewer text-flow resolution blocked by layout projection errors: {codes}")
+    })?;
 
     let fragments = flow
         .text_fragments
@@ -3067,6 +3152,77 @@ fn resolve_viewer_text_fragments(
         .collect::<Vec<_>>();
 
     Ok((fragments, flow.diagnostics))
+}
+
+fn viewer_paragraph_flow_runs_from_source(
+    runs: &[PubParagraphFlowRun],
+    graph: &PubResolvedGraph,
+) -> Vec<ViewerParagraphFlowRun> {
+    let mut projected = runs
+        .iter()
+        .filter_map(|run| {
+            let story = graph.stories.get(&run.story_id)?;
+            Some(ViewerParagraphFlowRun {
+                story_id: run.story_id,
+                scalar_start: run.story_scalar_start,
+                scalar_end: run.story_scalar_end,
+                constraint: match run.constraint {
+                    PubParagraphFlowConstraint::StartInNextTextBox => {
+                        ViewerParagraphFlowConstraint::StartInNextTextBox
+                    }
+                    PubParagraphFlowConstraint::KeepLinesTogether => {
+                        ViewerParagraphFlowConstraint::KeepLinesTogether
+                    }
+                    PubParagraphFlowConstraint::KeepWithNext => {
+                        ViewerParagraphFlowConstraint::KeepWithNext
+                    }
+                    PubParagraphFlowConstraint::WidowControl => {
+                        ViewerParagraphFlowConstraint::WidowControl
+                    }
+                },
+                source_value: run.source_value,
+                source_story_text_sha256: viewer_story_text_sha256(&story.text),
+            })
+        })
+        .collect::<Vec<_>>();
+    projected.sort_by_key(|run| (run.story_id, run.scalar_start, run.scalar_end));
+    projected
+}
+
+fn viewer_paragraph_flow_for_layout(
+    runs: &[ViewerParagraphFlowRun],
+) -> Vec<BoundedParagraphFlowRun> {
+    let mut projected = runs
+        .iter()
+        .map(|run| BoundedParagraphFlowRun {
+            story_origin: run.story_id,
+            scalar_start: run.scalar_start,
+            scalar_end: run.scalar_end,
+            constraint: match run.constraint {
+                ViewerParagraphFlowConstraint::StartInNextTextBox => {
+                    BoundedParagraphFlowConstraint::StartInNextTextBox
+                }
+                ViewerParagraphFlowConstraint::KeepLinesTogether => {
+                    BoundedParagraphFlowConstraint::KeepLinesTogether
+                }
+                ViewerParagraphFlowConstraint::KeepWithNext => {
+                    BoundedParagraphFlowConstraint::KeepWithNext
+                }
+                ViewerParagraphFlowConstraint::WidowControl => {
+                    BoundedParagraphFlowConstraint::WidowControl
+                }
+            },
+        })
+        .collect::<Vec<_>>();
+    projected.sort_by_key(|run| {
+        (
+            run.story_origin,
+            run.scalar_start,
+            run.scalar_end,
+            run.constraint,
+        )
+    });
+    projected
 }
 
 /// Explicit deterministic environment profile for the geometry-only Viewer
@@ -5573,6 +5729,7 @@ mod tests {
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
             paragraph_line_spacings: Vec::new(),
+            paragraph_flow_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -5733,6 +5890,7 @@ mod tests {
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
             paragraph_line_spacings: Vec::new(),
+            paragraph_flow_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -6090,6 +6248,34 @@ mod tests {
     }
 
     #[test]
+    fn viewer_fallback_flow_consumes_source_neutral_start_next_policy() {
+        let mut projection = linked_text_projection(true);
+        projection.stories[0].text = "A\rBCDEF".to_owned();
+        let story_origin = projection.stories[0].origin;
+        let flow = [BoundedParagraphFlowRun {
+            story_origin,
+            scalar_start: 2,
+            scalar_end: 7,
+            constraint: BoundedParagraphFlowConstraint::StartInNextTextBox,
+        }];
+
+        let (fragments, diagnostics) =
+            resolve_viewer_text_fragments_with_paragraph_flow(&projection, &flow)
+                .expect("fallback paragraph flow should resolve");
+
+        assert_eq!(fragments[0].frame_id, NodeId::from_canonical(id(41)));
+        assert_eq!(fragments[0].text, "A\r");
+        assert_eq!(fragments[1].frame_id, NodeId::from_canonical(id(42)));
+        assert_eq!(fragments[1].scalar_start, 2);
+        assert_eq!(fragments[1].text, "BCDE");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "story_overset")
+        );
+    }
+
+    #[test]
     fn viewer_fallback_flow_does_not_invent_ordinal_only_chain() {
         let projection = linked_text_projection(false);
         let (fragments, diagnostics) =
@@ -6101,6 +6287,30 @@ mod tests {
                 .iter()
                 .any(|diagnostic| { diagnostic.code == "shared_story_without_explicit_flow" })
         );
+    }
+
+    #[test]
+    fn viewer_paragraph_flow_contract_is_source_neutral_and_story_fenced() {
+        let source_text = "A\rBC";
+        let run = ViewerParagraphFlowRun {
+            story_id: StoryId::from_canonical(id(50)),
+            scalar_start: 2,
+            scalar_end: 4,
+            constraint: ViewerParagraphFlowConstraint::KeepWithNext,
+            source_value: 4,
+            source_story_text_sha256: viewer_story_text_sha256(source_text),
+        };
+        let json = serde_json::to_string(&run).expect("serialize Viewer paragraph flow");
+
+        assert!(json.contains("keep_with_next"));
+        assert!(run.applies_to_story_text(source_text));
+        assert!(!run.applies_to_story_text("changed"));
+        for forbidden in ["Quill", "FDPP", "BTEP", "Contents", "offset"] {
+            assert!(
+                !json.contains(forbidden),
+                "Viewer paragraph flow must not expose parser-private {forbidden}"
+            );
+        }
     }
 
     #[test]
@@ -6190,6 +6400,7 @@ mod tests {
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
             paragraph_line_spacings: Vec::new(),
+            paragraph_flow_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -6302,6 +6513,7 @@ mod tests {
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
             paragraph_line_spacings: Vec::new(),
+            paragraph_flow_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -6373,6 +6585,7 @@ mod tests {
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
             paragraph_line_spacings: Vec::new(),
+            paragraph_flow_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]

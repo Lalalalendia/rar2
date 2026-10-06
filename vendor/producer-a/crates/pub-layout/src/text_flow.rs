@@ -1,6 +1,7 @@
 use crate::{
-    BoundedLayoutEnvironment, BoundedLayoutProjection, ProjectionSeverity, ResolveBlocked,
-    ResolveDiagnostic, ResolveSeverity, ResolvedPhysicalNode, ResolvedSurface, SceneOriginMapping,
+    BoundedLayoutEnvironment, BoundedLayoutProjection, BoundedParagraphFlowConstraint,
+    BoundedParagraphFlowRun, ProjectionSeverity, ResolveBlocked, ResolveDiagnostic,
+    ResolveSeverity, ResolvedPhysicalNode, ResolvedSurface, SceneOriginMapping,
     resolve_bounded_geometry,
 };
 use pub_model::{LengthEmu, NodeId, StoryId};
@@ -59,6 +60,14 @@ pub struct BoundedTextFlowScene {
 pub fn resolve_bounded_text_flow(
     projection: &BoundedLayoutProjection,
     environment: BoundedTextFlowEnvironment,
+) -> Result<BoundedTextFlowScene, ResolveBlocked> {
+    resolve_bounded_text_flow_with_paragraph_flow(projection, environment, &[])
+}
+
+pub fn resolve_bounded_text_flow_with_paragraph_flow(
+    projection: &BoundedLayoutProjection,
+    environment: BoundedTextFlowEnvironment,
+    paragraph_flow: &[BoundedParagraphFlowRun],
 ) -> Result<BoundedTextFlowScene, ResolveBlocked> {
     let projection_errors: Vec<_> = projection
         .diagnostics
@@ -182,8 +191,9 @@ pub fn resolve_bounded_text_flow(
 
         let scalars: Vec<char> = story.text.chars().collect();
         let mut cursor = 0usize;
+        let mut consumed_start_next = BTreeSet::<u32>::new();
 
-        for frame_origin in chain {
+        for (chain_index, frame_origin) in chain.iter().copied().enumerate() {
             let Some(bounds) = geometry.get(&frame_origin) else {
                 diagnostics.push(ResolveDiagnostic {
                     code: "text_frame_geometry_missing".into(),
@@ -194,9 +204,7 @@ pub fn resolve_bounded_text_flow(
                 continue;
             };
 
-            let columns = bounds.width.get() / metrics.scalar_advance.get();
-            let rows = bounds.height.get() / metrics.line_height.get();
-            if columns <= 0 || rows <= 0 {
+            let Some((columns, _rows, capacity)) = fixed_text_capacity_v1(bounds, metrics) else {
                 diagnostics.push(ResolveDiagnostic {
                     code: "text_frame_has_no_capacity".into(),
                     severity: ResolveSeverity::FidelityWarning,
@@ -204,18 +212,37 @@ pub fn resolve_bounded_text_flow(
                     message: "text frame geometry cannot fit one measured scalar".into(),
                 });
                 continue;
+            };
+
+            let provisional_end = cursor.saturating_add(capacity).min(scalars.len());
+            let successor_capacity = chain
+                .get(chain_index + 1)
+                .and_then(|next_frame| geometry.get(next_frame))
+                .and_then(|next_bounds| fixed_text_capacity_v1(next_bounds, metrics))
+                .map(|(_, _, capacity)| capacity);
+            let flow_break = paragraph_flow_break_before_fixed_v1(
+                paragraph_flow,
+                story.origin,
+                &scalars,
+                cursor,
+                provisional_end,
+                columns,
+                capacity,
+                successor_capacity,
+                &consumed_start_next,
+            );
+            if let Some(break_before) = flow_break {
+                if let Ok(break_before_u32) = u32::try_from(break_before) {
+                    if paragraph_flow.iter().any(|run| {
+                        run.story_origin == story.origin
+                            && run.scalar_start == break_before_u32
+                            && run.constraint == BoundedParagraphFlowConstraint::StartInNextTextBox
+                    }) {
+                        consumed_start_next.insert(break_before_u32);
+                    }
+                }
             }
-
-            let capacity = usize::try_from(columns)
-                .ok()
-                .and_then(|columns| {
-                    usize::try_from(rows)
-                        .ok()
-                        .and_then(|rows| columns.checked_mul(rows))
-                })
-                .unwrap_or(usize::MAX);
-
-            let end = cursor.saturating_add(capacity).min(scalars.len());
+            let end = flow_break.unwrap_or(provisional_end);
             if end == cursor {
                 continue;
             }
@@ -223,10 +250,7 @@ pub fn resolve_bounded_text_flow(
             let text: String = scalars[cursor..end].iter().collect();
             let scalar_start = u32::try_from(cursor).unwrap_or(u32::MAX);
             let scalar_end = u32::try_from(end).unwrap_or(u32::MAX);
-            let line_count = u32::try_from(
-                (end - cursor).div_ceil(usize::try_from(columns).unwrap_or(usize::MAX)),
-            )
-            .unwrap_or(u32::MAX);
+            let line_count = u32::try_from((end - cursor).div_ceil(columns)).unwrap_or(u32::MAX);
 
             text_fragments.push(ResolvedTextFragment {
                 story_origin: story.origin,
@@ -286,6 +310,132 @@ pub fn resolve_bounded_text_flow(
         text_origin_mapping,
         diagnostics,
     })
+}
+
+fn fixed_text_capacity_v1(
+    bounds: &pub_model::RectEmu,
+    metrics: &BoundedTextMetrics,
+) -> Option<(usize, usize, usize)> {
+    let columns = bounds.width.get() / metrics.scalar_advance.get();
+    let rows = bounds.height.get() / metrics.line_height.get();
+    if columns <= 0 || rows <= 0 {
+        return None;
+    }
+    let columns = usize::try_from(columns).ok()?;
+    let rows = usize::try_from(rows).ok()?;
+    let capacity = columns.checked_mul(rows)?;
+    Some((columns, rows, capacity))
+}
+
+fn next_paragraph_end_fixed_v1(scalars: &[char], start: usize) -> Option<usize> {
+    if start >= scalars.len() {
+        return None;
+    }
+    for (offset, scalar) in scalars[start..].iter().enumerate() {
+        if matches!(scalar, '\r' | '\n') {
+            return start.checked_add(offset)?.checked_add(1);
+        }
+    }
+    Some(scalars.len())
+}
+
+// This helper deliberately receives the complete fixed-metric allocation
+// snapshot so policy decisions cannot mix state from different frames.
+#[allow(clippy::too_many_arguments)]
+fn paragraph_flow_break_before_fixed_v1(
+    paragraph_flow: &[BoundedParagraphFlowRun],
+    story_origin: StoryId,
+    scalars: &[char],
+    cursor: usize,
+    provisional_end: usize,
+    columns: usize,
+    capacity: usize,
+    successor_capacity: Option<usize>,
+    consumed_start_next: &BTreeSet<u32>,
+) -> Option<usize> {
+    let cursor_u32 = u32::try_from(cursor).ok()?;
+    let provisional_end_u32 = u32::try_from(provisional_end).ok()?;
+
+    let mut starts = paragraph_flow
+        .iter()
+        .filter(|run| {
+            run.story_origin == story_origin
+                && run.scalar_start >= cursor_u32
+                && run.scalar_start < provisional_end_u32
+                && run.scalar_end > run.scalar_start
+        })
+        .map(|run| run.scalar_start)
+        .collect::<Vec<_>>();
+    starts.sort_unstable();
+    starts.dedup();
+
+    for start_u32 in starts {
+        let start = usize::try_from(start_u32).ok()?;
+        let group = paragraph_flow
+            .iter()
+            .filter(|run| run.story_origin == story_origin && run.scalar_start == start_u32)
+            .collect::<Vec<_>>();
+        let end_u32 = group.first()?.scalar_end;
+        if group.iter().any(|run| run.scalar_end != end_u32) {
+            continue;
+        }
+        let end = usize::try_from(end_u32).ok()?;
+        if end <= start || end > scalars.len() {
+            continue;
+        }
+
+        let used = start.checked_sub(cursor)?;
+        if used >= capacity {
+            continue;
+        }
+        let remaining = capacity - used;
+        let paragraph_len = end - start;
+
+        if !consumed_start_next.contains(&start_u32)
+            && group
+                .iter()
+                .any(|run| run.constraint == BoundedParagraphFlowConstraint::StartInNextTextBox)
+        {
+            return Some(start);
+        }
+
+        let Some(successor_capacity) = successor_capacity else {
+            continue;
+        };
+
+        if group
+            .iter()
+            .any(|run| run.constraint == BoundedParagraphFlowConstraint::KeepLinesTogether)
+            && paragraph_len > remaining
+            && paragraph_len <= successor_capacity
+        {
+            return Some(start);
+        }
+
+        if group
+            .iter()
+            .any(|run| run.constraint == BoundedParagraphFlowConstraint::KeepWithNext)
+        {
+            if let Some(pair_end) = next_paragraph_end_fixed_v1(scalars, end) {
+                let pair_len = pair_end.saturating_sub(start);
+                if pair_end > end && pair_len > remaining && pair_len <= successor_capacity {
+                    return Some(start);
+                }
+            }
+        }
+
+        if group
+            .iter()
+            .any(|run| run.constraint == BoundedParagraphFlowConstraint::WidowControl)
+            && remaining <= columns
+            && paragraph_len > remaining
+            && paragraph_len <= successor_capacity
+        {
+            return Some(start);
+        }
+    }
+
+    None
 }
 
 pub(crate) fn explicit_chain(
@@ -472,6 +622,110 @@ mod tests {
                 .iter()
                 .any(|diagnostic| { diagnostic.code == "story_overset" })
         );
+    }
+
+    fn flow_run(
+        start: u32,
+        end: u32,
+        constraint: BoundedParagraphFlowConstraint,
+    ) -> BoundedParagraphFlowRun {
+        BoundedParagraphFlowRun {
+            story_origin: story_id(7),
+            scalar_start: start,
+            scalar_end: end,
+            constraint,
+        }
+    }
+
+    #[test]
+    fn fallback_start_next_moves_noninitial_paragraph_to_successor() {
+        let projection = projection(true, "ABC\rDEF");
+        let flow = [flow_run(
+            4,
+            7,
+            BoundedParagraphFlowConstraint::StartInNextTextBox,
+        )];
+
+        let scene =
+            resolve_bounded_text_flow_with_paragraph_flow(&projection, environment(), &flow)
+                .expect("flow");
+
+        assert_eq!(scene.text_fragments.len(), 2);
+        assert_eq!(scene.text_fragments[0].frame_origin, node_id(10));
+        assert_eq!(scene.text_fragments[0].text, "ABC\r");
+        assert_eq!(scene.text_fragments[1].frame_origin, node_id(11));
+        assert_eq!(scene.text_fragments[1].scalar_start, 4);
+        assert_eq!(scene.text_fragments[1].text, "DEF");
+    }
+
+    #[test]
+    fn fallback_keep_lines_together_moves_whole_paragraph() {
+        let projection = projection(true, "ABC\rDEFGHI");
+        let flow = [flow_run(
+            4,
+            10,
+            BoundedParagraphFlowConstraint::KeepLinesTogether,
+        )];
+
+        let off = resolve_bounded_text_flow(&projection, environment()).expect("off");
+        let on = resolve_bounded_text_flow_with_paragraph_flow(&projection, environment(), &flow)
+            .expect("on");
+
+        assert_eq!(off.text_fragments[0].text, "ABC\rDE");
+        assert_eq!(on.text_fragments[0].text, "ABC\r");
+        assert_eq!(on.text_fragments[1].text, "DEFGHI");
+    }
+
+    #[test]
+    fn fallback_keep_with_next_moves_paragraph_pair() {
+        let projection = projection(true, "ABC\rD\rE");
+        let flow = [flow_run(4, 6, BoundedParagraphFlowConstraint::KeepWithNext)];
+
+        let off = resolve_bounded_text_flow(&projection, environment()).expect("off");
+        let on = resolve_bounded_text_flow_with_paragraph_flow(&projection, environment(), &flow)
+            .expect("on");
+
+        assert_eq!(off.text_fragments[0].text, "ABC\rD\r");
+        assert_eq!(on.text_fragments[0].text, "ABC\r");
+        assert_eq!(on.text_fragments[1].text, "D\rE");
+    }
+
+    #[test]
+    fn fallback_widow_control_moves_one_row_orphan_case() {
+        let projection = projection(true, "ABC\rDEFG");
+        let flow = [flow_run(4, 8, BoundedParagraphFlowConstraint::WidowControl)];
+
+        let off = resolve_bounded_text_flow(&projection, environment()).expect("off");
+        let on = resolve_bounded_text_flow_with_paragraph_flow(&projection, environment(), &flow)
+            .expect("on");
+
+        assert_eq!(off.text_fragments[0].text, "ABC\rDE");
+        assert_eq!(on.text_fragments[0].text, "ABC\r");
+        assert_eq!(on.text_fragments[1].text, "DEFG");
+    }
+
+    #[test]
+    fn fallback_start_next_without_successor_leaves_target_overset() {
+        let mut projection = projection(true, "ABC\rDEF");
+        projection
+            .story_frames
+            .retain(|frame| frame.frame_origin == node_id(10));
+        projection.story_frames[0].next_frame_origin = None;
+        let flow = [flow_run(
+            4,
+            7,
+            BoundedParagraphFlowConstraint::StartInNextTextBox,
+        )];
+
+        let scene =
+            resolve_bounded_text_flow_with_paragraph_flow(&projection, environment(), &flow)
+                .expect("flow");
+
+        assert_eq!(scene.text_fragments.len(), 1);
+        assert_eq!(scene.text_fragments[0].text, "ABC\r");
+        assert!(scene.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "story_overset" && diagnostic.origin == story_id(7).into_canonical()
+        }));
     }
 
     #[test]

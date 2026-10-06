@@ -3617,6 +3617,7 @@ mod tests {
             }],
             paragraph_alignments: Vec::new(),
             paragraph_line_spacings: Vec::new(),
+            paragraph_flow_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             images: vec![ViewerEmbeddedImage {
