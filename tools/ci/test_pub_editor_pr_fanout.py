@@ -93,6 +93,16 @@ def assert_continuity_consumer_wiring() -> None:
         ".github/workflows/editor-desktop-continuity-v2-windows.yml" in contract
     ), "cheap contract must run when the Continuity V2 consumer wiring changes"
 
+    parent = Path(".github/workflows/editor-build-once-pr.yml").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        ".github/workflows/editor-desktop-continuity-v2-windows.yml" in parent
+    ), "Editor build-once parent must admit Continuity V2 workflow wiring changes"
+    assert (
+        'packages/product/editor-desktop-continuity/v2/**' in parent
+    ), "Editor build-once parent lost Continuity V2 product admission ownership"
+
 
 def assert_textbox_consumer_wiring() -> None:
     workflow_path = Path(".github/workflows/editor-desktop-textbox-restore-v1.yml")
@@ -128,7 +138,6 @@ def assert_fixed_pdf_consumer_wiring() -> None:
     required = (
         "Classify pub-editor fixed-PDF current revision scope",
         "ref: ${{ github.event.pull_request.base.ref || github.sha }}",
-        "vendor/producer-a/crates/pub-editor/**",
         "python tools/ci/pub_editor_pr_fanout.py",
         "needs: classify",
         "needs.classify.result != 'success'",
@@ -147,6 +156,16 @@ def assert_fixed_pdf_consumer_wiring() -> None:
     assert (
         ".github/workflows/editor-fixed-pdf-current-revision.yml" in contract
     ), "cheap contract must run when fixed-PDF consumer wiring changes"
+
+    parent = Path(".github/workflows/editor-build-once-pr.yml").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        'vendor/producer-a/crates/pub-editor/**' in parent
+    ), "Editor build-once parent lost fixed-PDF pub-editor admission ownership"
+    assert (
+        ".github/workflows/editor-fixed-pdf-current-revision.yml" in parent
+    ), "Editor build-once parent must admit fixed-PDF workflow wiring changes"
 
 
 def assert_duplicate_consumer_wiring() -> None:
