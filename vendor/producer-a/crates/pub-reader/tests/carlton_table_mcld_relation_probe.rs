@@ -5,7 +5,10 @@ use pub_contents::{
 };
 use pub_core::StreamPath;
 use pub_model::Sha256Digest;
-use pub_quill::{parse_bounded_mcld, parse_confirmed_story_catalog};
+use pub_quill::{
+    QuillMcldFieldValue, bounded_mcld_table_metrics, parse_bounded_mcld,
+    parse_confirmed_story_catalog,
+};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
@@ -93,10 +96,14 @@ fn exact_carlton_table_mcld_relation_candidates_are_source_safe() {
         .iter()
         .find(|entry| entry.text_id == table.text_id)
         .expect("Carlton TABLE Story catalog entry");
-    assert_eq!(
-        entry.layout_key, None,
-        "this probe starts from the exact missing 0x07 relation"
+    let layout_key = entry
+        .layout_key
+        .expect("Carlton TABLE Story catalog entry must retain its exact layout key");
+    assert!(
+        entry.layout_key_source.is_some(),
+        "Carlton TABLE layout key must retain exact source provenance"
     );
+
 
     let quill = pub_cfb::read_stream_reader(
         Cursor::new(bytes.as_slice()),
@@ -113,17 +120,55 @@ fn exact_carlton_table_mcld_relation_candidates_are_source_safe() {
         .iter()
         .map(|record| record.record_id)
         .collect::<BTreeSet<_>>();
-
-    let matching_entry_fields = entry
-        .fields
+    let layout_record_present = record_ids.contains(&layout_key);
+    assert!(
+        layout_record_present,
+        "exact Carlton TABLE layout key must select one bounded MCLD record"
+    );
+    let record = mcld
+        .records
         .iter()
-        .filter_map(|field| {
-            let value = scalar_value(&field.body)?;
-            record_ids
-                .contains(&value)
-                .then(|| format!("0x{:02x}/wire_0x{:02x}", field.id, field.block_type))
-        })
-        .collect::<BTreeSet<_>>();
+        .find(|record| record.record_id == layout_key)
+        .expect("layout-key-selected MCLD record");
+
+    let classify_field = |field_id: u8| {
+        let mut exact_single_u32_children = 0_usize;
+        let mut missing_children = 0_usize;
+        let mut duplicate_children = 0_usize;
+        let mut wrong_type_children = 0_usize;
+        let mut values = BTreeSet::new();
+
+        for child in &record.children {
+            let fields = child
+                .fields
+                .iter()
+                .filter(|field| field.id == field_id)
+                .collect::<Vec<_>>();
+            match fields.as_slice() {
+                [] => missing_children += 1,
+                [field] => match field.value {
+                    QuillMcldFieldValue::U32(value) if field.wire_type == 0x22 => {
+                        exact_single_u32_children += 1;
+                        values.insert(value);
+                    }
+                    _ => wrong_type_children += 1,
+                },
+                _ => duplicate_children += 1,
+            }
+        }
+
+        (
+            exact_single_u32_children,
+            missing_children,
+            duplicate_children,
+            wrong_type_children,
+            values.len(),
+        )
+    };
+
+    let field04 = classify_field(0x04);
+    let field05 = classify_field(0x05);
+    let metrics_admitted = bounded_mcld_table_metrics(&mcld, layout_key).is_ok();
 
     let tcd = stories
         .tcd
@@ -131,57 +176,23 @@ fn exact_carlton_table_mcld_relation_candidates_are_source_safe() {
         .filter(|tcd| tcd.story_syid.value.0 == table.text_id)
         .collect::<Vec<_>>();
     assert_eq!(tcd.len(), 1, "Carlton TABLE Story must have one exact TCD");
-    let tcd = tcd[0];
-
-    let descriptor = stories
-        .descriptor_nodes
-        .iter()
-        .flat_map(|node| node.descriptors.iter())
-        .filter(|descriptor| descriptor.source == tcd.descriptor_source)
-        .collect::<Vec<_>>();
-    assert_eq!(descriptor.len(), 1, "TCD descriptor identity must be unique");
-    let descriptor = descriptor[0];
-
-    let candidates = [
-        ("tcd_story_ordinal", u32::from(tcd.story_ordinal.value)),
-        ("tcd_header_word_1", tcd.header_word_1.value),
-        ("tcd_header_word_2", tcd.header_word_2.value),
-        ("tcd_descriptor_option_a", u32::from(descriptor.option_a.value)),
-        ("tcd_descriptor_option_b", u32::from(descriptor.option_b.value)),
-        ("tcd_descriptor_option_c", u32::from(descriptor.option_c.value)),
-    ];
-    let matching_tcd_candidates = candidates
-        .iter()
-        .filter_map(|(name, value)| record_ids.contains(value).then_some(*name))
-        .collect::<BTreeSet<_>>();
-
-    let child_count_matches = mcld
-        .records
-        .iter()
-        .filter(|record| usize::try_from(record.child_count.value).ok() == Some(table.cells.len()))
-        .count();
-
-    let matched_record_child_count_classes = candidates
-        .iter()
-        .filter_map(|(name, value)| {
-            let record = mcld.records.iter().find(|record| record.record_id == *value)?;
-            Some(format!(
-                "{name}:child_count_matches_table={}",
-                usize::try_from(record.child_count.value).ok() == Some(table.cells.len())
-            ))
-        })
-        .collect::<BTreeSet<_>>();
 
     eprintln!(
-        "CARLTON_TABLE_MCLD_RELATION entry_field_presence={:?} matching_entry_fields={:?} tcd_match_labels={:?} matched_record_child_classes={:?} child_count_match_record_count={} tcd_story_identity=true tcd_descriptor_identity=true",
-        entry
-            .fields
-            .iter()
-            .map(|field| format!("0x{:02x}/wire_0x{:02x}", field.id, field.block_type))
-            .collect::<BTreeSet<_>>(),
-        matching_entry_fields,
-        matching_tcd_candidates,
-        matched_record_child_count_classes,
-        child_count_matches,
+        "CARLTON_TABLE_MCLD_RELATION layout_key_source_present=true layout_record_present={} record_child_count={} child_count_matches_table={} field04_exact={} field04_missing={} field04_duplicate={} field04_wrong_type={} field04_distinct_classes={} field05_exact={} field05_missing={} field05_duplicate={} field05_wrong_type={} field05_distinct_classes={} metrics_admitted={} tcd_story_identity=true",
+        layout_record_present,
+        record.children.len(),
+        record.children.len() == table.cells.len(),
+        field04.0,
+        field04.1,
+        field04.2,
+        field04.3,
+        field04.4,
+        field05.0,
+        field05.1,
+        field05.2,
+        field05.3,
+        field05.4,
+        metrics_admitted,
     );
+
 }
