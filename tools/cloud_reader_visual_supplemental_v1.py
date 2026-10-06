@@ -86,6 +86,7 @@ def summarize(pairs_csv: Path, browser_receipt: Path, out: Path) -> dict:
     results = []
     unsupported = []
     page_mismatches = []
+    visual_degeneracies = []
     for row in rows:
         name = row["basename"]
         actual = by_name.get(name)
@@ -113,12 +114,16 @@ def summarize(pairs_csv: Path, browser_receipt: Path, out: Path) -> dict:
             "fidelity": actual.get("fidelity"),
             "fidelity_reasons": actual.get("fidelity_reasons", []),
             "diagnostic_codes": actual.get("diagnostic_codes", []),
+            "visual_degeneracies": actual.get("visual_degeneracies", []),
+            "visual_degeneracy_count": int(actual.get("visual_degeneracy_count", 0) or 0),
         }
         results.append(result)
         if not rendered:
             unsupported.append(result)
         elif not page_match:
             page_mismatches.append(result)
+        if result["visual_degeneracy_count"] > 0:
+            visual_degeneracies.append(result)
 
     payload = {
         "schema": SCHEMA,
@@ -130,6 +135,8 @@ def summarize(pairs_csv: Path, browser_receipt: Path, out: Path) -> dict:
         "rendered_pair_count": sum(x["rendered"] for x in results),
         "unsupported_pair_count": len(unsupported),
         "page_count_mismatch_pair_count": len(page_mismatches),
+        "visual_degeneracy_pair_count": len(visual_degeneracies),
+        "visual_degeneracy_count": sum(x["visual_degeneracy_count"] for x in results),
         "font_warning_pair_count": sum(bool(x["warning_state"]) for x in results),
         "external_manual_reduction_pair_count": 7,
         "external_manual_reduction_reference_page_count": 7,
@@ -142,6 +149,7 @@ def summarize(pairs_csv: Path, browser_receipt: Path, out: Path) -> dict:
         "pairs": results,
         "unsupported_pairs": unsupported,
         "page_count_mismatches": page_mismatches,
+        "visual_degeneracy_pairs": visual_degeneracies,
     }
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -175,6 +183,8 @@ def main() -> None:
             "rendered_pairs": payload["rendered_pair_count"],
             "unsupported_pairs": payload["unsupported_pair_count"],
             "page_count_mismatches": payload["page_count_mismatch_pair_count"],
+            "visual_degeneracy_pairs": payload["visual_degeneracy_pair_count"],
+            "visual_degeneracies": payload["visual_degeneracy_count"],
             "visual_reference_fingerprint_state": payload["visual_reference_fingerprint_state"],
         }, indent=2, sort_keys=True))
 
