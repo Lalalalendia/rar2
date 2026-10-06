@@ -304,6 +304,19 @@ def analyze(output_root: Path) -> dict[str, Any]:
     if not isinstance(native_checks, dict):
         raise AnalysisError("native checks missing")
 
+    projection_checks = {
+        "control_master_one_visible": bool(native_checks.get("control_master_one_visible")),
+        "control_master_two_visible": bool(native_checks.get("control_master_two_visible")),
+        "control_page_local_visible": bool(native_checks.get("control_page_local_visible")),
+        "ignore_true_master_one_suppressed": bool(native_checks.get("ignore_true_master_one_suppressed")),
+        "ignore_true_master_two_suppressed": bool(native_checks.get("ignore_true_master_two_suppressed")),
+        "ignore_true_page_local_visible": bool(native_checks.get("ignore_true_page_local_visible")),
+        "true_false_master_projection_restored": bool(native_checks.get("true_false_master_projection_restored")),
+        "reversible_true_master_projection_suppressed": bool(native_checks.get("reversible_true_master_projection_suppressed")),
+        "reversible_false_master_projection_restored": bool(native_checks.get("reversible_false_master_projection_restored")),
+        "rebind_while_true_page_local_visible": bool(native_checks.get("rebind_while_true_page_local_visible")),
+    }
+
     law71_confirmed = all(
         [
             bool(native_checks.get("control_false_and_master_1")),
@@ -315,6 +328,7 @@ def analyze(output_root: Path) -> dict[str, Any]:
             bool(native_checks.get("rebind_while_true_keeps_ignore_true")),
             bool(native_checks.get("rebind_while_true_persists_master_2")),
             bool(native_checks.get("tagged_master_and_page_local_shape_identity_stable")),
+            all(projection_checks.values()),
             all(visual_checks.values()),
             raw_checks["ignore_true_preserves_0x0d_master_ref_multiset"],
             raw_checks["rebind_while_true_moves_one_0x0d_ref_m1_to_m2"],
@@ -339,6 +353,7 @@ def analyze(output_root: Path) -> dict[str, Any]:
         },
         "renders": renders,
         "visual_checks": visual_checks,
+        "projection_region_checks": projection_checks,
         "raw_persistence_checks": raw_checks,
         "oplpd_0x0d_master_ref_counts": contents_counts,
         "arms": arms,
@@ -375,6 +390,7 @@ def main() -> int:
                 "law71_confirmed": result["law71_confirmed"],
                 "classification": result["classification"],
                 "visual_checks": result["visual_checks"],
+                "projection_region_checks": result["projection_region_checks"],
                 "raw_persistence_checks": result["raw_persistence_checks"],
             },
             sort_keys=True,
