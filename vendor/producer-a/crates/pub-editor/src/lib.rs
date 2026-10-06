@@ -1775,6 +1775,8 @@ impl EditorError {
             Self::NodeResizeNonPositive { .. } => "node_resize_non_positive",
             Self::NodeResizeOverflow { .. } => "node_resize_overflow",
             Self::StaleNodeResize { .. } => "stale_node_resize",
+            Self::TableTrackResizeUnsupported { .. } => "table_track_resize_unsupported",
+            Self::StaleTableTrackResize { .. } => "stale_table_track_resize",
             Self::NoChange { .. } => "no_change",
             Self::StaleOperation { .. } => "stale_operation",
             Self::TextFormatUnsupported { .. } => "text_format_unsupported",
