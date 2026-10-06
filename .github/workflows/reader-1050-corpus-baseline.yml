@@ -461,7 +461,20 @@ jobs:
           verdicts = payload["verdict_counts"]
           assert verdicts.get("open", 0) == 1041, verdicts
           assert verdicts.get("open_partial", 0) == 5, verdicts
-          assert verdicts.get("rescue", 0) + verdicts.get("no_safe_recovery", 0) == 4, verdicts
+          assert verdicts.get("rescue", 0) == 0, verdicts
+          assert verdicts.get("no_safe_recovery", 0) == 4, verdicts
+
+          unsupported = [
+              row for row in payload["rows"]
+              if row["reader_outcome"] == "cannot_safely_display"
+          ]
+          assert len(unsupported) == 4, len(unsupported)
+          for row in unsupported:
+              assert row.get("registry_evidence_class") == "format_gap", row
+              assert row.get("registry_disposition") == "existing_format_owner", row
+              assert row.get("evidence_owner") == "QUILL-STORY-EARLY-TEXT-BOUNDARY-01", row
+              assert row.get("promotion_gap") == "existing_format_owner_not_damage_authority", row
+              assert row["rescue_outcome"] == "diagnostic_only", row
 
           inferred_rescue = [
               row for row in payload["rows"]
