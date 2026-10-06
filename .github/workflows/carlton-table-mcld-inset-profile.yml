@@ -46,3 +46,7 @@ jobs:
       - name: Measure source-safe per-child inset profile
         run: |
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-quill             --test carlton_mcld_cell_inset_profile             -- --ignored --nocapture
+
+      - name: Measure exact TABLE Story to MCLD layout-key join
+        run: |
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader             --test carlton_table_mcld_join_profile             -- --ignored --nocapture
