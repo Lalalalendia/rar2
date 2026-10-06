@@ -3,15 +3,14 @@ use pub_contents::{
 };
 use pub_core::StreamPath;
 use pub_escher::{
-    inspect_sp_containers, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS,
-    PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS,
+    PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE,
+    PUBLISHER_FIELD_YS, inspect_sp_containers,
 };
 use pub_model::Sha256Digest;
 use pub_reader::{
-    build_mature_0x2c_source_graph, PubBridgeDiagnostic, CONTENTS_STREAM_PATH,
-    ESCHER_STREAM_PATH,
+    CONTENTS_STREAM_PATH, ESCHER_STREAM_PATH, PubBridgeDiagnostic, build_mature_0x2c_source_graph,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, env, error::Error, fs, io::Cursor};
 
@@ -84,19 +83,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let hash = source_hash(&bytes);
     let source = build_mature_0x2c_source_graph(Cursor::new(&bytes), hash)?;
 
-    let contents_bytes =
-        pub_cfb::read_stream_reader(Cursor::new(&bytes), CONTENTS_STREAM_PATH)?;
+    let contents_bytes = pub_cfb::read_stream_reader(Cursor::new(&bytes), CONTENTS_STREAM_PATH)?;
     let contents_stream = StreamPath(CONTENTS_STREAM_PATH.into());
     let contents_header = parse_0x2c_header(contents_stream.clone(), &contents_bytes)?;
-    let contents_trailer =
-        parse_confirmed_0x2c_trailer_root(&contents_bytes, &contents_header)?;
+    let contents_trailer = parse_confirmed_0x2c_trailer_root(&contents_bytes, &contents_header)?;
     let mut contents_references = Vec::new();
     for seq_num in 0..contents_trailer.directory.slots.len() {
-        let Some(reference) = parse_confirmed_chunk_reference(
-            &contents_bytes,
-            &contents_trailer.directory,
-            seq_num,
-        )? else {
+        let Some(reference) =
+            parse_confirmed_chunk_reference(&contents_bytes, &contents_trailer.directory, seq_num)?
+        else {
             continue;
         };
         contents_references.push(json!({
@@ -114,12 +109,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         }));
     }
 
-    let escher_bytes =
-        pub_cfb::read_stream_reader(Cursor::new(&bytes), ESCHER_STREAM_PATH)?;
-    let escher_inventory = inspect_sp_containers(
-        StreamPath(ESCHER_STREAM_PATH.into()),
-        &escher_bytes,
-    )?;
+    let escher_bytes = pub_cfb::read_stream_reader(Cursor::new(&bytes), ESCHER_STREAM_PATH)?;
+    let escher_inventory =
+        inspect_sp_containers(StreamPath(ESCHER_STREAM_PATH.into()), &escher_bytes)?;
     let mut raw_escher_shapes = escher_inventory
         .shapes
         .iter()
@@ -187,7 +179,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         left["publisher_shape_ids"]
             .to_string()
             .cmp(&right["publisher_shape_ids"].to_string())
-            .then_with(|| left["officeart_spid"].as_u64().cmp(&right["officeart_spid"].as_u64()))
+            .then_with(|| {
+                left["officeart_spid"]
+                    .as_u64()
+                    .cmp(&right["officeart_spid"].as_u64())
+            })
     });
 
     let mut page_membership = BTreeMap::<String, Vec<String>>::new();
