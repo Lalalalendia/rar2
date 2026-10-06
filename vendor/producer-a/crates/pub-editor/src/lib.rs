@@ -14,6 +14,7 @@ mod create_shape_runtime_v1;
 mod duplicate_authored_rectangle_v1;
 mod imported_paragraph_alignment_v1;
 mod imported_paragraphs_v1;
+mod table_track_extent_v1;
 mod text_format_property_base_v1;
 mod writer_assessment;
 
@@ -53,6 +54,10 @@ pub use imported_paragraph_alignment_v1::{
     ImportedParagraphBaseAlignmentV1,
 };
 pub use imported_paragraphs_v1::{ImportedParagraphProjectionErrorV1, ImportedParagraphV1};
+pub use table_track_extent_v1::{
+    SetTableTrackExtentErrorV1, TableTrackExtentPlanV1, TableTrackTargetV1,
+    plan_table_track_extent_v1, set_table_track_extent_v1,
+};
 pub use text_format_property_base_v1::{
     TEXT_FORMAT_PROPERTY_STATE_V1, TextFormatPropertyBaseRunV1, TextFormatPropertyOverrideRunV1,
     TextFormatPropertyStateV1, apply_text_format_property_operation_checked_v1,
