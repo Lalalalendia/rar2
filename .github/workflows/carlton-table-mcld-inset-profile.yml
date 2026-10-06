@@ -1,0 +1,48 @@
+name: Carlton TABLE MCLD inset profile
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-quill/tests/carlton_mcld_cell_inset_profile.rs"
+      - "tools/acquire_carlton_march_pair.py"
+      - ".github/workflows/carlton-table-mcld-inset-profile.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: carlton-table-mcld-inset-profile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Acquire exact public Carlton March pair
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/carlton-mcld-inset-profile"
+          mkdir -p "${root}"
+          python tools/acquire_carlton_march_pair.py "${root}"
+          pub="${root}/March-2026.pub"
+          echo "CHAPTERA_GOLDEN_CARLTON_MARCH=${pub}" >> "${GITHUB_ENV}"
+          actual="$(sha256sum "${pub}" | awk '{print $1}')"
+          test "${actual}" = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+
+      - name: Measure source-safe per-child inset profile
+        run: |
+          cargo test -p pub-quill             --test carlton_mcld_cell_inset_profile             -- --ignored --nocapture
