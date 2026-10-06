@@ -195,6 +195,7 @@ dependencies = [
  "anyhow",
  "cfb",
  "serde",
+ "sha2",
  "uuid",
 ]
 
