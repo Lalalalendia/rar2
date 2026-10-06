@@ -208,7 +208,9 @@ fn insert_row_is_v021_and_composes_with_prior_track_resize_and_cell_text() {
 
     reopened.undo().expect("undo cell text");
     reopened.undo().expect("undo insert row");
-    let before_grid = reopened.current_table_grid_v1(table_id()).expect("before grid");
+    let before_grid = reopened
+        .current_table_grid_v1(table_id())
+        .expect("before grid");
     assert_eq!(before_grid.rows.len(), 2);
     assert_eq!(before_grid.rows[0].extent, Some(LengthEmu::new(250_000)));
     assert!(!before_grid.cells.iter().any(|cell| cell.id == new_cells[0]));
@@ -233,10 +235,7 @@ fn delete_column_undo_restores_exact_ids_and_text() {
     let operation = session
         .delete_table_column_v1(table_id(), removed_column)
         .expect("delete column");
-    assert!(matches!(
-        operation,
-        EditOperation::DeleteTableColumn { .. }
-    ));
+    assert!(matches!(operation, EditOperation::DeleteTableColumn { .. }));
     let after = session.current_table_grid_v1(table_id()).expect("after");
     assert_eq!(after.columns.len(), 1);
     assert_eq!(after.columns[0].id, column_ids()[1]);
@@ -246,14 +245,24 @@ fn delete_column_undo_restores_exact_ids_and_text() {
     session.undo().expect("undo delete");
     let restored = session.current_table_grid_v1(table_id()).expect("restored");
     assert_eq!(restored.columns, session.project().table_grids[0].columns);
-    assert!(restored.columns.iter().any(|column| column.id == removed_column));
+    assert!(
+        restored
+            .columns
+            .iter()
+            .any(|column| column.id == removed_column)
+    );
     assert_eq!(materialized_text(&session, cell_ids()[0]), "removed");
     assert_eq!(materialized_text(&session, cell_ids()[1]), "survivor");
 
     session.redo().expect("redo delete");
     let redone = session.current_table_grid_v1(table_id()).expect("redone");
     assert_eq!(redone.columns.len(), 1);
-    assert!(!redone.columns.iter().any(|column| column.id == removed_column));
+    assert!(
+        !redone
+            .columns
+            .iter()
+            .any(|column| column.id == removed_column)
+    );
 }
 
 #[test]
