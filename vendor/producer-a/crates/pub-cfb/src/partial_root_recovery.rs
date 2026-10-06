@@ -1184,11 +1184,13 @@ mod tests {
     #[test]
     fn exact_sid_recovers_nested_regular_stream_without_path_selection() {
         let (source, sid, expected) = nested_regular_fixture();
+        let source_sha256 = sha256_hex(&source);
+        let source_byte_len = source.len() as u64;
         let recovered = recover_regular_stream_prefix_by_sid_reader(Cursor::new(source), sid)
             .expect("recover nested regular stream by SID");
         assert_eq!(recovered.stream_sid, sid);
-        assert_eq!(recovered.source_sha256, sha256_hex(&source));
-        assert_eq!(recovered.source_byte_len, source.len() as u64);
+        assert_eq!(recovered.source_sha256, source_sha256);
+        assert_eq!(recovered.source_byte_len, source_byte_len);
         assert_eq!(
             recovered.descriptive_name.as_deref(),
             Some("EscherDelayStm")
