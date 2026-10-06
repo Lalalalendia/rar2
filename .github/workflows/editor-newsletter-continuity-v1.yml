@@ -7,6 +7,7 @@ on:
       - "apps/chaptera-desktop/src/acceptance_v2.rs"
       - "tools/run_editor_desktop_continuity_v2.py"
       - "tools/validate_editor_desktop_continuity_v2_receipt.py"
+      - "tools/verify_editable_export_geometry.py"
       - "packages/product/editor-desktop-continuity/v2/**"
   workflow_dispatch:
 
