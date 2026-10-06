@@ -152,13 +152,22 @@ impl ProducerExactFontRegistry {
                     })
                     .map(|info| info.id)
                     .collect::<Vec<_>>();
-                let [id] = matches.as_slice() else { continue; };
-                let Some((bytes, face_index)) = database.with_face_data(*id, |bytes, face_index| {
-                    (bytes.to_vec(), face_index)
-                }) else { continue; };
-                if bytes.is_empty() { continue; }
+                let [id] = matches.as_slice() else {
+                    continue;
+                };
+                let Some((bytes, face_index)) =
+                    database.with_face_data(*id, |bytes, face_index| (bytes.to_vec(), face_index))
+                else {
+                    continue;
+                };
+                if bytes.is_empty() {
+                    continue;
+                }
                 let sha256 = sha256_hex(&bytes);
-                let resource_id = format!("chaptera.desktop.environment-font.{}.face{}", sha256, face_index);
+                let resource_id = format!(
+                    "chaptera.desktop.environment-font.{}.face{}",
+                    sha256, face_index
+                );
                 out.fonts.insert(
                     (family.clone(), bold, italic),
                     ProducerExactFont {
