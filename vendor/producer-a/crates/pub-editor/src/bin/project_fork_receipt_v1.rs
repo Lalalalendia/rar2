@@ -96,6 +96,15 @@ fn string_value<T: serde::Serialize>(value: &T) -> String {
     }
 }
 
+fn hash_id<T: serde::Serialize>(value: &T) -> String {
+    let raw = string_value(value);
+    if raw.starts_with("sha256:") {
+        raw
+    } else {
+        format!("sha256:{raw}")
+    }
+}
+
 fn main() {
     let base = graph();
     let node_id = canonical_id::<NodeId>("22000000-0000-4000-8000-000000000001");
@@ -142,31 +151,46 @@ fn main() {
         .as_ref()
         .expect("fork provenance");
 
+    let initial_state_preserved = fork_initial_state == parent_state;
+    let project_id_rekeyed = fork_identity.project_id != parent_identity.project_id;
+    let document_id_rekeyed = fork_identity.document_id != parent_identity.document_id;
+    let history_id_rekeyed = fork_identity.history_id != parent_identity.history_id;
+    let genesis_revision_id_rekeyed =
+        fork_identity.genesis_revision_id != parent_identity.genesis_revision_id;
+    let provenance_exact = provenance.project_id == parent_identity.project_id
+        && provenance.document_id == parent_identity.document_id
+        && provenance.history_id == parent_identity.history_id
+        && provenance.state_id == parent_state;
+    let fork_edit_diverged = edited_fork_state != parent_state;
+    let parent_unchanged_after_fork_edit = reopened_parent_bytes == parent_bytes;
+    let source_hash_equal_after_reopen =
+        reopened_parent.source_hash() == reopened_fork.source_hash();
+
     let receipt = json!({
         "receipt_version": "chaptera.project-fork-receipt.v1",
         "source_hash": string_value(&parent.source_hash),
         "parent": {
-            "project_id": parent_identity.project_id,
-            "document_id": parent_identity.document_id,
-            "history_id": parent_identity.history_id,
-            "genesis_revision_id": parent_identity.genesis_revision_id,
-            "state_id": string_value(&parent_state)
+            "project_id": parent_identity.project_id.clone(),
+            "document_id": parent_identity.document_id.clone(),
+            "history_id": parent_identity.history_id.clone(),
+            "genesis_revision_id": parent_identity.genesis_revision_id.clone(),
+            "state_id": hash_id(&parent_state)
         },
         "fork_initial": {
-            "project_id": fork_identity.project_id,
-            "document_id": fork_identity.document_id,
-            "history_id": fork_identity.history_id,
-            "genesis_revision_id": fork_identity.genesis_revision_id,
-            "state_id": string_value(&fork_initial_state),
+            "project_id": fork_identity.project_id.clone(),
+            "document_id": fork_identity.document_id.clone(),
+            "history_id": fork_identity.history_id.clone(),
+            "genesis_revision_id": fork_identity.genesis_revision_id.clone(),
+            "state_id": hash_id(&fork_initial_state),
             "forked_from": {
-                "project_id": provenance.project_id,
-                "document_id": provenance.document_id,
-                "history_id": provenance.history_id,
-                "state_id": string_value(&provenance.state_id)
+                "project_id": provenance.project_id.clone(),
+                "document_id": provenance.document_id.clone(),
+                "history_id": provenance.history_id.clone(),
+                "state_id": hash_id(&provenance.state_id)
             }
         },
         "fork_after_edit": {
-            "state_id": string_value(&edited_fork_state),
+            "state_id": hash_id(&edited_fork_state),
             "operation_count": edited_fork.operations.len()
         },
         "reopen": {
@@ -178,18 +202,15 @@ fn main() {
             "fork_nonempty": !fork_export.bytes.is_empty()
         },
         "invariants": {
-            "initial_state_preserved": fork_initial_state == parent_state,
-            "project_id_rekeyed": fork_identity.project_id != parent_identity.project_id,
-            "document_id_rekeyed": fork_identity.document_id != parent_identity.document_id,
-            "history_id_rekeyed": fork_identity.history_id != parent_identity.history_id,
-            "genesis_revision_id_rekeyed": fork_identity.genesis_revision_id != parent_identity.genesis_revision_id,
-            "provenance_exact": provenance.project_id == parent_identity.project_id
-                && provenance.document_id == parent_identity.document_id
-                && provenance.history_id == parent_identity.history_id
-                && provenance.state_id == parent_state,
-            "fork_edit_diverged": edited_fork_state != parent_state,
-            "parent_unchanged_after_fork_edit": reopened_parent_bytes == parent_bytes,
-            "source_hash_equal_after_reopen": reopened_parent.source_hash() == reopened_fork.source_hash(),
+            "initial_state_preserved": initial_state_preserved,
+            "project_id_rekeyed": project_id_rekeyed,
+            "document_id_rekeyed": document_id_rekeyed,
+            "history_id_rekeyed": history_id_rekeyed,
+            "genesis_revision_id_rekeyed": genesis_revision_id_rekeyed,
+            "provenance_exact": provenance_exact,
+            "fork_edit_diverged": fork_edit_diverged,
+            "parent_unchanged_after_fork_edit": parent_unchanged_after_fork_edit,
+            "source_hash_equal_after_reopen": source_hash_equal_after_reopen,
             "source_write_count": 0,
             "raw_document_content_emitted": false
         }
