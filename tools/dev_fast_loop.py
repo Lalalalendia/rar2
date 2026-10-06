@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 from pathlib import Path
 import shlex
@@ -16,6 +17,7 @@ PYTHON_SUFFIX = ".py"
 RUST_SUFFIX = ".rs"
 NODE_SUFFIXES = {".js", ".mjs", ".cjs"}
 WORKFLOW_PREFIX = ".github/workflows/"
+COMPONENT_REGISTRY_PATH = "tools/dev_fast_loop_components.json"
 
 
 class Check(NamedTuple):
@@ -25,6 +27,87 @@ class Check(NamedTuple):
 
     def display(self) -> str:
         return shlex.join(self.command)
+
+
+class ComponentRule(NamedTuple):
+    name: str
+    paths: tuple[str, ...]
+    commands: tuple[tuple[str, ...], ...]
+
+
+def load_component_registry(root: Path) -> list[ComponentRule]:
+    path = root / COMPONENT_REGISTRY_PATH
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid fast-loop component registry: {exc}") from exc
+
+    if not isinstance(payload, dict) or payload.get("schema") != "chaptera.dev-fast-components.v1":
+        raise RuntimeError("invalid fast-loop component registry schema")
+    raw_rules = payload.get("rules")
+    if not isinstance(raw_rules, list):
+        raise RuntimeError("fast-loop component registry rules must be a list")
+
+    rules: list[ComponentRule] = []
+    for index, raw_rule in enumerate(raw_rules):
+        if not isinstance(raw_rule, dict):
+            raise RuntimeError(f"component rule {index} must be an object")
+        name = raw_rule.get("name")
+        patterns = raw_rule.get("paths")
+        commands = raw_rule.get("commands")
+        if not isinstance(name, str) or not name.strip():
+            raise RuntimeError(f"component rule {index} requires a non-empty name")
+        if (
+            not isinstance(patterns, list)
+            or not patterns
+            or not all(isinstance(item, str) and item for item in patterns)
+        ):
+            raise RuntimeError(f"component rule {name!r} requires non-empty string paths")
+        if not isinstance(commands, list) or not commands:
+            raise RuntimeError(f"component rule {name!r} requires commands")
+
+        normalized_commands: list[tuple[str, ...]] = []
+        for command in commands:
+            if (
+                not isinstance(command, list)
+                or not command
+                or not all(isinstance(item, str) and item for item in command)
+            ):
+                raise RuntimeError(f"component rule {name!r} has an invalid argv command")
+            normalized_commands.append(tuple(command))
+
+        rules.append(
+            ComponentRule(
+                name=name,
+                paths=tuple(patterns),
+                commands=tuple(normalized_commands),
+            )
+        )
+    return rules
+
+
+def component_registry_checks(root: Path, paths: Iterable[str]) -> list[Check]:
+    normalized = tuple(paths)
+    checks: list[Check] = []
+    for rule in load_component_registry(root):
+        matched = any(
+            fnmatch.fnmatchcase(path, pattern)
+            for path in normalized
+            for pattern in rule.paths
+        )
+        if not matched:
+            continue
+        for command in rule.commands:
+            checks.append(
+                Check(
+                    "component-micro-test",
+                    command,
+                    f"component registry: {rule.name}",
+                )
+            )
+    return checks
 
 
 def _run_lines(root: Path, args: Sequence[str], *, check: bool = True) -> list[str]:
@@ -192,7 +275,7 @@ def _dedupe(checks: Iterable[Check]) -> list[Check]:
 def plan_for_paths(root: Path, paths: Iterable[str], *, mode: str = "edit") -> list[Check]:
     root = root.resolve()
     normalized = sorted({_normalize_path(path) for path in paths if path})
-    checks: list[Check] = []
+    checks: list[Check] = component_registry_checks(root, normalized)
 
     existing_python = [path for path in normalized if path.endswith(PYTHON_SUFFIX) and (root / path).exists()]
     if existing_python:
@@ -295,6 +378,7 @@ def plan_for_paths(root: Path, paths: Iterable[str], *, mode: str = "edit") -> l
         "node-micro-test": 20,
         "rust-check-workspace": 30,
         "rust-check-package": 30,
+        "component-micro-test": 35,
         "rust-micro-test": 40,
         "rust-unit-tests": 50,
     }

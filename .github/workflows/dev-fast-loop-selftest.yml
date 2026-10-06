@@ -5,6 +5,7 @@ on:
     paths:
       - "tools/dev_fast_loop.py"
       - "tools/test_dev_fast_loop.py"
+      - "tools/dev_fast_loop_components.json"
       - "docs/dev-fast-loop.md"
       - ".github/workflows/dev-fast-loop-selftest.yml"
   workflow_dispatch:
@@ -30,5 +31,5 @@ jobs:
       - name: Prove a bounded self-plan
         run: |
           python tools/dev_fast_loop.py \
-            --paths tools/dev_fast_loop.py tools/test_dev_fast_loop.py \
+            --paths tools/dev_fast_loop.py tools/test_dev_fast_loop.py tools/dev_fast_loop_components.json \
             --plan
