@@ -382,6 +382,32 @@ fn bounded_direct_image_transform(
         .unwrap_or(BoundedDirectImageTransform::Unsupported)
 }
 
+fn bounded_direct_story_transform(
+    rotation_properties: &[(u32, bool, bool)],
+    fsp_flags: u32,
+    bounds: RectEmu,
+) -> Option<Affine2D> {
+    if fsp_flags & (FSP_FLIP_H | FSP_FLIP_V) != 0 {
+        return None;
+    }
+    if rotation_properties
+        .iter()
+        .any(|(_, f_bid, f_complex)| *f_bid || *f_complex)
+        || rotation_properties.len() > 1
+    {
+        return None;
+    }
+
+    let Some((rotation_op, _, _)) = rotation_properties.first().copied() else {
+        return Some(Affine2D::identity());
+    };
+    if rotation_op as i32 == 0 {
+        return Some(Affine2D::identity());
+    }
+
+    affine_rotation_about_bounds(rotation_op, bounds)
+}
+
 pub fn format_profile()
 -> Result<pub_format_registry::FormatProfileEntry, pub_format_registry::RegistryError> {
     pub_format_registry::resolve(PUB_FORMAT_PROFILE_ID)
@@ -3354,42 +3380,59 @@ pub fn build_mature_0x2c_from_streams(
             && exact_story_identity.is_none()
             && image_slot.is_some()
             && grouped_sources.is_empty();
+        let direct_story_candidate = raw_type == Some(RAW_TYPE_SHAPE)
+            && story_frame.is_some()
+            && grouped_sources.is_empty();
+        let direct_rotation_properties = shape
+            .fopts
+            .iter()
+            .flat_map(|record| record.properties.iter())
+            .filter(|property| property.property_id() == OFFICE_ART_PROPERTY_ROTATION)
+            .map(|property| (property.op, property.f_bid(), property.f_complex()))
+            .collect::<Vec<_>>();
         let direct_image_rotation_properties = if direct_image_candidate {
-            shape
-                .fopts
-                .iter()
-                .flat_map(|record| record.properties.iter())
-                .filter(|property| property.property_id() == OFFICE_ART_PROPERTY_ROTATION)
-                .map(|property| (property.op, property.f_bid(), property.f_complex()))
-                .collect::<Vec<_>>()
+            direct_rotation_properties.clone()
         } else {
             Vec::new()
         };
-        let direct_image_fsp_flags = shape.fsp.as_ref().map(|fsp| fsp.flags).unwrap_or(0);
+        let direct_fsp_flags = shape.fsp.as_ref().map(|fsp| fsp.flags).unwrap_or(0);
         let direct_image_transform = if direct_image_candidate {
             bounded_direct_image_transform(
                 &direct_image_rotation_properties,
-                direct_image_fsp_flags,
+                direct_fsp_flags,
                 bounds,
             )
         } else {
             BoundedDirectImageTransform::Identity
         };
+        let direct_story_transform = if direct_story_candidate {
+            bounded_direct_story_transform(
+                &direct_rotation_properties,
+                direct_fsp_flags,
+                bounds,
+            )
+        } else {
+            None
+        };
         let direct_image_cardinal_rotation_degrees =
             if direct_image_candidate && explicit_image_crop.is_none() {
                 bounded_direct_image_cardinal_content_rotation_degrees(
                     &direct_image_rotation_properties,
-                    direct_image_fsp_flags,
+                    direct_fsp_flags,
                 )
             } else {
                 None
             };
-        let (node_transform, direct_image_rotation_applied) = match direct_image_transform {
-            BoundedDirectImageTransform::Identity | BoundedDirectImageTransform::Unsupported => {
-                (Affine2D::identity(), false)
-            }
-            BoundedDirectImageTransform::Applied(transform) => (transform, true),
-        };
+        let (node_transform, direct_image_rotation_applied) =
+            if let Some(transform) = direct_story_transform {
+                (transform, false)
+            } else {
+                match direct_image_transform {
+                    BoundedDirectImageTransform::Identity
+                    | BoundedDirectImageTransform::Unsupported => (Affine2D::identity(), false),
+                    BoundedDirectImageTransform::Applied(transform) => (transform, true),
+                }
+            };
 
         let object_key = contents_object_key(seq_num);
         let mut source_refs = vec![source_ref(
@@ -5324,6 +5367,56 @@ mod tests {
             LengthEmu::new(300),
             LengthEmu::new(500),
         )
+    }
+
+    #[test]
+    fn direct_story_rotation_preserves_exact_cardinal_affine_transform() {
+        for rotation_op in [
+            90u32 << 16,
+            ((-90i32) << 16) as u32,
+            180u32 << 16,
+        ] {
+            let transform =
+                bounded_direct_story_transform(&[(rotation_op, false, false)], 0, test_bounds())
+                    .expect("bounded direct Story rotation should be admitted");
+            assert_ne!(transform, Affine2D::identity());
+        }
+    }
+
+    #[test]
+    fn direct_story_rotation_identity_and_unsupported_states_fail_closed() {
+        assert_eq!(
+            bounded_direct_story_transform(&[], 0, test_bounds()),
+            Some(Affine2D::identity())
+        );
+        assert_eq!(
+            bounded_direct_story_transform(&[(0, false, false)], 0, test_bounds()),
+            Some(Affine2D::identity())
+        );
+        assert_eq!(
+            bounded_direct_story_transform(
+                &[(90u32 << 16, false, false)],
+                FSP_FLIP_H,
+                test_bounds(),
+            ),
+            None
+        );
+        assert_eq!(
+            bounded_direct_story_transform(
+                &[(90u32 << 16, false, false), (180u32 << 16, false, false)],
+                0,
+                test_bounds(),
+            ),
+            None
+        );
+        assert_eq!(
+            bounded_direct_story_transform(
+                &[(90u32 << 16, false, true)],
+                0,
+                test_bounds(),
+            ),
+            None
+        );
     }
 
     #[test]
