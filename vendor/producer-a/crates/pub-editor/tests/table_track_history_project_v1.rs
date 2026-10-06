@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use pub_editor::{
     CreateTableRuntimeV1, EDITOR_PROJECT_VERSION_V0_18, EDITOR_PROJECT_VERSION_V0_19,
-    EDITOR_PROJECT_VERSION_V0_20,
-    EditOperation, EditorError, EditorProjectAsset, EditorProjectError, EditorSession, LengthEmu,
-    NodeId, PageId, RectEmu, ResizeNodeBatchEntry, StoryId, TableCellId, TableTrackTargetV1,
+    EDITOR_PROJECT_VERSION_V0_20, EditOperation, EditorError, EditorProjectAsset,
+    EditorProjectError, EditorSession, LengthEmu, NodeId, PageId, RectEmu, ResizeNodeBatchEntry,
+    StoryId, TableCellId, TableTrackTargetV1,
 };
 use pub_model::{
     Document, DocumentId, ResolvedGraph, Sha256Digest, Size2D, SourceDescriptor, TableColumnId,
@@ -213,10 +213,7 @@ fn pre_v020_projects_cannot_smuggle_track_resize_history() {
         )
         .expect("resize column");
 
-    for schema_version in [
-        EDITOR_PROJECT_VERSION_V0_18,
-        EDITOR_PROJECT_VERSION_V0_19,
-    ] {
+    for schema_version in [EDITOR_PROJECT_VERSION_V0_18, EDITOR_PROJECT_VERSION_V0_19] {
         let mut legacy = producer.project();
         legacy.schema_version = schema_version.to_owned();
 
