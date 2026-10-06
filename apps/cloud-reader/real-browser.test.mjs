@@ -248,8 +248,30 @@ try {
       ? node.text_layout.lines.map((line) => ({ node_id: node.node_id, index: line.line_index, text: line.text, font_size: node.text_layout.font_size_emu / 9525 })) : []);
     const painted = await page.locator('[data-text-authority="server-shared-resolved"]').evaluateAll((lines) => lines.map((line) => {
       const bounds = line.getBoundingClientRect();
-      return { node_id: line.closest("[data-node-id]").dataset.nodeId, index: Number(line.dataset.textLineIndex), text: line.textContent,
-        font_size: parseFloat(getComputedStyle(line).fontSize), height: bounds.height, width: bounds.width };
+      const node = line.closest("[data-node-id]");
+      const svg = line.closest("svg.page");
+      const pageBounds = svg?.getBoundingClientRect();
+      const ctm = typeof line.getCTM === "function" ? line.getCTM() : null;
+      const screenCtm = typeof line.getScreenCTM === "function" ? line.getScreenCTM() : null;
+      return {
+        node_id: node.dataset.nodeId,
+        index: Number(line.dataset.textLineIndex),
+        text: line.textContent,
+        font_size: parseFloat(getComputedStyle(line).fontSize),
+        height: bounds.height,
+        width: bounds.width,
+        node_transform: node.getAttribute("transform"),
+        ctm: ctm ? { a: ctm.a, b: ctm.b, c: ctm.c, d: ctm.d, e: ctm.e, f: ctm.f } : null,
+        screen_ctm: screenCtm ? { a: screenCtm.a, b: screenCtm.b, c: screenCtm.c, d: screenCtm.d, e: screenCtm.e, f: screenCtm.f } : null,
+        page: svg ? {
+          page_id: svg.dataset.pageId,
+          width_px: pageBounds?.width ?? null,
+          height_px: pageBounds?.height ?? null,
+          width_attr: svg.getAttribute("width"),
+          height_attr: svg.getAttribute("height"),
+          view_box: svg.getAttribute("viewBox")
+        } : null
+      };
     }));
     assert.equal(painted.length, expectedLines.length, "actual SharedResolved frames must use loaded fonts");
     if (fixture.require_shared_text === true) {
@@ -272,7 +294,11 @@ try {
           line_index: line.index,
           width_px: line.width,
           height_px: line.height,
-          font_size_px: line.font_size
+          font_size_px: line.font_size,
+          node_transform: line.node_transform,
+          ctm: line.ctm,
+          screen_ctm: line.screen_ctm,
+          page: line.page
         };
         if (corpusDiagnosticMode) visualDegeneracies.push(degeneracy);
         else assert.fail("shared text must not collapse to tiny specks");
