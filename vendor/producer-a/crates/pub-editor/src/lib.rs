@@ -16,6 +16,7 @@ mod duplicate_authored_rectangle_v1;
 mod imported_paragraph_alignment_v1;
 mod imported_paragraph_flow_v1;
 mod imported_paragraphs_v1;
+mod table_rowcol_history_v1;
 mod table_track_extent_v1;
 mod table_track_history_v1;
 mod text_format_property_base_v1;
@@ -68,6 +69,13 @@ pub use imported_paragraph_flow_v1::{
     ImportedParagraphFlowErrorV1,
 };
 pub use imported_paragraphs_v1::{ImportedParagraphProjectionErrorV1, ImportedParagraphV1};
+pub use table_rowcol_history_v1::{
+    TABLE_ROWCOL_HISTORY_V1, TableCellContentSnapshotV1, TableRowColHistoryErrorV1,
+    TableRowColHistoryV1, TableRowColMutationV1, TableStructureSnapshotV1,
+    apply_table_rowcol_history_forward_v1, apply_table_rowcol_history_inverse_v1,
+    canonical_table_rowcol_history_v1, plan_table_rowcol_mutation_v1,
+    validate_table_structure_snapshot_v1,
+};
 pub use table_track_extent_v1::{
     SetTableTrackExtentErrorV1, TableTrackExtentPlanV1, TableTrackTargetV1,
     plan_table_track_extent_v1, set_table_track_extent_v1,
