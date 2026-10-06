@@ -11,10 +11,10 @@ mod acceptance_v2_cli;
 mod agent;
 mod authored_stack;
 mod diagnostic_sweep;
-mod editor_project_store;
 mod duplicate_rectangle;
 #[cfg(all(test, not(feature = "reader-only")))]
 mod duplicate_rectangle_gui_tests;
+mod editor_project_store;
 mod fallback_font;
 mod font_binding;
 mod history;
