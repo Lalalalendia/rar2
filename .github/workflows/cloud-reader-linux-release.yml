@@ -35,7 +35,7 @@ jobs:
           install -m 0644 deploy/nginx/chaptera-reader.conf.example dist/chaptera-reader.conf.example
           install -m 0755 deploy/install-reader-host.sh dist/install-reader-host.sh
           install -m 0755 tools/migration_pdf_worker_isolation.py dist/tools/migration_pdf_worker_isolation.py
-          install -m 0755 tools/run_cloud_reader_host_acceptance.py dist/run_cloud_reader_host_acceptance.py
+          install -m 0755 tools/run_cloud_reader_guest_host_acceptance.py dist/run_cloud_reader_guest_host_acceptance.py
           printf '%s\n' "${GITHUB_SHA}" > dist/COMMIT_SHA
           (cd dist && sha256sum \
             chaptera \
@@ -44,7 +44,7 @@ jobs:
             chaptera-reader.conf.example \
             install-reader-host.sh \
             tools/migration_pdf_worker_isolation.py \
-            run_cloud_reader_host_acceptance.py \
+            run_cloud_reader_guest_host_acceptance.py \
             COMMIT_SHA > SHA256SUMS)
           tar -C dist -czf chaptera-cloud-reader-linux-amd64.tar.gz \
             chaptera \
@@ -53,7 +53,7 @@ jobs:
             chaptera-reader.conf.example \
             install-reader-host.sh \
             tools/migration_pdf_worker_isolation.py \
-            run_cloud_reader_host_acceptance.py \
+            run_cloud_reader_guest_host_acceptance.py \
             COMMIT_SHA \
             SHA256SUMS
           sha256sum chaptera-cloud-reader-linux-amd64.tar.gz
