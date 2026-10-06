@@ -6,8 +6,9 @@ use pub_editor::{
 };
 use pub_layout::{
     BoundedAuthoringSlice, BoundedLayoutEnvironment, BoundedParagraphFlowConstraint,
-    BoundedParagraphFlowRun, BoundedShapedFlowRuntime, BoundedShapedFlowScene, BoundedShapingRuntime,
-    font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow_with_paragraph_flow,
+    BoundedParagraphFlowRun, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
+    BoundedShapingRuntime, font_fingerprint_sha256, project_bounded,
+    resolve_bounded_shaped_flow_with_paragraph_flow,
 };
 use pub_line_placement::{
     LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
