@@ -12,7 +12,9 @@ on:
       - "tools/test_dev_fast_loop.py"
       - "tools/dev_fast_loop_components.json"
       - "tools/ci/test_pub_editor_fast_plan.py"
+      - "tools/ci/test_pub_editor_bounded_cargo_tests.py"
       - ".github/workflows/pub-editor-fast-pr.yml"
+      - ".github/workflows/pub-editor-full-regression.yml"
   workflow_dispatch:
 
 permissions:
@@ -63,6 +65,7 @@ jobs:
         run: |
           python tools/test_dev_fast_loop.py
           python tools/ci/test_pub_editor_fast_plan.py
+          python tools/ci/test_pub_editor_bounded_cargo_tests.py
 
       - name: Run impacted pub-editor checks
         shell: bash
