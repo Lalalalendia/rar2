@@ -23,6 +23,12 @@ pub enum RootRegularStreamPrefixStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum RegularStreamStorageKind {
+    FatRegular,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RootRegularStreamTruncationReason {
     PhysicalSectorUnavailable,
     FatEntryMissing,
@@ -53,15 +59,19 @@ pub struct RecoveredRootRegularStreamPrefix {
 pub struct RecoveredRegularStreamPrefixBySid {
     pub bytes: Vec<u8>,
     pub source_sha256: String,
+    pub source_byte_len: u64,
     pub stream_sid: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub descriptive_name: Option<String>,
+    pub storage_kind: RegularStreamStorageKind,
     pub declared_len: u64,
     pub available_prefix_len: u64,
+    pub prefix_sha256: String,
     pub status: RootRegularStreamPrefixStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncation_reason: Option<RootRegularStreamTruncationReason>,
     pub source_ranges: Vec<RootRegularStreamSourceRange>,
+    pub source_modified: bool,
 }
 
 /// Returns only physically proven prefix bytes for one direct-root regular
@@ -108,8 +118,34 @@ pub fn recover_root_regular_stream_prefix_reader<R: Read + Seek>(
 /// This is physical evidence extraction, not logical-path reconstruction and
 /// not CFB repair.
 pub fn recover_regular_stream_prefix_by_sid_reader<R: Read + Seek>(
+    reader: R,
+    stream_sid: u32,
+) -> Result<RecoveredRegularStreamPrefixBySid> {
+    recover_regular_stream_prefix_by_sid_reader_inner(reader, stream_sid, None)
+}
+
+/// Same physical recovery primitive with an explicit expected source SHA-256
+/// admission gate. The expected digest is identity evidence only; it never
+/// changes stream selection or parsing.
+pub fn recover_regular_stream_prefix_by_sid_reader_with_expected_sha<R: Read + Seek>(
+    reader: R,
+    stream_sid: u32,
+    expected_source_sha256: &str,
+) -> Result<RecoveredRegularStreamPrefixBySid> {
+    if !is_sha256_hex(expected_source_sha256) {
+        anyhow::bail!("expected source SHA-256 must be 64 hexadecimal characters");
+    }
+    recover_regular_stream_prefix_by_sid_reader_inner(
+        reader,
+        stream_sid,
+        Some(expected_source_sha256),
+    )
+}
+
+fn recover_regular_stream_prefix_by_sid_reader_inner<R: Read + Seek>(
     mut reader: R,
     stream_sid: u32,
+    expected_source_sha256: Option<&str>,
 ) -> Result<RecoveredRegularStreamPrefixBySid> {
     reader
         .seek(SeekFrom::Start(0))
@@ -119,8 +155,18 @@ pub fn recover_regular_stream_prefix_by_sid_reader<R: Read + Seek>(
         .read_to_end(&mut source)
         .context("failed to read SID-bound partial CFB recovery input")?;
 
-    recover_regular_stream_prefix_by_sid_from_bytes(&source, stream_sid)
-        .with_context(|| format!("failed to recover regular stream prefix for SID {stream_sid}"))
+    let recovered = recover_regular_stream_prefix_by_sid_from_bytes(&source, stream_sid)
+        .with_context(|| format!("failed to recover regular stream prefix for SID {stream_sid}"))?;
+    if expected_source_sha256
+        .is_some_and(|expected| !recovered.source_sha256.eq_ignore_ascii_case(expected))
+    {
+        anyhow::bail!(
+            "source identity mismatch for SID {stream_sid}: expected {}, observed {}",
+            expected_source_sha256.unwrap_or_default(),
+            recovered.source_sha256
+        );
+    }
+    Ok(recovered)
 }
 
 fn recover_root_regular_stream_prefix_from_bytes(
@@ -409,12 +455,17 @@ fn recover_regular_stream_prefix_from_entry(
     }
 
     let complete = bytes.len() == stream_len_usize && truncation_reason.is_none();
+    let prefix_sha256 = sha256_hex(&bytes);
     Ok(RecoveredRegularStreamPrefixBySid {
         source_sha256: sha256_hex(source),
+        source_byte_len: u64::try_from(source.len())
+            .context("source byte length does not fit u64")?,
         stream_sid,
         descriptive_name: directory_name(entry).ok(),
+        storage_kind: RegularStreamStorageKind::FatRegular,
         available_prefix_len: u64::try_from(bytes.len())
             .context("available prefix length does not fit u64")?,
+        prefix_sha256,
         bytes,
         declared_len: stream_len,
         status: if complete {
@@ -424,6 +475,7 @@ fn recover_regular_stream_prefix_from_entry(
         },
         truncation_reason,
         source_ranges,
+        source_modified: false,
     })
 }
 
@@ -546,6 +598,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
@@ -882,10 +938,36 @@ mod tests {
                 .expect("recover nested regular stream by SID");
         assert_eq!(recovered.stream_sid, sid);
         assert_eq!(recovered.source_sha256, sha256_hex(&source));
+        assert_eq!(recovered.source_byte_len, source.len() as u64);
         assert_eq!(recovered.descriptive_name.as_deref(), Some("EscherDelayStm"));
+        assert_eq!(recovered.storage_kind, RegularStreamStorageKind::FatRegular);
         assert_eq!(recovered.status, RootRegularStreamPrefixStatus::Complete);
+        assert_eq!(recovered.prefix_sha256, sha256_hex(&expected));
         assert_eq!(recovered.bytes, expected);
         assert_eq!(recovered.available_prefix_len, recovered.declared_len);
+        assert!(!recovered.source_modified);
+    }
+
+    #[test]
+    fn expected_source_sha_gate_fails_closed_on_mismatch() {
+        let (source, sid, _) = nested_regular_fixture();
+        let expected = sha256_hex(&source);
+        let recovered = recover_regular_stream_prefix_by_sid_reader_with_expected_sha(
+            Cursor::new(source.clone()),
+            sid,
+            &expected,
+        )
+        .expect("matching source identity");
+        assert_eq!(recovered.source_sha256, expected);
+
+        let wrong = "00".repeat(32);
+        let error = recover_regular_stream_prefix_by_sid_reader_with_expected_sha(
+            Cursor::new(source),
+            sid,
+            &wrong,
+        )
+        .expect_err("mismatched source identity must fail closed");
+        assert!(format!("{error:#}").contains("source identity mismatch"));
     }
 
     #[test]
