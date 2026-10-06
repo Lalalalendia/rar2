@@ -37,6 +37,18 @@ fn exact_carlton_merged_table_autoformat_consumer() {
     );
 
     let table = tables[0];
+    let layout_relation = table
+        .layout_relation
+        .as_ref()
+        .expect("exact Carlton TABLE must retain its source-backed layout relation");
+    assert!(
+        !layout_relation.source_refs.is_empty(),
+        "TABLE layout relation must retain exact source provenance"
+    );
+    assert!(
+        table.layout_metrics.is_none(),
+        "non-uniform Carlton MCLD metrics must remain fail-closed"
+    );
     assert_eq!((table.rows, table.columns), (9, 2));
     assert_eq!(table.cells.len(), 17);
     assert!(

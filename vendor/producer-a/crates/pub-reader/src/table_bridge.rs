@@ -309,6 +309,17 @@ pub fn materialize_bounded_simple_table_cells(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubTableLayoutRelationSource {
+    /// Exact Story-catalog key selecting the source layout/MCLD record.
+    ///
+    /// This relation remains valid independently of whether a narrower
+    /// geometry-metric consumer can admit that record.
+    pub story_layout_key: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_refs: Vec<SourceRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubTableLayoutMetricsSource {
     pub story_layout_key: u32,
     pub cell_width: LengthEmu,
@@ -338,6 +349,8 @@ pub struct PubTableSource {
     pub cells: Vec<PubTableCellSource>,
     /// Present only for a complete, unmerged, unambiguous rectangular grid.
     pub simple_table: Option<SimpleRectangularTable<TableCellId>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout_relation: Option<PubTableLayoutRelationSource>,
     pub layout_metrics: Option<PubTableLayoutMetricsSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub border_segments: Vec<PubTableBorderSegmentSource>,
@@ -1471,6 +1484,7 @@ pub(crate) fn build_table_source(
     } else {
         Vec::new()
     };
+    let layout_relation = build_table_layout_relation(context, text_id);
     let layout_metrics = build_table_layout_metrics(context, table_seq_num, text_id, diagnostics);
 
     Ok(Some(PubTableSource {
@@ -1482,6 +1496,7 @@ pub(crate) fn build_table_source(
         tcd_story_ordinal: Some(tcd.story_ordinal.value),
         cells: joined_cells,
         simple_table,
+        layout_relation,
         layout_metrics,
         border_segments,
         source_refs: vec![
@@ -1541,6 +1556,42 @@ pub(crate) fn build_table_source(
             ),
         ],
     }))
+}
+
+fn build_table_layout_relation(
+    context: &TableBridgeContext<'_>,
+    text_id: u32,
+) -> Option<PubTableLayoutRelationSource> {
+    let (layout_key, layout_key_source) = context.story_layout_keys.get(&text_id)?;
+    let mcld = context.mcld?;
+    let record = mcld
+        .records
+        .iter()
+        .find(|record| record.record_id == *layout_key)?;
+
+    Some(PubTableLayoutRelationSource {
+        story_layout_key: *layout_key,
+        source_refs: vec![
+            source_ref(
+                context.source,
+                layout_key_source,
+                Some(format!("contents/0x65/story/{text_id}")),
+                Some("story/layout_key".into()),
+                SourceRole::Relation,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ),
+            source_ref(
+                context.source,
+                &record.source,
+                Some(quill_story_object_key(text_id)),
+                Some("MCLD/record".into()),
+                SourceRole::Relation,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ),
+        ],
+    })
 }
 
 fn build_table_layout_metrics(
@@ -2138,6 +2189,7 @@ mod tests {
             tcd_story_ordinal: None,
             cells: vec![source_cell],
             simple_table: Some(simple_table),
+            layout_relation: None,
             layout_metrics: None,
             border_segments: Vec::new(),
             source_refs: Vec::new(),
@@ -2193,6 +2245,7 @@ mod tests {
                 source_refs: Vec::new(),
             }],
             simple_table: None,
+            layout_relation: None,
             layout_metrics: None,
             border_segments: Vec::new(),
             source_refs: Vec::new(),
