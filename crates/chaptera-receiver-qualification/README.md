@@ -24,3 +24,7 @@ A `Supported` qualification claim is valid only when every assertion is `PASS`, 
 available evidence, and every evidence item meets or exceeds the assertion's required OracleScope.
 UNKNOWN, unavailable, waived, or lower-scope evidence remains explicit and can never normalize into
 PASS merely because a runtime/vendor name is recognized.
+
+Digest validation is also fail-closed: an available dependency must carry a valid
+`sha256:<64 lowercase hex>` digest; non-empty digests on unavailable/unknown dependencies are
+validated rather than silently accepted.
