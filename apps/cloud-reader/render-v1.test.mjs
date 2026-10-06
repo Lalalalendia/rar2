@@ -10,6 +10,7 @@ import {
   imageResourcePaintPlan,
   presetShapePaintGeometry,
   resolvedTextLinePaintPlan,
+  resolvedTextViewportGeometry,
   tableBorderPaintPlan,
   tableCellFillPaintPlan,
   tableCellPaintGeometry
@@ -420,6 +421,23 @@ test("shared resolved text paint plan preserves server line breaks", () => {
   assert.deepEqual(
     plan.lines.map((line) => [line.line_index, line.x, line.y, line.text]),
     [[0, 300, 200, "first"], [1, 100, 350, "second"]]
+  );
+});
+
+test("shared resolved text viewport keeps clipping in text-local coordinates", () => {
+  assert.deepEqual(
+    resolvedTextViewportGeometry({ x: 95250, y: 190500, width: 952500, height: 476250 }),
+    {
+      x: 95250,
+      y: 190500,
+      width: 952500,
+      height: 476250,
+      view_box: "0 0 100 50"
+    }
+  );
+  assert.equal(
+    resolvedTextViewportGeometry({ x: 0, y: 0, width: 0, height: 1 }),
+    null
   );
 });
 
