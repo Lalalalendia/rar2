@@ -68,6 +68,7 @@ struct CensusRow {
     terminal_gap: Option<DelayedBlipPrefixGap>,
     scanned_record_count: u32,
     strict_validated_image_count: usize,
+    strict_validated_metafile_count: usize,
     validated_kind_counts: BTreeMap<String, usize>,
     rejected_complete_blip_count: usize,
     rejected_disposition_counts: BTreeMap<String, usize>,
@@ -87,8 +88,10 @@ struct CensusSummary {
     missing_source_count: usize,
     image_salvage_positive_files: usize,
     total_reader_admissible_images: usize,
+    total_strict_validated_metafiles: usize,
     validated_kind_counts: BTreeMap<String, usize>,
     rejected_disposition_counts: BTreeMap<String, usize>,
+    rejected_kind_counts: BTreeMap<String, usize>,
     terminal_gap_counts: BTreeMap<String, usize>,
     outcome_counts: BTreeMap<String, usize>,
     rows: Vec<CensusRow>,
@@ -145,6 +148,17 @@ fn outcome_name(value: &CensusOutcome) -> &'static str {
     }
 }
 
+fn is_reader_raster_kind(value: BlipKind) -> bool {
+    matches!(
+        value,
+        BlipKind::Jpeg | BlipKind::Png | BlipKind::Gif | BlipKind::Dib | BlipKind::Tiff
+    )
+}
+
+fn is_metafile_kind(value: BlipKind) -> bool {
+    matches!(value, BlipKind::Emf | BlipKind::Wmf)
+}
+
 fn kind_name(value: BlipKind) -> &'static str {
     match value {
         BlipKind::Emf => "emf",
@@ -177,6 +191,15 @@ fn terminal_gap_name(value: &DelayedBlipPrefixGap) -> &'static str {
     }
 }
 
+fn verify_source_unchanged(path: &Path, source_sha256: &str) -> Result<()> {
+    let post =
+        fs::read(path).with_context(|| format!("re-read admitted source {source_sha256}"))?;
+    if sha256_hex(&post) != source_sha256 {
+        bail!("source modified during census: {source_sha256}");
+    }
+    Ok(())
+}
+
 fn blank_row(source_sha256: String, source_copy_count: usize) -> CensusRow {
     CensusRow {
         source_sha256,
@@ -191,6 +214,7 @@ fn blank_row(source_sha256: String, source_copy_count: usize) -> CensusRow {
         terminal_gap: None,
         scanned_record_count: 0,
         strict_validated_image_count: 0,
+        strict_validated_metafile_count: 0,
         validated_kind_counts: BTreeMap::new(),
         rejected_complete_blip_count: 0,
         rejected_disposition_counts: BTreeMap::new(),
@@ -280,9 +304,8 @@ fn main() -> Result<()> {
         row.reader_eligibility = Some(probe.eligibility);
         if !probe.eligibility.is_eligible() {
             row.outcome = CensusOutcome::IneligibleProductProbe;
-            let post = fs::read(path)
-                .with_context(|| format!("re-read admitted source {}", source_sha256))?;
-            row.source_modified = Some(sha256_hex(&post) != source_sha256);
+            verify_source_unchanged(path, &source_sha256)?;
+            row.source_modified = Some(false);
             rows.push(row);
             continue;
         }
@@ -295,9 +318,8 @@ fn main() -> Result<()> {
             Err(error) => {
                 row.error_signature_sha256 = Some(error_signature(&error));
                 row.outcome = CensusOutcome::PhysicalDiscoveryFail;
-                let post = fs::read(path)
-                    .with_context(|| format!("re-read admitted source {}", source_sha256))?;
-                row.source_modified = Some(sha256_hex(&post) != source_sha256);
+                verify_source_unchanged(path, &source_sha256)?;
+                row.source_modified = Some(false);
                 rows.push(row);
                 continue;
             }
@@ -331,9 +353,8 @@ fn main() -> Result<()> {
             Err(error) => {
                 row.error_signature_sha256 = Some(error_signature(&error));
                 row.outcome = CensusOutcome::PhysicalPrefixFail;
-                let post = fs::read(path)
-                    .with_context(|| format!("re-read admitted source {}", source_sha256))?;
-                row.source_modified = Some(sha256_hex(&post) != source_sha256);
+                verify_source_unchanged(path, &source_sha256)?;
+                row.source_modified = Some(false);
                 rows.push(row);
                 continue;
             }
@@ -366,7 +387,16 @@ fn main() -> Result<()> {
             bail!("prefix inventory length mismatch for {source_sha256}");
         }
         row.scanned_record_count = inventory.scanned_record_count;
-        row.strict_validated_image_count = inventory.records.len();
+        row.strict_validated_image_count = inventory
+            .records
+            .iter()
+            .filter(|validated| is_reader_raster_kind(validated.kind))
+            .count();
+        row.strict_validated_metafile_count = inventory
+            .records
+            .iter()
+            .filter(|validated| is_metafile_kind(validated.kind))
+            .count();
         row.terminal_gap = inventory.terminal_gap.clone();
 
         for validated in &inventory.records {
@@ -398,16 +428,18 @@ fn main() -> Result<()> {
             );
         }
 
+        let rejected_only_unsupported = row.rejected_disposition_counts.keys().all(|key| {
+            matches!(
+                key.as_str(),
+                "unsupported_metafile" | "unsupported_picture" | "unsupported_blip_type"
+            )
+        });
+        let has_unsupported_only_evidence =
+            row.strict_validated_metafile_count > 0 || !row.rejected_disposition_counts.is_empty();
+
         row.outcome = if row.reader_admissible_image_count > 0 {
             CensusOutcome::ImageSalvagePositive
-        } else if !row.rejected_disposition_counts.is_empty()
-            && row.rejected_disposition_counts.keys().all(|key| {
-                matches!(
-                    key.as_str(),
-                    "unsupported_metafile" | "unsupported_picture" | "unsupported_blip_type"
-                )
-            })
-        {
+        } else if has_unsupported_only_evidence && rejected_only_unsupported {
             CensusOutcome::UnsupportedOnly
         } else if row.terminal_gap.is_some() && row.scanned_record_count == 0 {
             CensusOutcome::ParserTerminalBeforeImage
@@ -415,12 +447,8 @@ fn main() -> Result<()> {
             CensusOutcome::StrictRasterZero
         };
 
-        let post =
-            fs::read(path).with_context(|| format!("re-read admitted source {}", source_sha256))?;
-        row.source_modified = Some(sha256_hex(&post) != source_sha256);
-        if row.source_modified == Some(true) {
-            bail!("source modified during census: {source_sha256}");
-        }
+        verify_source_unchanged(path, &source_sha256)?;
+        row.source_modified = Some(false);
 
         rows.push(row);
     }
@@ -429,9 +457,11 @@ fn main() -> Result<()> {
 
     let mut validated_kind_counts = BTreeMap::<String, usize>::new();
     let mut rejected_disposition_counts = BTreeMap::<String, usize>::new();
+    let mut rejected_kind_counts = BTreeMap::<String, usize>::new();
     let mut terminal_gap_counts = BTreeMap::<String, usize>::new();
     let mut outcome_counts = BTreeMap::<String, usize>::new();
     let mut total_reader_admissible_images = 0usize;
+    let mut total_strict_validated_metafiles = 0usize;
 
     for row in &rows {
         for (kind, count) in &row.validated_kind_counts {
@@ -442,6 +472,9 @@ fn main() -> Result<()> {
                 .entry(disposition.clone())
                 .or_default() += count;
         }
+        for (kind, count) in &row.rejected_kind_counts {
+            *rejected_kind_counts.entry(kind.clone()).or_default() += count;
+        }
         if let Some(gap) = &row.terminal_gap {
             *terminal_gap_counts
                 .entry(terminal_gap_name(gap).to_owned())
@@ -451,6 +484,7 @@ fn main() -> Result<()> {
             .entry(outcome_name(&row.outcome).to_owned())
             .or_default() += 1;
         total_reader_admissible_images += row.reader_admissible_image_count;
+        total_strict_validated_metafiles += row.strict_validated_metafile_count;
     }
 
     let located_source_count = rows
@@ -471,8 +505,10 @@ fn main() -> Result<()> {
         missing_source_count,
         image_salvage_positive_files,
         total_reader_admissible_images,
+        total_strict_validated_metafiles,
         validated_kind_counts,
         rejected_disposition_counts,
+        rejected_kind_counts,
         terminal_gap_counts,
         outcome_counts,
         rows,
