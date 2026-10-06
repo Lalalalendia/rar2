@@ -16,6 +16,7 @@ use pub_model::{
 use serde::{Deserialize, Serialize};
 
 mod break_policy;
+mod effective_table_layout;
 mod resolve;
 mod shaped_flow;
 mod shaping;
@@ -25,6 +26,9 @@ mod text_flow;
 pub use break_policy::{
     BOUNDED_BREAK_POLICY_REVISION, BoundedBreakCandidate, BoundedBreakKind, BoundedBreakPolicy,
     BoundedBreakPolicyError, break_policy_for_shaped_text,
+};
+pub use effective_table_layout::{
+    BoundedEffectiveTableResolveError, resolve_bounded_effective_table_cells,
 };
 pub use resolve::{
     BoundedLayoutEnvironment, BoundedResolvedScene, ResolveBlocked, ResolveDiagnostic,
