@@ -1017,8 +1017,7 @@ mod tests {
         let sector_len = 1usize << u16::from_le_bytes([source[30], source[31]]);
         let first_directory_sector =
             u32::from_le_bytes([source[48], source[49], source[50], source[51]]);
-        let directory_offset =
-            (usize::try_from(first_directory_sector).unwrap() + 1) * sector_len;
+        let directory_offset = (usize::try_from(first_directory_sector).unwrap() + 1) * sector_len;
         let entry_offset = directory_offset + usize::try_from(sid).unwrap() * DIR_ENTRY_LEN;
         let entry_count = sector_len / DIR_ENTRY_LEN;
         let invalid_sid = u32::try_from(entry_count + 100).unwrap();
@@ -1331,7 +1330,10 @@ mod tests {
             .iter()
             .find(|entry| entry.sid == sid)
             .expect("target stream entry survives");
-        assert!(matches!(entry.left_sibling, RawDirectoryLink::OutOfRange(_)));
+        assert!(matches!(
+            entry.left_sibling,
+            RawDirectoryLink::OutOfRange(_)
+        ));
 
         let recovered = recover_regular_stream_prefix_by_sid_reader(Cursor::new(damaged), sid)
             .expect("exact-SID payload recovery must ignore unrelated tree links");
