@@ -32,6 +32,8 @@ struct CurrentViewerInput {
     pages: Vec<CurrentPage>,
     images: Vec<CurrentImageAsset>,
     font: CurrentFont,
+    #[serde(default)]
+    fonts: Vec<CurrentFont>,
     census: CurrentCensus,
 }
 
@@ -685,11 +687,23 @@ fn main() -> Result<()> {
         bail!("current Viewer packet node census differs from page plans");
     }
     if input.font.bytes.is_empty() {
-        bail!("current Viewer explicit font bytes are required");
+        bail!("current Viewer explicit fallback font bytes are required");
     }
     let actual_font_fingerprint = font_fingerprint_sha256(&input.font.bytes);
     if actual_font_fingerprint != input.font.fingerprint_sha256 {
-        bail!("current Viewer explicit font fingerprint mismatch");
+        bail!("current Viewer explicit fallback font fingerprint mismatch");
+    }
+    let mut packet_fonts = BTreeMap::<String, &CurrentFont>::new();
+    for font in std::iter::once(&input.font).chain(input.fonts.iter()) {
+        if font.resource_id.is_empty() || font.bytes.is_empty() {
+            bail!("current Viewer carried font resource is incomplete");
+        }
+        if font_fingerprint_sha256(&font.bytes) != font.fingerprint_sha256 {
+            bail!("current Viewer carried font fingerprint mismatch");
+        }
+        if packet_fonts.insert(font.resource_id.clone(), font).is_some() {
+            bail!("current Viewer packet contains duplicate font resource identities");
+        }
     }
 
     let mut seen_nodes = BTreeSet::new();
@@ -699,7 +713,7 @@ fn main() -> Result<()> {
     let mut node_paints = Vec::new();
     let mut image_uses = BTreeMap::<ResourceId, Vec<NodeId>>::new();
     let mut text_runs = Vec::<FixedTextRun>::new();
-    let mut used_glyph_ids = BTreeSet::<u32>::new();
+    let mut used_glyph_ids_by_resource = BTreeMap::<String, BTreeSet<u32>>::new();
     let mut mapped_text_nodes = BTreeSet::<NodeId>::new();
     let mut mapped_resource_nodes = BTreeSet::<NodeId>::new();
     let mut text_node_ids = BTreeSet::<NodeId>::new();
@@ -870,10 +884,11 @@ fn main() -> Result<()> {
                     font_size_emu,
                     line_height_emu,
                 } => {
-                    if font_resource_id != &input.font.resource_id
-                        || font_fingerprint_sha256 != &input.font.fingerprint_sha256
-                    {
-                        bail!("SharedResolved text is not bound to the packet explicit font");
+                    let Some(packet_font) = packet_fonts.get(font_resource_id).copied() else {
+                        bail!("SharedResolved text references a font resource absent from packet");
+                    };
+                    if font_fingerprint_sha256 != &packet_font.fingerprint_sha256 {
+                        bail!("SharedResolved text font fingerprint differs from carried resource");
                     }
                     if *font_size_emu <= 0 || *line_height_emu <= 0 {
                         bail!("SharedResolved text has non-positive font metrics");
@@ -943,13 +958,13 @@ fn main() -> Result<()> {
                         if shaping.glyphs.iter().any(|glyph| glyph.glyph_id == 0) {
                             bail!("SharedResolved shaped line contains a missing glyph");
                         }
-                        if shaping.environment.face_index != input.font.face_index
+                        if shaping.environment.face_index != packet_font.face_index
                             || shaping.environment.layout.font_set_fingerprint
-                                != input.font.fingerprint_sha256
+                                != packet_font.fingerprint_sha256
                             || shaping.environment.layout.resource_fingerprint
-                                != input.font.resource_id
+                                != packet_font.resource_id
                         {
-                            bail!("SharedResolved shaping environment differs from packet font");
+                            bail!("SharedResolved shaping environment differs from carried font resource");
                         }
 
                         let fill_rgb = match color_range_disposition(
@@ -999,7 +1014,10 @@ fn main() -> Result<()> {
                             "text baseline y",
                         )?;
 
-                        used_glyph_ids.extend(shaping.glyphs.iter().map(|glyph| glyph.glyph_id));
+                        used_glyph_ids_by_resource
+                            .entry(packet_font.resource_id.clone())
+                            .or_default()
+                            .extend(shaping.glyphs.iter().map(|glyph| glyph.glyph_id));
                         text_runs.push(FixedTextRun {
                             node_id: resolved_node_id,
                             scalar_base: line.scalar_start,
@@ -1176,27 +1194,37 @@ fn main() -> Result<()> {
     let (font_plan, fonts) = if text_runs.is_empty() {
         (None, Vec::new())
     } else {
-        let embedding = read_opentype_embedding_flags(&input.font.bytes, input.font.face_index)
-            .context("read current Viewer font embedding flags")?;
-        let identity = FontIdentity {
-            fingerprint_sha256: input.font.fingerprint_sha256.clone(),
-            face_index: input.font.face_index,
-        };
-        let mut profile = FixedOutputFontProfile::basic_pdf_v0_1();
-        profile.preferred_embedding = PreferredEmbedding::Full;
-        let plan = plan_output_fonts(
-            &profile,
-            vec![OutputFontRequest {
+        let mut requests = Vec::new();
+        let mut fixed_fonts = Vec::new();
+        for (resource_id, used_glyph_ids) in used_glyph_ids_by_resource {
+            let font = packet_fonts
+                .get(&resource_id)
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("used font resource missing from packet"))?;
+            let embedding = read_opentype_embedding_flags(&font.bytes, font.face_index)
+                .context("read current Viewer carried font embedding flags")?;
+            let identity = FontIdentity {
+                fingerprint_sha256: font.fingerprint_sha256.clone(),
+                face_index: font.face_index,
+            };
+            requests.push(OutputFontRequest {
                 source: identity.clone(),
                 source_resource: Some(ExplicitFontResource {
                     identity: identity.clone(),
-                    bytes: &input.font.bytes,
+                    bytes: &font.bytes,
                     embedding,
                 }),
                 fallback_resource: None,
                 used_glyph_ids,
-            }],
-        );
+            });
+            fixed_fonts.push(FixedFontResource {
+                identity,
+                bytes: font.bytes.clone(),
+            });
+        }
+        let mut profile = FixedOutputFontProfile::basic_pdf_v0_1();
+        profile.preferred_embedding = PreferredEmbedding::Full;
+        let plan = plan_output_fonts(&profile, requests);
         if !plan.can_serialize() {
             let codes = plan
                 .blockers
@@ -1204,15 +1232,9 @@ fn main() -> Result<()> {
                 .map(|item| item.code.as_str())
                 .collect::<Vec<_>>()
                 .join(", ");
-            bail!("current Viewer font cannot be embedded: {codes}");
+            bail!("current Viewer carried fonts cannot be embedded: {codes}");
         }
-        (
-            Some(plan),
-            vec![FixedFontResource {
-                identity,
-                bytes: input.font.bytes.clone(),
-            }],
-        )
+        (Some(plan), fixed_fonts)
     };
 
     let scene = BoundedResolvedScene {
