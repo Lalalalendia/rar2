@@ -1902,6 +1902,8 @@ impl EditorError {
             Self::StaleNodeResize { .. } => "stale_node_resize",
             Self::TableTrackResizeUnsupported { .. } => "table_track_resize_unsupported",
             Self::StaleTableTrackResize { .. } => "stale_table_track_resize",
+            Self::TableRowColUnsupported { .. } => "table_rowcol_unsupported",
+            Self::StaleTableRowCol { .. } => "stale_table_rowcol",
             Self::NoChange { .. } => "no_change",
             Self::StaleOperation { .. } => "stale_operation",
             Self::TextFormatUnsupported { .. } => "text_format_unsupported",
