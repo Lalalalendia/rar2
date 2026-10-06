@@ -25,6 +25,9 @@ jobs:
         with:
           toolchain: "1.94.1"
 
+      - name: Preflight qualifier
+        run: python -m py_compile tools/qualify_w2_longform_fixture.py
+
       - name: Build current Chaptera producer
         run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p chaptera-producer-a
 
@@ -51,7 +54,10 @@ jobs:
           assert data["minimum_page_count"] == 10
           assert [row["item_id"] for row in data["candidates"]] == ["285", "288", "299"]
           for row in data["candidates"]:
+              if not row["http_success"]:
+                  assert row["is_cfb"] is False
               if row["longform_pub_qualified"]:
+                  assert row["http_success"] is True
                   assert row["is_cfb"] is True
                   assert row["chaptera_open_status"] == "opened"
                   assert row["page_count"] >= 10
