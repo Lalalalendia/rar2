@@ -95,6 +95,8 @@ pub struct RenderTableV1 {
     pub rows: u32,
     pub columns: u32,
     pub cells: Vec<RenderTableCellV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uniform_cell_text_inset_emu: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub borders: Vec<RenderTableBorderSegmentV1>,
 }
@@ -1463,6 +1465,7 @@ pub fn build_page_render_plan_v1(
                             fill_visible: cell.fill_visible,
                         })
                         .collect(),
+                    uniform_cell_text_inset_emu: table.uniform_cell_text_inset_emu,
                     borders: table
                         .borders
                         .iter()
@@ -1567,6 +1570,7 @@ pub fn build_page_render_plan_v1(
                             fill_visible: cell.fill_visible,
                         })
                         .collect(),
+                    uniform_cell_text_inset_emu: table.uniform_cell_text_inset_emu,
                     borders: table
                         .borders
                         .iter()
@@ -5015,6 +5019,7 @@ mod tests {
                 fill_rgb: Some([10, 20, 30]),
                 fill_visible: Some(true),
             }],
+            uniform_cell_text_inset_emu: Some(36_576),
             borders: vec![pub_viewer::ViewerTableBorderSegment {
                 x1_emu: 10,
                 y1_emu: 20,
@@ -5048,6 +5053,7 @@ mod tests {
         assert_eq!(table.cells[0].bounds, Some(cell_bounds));
         assert_eq!(table.cells[0].fill_rgb, Some([10, 20, 30]));
         assert_eq!(table.cells[0].fill_visible, Some(true));
+        assert_eq!(table.uniform_cell_text_inset_emu, Some(36_576));
         assert_eq!(table.borders.len(), 1);
         assert_eq!(table.borders[0].x1_emu, 10);
         assert_eq!(table.borders[0].y1_emu, 20);
