@@ -78,6 +78,18 @@ Mandatory rules:
 
 If a task requires several corrective edits, inspect failures first, make the bounded correction set, then push once.
 
+### Local development loop before hosted feedback
+
+For ordinary repository code/workflow changes, GitHub Actions is not the development REPL.
+
+- After a bounded local edit batch, run `python tools/dev_fast_loop.py --run` and fix task-owned failures locally before publishing another head.
+- Before publishing a coherent semantic slice, run `python tools/dev_fast_loop.py --mode feature --run`.
+- If the local environment genuinely cannot execute a selected check, record the exact missing runtime/tool in the task/PR instead of silently skipping it or pushing speculative fixes.
+- Do not push a head that is already known to fail the local fast loop solely to obtain hosted diagnostics.
+- A green fast loop is development evidence only. It does not replace the task's declared product, visual, native, integration, security, packaging, or release acceptance.
+
+The purpose is to permit many local implementation iterations per hosted head while preserving the existing acceptance law.
+
 ## 4. Mandatory latest-head concurrency for PR validation
 
 A PR-validation workflow whose older head loses evidentiary value when a newer commit arrives must cancel obsolete same-PR attempts.

@@ -97,6 +97,35 @@ def test_plan_routing_and_dedupe() -> None:
         assert ("ruby", "tools/ci/check_workflow_yaml_syntax.rb") in actual
 
 
+def test_same_stem_rust_source_discovers_exact_integration_test() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        write(
+            root / "crates/foo/Cargo.toml",
+            "[package]\nname='foo'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        write(root / "crates/foo/src/owned.rs", "pub fn owned() {}\n")
+        write(root / "crates/foo/src/unowned.rs", "pub fn unowned() {}\n")
+        write(root / "crates/foo/tests/owned.rs", "#[test] fn smoke() {}\n")
+
+        owned = commands(mod.plan_for_paths(root, ["crates/foo/src/owned.rs"]))
+        assert (
+            "cargo",
+            "test",
+            "--manifest-path",
+            "crates/foo/Cargo.toml",
+            "--test",
+            "owned",
+            "--no-fail-fast",
+        ) in owned
+
+        unowned = commands(mod.plan_for_paths(root, ["crates/foo/src/unowned.rs"]))
+        assert not any(
+            command[:2] == ("cargo", "test") and "--test" in command
+            for command in unowned
+        )
+
+
 def test_feature_mode_adds_package_unit_tests_once() -> None:
     with tempfile.TemporaryDirectory() as raw:
         root = Path(raw)
@@ -115,6 +144,7 @@ def test_feature_mode_adds_package_unit_tests_once() -> None:
 def main() -> None:
     test_discover_changed_paths()
     test_plan_routing_and_dedupe()
+    test_same_stem_rust_source_discovers_exact_integration_test()
     test_feature_mode_adds_package_unit_tests_once()
     print("dev fast loop tests: ok")
 
