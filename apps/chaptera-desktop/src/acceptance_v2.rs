@@ -401,24 +401,23 @@ pub fn run(
     let after_story_state_id_effective = state_id(&editor)?;
 
     let operations_before_drag = editor.operations().len();
-    let (move_instance, moved_node_id, before_move, drag) =
-        select_move(
-            &editor,
-            &visual,
-            require_wrap_irrelevant,
-            if newsletter_two_object || require_wrap_irrelevant {
-                export_image_nodes.as_ref()
-            } else {
-                None
-            },
-        )
-        .ok_or_else(|| {
-            if require_wrap_irrelevant {
-                "no admitted wrap-irrelevant direct page-local MoveNode target".to_owned()
-            } else {
-                "no admitted direct page-local MoveNode target".to_owned()
-            }
-        })?;
+    let (move_instance, moved_node_id, before_move, drag) = select_move(
+        &editor,
+        &visual,
+        require_wrap_irrelevant,
+        if newsletter_two_object || require_wrap_irrelevant {
+            export_image_nodes.as_ref()
+        } else {
+            None
+        },
+    )
+    .ok_or_else(|| {
+        if require_wrap_irrelevant {
+            "no admitted wrap-irrelevant direct page-local MoveNode target".to_owned()
+        } else {
+            "no admitted direct page-local MoveNode target".to_owned()
+        }
+    })?;
     let after_move = drag.preview_bounds();
     if editor.operations().len() != operations_before_drag {
         return Err("transient drag emitted a durable editor operation".to_owned());
@@ -432,22 +431,20 @@ pub fn run(
     let after_move_state_id = state_id(&editor)?;
 
     let operations_before_resize = editor.operations().len();
-    let (resize_instance, resized_node_id, before_resize, mut resize) =
-        select_resize(
-            &editor,
-            &visual,
-            &[moved_node_id],
-            require_wrap_irrelevant,
-            (newsletter_two_object || require_wrap_irrelevant).then_some(replacement_asset),
-        )
-        .ok_or_else(|| {
-            if require_wrap_irrelevant {
-                "no distinct admitted wrap-irrelevant direct page-local ResizeNode target"
-                    .to_owned()
-            } else {
-                "no distinct admitted direct page-local ResizeNode target".to_owned()
-            }
-        })?;
+    let (resize_instance, resized_node_id, before_resize, mut resize) = select_resize(
+        &editor,
+        &visual,
+        &[moved_node_id],
+        require_wrap_irrelevant,
+        (newsletter_two_object || require_wrap_irrelevant).then_some(replacement_asset),
+    )
+    .ok_or_else(|| {
+        if require_wrap_irrelevant {
+            "no distinct admitted wrap-irrelevant direct page-local ResizeNode target".to_owned()
+        } else {
+            "no distinct admitted direct page-local ResizeNode target".to_owned()
+        }
+    })?;
     let resize_commit = resize
         .commit()
         .map_err(|error| format!("commit transient resize transaction: {error}"))?;
