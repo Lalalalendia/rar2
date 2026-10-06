@@ -2,6 +2,9 @@ name: Migration consumer runtime producer
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/migration-consumer-runtime.yml"
   push:
     branches:
       - ci/migration-consumer-runtime-measurement
