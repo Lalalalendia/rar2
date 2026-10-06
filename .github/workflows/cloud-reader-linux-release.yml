@@ -34,7 +34,7 @@ jobs:
           toolchain: "1.94.1"
 
       - name: Build canonical release binary
-        run: cargo build --locked --release -p chaptera-server --bin chaptera --jobs 2
+        run: cargo build --release -p chaptera-server --bin chaptera --jobs 2
 
       - name: Assemble deployment packet
         shell: bash
