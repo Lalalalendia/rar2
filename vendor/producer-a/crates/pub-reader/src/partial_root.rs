@@ -601,7 +601,10 @@ mod tests {
         evidence.stream_identity = "/NotContents".to_owned();
 
         let semantic = analyze_reader_partial_contents_prefix(&evidence);
-        assert_eq!(semantic.boundary, ReaderPartialContentsBoundary::EvidenceInvalid);
+        assert_eq!(
+            semantic.boundary,
+            ReaderPartialContentsBoundary::EvidenceInvalid
+        );
         assert_eq!(semantic.class, ReaderPartialContentsClass::NoSafeFact);
     }
 
