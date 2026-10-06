@@ -2233,6 +2233,15 @@ fn operation_summary(operation: &EditOperation) -> Value {
                 .map(|id| id.as_canonical().to_string())
                 .collect::<Vec<_>>()
         }),
+        EditOperation::SetTableTrackExtent { history } => json!({
+            "kind":"set_table_track_extent",
+            "table_id":history.table_id.as_canonical().to_string(),
+            "target":history.target,
+            "before_extent":history.before_extent,
+            "after_extent":history.after_extent,
+            "before_bounds":rect_json(history.before_bounds),
+            "after_bounds":rect_json(history.after_bounds)
+        }),
         EditOperation::DeleteNode {
             node_id,
             page_id,
