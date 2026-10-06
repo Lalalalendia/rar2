@@ -590,6 +590,8 @@ pub struct ViewerTable {
     pub cells: Vec<ViewerTableCell>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uniform_cell_text_inset_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uniform_cell_vertical_alignment: Option<ViewerTextVerticalAlignment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub borders: Vec<ViewerTableBorderSegment>,
 }
@@ -3943,6 +3945,15 @@ fn viewer_tables_from_resolved(
                 .uniform_cell_text_inset
                 .as_ref()
                 .map(|inset| inset.inset_emu.get()),
+            uniform_cell_vertical_alignment: source
+                .layout_relation
+                .as_ref()
+                .and_then(|relation| relation.uniform_cell_vertical_alignment.as_ref())
+                .map(|alignment| match alignment.alignment {
+                    PubTextFrameVerticalAlignment::Top => ViewerTextVerticalAlignment::Top,
+                    PubTextFrameVerticalAlignment::Center => ViewerTextVerticalAlignment::Center,
+                    PubTextFrameVerticalAlignment::Bottom => ViewerTextVerticalAlignment::Bottom,
+                }),
             borders,
         });
     }
