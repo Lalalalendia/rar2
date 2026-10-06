@@ -517,6 +517,201 @@ fn unique_anchor_scalar_or_zero(
     fields.next().is_none().then_some(first.value)
 }
 
+fn is_bounded_native_autoformat_border_carrier(
+    shape: &pub_escher::SpContainerObservation,
+    table_seq_num: u32,
+    rows: u32,
+    columns: u32,
+) -> bool {
+    if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE)
+        || has_any_client_data_identity(shape)
+    {
+        return false;
+    }
+    let Some(anchor) = shape.client_anchor.as_ref() else {
+        return false;
+    };
+    if unique_anchor_scalar(anchor, TABLE_AUTOFORMAT_OWNER_REF_ID) != Some(table_seq_num)
+        || anchor
+            .fields
+            .iter()
+            .any(|field| field.id == TABLE_AUTOFORMAT_CELL_ORDINAL_ID)
+    {
+        return false;
+    }
+
+    let allowed = [
+        TABLE_AUTOFORMAT_OWNER_REF_ID,
+        TABLE_AUTOFORMAT_SEGMENT_ORIENTATION_ID,
+        TABLE_AUTOFORMAT_ROW_START_ID,
+        TABLE_AUTOFORMAT_COLUMN_START_ID,
+        TABLE_AUTOFORMAT_ROW_END_ID,
+        TABLE_AUTOFORMAT_COLUMN_END_ID,
+    ];
+    if anchor
+        .fields
+        .iter()
+        .any(|field| !allowed.contains(&field.id))
+        || !anchor.fields.iter().any(|field| {
+            matches!(
+                field.id,
+                TABLE_AUTOFORMAT_SEGMENT_ORIENTATION_ID
+                    | TABLE_AUTOFORMAT_ROW_START_ID
+                    | TABLE_AUTOFORMAT_COLUMN_START_ID
+                    | TABLE_AUTOFORMAT_ROW_END_ID
+                    | TABLE_AUTOFORMAT_COLUMN_END_ID
+            )
+        })
+    {
+        return false;
+    }
+
+    let Some(orientation) = unique_anchor_scalar(anchor, TABLE_AUTOFORMAT_SEGMENT_ORIENTATION_ID)
+    else {
+        return false;
+    };
+    let Some(row_start) = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_ROW_START_ID)
+    else {
+        return false;
+    };
+    let Some(column_start) = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_COLUMN_START_ID)
+    else {
+        return false;
+    };
+    let Some(row_end) = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_ROW_END_ID) else {
+        return false;
+    };
+    let Some(column_end) = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_COLUMN_END_ID)
+    else {
+        return false;
+    };
+    if row_start > rows || row_end > rows || column_start > columns || column_end > columns {
+        return false;
+    }
+
+    matches!(
+        orientation,
+        1 if row_start == row_end && column_start < column_end
+    ) || matches!(
+        orientation,
+        2 if column_start == column_end && row_start < row_end
+    )
+}
+
+fn complete_merged_table_grid(rows: u32, columns: u32, cells: &[PubTableCellSource]) -> bool {
+    let Some(slot_count_u64) = u64::from(rows).checked_mul(u64::from(columns)) else {
+        return false;
+    };
+    let Ok(slot_count) = usize::try_from(slot_count_u64) else {
+        return false;
+    };
+    if slot_count == 0 || cells.is_empty() {
+        return false;
+    }
+
+    let mut covered = vec![false; slot_count];
+    let mut stored_ordinals = vec![false; cells.len()];
+    let mut has_span = false;
+
+    for cell in cells {
+        let Some(coordinates) = cell.coordinates else {
+            return false;
+        };
+        if cell.bounds.is_none()
+            || coordinates.start_row > coordinates.end_row
+            || coordinates.start_column > coordinates.end_column
+            || coordinates.end_row >= rows
+            || coordinates.end_column >= columns
+        {
+            return false;
+        }
+
+        let Ok(stored_index) = usize::try_from(cell.stored_record_index) else {
+            return false;
+        };
+        if stored_index >= stored_ordinals.len() || stored_ordinals[stored_index] {
+            return false;
+        }
+        stored_ordinals[stored_index] = true;
+
+        has_span |= coordinates.start_row != coordinates.end_row
+            || coordinates.start_column != coordinates.end_column;
+
+        for row in coordinates.start_row..=coordinates.end_row {
+            for column in coordinates.start_column..=coordinates.end_column {
+                let Some(slot_u64) = u64::from(row)
+                    .checked_mul(u64::from(columns))
+                    .and_then(|value| value.checked_add(u64::from(column)))
+                else {
+                    return false;
+                };
+                let Ok(slot) = usize::try_from(slot_u64) else {
+                    return false;
+                };
+                if slot >= covered.len() || covered[slot] {
+                    return false;
+                }
+                covered[slot] = true;
+            }
+        }
+    }
+
+    has_span
+        && covered.into_iter().all(|value| value)
+        && stored_ordinals.into_iter().all(|value| value)
+}
+
+fn complete_merged_native_autoformat_carrier_cohort(
+    context: &TableBridgeContext<'_>,
+    table_seq_num: u32,
+    rows: u32,
+    columns: u32,
+    cells: &[PubTableCellSource],
+) -> bool {
+    if !complete_merged_table_grid(rows, columns, cells) {
+        return false;
+    }
+
+    let mut ordinal_counts = vec![0_u8; cells.len()];
+    for shape in &context.officeart_inventory.shapes {
+        let Some(anchor) = shape.client_anchor.as_ref() else {
+            continue;
+        };
+        if !anchor
+            .fields
+            .iter()
+            .any(|field| field.id == TABLE_AUTOFORMAT_OWNER_REF_ID && field.value == table_seq_num)
+        {
+            continue;
+        }
+        if unique_anchor_scalar(anchor, TABLE_AUTOFORMAT_OWNER_REF_ID) != Some(table_seq_num) {
+            return false;
+        }
+
+        if let Some(ordinal) = native_autoformat_cell_ordinal(shape, table_seq_num, cells.len()) {
+            let Ok(index) = usize::try_from(ordinal) else {
+                return false;
+            };
+            let Some(count) = ordinal_counts.get_mut(index) else {
+                return false;
+            };
+            *count = count.saturating_add(1);
+            if *count != 1 {
+                return false;
+            }
+            continue;
+        }
+
+        if is_bounded_native_autoformat_border_carrier(shape, table_seq_num, rows, columns) {
+            continue;
+        }
+
+        return false;
+    }
+
+    ordinal_counts.into_iter().all(|count| count == 1)
+}
+
 fn populate_native_autoformat_table_borders(
     context: &TableBridgeContext<'_>,
     table_seq_num: u32,
@@ -622,9 +817,11 @@ fn populate_native_autoformat_table_borders(
         let [shape] = shapes.as_slice() else {
             return Vec::new();
         };
-        let Some(rgb) = unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_COLOR)
-            .and_then(direct_officeart_rgb)
+        let Some(fill_color_raw) = unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_COLOR)
         else {
+            return Vec::new();
+        };
+        let Some(rgb) = bounded_officeart_rgb(fill_color_raw, context.color_scheme) else {
             return Vec::new();
         };
         let Some(width_emu) = unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_WIDTH)
@@ -632,6 +829,31 @@ fn populate_native_autoformat_table_borders(
         else {
             return Vec::new();
         };
+
+        let mut source_refs = vec![source_ref(
+            context.source,
+            &shape.source,
+            Some(contents_object_key(table_seq_num)),
+            Some("SpContainer/FOPT/table-autoformat-border-segment".into()),
+            SourceRole::Projection,
+            AuthorityClass::Authoritative,
+            ReadConfidence::Exact,
+        )];
+        if (fill_color_raw >> 24) as u8 == 0x08 {
+            let Some(scheme) = context.color_scheme else {
+                return Vec::new();
+            };
+            source_refs.push(source_ref(
+                context.source,
+                &scheme.source,
+                None,
+                Some("OplSccm/current-color-scheme".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ));
+        }
+
         out.push(PubTableBorderSegmentSource {
             axis,
             row_start,
@@ -640,15 +862,7 @@ fn populate_native_autoformat_table_borders(
             column_end,
             rgb,
             width_emu,
-            source_refs: vec![source_ref(
-                context.source,
-                &shape.source,
-                Some(contents_object_key(table_seq_num)),
-                Some("SpContainer/FOPT/table-autoformat-border-segment".into()),
-                SourceRole::Projection,
-                AuthorityClass::Authoritative,
-                ReadConfidence::Exact,
-            )],
+            source_refs,
         });
     }
 
@@ -1208,11 +1422,32 @@ pub(crate) fn build_table_source(
     }
 
     let simple_table = build_simple_table(rows, columns, &joined_cells);
+    let merged_autoformat_cohort = simple_table.is_none()
+        && complete_merged_native_autoformat_carrier_cohort(
+            context,
+            table_seq_num,
+            rows,
+            columns,
+            &joined_cells,
+        );
     let border_segments = if simple_table.is_some() {
         let _ = populate_bounded_table_cell_fill(context, table_seq_num, &mut joined_cells);
         let _ =
             populate_native_autoformat_table_cell_fill(context, table_seq_num, &mut joined_cells);
         populate_native_autoformat_table_borders(context, table_seq_num, rows, columns)
+    } else if merged_autoformat_cohort {
+        let mut candidate_cells = joined_cells.clone();
+        let admitted = populate_native_autoformat_table_cell_fill(
+            context,
+            table_seq_num,
+            &mut candidate_cells,
+        );
+        if admitted == candidate_cells.len() {
+            joined_cells = candidate_cells;
+            populate_native_autoformat_table_borders(context, table_seq_num, rows, columns)
+        } else {
+            Vec::new()
+        }
     } else {
         Vec::new()
     };
@@ -1680,6 +1915,84 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn table_autoformat_border_color_accepts_bounded_scheme_color() {
+        let source = test_span();
+        let scheme = MatureColorScheme {
+            source: source.clone(),
+            declared_count: 2,
+            declared_count_source: source.clone(),
+            slots: vec![
+                pub_contents::MatureColorSchemeSlot {
+                    ordinal: 0,
+                    rgb: Some([0, 0, 0]),
+                    source: source.clone(),
+                    rgb_source: None,
+                },
+                pub_contents::MatureColorSchemeSlot {
+                    ordinal: 1,
+                    rgb: Some([12, 34, 56]),
+                    source: source.clone(),
+                    rgb_source: Some(source.clone()),
+                },
+            ],
+            name: None,
+            name_source: None,
+        };
+
+        assert_eq!(
+            bounded_officeart_rgb(0x0800_0001, Some(&scheme)),
+            Some([12, 34, 56])
+        );
+        assert_eq!(bounded_officeart_rgb(0x0800_0001, None), None);
+        assert_eq!(bounded_officeart_rgb(0x0100_0001, Some(&scheme)), None);
+    }
+
+    #[test]
+    fn merged_table_grid_requires_exact_non_overlapping_spanning_coverage() {
+        let bounds = Some(RectEmu::new(
+            LengthEmu::new(0),
+            LengthEmu::new(0),
+            LengthEmu::new(100),
+            LengthEmu::new(100),
+        ));
+        let cell = |byte, stored_record_index, start_row, end_row, start_column, end_column| {
+            PubTableCellSource {
+                id: table_cell_id(byte),
+                stored_record_index,
+                coordinates: Some(PubTableCellCoordinates {
+                    start_row,
+                    end_row,
+                    start_column,
+                    end_column,
+                }),
+                utf16_start: 0,
+                utf16_end: 0,
+                bounds,
+                paint: None,
+                source_refs: Vec::new(),
+            }
+        };
+
+        let complete = vec![
+            cell(1, 0, 0, 0, 0, 1),
+            cell(2, 1, 1, 1, 0, 0),
+            cell(3, 2, 1, 1, 1, 1),
+        ];
+        assert!(complete_merged_table_grid(2, 2, &complete));
+
+        let mut missing = complete.clone();
+        missing.pop();
+        assert!(!complete_merged_table_grid(2, 2, &missing));
+
+        let overlapping = vec![
+            cell(1, 0, 0, 0, 0, 1),
+            cell(2, 1, 0, 1, 0, 0),
+            cell(3, 2, 1, 1, 1, 1),
+        ];
+        assert!(!complete_merged_table_grid(2, 2, &overlapping));
     }
 
     #[test]
