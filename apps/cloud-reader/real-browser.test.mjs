@@ -419,12 +419,79 @@ try {
     }
     const descriptorOnlyResourceCount = (scene.resources ?? [])
       .filter((resource) => resource.availability !== "inline_data_url").length;
+    const resourceById = new Map((scene.resources ?? []).map((resource) => [resource.resource_id, resource]));
+    const browserPageCensus = await page.locator("#pages svg.page").evaluateAll((pages) => pages.map((svg) => ({
+      page_id: svg.dataset.pageId,
+      rendered_node_count: svg.querySelectorAll(":scope > g[data-node-id]").length,
+      painted_image_count: svg.querySelectorAll("image[data-resource-id]").length,
+      missing_resource_placeholder_count: svg.querySelectorAll("[data-resource-missing]").length,
+      shared_resolved_line_count: svg.querySelectorAll('[data-text-authority="server-shared-resolved"]').length,
+      preview_text_container_count: svg.querySelectorAll('[data-text-authority="browser-preview-only"]').length,
+      table_cell_text_container_count: svg.querySelectorAll("[data-table-cell-id][data-text-authority]").length
+    })));
+    const browserCensusByPage = new Map(browserPageCensus.map((entry) => [entry.page_id, entry]));
+    const pageCensus = [...scene.pages]
+      .sort((left, right) => left.order - right.order)
+      .map((pageModel) => {
+        const nodes = scene.nodes.filter((node) => node.page_id === pageModel.page_id);
+        const pageNodeKinds = {};
+        const pageTextDispositions = {};
+        let resourceBoundNodeCount = 0;
+        let inlineResourceNodeCount = 0;
+        let descriptorResourceNodeCount = 0;
+        let missingResourceNodeCount = 0;
+        let transformedNodeCount = 0;
+        let fillPaintNodeCount = 0;
+        let linePaintNodeCount = 0;
+        let sharedResolvedLineCount = 0;
+        for (const node of nodes) {
+          pageNodeKinds[node.kind] = (pageNodeKinds[node.kind] ?? 0) + 1;
+          const disposition = node.text_layout?.disposition ?? "none";
+          pageTextDispositions[disposition] = (pageTextDispositions[disposition] ?? 0) + 1;
+          if (disposition === "shared_resolved") {
+            sharedResolvedLineCount += node.text_layout?.lines?.length ?? 0;
+          }
+          if (typeof node.resource_id === "string" && node.resource_id.length) {
+            resourceBoundNodeCount += 1;
+            const resource = resourceById.get(node.resource_id) ?? null;
+            if (!resource) missingResourceNodeCount += 1;
+            else if (resource.availability === "inline_data_url") inlineResourceNodeCount += 1;
+            else descriptorResourceNodeCount += 1;
+          }
+          const transform = node.transform ?? null;
+          if (transform && !(Number(transform.a) === 1 && Number(transform.b) === 0
+              && Number(transform.c) === 0 && Number(transform.d) === 1
+              && Number(transform.tx) === 0 && Number(transform.ty) === 0)) {
+            transformedNodeCount += 1;
+          }
+          if (Array.isArray(node.paint?.fill_rgb)) fillPaintNodeCount += 1;
+          if (Array.isArray(node.paint?.line?.rgb) && Number(node.paint?.line?.width_emu) > 0) {
+            linePaintNodeCount += 1;
+          }
+        }
+        return {
+          page_id: pageModel.page_id,
+          order: pageModel.order,
+          node_count: nodes.length,
+          node_kind_counts: pageNodeKinds,
+          text_layout_disposition_counts: pageTextDispositions,
+          shared_resolved_line_count: sharedResolvedLineCount,
+          resource_bound_node_count: resourceBoundNodeCount,
+          inline_resource_node_count: inlineResourceNodeCount,
+          descriptor_resource_node_count: descriptorResourceNodeCount,
+          missing_resource_node_count: missingResourceNodeCount,
+          transformed_node_count: transformedNodeCount,
+          fill_paint_node_count: fillPaintNodeCount,
+          line_paint_node_count: linePaintNodeCount,
+          browser: browserCensusByPage.get(pageModel.page_id) ?? null
+        };
+      });
     results.push({ fixture: fixture.name, source_sha256: fixture.sha256, source_byte_len: fixture.bytes,
       classification: receipt.classification, rendered: true, fidelity: scene.fidelity, stacking_fidelity: scene.stacking_fidelity,
       fidelity_reasons: fidelityReasons, diagnostic_codes: diagnosticCodes, pages: fixturePages, nodes: scene.nodes.length,
       node_kind_counts: nodeKindCounts, text_layout_disposition_counts: textLayoutDispositionCounts,
       descriptor_only_resource_count: descriptorOnlyResourceCount, browser_preserved_scene_node_order: true,
-      reference_raster_dpi: referenceRasterDpi || null, page_geometry: orderedPageGeometry,
+      reference_raster_dpi: referenceRasterDpi || null, page_geometry: orderedPageGeometry, page_census: pageCensus,
       stories: scene.stories.length, shared_lines: painted.length, nonempty_shared_lines: nonempty.length,
       visual_degeneracies: visualDegeneracies, visual_degeneracy_count: visualDegeneracies.length,
       shared_line_height_px: nonempty.length > 0
