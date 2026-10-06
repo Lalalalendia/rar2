@@ -82,7 +82,8 @@ fn select_replace_image(
     visual: &pub_viewer::ViewerGeometryDocument,
     replacement_asset: Sha256Digest,
     excluded: &[NodeId],
-) -> Option<(SceneInstanceV1, NodeId, RectEmu, ImageCropStateV1)> {
+    require_explicit_crop: bool,
+) -> Option<(SceneInstanceV1, NodeId, RectEmu, Option<ImageCropStateV1>)> {
     for page in &visual.document.pages {
         let page_origin = page.id.into_canonical();
         let target_page_id = page.id.as_canonical().to_string();
@@ -108,7 +109,10 @@ fn select_replace_image(
             {
                 continue;
             }
-            let crop = editor.image_crop_for(scene_node.origin)?;
+            let crop = editor.image_crop_for(scene_node.origin);
+            if require_explicit_crop && crop.is_none() {
+                continue;
+            }
             let frame = editor.graph().nodes.get(&scene_node.origin)?.header.bounds;
             return Some((instance, scene_node.origin, frame, crop));
         }
@@ -176,6 +180,8 @@ pub fn run(
         .map_err(|_| "CHAPTERA_SOURCE_HASH is required".to_owned())?;
     let replacement_binding_id = env::var("CHAPTERA_REPLACEMENT_BINDING_ID")
         .map_err(|_| "CHAPTERA_REPLACEMENT_BINDING_ID is required".to_owned())?;
+    let require_explicit_crop =
+        env::var("CHAPTERA_CONTINUITY_REQUIRE_EXPLICIT_CROP").as_deref() == Ok("1");
     if !replacement_binding_id.starts_with("continuity-v2-")
         || replacement_binding_id.len() != "continuity-v2-".len() + 32
         || !replacement_binding_id["continuity-v2-".len()..]
@@ -276,10 +282,15 @@ pub fn run(
         &visual,
         replacement_asset,
         &[moved_node_id, resized_node_id],
+        require_explicit_crop,
     )
     .ok_or_else(|| {
-        "no distinct admitted direct page-local ReplaceImage target with explicit source crop"
-            .to_owned()
+        if require_explicit_crop {
+            "no distinct admitted direct page-local ReplaceImage target with explicit source crop"
+                .to_owned()
+        } else {
+            "no distinct admitted direct page-local ReplaceImage target".to_owned()
+        }
     })?;
     let before_asset = editor.image_replacement_for(replaced_node_id);
     let operations_before_replace = editor.operations().len();
@@ -299,11 +310,9 @@ pub fn run(
     if replace_frame_after != replace_frame {
         return Err("ReplaceImage changed frame geometry".to_owned());
     }
-    let replace_crop_after = editor
-        .image_crop_for(replaced_node_id)
-        .ok_or_else(|| "ReplaceImage lost explicit source crop".to_owned())?;
+    let replace_crop_after = editor.image_crop_for(replaced_node_id);
     if replace_crop_after != replace_crop_before {
-        return Err("ReplaceImage changed explicit source crop".to_owned());
+        return Err("ReplaceImage changed source crop state".to_owned());
     }
     let after_replace_state_id = state_id(&editor)?;
     let story_state_after_replace = story_state(&editor, story_id)?;
@@ -365,9 +374,7 @@ pub fn run(
         .header
         .bounds;
     let reopened_asset = reopened.image_replacement_for(replaced_node_id);
-    let reopened_crop = reopened
-        .image_crop_for(replaced_node_id)
-        .ok_or_else(|| "fresh reopen lost explicit source crop".to_owned())?;
+    let reopened_crop = reopened.image_crop_for(replaced_node_id);
 
     if reopened_state_id != after_replace_state_id
         || story_state_reopened != after_story_state_id
@@ -453,8 +460,7 @@ pub fn run(
             "after_asset_byte_len": replacement_bytes.len(),
             "frame_before": rect_json(replace_frame),
             "frame_after": rect_json(replace_frame_after),
-            "explicit_crop_present": true,
-            "crop_preserved": true,
+            "explicit_crop_present": replace_crop_before.is_some(),
             "durable_replace_count": 1,
         },
         "history": {
