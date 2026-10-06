@@ -425,11 +425,14 @@ jobs:
               "$dir/scribus-home/.local/share" \
               "$dir/scribus-home/runtime"
             chmod 700 "$dir/scribus-home/runtime"
+            sha="$(basename "$dir")"
             echo "::notice::Scribus validating $idml"
             if [[ "${{ steps.scope.outputs.consumer_runtime }}" == "pinned" ]]; then
               rel_idml="$(realpath --relative-to="$GITHUB_WORKSPACE" "$idml")"
               rel_dir="$(dirname "$rel_idml")"
-              timeout --signal=TERM --kill-after=15s 120s docker run --rm \
+              container_name="chaptera-scribus-${sha:0:12}"
+              set +e
+              timeout --signal=TERM --kill-after=15s 120s docker run --rm --name "$container_name" \
                 -v "$GITHUB_WORKSPACE:/work" \
                 -w /work \
                 -e HOME="/work/$rel_dir/scribus-home" \
@@ -441,6 +444,13 @@ jobs:
                 "$PINNED_CONSUMER_RUNTIME_IMAGE_TAG" \
                 xvfb-run -a scribus -g -ns \
                   -py tools/ci/scribus_idml_consumer.py -- "/work/$rel_idml"
+              rc=$?
+              set -e
+              if [[ "$rc" -ne 0 ]]; then
+                docker rm -f "$container_name" >/dev/null 2>&1 || true
+                echo "::error::Scribus consumer failed/timed out for $sha (rc=$rc)"
+                exit "$rc"
+              fi
             else
               timeout --signal=TERM --kill-after=15s 120s env \
                 HOME="$dir/scribus-home" \
@@ -461,11 +471,14 @@ jobs:
           shopt -s nullglob
           for odg in "$EVIDENCE_ROOT"/consumer/*/output.odg; do
             dir="$(dirname "$odg")"
+            sha="$(basename "$dir")"
             mkdir -p "$dir/libreoffice"
             if [[ "${{ steps.scope.outputs.consumer_runtime }}" == "pinned" ]]; then
               rel_odg="$(realpath --relative-to="$GITHUB_WORKSPACE" "$odg")"
               rel_dir="$(dirname "$rel_odg")"
-              docker run --rm \
+              container_name="chaptera-libreoffice-${sha:0:12}"
+              set +e
+              timeout --signal=TERM --kill-after=15s 120s docker run --rm --name "$container_name" \
                 -v "$GITHUB_WORKSPACE:/work" \
                 -w /work \
                 "$PINNED_CONSUMER_RUNTIME_IMAGE_TAG" \
@@ -473,11 +486,19 @@ jobs:
                   --convert-to fodg \
                   --outdir "/work/$rel_dir/libreoffice" \
                   "/work/$rel_odg"
+              rc=$?
+              set -e
+              if [[ "$rc" -ne 0 ]]; then
+                docker rm -f "$container_name" >/dev/null 2>&1 || true
+                echo "::error::LibreOffice consumer failed/timed out for $sha (rc=$rc)"
+                exit "$rc"
+              fi
             else
-              libreoffice --headless \
-                --convert-to fodg \
-                --outdir "$dir/libreoffice" \
-                "$odg"
+              timeout --signal=TERM --kill-after=15s 120s \
+                libreoffice --headless \
+                  --convert-to fodg \
+                  --outdir "$dir/libreoffice" \
+                  "$odg"
             fi
             test -s "$dir/libreoffice/output.fodg"
           done
