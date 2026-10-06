@@ -85,6 +85,7 @@ struct CensusRow {
 #[derive(Debug, Serialize)]
 struct CensusSummary {
     schema: &'static str,
+    input_manifest_sha256: String,
     expected_denominator: usize,
     manifest_source_count: usize,
     located_source_count: usize,
@@ -252,10 +253,11 @@ fn main() -> Result<()> {
         bail!("partial-escherdelay-breadth-census accepts CORPUS_DIR MANIFEST.json OUTPUT.json");
     }
 
-    let manifest: CohortManifest = serde_json::from_slice(
-        &fs::read(&manifest_path).with_context(|| format!("read {}", manifest_path.display()))?,
-    )
-    .with_context(|| format!("parse {}", manifest_path.display()))?;
+    let manifest_bytes =
+        fs::read(&manifest_path).with_context(|| format!("read {}", manifest_path.display()))?;
+    let input_manifest_sha256 = sha256_hex(&manifest_bytes);
+    let manifest: CohortManifest = serde_json::from_slice(&manifest_bytes)
+        .with_context(|| format!("parse {}", manifest_path.display()))?;
     if manifest.schema != INPUT_SCHEMA {
         bail!(
             "unexpected manifest schema {:?}; expected {:?}",
@@ -524,6 +526,7 @@ fn main() -> Result<()> {
 
     let summary = CensusSummary {
         schema: OUTPUT_SCHEMA,
+        input_manifest_sha256,
         expected_denominator: EXPECTED_DENOMINATOR,
         manifest_source_count: EXPECTED_DENOMINATOR,
         located_source_count,
