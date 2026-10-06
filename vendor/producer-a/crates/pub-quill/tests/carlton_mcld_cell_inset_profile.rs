@@ -50,7 +50,11 @@ fn exact_carlton_mcld_per_child_inset_profile_is_source_safe() {
     let mut multi_child_records = 0_usize;
     eprintln!("CARLTON_MCLD_CELL_INSET_PROFILE_BEGIN");
 
-    for record in mcld.records.iter().filter(|record| record.children.len() > 1) {
+    for record in mcld
+        .records
+        .iter()
+        .filter(|record| record.children.len() > 1)
+    {
         multi_child_records += 1;
         let mut complete_children = 0_usize;
         let mut symmetric_children = 0_usize;
