@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedResolvedScene, BoundedShapedGlyph, BoundedShapedText,
     BoundedShapingDescriptor, ResolvedPhysicalNode, ResolvedSurface, SceneOriginMapping,
-    font_fingerprint_sha256,
+    compatible_natural_baseline_ascent_emu_v1, font_fingerprint_sha256,
 };
 use pub_model::{
     Affine2D, CanonicalId, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D, TableCellId,
@@ -97,6 +97,10 @@ struct CurrentTableCell {
     text: String,
     #[serde(default)]
     typography: Vec<CurrentTypographyRun>,
+    #[serde(default)]
+    layout: Option<CurrentTextLayout>,
+    #[serde(default)]
+    single_line_natural_extent_emu: Option<i64>,
     #[serde(default)]
     bounds: Option<RectEmu>,
     #[serde(default)]
@@ -254,6 +258,9 @@ struct MappingSummary {
     table_cell_inset_bounds_valid_count: usize,
     table_uniform_cell_text_inset_count: usize,
     table_uniform_vertical_alignment_count: usize,
+    mapped_table_text_cell_count: usize,
+    mapped_table_text_run_count: usize,
+    table_text_residual_cell_count: usize,
     derived_table_fill_node_count: usize,
     derived_table_border_node_count: usize,
     derived_table_paint_node_count: usize,
@@ -592,6 +599,185 @@ fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSu
     }
 }
 
+fn table_cell_content_bounds_v1(cell: &CurrentTableCell, inset_emu: i64) -> Option<RectEmu> {
+    if inset_emu < 0 {
+        return None;
+    }
+    let bounds = cell.bounds?;
+    let double_inset = inset_emu.checked_mul(2)?;
+    let width = bounds.width.get().checked_sub(double_inset)?;
+    let height = bounds.height.get().checked_sub(double_inset)?;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    Some(RectEmu::new(
+        LengthEmu::new(bounds.x.get().checked_add(inset_emu)?),
+        LengthEmu::new(bounds.y.get().checked_add(inset_emu)?),
+        LengthEmu::new(width),
+        LengthEmu::new(height),
+    ))
+}
+
+fn append_single_line_table_text_runs_with_ascent_probe_v1(
+    table: &CurrentTable,
+    owner: NodeId,
+    owner_bounds: RectEmu,
+    owner_transform: &Affine2D,
+    packet_fonts: &BTreeMap<String, &CurrentFont>,
+    text_runs: &mut Vec<FixedTextRun>,
+    used_glyph_ids_by_resource: &mut BTreeMap<String, BTreeSet<u32>>,
+    summary: &mut MappingSummary,
+) -> Result<bool> {
+    let nonempty_count = table.cells.iter().filter(|cell| !cell.text.is_empty()).count();
+    if owner_transform != &Affine2D::identity() {
+        summary.table_text_residual_cell_count += nonempty_count;
+        return Ok(false);
+    }
+    let Some(inset_emu) = table.uniform_cell_text_inset_emu.filter(|inset| *inset >= 0) else {
+        summary.table_text_residual_cell_count += nonempty_count;
+        return Ok(false);
+    };
+
+    let mut mapped_any = false;
+    for cell in table.cells.iter().filter(|cell| !cell.text.is_empty()) {
+        let Some(content_bounds) = table_cell_content_bounds_v1(cell, inset_emu) else {
+            summary.table_text_residual_cell_count += 1;
+            continue;
+        };
+        let Some(layout) = cell.layout.as_ref() else {
+            summary.table_text_residual_cell_count += 1;
+            continue;
+        };
+        let CurrentTextLayoutDisposition::SharedResolved {
+            font_resource_id,
+            font_fingerprint_sha256,
+            font_size_emu,
+            line_height_emu,
+        } = &layout.disposition
+        else {
+            summary.table_text_residual_cell_count += 1;
+            continue;
+        };
+        let Some(packet_font) = packet_fonts.get(font_resource_id).copied() else {
+            summary.table_text_residual_cell_count += 1;
+            continue;
+        };
+        if font_fingerprint_sha256 != &packet_font.fingerprint_sha256
+            || *font_size_emu <= 0
+            || *line_height_emu <= 0
+            || layout.lines.len() != 1
+        {
+            summary.table_text_residual_cell_count += 1;
+            continue;
+        }
+
+        let line = &layout.lines[0];
+        let (Some(cell_start), Some(cell_end)) = (cell.story_scalar_start, cell.story_scalar_end)
+        else {
+            summary.table_text_residual_cell_count += 1;
+            continue;
+        };
+        if line.text.is_empty()
+            || !line.spans.is_empty()
+            || line.scalar_start != cell_start
+            || line.scalar_end != cell_end
+            || line.scalar_start >= line.scalar_end
+            || line.measured_width_emu > content_bounds.width.get()
+        {
+            summary.table_text_residual_cell_count += 1;
+            continue;
+        }
+        let Some(natural_line_extent_emu) = cell.single_line_natural_extent_emu else {
+            summary.table_text_residual_cell_count += 1;
+            continue;
+        };
+        if natural_line_extent_emu <= 0 || natural_line_extent_emu > content_bounds.height.get() {
+            summary.table_text_residual_cell_count += 1;
+            continue;
+        }
+        let Some(shaping) = &line.shaping else {
+            summary.table_text_residual_cell_count += 1;
+            continue;
+        };
+        if shaping.units_per_em == 0
+            || shaping.glyphs.iter().any(|glyph| glyph.glyph_id == 0)
+            || shaping.environment.face_index != packet_font.face_index
+            || shaping.environment.layout.font_set_fingerprint != packet_font.fingerprint_sha256
+            || shaping.environment.layout.resource_fingerprint != packet_font.resource_id
+        {
+            summary.table_text_residual_cell_count += 1;
+            continue;
+        }
+        let fill_rgb = match color_range_disposition(
+            &cell.typography,
+            line.scalar_start,
+            line.scalar_end,
+        ) {
+            ColorRangeDisposition::Resolved(color) => color,
+            _ => {
+                summary.table_text_residual_cell_count += 1;
+                continue;
+            }
+        };
+        let Some(baseline_ascent_emu) = compatible_natural_baseline_ascent_emu_v1(
+            &packet_font.bytes,
+            packet_font.face_index,
+            LengthEmu::new(*font_size_emu),
+        )
+        .map(LengthEmu::get)
+        else {
+            summary.table_text_residual_cell_count += 1;
+            continue;
+        };
+
+        let base_x = checked_sub(
+            content_bounds.x.get(),
+            owner_bounds.x.get(),
+            "TABLE text content x offset",
+        )?;
+        let base_y = checked_sub(
+            content_bounds.y.get(),
+            owner_bounds.y.get(),
+            "TABLE text content y offset",
+        )?;
+        let baseline_x = checked_add(base_x, line.x_offset_emu, "TABLE text baseline x")?;
+        let baseline_y = checked_add(
+            checked_add(
+                base_y,
+                layout.vertical_offset_emu,
+                "TABLE text vertical offset",
+            )?,
+            baseline_ascent_emu,
+            "TABLE text compatible ascent baseline y",
+        )?;
+
+        used_glyph_ids_by_resource
+            .entry(packet_font.resource_id.clone())
+            .or_default()
+            .extend(shaping.glyphs.iter().map(|glyph| glyph.glyph_id));
+        text_runs.push(FixedTextRun {
+            node_id: owner,
+            scalar_base: line.scalar_start,
+            logical_text: line.text.clone(),
+            shaped: BoundedShapedText {
+                environment: shaping.environment.clone(),
+                units_per_em: shaping.units_per_em,
+                glyphs: shaping.glyphs.clone(),
+                total_x_advance: LengthEmu::new(line.measured_width_emu),
+            },
+            baseline_x: LengthEmu::new(baseline_x),
+            baseline_y: LengthEmu::new(baseline_y),
+            fill_rgb,
+        });
+        summary.mapped_table_text_cell_count += 1;
+        summary.mapped_table_text_run_count += 1;
+        summary.mapped_text_run_count += 1;
+        mapped_any = true;
+    }
+
+    Ok(mapped_any)
+}
+
 fn append_table_paint_nodes_v1(
     table: &CurrentTable,
     owner: NodeId,
@@ -789,14 +975,32 @@ fn main() -> Result<()> {
                     &mut node_paints,
                     &mut summary,
                 )?;
-                residual_reasons
-                    .entry(resolved_node_id)
-                    .or_default()
-                    .insert(if table_paint_mapped {
-                        "table_text".into()
-                    } else {
-                        "table".into()
-                    });
+                let table_text_residual_before = summary.table_text_residual_cell_count;
+                let table_text_mapped = append_single_line_table_text_runs_with_ascent_probe_v1(
+                    table,
+                    resolved_node_id,
+                    node.bounds,
+                    &node.transform,
+                    &packet_fonts,
+                    &mut text_runs,
+                    &mut used_glyph_ids_by_resource,
+                    &mut summary,
+                )?;
+                let table_text_has_residual =
+                    summary.table_text_residual_cell_count > table_text_residual_before;
+                if table_text_mapped {
+                    mapped_resource_nodes.insert(resolved_node_id);
+                }
+                if !table_text_mapped || table_text_has_residual {
+                    residual_reasons
+                        .entry(resolved_node_id)
+                        .or_default()
+                        .insert(if table_paint_mapped {
+                            "table_text".into()
+                        } else {
+                            "table".into()
+                        });
+                }
             }
 
             nodes.push(ResolvedPhysicalNode {
