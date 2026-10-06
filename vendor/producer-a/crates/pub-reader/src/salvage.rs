@@ -392,6 +392,13 @@ pub fn build_reader_partial_escherdelay_evidence(
     })
 }
 
+fn reader_partial_image_kind_admitted_v1(kind: BlipKind) -> bool {
+    matches!(
+        kind,
+        BlipKind::Jpeg | BlipKind::Png | BlipKind::Gif | BlipKind::Dib | BlipKind::Tiff
+    )
+}
+
 pub fn build_reader_partial_source_graph(
     bytes: &[u8],
     probe: &ReaderSalvageProbe,
@@ -468,6 +475,9 @@ pub fn build_reader_partial_source_graph(
             let Ok(validated) = validate_blip_record(&delay, record) else {
                 continue;
             };
+            if !reader_partial_image_kind_admitted_v1(validated.kind) {
+                continue;
+            }
             facts.push(ReaderPartialSourceFact::VerifiedImage {
                 resource_key: format!("escher-delay:{ordinal}:{}", validated.payload_sha256),
                 sha256: validated.payload_sha256,
@@ -480,6 +490,9 @@ pub fn build_reader_partial_source_graph(
         && let Some(evidence) = build_reader_partial_escherdelay_evidence(bytes, probe)
     {
         for image in evidence.validated_images {
+            if !reader_partial_image_kind_admitted_v1(image.kind) {
+                continue;
+            }
             facts.push(ReaderPartialSourceFact::VerifiedImage {
                 resource_key: format!(
                     "escher-delay:{}:{}:{}:{}",
@@ -760,6 +773,27 @@ fn contents_family_name(family: ContentsFamily) -> String {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn partial_image_product_admission_remains_raster_only_v1() {
+        for kind in [
+            BlipKind::Jpeg,
+            BlipKind::Png,
+            BlipKind::Gif,
+            BlipKind::Dib,
+            BlipKind::Tiff,
+        ] {
+            assert!(reader_partial_image_kind_admitted_v1(kind));
+        }
+        for kind in [
+            BlipKind::Emf,
+            BlipKind::Wmf,
+            BlipKind::Pict,
+            BlipKind::Unknown,
+        ] {
+            assert!(!reader_partial_image_kind_admitted_v1(kind));
+        }
+    }
 
     #[test]
     fn logical_payload_span_maps_across_physical_ranges() {
