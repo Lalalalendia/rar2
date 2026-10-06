@@ -1,6 +1,18 @@
 name: Cloud Reader Linux release packet
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/chaptera-server/**"
+      - "crates/chaptera-untrusted-pub-scan/**"
+      - "deploy/config/chaptera.reader.prod.example.toml"
+      - "deploy/systemd/chaptera-reader.service"
+      - "deploy/nginx/chaptera-reader.conf.example"
+      - "deploy/install-reader-host.sh"
+      - "tools/migration_pdf_worker_isolation.py"
+      - "tools/run_cloud_reader_guest_host_acceptance.py"
+      - ".github/workflows/cloud-reader-linux-release.yml"
   workflow_dispatch:
 
 permissions:
