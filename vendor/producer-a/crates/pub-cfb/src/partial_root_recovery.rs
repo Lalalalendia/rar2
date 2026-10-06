@@ -157,12 +157,11 @@ fn recover_regular_stream_prefix_by_sid_reader_inner<R: Read + Seek>(
 
     let recovered = recover_regular_stream_prefix_by_sid_from_bytes(&source, stream_sid)
         .with_context(|| format!("failed to recover regular stream prefix for SID {stream_sid}"))?;
-    if expected_source_sha256
-        .is_some_and(|expected| !recovered.source_sha256.eq_ignore_ascii_case(expected))
+    if let Some(expected) = expected_source_sha256
+        && !recovered.source_sha256.eq_ignore_ascii_case(expected)
     {
         anyhow::bail!(
-            "source identity mismatch for SID {stream_sid}: expected {}, observed {}",
-            expected_source_sha256.unwrap_or_default(),
+            "source identity mismatch for SID {stream_sid}: expected {expected}, observed {}",
             recovered.source_sha256
         );
     }
