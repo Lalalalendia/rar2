@@ -1,0 +1,115 @@
+name: Editor Newsletter Continuity V1
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/editor-newsletter-continuity-v1.yml"
+      - "apps/chaptera-desktop/src/acceptance_v2.rs"
+      - "tools/run_editor_desktop_continuity_v2.py"
+      - "tools/validate_editor_desktop_continuity_v2_receipt.py"
+      - "packages/product/editor-desktop-continuity/v2/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: editor-newsletter-continuity-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-newsletter-kernel:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install receipt validator
+        run: python -m pip install "jsonschema==4.23.0"
+
+      - name: Acquire pinned Apache POI SampleNewsletter
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture = Join-Path $env:RUNNER_TEMP "SampleNewsletter.pub"
+          $url = "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub"
+          Invoke-WebRequest -Uri $url -OutFile $fixture
+          $hash = (Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item $fixture).Length
+          if ($hash -ne "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf") {
+            throw "SampleNewsletter SHA-256 mismatch: $hash"
+          }
+          if ($bytes -ne 291840) { throw "SampleNewsletter byte length mismatch: $bytes" }
+          "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Generate deterministic replacement PNG
+        shell: pwsh
+        run: |
+          $replacement = Join-Path $env:RUNNER_TEMP "newsletter-replacement.png"
+          $env:CHAPTERA_NEWSLETTER_REPLACEMENT = $replacement
+          @'
+          import binascii
+          import os
+          import pathlib
+          import struct
+          import zlib
+
+          def chunk(kind, data):
+              body = kind + data
+              return struct.pack(">I", len(data)) + body + struct.pack(">I", binascii.crc32(body) & 0xffffffff)
+
+          width = 2
+          height = 2
+          ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+          row0 = b"\x00" + bytes([0x18, 0x62, 0xA0, 0xFF, 0xF2, 0xC1, 0x4E, 0xFF])
+          row1 = b"\x00" + bytes([0x51, 0xA8, 0x54, 0xFF, 0xD9, 0x50, 0x50, 0xFF])
+          png = (
+              b"\x89PNG\r\n\x1a\n"
+              + chunk(b"IHDR", ihdr)
+              + chunk(b"IDAT", zlib.compress(row0 + row1, 9))
+              + chunk(b"IEND", b"")
+          )
+          pathlib.Path(os.environ["CHAPTERA_NEWSLETTER_REPLACEMENT"]).write_bytes(png)
+          '@ | python -
+          "CHAPTERA_NEWSLETTER_REPLACEMENT=$replacement" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build current Chaptera Editor
+        run: cargo build -p chaptera-desktop --release --bin chaptera-editor
+
+      - name: Run bounded recurring-newsletter kernel
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $out = Join-Path $env:RUNNER_TEMP "chaptera-newsletter-continuity-v1"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $project = Join-Path $out "newsletter.project.json"
+          $export = Join-Path $out "newsletter.edited.odg"
+          $receipt = Join-Path $out "newsletter-continuity.real.json"
+          python tools/run_editor_desktop_continuity_v2.py --fixture "$env:CHAPTERA_SAMPLE_NEWSLETTER" --replacement "$env:CHAPTERA_NEWSLETTER_REPLACEMENT" --project-output "$project" --export-output "$export" --receipt-output "$receipt" --require-wrap-irrelevant-mutations -- target/release/chaptera-editor.exe --desktop-acceptance-v2 "{fixture}" "{replacement}" "{project}" "{export}"
+          python tools/validate_editor_desktop_continuity_v2_receipt.py "$receipt"
+          $value = Get-Content $receipt -Raw | ConvertFrom-Json
+          if ($value.invariants.wrap_mutation_scope -ne "text_frame_non_intersecting") {
+            throw "newsletter receipt did not prove wrap-irrelevant mutation scope"
+          }
+          if ($value.image_replace.explicit_crop_present -ne $false) {
+            throw "SampleNewsletter unexpectedly changed public crop baseline"
+          }
+          if ($value.source.immutable -ne $true) {
+            throw "newsletter source immutability missing"
+          }
+          Copy-Item $receipt "target/release/editor-newsletter-continuity-v1.real.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: editor-newsletter-continuity-v1-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/release/editor-newsletter-continuity-v1.real.json
+          if-no-files-found: error
