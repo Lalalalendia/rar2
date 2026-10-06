@@ -221,6 +221,66 @@ fn insert_row_is_v021_and_composes_with_prior_track_resize_and_cell_text() {
 }
 
 #[test]
+fn delete_row_undo_restores_exact_ids_text_and_replays() {
+    let mut session = EditorSession::new(graph()).expect("session");
+    session.create_table(runtime()).expect("CreateTable");
+    session
+        .replace_table_cell_text(table_id(), cell_ids()[2], "survivor row")
+        .expect("edit survivor");
+    session
+        .replace_table_cell_text(table_id(), cell_ids()[0], "removed row")
+        .expect("edit removed");
+
+    let before_grid = session.current_table_grid_v1(table_id()).expect("before");
+    let removed_row = row_ids()[0];
+    let operation = session
+        .delete_table_row_v1(table_id(), removed_row)
+        .expect("delete row");
+    assert!(matches!(operation, EditOperation::DeleteTableRow { .. }));
+
+    let after = session.current_table_grid_v1(table_id()).expect("after");
+    assert_eq!(after.rows.len(), 1);
+    assert_eq!(after.rows[0].id, row_ids()[1]);
+    assert!(after.cells.iter().all(|cell| cell.row_id == row_ids()[1]));
+    assert!(!after.cells.iter().any(|cell| cell.id == cell_ids()[0]));
+    assert_eq!(materialized_text(&session, cell_ids()[2]), "survivor row");
+
+    let project = session.project();
+    assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_21);
+
+    let mut reopened = EditorSession::new(graph()).expect("fresh session");
+    reopened.apply_project(&project).expect("replay");
+    assert_eq!(reopened.project(), project);
+    assert_eq!(
+        materialized_text(&reopened, cell_ids()[2]),
+        "survivor row"
+    );
+
+    reopened.undo().expect("undo delete row");
+    let restored = reopened
+        .current_table_grid_v1(table_id())
+        .expect("restored");
+    assert_eq!(restored, before_grid);
+    assert!(
+        restored
+            .rows
+            .iter()
+            .any(|row| row.id == removed_row)
+    );
+    assert_eq!(materialized_text(&reopened, cell_ids()[0]), "removed row");
+    assert_eq!(
+        materialized_text(&reopened, cell_ids()[2]),
+        "survivor row"
+    );
+
+    reopened.redo().expect("redo delete row");
+    assert_eq!(reopened.project(), project);
+    let redone = reopened.current_table_grid_v1(table_id()).expect("redone");
+    assert_eq!(redone.rows.len(), 1);
+    assert!(!redone.rows.iter().any(|row| row.id == removed_row));
+}
+
+#[test]
 fn delete_column_undo_restores_exact_ids_and_text() {
     let mut session = EditorSession::new(graph()).expect("session");
     session.create_table(runtime()).expect("CreateTable");
