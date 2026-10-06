@@ -2,20 +2,26 @@ use crate::{
     BoundedLayoutProjection, BoundedResolvedTableCells, ProjectionSeverity, ResolveBlocked,
     ResolvedTableCell, TableCellOriginMapping,
 };
-use pub_model::{EffectiveTableGridV1, LengthEmu, NodeId};
+use pub_model::{EffectiveTableGridV1, LengthEmu, NodeId, RectEmu};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectiveTableLayoutInputV1 {
+    pub grid: EffectiveTableGridV1,
+    pub bounds: RectEmu,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BoundedEffectiveTableResolveError {
     ProjectionBlocked(ResolveBlocked),
-    DuplicateGrid {
+    DuplicateState {
         table_origin: NodeId,
     },
-    GridForUnknownTable {
+    StateForUnknownTable {
         table_origin: NodeId,
     },
-    MissingGrid {
+    MissingState {
         table_origin: NodeId,
     },
     MissingTableGeometry {
@@ -45,6 +51,9 @@ pub enum BoundedEffectiveTableResolveError {
         index: u32,
         value: i64,
     },
+    InvalidBounds {
+        table_origin: NodeId,
+    },
     MetricOverflow {
         table_origin: NodeId,
     },
@@ -65,26 +74,24 @@ impl fmt::Display for BoundedEffectiveTableResolveError {
                 "projection blocked table resolution with {} errors",
                 error.projection_errors.len()
             ),
-            Self::DuplicateGrid { table_origin } => {
-                write!(
-                    formatter,
-                    "duplicate effective grid for table {}",
-                    table_origin.as_canonical()
-                )
-            }
-            Self::GridForUnknownTable { table_origin } => write!(
+            Self::DuplicateState { table_origin } => write!(
                 formatter,
-                "effective grid supplied for unknown table {}",
+                "duplicate effective layout state for table {}",
                 table_origin.as_canonical()
             ),
-            Self::MissingGrid { table_origin } => write!(
+            Self::StateForUnknownTable { table_origin } => write!(
                 formatter,
-                "missing effective grid for table {}",
+                "effective layout state supplied for unknown table {}",
+                table_origin.as_canonical()
+            ),
+            Self::MissingState { table_origin } => write!(
+                formatter,
+                "missing effective layout state for table {}",
                 table_origin.as_canonical()
             ),
             Self::MissingTableGeometry { table_origin } => write!(
                 formatter,
-                "table {} has no authored node geometry",
+                "table {} has no projected node geometry",
                 table_origin.as_canonical()
             ),
             Self::InvalidGrid { table_origin } => write!(
@@ -137,6 +144,11 @@ impl fmt::Display for BoundedEffectiveTableResolveError {
                 index,
                 value
             ),
+            Self::InvalidBounds { table_origin } => write!(
+                formatter,
+                "table {} has invalid effective bounds",
+                table_origin.as_canonical()
+            ),
             Self::MetricOverflow { table_origin } => write!(
                 formatter,
                 "table {} effective track arithmetic overflowed",
@@ -150,7 +162,7 @@ impl fmt::Display for BoundedEffectiveTableResolveError {
                 available_height,
             } => write!(
                 formatter,
-                "table {} effective tracks require {}x{} EMU but owner bounds provide {}x{} EMU",
+                "table {} effective tracks require {}x{} EMU but effective bounds provide {}x{} EMU",
                 table_origin.as_canonical(),
                 required_width,
                 required_height,
@@ -209,9 +221,14 @@ fn checked_offsets(
     Ok((offsets, total))
 }
 
+/// Resolves exact simple-table cell rectangles from the current effective table state.
+///
+/// The caller supplies operation-derived EffectiveTableGridV1 and effective TABLE
+/// bounds. The resolver never reparses Publisher table carriers, never equal-splits
+/// bounds, and fails closed when any required track extent is unknown.
 pub fn resolve_bounded_effective_table_cells(
     projection: &BoundedLayoutProjection,
-    grids: &[EffectiveTableGridV1],
+    states: &[EffectiveTableLayoutInputV1],
 ) -> Result<BoundedResolvedTableCells, BoundedEffectiveTableResolveError> {
     let projection_errors = projection
         .diagnostics
@@ -230,16 +247,17 @@ pub fn resolve_bounded_effective_table_cells(
         .iter()
         .map(|table| table.origin)
         .collect::<BTreeSet<_>>();
-    let mut grid_map = BTreeMap::new();
-    for grid in grids {
-        if !table_ids.contains(&grid.table_id) {
-            return Err(BoundedEffectiveTableResolveError::GridForUnknownTable {
-                table_origin: grid.table_id,
+    let mut state_map = BTreeMap::new();
+    for state in states {
+        let table_origin = state.grid.table_id;
+        if !table_ids.contains(&table_origin) {
+            return Err(BoundedEffectiveTableResolveError::StateForUnknownTable {
+                table_origin,
             });
         }
-        if grid_map.insert(grid.table_id, grid).is_some() {
-            return Err(BoundedEffectiveTableResolveError::DuplicateGrid {
-                table_origin: grid.table_id,
+        if state_map.insert(table_origin, state).is_some() {
+            return Err(BoundedEffectiveTableResolveError::DuplicateState {
+                table_origin,
             });
         }
     }
@@ -254,12 +272,13 @@ pub fn resolve_bounded_effective_table_cells(
     let mut origin_mapping = Vec::new();
 
     for table in &projection.tables {
-        let grid = grid_map
+        let state = state_map
             .get(&table.origin)
             .copied()
-            .ok_or(BoundedEffectiveTableResolveError::MissingGrid {
+            .ok_or(BoundedEffectiveTableResolveError::MissingState {
                 table_origin: table.origin,
             })?;
+        let grid = &state.grid;
         grid.validate()
             .map_err(|_| BoundedEffectiveTableResolveError::InvalidGrid {
                 table_origin: table.origin,
@@ -285,6 +304,15 @@ pub fn resolve_bounded_effective_table_cells(
             .ok_or(BoundedEffectiveTableResolveError::MissingTableGeometry {
                 table_origin: table.origin,
             })?;
+        if state.bounds.width.get() <= 0
+            || state.bounds.height.get() <= 0
+            || state.bounds.right().is_none()
+            || state.bounds.bottom().is_none()
+        {
+            return Err(BoundedEffectiveTableResolveError::InvalidBounds {
+                table_origin: table.origin,
+            });
+        }
 
         let row_extents = grid
             .rows
@@ -300,13 +328,13 @@ pub fn resolve_bounded_effective_table_cells(
         let (column_offsets, required_width) =
             checked_offsets(table.origin, &column_extents, false)?;
 
-        if required_width > owner.bounds.width.get() || required_height > owner.bounds.height.get() {
+        if required_width > state.bounds.width.get() || required_height > state.bounds.height.get() {
             return Err(BoundedEffectiveTableResolveError::MetricsExceedTableBounds {
                 table_origin: table.origin,
                 required_width,
                 required_height,
-                available_width: owner.bounds.width.get(),
-                available_height: owner.bounds.height.get(),
+                available_width: state.bounds.width.get(),
+                available_height: state.bounds.height.get(),
             });
         }
 
@@ -333,7 +361,7 @@ pub fn resolve_bounded_effective_table_cells(
                 .ok_or(BoundedEffectiveTableResolveError::TopologyMismatch {
                     table_origin: table.origin,
                 })?;
-            let x = owner
+            let x = state
                 .bounds
                 .x
                 .get()
@@ -347,7 +375,7 @@ pub fn resolve_bounded_effective_table_cells(
                 .ok_or(BoundedEffectiveTableResolveError::MetricOverflow {
                     table_origin: table.origin,
                 })?;
-            let y = owner
+            let y = state
                 .bounds
                 .y
                 .get()
@@ -366,7 +394,7 @@ pub fn resolve_bounded_effective_table_cells(
                 origin: projected.origin,
                 table_origin: table.origin,
                 address: projected.address,
-                bounds: pub_model::RectEmu::new(
+                bounds: RectEmu::new(
                     LengthEmu::new(x),
                     LengthEmu::new(y),
                     column_extent,
@@ -527,11 +555,11 @@ mod tests {
             node_geometry: vec![BoundedNodeGeometryInput {
                 node_id: table_id(),
                 parent_origin: page_id().into_canonical(),
-                bounds: pub_model::RectEmu::new(
+                bounds: RectEmu::new(
                     LengthEmu::new(100),
                     LengthEmu::new(200),
-                    LengthEmu::new(650),
-                    LengthEmu::new(450),
+                    LengthEmu::new(600),
+                    LengthEmu::new(400),
                 ),
                 transform: Affine2D::identity(),
             }],
@@ -543,16 +571,29 @@ mod tests {
         })
     }
 
+    fn state(grid: EffectiveTableGridV1) -> EffectiveTableLayoutInputV1 {
+        EffectiveTableLayoutInputV1 {
+            grid,
+            bounds: RectEmu::new(
+                LengthEmu::new(100),
+                LengthEmu::new(200),
+                LengthEmu::new(650),
+                LengthEmu::new(450),
+            ),
+        }
+    }
+
     #[test]
-    fn nonuniform_effective_tracks_resolve_exact_cell_rectangles() {
+    fn nonuniform_effective_tracks_and_bounds_resolve_exact_cell_rectangles() {
         let grid = grid();
-        let resolved =
-            resolve_bounded_effective_table_cells(&projection(&grid), &[grid]).expect("resolve");
+        let projection = projection(&grid);
+        let resolved = resolve_bounded_effective_table_cells(&projection, &[state(grid)])
+            .expect("resolve effective table state");
 
         assert_eq!(resolved.cells.len(), 4);
         assert_eq!(
             resolved.cells[0].bounds,
-            pub_model::RectEmu::new(
+            RectEmu::new(
                 LengthEmu::new(100),
                 LengthEmu::new(200),
                 LengthEmu::new(300),
@@ -561,7 +602,7 @@ mod tests {
         );
         assert_eq!(
             resolved.cells[3].bounds,
-            pub_model::RectEmu::new(
+            RectEmu::new(
                 LengthEmu::new(400),
                 LengthEmu::new(400),
                 LengthEmu::new(350),
@@ -574,8 +615,9 @@ mod tests {
     fn unknown_track_extent_fails_closed() {
         let mut grid = grid();
         grid.columns[1].extent = None;
+        let projection = projection(&grid);
         assert!(matches!(
-            resolve_bounded_effective_table_cells(&projection(&grid), &[grid]),
+            resolve_bounded_effective_table_cells(&projection, &[state(grid)]),
             Err(BoundedEffectiveTableResolveError::UnknownColumnExtent {
                 table_origin,
                 index: 1,
@@ -590,24 +632,25 @@ mod tests {
         let mut mismatched = grid.clone();
         mismatched.cells.swap(0, 1);
         assert!(matches!(
-            resolve_bounded_effective_table_cells(&projection, &[mismatched]),
+            resolve_bounded_effective_table_cells(&projection, &[state(mismatched)]),
             Err(BoundedEffectiveTableResolveError::InvalidGrid { .. })
                 | Err(BoundedEffectiveTableResolveError::TopologyMismatch { .. })
         ));
     }
 
     #[test]
-    fn track_metrics_may_not_exceed_owner_bounds() {
+    fn effective_track_metrics_may_not_exceed_effective_bounds() {
         let grid = grid();
-        let mut projection = projection(&grid);
-        projection.node_geometry[0].bounds = pub_model::RectEmu::new(
+        let projection = projection(&grid);
+        let mut effective = state(grid);
+        effective.bounds = RectEmu::new(
             LengthEmu::new(100),
             LengthEmu::new(200),
             LengthEmu::new(649),
             LengthEmu::new(450),
         );
         assert!(matches!(
-            resolve_bounded_effective_table_cells(&projection, &[grid]),
+            resolve_bounded_effective_table_cells(&projection, &[effective]),
             Err(BoundedEffectiveTableResolveError::MetricsExceedTableBounds { .. })
         ));
     }
