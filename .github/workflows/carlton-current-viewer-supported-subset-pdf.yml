@@ -426,6 +426,47 @@ jobs:
                   f"Carlton TABLE vertical-alignment authority drift: "
                   f"{mapping.get('table_uniform_vertical_alignment_count')!r}"
               )
+          expected_table_single_line = {
+              "bounded_profile": 13,
+              "hard_break_free": 13,
+              "width_fit": 10,
+          }
+          actual_table_single_line = {
+              "bounded_profile": mapping.get("table_bounded_text_profile_cell_count"),
+              "hard_break_free": mapping.get("table_hard_break_free_profile_cell_count"),
+              "width_fit": mapping.get("table_single_line_width_fit_cell_count"),
+          }
+          if actual_table_single_line != expected_table_single_line:
+              raise SystemExit(
+                  f"Carlton TABLE single-line baseline drift: {actual_table_single_line!r}"
+              )
+          print(
+              "table_single_line_admission_breakdown="
+              + json.dumps(
+                  {
+                      **actual_table_single_line,
+                      "alignment_admissible_profile": mapping[
+                          "table_paragraph_alignment_admissible_profile_cell_count"
+                      ],
+                      "width_fit_alignment_admissible": mapping[
+                          "table_width_fit_alignment_admissible_cell_count"
+                      ],
+                      "layout_present_nonempty": mapping[
+                          "table_layout_present_nonempty_cell_count"
+                      ],
+                      "layout_present_bounded_profile": mapping[
+                          "table_layout_present_bounded_profile_cell_count"
+                      ],
+                      "layout_present_width_fit": mapping[
+                          "table_layout_present_width_fit_cell_count"
+                      ],
+                      "layout_present_width_fit_alignment_admissible": mapping[
+                          "table_layout_present_width_fit_alignment_admissible_cell_count"
+                      ],
+                  },
+                  sort_keys=True,
+              )
+          )
           if mapping["table_cell_paint_state_count"] != 17:
               raise SystemExit(f"TABLE known cell-paint state drift: {mapping['table_cell_paint_state_count']!r}")
           if mapping["derived_table_border_node_count"] != 20:
