@@ -39,7 +39,7 @@ jobs:
       - name: Checkout exact candidate
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-python@v5
         with:
@@ -100,7 +100,8 @@ jobs:
 
       - name: Render new hosted supplemental set through current Reader
         env:
-          REPOSITORY_COMMIT_SHA: ${{ github.sha }}
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          READER_CORPUS_DIAGNOSTIC: "1"
           READER_WORKER_BINARY: ${{ github.workspace }}/target/publisher-visual-supplemental/debug/chaptera
           READER_REAL_MANIFEST: ${{ runner.temp }}/publisher-visual-supplemental/manifest.json
           READER_REAL_OUTPUT: ${{ runner.temp }}/publisher-visual-supplemental/browser
@@ -129,6 +130,8 @@ jobs:
               "rendered_pair_count": data["rendered_pair_count"],
               "unsupported_pair_count": data["unsupported_pair_count"],
               "page_count_mismatch_pair_count": data["page_count_mismatch_pair_count"],
+              "visual_degeneracy_pair_count": data["visual_degeneracy_pair_count"],
+              "visual_degeneracy_count": data["visual_degeneracy_count"],
               "visual_reference_fingerprint_state": data["visual_reference_fingerprint_state"],
               "unsupported_pairs": [
                   row["basename"] for row in data["unsupported_pairs"]
@@ -141,12 +144,21 @@ jobs:
                   }
                   for row in data["page_count_mismatches"]
               ],
+              "visual_degeneracy_pairs": [
+                  {
+                      "basename": row["basename"],
+                      "count": row["visual_degeneracy_count"],
+                      "details": row["visual_degeneracies"],
+                  }
+                  for row in data["visual_degeneracy_pairs"]
+              ],
           }, indent=2, sort_keys=True))
           assert data["hosted_pair_count"] == 24
           assert data["hosted_reference_page_count"] == 52
           assert data["rendered_pair_count"] == 24, "not all new hosted corpus pairs render"
           assert data["unsupported_pair_count"] == 0, "new hosted corpus has unsupported Reader pairs"
           assert data["page_count_mismatch_pair_count"] == 0, "new hosted corpus has page-count mismatches"
+          assert data["visual_degeneracy_count"] == 0, "new hosted corpus has collapsed shared-text geometry"
           PY
 
       - name: Upload source-free supplemental receipt
