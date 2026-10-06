@@ -15,6 +15,11 @@ $Master2Id = 33554741
 $PbFilePublication = 1
 $MsoTextOrientationHorizontal = 1
 $TagName = "PUB_T828_ROLE"
+# Office RGB properties use COLORREF layout 0x00BBGGRR.
+$MasterOneRgb = 0x000000FF
+$MasterTwoRgb = 0x0000FF00
+$PageALocalRgb = 0x00FF0000
+$PageBLocalRgb = 0x00FF00FF
 
 $packet = Get-Content -LiteralPath $PacketPath -Raw | ConvertFrom-Json
 if ([string]$packet.id -ne $ExpectedExperiment) {
@@ -193,6 +198,8 @@ function Get-PageSnapshot {
         return [ordered]@{
             page_id = [int]$page.PageID
             page_number = [int]$page.PageNumber
+            width = [double]$page.Width
+            height = [double]$page.Height
             ignore_master = [bool]$page.IgnoreMaster
             master_page_id = [int]$master.PageID
             master_name = $masterName
@@ -218,6 +225,7 @@ function Get-MasterSnapshot {
         return [ordered]@{
             page_id = [int]$page.PageID
             name = $name
+            shape_count = [int]$page.Shapes.Count
             tagged_shapes = @(Get-TaggedShapeSnapshots -Page $page)
         }
     }
@@ -238,30 +246,101 @@ function Get-DocumentSnapshot {
     }
 }
 
-function Add-TaggedTextBox {
+function Clear-AllShapes {
+    param([Parameter(Mandatory = $true)]$Page)
+    $removed = 0
+    while ([int]$Page.Shapes.Count -gt 0) {
+        $shape = $null
+        try {
+            $shape = $Page.Shapes.Item(1)
+            $shape.Delete()
+            $removed += 1
+        }
+        finally {
+            Release-Com $shape
+        }
+    }
+    return $removed
+}
+
+function Add-TaggedRectangle {
     param(
         [Parameter(Mandatory = $true)]$Page,
         [Parameter(Mandatory = $true)][string]$Role,
-        [Parameter(Mandatory = $true)][string]$Text,
         [Parameter(Mandatory = $true)][double]$Left,
-        [Parameter(Mandatory = $true)][double]$Top
+        [Parameter(Mandatory = $true)][double]$Top,
+        [Parameter(Mandatory = $true)][double]$Width,
+        [Parameter(Mandatory = $true)][double]$Height,
+        [Parameter(Mandatory = $true)][int]$Rgb
     )
 
     $shape = $null
-    $range = $null
     try {
-        $shape = $Page.Shapes.AddTextbox($MsoTextOrientationHorizontal, $Left, $Top, 180, 36)
+        # Office msoShapeRectangle = 1.
+        $shape = $Page.Shapes.AddShape(1, $Left, $Top, $Width, $Height)
+        $shape.Name = "T828_" + $Role.Replace("-", "_")
         $shape.Tags.Add($TagName, $Role) | Out-Null
-        $range = $shape.TextFrame.TextRange
-        $range.Text = $Text
-        try { $range.Font.Name = "Arial" } catch {}
-        try { $range.Font.Size = 18 } catch {}
+        $shape.Fill.Solid()
+        $shape.Fill.ForeColor.RGB = $Rgb
+        $shape.Fill.Transparency = 0
+        $shape.Line.Visible = 0
         return [int]$shape.ID
     }
     finally {
-        Release-Com $range
         Release-Com $shape
     }
+}
+
+function Read-PagePixelForShape {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][double]$PageWidth,
+        [Parameter(Mandatory = $true)][double]$PageHeight,
+        [Parameter(Mandatory = $true)]$ShapeSnapshot
+    )
+
+    Add-Type -AssemblyName System.Drawing
+    $bitmap = $null
+    try {
+        $bitmap = [System.Drawing.Bitmap]::FromFile($Path)
+        if ($bitmap.Width -le 0 -or $bitmap.Height -le 0) {
+            throw "Saved page picture has invalid dimensions."
+        }
+        $centerX = [double]$ShapeSnapshot.left + ([double]$ShapeSnapshot.width / 2.0)
+        $centerY = [double]$ShapeSnapshot.top + ([double]$ShapeSnapshot.height / 2.0)
+        $x = [int][Math]::Floor(($centerX / $PageWidth) * $bitmap.Width)
+        $y = [int][Math]::Floor(($centerY / $PageHeight) * $bitmap.Height)
+        $x = [Math]::Max(0, [Math]::Min($bitmap.Width - 1, $x))
+        $y = [Math]::Max(0, [Math]::Min($bitmap.Height - 1, $y))
+        $pixel = $bitmap.GetPixel($x, $y)
+        return [ordered]@{
+            image_width = [int]$bitmap.Width
+            image_height = [int]$bitmap.Height
+            sample_x = $x
+            sample_y = $y
+            r = [int]$pixel.R
+            g = [int]$pixel.G
+            b = [int]$pixel.B
+            a = [int]$pixel.A
+        }
+    }
+    finally {
+        if ($null -ne $bitmap) { $bitmap.Dispose() }
+    }
+}
+
+function Test-PixelNearColor {
+    param(
+        [Parameter(Mandatory = $true)]$Pixel,
+        [Parameter(Mandatory = $true)][int]$R,
+        [Parameter(Mandatory = $true)][int]$G,
+        [Parameter(Mandatory = $true)][int]$B,
+        [int]$MaxDistanceSq = 1600
+    )
+    $dr = [int]$Pixel.r - $R
+    $dg = [int]$Pixel.g - $G
+    $db = [int]$Pixel.b - $B
+    return (($dr * $dr) + ($dg * $dg) + ($db * $db)) -le $MaxDistanceSq
 }
 
 function Save-PageRender {
@@ -304,11 +383,21 @@ function Snapshot-PubFile {
         $semantic = Get-DocumentSnapshot -Document $doc
         Save-PageRender -Document $doc -PageId $PageAId -Path $pageARender
         Save-PageRender -Document $doc -PageId $PageBId -Path $pageBRender
+        $masterOneShape = Get-RoleShapeSnapshot -DocumentSnapshot $semantic -Carrier "master_1" -Role "MASTER-ONE"
+        $masterTwoShape = Get-RoleShapeSnapshot -DocumentSnapshot $semantic -Carrier "master_1" -Role "MASTER-TWO"
+        $pageALocalShape = Get-RoleShapeSnapshot -DocumentSnapshot $semantic -Carrier "page_a" -Role "PAGE-A-LOCAL"
         return [ordered]@{
             semantic = $semantic
             renders = [ordered]@{
                 page_a = Get-FileSummary $pageARender
                 page_b = Get-FileSummary $pageBRender
+            }
+            render_samples = [ordered]@{
+                page_a = [ordered]@{
+                    master_one = Read-PagePixelForShape -Path $pageARender -PageWidth ([double]$semantic.page_a.width) -PageHeight ([double]$semantic.page_a.height) -ShapeSnapshot $masterOneShape
+                    master_two = Read-PagePixelForShape -Path $pageARender -PageWidth ([double]$semantic.page_a.width) -PageHeight ([double]$semantic.page_a.height) -ShapeSnapshot $masterTwoShape
+                    page_local = Read-PagePixelForShape -Path $pageARender -PageWidth ([double]$semantic.page_a.width) -PageHeight ([double]$semantic.page_a.height) -ShapeSnapshot $pageALocalShape
+                }
             }
         }
     }
@@ -316,6 +405,20 @@ function Snapshot-PubFile {
         Close-Document $doc
         Close-PubPublisherApplication $app
     }
+}
+
+function Get-RoleShapeSnapshot {
+    param(
+        [Parameter(Mandatory = $true)]$DocumentSnapshot,
+        [Parameter(Mandatory = $true)][string]$Carrier,
+        [Parameter(Mandatory = $true)][string]$Role
+    )
+    $carrierSnapshot = $DocumentSnapshot[$Carrier]
+    $matches = @($carrierSnapshot.tagged_shapes | Where-Object { [string]$_.role -eq $Role })
+    if ($matches.Count -ne 1) {
+        throw "Expected exactly one role=$Role on carrier=$Carrier; found $($matches.Count)."
+    }
+    return $matches[0]
 }
 
 function Get-RoleShapeId {
@@ -378,10 +481,16 @@ function New-SeedFixture {
         $pageB.IgnoreMaster = $false
         $pageB.Master = $master1
 
-        [void](Add-TaggedTextBox -Page $master1 -Role "MASTER-ONE" -Text "T828 MASTER ONE" -Left 72 -Top 72)
-        [void](Add-TaggedTextBox -Page $master1 -Role "MASTER-TWO" -Text "T828 MASTER TWO" -Left 72 -Top 120)
-        [void](Add-TaggedTextBox -Page $pageA -Role "PAGE-A-LOCAL" -Text "T828 PAGE A LOCAL" -Left 306 -Top 72)
-        [void](Add-TaggedTextBox -Page $pageB -Role "PAGE-B-LOCAL" -Text "T828 PAGE B LOCAL" -Left 306 -Top 72)
+        # Normalize the disposable seed to a controlled visual scene while preserving
+        # the registered page/master identities and relation topology.
+        [void](Clear-AllShapes -Page $master1)
+        [void](Clear-AllShapes -Page $pageA)
+        [void](Clear-AllShapes -Page $pageB)
+
+        [void](Add-TaggedRectangle -Page $master1 -Role "MASTER-ONE" -Left 72 -Top 72 -Width 144 -Height 72 -Rgb $MasterOneRgb)
+        [void](Add-TaggedRectangle -Page $master1 -Role "MASTER-TWO" -Left 72 -Top 180 -Width 144 -Height 72 -Rgb $MasterTwoRgb)
+        [void](Add-TaggedRectangle -Page $pageA -Role "PAGE-A-LOCAL" -Left 306 -Top 72 -Width 144 -Height 72 -Rgb $PageALocalRgb)
+        [void](Add-TaggedRectangle -Page $pageB -Role "PAGE-B-LOCAL" -Left 306 -Top 72 -Width 144 -Height 72 -Rgb $PageBLocalRgb)
 
         $doc.SaveAs($SeedPub, $PbFilePublication, $false)
     }
@@ -659,6 +768,31 @@ $checks = [ordered]@{
         [int]$rebindTrue.fresh_reopen.semantic.page_a.master_page_id -eq $Master2Id
     )
     tagged_master_and_page_local_shape_identity_stable = [bool]$identityStable
+
+    control_master_one_visible = (Test-PixelNearColor -Pixel $control.fresh_reopen.render_samples.page_a.master_one -R 255 -G 0 -B 0)
+    control_master_two_visible = (Test-PixelNearColor -Pixel $control.fresh_reopen.render_samples.page_a.master_two -R 0 -G 255 -B 0)
+    control_page_local_visible = (Test-PixelNearColor -Pixel $control.fresh_reopen.render_samples.page_a.page_local -R 0 -G 0 -B 255)
+
+    ignore_true_master_one_suppressed = (-not (Test-PixelNearColor -Pixel $ignoreTrue.fresh_reopen.render_samples.page_a.master_one -R 255 -G 0 -B 0))
+    ignore_true_master_two_suppressed = (-not (Test-PixelNearColor -Pixel $ignoreTrue.fresh_reopen.render_samples.page_a.master_two -R 0 -G 255 -B 0))
+    ignore_true_page_local_visible = (Test-PixelNearColor -Pixel $ignoreTrue.fresh_reopen.render_samples.page_a.page_local -R 0 -G 0 -B 255)
+
+    true_false_master_projection_restored = (
+        (Test-PixelNearColor -Pixel $trueFalse.fresh_reopen.render_samples.page_a.master_one -R 255 -G 0 -B 0) -and
+        (Test-PixelNearColor -Pixel $trueFalse.fresh_reopen.render_samples.page_a.master_two -R 0 -G 255 -B 0) -and
+        (Test-PixelNearColor -Pixel $trueFalse.fresh_reopen.render_samples.page_a.page_local -R 0 -G 0 -B 255)
+    )
+    reversible_true_master_projection_suppressed = (
+        (-not (Test-PixelNearColor -Pixel $reversible.after_true.fresh_reopen.render_samples.page_a.master_one -R 255 -G 0 -B 0)) -and
+        (-not (Test-PixelNearColor -Pixel $reversible.after_true.fresh_reopen.render_samples.page_a.master_two -R 0 -G 255 -B 0)) -and
+        (Test-PixelNearColor -Pixel $reversible.after_true.fresh_reopen.render_samples.page_a.page_local -R 0 -G 0 -B 255)
+    )
+    reversible_false_master_projection_restored = (
+        (Test-PixelNearColor -Pixel $reversible.final_false.fresh_reopen.render_samples.page_a.master_one -R 255 -G 0 -B 0) -and
+        (Test-PixelNearColor -Pixel $reversible.final_false.fresh_reopen.render_samples.page_a.master_two -R 0 -G 255 -B 0) -and
+        (Test-PixelNearColor -Pixel $reversible.final_false.fresh_reopen.render_samples.page_a.page_local -R 0 -G 0 -B 255)
+    )
+    rebind_while_true_page_local_visible = (Test-PixelNearColor -Pixel $rebindTrue.fresh_reopen.render_samples.page_a.page_local -R 0 -G 0 -B 255)
 }
 
 $comClassification = "inconclusive"
@@ -671,7 +805,17 @@ if (
     $checks.reversible_final_false_persists -and
     $checks.rebind_while_true_keeps_ignore_true -and
     $checks.rebind_while_true_persists_master_2 -and
-    $checks.tagged_master_and_page_local_shape_identity_stable
+    $checks.tagged_master_and_page_local_shape_identity_stable -and
+    $checks.control_master_one_visible -and
+    $checks.control_master_two_visible -and
+    $checks.control_page_local_visible -and
+    $checks.ignore_true_master_one_suppressed -and
+    $checks.ignore_true_master_two_suppressed -and
+    $checks.ignore_true_page_local_visible -and
+    $checks.true_false_master_projection_restored -and
+    $checks.reversible_true_master_projection_suppressed -and
+    $checks.reversible_false_master_projection_restored -and
+    $checks.rebind_while_true_page_local_visible
 ) {
     $comClassification = "independent-ignore-master-and-applied-master-state-confirmed-at-com-layer"
 }
@@ -697,7 +841,7 @@ $result = [ordered]@{
         master_1 = $Master1Id
         master_2 = $Master2Id
     }
-    render_oracle = "Publisher Page.SaveAsPicture PNG captured only after fresh reopen."
+    render_oracle = "Publisher Page.SaveAsPicture PNG captured only after fresh reopen; center-pixel samples are taken from two controlled master-owned rectangles and one controlled page-local rectangle."
     seed = $seed
     arms = [ordered]@{
         control = $control
@@ -725,5 +869,13 @@ Write-PubJson -Value $result -Path (Join-Path $analysisDir "ignore-master-auth-0
     "reversible_final_false_persists=$($checks.reversible_final_false_persists)",
     "rebind_while_true_persists_master_2=$($checks.rebind_while_true_persists_master_2)",
     "identity_stable=$($checks.tagged_master_and_page_local_shape_identity_stable)",
+    "control_master_one_visible=$($checks.control_master_one_visible)",
+    "control_master_two_visible=$($checks.control_master_two_visible)",
+    "control_page_local_visible=$($checks.control_page_local_visible)",
+    "ignore_true_master_one_suppressed=$($checks.ignore_true_master_one_suppressed)",
+    "ignore_true_master_two_suppressed=$($checks.ignore_true_master_two_suppressed)",
+    "ignore_true_page_local_visible=$($checks.ignore_true_page_local_visible)",
+    "reversible_true_master_projection_suppressed=$($checks.reversible_true_master_projection_suppressed)",
+    "reversible_false_master_projection_restored=$($checks.reversible_false_master_projection_restored)",
     "com_classification=$comClassification"
 ) | Set-Content -LiteralPath (Join-Path $logDir "ignore-master-auth-01.txt") -Encoding ASCII
