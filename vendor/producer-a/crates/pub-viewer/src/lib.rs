@@ -588,6 +588,9 @@ pub struct ViewerTable {
     pub rows: u32,
     pub columns: u32,
     pub cells: Vec<ViewerTableCell>,
+    /// Symmetric source-backed TABLE cell text inset. Missing remains unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uniform_cell_text_inset_emu: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub borders: Vec<ViewerTableBorderSegment>,
 }
@@ -3937,6 +3940,10 @@ fn viewer_tables_from_resolved(
             rows: source.rows,
             columns: source.columns,
             cells,
+            uniform_cell_text_inset_emu: source
+                .uniform_text_inset
+                .as_ref()
+                .map(|inset| inset.inset_emu.get()),
             borders,
         });
     }
