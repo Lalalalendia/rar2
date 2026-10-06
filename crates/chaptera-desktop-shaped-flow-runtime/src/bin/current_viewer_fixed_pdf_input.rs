@@ -536,7 +536,11 @@ fn census(
                     .stories
                     .iter()
                     .find(|story| story.id == table.story_id);
-                for cell in table.cells.iter().filter(|cell| !cell.text.is_empty() && cell.layout.is_some()) {
+                for cell in table
+                    .cells
+                    .iter()
+                    .filter(|cell| !cell.text.is_empty() && cell.layout.is_some())
+                {
                     out.table_layout_present_cell_count += 1;
                     let Some(story) = story else {
                         *out.table_layout_line_spacing_kind_counts
