@@ -18,6 +18,7 @@ on:
       - ".github/workflows/editor-fixed-output-current-image-resources.yml"
       - "tools/ci/pub_editor_pr_fanout.py"
       - "tools/ci/test_pub_editor_pr_fanout.py"
+      - "tools/ci/test_pub_editor_testonly_fanout.py"
   workflow_dispatch:
 
 permissions:
@@ -40,3 +41,6 @@ jobs:
         run: python tools/ci/test_pub_editor_pr_fanout.py
       - name: Guard Editor build-once wiring
         run: python tools/ci/test_editor_build_once_wiring.py
+
+      - name: Guard classifier-test-only fanout
+        run: python tools/ci/test_pub_editor_testonly_fanout.py

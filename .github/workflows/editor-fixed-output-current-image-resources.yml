@@ -5,7 +5,6 @@ on:
     paths:
       - "vendor/producer-a/crates/pub-editor/src/lib.rs"
       - "tools/ci/pub_editor_pr_fanout.py"
-      - "tools/ci/test_pub_editor_pr_fanout.py"
       - ".github/workflows/editor-fixed-output-current-image-resources.yml"
   workflow_dispatch:
 

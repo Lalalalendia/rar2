@@ -10,7 +10,6 @@ on:
       - "apps/chaptera-desktop/src/duplicate_rectangle.rs"
       - "apps/chaptera-desktop/src/duplicate_rectangle_gui_tests.rs"
       - "tools/ci/pub_editor_pr_fanout.py"
-      - "tools/ci/test_pub_editor_pr_fanout.py"
       - ".github/workflows/editor-duplicate-rectangle-v1.yml"
   push:
     branches:
