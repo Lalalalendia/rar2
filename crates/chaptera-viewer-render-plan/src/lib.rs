@@ -95,6 +95,18 @@ pub struct RenderTableV1 {
     pub rows: u32,
     pub columns: u32,
     pub cells: Vec<RenderTableCellV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub borders: Vec<RenderTableBorderSegmentV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderTableBorderSegmentV1 {
+    pub x1_emu: i64,
+    pub y1_emu: i64,
+    pub x2_emu: i64,
+    pub y2_emu: i64,
+    pub rgb: [u8; 3],
+    pub width_emu: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1357,6 +1369,18 @@ pub fn build_page_render_plan_v1(
                             fill_visible: cell.fill_visible,
                         })
                         .collect(),
+                    borders: table
+                        .borders
+                        .iter()
+                        .map(|border| RenderTableBorderSegmentV1 {
+                            x1_emu: border.x1_emu,
+                            y1_emu: border.y1_emu,
+                            x2_emu: border.x2_emu,
+                            y2_emu: border.y2_emu,
+                            rgb: border.rgb,
+                            width_emu: border.width_emu,
+                        })
+                        .collect(),
                 });
             let text_bounds = unique_story_frame_for_node(visual, node.origin)
                 .and_then(|frame| frame.text_content_bounds);
@@ -1438,6 +1462,18 @@ pub fn build_page_render_plan_v1(
                             bounds: cell.bounds,
                             fill_rgb: cell.fill_rgb,
                             fill_visible: cell.fill_visible,
+                        })
+                        .collect(),
+                    borders: table
+                        .borders
+                        .iter()
+                        .map(|border| RenderTableBorderSegmentV1 {
+                            x1_emu: border.x1_emu,
+                            y1_emu: border.y1_emu,
+                            x2_emu: border.x2_emu,
+                            y2_emu: border.y2_emu,
+                            rgb: border.rgb,
+                            width_emu: border.width_emu,
                         })
                         .collect(),
                 });
@@ -4830,7 +4866,14 @@ mod tests {
                 fill_rgb: Some([10, 20, 30]),
                 fill_visible: Some(true),
             }],
-            borders: Vec::new(),
+            borders: vec![pub_viewer::ViewerTableBorderSegment {
+                x1_emu: 10,
+                y1_emu: 20,
+                x2_emu: 160,
+                y2_emu: 20,
+                rgb: [40, 50, 60],
+                width_emu: 12,
+            }],
         });
 
         let plan = build_page_render_plan_v1(&visual, 0).expect("render plan");
@@ -4850,6 +4893,13 @@ mod tests {
         assert_eq!(table.cells[0].bounds, Some(cell_bounds));
         assert_eq!(table.cells[0].fill_rgb, Some([10, 20, 30]));
         assert_eq!(table.cells[0].fill_visible, Some(true));
+        assert_eq!(table.borders.len(), 1);
+        assert_eq!(table.borders[0].x1_emu, 10);
+        assert_eq!(table.borders[0].y1_emu, 20);
+        assert_eq!(table.borders[0].x2_emu, 160);
+        assert_eq!(table.borders[0].y2_emu, 20);
+        assert_eq!(table.borders[0].rgb, [40, 50, 60]);
+        assert_eq!(table.borders[0].width_emu, 12);
     }
 
     #[cfg(feature = "projected-scene-instances")]

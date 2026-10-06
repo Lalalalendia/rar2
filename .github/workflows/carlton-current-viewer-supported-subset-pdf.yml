@@ -242,6 +242,8 @@ jobs:
 
           packet = json.loads(Path(os.environ["CHAPTERA_CURRENT_VIEWER_PACKET"]).read_text(encoding="utf-8"))
           request = json.loads(Path(os.environ["CHAPTERA_SUPPORTED_REQUEST"]).read_text(encoding="utf-8"))
+          mapping_receipt = json.loads(Path(os.environ["CHAPTERA_SUPPORTED_MAPPING"]).read_text(encoding="utf-8"))
+          mapping = mapping_receipt["mapping"]
 
           packet_pages = [page["page_id"] for page in packet["pages"]]
           request_pages = [page["origin"] for page in request["scene"]["surfaces"]]
@@ -253,15 +255,25 @@ jobs:
           origin_mapping = request["scene"].get("origin_mapping", [])
           mapped_authoring_nodes = [entry["authoring_origin"] for entry in origin_mapping]
           mapped_resolved_nodes = [entry["resolved_node_origin"] for entry in origin_mapping]
+          derived_table_paint_count = mapping["derived_table_paint_node_count"]
 
           if packet_nodes != mapped_authoring_nodes:
               raise SystemExit("product authoring-node paint order changed before renderer")
-          if request_nodes != mapped_resolved_nodes:
-              raise SystemExit("resolved output node order differs from scene origin mapping")
+          if len(mapped_resolved_nodes) != len(packet_nodes):
+              raise SystemExit("authoring origin mapping cardinality changed")
+          mapped_resolved_set = set(mapped_resolved_nodes)
+          request_real_nodes = [node_id for node_id in request_nodes if node_id in mapped_resolved_set]
+          if request_real_nodes != mapped_resolved_nodes:
+              raise SystemExit("real resolved output node order changed around derived TABLE paint primitives")
           if len(request_nodes) != len(set(request_nodes)):
               raise SystemExit("resolved output NodeIds must remain unique")
-          if len(request_nodes) != len(packet_nodes):
-              raise SystemExit("node cardinality changed before renderer")
+          derived_nodes = [node_id for node_id in request_nodes if node_id not in mapped_resolved_set]
+          if len(derived_nodes) != derived_table_paint_count:
+              raise SystemExit(
+                  f"derived TABLE paint cardinality drift: {len(derived_nodes)!r} != {derived_table_paint_count!r}"
+              )
+          if len(request_nodes) != len(packet_nodes) + derived_table_paint_count:
+              raise SystemExit("request node cardinality does not equal real nodes plus derived TABLE paint nodes")
 
           binding_pages = packet["binding"].get("page_ids")
           if binding_pages != packet_pages:
@@ -296,6 +308,21 @@ jobs:
           print("supported_subset_significant_fractions=" + json.dumps(fractions))
           if result["page_count"]["match"] is not True:
               raise SystemExit("supported-subset PDF page count differs from Carlton reference")
+          baseline = [
+              0.24110659718275027,
+              0.21899449752797606,
+              0.25260165812078317,
+          ]
+          if len(fractions) != 3:
+              raise SystemExit(f"Carlton raster page count drift: {fractions!r}")
+          if abs(fractions[0] - baseline[0]) > 1e-12 or abs(fractions[1] - baseline[1]) > 1e-12:
+              raise SystemExit(
+                  f"TABLE paint unexpectedly changed non-table pages: {fractions[:2]!r}"
+              )
+          if not fractions[2] < baseline[2]:
+              raise SystemExit(
+                  f"TABLE fixed-output paint did not improve page 3: {fractions[2]!r} >= {baseline[2]!r}"
+              )
           '@ | python -
           "CHAPTERA_SUPPORTED_DIFF=$diff" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
@@ -396,6 +423,19 @@ jobs:
               raise SystemExit("cropped-image residual drift")
           if mapping["table_node_count"] != 1:
               raise SystemExit("table residual drift")
+          if mapping["table_cell_paint_state_count"] != 17:
+              raise SystemExit(f"TABLE known cell-paint state drift: {mapping['table_cell_paint_state_count']!r}")
+          if mapping["derived_table_border_node_count"] != 20:
+              raise SystemExit(f"TABLE border paint primitive drift: {mapping['derived_table_border_node_count']!r}")
+          if mapping["table_paint_incomplete_node_count"] != 0:
+              raise SystemExit(f"TABLE paint unexpectedly incomplete: {mapping['table_paint_incomplete_node_count']!r}")
+          if (
+              mapping["derived_table_fill_node_count"] + mapping["derived_table_border_node_count"]
+              != mapping["derived_table_paint_node_count"]
+          ):
+              raise SystemExit("TABLE derived paint primitive census is not a complete partition")
+          if mapping["derived_table_paint_node_count"] <= mapping["derived_table_border_node_count"]:
+              raise SystemExit("Carlton TABLE did not materialize any visible cell-fill primitives")
           if mapping["input_page_count"] != 3 or mapping["input_node_count"] != 108:
               raise SystemExit("Carlton supported-subset input census drift")
           if mapping.get("semantic_duplicate_node_id_count") != 2:
