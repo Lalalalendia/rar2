@@ -1,0 +1,21 @@
+{
+  "schema": "chaptera.recovery-rescue-evidence.v1",
+  "rows": [
+    {
+      "source_sha256": "6eb0a85afb42d329e2241ce060ec3b6957ecd429a5122cfc908b4621ab4884b8",
+      "rescue_outcome": "salvage_only",
+      "repair_gate": null,
+      "repair_native_status": "inconclusive",
+      "recovery_route": "partially_recovered",
+      "recovery_class": "partial_salvage",
+      "producer_receipt_sha256": "1bbdaf7fd5fa47cbadc50b152d72d7227fca716468fc1de53bf003f02a5ceed8",
+      "product_validation_sha256": "12d558a4fe1a699420e7b4a09e4616d0b045aaf36c95df575792593d1046bc02",
+      "artifact_count": 12,
+      "fabricated_bytes": 0,
+      "silent_drops": 0,
+      "evidence_level": "recovery_research",
+      "confidence": "high",
+      "promotion_gap": null
+    }
+  ]
+}
