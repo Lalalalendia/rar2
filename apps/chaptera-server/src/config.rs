@@ -143,9 +143,6 @@ impl UploadAdmissionRuntimeConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceValidationRuntimeConfig {
-    pub clamd_endpoint: SocketAddr,
-    pub clamd_connect_timeout_ms: u64,
-    pub clamd_io_timeout_ms: u64,
     pub isolation_python: PathBuf,
     pub isolation_harness: PathBuf,
     pub worker_binary: PathBuf,
@@ -163,9 +160,6 @@ pub struct SourceValidationRuntimeConfig {
 impl SourceValidationRuntimeConfig {
     pub fn materialize(&self) -> SourceSecurityScannerConfig {
         SourceSecurityScannerConfig {
-            clamd_endpoint: self.clamd_endpoint,
-            clamd_connect_timeout: Duration::from_millis(self.clamd_connect_timeout_ms),
-            clamd_io_timeout: Duration::from_millis(self.clamd_io_timeout_ms),
             isolation_python: self.isolation_python.clone(),
             isolation_harness: self.isolation_harness.clone(),
             worker_binary: self.worker_binary.clone(),
@@ -430,9 +424,6 @@ impl ChapteraConfig {
                 retention_seconds: 7 * 24 * 60 * 60,
             },
             source_validation: SourceValidationRuntimeConfig {
-                clamd_endpoint: "127.0.0.1:3310".parse().expect("static clamd endpoint"),
-                clamd_connect_timeout_ms: 2_000,
-                clamd_io_timeout_ms: 5_000,
                 isolation_python: PathBuf::from("python3"),
                 isolation_harness: PathBuf::from("tools/migration_pdf_worker_isolation.py"),
                 worker_binary: PathBuf::from("target/debug/chaptera-untrusted-pub-worker"),
@@ -1463,9 +1454,6 @@ lease_seconds = 3600
 retention_seconds = 604800
 
 [source_validation]
-clamd_endpoint = "127.0.0.1:3310"
-clamd_connect_timeout_ms = 2000
-clamd_io_timeout_ms = 5000
 isolation_python = "/usr/bin/python3"
 isolation_harness = "/opt/chaptera/current/tools/migration_pdf_worker_isolation.py"
 worker_binary = "/opt/chaptera/current/chaptera"
