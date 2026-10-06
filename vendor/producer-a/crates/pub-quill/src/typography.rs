@@ -35,6 +35,17 @@ const PARAGRAPH_DEFAULT_CHAR_STYLE_ID: u16 = 0x0219;
 const PARAGRAPH_LINE_SPACING_ID: u16 = 0x0234;
 const PARAGRAPH_LINE_SPACING_RAW_UNITS_PER_EMU: u32 = 8;
 
+// Publisher 16.0.12527 one-property-at-a-time native writes materialize these
+// exact six-byte FDPP records for the four paragraph-flow switches:
+//   <native tag:u16 LE> <0x00000004:u32 LE>
+// Keep this bounded to the proven tags. Omission/default/inheritance remains
+// separate research and must not be inferred from unrelated FDPP bytes.
+const PARAGRAPH_START_IN_NEXT_TEXT_BOX_NATIVE_TAG: [u8; 2] = [0x0A, 0x0A];
+const PARAGRAPH_KEEP_LINES_TOGETHER_NATIVE_TAG: [u8; 2] = [0x17, 0x0A];
+const PARAGRAPH_KEEP_WITH_NEXT_NATIVE_TAG: [u8; 2] = [0x18, 0x0A];
+const PARAGRAPH_WIDOW_CONTROL_NATIVE_TAG: [u8; 2] = [0x1D, 0x0A];
+const PARAGRAPH_FLOW_NATIVE_ON_VALUE: u32 = 4;
+
 pub const QUILL_TEXT_SIZE_EMU_PER_POINT: u32 = 12_700;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +64,8 @@ pub struct QuillTypographyCatalog {
     pub paragraph_alignments: Vec<QuillParagraphAlignmentRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_line_spacings: Vec<QuillParagraphLineSpacingRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paragraph_flow_runs: Vec<QuillParagraphFlowRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unknown_block_types_assumed_zero_length: Vec<u8>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -209,6 +222,33 @@ pub struct QuillParagraphLineSpacingRun {
     pub line_spacing: QuillParagraphLineSpacing,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_value: Option<u32>,
+    pub fdpp_descriptor_ordinal: u32,
+    pub fdpp_style_ordinal: u32,
+    pub fdpp_style_source: RawSpan,
+}
+
+/// Explicit paragraph-flow switch observed in a bounded Publisher FDPP write.
+/// Only the native ON form is currently promoted. Absence is not flattened
+/// into false because style/default inheritance and explicit clear remain
+/// outside the closed carrier slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuillParagraphFlowConstraint {
+    StartInNextTextBox,
+    KeepLinesTogether,
+    KeepWithNext,
+    WidowControl,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillParagraphFlowRun {
+    pub story_index: u32,
+    pub story_syid: QuillSyid,
+    pub story_start_utf16: u32,
+    pub story_end_utf16: u32,
+    pub constraint: QuillParagraphFlowConstraint,
+    pub source_value: u32,
+    pub property_source: RawSpan,
     pub fdpp_descriptor_ordinal: u32,
     pub fdpp_style_ordinal: u32,
     pub fdpp_style_source: RawSpan,
@@ -535,7 +575,7 @@ pub fn inspect_raw_fdpp_styles(
         let mut cursor = start + 4;
         let mut properties = Vec::new();
         while cursor < end {
-            let (block, next) = parse_block(bytes, cursor, end, &mut unknown)?;
+            let (block, next) = parse_fdpp_block(bytes, cursor, end, &mut unknown)?;
             if !unknown.is_empty() {
                 return Err(QuillTypographyReadError::new(
                     "unknown raw FDPP block framing",
@@ -765,6 +805,7 @@ pub fn parse_bounded_typography(
     let mut size_only_runs = Vec::new();
     let mut paragraph_alignments = Vec::new();
     let mut paragraph_line_spacings = Vec::new();
+    let mut paragraph_flow_runs = Vec::new();
     let mut inheritance_unknown_block_types = BTreeSet::new();
     let mut effective_inheritance_unavailable_reason = None;
 
@@ -803,6 +844,8 @@ pub fn parse_bounded_typography(
                 build_paragraph_alignment_runs(&paragraph_ranges, &story_extents);
             paragraph_line_spacings =
                 build_paragraph_line_spacing_runs(bytes, &paragraph_ranges, &story_extents)?;
+            paragraph_flow_runs =
+                build_paragraph_flow_runs(bytes, &paragraph_ranges, &story_extents)?;
         }
 
         if explicit_run_projection_allowed(&unknown_block_types)
@@ -845,6 +888,7 @@ pub fn parse_bounded_typography(
         size_only_runs,
         paragraph_alignments,
         paragraph_line_spacings,
+        paragraph_flow_runs,
         unknown_block_types_assumed_zero_length: unknown_block_types.into_iter().collect(),
         inheritance_unknown_block_types_assumed_zero_length: inheritance_unknown_block_types
             .into_iter()
@@ -950,7 +994,8 @@ fn parse_fdpp_styles(
             let mut alignments = Vec::new();
 
             while cursor < style_end {
-                let (block, next) = parse_block(bytes, cursor, style_end, unknown_block_types)?;
+                let (block, next) =
+                    parse_fdpp_block(bytes, cursor, style_end, unknown_block_types)?;
                 if block.id == PARAGRAPH_DEFAULT_CHAR_STYLE_ID {
                     if let Some(value) = block.value {
                         selectors.push(value);
@@ -1152,7 +1197,7 @@ fn explicit_line_spacing_value_for_range(
     let mut unknown = BTreeSet::new();
     let mut values = Vec::new();
     while cursor < end {
-        let (block, next) = parse_block(bytes, cursor, end, &mut unknown)?;
+        let (block, next) = parse_fdpp_block(bytes, cursor, end, &mut unknown)?;
         if block.id == PARAGRAPH_LINE_SPACING_ID {
             if block.block_type != 0x20 {
                 return Ok(None);
@@ -1209,6 +1254,116 @@ fn build_paragraph_line_spacing_runs(
             });
         }
     }
+    Ok(runs)
+}
+
+fn paragraph_flow_constraint_from_native_id(id: u16) -> Option<QuillParagraphFlowConstraint> {
+    match id {
+        0x0A0A => Some(QuillParagraphFlowConstraint::StartInNextTextBox),
+        0x0A17 => Some(QuillParagraphFlowConstraint::KeepLinesTogether),
+        0x0A18 => Some(QuillParagraphFlowConstraint::KeepWithNext),
+        0x0A1D => Some(QuillParagraphFlowConstraint::WidowControl),
+        _ => None,
+    }
+}
+
+fn build_paragraph_flow_runs(
+    bytes: &[u8],
+    ranges: &[ParagraphTypographyRange],
+    stories: &[StoryExtent],
+) -> Result<Vec<QuillParagraphFlowRun>, QuillTypographyReadError> {
+    let mut runs = Vec::new();
+
+    for range in ranges {
+        let start = usize::try_from(range.style_source.offset).map_err(|_| {
+            QuillTypographyReadError::new("FDPP paragraph-flow style offset exceeds usize")
+        })?;
+        let len = usize::try_from(range.style_source.len).map_err(|_| {
+            QuillTypographyReadError::new("FDPP paragraph-flow style length exceeds usize")
+        })?;
+        let end = checked_end(start, len, bytes.len(), "FDPP paragraph-flow style")?;
+        if len < 4 {
+            return Err(QuillTypographyReadError::new(
+                "FDPP paragraph-flow style is shorter than header",
+            ));
+        }
+
+        let mut cursor = start + 4;
+        let mut unknown = BTreeSet::new();
+        let mut observations = Vec::new();
+        while cursor < end {
+            let property_start = cursor;
+            let (block, next) = parse_fdpp_block(bytes, cursor, end, &mut unknown)?;
+            if let (Some(constraint), Some(value)) = (
+                paragraph_flow_constraint_from_native_id(block.id),
+                block.value,
+            ) {
+                if block.block_type == 0x20 && value == PARAGRAPH_FLOW_NATIVE_ON_VALUE {
+                    observations.push((
+                        constraint,
+                        value,
+                        RawSpan {
+                            stream: range.style_source.stream.clone(),
+                            offset: property_start as u64,
+                            len: (next - property_start) as u64,
+                        },
+                    ));
+                }
+            }
+            cursor = next;
+        }
+        if cursor != end || !unknown.is_empty() {
+            continue;
+        }
+
+        // Duplicate instances of the same native switch are ambiguous. Do not
+        // guess which one wins; simply suppress that constraint for this range.
+        for constraint in [
+            QuillParagraphFlowConstraint::StartInNextTextBox,
+            QuillParagraphFlowConstraint::KeepLinesTogether,
+            QuillParagraphFlowConstraint::KeepWithNext,
+            QuillParagraphFlowConstraint::WidowControl,
+        ] {
+            let matches = observations
+                .iter()
+                .filter(|(candidate, _, _)| *candidate == constraint)
+                .collect::<Vec<_>>();
+            let [(_, source_value, property_source)] = matches.as_slice() else {
+                continue;
+            };
+
+            for story in stories {
+                let story_start = range.global_start_utf16.max(story.global_start_utf16);
+                let story_end = range.global_end_utf16.min(story.global_end_utf16);
+                if story_start >= story_end {
+                    continue;
+                }
+                runs.push(QuillParagraphFlowRun {
+                    story_index: story.story_index,
+                    story_syid: story.story_syid,
+                    story_start_utf16: story_start - story.global_start_utf16,
+                    story_end_utf16: story_end - story.global_start_utf16,
+                    constraint,
+                    source_value: *source_value,
+                    property_source: (*property_source).clone(),
+                    fdpp_descriptor_ordinal: range.fdpp_descriptor_ordinal,
+                    fdpp_style_ordinal: range.fdpp_style_ordinal,
+                    fdpp_style_source: range.style_source.clone(),
+                });
+            }
+        }
+    }
+
+    runs.sort_by_key(|run| {
+        (
+            run.story_index,
+            run.story_start_utf16,
+            run.story_end_utf16,
+            run.constraint,
+            run.fdpp_descriptor_ordinal,
+            run.fdpp_style_ordinal,
+        )
+    });
     Ok(runs)
 }
 
@@ -2713,6 +2868,55 @@ fn parse_block(
     ))
 }
 
+fn parse_fdpp_block(
+    bytes: &[u8],
+    start: usize,
+    limit: usize,
+    unknown_block_types: &mut BTreeSet<u8>,
+) -> Result<(BlockObservation, usize), QuillTypographyReadError> {
+    if start + 2 > limit {
+        return Err(QuillTypographyReadError::new(format!(
+            "FDPP style block header exceeds limit at 0x{start:x}"
+        )));
+    }
+
+    let raw_tag = [bytes[start], bytes[start + 1]];
+    if matches!(
+        raw_tag,
+        PARAGRAPH_START_IN_NEXT_TEXT_BOX_NATIVE_TAG
+            | PARAGRAPH_KEEP_LINES_TOGETHER_NATIVE_TAG
+            | PARAGRAPH_KEEP_WITH_NEXT_NATIVE_TAG
+            | PARAGRAPH_WIDOW_CONTROL_NATIVE_TAG
+    ) {
+        let data_offset = start + 2;
+        let end = data_offset
+            .checked_add(4)
+            .ok_or_else(|| QuillTypographyReadError::new("FDPP flow block end overflows"))?;
+
+        // The raw two-byte tag aliases an ordinary packed Quill tag. Native
+        // one-property writes distinguish the paragraph-flow form by the exact
+        // four-byte ON payload 0x00000004. Do not reframe an arbitrary matching
+        // tag in existing corpora unless that causal payload is present.
+        if end <= limit
+            && end <= bytes.len()
+            && read_u32(bytes, data_offset, limit)? == PARAGRAPH_FLOW_NATIVE_ON_VALUE
+        {
+            return Ok((
+                BlockObservation {
+                    id: u16::from_le_bytes(raw_tag),
+                    block_type: 0x20,
+                    data_offset,
+                    end,
+                    value: Some(PARAGRAPH_FLOW_NATIVE_ON_VALUE),
+                },
+                end,
+            ));
+        }
+    }
+
+    parse_block(bytes, start, limit, unknown_block_types)
+}
+
 fn read_u16(bytes: &[u8], offset: usize, limit: usize) -> Result<u16, QuillTypographyReadError> {
     if offset + 2 > limit || offset + 2 > bytes.len() {
         return Err(QuillTypographyReadError::new(format!(
@@ -2888,6 +3092,131 @@ mod tests {
         ];
         let error = validate_monotone_fdpc_text_offsets(&regressed).unwrap_err();
         assert!(error.to_string().contains("regress in stored order"));
+    }
+
+    #[test]
+    fn native_paragraph_flow_framing_is_fdpp_scoped() {
+        assert_eq!(
+            decode_quill_style_tag(PARAGRAPH_KEEP_WITH_NEXT_NATIVE_TAG),
+            (0x0218, 0x08)
+        );
+
+        let bytes = [0x18, 0x0A, 0x04, 0x00, 0x00, 0x00];
+        let mut unknown = BTreeSet::new();
+        let (block, next) =
+            parse_fdpp_block(&bytes, 0, bytes.len(), &mut unknown).expect("FDPP flow block");
+        assert_eq!(next, bytes.len());
+        assert_eq!(block.id, 0x0A18);
+        assert_eq!(block.block_type, 0x20);
+        assert_eq!(block.value, Some(PARAGRAPH_FLOW_NATIVE_ON_VALUE));
+        assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn fdpp_native_tag_without_exact_on_payload_keeps_generic_framing() {
+        let bytes = [0x18, 0x0A, 0x00, 0x00, 0x00, 0x00];
+        let mut unknown = BTreeSet::new();
+        let (block, next) =
+            parse_fdpp_block(&bytes, 0, bytes.len(), &mut unknown).expect("generic FDPP block");
+
+        assert_eq!(block.id, 0x0218);
+        assert_eq!(block.block_type, 0x08);
+        assert_eq!(block.value, None);
+        assert_eq!(next, 2);
+        assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn native_paragraph_flow_tags_use_bounded_four_byte_payload() {
+        let cases = [
+            (
+                PARAGRAPH_START_IN_NEXT_TEXT_BOX_NATIVE_TAG,
+                0x0A0A,
+                QuillParagraphFlowConstraint::StartInNextTextBox,
+            ),
+            (
+                PARAGRAPH_KEEP_LINES_TOGETHER_NATIVE_TAG,
+                0x0A17,
+                QuillParagraphFlowConstraint::KeepLinesTogether,
+            ),
+            (
+                PARAGRAPH_KEEP_WITH_NEXT_NATIVE_TAG,
+                0x0A18,
+                QuillParagraphFlowConstraint::KeepWithNext,
+            ),
+            (
+                PARAGRAPH_WIDOW_CONTROL_NATIVE_TAG,
+                0x0A1D,
+                QuillParagraphFlowConstraint::WidowControl,
+            ),
+        ];
+
+        for (raw_tag, expected_id, expected_constraint) in cases {
+            let bytes = [raw_tag[0], raw_tag[1], 0x04, 0x00, 0x00, 0x00];
+            let mut unknown = BTreeSet::new();
+            let (block, next) =
+                parse_fdpp_block(&bytes, 0, bytes.len(), &mut unknown).expect("native flow block");
+
+            assert_eq!(next, 6);
+            assert_eq!(block.id, expected_id);
+            assert_eq!(block.block_type, 0x20);
+            assert_eq!(block.value, Some(PARAGRAPH_FLOW_NATIVE_ON_VALUE));
+            assert_eq!(
+                paragraph_flow_constraint_from_native_id(block.id),
+                Some(expected_constraint)
+            );
+            assert!(unknown.is_empty());
+        }
+    }
+
+    #[test]
+    fn paragraph_flow_run_preserves_property_source_and_story_range() {
+        let bytes = [
+            0x0A, 0x00, 0x00, 0x00, // style length/header owned by caller
+            0x18, 0x0A, 0x04, 0x00, 0x00, 0x00,
+        ];
+        let stream = StreamPath("/Quill/QuillSub/CONTENTS".into());
+        let range = ParagraphTypographyRange {
+            global_start_utf16: 0,
+            global_end_utf16: 5,
+            fdpp_descriptor_ordinal: 2,
+            fdpp_style_ordinal: 7,
+            style_source: RawSpan {
+                stream: stream.clone(),
+                offset: 0,
+                len: bytes.len() as u64,
+            },
+            selected_style_index: None,
+            selector_source: None,
+            default_style_selector_present: false,
+            alignment: None,
+            alignment_source_value: None,
+            alignment_source: None,
+        };
+        let story = StoryExtent {
+            story_index: 3,
+            story_syid: QuillSyid(22),
+            global_start_utf16: 0,
+            global_end_utf16: 5,
+        };
+
+        let runs =
+            build_paragraph_flow_runs(&bytes, &[range], &[story]).expect("paragraph flow runs");
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].story_index, 3);
+        assert_eq!(runs[0].story_syid, QuillSyid(22));
+        assert_eq!(runs[0].story_start_utf16, 0);
+        assert_eq!(runs[0].story_end_utf16, 5);
+        assert_eq!(
+            runs[0].constraint,
+            QuillParagraphFlowConstraint::KeepWithNext
+        );
+        assert_eq!(runs[0].source_value, PARAGRAPH_FLOW_NATIVE_ON_VALUE);
+        assert_eq!(runs[0].property_source.offset, 4);
+        assert_eq!(runs[0].property_source.len, 6);
+        assert_eq!(runs[0].fdpp_descriptor_ordinal, 2);
+        assert_eq!(runs[0].fdpp_style_ordinal, 7);
     }
 
     #[test]
