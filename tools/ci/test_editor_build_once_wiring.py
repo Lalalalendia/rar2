@@ -86,6 +86,16 @@ def main():
         if "\n  pull_request:" in text:
             raise SystemExit(f"{raw}: direct PR admission must be owned by {PARENT}")
 
+    for test_only in (
+        '      - "tools/ci/test_pub_editor_pr_fanout.py"',
+        '      - "tools/ci/test_validate_editor_binary_artifact.py"',
+        '      - "tools/ci/test_editor_build_once_wiring.py"',
+    ):
+        if test_only in parent:
+            raise SystemExit(
+                f"parent must not launch heavy Editor DAG for test-only trigger: {test_only}"
+            )
+
     fixed = Path(
         ".github/workflows/editor-fixed-pdf-current-revision.yml"
     ).read_text(encoding="utf-8")
