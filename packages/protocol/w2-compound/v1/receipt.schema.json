@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chaptera.dev/schema/w2-compound/v1/receipt.schema.json",
+  "title": "Chaptera W2 split-evidence compound receipt V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["receipt_version","evidence_mode","newsletter","overset","project_fork","fixed_output","invariants"],
+  "properties": {
+    "receipt_version": {"const":"chaptera.w2-compound-receipt.v1"},
+    "evidence_mode": {"const":"split_evidence"},
+    "newsletter": {"$ref":"#/$defs/evidence"},
+    "overset": {"$ref":"#/$defs/evidence"},
+    "project_fork": {"$ref":"#/$defs/evidence"},
+    "fixed_output": {
+      "type":"object","additionalProperties":false,
+      "required":["workflow_run_id","head_sha","conclusion","verified_live"],
+      "properties":{
+        "workflow_run_id":{"const":37474235340},
+        "head_sha":{"const":"c92767c4e0236c48ec50aae2263e5e466881e29c"},
+        "conclusion":{"const":"success"},
+        "verified_live":{"const":true}
+      }
+    },
+    "invariants": {
+      "type":"object","additionalProperties":false,
+      "required":["same_document_claim","newsletter_source_immutable","newsletter_editable_output","overset_explicit","fork_initial_state_preserved","fork_identity_rekeyed","fork_parent_unchanged","wrap_preservation_claimed","source_write_count"],
+      "properties":{
+        "same_document_claim":{"const":false},
+        "newsletter_source_immutable":{"const":true},
+        "newsletter_editable_output":{"const":true},
+        "overset_explicit":{"const":true},
+        "fork_initial_state_preserved":{"const":true},
+        "fork_identity_rekeyed":{"const":true},
+        "fork_parent_unchanged":{"const":true},
+        "wrap_preservation_claimed":{"const":false},
+        "source_write_count":{"const":0}
+      }
+    }
+  },
+  "$defs": {
+    "sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "evidence":{
+      "type":"object","additionalProperties":false,
+      "required":["receipt_sha256","source_hash","validated"],
+      "properties":{
+        "receipt_sha256":{"$ref":"#/$defs/sha256"},
+        "source_hash":{"$ref":"#/$defs/sha256"},
+        "validated":{"const":true}
+      }
+    }
+  }
+}
