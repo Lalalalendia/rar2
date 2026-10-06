@@ -109,6 +109,63 @@ fn compatible_legacy_windows_line_metric_units_v1(
     (hhea_units > 0 && hhea_units == win_units).then_some(hhea_units)
 }
 
+fn compatible_legacy_windows_ascent_units_v1(
+    hhea_ascender: i64,
+    hhea_descender: i64,
+    win_ascent: u16,
+    win_descent: u16,
+) -> Option<i64> {
+    if hhea_ascender <= 0 || hhea_descender >= 0 {
+        return None;
+    }
+    let descender_magnitude = hhea_descender.checked_neg()?;
+    (hhea_ascender == i64::from(win_ascent)
+        && descender_magnitude == i64::from(win_descent))
+    .then_some(hhea_ascender)
+}
+
+pub fn compatible_natural_baseline_ascent_emu_v1(
+    font_bytes: &[u8],
+    face_index: u32,
+    font_size_emu: LengthEmu,
+) -> Option<LengthEmu> {
+    if font_size_emu.get() <= 0 {
+        return None;
+    }
+
+    let font = ReadFontRef::from_index(font_bytes, face_index).ok()?;
+    if font.fvar().is_ok() {
+        return None;
+    }
+
+    let head = font.head().ok()?;
+    let hhea = font.hhea().ok()?;
+    let os2 = font.os2().ok()?;
+    if os2
+        .fs_selection()
+        .contains(SelectionFlags::USE_TYPO_METRICS)
+    {
+        return None;
+    }
+
+    let units_per_em = i64::from(head.units_per_em());
+    if units_per_em <= 0 {
+        return None;
+    }
+    let ascent_units = compatible_legacy_windows_ascent_units_v1(
+        fword_to_i64(hhea.ascender()),
+        fword_to_i64(hhea.descender()),
+        os2.us_win_ascent(),
+        os2.us_win_descent(),
+    )?;
+
+    let numerator = i128::from(ascent_units) * i128::from(font_size_emu.get());
+    let denominator = i128::from(units_per_em);
+    let rounded = (numerator + denominator / 2) / denominator;
+    let emu = i64::try_from(rounded).ok()?;
+    (emu > 0).then(|| LengthEmu::new(emu))
+}
+
 /// Returns one bounded natural single-line font metric from exact font bytes.
 ///
 /// Native Publisher2019 evidence for exact Arial Regular
@@ -319,6 +376,22 @@ mod tests {
         );
         assert_eq!(
             compatible_legacy_windows_line_metric_units_v1(1854, -434, 1854, 500),
+            None
+        );
+    }
+
+    #[test]
+    fn publisher_legacy_windows_ascent_requires_component_agreement() {
+        assert_eq!(
+            compatible_legacy_windows_ascent_units_v1(1854, -434, 1854, 434),
+            Some(1854)
+        );
+        assert_eq!(
+            compatible_legacy_windows_ascent_units_v1(1854, -434, 1800, 488),
+            None
+        );
+        assert_eq!(
+            compatible_legacy_windows_ascent_units_v1(1854, -434, 1854, 500),
             None
         );
     }
