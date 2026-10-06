@@ -5,8 +5,7 @@ use pub_editor::{
     AuthoredStackReorderModeV1, EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_10,
     EDITOR_PROJECT_VERSION_V0_12, EDITOR_PROJECT_VERSION_V0_13, EDITOR_PROJECT_VERSION_V0_17,
     EDITOR_PROJECT_VERSION_V0_18, EditOperation, EditorError, EditorProjectError, EditorSession,
-    LengthEmu, LineGeometryV1,
-    PointEmuV1, RectEmu, Srgb8V1,
+    LengthEmu, LineGeometryV1, PointEmuV1, RectEmu, Srgb8V1,
 };
 use pub_model::{
     Document, DocumentId, NodeId, Page, PageId, ResolvedGraph, Sha256Digest, Size2D,
