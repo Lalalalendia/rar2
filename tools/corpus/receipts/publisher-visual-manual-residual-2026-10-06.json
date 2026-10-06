@@ -118,9 +118,20 @@
     }
   ],
   "execution_state": {
-    "source_free_registry": "committed by this intake PR",
+    "source_free_registry": "landed on main as 0b4dbbe70a5fd82e27d4ed07c28cde52344235f0",
     "raw_bundle_committed_to_git": false,
-    "actions_materialization": "pending: raw external bundles are not yet available to GitHub Actions",
+    "normalized_external_bundle": "created and retained outside public git with exact SHA-256",
+    "actions_materialization": "workflow consumes an exact donor Actions artifact and fails closed on bundle SHA drift",
     "intended_consumer": "Reader visual residual / Publisher oracle acceptance"
+  },
+  "normalized_bundle": {
+    "file_name": "publisher-visual-manual-residual-2026-10-06.zip",
+    "pair_count": 11,
+    "reference_page_count": 15,
+    "bytes": 5446053,
+    "sha256": "f83b8baa76fda77dfbc5a2bbbb011375fddef8e9af48e9bce60789af45831529",
+    "pairs_csv_sha256": "d43f6c03b55d415fb5187d19aaa5f432a9443867cd3942731bdcdadac77cd8f8",
+    "layout": "tools/cloud_reader_manual_oracle_bundle_v1.py compatible",
+    "raw_bundle_committed_to_git": false
   }
 }
