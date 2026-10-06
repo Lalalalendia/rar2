@@ -853,6 +853,14 @@ mod tests {
         let mut compound =
             cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("synthetic Publisher CFB");
         compound.create_storage("/Escher").expect("Escher storage");
+        compound
+            .create_storage("/Objects")
+            .expect("Objects storage");
+        compound
+            .create_stream("/Objects/Damaged")
+            .expect("small mini stream")
+            .write_all(b"small")
+            .expect("write mini stream");
 
         let mut contents = vec![0_u8; 5_000];
         contents[..4].copy_from_slice(&[0xe8, 0xac, 0x2c, 0x00]);
@@ -899,6 +907,52 @@ mod tests {
         let offset = (minifat_sector as usize + 1) * sector_len;
         bytes[offset..offset + 4].copy_from_slice(&0x1234_5678u32.to_le_bytes());
         bytes
+    }
+
+    #[test]
+    fn damaged_cfb_recovers_sid_bound_delay_image_into_partial_graph() {
+        let bytes = corrupt_first_minifat_entry(synthetic_pub_cfb_with_delay_png());
+        assert!(pub_cfb::inspect_reader(Cursor::new(bytes.clone())).is_err());
+
+        let probe = probe_reader_salvage_candidate(&bytes);
+        assert_eq!(probe.intake.class, FailureIntakeClass::PubDamaged);
+        assert_eq!(
+            probe.eligibility,
+            ReaderSalvageEligibility::EligibleDamagedPublisher
+        );
+        assert!(!probe.cfb_inventory_available);
+        assert_eq!(
+            probe.subsystems.escher_delay,
+            ReaderSalvageStreamState::ContainerUnavailable
+        );
+
+        let evidence =
+            build_reader_partial_escherdelay_evidence(&bytes, &probe).expect("delay evidence");
+        assert_eq!(evidence.validated_images.len(), 1);
+        assert_eq!(evidence.source_sha256, source_sha256(&bytes));
+        assert!(!evidence.stream_source_ranges.is_empty());
+        let image = &evidence.validated_images[0];
+        assert_eq!(image.kind, "png");
+        assert!(!image.payload_physical_ranges.is_empty());
+        assert_eq!(image.byte_len, 21);
+
+        let graph = build_reader_partial_source_graph(&bytes, &probe).expect("partial graph");
+        let verified = graph
+            .facts
+            .iter()
+            .filter_map(|fact| match fact {
+                ReaderPartialSourceFact::VerifiedImage {
+                    sha256, byte_len, ..
+                } => Some((sha256.as_str(), *byte_len)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(verified.len(), 1);
+        assert_eq!(verified[0].0, image.payload_sha256);
+        assert_eq!(verified[0].1, image.byte_len);
+        assert!(!graph.gaps.contains(&ReaderPartialSourceGap::ImageFactsUnavailable));
+        assert!(graph.gaps.contains(&ReaderPartialSourceGap::TextUnavailable));
+        assert!(graph.gaps.contains(&ReaderPartialSourceGap::GeometryFactsUnavailable));
     }
 
     #[test]
