@@ -1,9 +1,7 @@
-use pub_editor::{
-    set_table_track_extent_v1, SetTableTrackExtentErrorV1, TableTrackTargetV1,
-};
+use pub_editor::{SetTableTrackExtentErrorV1, TableTrackTargetV1, set_table_track_extent_v1};
 use pub_model::{
-    EffectiveTableCellV1, EffectiveTableGridV1, EffectiveTableTrackV1, LengthEmu, NodeId,
-    StoryId, TableCellAddress, TableCellId, TableColumnId, TableRowId, EFFECTIVE_TABLE_GRID_V1,
+    EFFECTIVE_TABLE_GRID_V1, EffectiveTableCellV1, EffectiveTableGridV1, EffectiveTableTrackV1,
+    LengthEmu, NodeId, StoryId, TableCellAddress, TableCellId, TableColumnId, TableRowId,
 };
 
 fn canonical_id<T: serde::de::DeserializeOwned>(value: &str) -> T {
@@ -32,12 +30,28 @@ fn story_id() -> StoryId {
 
 fn grid() -> EffectiveTableGridV1 {
     let rows = vec![
-        EffectiveTableTrackV1 { id: row_id(1), index: 0, extent: Some(LengthEmu::new(100)) },
-        EffectiveTableTrackV1 { id: row_id(2), index: 1, extent: Some(LengthEmu::new(100)) },
+        EffectiveTableTrackV1 {
+            id: row_id(1),
+            index: 0,
+            extent: Some(LengthEmu::new(100)),
+        },
+        EffectiveTableTrackV1 {
+            id: row_id(2),
+            index: 1,
+            extent: Some(LengthEmu::new(100)),
+        },
     ];
     let columns = vec![
-        EffectiveTableTrackV1 { id: col_id(1), index: 0, extent: Some(LengthEmu::new(200)) },
-        EffectiveTableTrackV1 { id: col_id(2), index: 1, extent: Some(LengthEmu::new(200)) },
+        EffectiveTableTrackV1 {
+            id: col_id(1),
+            index: 0,
+            extent: Some(LengthEmu::new(200)),
+        },
+        EffectiveTableTrackV1 {
+            id: col_id(2),
+            index: 1,
+            extent: Some(LengthEmu::new(200)),
+        },
     ];
     let mut cells = Vec::new();
     let mut n = 1;
@@ -47,7 +61,10 @@ fn grid() -> EffectiveTableGridV1 {
                 id: cell_id(n),
                 row_id: rows[row].id,
                 column_id: columns[column].id,
-                address: TableCellAddress { row: row as u32, column: column as u32 },
+                address: TableCellAddress {
+                    row: row as u32,
+                    column: column as u32,
+                },
                 row_span: 1,
                 column_span: 1,
                 story_id: Some(story_id()),
