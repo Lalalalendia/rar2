@@ -62,6 +62,7 @@ HEAVY_SCOPES = (
     "virginia_page_role",
     "visual_batch01",
     "typography_golden",
+    "android_core",
     "android",
     "web",
     "local_portable",
@@ -141,14 +142,31 @@ def load_reader_fanout_module():
     return module
 
 
-def heavy_families_for_paths(paths: Sequence[str]) -> list[str]:
+def heavy_evidence_for_paths(paths: Sequence[str]) -> tuple[list[str], list[str]]:
     classifier = load_reader_fanout_module()
     scopes = classifier.classify(
         list(paths),
         set(),
         visual_neutral_paths=set(),
     )
-    return sorted(scope for scope in HEAVY_SCOPES if scopes.get(scope, False))
+    required = sorted(scope for scope in HEAVY_SCOPES if scopes.get(scope, False))
+
+    effective_jobs = set(required)
+    if scopes.get("visual_oracle", False):
+        # Current Reader PR CI composes both proofs into the visual reusable
+        # workflow instead of allocating standalone jobs.
+        effective_jobs.discard("reader_windows_smoke")
+        effective_jobs.discard("typography_golden")
+
+    return required, sorted(effective_jobs)
+
+
+def heavy_families_for_paths(paths: Sequence[str]) -> list[str]:
+    return heavy_evidence_for_paths(paths)[0]
+
+
+def effective_heavy_jobs_for_paths(paths: Sequence[str]) -> list[str]:
+    return heavy_evidence_for_paths(paths)[1]
 
 
 def changed_paths(root: Path, base_sha: str, head_sha: str) -> list[str]:
@@ -260,6 +278,7 @@ def plan_train(
             seen_paths[path] = candidate.label
             total_paths.add(path)
 
+        heavy_families, effective_heavy_jobs = heavy_evidence_for_paths(paths)
         planned_candidates.append(
             {
                 "label": candidate.label,
@@ -267,7 +286,8 @@ def plan_train(
                 "head_sha": head_sha,
                 "commits": commits,
                 "changed_paths": paths,
-                "heavy_families": heavy_families_for_paths(paths),
+                "heavy_families": heavy_families,
+                "effective_heavy_jobs": effective_heavy_jobs,
             }
         )
 
@@ -281,6 +301,12 @@ def plan_train(
         for family in candidate["heavy_families"]:
             heavy_family_members.setdefault(family, []).append(candidate["label"])
     heavy_families = sorted(heavy_family_members)
+
+    effective_heavy_job_members: dict[str, list[str]] = {}
+    for candidate in planned_candidates:
+        for job in candidate["effective_heavy_jobs"]:
+            effective_heavy_job_members.setdefault(job, []).append(candidate["label"])
+    effective_heavy_jobs = sorted(effective_heavy_job_members)
 
     train_branch = branch_name or f"integration/train-{base_sha[:10]}"
     commands = [
@@ -299,6 +325,8 @@ def plan_train(
         "composition_commits": composition_commits,
         "heavy_families": heavy_families,
         "heavy_family_members": heavy_family_members,
+        "effective_heavy_jobs": effective_heavy_jobs,
+        "effective_heavy_job_members": effective_heavy_job_members,
         "train_branch": train_branch,
         "suggested_commands": commands,
         "mutated_repository": False,
@@ -328,11 +356,17 @@ def verify_composed_head(root: Path, plan: dict, head_ref: str) -> dict:
             + (f"; extra={extra}" if extra else "")
         )
 
-    actual_heavy = heavy_families_for_paths(actual_paths)
+    actual_heavy, actual_effective_jobs = heavy_evidence_for_paths(actual_paths)
     expected_heavy = sorted(plan.get("heavy_families", []))
     if actual_heavy != expected_heavy:
         raise TrainError(
             f"composed head heavy-family set drifted: expected={expected_heavy}, actual={actual_heavy}"
+        )
+    expected_effective_jobs = sorted(plan.get("effective_heavy_jobs", []))
+    if actual_effective_jobs != expected_effective_jobs:
+        raise TrainError(
+            "composed head effective heavy-job set drifted: "
+            f"expected={expected_effective_jobs}, actual={actual_effective_jobs}"
         )
 
     return {
@@ -341,6 +375,7 @@ def verify_composed_head(root: Path, plan: dict, head_ref: str) -> dict:
         "head_sha": head_sha,
         "changed_paths": actual_paths,
         "heavy_families": actual_heavy,
+        "effective_heavy_jobs": actual_effective_jobs,
         "candidate_count": plan["candidate_count"],
         "verified": True,
     }

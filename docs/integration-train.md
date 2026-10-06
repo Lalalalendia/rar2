@@ -113,3 +113,26 @@ The verifier fails closed when:
 - the aggregate heavy-family classification differs from the plan.
 
 This is the promotion gate before trusting the train PR's single aggregate hosted acceptance.
+
+
+## Required scopes vs executable heavy jobs
+
+The Reader classifier describes semantic evidence requirements. The hosted DAG may compose several requirements into one reusable job.
+
+The train receipt therefore keeps both layers:
+
+- `heavy_families` — raw required heavy scopes from the canonical classifier;
+- `effective_heavy_jobs` — top-level hosted jobs after current DAG composition.
+
+Current composition law:
+- when `visual_oracle` is required, its reusable workflow receives the typography-golden and Reader shared-core-smoke switches;
+- standalone `typography_golden` and `reader_windows_smoke` are therefore not separate effective jobs;
+- `android_core` is an independent selective job and must be present in both the required scope and effective-job model when the classifier selects it.
+
+The receipt also records family/job → member attribution independently.
+
+This split prevents two opposite errors:
+1. under-counting a real hosted gate such as Android core;
+2. over-counting embedded evidence as if smoke/typography allocated extra runners beside the visual oracle.
+
+Promotion verification recomputes and compares both sets on the exact composed head.
