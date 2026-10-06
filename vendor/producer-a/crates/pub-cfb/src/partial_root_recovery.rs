@@ -1225,6 +1225,43 @@ mod tests {
     use super::*;
     use std::io::{Cursor, Write};
 
+    fn multi_sector_directory_fixture() -> Vec<u8> {
+        let mut compound =
+            cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("directory fixture CFB");
+        for index in 0..10u8 {
+            compound
+                .create_stream(format!("/Stream{index:02}"))
+                .expect("fixture stream")
+                .write_all(&[index])
+                .expect("write fixture stream");
+        }
+        compound.flush().expect("flush directory fixture");
+        compound.into_inner().into_inner()
+    }
+
+    fn break_directory_chain_after_first_sector(mut source: Vec<u8>) -> Vec<u8> {
+        let sector_len = 1usize << u16::from_le_bytes([source[30], source[31]]);
+        let first_directory_sector =
+            u32::from_le_bytes([source[48], source[49], source[50], source[51]]);
+        let fat_sector = first_fat_sector(&source);
+        let fat_offset = (usize::try_from(fat_sector).unwrap() + 1) * sector_len;
+        let entry_offset = fat_offset + usize::try_from(first_directory_sector).unwrap() * 4;
+        source[entry_offset..entry_offset + 4].copy_from_slice(&0x1234_5678u32.to_le_bytes());
+        source
+    }
+
+    fn cycle_directory_chain_after_first_sector(mut source: Vec<u8>) -> Vec<u8> {
+        let sector_len = 1usize << u16::from_le_bytes([source[30], source[31]]);
+        let first_directory_sector =
+            u32::from_le_bytes([source[48], source[49], source[50], source[51]]);
+        let fat_sector = first_fat_sector(&source);
+        let fat_offset = (usize::try_from(fat_sector).unwrap() + 1) * sector_len;
+        let entry_offset = fat_offset + usize::try_from(first_directory_sector).unwrap() * 4;
+        source[entry_offset..entry_offset + 4]
+            .copy_from_slice(&first_directory_sector.to_le_bytes());
+        source
+    }
+
     fn regular_root_fixture() -> Vec<u8> {
         let mut compound =
             cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("partial fixture CFB");
@@ -1415,6 +1452,68 @@ mod tests {
         let child_offset = directory_offset + usize::try_from(root_child).unwrap() * DIR_ENTRY_LEN;
         source[child_offset + 68..child_offset + 72].copy_from_slice(&root_child.to_le_bytes());
         source
+    }
+
+    #[test]
+    fn partial_directory_prefix_retains_complete_entries_before_physical_break() {
+        let source = multi_sector_directory_fixture();
+        let (sector_len, directory_sector_ids, _) = directory_bytes(&source);
+        assert!(directory_sector_ids.len() > 1);
+
+        let damaged = break_directory_chain_after_first_sector(source);
+        let recovered =
+            recover_partial_cfb_raw_directory_prefix_reader(Cursor::new(damaged.clone()))
+                .expect("partial directory prefix");
+
+        assert_eq!(recovered.status, RootRegularStreamPrefixStatus::Partial);
+        assert_eq!(
+            recovered.truncation_reason,
+            Some(RootRegularStreamTruncationReason::InvalidNextSector)
+        );
+        assert_eq!(recovered.available_directory_len, sector_len as u64);
+        assert_eq!(recovered.source_ranges.len(), 1);
+        assert_eq!(recovered.source_sha256, sha256_hex(&damaged));
+        assert!(!recovered.source_modified);
+        assert!(recovered.entries.iter().any(|entry| entry.sid == 0));
+        assert!(recovered.entries.iter().all(|entry| {
+            usize::try_from(entry.sid).unwrap() < sector_len / DIR_ENTRY_LEN
+        }));
+    }
+
+    #[test]
+    fn healthy_directory_prefix_is_complete_and_preserves_known_stream_entry() {
+        let source = multi_sector_directory_fixture();
+        let recovered =
+            recover_partial_cfb_raw_directory_prefix_reader(Cursor::new(source.clone()))
+                .expect("complete directory evidence");
+        assert_eq!(recovered.status, RootRegularStreamPrefixStatus::Complete);
+        assert_eq!(recovered.truncation_reason, None);
+        assert!(recovered.entries.iter().any(|entry| {
+            entry.object_type == 2 && entry.descriptive_name.as_deref() == Some("Stream09")
+        }));
+        assert_eq!(recovered.source_sha256, sha256_hex(&source));
+    }
+
+    #[test]
+    fn directory_prefix_cycle_fails_closed() {
+        let source = cycle_directory_chain_after_first_sector(multi_sector_directory_fixture());
+        let error =
+            recover_partial_cfb_raw_directory_prefix_reader(Cursor::new(source))
+                .expect_err("directory cycle must fail closed");
+        assert!(format!("{error:#}").contains("directory chain cycle"));
+    }
+
+    #[test]
+    fn invalid_recovered_root_entry_fails_closed() {
+        let mut source = multi_sector_directory_fixture();
+        let sector_len = 1usize << u16::from_le_bytes([source[30], source[31]]);
+        let directory_sector =
+            u32::from_le_bytes([source[48], source[49], source[50], source[51]]);
+        let root_offset = (usize::try_from(directory_sector).unwrap() + 1) * sector_len;
+        source[root_offset + 66] = 2;
+        assert!(
+            recover_partial_cfb_raw_directory_prefix_reader(Cursor::new(source)).is_err()
+        );
     }
 
     #[test]
