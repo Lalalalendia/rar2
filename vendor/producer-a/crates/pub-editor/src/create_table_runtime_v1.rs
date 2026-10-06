@@ -427,7 +427,12 @@ pub fn apply_create_table_inverse_v1(
     let exact_child_count = graph
         .pages
         .get(&table.page_id)
-        .map(|page| page.children.iter().filter(|id| **id == table.node_id).count())
+        .map(|page| {
+            page.children
+                .iter()
+                .filter(|id| **id == table.node_id)
+                .count()
+        })
         .unwrap_or(0);
     if graph.nodes.get(&table.node_id) != Some(&plan.node)
         || graph.stories.get(&table.story_id) != Some(&plan.story)
