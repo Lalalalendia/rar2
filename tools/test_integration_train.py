@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import json
 import subprocess
 import tempfile
 
@@ -52,6 +53,38 @@ def init_repo() -> tuple[tempfile.TemporaryDirectory, Path, str]:
 def branch_commit(root: Path, base: str, branch: str, path: str, text: str) -> str:
     git(root, "switch", "-C", branch, base)
     return commit_file(root, path, text, branch)
+
+
+def write_fast_receipt(
+    root: Path,
+    name: str,
+    *,
+    head_sha: str,
+    changed_paths: list[str],
+    mode: str = "feature",
+    success: bool = True,
+) -> Path:
+    path = root / f"{name}.json"
+    payload = {
+        "schema": "chaptera.dev-fast-loop-run.v1",
+        "head_sha": head_sha,
+        "mode": mode,
+        "changed_paths": changed_paths,
+        "success": success,
+        "exit_code": 0 if success else 1,
+        "total_seconds": 1.25,
+        "checks": [
+            {
+                "kind": "rust-test",
+                "command": ["cargo", "test", "--test", name],
+                "reason": "synthetic integration-train fixture",
+                "seconds": 1.0,
+                "exit_code": 0 if success else 1,
+            }
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
 
 
 def expect_rejected(fn, needle: str) -> None:
@@ -109,6 +142,145 @@ def test_positive_disjoint_plan() -> None:
         assert plan["effective_heavy_jobs"] == []
         assert plan["effective_heavy_job_members"] == {}
         assert plan["suggested_commands"][-1].startswith("git cherry-pick ")
+    finally:
+        temp.cleanup()
+
+
+def test_fast_receipts_bind_to_exact_candidates() -> None:
+    temp, root, base = init_repo()
+    try:
+        a = branch_commit(root, base, "task-a", "crates/a/src/feature_a.rs", "pub fn a() {}\n")
+        b = branch_commit(root, base, "task-b", "crates/b/src/feature_b.rs", "pub fn b() {}\n")
+        plan = mod.plan_train(
+            root,
+            base_ref=base,
+            candidates=[
+                mod.CandidateSpec("TASK-A", a),
+                mod.CandidateSpec("TASK-B", b),
+            ],
+        )
+        a_receipt = write_fast_receipt(
+            root, "a-fast", head_sha=a, changed_paths=["crates/a/src/feature_a.rs"]
+        )
+        b_receipt = write_fast_receipt(
+            root, "b-fast", head_sha=b, changed_paths=["crates/b/src/feature_b.rs"]
+        )
+        mod.attach_fast_receipts(
+            root,
+            plan,
+            [
+                mod.FastReceiptSpec("TASK-A", a_receipt),
+                mod.FastReceiptSpec("TASK-B", b_receipt),
+            ],
+        )
+        assert plan["fast_receipts_verified"] == ["TASK-A", "TASK-B"]
+        assert plan["fast_receipt_waiver"]["enabled"] is False
+        assert plan["candidates"][0]["fast_receipt"]["head_sha"] == a
+        assert plan["candidates"][1]["fast_receipt"]["check_count"] == 1
+    finally:
+        temp.cleanup()
+
+
+def test_fast_receipt_stale_head_rejected() -> None:
+    temp, root, base = init_repo()
+    try:
+        a = branch_commit(root, base, "task-a", "crates/a/src/feature_a.rs", "pub fn a() {}\n")
+        b = branch_commit(root, base, "task-b", "crates/b/src/feature_b.rs", "pub fn b() {}\n")
+        plan = mod.plan_train(
+            root,
+            base_ref=base,
+            candidates=[
+                mod.CandidateSpec("TASK-A", a),
+                mod.CandidateSpec("TASK-B", b),
+            ],
+        )
+        stale = write_fast_receipt(
+            root, "stale", head_sha=base, changed_paths=["crates/a/src/feature_a.rs"]
+        )
+        b_receipt = write_fast_receipt(
+            root, "b-fast", head_sha=b, changed_paths=["crates/b/src/feature_b.rs"]
+        )
+        expect_rejected(
+            lambda: mod.attach_fast_receipts(
+                root,
+                plan,
+                [
+                    mod.FastReceiptSpec("TASK-A", stale),
+                    mod.FastReceiptSpec("TASK-B", b_receipt),
+                ],
+            ),
+            "head mismatch",
+        )
+    finally:
+        temp.cleanup()
+
+
+def test_fast_receipt_path_drift_rejected() -> None:
+    temp, root, base = init_repo()
+    try:
+        a = branch_commit(root, base, "task-a", "crates/a/src/feature_a.rs", "pub fn a() {}\n")
+        b = branch_commit(root, base, "task-b", "crates/b/src/feature_b.rs", "pub fn b() {}\n")
+        plan = mod.plan_train(
+            root,
+            base_ref=base,
+            candidates=[
+                mod.CandidateSpec("TASK-A", a),
+                mod.CandidateSpec("TASK-B", b),
+            ],
+        )
+        drift = write_fast_receipt(
+            root, "drift", head_sha=a, changed_paths=["crates/a/src/not_the_diff.rs"]
+        )
+        b_receipt = write_fast_receipt(
+            root, "b-fast", head_sha=b, changed_paths=["crates/b/src/feature_b.rs"]
+        )
+        expect_rejected(
+            lambda: mod.attach_fast_receipts(
+                root,
+                plan,
+                [
+                    mod.FastReceiptSpec("TASK-A", drift),
+                    mod.FastReceiptSpec("TASK-B", b_receipt),
+                ],
+            ),
+            "path set does not match",
+        )
+    finally:
+        temp.cleanup()
+
+
+def test_fast_receipt_missing_requires_explicit_waiver() -> None:
+    temp, root, base = init_repo()
+    try:
+        a = branch_commit(root, base, "task-a", "crates/a/src/feature_a.rs", "pub fn a() {}\n")
+        b = branch_commit(root, base, "task-b", "crates/b/src/feature_b.rs", "pub fn b() {}\n")
+        plan = mod.plan_train(
+            root,
+            base_ref=base,
+            candidates=[
+                mod.CandidateSpec("TASK-A", a),
+                mod.CandidateSpec("TASK-B", b),
+            ],
+        )
+        a_receipt = write_fast_receipt(
+            root, "a-fast", head_sha=a, changed_paths=["crates/a/src/feature_a.rs"]
+        )
+        expect_rejected(
+            lambda: mod.attach_fast_receipts(
+                root,
+                plan,
+                [mod.FastReceiptSpec("TASK-A", a_receipt)],
+            ),
+            "missing required feature fast-loop receipt",
+        )
+        mod.attach_fast_receipts(
+            root,
+            plan,
+            [mod.FastReceiptSpec("TASK-A", a_receipt)],
+            allow_unreceipted_candidates=True,
+        )
+        assert plan["fast_receipt_waiver"]["enabled"] is True
+        assert plan["fast_receipt_waiver"]["missing_candidates"] == ["TASK-B"]
     finally:
         temp.cleanup()
 
@@ -322,6 +494,10 @@ def main() -> None:
     test_heavy_family_union()
     test_unrelated_feature_has_no_heavy_family()
     test_positive_disjoint_plan()
+    test_fast_receipts_bind_to_exact_candidates()
+    test_fast_receipt_stale_head_rejected()
+    test_fast_receipt_path_drift_rejected()
+    test_fast_receipt_missing_requires_explicit_waiver()
     test_verify_composed_head()
     test_verify_composed_head_rejects_extra_path()
     test_overlapping_path_rejected()
