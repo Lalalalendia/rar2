@@ -251,6 +251,16 @@ try {
       const node = line.closest("[data-node-id]");
       const svg = line.closest("svg.page");
       const pageBounds = svg?.getBoundingClientRect();
+      const viewBox = svg?.viewBox?.baseVal ?? null;
+      const pageScreenScale = pageBounds && viewBox && viewBox.width > 0 && viewBox.height > 0
+        ? Math.min(pageBounds.width / viewBox.width, pageBounds.height / viewBox.height)
+        : null;
+      const normalizedWidthPx96 = pageScreenScale && pageScreenScale > 0
+        ? bounds.width / pageScreenScale / 9525
+        : bounds.width;
+      const normalizedHeightPx96 = pageScreenScale && pageScreenScale > 0
+        ? bounds.height / pageScreenScale / 9525
+        : bounds.height;
       const ctm = typeof line.getCTM === "function" ? line.getCTM() : null;
       const screenCtm = typeof line.getScreenCTM === "function" ? line.getScreenCTM() : null;
       return {
@@ -260,6 +270,9 @@ try {
         font_size: parseFloat(getComputedStyle(line).fontSize),
         height: bounds.height,
         width: bounds.width,
+        normalized_width_px_96: normalizedWidthPx96,
+        normalized_height_px_96: normalizedHeightPx96,
+        page_screen_scale_px_per_emu: pageScreenScale,
         node_transform: node.getAttribute("transform"),
         ctm: ctm ? { a: ctm.a, b: ctm.b, c: ctm.c, d: ctm.d, e: ctm.e, f: ctm.f } : null,
         screen_ctm: screenCtm ? { a: screenCtm.a, b: screenCtm.b, c: screenCtm.c, d: screenCtm.d, e: screenCtm.e, f: screenCtm.f } : null,
@@ -287,13 +300,16 @@ try {
       // object marker. It is intentionally zero-width, so marker-only lines
       // are visually empty even though JavaScript trim() retains U+200B.
       const visibleText = line.text.replaceAll("\u200B", "").trim();
-      if (visibleText && !(line.height >= 5 && line.width >= 1)) {
+      if (visibleText && !(line.normalized_height_px_96 >= 5 && line.normalized_width_px_96 >= 1)) {
         const degeneracy = {
           code: "shared_text_tiny_speck",
           node_id: line.node_id,
           line_index: line.index,
           width_px: line.width,
           height_px: line.height,
+          normalized_width_px_96: line.normalized_width_px_96,
+          normalized_height_px_96: line.normalized_height_px_96,
+          page_screen_scale_px_per_emu: line.page_screen_scale_px_per_emu,
           font_size_px: line.font_size,
           node_transform: line.node_transform,
           ctm: line.ctm,
