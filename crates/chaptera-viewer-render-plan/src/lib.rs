@@ -1119,13 +1119,7 @@ fn render_table_cell_paragraph_alignments_v1(
     {
         return Vec::new();
     }
-    render_paragraph_alignment_runs_v1(
-        visual,
-        story_id,
-        &story.text,
-        scalar_start,
-        scalar_end,
-    )
+    render_paragraph_alignment_runs_v1(visual, story_id, &story.text, scalar_start, scalar_end)
 }
 
 fn render_paragraph_alignment_runs_v1(
