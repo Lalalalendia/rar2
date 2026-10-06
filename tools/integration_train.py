@@ -81,6 +81,11 @@ class CandidateSpec(NamedTuple):
     ref: str
 
 
+class FastReceiptSpec(NamedTuple):
+    label: str
+    path: Path
+
+
 def run_lines(root: Path, args: Sequence[str]) -> list[str]:
     result = subprocess.run(
         list(args),
@@ -122,6 +127,17 @@ def parse_candidate(raw: str) -> CandidateSpec:
     if not label or not ref:
         raise TrainError(f"candidate must have non-empty LABEL and REF, got {raw!r}")
     return CandidateSpec(label=label, ref=ref)
+
+
+def parse_fast_receipt(raw: str) -> FastReceiptSpec:
+    if "=" not in raw:
+        raise TrainError(f"fast receipt must be LABEL=PATH, got {raw!r}")
+    label, path = raw.split("=", 1)
+    label = label.strip()
+    path = path.strip()
+    if not label or not path:
+        raise TrainError(f"fast receipt must have non-empty LABEL and PATH, got {raw!r}")
+    return FastReceiptSpec(label=label, path=Path(path))
 
 
 def is_allowed_path(path: str) -> bool:
@@ -333,6 +349,91 @@ def plan_train(
     }
 
 
+def attach_fast_receipts(
+    root: Path,
+    plan: dict,
+    receipt_specs: Sequence[FastReceiptSpec],
+    *,
+    allow_unreceipted_candidates: bool = False,
+) -> None:
+    by_label: dict[str, Path] = {}
+    for spec in receipt_specs:
+        if spec.label in by_label:
+            raise TrainError(f"duplicate fast receipt for candidate {spec.label}")
+        by_label[spec.label] = spec.path
+
+    candidate_labels = {candidate["label"] for candidate in plan["candidates"]}
+    unknown = sorted(set(by_label) - candidate_labels)
+    if unknown:
+        raise TrainError("fast receipt supplied for unknown candidate(s): " + ", ".join(unknown))
+
+    missing = sorted(candidate_labels - set(by_label))
+    if missing and not allow_unreceipted_candidates:
+        raise TrainError(
+            "missing required feature fast-loop receipt(s): " + ", ".join(missing)
+        )
+
+    verified_labels: list[str] = []
+    for candidate in plan["candidates"]:
+        label = candidate["label"]
+        raw_path = by_label.get(label)
+        if raw_path is None:
+            candidate["fast_receipt"] = None
+            continue
+
+        path = raw_path if raw_path.is_absolute() else (root / raw_path)
+        try:
+            receipt = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise TrainError(f"{label}: cannot read fast-loop receipt {path}: {exc}") from exc
+
+        if receipt.get("schema") != "chaptera.dev-fast-loop-run.v1":
+            raise TrainError(f"{label}: unsupported fast-loop receipt schema")
+        if receipt.get("mode") != "feature":
+            raise TrainError(f"{label}: fast-loop receipt must use feature mode")
+        if receipt.get("success") is not True or receipt.get("exit_code") != 0:
+            raise TrainError(f"{label}: fast-loop receipt is not green")
+        if receipt.get("head_sha") != candidate["head_sha"]:
+            raise TrainError(
+                f"{label}: fast-loop receipt head mismatch: "
+                f"{receipt.get('head_sha')!r} != {candidate['head_sha']!r}"
+            )
+
+        receipt_paths = sorted(set(receipt.get("changed_paths") or []))
+        if receipt_paths != candidate["changed_paths"]:
+            raise TrainError(
+                f"{label}: fast-loop receipt path set does not match candidate diff"
+            )
+
+        checks = receipt.get("checks")
+        if not isinstance(checks, list) or not checks:
+            raise TrainError(f"{label}: fast-loop receipt has no executed checks")
+        bad_checks = [
+            index
+            for index, check in enumerate(checks)
+            if not isinstance(check, dict) or check.get("exit_code") != 0
+        ]
+        if bad_checks:
+            raise TrainError(f"{label}: fast-loop receipt contains failed check(s): {bad_checks}")
+
+        candidate["fast_receipt"] = {
+            "schema": receipt["schema"],
+            "head_sha": receipt["head_sha"],
+            "mode": receipt["mode"],
+            "changed_paths": receipt_paths,
+            "check_count": len(checks),
+            "total_seconds": receipt.get("total_seconds"),
+            "receipt_path": str(raw_path),
+        }
+        verified_labels.append(label)
+
+    plan["fast_receipts_verified"] = sorted(verified_labels)
+    plan["fast_receipt_waiver"] = {
+        "enabled": allow_unreceipted_candidates,
+        "missing_candidates": missing,
+    }
+
+
 def verify_composed_head(root: Path, plan: dict, head_ref: str) -> dict:
     base_sha = plan["base_sha"]
     head_sha = resolve_commit(root, head_ref)
@@ -405,6 +506,17 @@ def main() -> int:
     )
     parser.add_argument("--branch-name", help="suggested integration branch name")
     parser.add_argument(
+        "--fast-receipt",
+        action="append",
+        default=[],
+        help="feature fast-loop receipt in LABEL=PATH form; repeat once per candidate",
+    )
+    parser.add_argument(
+        "--allow-unreceipted-candidates",
+        action="store_true",
+        help="explicit controlled-pilot waiver; production trains require one green feature receipt per candidate",
+    )
+    parser.add_argument(
         "--verify-head",
         help="optional composed train ref/SHA to verify against the generated plan",
     )
@@ -419,6 +531,13 @@ def main() -> int:
             base_ref=args.base,
             candidates=specs,
             branch_name=args.branch_name,
+        )
+        receipt_specs = [parse_fast_receipt(raw) for raw in args.fast_receipt]
+        attach_fast_receipts(
+            root,
+            plan,
+            receipt_specs,
+            allow_unreceipted_candidates=args.allow_unreceipted_candidates,
         )
         if args.verify_head:
             plan["composed_verification"] = verify_composed_head(
