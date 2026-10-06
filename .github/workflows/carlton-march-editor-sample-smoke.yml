@@ -7,13 +7,6 @@ on:
         required: false
         type: string
         default: ""
-  pull_request:
-    paths:
-      - ".github/workflows/carlton-march-editor-sample-smoke.yml"
-      - "tools/acquire_carlton_march_pair.py"
-      - "apps/chaptera-desktop/src/acceptance.rs"
-      - "apps/chaptera-desktop/src/acceptance_cli.rs"
-      - "vendor/producer-a/crates/pub-editor/**"
   workflow_dispatch:
 
 permissions:

@@ -1,0 +1,153 @@
+name: Editor build-once PR admission
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/editor-build-once-pr.yml"
+      - ".github/workflows/chaptera-editor-windows-binary.yml"
+      - ".github/workflows/carlton-march-editor-sample-smoke.yml"
+      - ".github/workflows/editor-desktop-continuity-v2-windows.yml"
+      - ".github/workflows/editor-fixed-pdf-current-revision.yml"
+      - "tools/ci/validate_editor_binary_artifact.py"
+      - "tools/ci/test_validate_editor_binary_artifact.py"
+      - "tools/ci/test_editor_build_once_wiring.py"
+      - "tools/ci/pub_editor_pr_fanout.py"
+      - "tools/ci/test_pub_editor_pr_fanout.py"
+      - "tools/acquire_carlton_march_pair.py"
+      - "apps/chaptera-desktop/src/acceptance.rs"
+      - "apps/chaptera-desktop/src/acceptance_cli.rs"
+      - "apps/chaptera-desktop/src/acceptance_v2.rs"
+      - "apps/chaptera-desktop/src/acceptance_v2_cli.rs"
+      - "packages/product/editor-desktop-continuity/v2/**"
+      - "tools/run_editor_desktop_continuity_v2.py"
+      - "tools/validate_editor_desktop_continuity_v2_receipt.py"
+      - "tools/verify_editable_export_geometry.py"
+      - "tools/run_editor_fixed_pdf_current_revision_v2.py"
+      - "tools/run_yab259_current_fixed_pdf_resource_request.py"
+      - "tools/yab259_current_fixed_pdf_resource_request.rs"
+      - "tools/run_yab259_fixed_pdf_packet_renderer.py"
+      - "tools/yab259_fixed_pdf_packet_renderer.rs"
+      - "tools/run_yab259_fixed_pdf_closure.py"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/bin/current_fixed_pdf_input.rs"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/lib.rs"
+      - "crates/chaptera-desktop-fallback-font-resource/**"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-odg/**"
+      - "vendor/producer-a/crates/pub-layout/src/shaped_flow.rs"
+      - "crates/chaptera-scene-instance/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  classify:
+    name: Classify Editor build-once consumers
+    runs-on: ubuntu-latest
+    outputs:
+      continuity_v2_windows: ${{ steps.scope.outputs.continuity_v2_windows }}
+      fixed_pdf_current_revision: ${{ steps.scope.outputs.fixed_pdf_current_revision }}
+      carlton_editor_sample: ${{ steps.carlton.outputs.carlton_editor_sample }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.ref || github.sha }}
+          fetch-depth: 0
+
+      - id: base-authority
+        name: Resolve base-branch classifier authority
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch PR head for classification
+        if: ${{ github.event.pull_request.head.sha != '' }}
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags origin "$HEAD_SHA"
+
+      - name: Test base-authority pub-editor classifier
+        run: python tools/ci/test_pub_editor_pr_fanout.py
+
+      - id: scope
+        name: Classify Continuity and fixed-PDF ownership
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ steps.base-authority.outputs.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "continuity_v2_windows=true" >> "$GITHUB_OUTPUT"
+            echo "fixed_pdf_current_revision=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python tools/ci/pub_editor_pr_fanout.py \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --receipt target/editor-build-once-pr-scope.json \
+            --github-output "$GITHUB_OUTPUT"
+
+          changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
+          if grep -Eq '^(\.github/workflows/editor-build-once-pr\.yml|\.github/workflows/chaptera-editor-windows-binary\.yml|tools/ci/validate_editor_binary_artifact\.py|tools/ci/test_validate_editor_binary_artifact\.py|tools/ci/test_editor_build_once_wiring\.py)$' <<<"$changed"; then
+            echo "continuity_v2_windows=true" >> "$GITHUB_OUTPUT"
+            echo "fixed_pdf_current_revision=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - id: carlton
+        name: Classify Carlton Editor sample ownership
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ steps.base-authority.outputs.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "carlton_editor_sample=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
+          if grep -Eq '^(\.github/workflows/(editor-build-once-pr|chaptera-editor-windows-binary|carlton-march-editor-sample-smoke)\.yml|tools/ci/(validate_editor_binary_artifact|test_validate_editor_binary_artifact|test_editor_build_once_wiring)\.py|tools/acquire_carlton_march_pair\.py|apps/chaptera-desktop/src/(acceptance|acceptance_cli)\.rs|vendor/producer-a/crates/pub-editor/)' <<<"$changed"; then
+            echo "carlton_editor_sample=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "carlton_editor_sample=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  editor-binary:
+    name: Build exact-candidate Editor binary once
+    needs: classify
+    if: ${{ !cancelled() && always() && (needs.classify.result != 'success' || needs.classify.outputs.continuity_v2_windows == 'true' || needs.classify.outputs.fixed_pdf_current_revision == 'true' || needs.classify.outputs.carlton_editor_sample == 'true') }}
+    uses: ./.github/workflows/chaptera-editor-windows-binary.yml
+    with:
+      artifact_name: chaptera-editor-windows-binary-${{ github.sha }}
+
+  continuity-v2:
+    name: Editor Continuity V2
+    needs: [classify, editor-binary]
+    if: ${{ !cancelled() && always() && needs.editor-binary.result == 'success' && (needs.classify.result != 'success' || needs.classify.outputs.continuity_v2_windows == 'true') }}
+    uses: ./.github/workflows/editor-desktop-continuity-v2-windows.yml
+    with:
+      editor_binary_artifact_name: chaptera-editor-windows-binary-${{ github.sha }}
+
+  fixed-pdf-current:
+    name: Editor fixed-PDF current revision
+    needs: [classify, editor-binary]
+    if: ${{ !cancelled() && always() && needs.editor-binary.result == 'success' && (needs.classify.result != 'success' || needs.classify.outputs.fixed_pdf_current_revision == 'true') }}
+    uses: ./.github/workflows/editor-fixed-pdf-current-revision.yml
+    with:
+      editor_binary_artifact_name: chaptera-editor-windows-binary-${{ github.sha }}
+
+  carlton-sample:
+    name: Carlton March Editor sample
+    needs: [classify, editor-binary]
+    if: ${{ !cancelled() && always() && needs.editor-binary.result == 'success' && (needs.classify.result != 'success' || needs.classify.outputs.carlton_editor_sample == 'true') }}
+    uses: ./.github/workflows/carlton-march-editor-sample-smoke.yml
+    with:
+      editor_binary_artifact_name: chaptera-editor-windows-binary-${{ github.sha }}

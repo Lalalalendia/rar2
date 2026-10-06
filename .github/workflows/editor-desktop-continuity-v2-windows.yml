@@ -7,21 +7,6 @@ on:
         required: false
         type: string
         default: ""
-  pull_request:
-    paths:
-      - ".github/workflows/editor-desktop-continuity-v2-windows.yml"
-      - "tools/ci/test_pub_editor_pr_fanout.py"
-      - "tools/ci/pub_editor_pr_fanout.py"
-      - "apps/chaptera-desktop/src/acceptance.rs"
-      - "apps/chaptera-desktop/src/acceptance_v2.rs"
-      - "apps/chaptera-desktop/src/acceptance_v2_cli.rs"
-      - "packages/product/editor-desktop-continuity/v2/**"
-      - "tools/run_editor_desktop_continuity_v2.py"
-      - "tools/validate_editor_desktop_continuity_v2_receipt.py"
-      - "tools/verify_editable_export_geometry.py"
-      - "vendor/producer-a/crates/pub-editor/**"
-      - "vendor/producer-a/crates/pub-odg/**"
-      - "crates/chaptera-scene-instance/**"
   workflow_dispatch:
 
 permissions:
