@@ -325,7 +325,7 @@ fn detect_image_payload(
             &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
         )
         .or_else(|| find_bytes(prefix, b"GIF87a"))
-        .or_else(|| find_bytes(prefix, b"GIF89a"))
+        .or_else(|| find_bytes(prefix, b"GIF89a")),
         OFFICE_ART_BLIP_JPEG => find_bytes(prefix, &[0xFF, 0xD8, 0xFF]),
         OFFICE_ART_BLIP_DIB => find_dib_header(prefix),
         _ => None,
