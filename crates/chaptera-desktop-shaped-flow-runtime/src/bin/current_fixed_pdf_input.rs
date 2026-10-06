@@ -229,7 +229,11 @@ fn exact_project_targets(project: &EditorProject) -> Result<ProjectTargets, Stri
                 replacement_node_id,
                 ..
             } = &targets
-                && (move_node_id == resize_node_id || move_node_id == replacement_node_id)
+                && !stage02_target_topology_admitted(
+                    *move_node_id,
+                    *resize_node_id,
+                    *replacement_node_id,
+                )
             {
                 return Err(
                     "Stage-0 MoveNode target must be distinct from resized/replaced target".into(),
@@ -238,6 +242,14 @@ fn exact_project_targets(project: &EditorProject) -> Result<ProjectTargets, Stri
             Ok(targets)
         }
     }
+}
+
+fn stage02_target_topology_admitted(
+    move_node_id: NodeId,
+    resize_node_id: NodeId,
+    replacement_node_id: NodeId,
+) -> bool {
+    move_node_id != resize_node_id && move_node_id != replacement_node_id
 }
 
 fn read_project(path: &Path) -> Result<(Vec<u8>, EditorProject), String> {
@@ -436,11 +448,31 @@ mod tests {
     fn stage02_target_topology_allows_resize_then_replace_same_frame() {
         let move_node: NodeId =
             serde_json::from_str("\"11111111-1111-4111-8111-111111111111\"").unwrap();
-        let photo_node: NodeId =
+        let resize_node: NodeId =
             serde_json::from_str("\"22222222-2222-4222-8222-222222222222\"").unwrap();
+        let third_node: NodeId =
+            serde_json::from_str("\"33333333-3333-4333-8333-333333333333\"").unwrap();
 
-        assert_ne!(move_node, photo_node);
-        assert_eq!(photo_node, photo_node);
+        assert!(stage02_target_topology_admitted(
+            move_node,
+            resize_node,
+            resize_node
+        ));
+        assert!(stage02_target_topology_admitted(
+            move_node,
+            resize_node,
+            third_node
+        ));
+        assert!(!stage02_target_topology_admitted(
+            move_node,
+            move_node,
+            resize_node
+        ));
+        assert!(!stage02_target_topology_admitted(
+            move_node,
+            resize_node,
+            move_node
+        ));
     }
 
     #[test]
