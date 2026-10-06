@@ -11,6 +11,7 @@ pub enum AuthoredParagraphAlignmentValueV1 {
     Left,
     Center,
     Right,
+    Justify,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +19,7 @@ pub enum EffectiveParagraphAlignmentValueV1 {
     Left,
     Center,
     Right,
+    Justify,
     InterWord,
     Distribute,
 }
@@ -40,6 +42,9 @@ pub(crate) fn paragraph_scoped_alignment_value_v1(
         Some(EffectiveParagraphAlignmentValueV1::Right) => {
             Ok(ParagraphScopedAlignmentValueV1::Right)
         }
+        Some(EffectiveParagraphAlignmentValueV1::Justify) => {
+            Ok(ParagraphScopedAlignmentValueV1::Justify)
+        }
         Some(EffectiveParagraphAlignmentValueV1::InterWord) => {
             Err(ParagraphScopedAlignmentProjectionErrorV1::InterWord)
         }
@@ -56,6 +61,7 @@ impl From<AuthoredParagraphAlignmentValueV1> for EffectiveParagraphAlignmentValu
             AuthoredParagraphAlignmentValueV1::Left => Self::Left,
             AuthoredParagraphAlignmentValueV1::Center => Self::Center,
             AuthoredParagraphAlignmentValueV1::Right => Self::Right,
+            AuthoredParagraphAlignmentValueV1::Justify => Self::Justify,
         }
     }
 }
@@ -277,6 +283,13 @@ mod tests {
             ),
             Some(AuthoredParagraphAlignmentValueV1::Center)
         );
+        assert_eq!(
+            normalized_paragraph_alignment_override_v1(
+                Some(ImportedParagraphAlignmentValueV1::InterWord),
+                AuthoredParagraphAlignmentValueV1::Justify,
+            ),
+            Some(AuthoredParagraphAlignmentValueV1::Justify)
+        );
     }
 
     #[test]
@@ -453,6 +466,14 @@ mod paragraph_scoped_projection_tests {
         assert_eq!(
             paragraph_scoped_alignment_value_v1(Some(EffectiveParagraphAlignmentValueV1::Right)),
             Ok(ParagraphScopedAlignmentValueV1::Right)
+        );
+        assert_eq!(
+            paragraph_scoped_alignment_value_v1(Some(EffectiveParagraphAlignmentValueV1::Justify)),
+            Ok(ParagraphScopedAlignmentValueV1::Justify)
+        );
+        assert_eq!(
+            EffectiveParagraphAlignmentValueV1::from(AuthoredParagraphAlignmentValueV1::Justify),
+            EffectiveParagraphAlignmentValueV1::Justify
         );
     }
 

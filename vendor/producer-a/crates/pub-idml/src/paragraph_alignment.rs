@@ -363,6 +363,7 @@ pub fn add_paragraph_scoped_alignment_to_idml(
                 ParagraphScopedAlignmentValueV1::Left => "LeftAlign",
                 ParagraphScopedAlignmentValueV1::Center => "CenterAlign",
                 ParagraphScopedAlignmentValueV1::Right => "RightAlign",
+                ParagraphScopedAlignmentValueV1::Justify => "LeftJustified",
             };
             writeln!(
                 replacement,
@@ -612,6 +613,41 @@ mod tests {
                 .count(),
             3
         );
+    }
+
+    #[test]
+    fn writes_scoped_justify_as_left_justified() {
+        let story_id = story(18);
+        let export_plan = plan(story_id);
+        let mut package = package_with_story_text(&export_plan, story_id, "One");
+        let placement = IdmlParagraphScopedAlignmentPlacement {
+            story_id,
+            story_text: "One".into(),
+            paragraphs: vec![scoped(
+                19,
+                story_id,
+                0,
+                3,
+                ParagraphScopedAlignmentValueV1::Justify,
+            )],
+        };
+
+        add_paragraph_scoped_alignment_to_idml(
+            &export_plan,
+            &mut package,
+            std::slice::from_ref(&placement),
+        )
+        .expect("paragraph-scoped IDML justify");
+
+        let xml = package
+            .parts
+            .iter()
+            .find(|part| part.kind == IdmlPartKind::Story)
+            .and_then(|part| part.content.as_text())
+            .expect("story XML");
+        assert_eq!(xml.matches("Justification=\"LeftJustified\"").count(), 1);
+        assert_eq!(xml.matches("Justification=\"LeftAlign\"").count(), 0);
+        assert_eq!(xml.matches("Justification=\"FullyJustified\"").count(), 0);
     }
 
     #[test]
