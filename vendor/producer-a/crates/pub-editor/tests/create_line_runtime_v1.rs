@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use pub_editor::{
     AuthoredEntityProvenanceV1, AuthoredLineRuntimeV1, AuthoredSolidStrokeV1,
     EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_16, EDITOR_PROJECT_VERSION_V0_17,
-    EDITOR_PROJECT_VERSION_V0_19, EDITOR_PROJECT_VERSION_V0_20, EditOperation, EditorError,
+    EDITOR_PROJECT_VERSION_V0_20, EditOperation, EditorError,
     EditorProject, EditorProjectError, EditorSession, LineGeometryV1, PointEmuV1, Srgb8V1,
     mature_0x2c_pub_persistence_target,
 };
