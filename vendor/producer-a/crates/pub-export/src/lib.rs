@@ -117,6 +117,7 @@ pub enum ParagraphScopedAlignmentValueV1 {
     Left,
     Center,
     Right,
+    Justify,
 }
 
 /// Target-neutral physical-writer authority for one canonical ParagraphId.
