@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use pub_editor::{
     CreateTableRuntimeV1, EDITOR_PROJECT_VERSION_V0_18, EDITOR_PROJECT_VERSION_V0_19,
-    EditOperation, EditorProjectAsset, EditorProjectError, EditorSession, LengthEmu, NodeId, PageId,
-    RectEmu, StoryId, TableCellId, TableTrackTargetV1,
+    EditOperation, EditorProjectAsset, EditorProjectError, EditorSession, LengthEmu, NodeId,
+    PageId, RectEmu, StoryId, TableCellId, TableTrackTargetV1,
 };
 use pub_model::{
     Document, DocumentId, ResolvedGraph, Sha256Digest, Size2D, SourceDescriptor, TableColumnId,
@@ -222,7 +222,6 @@ fn v018_project_cannot_smuggle_track_resize_history() {
     assert!(target.operations().is_empty());
 }
 
-
 #[test]
 fn v019_project_requires_identity_and_exact_asset_reachability() {
     let mut producer = EditorSession::new(graph()).expect("producer");
@@ -249,10 +248,9 @@ fn v019_project_requires_identity_and_exact_asset_reachability() {
     ));
 
     let mut extra_asset = producer.project();
-    let fake_sha: Sha256Digest =
-        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-            .parse()
-            .expect("fake sha");
+    let fake_sha: Sha256Digest = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        .parse()
+        .expect("fake sha");
     extra_asset.assets.push(EditorProjectAsset {
         sha256: fake_sha,
         mime: "image/png".into(),
@@ -265,7 +263,6 @@ fn v019_project_requires_identity_and_exact_asset_reachability() {
         Err(EditorProjectError::AssetReachabilityMismatch { .. })
     ));
 }
-
 
 #[test]
 fn v019_project_rejects_tampered_effective_table_grid() {
