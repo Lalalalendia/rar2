@@ -72,6 +72,7 @@ assert.ok(Number.isInteger(workerCpuSeconds) && workerCpuSeconds >= 15 && worker
 assert.ok(Number.isInteger(workerAddressSpaceMb) && workerAddressSpaceMb >= 256 && workerAddressSpaceMb <= 1024, "worker address-space limit must be 256..1024 MiB");
 
 const referenceRasterDpi = Number(process.env.READER_REFERENCE_RASTER_DPI ?? "0");
+const corpusDiagnosticMode = process.env.READER_CORPUS_DIAGNOSTIC === "1";
 assert.ok(
   referenceRasterDpi === 0 || (Number.isInteger(referenceRasterDpi) && referenceRasterDpi >= 72 && referenceRasterDpi <= 300),
   "reference raster DPI must be 0 or an integer in 72..300"
@@ -254,6 +255,7 @@ try {
     if (fixture.require_shared_text === true) {
       assert.ok(painted.some((line) => line.text.trim()), "fixture marked require_shared_text must exercise shared text");
     }
+    const visualDegeneracies = [];
     for (const line of painted) {
       const expected = expectedLines.find((candidate) => candidate.node_id === line.node_id && candidate.index === line.index);
       assert.ok(expected);
@@ -263,7 +265,18 @@ try {
       // object marker. It is intentionally zero-width, so marker-only lines
       // are visually empty even though JavaScript trim() retains U+200B.
       const visibleText = line.text.replaceAll("\u200B", "").trim();
-      if (visibleText) assert.ok(line.height >= 5 && line.width >= 1, "shared text must not collapse to tiny specks");
+      if (visibleText && !(line.height >= 5 && line.width >= 1)) {
+        const degeneracy = {
+          code: "shared_text_tiny_speck",
+          node_id: line.node_id,
+          line_index: line.index,
+          width_px: line.width,
+          height_px: line.height,
+          font_size_px: line.font_size
+        };
+        if (corpusDiagnosticMode) visualDegeneracies.push(degeneracy);
+        else assert.fail("shared text must not collapse to tiny specks");
+      }
     }
     await page.locator("#pages").scrollIntoViewIfNeeded();
     await page.screenshot({ path: join(output, fixture.name + "-ui.png") });
@@ -371,6 +384,7 @@ try {
       descriptor_only_resource_count: descriptorOnlyResourceCount, browser_preserved_scene_node_order: true,
       reference_raster_dpi: referenceRasterDpi || null, page_geometry: orderedPageGeometry,
       stories: scene.stories.length, shared_lines: painted.length, nonempty_shared_lines: nonempty.length,
+      visual_degeneracies: visualDegeneracies, visual_degeneracy_count: visualDegeneracies.length,
       shared_line_height_px: nonempty.length > 0
         ? { min: Math.min(...nonempty.map((line) => line.height)), max: Math.max(...nonempty.map((line) => line.height)) }
         : null,
