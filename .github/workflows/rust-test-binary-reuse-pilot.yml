@@ -1,0 +1,389 @@
+name: CI-RUST-TEST-BINARY-REUSE-01 nextest archive pilot
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/rust-test-binary-reuse-pilot.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  NEXTEST_VERSION: "0.9.143"
+  NEXTEST_WINDOWS_X64_SHA256: "c670ba18e8731fd2eff33a47af33a0fa53d1afa6d0678344e82dc6f8fc7344ac"
+  NEXTEST_ARCHIVE_NAME: "chaptera-reader-nextest-${{ github.sha }}"
+
+jobs:
+  baseline:
+    name: baseline current cargo-test sequence
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify exact candidate
+        shell: pwsh
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne "${{ github.sha }}") {
+            throw "baseline checkout mismatch: expected ${{ github.sha }}, got $actual"
+          }
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Restore identical Windows Cargo cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: chaptera-windows-desktop-deps-v1
+          add-job-id-key: "false"
+          key: ${{ hashFiles('Cargo.toml', 'vendor/producer-a/Cargo.toml') }}
+          workspaces: ". -> target"
+          cache-bin: "false"
+          cache-workspace-crates: "false"
+          cache-on-failure: "false"
+          save-if: "false"
+
+      - name: Run current Reader desktop test sequence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo test -p chaptera-desktop --features reader-only image_decode_adapter::tests -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "image_decode_adapter baseline failed" }
+
+          cargo test -p chaptera-desktop --features reader-only reader_first_run -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "reader_first_run baseline failed" }
+
+          cargo test -p chaptera-desktop --features reader-only open_generation -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "open_generation baseline failed" }
+
+          cargo test -p chaptera-desktop --features reader-only committed_source -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "committed_source baseline failed" }
+
+          cargo test -p chaptera-desktop --features reader-only multi_file_drop -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "multi_file_drop baseline failed" }
+
+          cargo test -p chaptera-desktop --features reader-only failed_replacement_open -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "failed_replacement_open baseline failed" }
+
+  archive-producer:
+    name: nextest archive producer
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify exact candidate
+        shell: pwsh
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne "${{ github.sha }}") {
+            throw "archive producer checkout mismatch: expected ${{ github.sha }}, got $actual"
+          }
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Restore identical Windows Cargo cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: chaptera-windows-desktop-deps-v1
+          add-job-id-key: "false"
+          key: ${{ hashFiles('Cargo.toml', 'vendor/producer-a/Cargo.toml') }}
+          workspaces: ". -> target"
+          cache-bin: "false"
+          cache-workspace-crates: "false"
+          cache-on-failure: "false"
+          save-if: "false"
+
+      - name: Install pinned cargo-nextest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $base = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$env:NEXTEST_VERSION"
+          $name = "cargo-nextest-$env:NEXTEST_VERSION-x86_64-pc-windows-msvc"
+          $root = Join-Path $env:RUNNER_TEMP "cargo-nextest"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $zip = Join-Path $root "$name.zip"
+          $publishedPath = Join-Path $root "$name.sha256"
+
+          Invoke-WebRequest -Uri "$base/$name.zip" -OutFile $zip
+          Invoke-WebRequest -Uri "$base/$name.sha256" -OutFile $publishedPath
+
+          $published = ((Get-Content -Raw $publishedPath).Trim() -split "\\s+")[0].ToLowerInvariant()
+          if ($published -ne $env:NEXTEST_WINDOWS_X64_SHA256) {
+            throw "published cargo-nextest SHA drift: $published"
+          }
+          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:NEXTEST_WINDOWS_X64_SHA256) {
+            throw "cargo-nextest archive SHA mismatch: $actual"
+          }
+
+          Expand-Archive -LiteralPath $zip -DestinationPath $root -Force
+          $exe = Get-ChildItem $root -Recurse -File -Filter cargo-nextest.exe | Select-Object -First 1
+          if (-not $exe) { throw "cargo-nextest.exe not found after extraction" }
+          $exe.Directory.FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build one Reader test-binary archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo nextest --version
+          if ($LASTEXITCODE -ne 0) { throw "cargo-nextest version probe failed" }
+
+          $out = Join-Path $env:RUNNER_TEMP "reader-nextest"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $archive = Join-Path $out "reader-tests.tar.zst"
+
+          cargo nextest archive -p chaptera-desktop --features reader-only --archive-file $archive
+          if ($LASTEXITCODE -ne 0) { throw "nextest archive build failed" }
+
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item $archive).Length
+          @{
+            schema_version = "chaptera.reader-nextest-archive-pilot.v1"
+            candidate_sha = "${{ github.sha }}"
+            rust_toolchain = "1.94.1"
+            cargo_nextest_version = $env:NEXTEST_VERSION
+            package = "chaptera-desktop"
+            features = @("reader-only")
+            archive_sha256 = $hash
+            archive_byte_len = $bytes
+          } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $out "manifest.json")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NEXTEST_ARCHIVE_NAME }}
+          path: |
+            ${{ runner.temp }}/reader-nextest/reader-tests.tar.zst
+            ${{ runner.temp }}/reader-nextest/manifest.json
+          if-no-files-found: error
+          retention-days: 1
+
+  archive-consumer-a:
+    name: nextest consumer A
+    needs: archive-producer
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.NEXTEST_ARCHIVE_NAME }}
+          path: ${{ runner.temp }}/reader-nextest
+
+      - name: Install pinned cargo-nextest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $base = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$env:NEXTEST_VERSION"
+          $name = "cargo-nextest-$env:NEXTEST_VERSION-x86_64-pc-windows-msvc"
+          $root = Join-Path $env:RUNNER_TEMP "cargo-nextest"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $zip = Join-Path $root "$name.zip"
+          $publishedPath = Join-Path $root "$name.sha256"
+          Invoke-WebRequest -Uri "$base/$name.zip" -OutFile $zip
+          Invoke-WebRequest -Uri "$base/$name.sha256" -OutFile $publishedPath
+          $published = ((Get-Content -Raw $publishedPath).Trim() -split "\\s+")[0].ToLowerInvariant()
+          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($published -ne $env:NEXTEST_WINDOWS_X64_SHA256 -or $actual -ne $env:NEXTEST_WINDOWS_X64_SHA256) {
+            throw "cargo-nextest identity mismatch"
+          }
+          Expand-Archive -LiteralPath $zip -DestinationPath $root -Force
+          $exe = Get-ChildItem $root -Recurse -File -Filter cargo-nextest.exe | Select-Object -First 1
+          if (-not $exe) { throw "cargo-nextest.exe not found" }
+          $exe.Directory.FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Validate exact archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = "${{ runner.temp }}/reader-nextest"
+          $manifest = Get-Content -Raw (Join-Path $root "manifest.json") | ConvertFrom-Json
+          if ($manifest.candidate_sha -ne "${{ github.sha }}") { throw "candidate SHA mismatch" }
+          if ($manifest.cargo_nextest_version -ne $env:NEXTEST_VERSION) { throw "nextest version mismatch" }
+          if ($manifest.rust_toolchain -ne "1.94.1") { throw "toolchain mismatch" }
+          if ($manifest.package -ne "chaptera-desktop") { throw "package mismatch" }
+          if (($manifest.features -join ",") -ne "reader-only") { throw "feature mismatch" }
+          $archive = Join-Path $root "reader-tests.tar.zst"
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $manifest.archive_sha256) { throw "archive SHA mismatch" }
+          if ((Get-Item $archive).Length -ne [int64]$manifest.archive_byte_len) { throw "archive length mismatch" }
+
+      - name: Run Reader adapter and first-run tests from archive
+        shell: pwsh
+        run: |
+          $archive = "${{ runner.temp }}/reader-nextest/reader-tests.tar.zst"
+          cargo nextest run --archive-file $archive --workspace-remap "${{ github.workspace }}" --no-tests=fail -E 'test(/image_decode_adapter::tests/) | test(/reader_first_run/)'
+          if ($LASTEXITCODE -ne 0) { throw "nextest consumer A failed" }
+
+  archive-consumer-b:
+    name: nextest consumer B
+    needs: archive-producer
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.NEXTEST_ARCHIVE_NAME }}
+          path: ${{ runner.temp }}/reader-nextest
+
+      - name: Install pinned cargo-nextest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $base = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$env:NEXTEST_VERSION"
+          $name = "cargo-nextest-$env:NEXTEST_VERSION-x86_64-pc-windows-msvc"
+          $root = Join-Path $env:RUNNER_TEMP "cargo-nextest"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $zip = Join-Path $root "$name.zip"
+          $publishedPath = Join-Path $root "$name.sha256"
+          Invoke-WebRequest -Uri "$base/$name.zip" -OutFile $zip
+          Invoke-WebRequest -Uri "$base/$name.sha256" -OutFile $publishedPath
+          $published = ((Get-Content -Raw $publishedPath).Trim() -split "\\s+")[0].ToLowerInvariant()
+          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($published -ne $env:NEXTEST_WINDOWS_X64_SHA256 -or $actual -ne $env:NEXTEST_WINDOWS_X64_SHA256) {
+            throw "cargo-nextest identity mismatch"
+          }
+          Expand-Archive -LiteralPath $zip -DestinationPath $root -Force
+          $exe = Get-ChildItem $root -Recurse -File -Filter cargo-nextest.exe | Select-Object -First 1
+          if (-not $exe) { throw "cargo-nextest.exe not found" }
+          $exe.Directory.FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Validate exact archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = "${{ runner.temp }}/reader-nextest"
+          $manifest = Get-Content -Raw (Join-Path $root "manifest.json") | ConvertFrom-Json
+          if ($manifest.candidate_sha -ne "${{ github.sha }}") { throw "candidate SHA mismatch" }
+          if ($manifest.cargo_nextest_version -ne $env:NEXTEST_VERSION) { throw "nextest version mismatch" }
+          if ($manifest.rust_toolchain -ne "1.94.1") { throw "toolchain mismatch" }
+          if ($manifest.package -ne "chaptera-desktop") { throw "package mismatch" }
+          if (($manifest.features -join ",") -ne "reader-only") { throw "feature mismatch" }
+          $archive = Join-Path $root "reader-tests.tar.zst"
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $manifest.archive_sha256) { throw "archive SHA mismatch" }
+          if ((Get-Item $archive).Length -ne [int64]$manifest.archive_byte_len) { throw "archive length mismatch" }
+
+      - name: Run Reader open-state tests from archive
+        shell: pwsh
+        run: |
+          $archive = "${{ runner.temp }}/reader-nextest/reader-tests.tar.zst"
+          cargo nextest run --archive-file $archive --workspace-remap "${{ github.workspace }}" --no-tests=fail -E 'test(/open_generation/) | test(/committed_source/) | test(/multi_file_drop/) | test(/failed_replacement_open/)'
+          if ($LASTEXITCODE -ne 0) { throw "nextest consumer B failed" }
+
+  compare:
+    name: compare baseline vs archive topology
+    needs: [baseline, archive-producer, archive-consumer-a, archive-consumer-b]
+    if: ${{ !cancelled() && always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compute exact job-duration comparison
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.run_id }}
+          BASELINE_RESULT: ${{ needs.baseline.result }}
+          PRODUCER_RESULT: ${{ needs.archive-producer.result }}
+          CONSUMER_A_RESULT: ${{ needs.archive-consumer-a.result }}
+          CONSUMER_B_RESULT: ${{ needs.archive-consumer-b.result }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from datetime import datetime
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          expected = {
+              "baseline current cargo-test sequence": os.environ["BASELINE_RESULT"],
+              "nextest archive producer": os.environ["PRODUCER_RESULT"],
+              "nextest consumer A": os.environ["CONSUMER_A_RESULT"],
+              "nextest consumer B": os.environ["CONSUMER_B_RESULT"],
+          }
+          bad = {name: result for name, result in expected.items() if result != "success"}
+          if bad:
+              raise SystemExit("pilot job failure: " + json.dumps(bad, sort_keys=True))
+
+          url = (
+              "https://api.github.com/repos/"
+              + os.environ["GH_REPOSITORY"]
+              + "/actions/runs/"
+              + os.environ["GH_RUN_ID"]
+              + "/jobs?per_page=100"
+          )
+          request = Request(
+              url,
+              headers={
+                  "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          payload = json.load(urlopen(request))
+          jobs = {job["name"]: job for job in payload["jobs"]}
+
+          def seconds(name):
+              job = jobs[name]
+              start = datetime.fromisoformat(job["started_at"].replace("Z", "+00:00"))
+              end = datetime.fromisoformat(job["completed_at"].replace("Z", "+00:00"))
+              return (end - start).total_seconds()
+
+          baseline = seconds("baseline current cargo-test sequence")
+          producer = seconds("nextest archive producer")
+          consumer_a = seconds("nextest consumer A")
+          consumer_b = seconds("nextest consumer B")
+          archive_critical = producer + max(consumer_a, consumer_b)
+          archive_runner = producer + consumer_a + consumer_b
+          critical_gain = ((baseline - archive_critical) / baseline * 100.0) if baseline else 0.0
+          runner_delta = ((archive_runner - baseline) / baseline * 100.0) if baseline else 0.0
+
+          receipt = {
+              "schema": "chaptera.rust-test-binary-reuse-pilot.v1",
+              "candidate_sha": os.environ.get("GITHUB_SHA"),
+              "baseline_seconds": baseline,
+              "archive_producer_seconds": producer,
+              "archive_consumer_a_seconds": consumer_a,
+              "archive_consumer_b_seconds": consumer_b,
+              "archive_critical_path_seconds": archive_critical,
+              "archive_runner_seconds": archive_runner,
+              "critical_path_gain_percent": round(critical_gain, 2),
+              "runner_time_delta_percent": round(runner_delta, 2),
+              "adopt_candidate": (
+                  archive_critical <= baseline * 0.80
+                  and archive_runner <= baseline * 1.75
+              ),
+          }
+          Path("target").mkdir(exist_ok=True)
+          Path("target/nextest-pilot-comparison.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rust-test-binary-reuse-pilot-${{ github.sha }}
+          path: target/nextest-pilot-comparison.json
+          if-no-files-found: error
