@@ -88,6 +88,12 @@ pub struct PubMaterializedTableCell {
     pub address: TableCellAddress,
     pub row_span: u32,
     pub column_span: u32,
+    /// Story-global Unicode-scalar bounds for the materialized cell text.
+    ///
+    /// These are derived only after the TCD/CELLS UTF-16 boundaries and
+    /// Publisher cell separators have been validated.
+    pub story_scalar_start: u32,
+    pub story_scalar_end: u32,
     pub text: String,
     pub bounds: Option<RectEmu>,
     pub fill_rgb: Option<[u8; 3]>,
@@ -130,6 +136,9 @@ pub enum PubTableTextError {
         start: u32,
     },
     InvalidUtf16 {
+        id: TableCellId,
+    },
+    ScalarRangeOverflow {
         id: TableCellId,
     },
 }
@@ -258,8 +267,17 @@ pub fn materialize_bounded_table_cells(
                 cell_end -= 1;
             }
 
+            let prefix = String::from_utf16(&story_utf16[..cell_start])
+                .map_err(|_| PubTableTextError::InvalidUtf16 { id: source.id })?;
             let text = String::from_utf16(&story_utf16[cell_start..cell_end])
                 .map_err(|_| PubTableTextError::InvalidUtf16 { id: source.id })?;
+            let story_scalar_start = u32::try_from(prefix.chars().count())
+                .map_err(|_| PubTableTextError::ScalarRangeOverflow { id: source.id })?;
+            let cell_scalar_len = u32::try_from(text.chars().count())
+                .map_err(|_| PubTableTextError::ScalarRangeOverflow { id: source.id })?;
+            let story_scalar_end = story_scalar_start
+                .checked_add(cell_scalar_len)
+                .ok_or(PubTableTextError::ScalarRangeOverflow { id: source.id })?;
 
             Ok(PubMaterializedTableCell {
                 id: source.id,
@@ -269,6 +287,8 @@ pub fn materialize_bounded_table_cells(
                 },
                 row_span: coordinates.end_row - coordinates.start_row + 1,
                 column_span: coordinates.end_column - coordinates.start_column + 1,
+                story_scalar_start,
+                story_scalar_end,
                 text,
                 bounds: source.bounds,
                 fill_rgb: source.paint.as_ref().map(|paint| paint.solid_fill_rgb),

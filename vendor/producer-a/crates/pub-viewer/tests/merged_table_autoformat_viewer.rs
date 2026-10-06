@@ -45,12 +45,36 @@ fn exact_carlton_merged_table_reaches_viewer_surface() {
         "all bounded native border/decor carriers must reach Viewer geometry",
     );
 
+    let ranged = table
+        .cells
+        .iter()
+        .filter(|cell| cell.story_scalar_start.is_some() && cell.story_scalar_end.is_some())
+        .count();
+    let nonempty = table.cells.iter().filter(|cell| !cell.text.is_empty()).count();
+    let nonempty_ranged = table
+        .cells
+        .iter()
+        .filter(|cell| !cell.text.is_empty())
+        .filter(|cell| {
+            matches!(
+                (cell.story_scalar_start, cell.story_scalar_end),
+                (Some(start), Some(end)) if start < end
+            )
+        })
+        .count();
+    assert_eq!(ranged, 17);
+    assert_eq!(nonempty, 14);
+    assert_eq!(nonempty_ranged, 14);
+
     println!(
-        "VIEWER_MERGED_TABLE_AUTOFORMAT tables={} cells={} spanning={} painted={} borders={}",
+        "VIEWER_MERGED_TABLE_AUTOFORMAT tables={} cells={} spanning={} painted={} borders={} ranged={} nonempty={} nonempty_ranged={}",
         geometry.tables.len(),
         table.cells.len(),
         spanning,
         painted,
         table.borders.len(),
+        ranged,
+        nonempty,
+        nonempty_ranged,
     );
 }

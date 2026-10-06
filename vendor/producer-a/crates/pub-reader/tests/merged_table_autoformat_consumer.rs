@@ -64,12 +64,39 @@ fn exact_carlton_merged_table_autoformat_consumer() {
     assert_eq!(painted, 17);
     assert_eq!(table.border_segments.len(), 20);
 
+    let story_id = table.story_id.expect("exact Carlton TABLE Story");
+    let story = build
+        .graph
+        .stories
+        .get(&story_id)
+        .expect("exact Carlton TABLE Story payload");
+    let materialized =
+        pub_reader::materialize_bounded_table_cells(table, story).expect("materialize Carlton cells");
+    assert_eq!(materialized.len(), 17);
+    let nonempty = materialized.iter().filter(|cell| !cell.text.is_empty()).count();
+    let nonempty_ranged = materialized
+        .iter()
+        .filter(|cell| !cell.text.is_empty())
+        .filter(|cell| cell.story_scalar_start < cell.story_scalar_end)
+        .count();
+    let empty_collapsed = materialized
+        .iter()
+        .filter(|cell| cell.text.is_empty())
+        .filter(|cell| cell.story_scalar_start == cell.story_scalar_end)
+        .count();
+    assert_eq!(nonempty, 14);
+    assert_eq!(nonempty_ranged, 14);
+    assert_eq!(empty_collapsed, 3);
+
     println!(
-        "TABLE_MERGED_AUTOFORMAT_CONSUMER tables={} cells={} spanning={} painted={} borders={}",
+        "TABLE_MERGED_AUTOFORMAT_CONSUMER tables={} cells={} spanning={} painted={} borders={} nonempty={} nonempty_ranged={} empty_collapsed={}",
         tables.len(),
         table.cells.len(),
         spanning,
         painted,
         table.border_segments.len(),
+        nonempty,
+        nonempty_ranged,
+        empty_collapsed,
     );
 }

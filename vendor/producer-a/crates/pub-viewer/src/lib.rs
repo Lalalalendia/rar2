@@ -616,6 +616,13 @@ pub struct ViewerTableCell {
         skip_serializing_if = "table_span_is_one"
     )]
     pub column_span: u32,
+    /// Story-global Unicode-scalar bounds for this exact cell text.
+    ///
+    /// Missing remains explicit for non-mature/legacy producers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub story_scalar_start: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub story_scalar_end: Option<u32>,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<RectEmu>,
@@ -3892,6 +3899,8 @@ fn viewer_tables_from_resolved(
                 address: cell.address,
                 row_span: cell.row_span,
                 column_span: cell.column_span,
+                story_scalar_start: Some(cell.story_scalar_start),
+                story_scalar_end: Some(cell.story_scalar_end),
                 text: cell.text,
                 bounds: cell.bounds.or_else(|| {
                     resolved_bounds.as_ref().and_then(|resolved| {
@@ -5085,6 +5094,8 @@ mod tests {
                 address: TableCellAddress { row, column },
                 row_span,
                 column_span,
+                story_scalar_start: None,
+                story_scalar_end: None,
                 text: String::new(),
                 bounds: Some(RectEmu::new(
                     LengthEmu::new(x),
