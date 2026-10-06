@@ -9,7 +9,8 @@ on:
       - "vendor/producer-a/crates/pub-export/**"
       - "vendor/producer-a/crates/pub-idml/**"
       - "vendor/producer-a/crates/pub-odg/**"
-      - "vendor/producer-a/crates/pub-reader/**"
+      - "vendor/producer-a/crates/pub-reader/Cargo.toml"
+      - "vendor/producer-a/crates/pub-reader/src/**"
       - "tools/ci/scribus_idml_consumer.py"
   push:
     branches:
