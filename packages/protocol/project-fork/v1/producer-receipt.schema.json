@@ -10,14 +10,16 @@
     "source_hash": {"type":"string","pattern":"^[0-9a-f]{64}$"},
     "parent": {"$ref":"#/$defs/identityState"},
     "fork_initial": {
-      "allOf": [
-        {"$ref":"#/$defs/identityState"},
-        {
-          "type":"object",
-          "required":["forked_from"],
-          "properties":{"forked_from":{"$ref":"#/$defs/provenance"}}
-        }
-      ]
+      "type":"object","additionalProperties":false,
+      "required":["project_id","document_id","history_id","genesis_revision_id","state_id","forked_from"],
+      "properties":{
+        "project_id":{"$ref":"#/$defs/uuid"},
+        "document_id":{"$ref":"#/$defs/uuid"},
+        "history_id":{"$ref":"#/$defs/uuid"},
+        "genesis_revision_id":{"$ref":"#/$defs/uuid"},
+        "state_id":{"$ref":"#/$defs/hashId"},
+        "forked_from":{"$ref":"#/$defs/provenance"}
+      }
     },
     "fork_after_edit": {
       "type":"object","additionalProperties":false,
