@@ -433,6 +433,42 @@ mod tests {
         compound.into_inner().into_inner()
     }
 
+    fn case_colliding_root_fixture() -> Vec<u8> {
+        let mut compound =
+            cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("collision fixture CFB");
+        compound
+            .create_stream("/Contents")
+            .expect("Contents")
+            .write_all(&vec![0x41; 4_096])
+            .expect("write Contents");
+        compound
+            .create_stream("/Contentz")
+            .expect("Contentz")
+            .write_all(&vec![0x42; 4_096])
+            .expect("write Contentz");
+        compound.flush().expect("flush collision fixture");
+        let mut source = compound.into_inner().into_inner();
+
+        let from = "Contentz\0"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        let to = "CONTENTS\0"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        assert_eq!(from.len(), to.len());
+
+        let positions = source
+            .windows(from.len())
+            .enumerate()
+            .filter_map(|(offset, window)| (window == from.as_slice()).then_some(offset))
+            .collect::<Vec<_>>();
+        assert_eq!(positions.len(), 1, "expected one Contentz directory name");
+        source[positions[0]..positions[0] + to.len()].copy_from_slice(&to);
+        source
+    }
+
     fn first_fat_sector(source: &[u8]) -> u32 {
         u32::from_le_bytes([source[76], source[77], source[78], source[79]])
     }
@@ -484,6 +520,25 @@ mod tests {
         source[child_offset + 68..child_offset + 72]
             .copy_from_slice(&root_child.to_le_bytes());
         source
+    }
+
+    #[test]
+    fn complete_prefix_matches_strict_root_reader_exactly() {
+        let source = regular_root_fixture();
+        let strict = crate::recover_root_regular_stream_reader(
+            Cursor::new(source.clone()),
+            "/Contents",
+        )
+        .expect("strict complete Contents");
+        let prefix = recover_root_regular_stream_prefix_reader(
+            Cursor::new(source),
+            "/Contents",
+        )
+        .expect("prefix complete Contents");
+
+        assert_eq!(prefix.status, RootRegularStreamPrefixStatus::Complete);
+        assert_eq!(prefix.bytes, strict.bytes);
+        assert_eq!(prefix.root_entry_names, strict.root_entry_names);
     }
 
     #[test]
@@ -556,6 +611,15 @@ mod tests {
         )
         .expect_err("MiniFAT stream must remain outside partial regular recovery");
         assert!(format!("{error:#}").contains("requires MiniFAT"));
+    }
+
+    #[test]
+    fn case_colliding_root_names_fail_closed() {
+        let source = case_colliding_root_fixture();
+        let error =
+            recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Contents")
+                .expect_err("case-colliding root stream names must fail closed");
+        assert!(format!("{error:#}").contains("duplicate root stream name"));
     }
 
     #[test]
