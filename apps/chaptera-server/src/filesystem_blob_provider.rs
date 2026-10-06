@@ -176,18 +176,13 @@ impl BlobProvider for FilesystemBlobProvider {
                 "filesystem_generation_mismatch",
             ));
         }
-        let file = fs::File::open(&path)
-            .await
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    ProviderError::new(
-                        ProviderErrorKind::NotFound,
-                        "filesystem_object_not_found",
-                    )
-                } else {
-                    provider_other("filesystem_open_failed")
-                }
-            })?;
+        let file = fs::File::open(&path).await.map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                ProviderError::new(ProviderErrorKind::NotFound, "filesystem_object_not_found")
+            } else {
+                provider_other("filesystem_open_failed")
+            }
+        })?;
         Ok(Box::new(file))
     }
 
@@ -210,18 +205,13 @@ impl BlobProvider for FilesystemBlobProvider {
             ));
         }
         let path = self.path_for(object_locator)?;
-        fs::remove_file(path)
-            .await
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    ProviderError::new(
-                        ProviderErrorKind::NotFound,
-                        "filesystem_object_not_found",
-                    )
-                } else {
-                    provider_other("filesystem_delete_failed")
-                }
-            })
+        fs::remove_file(path).await.map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                ProviderError::new(ProviderErrorKind::NotFound, "filesystem_object_not_found")
+            } else {
+                provider_other("filesystem_delete_failed")
+            }
+        })
     }
 
     async fn issue_grant(
@@ -230,26 +220,22 @@ impl BlobProvider for FilesystemBlobProvider {
     ) -> Result<ProviderGrant, ProviderError> {
         let _ = self.path_for(&request.object_locator)?;
         match request.operation {
-            GrantOperation::UploadCreateOnly | GrantOperation::Download => Err(
-                ProviderError::new(
-                    ProviderErrorKind::Other,
-                    "filesystem_direct_grants_unsupported",
-                ),
-            ),
+            GrantOperation::UploadCreateOnly | GrantOperation::Download => Err(ProviderError::new(
+                ProviderErrorKind::Other,
+                "filesystem_direct_grants_unsupported",
+            )),
         }
     }
 }
 
 async fn hash_file(path: &Path) -> Result<(u64, String), ProviderError> {
-    let mut file = fs::File::open(path)
-        .await
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                ProviderError::new(ProviderErrorKind::NotFound, "filesystem_object_not_found")
-            } else {
-                provider_other("filesystem_open_failed")
-            }
-        })?;
+    let mut file = fs::File::open(path).await.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            ProviderError::new(ProviderErrorKind::NotFound, "filesystem_object_not_found")
+        } else {
+            provider_other("filesystem_open_failed")
+        }
+    })?;
     let mut hasher = Sha256::new();
     let mut total = 0_u64;
     let mut buffer = vec![0_u8; COPY_BUFFER_BYTES];
@@ -381,12 +367,7 @@ mod tests {
     async fn filesystem_provider_rejects_escape_and_overlong_input() {
         let root = temp_root("reject");
         let provider = FilesystemBlobProvider::new(&root).unwrap();
-        assert!(
-            provider
-                .head_exact("quarantine/../escape")
-                .await
-                .is_err()
-        );
+        assert!(provider.head_exact("quarantine/../escape").await.is_err());
         let error = provider
             .create_immutable(
                 "quarantine/tenant/upload",
