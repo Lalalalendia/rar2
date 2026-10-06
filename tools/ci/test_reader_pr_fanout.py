@@ -10,6 +10,28 @@ mod = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
 spec.loader.exec_module(mod)
 
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def pull_request_event_block(relative_path: str) -> str:
+    content = (ROOT / relative_path).read_text(encoding="utf-8")
+    start = content.index("  pull_request:\n")
+    tail = content[start + 1 :]
+    boundaries = [
+        tail.find(marker)
+        for marker in ("\n  push:\n", "\n  schedule:\n", "\n  workflow_dispatch:\n")
+        if tail.find(marker) >= 0
+    ]
+    end = start + 1 + (min(boundaries) if boundaries else len(tail))
+    return content[start:end]
+
+
+def assert_narrow_product_admission(relative_path: str, crate_path: str) -> None:
+    block = pull_request_event_block(relative_path)
+    assert f'"{crate_path}/**"' not in block, (relative_path, block)
+    assert f'"{crate_path}/Cargo.toml"' in block, (relative_path, block)
+    assert f'"{crate_path}/src/**"' in block, (relative_path, block)
+
 
 def assert_scope(paths, *, evidence_only_paths=None, visual_neutral_paths=None, **expected):
     actual = mod.classify(paths, evidence_only_paths, visual_neutral_paths=visual_neutral_paths)
@@ -18,6 +40,23 @@ def assert_scope(paths, *, evidence_only_paths=None, visual_neutral_paths=None, 
 
 
 def main():
+    assert_narrow_product_admission(
+        ".github/workflows/editable-source-image-export-v1.yml",
+        "vendor/producer-a/crates/pub-reader",
+    )
+    assert_narrow_product_admission(
+        ".github/workflows/migration-1050-corpus-matrix.yml",
+        "vendor/producer-a/crates/pub-reader",
+    )
+    assert_narrow_product_admission(
+        ".github/workflows/desktop-pub-open-worker.yml",
+        "vendor/producer-a/crates/pub-viewer",
+    )
+    assert_narrow_product_admission(
+        ".github/workflows/publisher-visual-golden-supplemental.yml",
+        "vendor/producer-a/crates/pub-viewer",
+    )
+
     production = 'fn paint() { draw(1); }\n'
     comment_only = '// bounded neutral control\n' + production
     assert mod.desktop_main_visual_change_is_neutral(production, comment_only)
@@ -151,6 +190,45 @@ fn main() -> eframe::Result<()> {
         android_core=False,
         android=False,
         web=False,
+    )
+
+    assert mod.is_rust_integration_test_path(
+        "vendor/producer-a/crates/pub-reader/tests/identity_domain_collision_guard.rs"
+    )
+    assert mod.is_rust_integration_test_path(
+        "vendor/producer-a/crates/pub-viewer/tests/picture_recolor_reference_census.rs"
+    )
+    assert_scope(
+        ["vendor/producer-a/crates/pub-reader/tests/identity_domain_collision_guard.rs"],
+        tier_a=True,
+        reader_windows_smoke=False,
+        reader_windows=False,
+        editor_windows=False,
+        visual_oracle=False,
+        cloud_reference=False,
+        virginia_page_role=False,
+        visual_batch01=False,
+        typography_golden=False,
+        android_core=False,
+        android=False,
+        web=False,
+        local_portable=False,
+    )
+    assert_scope(
+        ["vendor/producer-a/crates/pub-viewer/tests/picture_recolor_reference_census.rs"],
+        tier_a=True,
+        reader_windows_smoke=False,
+        reader_windows=False,
+        editor_windows=False,
+        visual_oracle=False,
+        cloud_reference=False,
+        virginia_page_role=False,
+        visual_batch01=False,
+        typography_golden=False,
+        android_core=False,
+        android=False,
+        web=False,
+        local_portable=False,
     )
 
     assert_scope(
