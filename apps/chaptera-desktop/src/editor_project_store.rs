@@ -1,6 +1,4 @@
-use chaptera_suite_handoff::{
-    AdmittedDestination, DestinationWriteError, FileIdentity, identify_existing_path,
-};
+use chaptera_suite_handoff::{AdmittedDestination, DestinationWriteError, identify_existing_path};
 use pub_editor::{EditorProject, EditorProjectAsset, Sha256Digest};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -47,6 +45,7 @@ pub enum EditorProjectStoreError {
         path: PathBuf,
         source: io::Error,
     },
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     ConcurrentSave {
         path: PathBuf,
     },

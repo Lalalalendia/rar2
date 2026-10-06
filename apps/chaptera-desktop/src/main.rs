@@ -5078,10 +5078,12 @@ fn load_editor_project_sidecar(
     Ok(Some((stored.manifest_path, operation_count, disposition)))
 }
 
+#[cfg(test)]
 fn editor_project_sidecar_path(source_path: &Path) -> Option<PathBuf> {
     editor_project_store::sidecar_path(source_path)
 }
 
+#[cfg(test)]
 fn editor_project_asset_dir_path(source_path: &Path) -> Option<PathBuf> {
     let file_name = source_path.file_name()?;
     let mut asset_dir_name = file_name.to_os_string();
@@ -5675,7 +5677,9 @@ mod tests {
             .map_or(normalized_source.as_str(), |(production, _)| production);
 
         assert!(production_source.contains("fs::read(&path)"));
-        assert!(production_source.contains("fs::write(&sidecar"));
+        assert!(production_source.contains("editor_project_store::commit("));
+        assert!(production_source.contains("editor_project_store::inspect("));
+        assert!(!production_source.contains("fs::write(&sidecar"));
         assert!(!production_source.contains("fs::write(&path"));
         assert!(!production_source.contains("OpenOptions"));
     }
