@@ -90,6 +90,22 @@ For ordinary repository code/workflow changes, GitHub Actions is not the develop
 
 The purpose is to permit many local implementation iterations per hosted head while preserving the existing acceptance law.
 
+### Optional bounded integration-train mode
+
+The ordinary task-specific PR remains the default. A task may stay branch-only for promotion through a shared integration train **only** when its owning Notion task explicitly names the active train/coordinator.
+
+In that mode:
+
+- the task branch remains the sole implementation owner;
+- the agent must complete both local fast loops before handing off its exact head SHA;
+- do not open a separate task PR merely to obtain hosted feedback;
+- the coordinator must validate all candidates with `python tools/integration_train.py` against one exact common base;
+- V0 trains are limited to the tool's bounded non-overlapping feature-code surface; any rejected/control/shared/release-sensitive change returns to the ordinary per-task PR path;
+- the train PR is a promotion carrier, not a second implementation owner;
+- closure for each task records both its exact candidate commit SHA and the shared train PR/accepted integration SHA.
+
+Never improvise a train outside an explicit Notion assignment, and never add candidates to a train after its hosted acceptance has gone red.
+
 ## 4. Mandatory latest-head concurrency for PR validation
 
 A PR-validation workflow whose older head loses evidentiary value when a newer commit arrives must cancel obsolete same-PR attempts.
