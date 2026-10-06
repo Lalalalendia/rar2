@@ -9,8 +9,7 @@ pub const SEPARATION_EVIDENCE_V1: &str = "chaptera.receiver-separation-evidence.
 pub const QUALIFICATION_ASSERTION_RESULT_V1: &str =
     "chaptera.receiver-qualification-assertion-result.v1";
 pub const QUALIFICATION_CLAIM_V1: &str = "chaptera.receiver-qualification-claim.v1";
-pub const RECEIVER_QUALIFICATION_RECEIPT_V1: &str =
-    "chaptera.receiver-qualification-receipt.v1";
+pub const RECEIVER_QUALIFICATION_RECEIPT_V1: &str = "chaptera.receiver-qualification-receipt.v1";
 
 const RUNTIME_MANIFEST_DOMAIN_V1: &[u8] = b"chaptera-receiver-runtime-manifest-v1\0";
 const RECEIPT_DOMAIN_V1: &[u8] = b"chaptera-receiver-qualification-receipt-v1\0";
@@ -146,20 +145,14 @@ pub struct RuntimeDependencyV1 {
 
 impl RuntimeDependencyV1 {
     fn validate(&self) -> Result<(), ProtocolError> {
-        require_token(
-            &self.dependency_type,
-            "runtime_dependency_type_invalid",
-        )?;
+        require_token(&self.dependency_type, "runtime_dependency_type_invalid")?;
         require_text(&self.id, "runtime_dependency_id_invalid")?;
         if self.availability == EvidenceAvailabilityV1::Available {
             require_prefixed_sha256(&self.digest, "runtime_dependency_digest_invalid")?;
         } else if !self.digest.is_empty() {
             require_prefixed_sha256(&self.digest, "runtime_dependency_digest_invalid")?;
         }
-        require_text(
-            &self.provenance,
-            "runtime_dependency_provenance_invalid",
-        )
+        require_text(&self.provenance, "runtime_dependency_provenance_invalid")
     }
 }
 
@@ -180,18 +173,9 @@ impl JobRouteConfigV1 {
             &self.expanded_settings_hash,
             "job_route_expanded_hash_invalid",
         )?;
-        require_text(
-            &self.queue_or_virtual_printer,
-            "job_route_queue_invalid",
-        )?;
-        validate_optional_hash(
-            &self.preset_bytes_hash,
-            "job_route_preset_hash_invalid",
-        )?;
-        validate_optional_hash(
-            &self.ticket_mapping_hash,
-            "job_route_ticket_hash_invalid",
-        )
+        require_text(&self.queue_or_virtual_printer, "job_route_queue_invalid")?;
+        validate_optional_hash(&self.preset_bytes_hash, "job_route_preset_hash_invalid")?;
+        validate_optional_hash(&self.ticket_mapping_hash, "job_route_ticket_hash_invalid")
     }
 }
 
@@ -208,10 +192,7 @@ impl PrinterDriverConfigV1 {
     fn validate(&self) -> Result<(), ProtocolError> {
         require_text(&self.identity, "driver_identity_invalid")?;
         require_text(&self.version, "driver_version_invalid")?;
-        require_prefixed_sha256(
-            &self.bytes_or_vendor_digest,
-            "driver_digest_invalid",
-        )?;
+        require_prefixed_sha256(&self.bytes_or_vendor_digest, "driver_digest_invalid")?;
         require_text(
             &self.controller_compatibility,
             "driver_controller_compatibility_invalid",
@@ -233,10 +214,7 @@ pub struct ColorConfigV1 {
 
 impl ColorConfigV1 {
     fn validate(&self) -> Result<(), ProtocolError> {
-        require_text(
-            &self.media_definition,
-            "color_media_definition_invalid",
-        )?;
+        require_text(&self.media_definition, "color_media_definition_invalid")?;
         require_text(&self.cmm_or_engine, "color_cmm_invalid")?;
         for item in self
             .output_profile
@@ -248,18 +226,9 @@ impl ColorConfigV1 {
         {
             item.validate()?;
         }
-        require_collection_bound(
-            self.devicelinks.len(),
-            "color_devicelinks_too_many",
-        )?;
-        require_collection_bound(
-            self.spot_libraries.len(),
-            "color_spot_libraries_too_many",
-        )?;
-        require_collection_bound(
-            self.color_adjustments.len(),
-            "color_adjustments_too_many",
-        )
+        require_collection_bound(self.devicelinks.len(), "color_devicelinks_too_many")?;
+        require_collection_bound(self.spot_libraries.len(), "color_spot_libraries_too_many")?;
+        require_collection_bound(self.color_adjustments.len(), "color_adjustments_too_many")
     }
 }
 
@@ -279,14 +248,8 @@ impl SpecialInkConfigV1 {
             &self.generated_role_rules_hash,
             "special_generated_rules_hash_invalid",
         )?;
-        validate_optional_hash(
-            &self.choke_spread_hash,
-            "special_choke_hash_invalid",
-        )?;
-        require_collection_bound(
-            self.layer_order.len(),
-            "special_layer_order_too_many",
-        )?;
+        validate_optional_hash(&self.choke_spread_hash, "special_choke_hash_invalid")?;
+        require_collection_bound(self.layer_order.len(), "special_layer_order_too_many")?;
         for layer in &self.layer_order {
             require_text(layer, "special_layer_name_invalid")?;
         }
@@ -308,10 +271,7 @@ impl FinishingConfigV1 {
         if let Some(driver) = &self.cutter_driver {
             driver.validate()?;
         }
-        validate_optional_hash(
-            &self.mark_schema_hash,
-            "finishing_mark_schema_hash_invalid",
-        )?;
+        validate_optional_hash(&self.mark_schema_hash, "finishing_mark_schema_hash_invalid")?;
         validate_optional_hash(
             &self.device_adjustments_hash,
             "finishing_adjustments_hash_invalid",
@@ -349,18 +309,11 @@ impl RuntimeConfigManifestV1 {
         self.color.validate()?;
         self.special_ink.validate()?;
         self.finishing.validate()?;
-        require_collection_bound(
-            self.dependencies.len(),
-            "runtime_dependencies_too_many",
-        )?;
+        require_collection_bound(self.dependencies.len(), "runtime_dependencies_too_many")?;
         for dependency in &self.dependencies {
             dependency.validate()?;
-            if dependency.required
-                && dependency.availability != EvidenceAvailabilityV1::Available
-            {
-                return Err(ProtocolError::new(
-                    "runtime_config_closure_partial",
-                ));
+            if dependency.required && dependency.availability != EvidenceAvailabilityV1::Available {
+                return Err(ProtocolError::new("runtime_config_closure_partial"));
             }
         }
         Ok(())
@@ -386,10 +339,7 @@ impl EvidenceReferenceV1 {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         require_token(&self.evidence_id, "evidence_id_invalid")?;
         require_token(&self.evidence_kind, "evidence_kind_invalid")?;
-        require_prefixed_sha256(
-            &self.content_hash,
-            "evidence_content_hash_invalid",
-        )?;
+        require_prefixed_sha256(&self.content_hash, "evidence_content_hash_invalid")?;
         self.oracle_scope.validate()
     }
 }
@@ -520,8 +470,14 @@ impl SeparationEvidenceV1 {
             (&self.producer.version_build, "separation_version_invalid"),
             (&self.producer.interpreter, "separation_interpreter_invalid"),
             (&self.source.job_id, "separation_job_id_invalid"),
-            (&self.source.native_format, "separation_native_format_invalid"),
-            (&self.stage.pipeline_stage, "separation_pipeline_stage_invalid"),
+            (
+                &self.source.native_format,
+                "separation_native_format_invalid",
+            ),
+            (
+                &self.stage.pipeline_stage,
+                "separation_pipeline_stage_invalid",
+            ),
             (
                 &self.plane.canonical_colorant_id,
                 "separation_colorant_id_invalid",
@@ -554,10 +510,7 @@ impl SeparationEvidenceV1 {
                 &self.provenance.extraction_method,
                 "separation_extraction_method_invalid",
             ),
-            (
-                &self.provenance.confidence,
-                "separation_confidence_invalid",
-            ),
+            (&self.provenance.confidence, "separation_confidence_invalid"),
         ] {
             require_text(value, code)?;
         }
@@ -593,9 +546,7 @@ impl SeparationEvidenceV1 {
             || self.raster.height_px == 0
             || self.raster.bits_per_sample == 0
         {
-            return Err(ProtocolError::new(
-                "separation_raster_dimensions_invalid",
-            ));
+            return Err(ProtocolError::new("separation_raster_dimensions_invalid"));
         }
         for number in [
             self.raster.resolution_x_dpi,
@@ -604,9 +555,7 @@ impl SeparationEvidenceV1 {
             self.geometry.physical_height_mm,
         ] {
             if !number.is_finite() || number <= 0.0 {
-                return Err(ProtocolError::new(
-                    "separation_numeric_value_invalid",
-                ));
+                return Err(ProtocolError::new("separation_numeric_value_invalid"));
             }
         }
         if self.geometry.origin_transform.len() != 6
@@ -663,44 +612,31 @@ impl QualificationAssertionResultV1 {
         )?;
         require_token(&self.assertion_id, "assertion_id_invalid")?;
         require_text(&self.reason, "assertion_reason_invalid")?;
-        require_collection_bound(
-            self.evidence.len(),
-            "assertion_evidence_too_many",
-        )?;
+        require_collection_bound(self.evidence.len(), "assertion_evidence_too_many")?;
         for evidence in &self.evidence {
             evidence.validate()?;
         }
         if self.outcome == QualificationAssertionOutcomeV1::Pass {
             if self.evidence.is_empty() {
-                return Err(ProtocolError::new(
-                    "assertion_pass_without_evidence",
-                ));
+                return Err(ProtocolError::new("assertion_pass_without_evidence"));
             }
             if self.evidence.iter().any(|item| {
                 item.availability != EvidenceAvailabilityV1::Available
                     || item.oracle_scope.level < self.required_scope
             }) {
-                return Err(ProtocolError::new(
-                    "assertion_pass_evidence_insufficient",
-                ));
+                return Err(ProtocolError::new("assertion_pass_evidence_insufficient"));
             }
             if self.waiver_id.is_some() {
-                return Err(ProtocolError::new(
-                    "assertion_pass_with_waiver_invalid",
-                ));
+                return Err(ProtocolError::new("assertion_pass_with_waiver_invalid"));
             }
         }
         if self.outcome == QualificationAssertionOutcomeV1::Waived {
             let Some(waiver_id) = &self.waiver_id else {
-                return Err(ProtocolError::new(
-                    "assertion_waiver_id_required",
-                ));
+                return Err(ProtocolError::new("assertion_waiver_id_required"));
             };
             require_token(waiver_id, "assertion_waiver_id_invalid")?;
         } else if self.waiver_id.is_some() {
-            return Err(ProtocolError::new(
-                "assertion_waiver_id_unexpected",
-            ));
+            return Err(ProtocolError::new("assertion_waiver_id_unexpected"));
         }
         Ok(())
     }
@@ -742,9 +678,10 @@ impl QualificationClaimV1 {
             }
         }
         if self.capability == CapabilityStateV1::Supported
-            && self.assertion_results.iter().any(|assertion| {
-                assertion.outcome != QualificationAssertionOutcomeV1::Pass
-            })
+            && self
+                .assertion_results
+                .iter()
+                .any(|assertion| assertion.outcome != QualificationAssertionOutcomeV1::Pass)
         {
             return Err(ProtocolError::new(
                 "qualification_supported_requires_all_pass",
@@ -816,23 +753,15 @@ impl ReceiverQualificationReceiptV1 {
             &self.runtime_config_manifest_hash,
             "receipt_runtime_manifest_hash_invalid",
         )?;
-        require_prefixed_sha256(
-            &self.qualification_plan_hash,
-            "receipt_plan_hash_invalid",
-        )?;
+        require_prefixed_sha256(&self.qualification_plan_hash, "receipt_plan_hash_invalid")?;
         require_token(
             &self.normalization_version,
             "receipt_normalization_version_invalid",
         )?;
         if self.claims.is_empty() {
-            return Err(ProtocolError::new(
-                "qualification_receipt_claims_required",
-            ));
+            return Err(ProtocolError::new("qualification_receipt_claims_required"));
         }
-        require_collection_bound(
-            self.claims.len(),
-            "qualification_receipt_claims_too_many",
-        )?;
+        require_collection_bound(self.claims.len(), "qualification_receipt_claims_too_many")?;
         require_collection_bound(
             self.evidence.len(),
             "qualification_receipt_evidence_too_many",
@@ -863,10 +792,7 @@ pub fn canonical_protocol_json_v1<T: Serialize + ?Sized>(
     Ok(out)
 }
 
-fn derive_hash<T: Serialize + ?Sized>(
-    domain: &[u8],
-    value: &T,
-) -> Result<String, ProtocolError> {
+fn derive_hash<T: Serialize + ?Sized>(domain: &[u8], value: &T) -> Result<String, ProtocolError> {
     let canonical = canonical_protocol_json_v1(value)?;
     let mut hasher = Sha256::new();
     hasher.update(domain);
@@ -874,10 +800,7 @@ fn derive_hash<T: Serialize + ?Sized>(
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
-fn write_canonical_value(
-    out: &mut Vec<u8>,
-    value: &Value,
-) -> Result<(), serde_json::Error> {
+fn write_canonical_value(out: &mut Vec<u8>, value: &Value) -> Result<(), serde_json::Error> {
     match value {
         Value::Object(map) => {
             out.push(b'{');
@@ -908,11 +831,7 @@ fn write_canonical_value(
     Ok(())
 }
 
-fn require_version(
-    value: &str,
-    expected: &str,
-    code: &'static str,
-) -> Result<(), ProtocolError> {
+fn require_version(value: &str, expected: &str, code: &'static str) -> Result<(), ProtocolError> {
     if value != expected {
         return Err(ProtocolError::new(code));
     }
@@ -923,8 +842,7 @@ fn require_token(value: &str, code: &'static str) -> Result<(), ProtocolError> {
     if value.is_empty()
         || value.len() > MAX_TOKEN_BYTES
         || !value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric()
-                || matches!(byte, b'_' | b'-' | b'.' | b':' | b'/' | b'+')
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':' | b'/' | b'+')
         })
     {
         return Err(ProtocolError::new(code));
@@ -933,19 +851,13 @@ fn require_token(value: &str, code: &'static str) -> Result<(), ProtocolError> {
 }
 
 fn require_text(value: &str, code: &'static str) -> Result<(), ProtocolError> {
-    if value.is_empty()
-        || value.len() > MAX_TEXT_BYTES
-        || value.chars().any(char::is_control)
-    {
+    if value.is_empty() || value.len() > MAX_TEXT_BYTES || value.chars().any(char::is_control) {
         return Err(ProtocolError::new(code));
     }
     Ok(())
 }
 
-fn require_prefixed_sha256(
-    value: &str,
-    code: &'static str,
-) -> Result<(), ProtocolError> {
+fn require_prefixed_sha256(value: &str, code: &'static str) -> Result<(), ProtocolError> {
     let Some(hex) = value.strip_prefix("sha256:") else {
         return Err(ProtocolError::new(code));
     };
@@ -959,20 +871,14 @@ fn require_prefixed_sha256(
     Ok(())
 }
 
-fn validate_optional_hash(
-    value: &Option<String>,
-    code: &'static str,
-) -> Result<(), ProtocolError> {
+fn validate_optional_hash(value: &Option<String>, code: &'static str) -> Result<(), ProtocolError> {
     if let Some(value) = value {
         require_prefixed_sha256(value, code)?;
     }
     Ok(())
 }
 
-fn require_collection_bound(
-    len: usize,
-    code: &'static str,
-) -> Result<(), ProtocolError> {
+fn require_collection_bound(len: usize, code: &'static str) -> Result<(), ProtocolError> {
     if len > MAX_COLLECTION_ITEMS {
         return Err(ProtocolError::new(code));
     }
@@ -985,10 +891,7 @@ mod tests {
     use serde_json::json;
 
     fn hash(ch: char) -> String {
-        format!(
-            "sha256:{}",
-            std::iter::repeat_n(ch, 64).collect::<String>()
-        )
+        format!("sha256:{}", std::iter::repeat_n(ch, 64).collect::<String>())
     }
 
     fn scope(level: OracleScopeLevelV1) -> OracleScopeV1 {
@@ -1139,12 +1042,7 @@ mod tests {
             special_ink: SpecialInkConfigV1 {
                 inkset: "CMYK".into(),
                 generated_role_rules_hash: None,
-                layer_order: vec![
-                    "C".into(),
-                    "M".into(),
-                    "Y".into(),
-                    "K".into(),
-                ],
+                layer_order: vec!["C".into(), "M".into(), "Y".into(), "K".into()],
                 choke_spread_hash: None,
             },
             finishing: FinishingConfigV1 {
