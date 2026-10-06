@@ -50,7 +50,11 @@ fn exact_carlton_merged_table_reaches_viewer_surface() {
         .iter()
         .filter(|cell| cell.story_scalar_start.is_some() && cell.story_scalar_end.is_some())
         .count();
-    let nonempty = table.cells.iter().filter(|cell| !cell.text.is_empty()).count();
+    let nonempty = table
+        .cells
+        .iter()
+        .filter(|cell| !cell.text.is_empty())
+        .count();
     let nonempty_ranged = table
         .cells
         .iter()
