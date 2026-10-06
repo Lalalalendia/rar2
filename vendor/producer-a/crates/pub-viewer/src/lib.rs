@@ -7127,7 +7127,7 @@ mod mature_officeart_wmf_exact_product_tests {
         exact_wmf_fixture(
             "CHAPTERA_SAMPLE_BROCHURE",
             "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87",
-            [5, 5, 5, 5, 6, 6, 5, 5],
+            [5, 5, 5, 5, 8, 8, 5, 5],
         );
     }
 }

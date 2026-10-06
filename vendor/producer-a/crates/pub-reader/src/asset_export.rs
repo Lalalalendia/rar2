@@ -257,6 +257,7 @@ fn asset_filename(resource_id: ResourceId, mime: &str) -> String {
 fn extension_for_mime(mime: &str) -> &'static str {
     match mime {
         "image/png" => "png",
+        "image/gif" => "gif",
         "image/jpeg" => "jpg",
         "image/x-ms-bmp-dib" => "dib",
         "image/tiff" => "tif",
@@ -379,6 +380,12 @@ mod tests {
         assert_eq!(json_a, json_b);
         assert!(json_a.contains(PUB_ASSET_EXPORT_SCHEMA_V0_1));
         assert!(json_a.contains(&bundle.files[0].filename));
+    }
+
+    #[test]
+    fn gif_mime_uses_gif_extension() {
+        let id = ResourceId::from_canonical(canonical(8));
+        assert!(asset_filename(id, "image/gif").ends_with(".gif"));
     }
 
     #[test]

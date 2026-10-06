@@ -262,6 +262,7 @@ pub fn build_pub_image_resource_catalog(
 
         let mime = match kind {
             BlipKind::Png => "image/png",
+            BlipKind::Gif => "image/gif",
             BlipKind::Jpeg => "image/jpeg",
             BlipKind::Dib => "image/x-ms-bmp-dib",
             BlipKind::Tiff => "image/tiff",
