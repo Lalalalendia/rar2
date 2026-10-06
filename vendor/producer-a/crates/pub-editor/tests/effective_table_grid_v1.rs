@@ -88,6 +88,7 @@ fn graph() -> PubResolvedGraph {
             },
         ],
         simple_table: Some(simple),
+        layout_relation: None,
         layout_metrics: Some(PubTableLayoutMetricsSource {
             story_layout_key: 99,
             cell_width: LengthEmu::new(1_000),
