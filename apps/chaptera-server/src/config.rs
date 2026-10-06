@@ -545,7 +545,10 @@ impl ChapteraConfig {
                 "quarantine and private storage namespaces must differ",
             ));
         }
-        if !matches!(self.storage.provider.as_str(), "s3-compatible" | "filesystem") {
+        if !matches!(
+            self.storage.provider.as_str(),
+            "s3-compatible" | "filesystem"
+        ) {
             return Err(ConfigError::new(
                 "storage_provider_unsupported",
                 "storage.provider must be s3-compatible or filesystem",
