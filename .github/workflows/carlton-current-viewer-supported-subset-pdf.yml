@@ -426,6 +426,22 @@ jobs:
                   f"Carlton TABLE vertical-alignment authority drift: "
                   f"{mapping.get('table_uniform_vertical_alignment_count')!r}"
               )
+          if mapping.get("table_bounded_text_profile_cell_count") != 13:
+              raise SystemExit(
+                  f"Carlton bounded TABLE text profile drift: "
+                  f"{mapping.get('table_bounded_text_profile_cell_count')!r}"
+              )
+          print(
+              "table_text_single_line_fit="
+              + json.dumps(
+                  {
+                      "bounded_profile": mapping["table_bounded_text_profile_cell_count"],
+                      "hard_break_free": mapping["table_hard_break_free_profile_cell_count"],
+                      "single_line_width_fit": mapping["table_single_line_width_fit_cell_count"],
+                  },
+                  sort_keys=True,
+              )
+          )
           if mapping["table_cell_paint_state_count"] != 17:
               raise SystemExit(f"TABLE known cell-paint state drift: {mapping['table_cell_paint_state_count']!r}")
           if mapping["derived_table_border_node_count"] != 20:
