@@ -16,7 +16,7 @@ $Prepare = Join-Path $RepoRoot "tools/research-runner/prepare_native_run.ps1"
 $Finalize = Join-Path $RepoRoot "tools/research-runner/finalize_native_run.ps1"
 
 $ExpectedPacketBlob = "fc8eaa28b9c133578d6c08444cf655be273fac20"
-$ExpectedOperationBlob = "a3e652a3ff55587d25ac8b0b00e36f3bad6b00fb"
+$ExpectedOperationBlob = "a291712cb8814c86c54c173df918c03f16abeecf"
 $ExpectedAnalyzerBlob = "e36bd9fb52f97b39294797ccd0f50da3c36ba79b"
 $ExpectedFixtureSha256 = "5bf6057b8b11c8ee4a421d93885ae6e9e7c03a7a42d541e6d0df33497c08c33b"
 $ExpectedFixtureRelativePath = "pubgen-create-20260923/minimal-blank-v1-generated.pub"
