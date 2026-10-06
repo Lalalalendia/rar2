@@ -1,0 +1,52 @@
+[Unit]
+Description=Chaptera public Cloud Reader
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/var/lib/chaptera
+
+[Service]
+Type=simple
+User=chaptera
+Group=chaptera
+Slice=chaptera.slice
+WorkingDirectory=/var/lib/chaptera
+
+# Guest Reader production config deliberately has no OIDC/AuthN surface.
+# Serve validates the typed config and resolves the Reader rate secret itself.
+ExecStart=/opt/chaptera/current/chaptera --config /etc/chaptera/chaptera.toml serve
+
+Restart=on-failure
+RestartSec=3s
+KillSignal=SIGTERM
+TimeoutStopSec=45s
+
+StateDirectory=chaptera
+CacheDirectory=chaptera-reader
+RuntimeDirectory=chaptera-reader
+EnvironmentFile=-/etc/chaptera/chaptera.env
+LoadCredential=reader_rate_subject_secret:/etc/chaptera/credentials/reader_rate_subject_secret
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+# The isolated guest scene child runs inside this same service cgroup.
+# These are guardrails, not a claim that a sub-1 GiB host is production-safe.
+MemoryHigh=640M
+MemoryMax=768M
+TasksMax=192
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target
