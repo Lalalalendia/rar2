@@ -1976,31 +1976,34 @@ fn resolve_single_line_table_cell_text_layout_v1(
         first_line_extent_emu,
     );
 
-    Some((RenderTextLayoutV1 {
-        disposition: RenderTextLayoutDispositionV1::SharedResolved {
-            font_resource_id: font.resource_id.to_owned(),
-            font_fingerprint_sha256: fingerprint,
-            font_size_emu,
-            line_height_emu,
+    Some((
+        RenderTextLayoutV1 {
+            disposition: RenderTextLayoutDispositionV1::SharedResolved {
+                font_resource_id: font.resource_id.to_owned(),
+                font_fingerprint_sha256: fingerprint,
+                font_size_emu,
+                line_height_emu,
+            },
+            vertical_offset_emu,
+            lines: vec![RenderResolvedTextLineV1 {
+                line_index: 0,
+                scalar_start: fragment.scalar_start,
+                scalar_end: fragment.scalar_end,
+                consumed_scalar_end: fragment.scalar_end,
+                text: fragment.text.clone(),
+                measured_width_emu: shaped.total_x_advance.get(),
+                line_height_emu,
+                x_offset_emu,
+                spans: Vec::new(),
+                shaping: Some(RenderResolvedShapingV1 {
+                    environment: shaped.environment,
+                    units_per_em: shaped.units_per_em,
+                    glyphs: shaped.glyphs,
+                }),
+            }],
         },
-        vertical_offset_emu,
-        lines: vec![RenderResolvedTextLineV1 {
-            line_index: 0,
-            scalar_start: fragment.scalar_start,
-            scalar_end: fragment.scalar_end,
-            consumed_scalar_end: fragment.scalar_end,
-            text: fragment.text.clone(),
-            measured_width_emu: shaped.total_x_advance.get(),
-            line_height_emu,
-            x_offset_emu,
-            spans: Vec::new(),
-            shaping: Some(RenderResolvedShapingV1 {
-                environment: shaped.environment,
-                units_per_em: shaped.units_per_em,
-                glyphs: shaped.glyphs,
-            }),
-        }],
-    }, first_line_extent_emu))
+        first_line_extent_emu,
+    ))
 }
 
 #[derive(Clone)]
