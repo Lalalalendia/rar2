@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import importlib.util
 import json
 from pathlib import Path
 import shlex
@@ -51,6 +52,23 @@ FORBIDDEN_EXACT = {
     "apps/chaptera-desktop/src/render_backend.rs",
     "apps/chaptera-desktop/src/source_font.rs",
 }
+
+HEAVY_SCOPES = (
+    "reader_windows_smoke",
+    "reader_windows",
+    "editor_windows",
+    "visual_oracle",
+    "cloud_reference",
+    "virginia_page_role",
+    "visual_batch01",
+    "typography_golden",
+    "android",
+    "web",
+    "local_portable",
+    "installer",
+    "path_identity",
+    "update_accept",
+)
 
 
 class TrainError(RuntimeError):
@@ -111,6 +129,26 @@ def is_allowed_path(path: str) -> bool:
     if any(fnmatch.fnmatchcase(path, pattern) for pattern in FORBIDDEN_PATTERNS):
         return False
     return any(fnmatch.fnmatchcase(path, pattern) for pattern in ALLOWED_PATTERNS)
+
+
+def load_reader_fanout_module():
+    module_path = Path(__file__).with_name("ci") / "reader_pr_fanout.py"
+    spec = importlib.util.spec_from_file_location("chaptera_reader_pr_fanout", module_path)
+    if spec is None or spec.loader is None:
+        raise TrainError(f"cannot load canonical Reader fanout classifier from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def heavy_families_for_paths(paths: Sequence[str]) -> list[str]:
+    classifier = load_reader_fanout_module()
+    scopes = classifier.classify(
+        list(paths),
+        set(),
+        visual_neutral_paths=set(),
+    )
+    return sorted(scope for scope in HEAVY_SCOPES if scopes.get(scope, False))
 
 
 def changed_paths(root: Path, base_sha: str, head_sha: str) -> list[str]:
@@ -229,6 +267,7 @@ def plan_train(
                 "head_sha": head_sha,
                 "commits": commits,
                 "changed_paths": paths,
+                "heavy_families": heavy_families_for_paths(paths),
             }
         )
 
@@ -236,6 +275,12 @@ def plan_train(
         raise TrainError(
             f"train has {len(total_paths)} changed files; limit is {MAX_TOTAL_FILES}"
         )
+
+    heavy_family_members: dict[str, list[str]] = {}
+    for candidate in planned_candidates:
+        for family in candidate["heavy_families"]:
+            heavy_family_members.setdefault(family, []).append(candidate["label"])
+    heavy_families = sorted(heavy_family_members)
 
     train_branch = branch_name or f"integration/train-{base_sha[:10]}"
     commands = [
@@ -252,6 +297,8 @@ def plan_train(
         "total_changed_files": len(total_paths),
         "candidates": planned_candidates,
         "composition_commits": composition_commits,
+        "heavy_families": heavy_families,
+        "heavy_family_members": heavy_family_members,
         "train_branch": train_branch,
         "suggested_commands": commands,
         "mutated_repository": False,
