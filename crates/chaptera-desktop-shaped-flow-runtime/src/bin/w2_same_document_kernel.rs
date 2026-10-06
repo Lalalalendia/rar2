@@ -210,7 +210,9 @@ fn run(
         .map_err(|error| format!("open parent EditorSession: {error}"))?;
     let parent = parent_session.project();
     if !parent.operations.is_empty() || !parent.assets.is_empty() {
-        return Err("imported previous issue parent must start with zero Chaptera mutations".into());
+        return Err(
+            "imported previous issue parent must start with zero Chaptera mutations".into(),
+        );
     }
     let parent_identity = parent
         .identity
@@ -264,7 +266,9 @@ fn run(
         || !recipe_assets_equal
         || !fork_identity_preserved
     {
-        return Err("forked next issue does not reproduce the accepted Stage-0.1 effective state".into());
+        return Err(
+            "forked next issue does not reproduce the accepted Stage-0.1 effective state".into(),
+        );
     }
 
     let encoded_next = serde_json::to_vec_pretty(&next_project)
@@ -313,22 +317,14 @@ fn run(
         line_height_emu: LengthEmu::new(LINE_HEIGHT_PT * EMU_PER_POINT),
         bytes: &font_bytes,
     };
-    let layout = build_current_story_layout_v1(
-        &next_reopen,
-        story_id,
-        "w2-same-document-next-issue",
-        &font,
-    )
-    .map_err(|error| format!("next-issue authoritative layout: {error}"))?;
+    let layout =
+        build_current_story_layout_v1(&next_reopen, story_id, "w2-same-document-next-issue", &font)
+            .map_err(|error| format!("next-issue authoritative layout: {error}"))?;
 
     let story_origin = story_id.as_canonical().to_string();
-    let has_overset_diagnostic = layout
-        .shaped_flow
-        .diagnostics
-        .iter()
-        .any(|diagnostic| {
-            diagnostic.code == "story_overset" && diagnostic.origin.to_string() == story_origin
-        });
+    let has_overset_diagnostic = layout.shaped_flow.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "story_overset" && diagnostic.origin.to_string() == story_origin
+    });
     let consumed_scalar_end = layout
         .shaped_flow
         .lines
@@ -434,7 +430,15 @@ fn main() {
         .map(PathBuf::from)
         .collect::<Vec<_>>();
     let result = match args.as_slice() {
-        [source, recipe, replacement, font, next_project, next_odg, receipt] => run(
+        [
+            source,
+            recipe,
+            replacement,
+            font,
+            next_project,
+            next_odg,
+            receipt,
+        ] => run(
             source,
             recipe,
             replacement,
