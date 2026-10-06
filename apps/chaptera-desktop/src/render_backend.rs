@@ -194,10 +194,8 @@ impl CardinalTextPaintTransform {
         let x_emu = (point.x - self.page_origin.x) / self.scene_scale;
         let y_emu = (point.y - self.page_origin.y) / self.scene_scale;
         egui::pos2(
-            self.page_origin.x
-                + (self.a * x_emu + self.c * y_emu + self.tx_emu) * self.scene_scale,
-            self.page_origin.y
-                + (self.b * x_emu + self.d * y_emu + self.ty_emu) * self.scene_scale,
+            self.page_origin.x + (self.a * x_emu + self.c * y_emu + self.tx_emu) * self.scene_scale,
+            self.page_origin.y + (self.b * x_emu + self.d * y_emu + self.ty_emu) * self.scene_scale,
         )
     }
 
@@ -209,8 +207,14 @@ impl CardinalTextPaintTransform {
             rect.left_bottom(),
         ]
         .map(|point| self.map_point(point));
-        let min_x = corners.iter().map(|point| point.x).fold(f32::INFINITY, f32::min);
-        let min_y = corners.iter().map(|point| point.y).fold(f32::INFINITY, f32::min);
+        let min_x = corners
+            .iter()
+            .map(|point| point.x)
+            .fold(f32::INFINITY, f32::min);
+        let min_y = corners
+            .iter()
+            .map(|point| point.y)
+            .fold(f32::INFINITY, f32::min);
         let max_x = corners
             .iter()
             .map(|point| point.x)
@@ -569,13 +573,7 @@ fn paint_shared_resolved_text(
                 first_line_extent_px = Some(galley.size().y);
             }
             let x = clip_rect.left() + line.x_offset_emu as f32 * scene_scale;
-            paint_text_galley(
-                painter,
-                egui::pos2(x, y),
-                galley,
-                text_color,
-                transform,
-            );
+            paint_text_galley(painter, egui::pos2(x, y), galley, text_color, transform);
             executed_font_sizes_px.push(font_size_px);
             continue;
         }
@@ -605,13 +603,7 @@ fn paint_shared_resolved_text(
             let x = clip_rect.left() + relative_x_emu as f32 * scene_scale;
             max_width_px =
                 max_width_px.max((relative_x_emu as f32 * scene_scale).max(0.0) + galley.size().x);
-            paint_text_galley(
-                painter,
-                egui::pos2(x, y),
-                galley,
-                text_color,
-                transform,
-            );
+            paint_text_galley(painter, egui::pos2(x, y), galley, text_color, transform);
             executed_font_sizes_px.push(span_font_size_px);
         }
         if expected_index == 0 {
