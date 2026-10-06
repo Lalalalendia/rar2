@@ -95,7 +95,9 @@ fn exact_reference_recolor_admission_census() {
         ),
         (
             "VirginiaRemplacanteZoneA2015",
-            PathBuf::from(env::var_os("CHAPTERA_RECOLOR_REMPLACANTE").expect("Remplacante fixture")),
+            PathBuf::from(
+                env::var_os("CHAPTERA_RECOLOR_REMPLACANTE").expect("Remplacante fixture"),
+            ),
         ),
     ];
 
@@ -111,7 +113,6 @@ fn exact_reference_recolor_admission_census() {
     )
     .expect("write census");
 }
-
 
 #[test]
 fn recolor_census_receipt_json_shape_is_stable() {
