@@ -244,7 +244,6 @@ pub fn inspect_pub_bytes_v1(
     )
 }
 
-
 #[derive(Debug)]
 struct CfbFirewallViolation {
     code: &'static str,
