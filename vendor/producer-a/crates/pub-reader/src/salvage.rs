@@ -231,22 +231,6 @@ pub struct ReaderPartialEscherDelayEvidence {
     pub validated_images: Vec<ReaderPartialEscherDelayImageEvidence>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReaderPartialSourceGraphError {
-    SourceIdentityMismatch,
-    SourceModified,
-    ProbeMismatch,
-    Ineligible,
-}
-
-impl std::fmt::Display for ReaderPartialSourceGraphError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
-impl std::error::Error for ReaderPartialSourceGraphError {}
-
 fn map_logical_span_to_physical_ranges(
     source_ranges: &[pub_cfb::RootRegularStreamSourceRange],
     span: &pub_core::RawSpan,
