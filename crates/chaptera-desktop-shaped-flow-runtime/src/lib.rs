@@ -5,15 +5,16 @@ use pub_editor::{
     FormatPropertyV1, FormatValueV1, ImportedParagraphFlowConstraintV1,
 };
 use pub_layout::{
-    BoundedLayoutEnvironment, BoundedParagraphFlowConstraint, BoundedParagraphFlowRun,
-    BoundedShapedFlowRuntime, BoundedShapedFlowScene, BoundedShapingRuntime,
-    font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow_with_paragraph_flow,
+    BoundedAuthoringSlice, BoundedLayoutEnvironment, BoundedParagraphFlowConstraint,
+    BoundedParagraphFlowRun, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
+    BoundedShapingRuntime, font_fingerprint_sha256, project_bounded,
+    resolve_bounded_shaped_flow_with_paragraph_flow,
 };
 use pub_line_placement::{
     LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
     ResolvedLineInputV1, resolve_paragraph_line_placement_v1,
 };
-use pub_model::{LengthEmu, NodeId, StoryId};
+use pub_model::{LengthEmu, NodeId, PageId, StoryId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -110,6 +111,73 @@ impl fmt::Display for DesktopShapedFlowRuntimeError {
 }
 
 impl std::error::Error for DesktopShapedFlowRuntimeError {}
+
+fn qualified_page_set_error_v1(page_ids: &[PageId]) -> Result<(), DesktopShapedFlowRuntimeError> {
+    if page_ids.is_empty() {
+        return Err(DesktopShapedFlowRuntimeError::new(
+            "qualified_pages_missing",
+            "current fixed-PDF input requires at least one qualified customer page",
+        ));
+    }
+    Ok(())
+}
+
+fn bounded_authoring_slice_for_pages_v1(
+    editor: &EditorSession,
+    page_ids: &[PageId],
+) -> Result<BoundedAuthoringSlice, DesktopShapedFlowRuntimeError> {
+    qualified_page_set_error_v1(page_ids)?;
+    let mut authoring =
+        pub_viewer::bounded_authoring_slice_from_resolved(editor.graph()).map_err(|error| {
+            DesktopShapedFlowRuntimeError::new(
+                "authoring_projection_failed",
+                format!("resolved graph could not enter bounded layout projection: {error}"),
+            )
+        })?;
+
+    let requested_pages = page_ids.iter().copied().collect::<BTreeSet<_>>();
+    let available_pages = authoring
+        .pages
+        .iter()
+        .map(|page| page.id)
+        .collect::<BTreeSet<_>>();
+    if let Some(page_id) = page_ids
+        .iter()
+        .find(|page_id| !available_pages.contains(page_id))
+    {
+        return Err(DesktopShapedFlowRuntimeError::new(
+            "authoring_projection_failed",
+            format!("layout projection missing document page {page_id:?}"),
+        ));
+    }
+
+    authoring
+        .pages
+        .retain(|page| requested_pages.contains(&page.id));
+    let requested_page_origins = page_ids
+        .iter()
+        .map(|page_id| page_id.into_canonical())
+        .collect::<BTreeSet<_>>();
+    authoring
+        .node_geometry
+        .retain(|node| requested_page_origins.contains(&node.parent_origin));
+    let requested_nodes = authoring
+        .node_geometry
+        .iter()
+        .map(|node| node.node_id)
+        .collect::<BTreeSet<_>>();
+    authoring
+        .story_frames
+        .retain(|frame| requested_nodes.contains(&frame.frame_id));
+    authoring
+        .tables
+        .retain(|table| requested_nodes.contains(&table.node_id));
+    authoring
+        .guides
+        .retain(|guide| requested_pages.contains(&guide.page_id));
+
+    Ok(authoring)
+}
 
 pub fn validate_explicit_font_resource_v1(
     font: &ExplicitDesktopFontResourceV1<'_>,
@@ -508,6 +576,16 @@ pub fn build_current_story_layout_v1(
     layout_revision_id: &str,
     font: &ExplicitDesktopFontResourceV1<'_>,
 ) -> Result<DesktopStoryLayoutV1, DesktopShapedFlowRuntimeError> {
+    build_current_story_layout_with_pages_v1(editor, story_id, layout_revision_id, font, None)
+}
+
+fn build_current_story_layout_with_pages_v1(
+    editor: &EditorSession,
+    story_id: StoryId,
+    layout_revision_id: &str,
+    font: &ExplicitDesktopFontResourceV1<'_>,
+    page_ids: Option<&[PageId]>,
+) -> Result<DesktopStoryLayoutV1, DesktopShapedFlowRuntimeError> {
     if layout_revision_id.is_empty() {
         return Err(DesktopShapedFlowRuntimeError::new(
             "invalid_layout_revision",
@@ -531,13 +609,17 @@ pub fn build_current_story_layout_v1(
     let fingerprint = validate_explicit_font_resource_v1(font)?;
     let current_boolean_typography = current_story_boolean_typography_v1(editor, story_id)?;
     let current_paragraph_flow = current_story_paragraph_flow_v1(editor, story_id)?;
-    let authoring =
-        pub_viewer::bounded_authoring_slice_from_resolved(editor.graph()).map_err(|error| {
-            DesktopShapedFlowRuntimeError::new(
-                "authoring_projection_failed",
-                format!("resolved graph could not enter bounded layout projection: {error}"),
-            )
-        })?;
+    let authoring = match page_ids {
+        Some(page_ids) => bounded_authoring_slice_for_pages_v1(editor, page_ids)?,
+        None => {
+            pub_viewer::bounded_authoring_slice_from_resolved(editor.graph()).map_err(|error| {
+                DesktopShapedFlowRuntimeError::new(
+                    "authoring_projection_failed",
+                    format!("resolved graph could not enter bounded layout projection: {error}"),
+                )
+            })?
+        }
+    };
     let projection = project_bounded(authoring);
 
     let runtime = BoundedShapedFlowRuntime {
@@ -599,11 +681,35 @@ pub fn build_current_fixed_pdf_resource_input_v1(
     binding: Value,
     font: &ExplicitDesktopFontResourceV1<'_>,
 ) -> Result<CurrentFixedPdfResourceInputV1, DesktopShapedFlowRuntimeError> {
-    let layout = build_current_story_layout_v1(
+    let page_ids = editor.graph().document.pages.clone();
+    build_current_fixed_pdf_resource_input_for_pages_v1(
+        editor,
+        primary_story_id,
+        &page_ids,
+        binding,
+        font,
+    )
+}
+
+/// Builds fixed-output resources against an already-qualified page projection.
+///
+/// The caller owns page-role qualification. This keeps current-revision output
+/// aligned with the Reader/customer-visible page set instead of silently
+/// widening back to every recovered raw PAGE.
+pub fn build_current_fixed_pdf_resource_input_for_pages_v1(
+    editor: &EditorSession,
+    primary_story_id: StoryId,
+    page_ids: &[PageId],
+    binding: Value,
+    font: &ExplicitDesktopFontResourceV1<'_>,
+) -> Result<CurrentFixedPdfResourceInputV1, DesktopShapedFlowRuntimeError> {
+    qualified_page_set_error_v1(page_ids)?;
+    let layout = build_current_story_layout_with_pages_v1(
         editor,
         primary_story_id,
         "fixed-pdf:current-editor-state",
         font,
+        Some(page_ids),
     )?;
     let image_resources = editor.current_image_resources_v1().map_err(|error| {
         DesktopShapedFlowRuntimeError::new(
@@ -698,6 +804,28 @@ mod tests {
         assert!(!text.contains("source_refs"));
         assert!(!text.contains("Quill"));
         assert!(!text.contains("Escher"));
+    }
+
+    #[test]
+    fn qualified_fixed_pdf_page_set_rejects_empty_projection() {
+        let bytes = b"not-a-real-pub";
+        let digest = Sha256::digest(bytes);
+        let mut digest_bytes = [0_u8; 32];
+        digest_bytes.copy_from_slice(&digest);
+        let source_hash = Sha256Digest::from_bytes(digest_bytes);
+        let editor = open_mature_0x2c_editor(bytes, source_hash);
+        assert!(
+            editor.is_err(),
+            "test precondition: invalid source stays invalid"
+        );
+
+        // The page-set guard is intentionally before layout projection; keep a
+        // direct source-free assertion on the stable error contract by using a
+        // tiny helper rather than requiring a network/native fixture here.
+        assert_eq!(
+            qualified_page_set_error_v1(&[]).unwrap_err().code,
+            "qualified_pages_missing"
+        );
     }
 
     #[test]
