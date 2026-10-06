@@ -10,8 +10,7 @@ pub use assets::{
     inspect_delayed_blips, inspect_validated_delayed_blips_prefix, resolve_delayed_blip,
 };
 pub use strict_blip::{
-    BlipMetafileCompression, BlipUidRule, BlipValidationError, ValidatedBlip,
-    validate_blip_record,
+    BlipMetafileCompression, BlipUidRule, BlipValidationError, ValidatedBlip, validate_blip_record,
 };
 
 use pub_core::{RawSpan, StreamPath};
