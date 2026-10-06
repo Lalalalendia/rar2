@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedResolvedScene, BoundedShapedGlyph, BoundedShapedText,
     BoundedShapingDescriptor, ResolvedPhysicalNode, ResolvedSurface, SceneOriginMapping,
-    compatible_natural_baseline_ascent_emu_v1, font_fingerprint_sha256,
+    font_fingerprint_sha256,
 };
 use pub_model::{
     Affine2D, CanonicalId, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D, TableCellId,
@@ -101,6 +101,8 @@ struct CurrentTableCell {
     layout: Option<CurrentTextLayout>,
     #[serde(default)]
     single_line_natural_extent_emu: Option<i64>,
+    #[serde(default)]
+    single_line_baseline_ascent_emu: Option<i64>,
     #[serde(default)]
     bounds: Option<RectEmu>,
     #[serde(default)]
@@ -719,12 +721,9 @@ fn append_single_line_table_text_runs_with_ascent_probe_v1(
                 continue;
             }
         };
-        let Some(baseline_ascent_emu) = compatible_natural_baseline_ascent_emu_v1(
-            &packet_font.bytes,
-            packet_font.face_index,
-            LengthEmu::new(*font_size_emu),
-        )
-        .map(LengthEmu::get)
+        let Some(baseline_ascent_emu) = cell
+            .single_line_baseline_ascent_emu
+            .filter(|value| *value > 0)
         else {
             summary.table_text_residual_cell_count += 1;
             continue;
