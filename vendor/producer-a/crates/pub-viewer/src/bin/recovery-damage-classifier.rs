@@ -6,6 +6,7 @@ use pub_viewer::{
     classify_pub_family, open_pub_or_salvage, probe_reader_salvage_candidate,
     probe_reader_salvage_candidate_with_trigger, viewer_geometry_environment_v0_1,
 };
+use pub_reader::reader_evidence_disposition;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -101,6 +102,12 @@ struct ClassifierRow {
     intake_class: &'static str,
     reader_route: String,
     pub_profile: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_owner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registry_evidence_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registry_disposition: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     salvage_eligibility: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -369,6 +376,17 @@ fn classify(bytes: &[u8], rescue_evidence: Option<&RescueEvidenceRow>) -> Classi
     let source_sha256 = sha256_hex(bytes);
     let intake = classify_failure_candidate(bytes);
     let family = classify_pub_family(bytes);
+    let registry = reader_evidence_disposition(&source_sha256);
+    let registry_owner = registry.as_ref().map(|entry| entry.owner.clone());
+    let registry_evidence_class = registry
+        .as_ref()
+        .map(|entry| entry.evidence_class.clone());
+    let registry_disposition = registry
+        .as_ref()
+        .map(|entry| entry.disposition.clone());
+    let existing_format_owner = registry.as_ref().is_some_and(|entry| {
+        entry.evidence_class == "format_gap" && entry.disposition == "existing_format_owner"
+    });
 
     match open_pub_or_salvage(bytes, viewer_geometry_environment_v0_1()) {
         Ok(ViewerProductOpenOutcome::Normal(_)) => {
@@ -381,6 +399,9 @@ fn classify(bytes: &[u8], rescue_evidence: Option<&RescueEvidenceRow>) -> Classi
                 intake_class: intake_name(intake.class),
                 reader_route: family.route.as_str().to_owned(),
                 pub_profile: family.profile.as_str().to_owned(),
+                evidence_owner: registry_owner.clone(),
+                registry_evidence_class: registry_evidence_class.clone(),
+                registry_disposition: registry_disposition.clone(),
                 salvage_eligibility: None,
                 corruption_evidence: None,
                 has_surviving_evidence: None,
@@ -427,6 +448,9 @@ fn classify(bytes: &[u8], rescue_evidence: Option<&RescueEvidenceRow>) -> Classi
                 intake_class: intake_name(intake.class),
                 reader_route: family.route.as_str().to_owned(),
                 pub_profile: family.profile.as_str().to_owned(),
+                evidence_owner: registry_owner.clone(),
+                registry_evidence_class: registry_evidence_class.clone(),
+                registry_disposition: registry_disposition.clone(),
                 salvage_eligibility: Some(eligibility_name(probe.eligibility)),
                 corruption_evidence: probe.corruption_evidence.map(corruption_name),
                 has_surviving_evidence: Some(probe.has_surviving_evidence()),
@@ -492,16 +516,19 @@ fn classify(bytes: &[u8], rescue_evidence: Option<&RescueEvidenceRow>) -> Classi
             };
 
             let has_forced_recovery = fact_counts_value.is_some();
+            let inferred_rescue_allowed = has_forced_recovery && !existing_format_owner;
             let mut row = ClassifierRow {
                 source_sha256,
                 byte_len: bytes.len(),
-                compact_verdict: if has_forced_recovery {
+                compact_verdict: if inferred_rescue_allowed {
                     CompactVerdict::Rescue
                 } else {
                     CompactVerdict::NoSafeRecovery
                 },
                 reader_outcome: ReaderOutcome::CannotSafelyDisplay,
-                reader_reason: if has_forced_recovery {
+                reader_reason: if existing_format_owner {
+                    "existing_format_owner_not_damage_authority".to_owned()
+                } else if has_forced_recovery {
                     "recovery_primitives_succeed_but_typed_authority_missing".to_owned()
                 } else {
                     eligibility_name(probe.eligibility).to_owned()
@@ -509,6 +536,9 @@ fn classify(bytes: &[u8], rescue_evidence: Option<&RescueEvidenceRow>) -> Classi
                 intake_class: intake_name(intake.class),
                 reader_route: family.route.as_str().to_owned(),
                 pub_profile: family.profile.as_str().to_owned(),
+                evidence_owner: registry_owner.clone(),
+                registry_evidence_class: registry_evidence_class.clone(),
+                registry_disposition: registry_disposition.clone(),
                 salvage_eligibility: Some(eligibility_name(probe.eligibility)),
                 corruption_evidence: probe.corruption_evidence.map(corruption_name),
                 has_surviving_evidence: forced_survives.or(Some(probe.has_surviving_evidence())),
@@ -519,7 +549,9 @@ fn classify(bytes: &[u8], rescue_evidence: Option<&RescueEvidenceRow>) -> Classi
                 salvage_text,
                 salvage_images,
                 salvage_geometry,
-                rescue_outcome: if has_forced_recovery {
+                rescue_outcome: if existing_format_owner {
+                    RescueOutcome::DiagnosticOnly
+                } else if has_forced_recovery {
                     RescueOutcome::SalvageOnly
                 } else if matches!(
                     probe.eligibility,
@@ -534,18 +566,27 @@ fn classify(bytes: &[u8], rescue_evidence: Option<&RescueEvidenceRow>) -> Classi
                 },
                 repair_gate: None,
                 repair_native_status: None,
-                evidence_level: if has_forced_recovery {
+                evidence_level: if existing_format_owner {
+                    EvidenceLevel::ExactShaAuthority
+                } else if has_forced_recovery {
                     EvidenceLevel::Inferred
                 } else {
                     EvidenceLevel::Production
                 },
-                confidence: if has_forced_recovery {
+                confidence: if existing_format_owner {
+                    Confidence::High
+                } else if has_forced_recovery {
                     Confidence::Medium
                 } else {
                     Confidence::High
                 },
-                promotion_gap: has_forced_recovery
-                    .then(|| "missing_production_typed_corruption_authority".to_owned()),
+                promotion_gap: if existing_format_owner {
+                    Some("existing_format_owner_not_damage_authority".to_owned())
+                } else if has_forced_recovery {
+                    Some("missing_production_typed_corruption_authority".to_owned())
+                } else {
+                    None
+                },
                 open_error_signature_sha256: Some(sha256_hex(format!("{error:#}").as_bytes())),
                 source_modified: probe.source_modified,
             };
