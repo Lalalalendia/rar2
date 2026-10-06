@@ -304,6 +304,10 @@ pub fn analyze_reader_partial_contents_prefix(
 
         let raw_type = reference.raw_types[0].value;
         let chunk_offset = reference.chunk_offsets[0].value;
+        if chunk_offset >= trailer_offset {
+            chunk_crosses_trailer_count += 1;
+            continue;
+        }
         let chunk = match parse_confirmed_0x2c_chunk(
             StreamPath("/Contents".into()),
             prefix,
