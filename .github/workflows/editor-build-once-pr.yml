@@ -85,60 +85,9 @@ jobs:
             echo "fixed_pdf_current_revision=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
           changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
-          if grep -Eq '^(\.github/workflows/editor-build-once-pr\.yml|\.github/workflows/chaptera-editor-windows-binary\.yml|tools/ci/validate_editor_binary_artifact\.py)
-      - id: carlton
-        name: Classify Carlton Editor sample ownership
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ steps.base-authority.outputs.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          if [[ "$EVENT_NAME" != "pull_request" ]]; then
-            echo "carlton_editor_sample=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
-          if grep -Eq '^(\.github/workflows/(editor-build-once-pr|chaptera-editor-windows-binary|carlton-march-editor-sample-smoke)\.yml|tools/ci/validate_editor_binary_artifact\.py|tools/acquire_carlton_march_pair\.py|apps/chaptera-desktop/src/(acceptance|acceptance_cli)\.rs|vendor/producer-a/crates/pub-editor/)' <<<"$changed"; then
-            echo "carlton_editor_sample=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "carlton_editor_sample=false" >> "$GITHUB_OUTPUT"
-          fi
-
-  editor-binary:
-    name: Build exact-candidate Editor binary once
-    needs: classify
-    if: ${{ !cancelled() && always() && (needs.classify.result != 'success' || needs.classify.outputs.continuity_v2_windows == 'true' || needs.classify.outputs.fixed_pdf_current_revision == 'true' || needs.classify.outputs.carlton_editor_sample == 'true') }}
-    uses: ./.github/workflows/chaptera-editor-windows-binary.yml
-    with:
-      artifact_name: chaptera-editor-windows-binary-${{ github.sha }}
-
-  continuity-v2:
-    name: Editor Continuity V2
-    needs: [classify, editor-binary]
-    if: ${{ !cancelled() && always() && needs.editor-binary.result == 'success' && (needs.classify.result != 'success' || needs.classify.outputs.continuity_v2_windows == 'true') }}
-    uses: ./.github/workflows/editor-desktop-continuity-v2-windows.yml
-    with:
-      editor_binary_artifact_name: chaptera-editor-windows-binary-${{ github.sha }}
-
-  fixed-pdf-current:
-    name: Editor fixed-PDF current revision
-    needs: [classify, editor-binary]
-    if: ${{ !cancelled() && always() && needs.editor-binary.result == 'success' && (needs.classify.result != 'success' || needs.classify.outputs.fixed_pdf_current_revision == 'true') }}
-    uses: ./.github/workflows/editor-fixed-pdf-current-revision.yml
-    with:
-      editor_binary_artifact_name: chaptera-editor-windows-binary-${{ github.sha }}
-
-  carlton-sample:
-    name: Carlton March Editor sample
-    needs: [classify, editor-binary]
-    if: ${{ !cancelled() && always() && needs.editor-binary.result == 'success' && (needs.classify.result != 'success' || needs.classify.outputs.carlton_editor_sample == 'true') }}
-    uses: ./.github/workflows/carlton-march-editor-sample-smoke.yml
-    with:
-      editor_binary_artifact_name: chaptera-editor-windows-binary-${{ github.sha }}
- <<<"$changed"; then
+          if grep -Eq '^(\.github/workflows/editor-build-once-pr\.yml|\.github/workflows/chaptera-editor-windows-binary\.yml|tools/ci/validate_editor_binary_artifact\.py)$' <<<"$changed"; then
             echo "continuity_v2_windows=true" >> "$GITHUB_OUTPUT"
             echo "fixed_pdf_current_revision=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -164,7 +113,7 @@ jobs:
             exit 0
           fi
           changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
-          if grep -Eq '^(\.github/workflows/(editor-build-once-pr|chaptera-editor-windows-binary|carlton-march-editor-sample-smoke)\.yml|tools/ci/(validate_editor_binary_artifact|test_validate_editor_binary_artifact|test_editor_build_once_wiring)\.py|tools/acquire_carlton_march_pair\.py|apps/chaptera-desktop/src/(acceptance|acceptance_cli)\.rs|vendor/producer-a/crates/pub-editor/)' <<<"$changed"; then
+          if grep -Eq '^(\.github/workflows/(editor-build-once-pr|chaptera-editor-windows-binary|carlton-march-editor-sample-smoke)\.yml|tools/ci/validate_editor_binary_artifact\.py|tools/acquire_carlton_march_pair\.py|apps/chaptera-desktop/src/(acceptance|acceptance_cli)\.rs|vendor/producer-a/crates/pub-editor/)' <<<"$changed"; then
             echo "carlton_editor_sample=true" >> "$GITHUB_OUTPUT"
           else
             echo "carlton_editor_sample=false" >> "$GITHUB_OUTPUT"
