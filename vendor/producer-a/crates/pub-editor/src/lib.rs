@@ -2196,7 +2196,10 @@ fn is_scoped_text_format_operation_v1(operation: &EditOperation) -> bool {
 }
 
 fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
-    if operations.iter().any(|operation| table_rowcol_history_v1(operation).is_some()) {
+    if operations
+        .iter()
+        .any(|operation| table_rowcol_history_v1(operation).is_some())
+    {
         EDITOR_PROJECT_VERSION_V0_21
     } else if operations
         .iter()
@@ -4258,9 +4261,7 @@ impl EditorSession {
                 .iter()
                 .position(|operation| table_rowcol_history_v1(operation).is_some())
             {
-                return Err(EditorProjectError::LegacyProjectCarriesTableRowColOperation {
-                    index,
-                });
+                return Err(EditorProjectError::LegacyProjectCarriesTableRowColOperation { index });
             }
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
@@ -6883,10 +6884,7 @@ impl EditorSession {
         table_id: NodeId,
         row_id: TableRowId,
     ) -> Result<EditOperation, EditorError> {
-        self.create_table_rowcol_operation_v1(
-            table_id,
-            TableRowColMutationV1::DeleteRow { row_id },
-        )
+        self.create_table_rowcol_operation_v1(table_id, TableRowColMutationV1::DeleteRow { row_id })
     }
 
     pub fn insert_table_column_v1(
@@ -6969,16 +6967,16 @@ impl EditorSession {
                 node_id: history.table_id,
             });
         }
-        let grid = self
-            .current_table_grid_v1(history.table_id)
-            .ok_or(EditorError::TableRowColUnsupported {
+        let grid = self.current_table_grid_v1(history.table_id).ok_or(
+            EditorError::TableRowColUnsupported {
                 node_id: history.table_id,
-            })?;
-        let bounds = self
-            .current_table_bounds_v1(history.table_id)
-            .ok_or(EditorError::TableRowColUnsupported {
+            },
+        )?;
+        let bounds = self.current_table_bounds_v1(history.table_id).ok_or(
+            EditorError::TableRowColUnsupported {
                 node_id: history.table_id,
-            })?;
+            },
+        )?;
         let before =
             table_structure_snapshot_from_graph_v1(&self.graph, history.table_id, grid, bounds)
                 .map_err(|_| EditorError::StaleTableRowCol {
@@ -6995,10 +6993,11 @@ impl EditorSession {
         }
 
         let mut candidate_graph = self.graph.clone();
-        apply_table_structure_snapshot_to_graph_v1(&mut candidate_graph, &history.after)
-            .map_err(|_| EditorError::StaleTableRowCol {
+        apply_table_structure_snapshot_to_graph_v1(&mut candidate_graph, &history.after).map_err(
+            |_| EditorError::StaleTableRowCol {
                 node_id: history.table_id,
-            })?;
+            },
+        )?;
         self.graph = candidate_graph;
         self.undo.push(operation.clone());
         self.redo.clear();
@@ -7062,11 +7061,12 @@ impl EditorSession {
                 .map_err(|_| EditorError::StaleTableRowCol {
                     node_id: history.table_id,
                 })?;
-                let before = apply_table_rowcol_history_inverse_v1(&current, history).map_err(
-                    |_| EditorError::StaleTableRowCol {
-                        node_id: history.table_id,
-                    },
-                )?;
+                let before =
+                    apply_table_rowcol_history_inverse_v1(&current, history).map_err(|_| {
+                        EditorError::StaleTableRowCol {
+                            node_id: history.table_id,
+                        }
+                    })?;
                 let mut candidate_graph = self.graph.clone();
                 apply_table_structure_snapshot_to_graph_v1(&mut candidate_graph, &before).map_err(
                     |_| EditorError::StaleTableRowCol {
@@ -7199,11 +7199,12 @@ impl EditorSession {
                 .map_err(|_| EditorError::StaleTableRowCol {
                     node_id: history.table_id,
                 })?;
-                let after = apply_table_rowcol_history_forward_v1(&current, history).map_err(
-                    |_| EditorError::StaleTableRowCol {
-                        node_id: history.table_id,
-                    },
-                )?;
+                let after =
+                    apply_table_rowcol_history_forward_v1(&current, history).map_err(|_| {
+                        EditorError::StaleTableRowCol {
+                            node_id: history.table_id,
+                        }
+                    })?;
                 let mut candidate_graph = self.graph.clone();
                 apply_table_structure_snapshot_to_graph_v1(&mut candidate_graph, &after).map_err(
                     |_| EditorError::StaleTableRowCol {
@@ -7927,29 +7928,25 @@ fn table_rowcol_operation_matches_mutation_v1(operation: &EditOperation) -> bool
     matches!(
         operation,
         EditOperation::InsertTableRow {
-            history:
-                TableRowColHistoryV1 {
-                    mutation: TableRowColMutationV1::InsertRow { .. },
-                    ..
-                },
+            history: TableRowColHistoryV1 {
+                mutation: TableRowColMutationV1::InsertRow { .. },
+                ..
+            },
         } | EditOperation::DeleteTableRow {
-            history:
-                TableRowColHistoryV1 {
-                    mutation: TableRowColMutationV1::DeleteRow { .. },
-                    ..
-                },
+            history: TableRowColHistoryV1 {
+                mutation: TableRowColMutationV1::DeleteRow { .. },
+                ..
+            },
         } | EditOperation::InsertTableColumn {
-            history:
-                TableRowColHistoryV1 {
-                    mutation: TableRowColMutationV1::InsertColumn { .. },
-                    ..
-                },
+            history: TableRowColHistoryV1 {
+                mutation: TableRowColMutationV1::InsertColumn { .. },
+                ..
+            },
         } | EditOperation::DeleteTableColumn {
-            history:
-                TableRowColHistoryV1 {
-                    mutation: TableRowColMutationV1::DeleteColumn { .. },
-                    ..
-                },
+            history: TableRowColHistoryV1 {
+                mutation: TableRowColMutationV1::DeleteColumn { .. },
+                ..
+            },
         }
     )
 }
