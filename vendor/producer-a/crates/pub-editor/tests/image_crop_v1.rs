@@ -1,6 +1,6 @@
 use pub_editor::{
-    EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_19, EDITOR_PROJECT_VERSION_V0_20, EditOperation, EditorError,
-    ImageCropStateV1, NodeId,
+    EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_19, EDITOR_PROJECT_VERSION_V0_20,
+    EditOperation, EditorError, ImageCropStateV1, NodeId,
 };
 
 fn node_id() -> NodeId {
