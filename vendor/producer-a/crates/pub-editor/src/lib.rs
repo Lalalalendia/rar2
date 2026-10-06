@@ -46,8 +46,10 @@ pub use create_shape_runtime_v1::{
 };
 pub use create_table_runtime_v1::{
     AUTHORED_TABLE_SENTINEL_CONTENTS_SEQ_NUM_V1, AUTHORED_TABLE_SENTINEL_TEXT_ID_V1,
-    CreateTablePlanV1, CreateTableRuntimeV1, CreateTableRuntimeValidationError,
-    build_create_table_plan_v1, rebuild_authored_table_story_v1, validate_create_table_runtime_v1,
+    AuthoredTableStoryRangesV1, CreateTablePlanV1, CreateTableRuntimeV1,
+    CreateTableRuntimeValidationError, apply_create_table_forward_v1,
+    apply_create_table_inverse_v1, build_create_table_plan_v1, rebuild_authored_table_story_v1,
+    validate_create_table_runtime_v1,
 };
 pub use duplicate_authored_rectangle_v1::{
     DUPLICATE_OFFSET_EMU_V1, DUPLICATE_PLACEMENT_POLICY_V1, DuplicateAuthoredRectangleErrorV1,
@@ -146,7 +148,8 @@ pub const EDITOR_PROJECT_VERSION_V0_14: &str = "pub-editor-v0.14";
 pub const EDITOR_PROJECT_VERSION_V0_15: &str = "pub-editor-v0.15";
 pub const EDITOR_PROJECT_VERSION_V0_16: &str = "pub-editor-v0.16";
 pub const EDITOR_PROJECT_VERSION_V0_17: &str = "pub-editor-v0.17";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_17;
+pub const EDITOR_PROJECT_VERSION_V0_18: &str = "pub-editor-v0.18";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_18;
 pub const MAX_MOVE_NODES_V1: usize = 1024;
 pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
@@ -358,6 +361,9 @@ pub enum EditOperation {
         stroke: AuthoredSolidStrokeV1,
         provenance: AuthoredEntityProvenanceV1,
     },
+    CreateTable {
+        table: CreateTableRuntimeV1,
+    },
     DeleteNode {
         node_id: NodeId,
         page_id: PageId,
@@ -447,6 +453,7 @@ impl EditOperation {
             | Self::CreateTextBox { .. }
             | Self::CreateShape { .. }
             | Self::CreateLine { .. }
+            | Self::CreateTable { .. }
             | Self::DeleteNode { .. }
             | Self::ReorderAuthoredStack { .. }
             | Self::SetTextFormatProperty { .. }
@@ -593,6 +600,28 @@ impl PersistenceRequirements for EditOperation {
                     feature: "line.stroke".into(),
                     origin: Some(node_id.into_canonical()),
                     property_path: Some("node.line.stroke".into()),
+                },
+            ],
+            Self::CreateTable { table } => vec![
+                PersistenceRequirement {
+                    feature: "node.created_identity".into(),
+                    origin: Some(table.node_id.into_canonical()),
+                    property_path: Some("node".into()),
+                },
+                PersistenceRequirement {
+                    feature: "story.created_identity".into(),
+                    origin: Some(table.story_id.into_canonical()),
+                    property_path: Some("story".into()),
+                },
+                PersistenceRequirement {
+                    feature: "table.grid".into(),
+                    origin: Some(table.node_id.into_canonical()),
+                    property_path: Some("table.grid".into()),
+                },
+                PersistenceRequirement {
+                    feature: "node.geometry.bounds".into(),
+                    origin: Some(table.node_id.into_canonical()),
+                    property_path: Some("node.bounds".into()),
                 },
             ],
             Self::DeleteNode { node_id, .. } => vec![PersistenceRequirement {
@@ -1998,6 +2027,11 @@ fn is_scoped_text_format_operation_v1(operation: &EditOperation) -> bool {
 fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
     if operations
         .iter()
+        .any(|operation| matches!(operation, EditOperation::CreateTable { .. }))
+    {
+        EDITOR_PROJECT_VERSION_V0_18
+    } else if operations
+        .iter()
         .any(|operation| matches!(operation, EditOperation::CreateLine { .. }))
     {
         EDITOR_PROJECT_VERSION_V0_17
@@ -2209,6 +2243,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesCreateLineOperation {
         index: usize,
     },
+    LegacyProjectCarriesCreateTableOperation {
+        index: usize,
+    },
     LegacyProjectCarriesCreateTextBoxOperation {
         index: usize,
     },
@@ -2275,7 +2312,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, or {EDITOR_PROJECT_VERSION_V0_17:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, or {EDITOR_PROJECT_VERSION_V0_18:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -2318,6 +2355,10 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesCreateLineOperation { index } => write!(
                 formatter,
                 "editor project operation {index} uses CreateLine but the project schema predates pub-editor-v0.17"
+            ),
+            Self::LegacyProjectCarriesCreateTableOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses CreateTable but the project schema predates pub-editor-v0.18"
             ),
             Self::LegacyProjectCarriesCreateTextBoxOperation { index } => write!(
                 formatter,
@@ -3446,7 +3487,7 @@ impl EditorSession {
     }
 
     pub fn try_project(&self) -> Result<EditorProject, EditorProjectError> {
-        let table_grids = effective_table_grids(&self.graph);
+        let table_grids = effective_table_grids_with_history(&self.graph, &self.undo);
         let carries_reorder = self
             .undo
             .iter()
@@ -3466,10 +3507,15 @@ impl EditorSession {
             .undo
             .iter()
             .any(|operation| matches!(operation, EditOperation::CreateLine { .. }));
+        let carries_create_table = self
+            .undo
+            .iter()
+            .any(|operation| matches!(operation, EditOperation::CreateTable { .. }));
         if (carries_reorder
             || carries_text_format
             || carries_paragraph_alignment
-            || carries_create_line)
+            || carries_create_line
+            || carries_create_table)
             && self.project_identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
@@ -3481,6 +3527,12 @@ impl EditorSession {
             )
         } else {
             let legacy_schema = if self
+                .undo
+                .iter()
+                .any(|operation| matches!(operation, EditOperation::CreateTable { .. }))
+            {
+                EDITOR_PROJECT_VERSION_V0_18
+            } else if self
                 .undo
                 .iter()
                 .any(|operation| matches!(operation, EditOperation::CreateLine { .. }))
@@ -3607,6 +3659,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
         {
             return Err(EditorProjectError::UnsupportedSchema {
                 found: project.schema_version.clone(),
@@ -3640,6 +3693,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
         {
             if let Some(index) = project
                 .operations
@@ -3662,6 +3716,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
         {
             if let Some(index) = project
                 .operations
@@ -3683,6 +3738,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && !project.table_grids.is_empty()
         {
             return Err(EditorProjectError::LegacyProjectCarriesTableGrids);
@@ -3698,6 +3754,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
@@ -3715,6 +3772,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
         {
             if let Some(index) = project
                 .operations
@@ -3733,6 +3791,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
         {
             if let Some(index) = project
                 .operations
@@ -3750,6 +3809,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
         {
             if let Some(index) = project
                 .operations
@@ -3759,13 +3819,24 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesCreateShapeOperation { index });
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_17 {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+        {
             if let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::CreateLine { .. }))
             {
                 return Err(EditorProjectError::LegacyProjectCarriesCreateLineOperation { index });
+            }
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_18 {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(|operation| matches!(operation, EditOperation::CreateTable { .. }))
+            {
+                return Err(EditorProjectError::LegacyProjectCarriesCreateTableOperation { index });
             }
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
@@ -3775,6 +3846,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
         {
             if let Some(index) = project
                 .operations
@@ -3792,6 +3864,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
         {
             if let Some(index) = project
                 .operations
@@ -3806,6 +3879,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::ReorderAuthoredStack { .. })
@@ -3819,6 +3893,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
         {
             if let Some(index) = project
                 .operations
@@ -3830,6 +3905,7 @@ impl EditorSession {
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
         {
             if let Some(index) = project
                 .operations
@@ -3844,6 +3920,7 @@ impl EditorSession {
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
@@ -3864,6 +3941,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.identity.is_some()
         {
             return Err(EditorProjectError::LegacyProjectCarriesIdentity);
@@ -3874,7 +3952,8 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_14
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_15
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
-            || project.schema_version == EDITOR_PROJECT_VERSION_V0_17)
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_17
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_18)
             && project.identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
@@ -3903,6 +3982,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_15
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_17
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_18
         {
             let expected = required_editor_asset_refs_v1(&project.operations)
                 .into_iter()
@@ -3972,8 +4052,9 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_15
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_17
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_18
         {
-            let actual_grids = effective_table_grids(&candidate.graph);
+            let actual_grids = effective_table_grids_with_history(&candidate.graph, &candidate.undo);
             if actual_grids != project.table_grids {
                 return Err(EditorProjectError::TableGridMismatch);
             }
@@ -6551,6 +6632,9 @@ fn replay_canonical_operation(
         EditOperation::CreateLine { .. } => session
             .consume_canonical_create_line(expected.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::CreateTable { .. } => session
+            .consume_canonical_create_table(expected.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::DeleteNode { .. } => session
             .consume_canonical_delete_node(expected.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
@@ -7689,6 +7773,9 @@ fn apply_forward(
         EditOperation::CreateLine { .. } => {
             unreachable!("CreateLine is applied to the authored overlay state")
         }
+        EditOperation::CreateTable { .. } => {
+            unreachable!("CreateTable is applied atomically with the authored-stack lane")
+        }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is applied to the authored overlay state")
         }
@@ -7944,6 +8031,9 @@ fn apply_inverse(
         EditOperation::CreateLine { .. } => {
             unreachable!("CreateLine is reverted in the authored overlay state")
         }
+        EditOperation::CreateTable { .. } => {
+            unreachable!("CreateTable is reverted atomically with the authored-stack lane")
+        }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is reverted in the authored overlay state")
         }
@@ -7969,6 +8059,7 @@ fn authored_stack_operation_page_id_v1(operation: &EditOperation) -> Option<Page
         EditOperation::CreateShape { page_id, .. }
         | EditOperation::CreateLine { page_id, .. }
         | EditOperation::DeleteNode { page_id, .. } => Some(*page_id),
+        EditOperation::CreateTable { table } => Some(table.page_id),
         EditOperation::ReorderAuthoredStack { transition } => Some(transition.page_id),
         _ => None,
     }
@@ -8014,6 +8105,21 @@ fn apply_authored_stack_history_forward_v1(
                 .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
             let after = apply_authored_stack_transition_forward_v1(&before, &transition)
                 .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+            install_authored_stack_in_map_v1(stacks, after);
+        }
+        EditOperation::CreateTable { table } => {
+            let before = stacks
+                .get(&table.page_id)
+                .cloned()
+                .unwrap_or_else(|| AuthoredStackV1::empty(table.page_id));
+            let transition = plan_create_table_append_v1(&before, table.node_id, table.page_id)
+                .map_err(|_| EditorError::StaleAuthoredStack {
+                    page_id: table.page_id,
+                })?;
+            let after = apply_authored_stack_transition_forward_v1(&before, &transition)
+                .map_err(|_| EditorError::StaleAuthoredStack {
+                    page_id: table.page_id,
+                })?;
             install_authored_stack_in_map_v1(stacks, after);
         }
         EditOperation::DeleteNode {
