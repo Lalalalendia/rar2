@@ -5,7 +5,7 @@ use chaptera_server::{
     authz_runtime::SqliteAuthzAuthority,
     blob_runtime::BlobStoreRuntime,
     cli::{Cli, Command},
-    config::{ChapteraConfig, EnvironmentMode, SecretResolver},
+    config::{ChapteraConfig, EnvironmentMode, ResolvedSecrets, SecretResolver},
     doctor,
     edge::EdgePolicy,
     guest_reader_http::{
@@ -25,7 +25,9 @@ use chaptera_server::{
     project_persistence_sqlite::SqliteProjectPersistence,
     public_rate_limit::SqlitePublicRateLimitAuthority,
     revision_materializer::BlobStoreExactSourceLoader,
-    runtime_readiness::{ports_with_configured_serve, ports_with_revision_stream},
+    runtime_readiness::{
+        ports_with_configured_serve, ports_with_guest_reader, ports_with_revision_stream,
+    },
     schema_migration::SqliteMigrationRuntime,
     serve,
     source_authority::SqliteDocumentSourceAuthority,
@@ -144,6 +146,78 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+async fn build_guest_reader_router(
+    config: &ChapteraConfig,
+    secrets: &ResolvedSecrets,
+    blob_store: &BlobStoreRuntime,
+) -> Result<Option<axum::Router>, Box<dyn Error>> {
+    let Some(guest_config) = &config.cloud_reader_guest else {
+        return Ok(None);
+    };
+    let busy_timeout = Duration::from_millis(config.sqlite.busy_timeout_ms);
+    let rate_secret = secrets
+        .cloud_reader_guest_rate_secret
+        .as_ref()
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cloud_reader_guest rate subject secret was not resolved",
+            )
+        })?;
+    let guest_rate = SqlitePublicRateLimitAuthority::open(
+        &config.sqlite.path,
+        config.sqlite.pool_max,
+        busy_timeout,
+        guest_config.public_rate_limit(),
+        rate_secret.expose(),
+    )
+    .await?;
+    let guest_admission = SqliteUploadAdmissionAuthority::open(
+        &config.sqlite.path,
+        config.sqlite.pool_max,
+        busy_timeout,
+        guest_config.upload_admission(),
+    )
+    .await?;
+    let guest_sessions = SqliteGuestReaderSessionStore::open(
+        &config.sqlite.path,
+        config.sqlite.pool_max,
+        busy_timeout,
+    )
+    .await?;
+    let guest_scan_config = config.source_validation.materialize();
+    let guest_scanner = ProductionSourceSecurityScanner::new(guest_scan_config.clone())?;
+    let guest_scene_worker = IsolatedGuestSceneProducer::new_with_fonts(
+        guest_scan_config,
+        &guest_config.font_resources,
+    )?;
+    let guest_state = GuestReaderHttpState::new(
+        guest_rate,
+        guest_admission,
+        guest_sessions,
+        blob_store.service().clone(),
+        guest_scanner,
+        guest_scene_worker,
+        GuestReaderHttpConfig {
+            session_ttl: Duration::from_secs(guest_config.session_ttl_seconds),
+            max_file_bytes: guest_config.max_file_bytes,
+        },
+    )?;
+    let guest_cleanup_state = guest_state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            if let Err(error) = guest_cleanup_state.cleanup_expired_sessions().await {
+                eprintln!("chaptera_guest_cleanup {error}");
+            }
+        }
+    });
+
+    Ok(Some(guest_reader_http::router(guest_state)))
 }
 
 async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
@@ -281,71 +355,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                         None
                     };
 
-                    if let Some(guest_config) = &config.cloud_reader_guest {
-                        let rate_secret = secrets
-                            .cloud_reader_guest_rate_secret
-                            .as_ref()
-                            .ok_or_else(|| {
-                                io::Error::new(
-                                    io::ErrorKind::InvalidInput,
-                                    "cloud_reader_guest rate subject secret was not resolved",
-                                )
-                            })?;
-                        let guest_rate = SqlitePublicRateLimitAuthority::open(
-                            &config.sqlite.path,
-                            config.sqlite.pool_max,
-                            busy_timeout,
-                            guest_config.public_rate_limit(),
-                            rate_secret.expose(),
-                        )
-                        .await?;
-                        let guest_admission = SqliteUploadAdmissionAuthority::open(
-                            &config.sqlite.path,
-                            config.sqlite.pool_max,
-                            busy_timeout,
-                            guest_config.upload_admission(),
-                        )
-                        .await?;
-                        let guest_sessions = SqliteGuestReaderSessionStore::open(
-                            &config.sqlite.path,
-                            config.sqlite.pool_max,
-                            busy_timeout,
-                        )
-                        .await?;
-                        let guest_scan_config = config.source_validation.materialize();
-                        let guest_scanner =
-                            ProductionSourceSecurityScanner::new(guest_scan_config.clone())?;
-                        let guest_scene_worker = IsolatedGuestSceneProducer::new_with_fonts(
-                            guest_scan_config,
-                            &guest_config.font_resources,
-                        )?;
-                        let guest_state = GuestReaderHttpState::new(
-                            guest_rate,
-                            guest_admission,
-                            guest_sessions,
-                            blob_store.service().clone(),
-                            guest_scanner,
-                            guest_scene_worker,
-                            GuestReaderHttpConfig {
-                                session_ttl: Duration::from_secs(guest_config.session_ttl_seconds),
-                                max_file_bytes: guest_config.max_file_bytes,
-                            },
-                        )?;
-                        let guest_cleanup_state = guest_state.clone();
-                        tokio::spawn(async move {
-                            let mut interval = tokio::time::interval(Duration::from_secs(30));
-                            interval
-                                .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                            loop {
-                                interval.tick().await;
-                                if let Err(error) =
-                                    guest_cleanup_state.cleanup_expired_sessions().await
-                                {
-                                    eprintln!("chaptera_guest_cleanup {error}");
-                                }
-                            }
-                        });
-                        let guest_router = guest_reader_http::router(guest_state);
+                    if let Some(guest_router) =
+                        build_guest_reader_router(&config, &secrets, &blob_store).await?
+                    {
                         product_router = Some(match product_router {
                             Some(router) => router.merge(guest_router),
                             None => guest_router,
@@ -368,6 +380,30 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                         Some(auth_http),
                         !matches!(config.environment, EnvironmentMode::Prod),
                         product_router,
+                    )
+                    .await?;
+                } else if config.cloud_reader_guest.is_some() {
+                    let blob_store = BlobStoreRuntime::open(&config).await?;
+                    let product_router =
+                        build_guest_reader_router(&config, &secrets, &blob_store)
+                            .await?
+                            .ok_or_else(|| {
+                                io::Error::new(
+                                    io::ErrorKind::InvalidInput,
+                                    "cloud_reader_guest configuration disappeared during startup",
+                                )
+                            })?;
+                    drop(secrets);
+
+                    let assembled = ports_with_guest_reader(revision_stream, blob_store);
+                    let state = AppState::new_guest_reader(assembled.ports);
+                    serve::run_with_auth_local_product(
+                        config.runtime_config(),
+                        edge_policy,
+                        state,
+                        None,
+                        !matches!(config.environment, EnvironmentMode::Prod),
+                        Some(product_router),
                     )
                     .await?;
                 } else {
