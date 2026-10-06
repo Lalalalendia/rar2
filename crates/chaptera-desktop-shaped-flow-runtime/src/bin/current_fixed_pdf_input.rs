@@ -1,5 +1,5 @@
 use chaptera_desktop_shaped_flow_runtime::{
-    ExplicitDesktopFontResourceV1, build_current_fixed_pdf_resource_input_v1,
+    ExplicitDesktopFontResourceV1, build_current_fixed_pdf_resource_input_for_pages_v1,
 };
 use pub_editor::{EditOperation, EditorProject, Sha256Digest, open_mature_0x2c_editor};
 use pub_model::{EMU_PER_POINT, LengthEmu, NodeId, StoryId};
@@ -323,10 +323,14 @@ fn run(
         bytes: &font_bytes,
     };
 
+    let viewer = pub_viewer::open_mature_0x2c(&source)
+        .map_err(|error| format!("qualify customer-visible fixed-PDF pages: {error}"))?;
+    let customer_page_ids = viewer.pages.iter().map(|page| page.id).collect::<Vec<_>>();
     let binding = targets.binding(&source_hex, &project);
-    let input = build_current_fixed_pdf_resource_input_v1(
+    let input = build_current_fixed_pdf_resource_input_for_pages_v1(
         &editor,
         targets.primary_story_id(),
+        &customer_page_ids,
         binding,
         &font,
     )
