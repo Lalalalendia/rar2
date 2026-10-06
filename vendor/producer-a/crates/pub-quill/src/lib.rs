@@ -9,10 +9,10 @@ mod writer;
 
 pub use mcld::{
     QuillMcldChild, QuillMcldChunk, QuillMcldConsensusU32, QuillMcldField, QuillMcldFieldValue,
-    QuillMcldReadError, QuillMcldRecord, QuillMcldTableMetrics,
-    QuillMcldTextFrameVerticalAlignment, QuillMcldUniformTextInset, QuillMcldVerticalAlignment,
+    QuillMcldReadError, QuillMcldRecord, QuillMcldTableMetrics, QuillMcldTextFrameVerticalAlignment,
+    QuillMcldTextInsets, QuillMcldUniformTextInset, QuillMcldVerticalAlignment,
     bounded_mcld_table_metrics, bounded_mcld_text_frame_vertical_alignment,
-    bounded_mcld_uniform_text_inset, parse_bounded_mcld,
+    bounded_mcld_text_insets, bounded_mcld_uniform_text_inset, parse_bounded_mcld,
 };
 pub use story::{
     QUILL_DESCRIPTOR_LIST_END, QUILL_DESCRIPTOR_LIST_ROOT_OFFSET, QUILL_DESCRIPTOR_PRESENCE_MARKER,
