@@ -62,7 +62,7 @@ echo "=== chaptera-reader ==="
 systemctl --no-pager --full status chaptera-reader.service || true
 echo
 echo "=== loopback health ==="
-curl -fsS http://127.0.0.1:8080/ >/dev/null
-echo "Reader process is serving on 127.0.0.1:8080"
+curl -fsS http://127.0.0.1:8080/live >/dev/null
+echo "Reader process is healthy on 127.0.0.1:8080"
 echo
 echo "Next: issue TLS with certbot for reader.chaptera.online after DNS points here."
