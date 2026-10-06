@@ -1,4 +1,5 @@
 use crate::{EditOperation, ImportedParagraphAlignmentValueV1};
+use pub_export::ParagraphScopedAlignmentValueV1;
 use pub_model::{ParagraphId, StoryId, TextRange};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -19,6 +20,34 @@ pub enum EffectiveParagraphAlignmentValueV1 {
     Right,
     InterWord,
     Distribute,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParagraphScopedAlignmentProjectionErrorV1 {
+    InterWord,
+    Distribute,
+    Unknown,
+}
+
+pub(crate) fn paragraph_scoped_alignment_value_v1(
+    effective: Option<EffectiveParagraphAlignmentValueV1>,
+) -> Result<ParagraphScopedAlignmentValueV1, ParagraphScopedAlignmentProjectionErrorV1> {
+    match effective {
+        Some(EffectiveParagraphAlignmentValueV1::Left) => Ok(ParagraphScopedAlignmentValueV1::Left),
+        Some(EffectiveParagraphAlignmentValueV1::Center) => {
+            Ok(ParagraphScopedAlignmentValueV1::Center)
+        }
+        Some(EffectiveParagraphAlignmentValueV1::Right) => {
+            Ok(ParagraphScopedAlignmentValueV1::Right)
+        }
+        Some(EffectiveParagraphAlignmentValueV1::InterWord) => {
+            Err(ParagraphScopedAlignmentProjectionErrorV1::InterWord)
+        }
+        Some(EffectiveParagraphAlignmentValueV1::Distribute) => {
+            Err(ParagraphScopedAlignmentProjectionErrorV1::Distribute)
+        }
+        None => Err(ParagraphScopedAlignmentProjectionErrorV1::Unknown),
+    }
 }
 
 impl From<AuthoredParagraphAlignmentValueV1> for EffectiveParagraphAlignmentValueV1 {
@@ -404,5 +433,46 @@ mod tests {
                 found: Some(AuthoredParagraphAlignmentValueV1::Center),
             }) if paragraph_id == first
         ));
+    }
+}
+
+#[cfg(test)]
+mod paragraph_scoped_projection_tests {
+    use super::*;
+
+    #[test]
+    fn maps_authored_effective_values_without_writer_policy_in_lib_rs() {
+        assert_eq!(
+            paragraph_scoped_alignment_value_v1(Some(EffectiveParagraphAlignmentValueV1::Left)),
+            Ok(ParagraphScopedAlignmentValueV1::Left)
+        );
+        assert_eq!(
+            paragraph_scoped_alignment_value_v1(Some(EffectiveParagraphAlignmentValueV1::Center)),
+            Ok(ParagraphScopedAlignmentValueV1::Center)
+        );
+        assert_eq!(
+            paragraph_scoped_alignment_value_v1(Some(EffectiveParagraphAlignmentValueV1::Right)),
+            Ok(ParagraphScopedAlignmentValueV1::Right)
+        );
+    }
+
+    #[test]
+    fn keeps_imported_justify_families_and_unknown_outside_scoped_writer() {
+        assert_eq!(
+            paragraph_scoped_alignment_value_v1(Some(
+                EffectiveParagraphAlignmentValueV1::InterWord
+            )),
+            Err(ParagraphScopedAlignmentProjectionErrorV1::InterWord)
+        );
+        assert_eq!(
+            paragraph_scoped_alignment_value_v1(Some(
+                EffectiveParagraphAlignmentValueV1::Distribute
+            )),
+            Err(ParagraphScopedAlignmentProjectionErrorV1::Distribute)
+        );
+        assert_eq!(
+            paragraph_scoped_alignment_value_v1(None),
+            Err(ParagraphScopedAlignmentProjectionErrorV1::Unknown)
+        );
     }
 }

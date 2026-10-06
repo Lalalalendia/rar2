@@ -117,13 +117,13 @@ use pub_export::{
     CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
     FormatRepresentability, FullStoryParagraphAlignmentV1, FullStoryTypographyV1, LossItem,
     LossKind, LossSeverity, ParagraphAlignmentV1, ParagraphScopedAlignmentV1,
-    ParagraphScopedAlignmentValueV1, PersistenceCompatibilityAssessment,
-    PersistenceCompatibilityError, PersistenceRequirement, PersistenceRequirements,
-    PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE,
-    STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE, ScopedCapabilityError,
-    ScopedCapabilityOverride, SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile,
-    WriterCapabilityManifest, assess_persistence_compatibility, build_export_report,
-    plan_export_with_scoped_capabilities, render_human_summary,
+    PersistenceCompatibilityAssessment, PersistenceCompatibilityError, PersistenceRequirement,
+    PersistenceRequirements, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
+    STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE,
+    ScopedCapabilityError, ScopedCapabilityOverride, SemanticFeatureRequest,
+    TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
+    assess_persistence_compatibility, build_export_report, plan_export_with_scoped_capabilities,
+    render_human_summary,
 };
 use pub_idml::{
     IDML_ADAPTER_VERSION_V0_1, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IMAGE_BYTES_FEATURE,
@@ -4846,38 +4846,39 @@ impl EditorSession {
             let effective = self
                 .effective_paragraph_alignment_v1(paragraph.paragraph_id)
                 .map_err(|error| error.to_string())?;
-            let alignment = match effective.effective {
-                Some(EffectiveParagraphAlignmentValueV1::Left) => {
-                    ParagraphScopedAlignmentValueV1::Left
-                }
-                Some(EffectiveParagraphAlignmentValueV1::Center) => {
-                    ParagraphScopedAlignmentValueV1::Center
-                }
-                Some(EffectiveParagraphAlignmentValueV1::Right) => {
-                    ParagraphScopedAlignmentValueV1::Right
-                }
-                Some(EffectiveParagraphAlignmentValueV1::InterWord) => {
-                    return Err(format!(
-                        "Story {} Paragraph {} has effective InterWord alignment, which is outside the paragraph-scoped editable writer",
-                        paragraph.story_id.as_canonical(),
-                        paragraph.paragraph_id.as_canonical()
-                    ));
-                }
-                Some(EffectiveParagraphAlignmentValueV1::Distribute) => {
-                    return Err(format!(
-                        "Story {} Paragraph {} has effective Distribute alignment, which is outside the paragraph-scoped editable writer",
-                        paragraph.story_id.as_canonical(),
-                        paragraph.paragraph_id.as_canonical()
-                    ));
-                }
-                None => {
-                    return Err(format!(
-                        "Story {} Paragraph {} has unknown effective alignment, so scoped editable export cannot cover the complete canonical Story",
-                        paragraph.story_id.as_canonical(),
-                        paragraph.paragraph_id.as_canonical()
-                    ));
-                }
-            };
+            let alignment =
+                match authored_paragraph_alignment_v1::paragraph_scoped_alignment_value_v1(
+                    effective.effective,
+                ) {
+                    Ok(alignment) => alignment,
+                    Err(
+                        authored_paragraph_alignment_v1::ParagraphScopedAlignmentProjectionErrorV1::InterWord,
+                    ) => {
+                        return Err(format!(
+                            "Story {} Paragraph {} has effective InterWord alignment, which is outside the paragraph-scoped editable writer",
+                            paragraph.story_id.as_canonical(),
+                            paragraph.paragraph_id.as_canonical()
+                        ));
+                    }
+                    Err(
+                        authored_paragraph_alignment_v1::ParagraphScopedAlignmentProjectionErrorV1::Distribute,
+                    ) => {
+                        return Err(format!(
+                            "Story {} Paragraph {} has effective Distribute alignment, which is outside the paragraph-scoped editable writer",
+                            paragraph.story_id.as_canonical(),
+                            paragraph.paragraph_id.as_canonical()
+                        ));
+                    }
+                    Err(
+                        authored_paragraph_alignment_v1::ParagraphScopedAlignmentProjectionErrorV1::Unknown,
+                    ) => {
+                        return Err(format!(
+                            "Story {} Paragraph {} has unknown effective alignment, so scoped editable export cannot cover the complete canonical Story",
+                            paragraph.story_id.as_canonical(),
+                            paragraph.paragraph_id.as_canonical()
+                        ));
+                    }
+                };
 
             result.push(ParagraphScopedAlignmentV1 {
                 story_id: paragraph.story_id,
