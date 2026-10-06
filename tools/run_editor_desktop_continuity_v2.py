@@ -300,7 +300,10 @@ def validate_observation(
     move_id = move["origin_node_id"]
     resize_id = resize["origin_node_id"]
     image_id = image["origin_node_id"]
-    if expected_wrap_mutation_scope == "text_frame_non_intersecting":
+    if expected_wrap_mutation_scope in {
+        "text_frame_non_intersecting",
+        "authority_blocked_not_asserted",
+    }:
         if move_id == resize_id:
             raise ContinuityV2Error(
                 "newsletter V2 requires MoveNode on a distinct exact source image"
@@ -651,6 +654,7 @@ def run_continuity_v2(
     rar_commit: str | None = None,
     require_explicit_crop: bool = False,
     require_wrap_irrelevant_mutations: bool = False,
+    newsletter_two_object_mode: bool = False,
 ) -> dict[str, Any]:
     fixture = bind_fixture(fixture, expected_hash=expected_hash, expected_len=expected_len)
     replacement, replacement_bytes, replacement_mime, replacement_sha256 = bind_replacement(
@@ -689,6 +693,9 @@ def run_continuity_v2(
     )
     env["CHAPTERA_CONTINUITY_REQUIRE_WRAP_IRRELEVANT"] = (
         "1" if require_wrap_irrelevant_mutations else "0"
+    )
+    env["CHAPTERA_CONTINUITY_NEWSLETTER_TWO_OBJECT"] = (
+        "1" if newsletter_two_object_mode else "0"
     )
 
     completed = subprocess.run(
@@ -843,6 +850,7 @@ def main() -> int:
     parser.add_argument("--expected-source-bytes", type=int, default=SAMPLE_SOURCE_BYTE_LEN)
     parser.add_argument("--require-explicit-crop", action="store_true")
     parser.add_argument("--require-wrap-irrelevant-mutations", action="store_true")
+    parser.add_argument("--newsletter-two-object-mode", action="store_true")
     parser.add_argument("desktop_command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
@@ -862,6 +870,7 @@ def main() -> int:
             expected_len=args.expected_source_bytes,
             require_explicit_crop=args.require_explicit_crop,
             require_wrap_irrelevant_mutations=args.require_wrap_irrelevant_mutations,
+            newsletter_two_object_mode=args.newsletter_two_object_mode,
         )
     except (ContinuityV2Error, OSError) as error:
         print(str(error), file=sys.stderr)
