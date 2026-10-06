@@ -49,6 +49,7 @@ pub use table_layout::{
 pub use text_flow::{
     BoundedTextFlowEnvironment, BoundedTextFlowScene, BoundedTextMetrics, ResolvedTextFragment,
     TextFragmentOriginMapping, resolve_bounded_text_flow,
+    resolve_bounded_text_flow_with_paragraph_flow,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
