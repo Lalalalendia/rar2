@@ -890,6 +890,14 @@ mod tests {
         record.extend_from_slice(&pub_escher::OFFICE_ART_BLIP_PNG.to_le_bytes());
         record.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         record.extend_from_slice(&payload);
+
+        // Keep EscherDelay on the regular FAT path so the damaged-CFB
+        // recovery arm exercises the exact-SID regular-stream substrate.
+        record.extend_from_slice(&0x0000u16.to_le_bytes());
+        record.extend_from_slice(&0xf122u16.to_le_bytes());
+        record.extend_from_slice(&4096u32.to_le_bytes());
+        record.extend_from_slice(&vec![0u8; 4096]);
+
         compound
             .create_stream(ESCHER_DELAY_STREAM)
             .expect("Escher delay stream")
