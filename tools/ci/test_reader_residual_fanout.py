@@ -129,17 +129,21 @@ def main() -> int:
         violations.append(
             'reader-pr-ci.yml: Reader Windows shared-core smoke lost classifier ownership'
         )
-    if 'visual_oracle' in reader_smoke_section:
+    if "visual_oracle != 'true'" not in reader_smoke_section:
         violations.append(
-            'reader-pr-ci.yml: shared-core smoke must stay parallel to visual oracle'
+            'reader-pr-ci.yml: standalone shared-core smoke must be suppressed when visual oracle owns the combined Windows job'
         )
 
     visual_section = reader_ci.split('\n  visual-oracle:\n', 1)[1].split(
         '\n  cloud-reference:\n', 1
     )[0]
-    if 'run_windows_shared_core_smoke: false' not in visual_section:
+    if (
+        "run_windows_shared_core_smoke: "
+        "${{ needs.classify.outputs.reader_windows_smoke == 'true' }}"
+        not in visual_section
+    ):
         violations.append(
-            'reader-pr-ci.yml: visual oracle must not serialize Reader shared-core smoke'
+            'reader-pr-ci.yml: visual oracle must consume the shared-core smoke classifier bit'
         )
 
     smoke_workflow = Path(
@@ -154,6 +158,22 @@ def main() -> int:
         if invariant not in smoke_workflow:
             violations.append(
                 'chaptera-reader-windows-smoke.yml: missing parallel evidence invariant '
+                f'{invariant}'
+            )
+
+    visual_workflow = Path(
+        '.github/workflows/carlton-reader-visual-oracle.yml'
+    ).read_text(encoding='utf-8')
+    for invariant in (
+        'run_windows_shared_core_smoke:',
+        'chaptera.reader-windows-shared-core-smoke.v1',
+        'chaptera-reader-windows-shared-core-smoke',
+        'mature_officeart_wmf_exact_product_tests',
+        'Run bounded Reader product and real-PUB smoke',
+    ):
+        if invariant not in visual_workflow:
+            violations.append(
+                'carlton-reader-visual-oracle.yml: missing combined shared-core evidence invariant '
                 f'{invariant}'
             )
 

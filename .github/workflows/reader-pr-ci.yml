@@ -208,6 +208,19 @@ jobs:
                   "reader-pr-ci cancellation guard: always() fanout must be cancellation-responsive:\n"
                   + "\n".join(unsafe)
               )
+
+          required_composition_markers = [
+              "needs.classify.outputs.reader_windows_smoke == 'true' && needs.classify.outputs.visual_oracle != 'true'",
+              "run_windows_shared_core_smoke: $" + "{{ needs.classify.outputs.reader_windows_smoke == 'true' }}",
+          ]
+          missing_composition = [
+              marker for marker in required_composition_markers if marker not in workflow
+          ]
+          if missing_composition:
+              raise SystemExit(
+                  "reader-pr-ci composition guard: visual/shared-core smoke composition missing: "
+                  + ", ".join(missing_composition)
+              )
           print(
               "reader-pr-ci cancellation guard: "
               f"{len(fanout_conditions)} selective fanout condition(s) include !cancelled()"
@@ -283,7 +296,7 @@ jobs:
   reader-windows-smoke:
     name: Reader Windows shared-core smoke
     needs: [classify, tier-a]
-    if: ${{ !cancelled() && always() && needs.classify.outputs.reader_windows_smoke == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ !cancelled() && always() && needs.classify.outputs.reader_windows_smoke == 'true' && needs.classify.outputs.visual_oracle != 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/chaptera-reader-windows-smoke.yml
 
   reader-windows:
@@ -305,7 +318,7 @@ jobs:
     uses: ./.github/workflows/carlton-reader-visual-oracle.yml
     with:
       run_typography_golden: ${{ needs.classify.outputs.typography_golden == 'true' }}
-      run_windows_shared_core_smoke: false
+      run_windows_shared_core_smoke: ${{ needs.classify.outputs.reader_windows_smoke == 'true' }}
 
   cloud-reference:
     name: Cloud exact PUB-PDF reference
