@@ -421,6 +421,24 @@ jobs:
               raise SystemExit("cropped-image residual drift")
           if mapping["table_node_count"] != 1:
               raise SystemExit("table residual drift")
+          expected_table_text_authority = {
+              "table_nonempty_cell_text_count": 14,
+              "table_cell_story_range_count": 14,
+              "table_cell_typography_present_count": 14,
+              "table_cell_typography_complete_count": 14,
+              "table_cell_uniform_size_count": 14,
+              "table_cell_resolved_color_count": 14,
+              "table_cell_inset_bounds_valid_count": 14,
+              "table_uniform_cell_text_inset_count": 1,
+              "table_uniform_vertical_alignment_count": 1,
+              "table_cell_paragraph_alignment_valid_count": 14,
+          }
+          for key, expected in expected_table_text_authority.items():
+              if mapping.get(key) != expected:
+                  raise SystemExit(
+                      f"Carlton TABLE text authority drift for {key}: "
+                      f"{mapping.get(key)!r} != {expected!r}"
+                  )
           if mapping["table_cell_paint_state_count"] != 17:
               raise SystemExit(f"TABLE known cell-paint state drift: {mapping['table_cell_paint_state_count']!r}")
           if mapping["derived_table_border_node_count"] != 20:
