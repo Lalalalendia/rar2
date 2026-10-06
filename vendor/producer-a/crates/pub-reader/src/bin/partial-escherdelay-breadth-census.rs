@@ -67,6 +67,7 @@ struct CensusRow {
     truncation_reason: Option<String>,
     terminal_gap: Option<DelayedBlipPrefixGap>,
     scanned_record_count: u32,
+    typed_blip_record_count: usize,
     strict_validated_resource_count: usize,
     strict_validated_raster_count: usize,
     strict_validated_metafile_count: usize,
@@ -89,6 +90,8 @@ struct CensusSummary {
     located_source_count: usize,
     missing_source_count: usize,
     image_salvage_positive_files: usize,
+    total_scanned_records: u64,
+    total_typed_blip_records: usize,
     total_reader_admissible_images: usize,
     total_strict_validated_resources: usize,
     total_strict_validated_rasters: usize,
@@ -218,6 +221,7 @@ fn blank_row(source_sha256: String, source_copy_count: usize) -> CensusRow {
         truncation_reason: None,
         terminal_gap: None,
         scanned_record_count: 0,
+        typed_blip_record_count: 0,
         strict_validated_resource_count: 0,
         strict_validated_raster_count: 0,
         strict_validated_metafile_count: 0,
@@ -416,6 +420,8 @@ fn main() -> Result<()> {
                 .or_default() += 1;
         }
         row.rejected_complete_blip_count = inventory.rejected_complete_blips.len();
+        row.typed_blip_record_count =
+            row.strict_validated_resource_count + row.rejected_complete_blip_count;
         for rejected in &inventory.rejected_complete_blips {
             *row.rejected_disposition_counts
                 .entry(disposition_name(rejected.disposition).to_owned())
@@ -471,6 +477,8 @@ fn main() -> Result<()> {
     let mut rejected_kind_counts = BTreeMap::<String, usize>::new();
     let mut terminal_gap_counts = BTreeMap::<String, usize>::new();
     let mut outcome_counts = BTreeMap::<String, usize>::new();
+    let mut total_scanned_records = 0u64;
+    let mut total_typed_blip_records = 0usize;
     let mut total_reader_admissible_images = 0usize;
     let mut total_strict_validated_resources = 0usize;
     let mut total_strict_validated_rasters = 0usize;
@@ -497,6 +505,8 @@ fn main() -> Result<()> {
         *outcome_counts
             .entry(outcome_name(&row.outcome).to_owned())
             .or_default() += 1;
+        total_scanned_records += u64::from(row.scanned_record_count);
+        total_typed_blip_records += row.typed_blip_record_count;
         total_reader_admissible_images += row.reader_admissible_image_count;
         total_strict_validated_resources += row.strict_validated_resource_count;
         total_strict_validated_rasters += row.strict_validated_raster_count;
@@ -521,6 +531,8 @@ fn main() -> Result<()> {
         located_source_count,
         missing_source_count,
         image_salvage_positive_files,
+        total_scanned_records,
+        total_typed_blip_records,
         total_reader_admissible_images,
         total_strict_validated_resources,
         total_strict_validated_rasters,
