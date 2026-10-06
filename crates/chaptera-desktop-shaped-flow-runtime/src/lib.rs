@@ -5,8 +5,9 @@ use pub_editor::{
     FormatPropertyV1, FormatValueV1, ImportedParagraphFlowConstraintV1,
 };
 use pub_layout::{
-    BoundedLayoutEnvironment, BoundedParagraphFlowConstraint, BoundedParagraphFlowRun,
-    BoundedShapedFlowRuntime, BoundedShapedFlowScene, BoundedShapingRuntime,
+    BoundedAuthoringSlice, BoundedLayoutEnvironment, BoundedParagraphFlowConstraint,
+    BoundedParagraphFlowRun, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
+    BoundedShapingRuntime,
     font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow_with_paragraph_flow,
 };
 use pub_line_placement::{
@@ -119,6 +120,64 @@ fn qualified_page_set_error_v1(page_ids: &[PageId]) -> Result<(), DesktopShapedF
         ));
     }
     Ok(())
+}
+
+fn bounded_authoring_slice_for_pages_v1(
+    editor: &EditorSession,
+    page_ids: &[PageId],
+) -> Result<BoundedAuthoringSlice, DesktopShapedFlowRuntimeError> {
+    qualified_page_set_error_v1(page_ids)?;
+    let mut authoring = pub_viewer::bounded_authoring_slice_from_resolved(editor.graph()).map_err(
+        |error| {
+            DesktopShapedFlowRuntimeError::new(
+                "authoring_projection_failed",
+                format!("resolved graph could not enter bounded layout projection: {error}"),
+            )
+        },
+    )?;
+
+    let requested_pages = page_ids.iter().copied().collect::<BTreeSet<_>>();
+    let available_pages = authoring
+        .pages
+        .iter()
+        .map(|page| page.id)
+        .collect::<BTreeSet<_>>();
+    if let Some(page_id) = page_ids
+        .iter()
+        .find(|page_id| !available_pages.contains(page_id))
+    {
+        return Err(DesktopShapedFlowRuntimeError::new(
+            "authoring_projection_failed",
+            format!("layout projection missing document page {page_id:?}"),
+        ));
+    }
+
+    authoring
+        .pages
+        .retain(|page| requested_pages.contains(&page.id));
+    let requested_page_origins = page_ids
+        .iter()
+        .map(|page_id| page_id.into_canonical())
+        .collect::<BTreeSet<_>>();
+    authoring
+        .node_geometry
+        .retain(|node| requested_page_origins.contains(&node.parent_origin));
+    let requested_nodes = authoring
+        .node_geometry
+        .iter()
+        .map(|node| node.node_id)
+        .collect::<BTreeSet<_>>();
+    authoring
+        .story_frames
+        .retain(|frame| requested_nodes.contains(&frame.frame_id));
+    authoring
+        .tables
+        .retain(|table| requested_nodes.contains(&table.node_id));
+    authoring
+        .guides
+        .retain(|guide| requested_pages.contains(&guide.page_id));
+
+    Ok(authoring)
 }
 
 pub fn validate_explicit_font_resource_v1(
@@ -552,17 +611,16 @@ fn build_current_story_layout_with_pages_v1(
     let current_boolean_typography = current_story_boolean_typography_v1(editor, story_id)?;
     let current_paragraph_flow = current_story_paragraph_flow_v1(editor, story_id)?;
     let authoring = match page_ids {
-        Some(page_ids) => {
-            pub_viewer::bounded_authoring_slice_from_resolved_pages(editor.graph(), page_ids)
-        }
-        None => pub_viewer::bounded_authoring_slice_from_resolved(editor.graph()),
-    }
-    .map_err(|error| {
-        DesktopShapedFlowRuntimeError::new(
-            "authoring_projection_failed",
-            format!("resolved graph could not enter bounded layout projection: {error}"),
-        )
-    })?;
+        Some(page_ids) => bounded_authoring_slice_for_pages_v1(editor, page_ids)?,
+        None => pub_viewer::bounded_authoring_slice_from_resolved(editor.graph()).map_err(
+            |error| {
+                DesktopShapedFlowRuntimeError::new(
+                    "authoring_projection_failed",
+                    format!("resolved graph could not enter bounded layout projection: {error}"),
+                )
+            },
+        )?,
+    };
     let projection = project_bounded(authoring);
 
     let runtime = BoundedShapedFlowRuntime {
