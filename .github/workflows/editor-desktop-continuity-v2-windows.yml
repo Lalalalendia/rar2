@@ -13,7 +13,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Reusable workflows inherit the caller's github.workflow name. Use a static
+  # child prefix so cancel-in-progress cannot cancel the parent admission DAG.
+  group: editor-desktop-continuity-v2-windows-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

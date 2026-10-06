@@ -106,9 +106,15 @@ def main():
             "reason=parent_artifact_authoritative",
             "inputs.editor_binary_artifact_name != '' || needs.classify.result != 'success'",
             "Parent-supplied exact artifact means the parent already admitted this consumer.",
+            "group: editor-desktop-continuity-v2-windows-${{ github.event.pull_request.number || github.ref }}",
+            "Reusable workflows inherit the caller's github.workflow name.",
         ),
         "continuity-consumer",
     )
+    if "group: ${{ github.workflow }}-" in continuity:
+        raise SystemExit(
+            "continuity-consumer: reusable child must not share caller github.workflow concurrency prefix"
+        )
 
     fixed = Path(
         ".github/workflows/editor-fixed-pdf-current-revision.yml"
