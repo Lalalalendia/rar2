@@ -9052,12 +9052,12 @@ mod image_crop_authoring_tests {
         assert_eq!(session.image_crop_for(node_id), Some(after));
 
         let project = session.project();
-        assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_14);
+        assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_19);
         let (replay_graph, replay_node_id, replay_resource_id) = crop_graph();
         assert_eq!(replay_node_id, node_id);
         let mut replay = EditorSession::new(replay_graph).expect("replay session");
         install_source_png(&mut replay, replay_node_id, replay_resource_id);
-        replay.apply_project(&project).expect("v0.14 crop replay");
+        replay.apply_project(&project).expect("v0.19 crop replay");
         assert_eq!(replay.image_crop_for(node_id), Some(after));
         assert_eq!(replay.graph.nodes[&node_id].header.bounds, resized);
         assert_eq!(replay.project(), project);
