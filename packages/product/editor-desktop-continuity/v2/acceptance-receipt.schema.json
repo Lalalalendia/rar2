@@ -477,6 +477,12 @@
         },
         "replacement_asset_sha_emitted": {
           "const": false
+        },
+        "wrap_mutation_scope": {
+          "enum": [
+            "not_asserted",
+            "text_frame_non_intersecting"
+          ]
         }
       }
     }
