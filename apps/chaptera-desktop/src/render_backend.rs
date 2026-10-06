@@ -130,6 +130,116 @@ fn image_paint_geometry(
     Some((image_rect, uv_rect))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CardinalTextPaintTransform {
+    a: f32,
+    b: f32,
+    c: f32,
+    d: f32,
+    tx_emu: f32,
+    ty_emu: f32,
+    page_origin: egui::Pos2,
+    scene_scale: f32,
+    angle_radians: f32,
+}
+
+fn cardinal_rotation_radians(a: f32, b: f32, c: f32, d: f32) -> Option<f32> {
+    const EPSILON: f32 = 0.000_1;
+    let near = |actual: f32, expected: f32| (actual - expected).abs() <= EPSILON;
+    if near(a, 0.0) && near(b, 1.0) && near(c, -1.0) && near(d, 0.0) {
+        Some(std::f32::consts::FRAC_PI_2)
+    } else if near(a, -1.0) && near(b, 0.0) && near(c, 0.0) && near(d, -1.0) {
+        Some(std::f32::consts::PI)
+    } else if near(a, 0.0) && near(b, -1.0) && near(c, 1.0) && near(d, 0.0) {
+        Some(-std::f32::consts::FRAC_PI_2)
+    } else {
+        None
+    }
+}
+
+fn cardinal_text_paint_transform(
+    node: &NodeRenderPlanV1,
+    node_rect: egui::Rect,
+    scene_scale: f32,
+) -> Option<CardinalTextPaintTransform> {
+    if !scene_scale.is_finite() || scene_scale <= 0.0 {
+        return None;
+    }
+    let a = node.transform.a.as_str().parse::<f32>().ok()?;
+    let b = node.transform.b.as_str().parse::<f32>().ok()?;
+    let c = node.transform.c.as_str().parse::<f32>().ok()?;
+    let d = node.transform.d.as_str().parse::<f32>().ok()?;
+    let angle_radians = cardinal_rotation_radians(a, b, c, d)?;
+    let tx_emu = node.transform.tx.get() as f32;
+    let ty_emu = node.transform.ty.get() as f32;
+    let page_origin = egui::pos2(
+        node_rect.left() - node.bounds.x.get() as f32 * scene_scale,
+        node_rect.top() - node.bounds.y.get() as f32 * scene_scale,
+    );
+    Some(CardinalTextPaintTransform {
+        a,
+        b,
+        c,
+        d,
+        tx_emu,
+        ty_emu,
+        page_origin,
+        scene_scale,
+        angle_radians,
+    })
+}
+
+impl CardinalTextPaintTransform {
+    fn map_point(self, point: egui::Pos2) -> egui::Pos2 {
+        let x_emu = (point.x - self.page_origin.x) / self.scene_scale;
+        let y_emu = (point.y - self.page_origin.y) / self.scene_scale;
+        egui::pos2(
+            self.page_origin.x
+                + (self.a * x_emu + self.c * y_emu + self.tx_emu) * self.scene_scale,
+            self.page_origin.y
+                + (self.b * x_emu + self.d * y_emu + self.ty_emu) * self.scene_scale,
+        )
+    }
+
+    fn map_rect_bbox(self, rect: egui::Rect) -> egui::Rect {
+        let corners = [
+            rect.left_top(),
+            rect.right_top(),
+            rect.right_bottom(),
+            rect.left_bottom(),
+        ]
+        .map(|point| self.map_point(point));
+        let min_x = corners.iter().map(|point| point.x).fold(f32::INFINITY, f32::min);
+        let min_y = corners.iter().map(|point| point.y).fold(f32::INFINITY, f32::min);
+        let max_x = corners
+            .iter()
+            .map(|point| point.x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let max_y = corners
+            .iter()
+            .map(|point| point.y)
+            .fold(f32::NEG_INFINITY, f32::max);
+        egui::Rect::from_min_max(egui::pos2(min_x, min_y), egui::pos2(max_x, max_y))
+    }
+}
+
+fn paint_text_galley(
+    painter: &egui::Painter,
+    position: egui::Pos2,
+    galley: std::sync::Arc<egui::Galley>,
+    color: egui::Color32,
+    transform: Option<CardinalTextPaintTransform>,
+) {
+    if let Some(transform) = transform {
+        painter.add(
+            egui::epaint::TextShape::new(transform.map_point(position), galley, color)
+                .with_angle(transform.angle_radians),
+        );
+    } else {
+        painter.galley(position, galley, color);
+    }
+}
+
 /// Paints document-owned layers that occur before shell/debug overlays.
 ///
 /// The shell resolves temporary authoring preview state (for example a
@@ -221,7 +331,11 @@ pub fn paint_document_node_foreground(
     if !text_clip_rect.is_positive() {
         return NodePaintOutcome::default();
     }
-    let text_painter = painter.with_clip_rect(text_clip_rect);
+    let text_transform = cardinal_text_paint_transform(node, node_rect, scene_scale);
+    let paint_clip_rect = text_transform
+        .map(|transform| transform.map_rect_bbox(text_clip_rect))
+        .unwrap_or(text_clip_rect);
+    let text_painter = painter.with_clip_rect(paint_clip_rect);
 
     if let Some(layout) = fragment.layout.as_ref()
         && let RenderTextLayoutDispositionV1::SharedResolved {
@@ -240,6 +354,7 @@ pub fn paint_document_node_foreground(
                 line_height_emu: *line_height_emu,
                 scene_scale,
                 clip_rect: text_clip_rect,
+                transform: text_transform,
             },
         )
     {
@@ -295,7 +410,13 @@ pub fn paint_document_node_foreground(
         shared_resolved_line_count: 0,
         backend_fallback_reason,
     };
-    text_painter.galley(text_clip_rect.min, galley, text_color);
+    paint_text_galley(
+        &text_painter,
+        text_clip_rect.min,
+        galley,
+        text_color,
+        text_transform,
+    );
 
     NodePaintOutcome {
         text_clipped,
@@ -379,6 +500,7 @@ struct SharedResolvedPaintParams<'a> {
     line_height_emu: i64,
     scene_scale: f32,
     clip_rect: egui::Rect,
+    transform: Option<CardinalTextPaintTransform>,
 }
 
 fn shared_resolved_block_height_px(
@@ -404,6 +526,7 @@ fn paint_shared_resolved_text(
         line_height_emu,
         scene_scale,
         clip_rect,
+        transform,
     } = params;
     if font_size_emu <= 0 || line_height_emu <= 0 || !scene_scale.is_finite() || scene_scale <= 0.0
     {
@@ -446,7 +569,13 @@ fn paint_shared_resolved_text(
                 first_line_extent_px = Some(galley.size().y);
             }
             let x = clip_rect.left() + line.x_offset_emu as f32 * scene_scale;
-            painter.galley(egui::pos2(x, y), galley, text_color);
+            paint_text_galley(
+                painter,
+                egui::pos2(x, y),
+                galley,
+                text_color,
+                transform,
+            );
             executed_font_sizes_px.push(font_size_px);
             continue;
         }
@@ -476,7 +605,13 @@ fn paint_shared_resolved_text(
             let x = clip_rect.left() + relative_x_emu as f32 * scene_scale;
             max_width_px =
                 max_width_px.max((relative_x_emu as f32 * scene_scale).max(0.0) + galley.size().x);
-            painter.galley(egui::pos2(x, y), galley, text_color);
+            paint_text_galley(
+                painter,
+                egui::pos2(x, y),
+                galley,
+                text_color,
+                transform,
+            );
             executed_font_sizes_px.push(span_font_size_px);
         }
         if expected_index == 0 {
@@ -703,6 +838,51 @@ mod tests {
             (actual - expected).abs() < 0.001,
             "expected {expected}, got {actual}"
         );
+    }
+
+    #[test]
+    fn cardinal_rotation_classifier_accepts_only_pure_quarter_and_half_turns() {
+        assert_close(
+            cardinal_rotation_radians(0.0, 1.0, -1.0, 0.0).expect("90 degree"),
+            std::f32::consts::FRAC_PI_2,
+        );
+        assert_close(
+            cardinal_rotation_radians(-1.0, 0.0, 0.0, -1.0).expect("180 degree"),
+            std::f32::consts::PI,
+        );
+        assert_close(
+            cardinal_rotation_radians(0.0, -1.0, 1.0, 0.0).expect("-90 degree"),
+            -std::f32::consts::FRAC_PI_2,
+        );
+        assert!(cardinal_rotation_radians(1.0, 0.0, 0.0, 1.0).is_none());
+        assert!(cardinal_rotation_radians(0.5, 0.5, -0.5, 0.5).is_none());
+    }
+
+    #[test]
+    fn cardinal_text_transform_maps_point_and_clip_bbox() {
+        let transform = CardinalTextPaintTransform {
+            a: 0.0,
+            b: 1.0,
+            c: -1.0,
+            d: 0.0,
+            tx_emu: 30.0,
+            ty_emu: 40.0,
+            page_origin: egui::pos2(100.0, 50.0),
+            scene_scale: 0.5,
+            angle_radians: std::f32::consts::FRAC_PI_2,
+        };
+        let mapped = transform.map_point(egui::pos2(110.0, 60.0));
+        assert_close(mapped.x, 105.0);
+        assert_close(mapped.y, 80.0);
+
+        let bbox = transform.map_rect_bbox(egui::Rect::from_min_max(
+            egui::pos2(110.0, 60.0),
+            egui::pos2(130.0, 70.0),
+        ));
+        assert_close(bbox.left(), 100.0);
+        assert_close(bbox.top(), 80.0);
+        assert_close(bbox.right(), 105.0);
+        assert_close(bbox.bottom(), 90.0);
     }
 
     #[test]
