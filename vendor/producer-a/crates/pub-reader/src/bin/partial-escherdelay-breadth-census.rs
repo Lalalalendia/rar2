@@ -63,8 +63,8 @@ struct CensusRow {
     declared_len: Option<u64>,
     available_prefix_len: Option<u64>,
     prefix_sha256: Option<String>,
-    physical_status: Option<String>,
-    truncation_reason: Option<String>,
+    physical_status: Option<pub_cfb::RootRegularStreamPrefixStatus>,
+    truncation_reason: Option<pub_cfb::RootRegularStreamTruncationReason>,
     terminal_gap: Option<DelayedBlipPrefixGap>,
     scanned_record_count: u32,
     typed_blip_record_count: usize,
@@ -385,10 +385,8 @@ fn main() -> Result<()> {
         }
         row.available_prefix_len = Some(recovered.available_prefix_len);
         row.prefix_sha256 = Some(recovered.prefix_sha256.clone());
-        row.physical_status = Some(format!("{:?}", recovered.status).to_ascii_lowercase());
-        row.truncation_reason = recovered
-            .truncation_reason
-            .map(|value| format!("{value:?}").to_ascii_lowercase());
+        row.physical_status = Some(recovered.status);
+        row.truncation_reason = recovered.truncation_reason;
 
         let inventory = inspect_validated_delayed_blips_prefix(
             StreamPath(ESCHER_DELAY_STREAM.into()),
