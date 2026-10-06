@@ -265,6 +265,13 @@ struct MappingSummary {
     table_bounded_source_font_missing_or_mixed_count: usize,
     table_bounded_source_font_family_counts: BTreeMap<String, usize>,
     table_bounded_source_font_style_counts: BTreeMap<String, usize>,
+    table_bounded_source_family_profile_count: usize,
+    table_bounded_source_bold_profile_count: usize,
+    table_bounded_source_italic_profile_count: usize,
+    table_single_line_overflow_cell_count: usize,
+    table_single_line_overflow_source_family_profile_count: usize,
+    table_single_line_overflow_source_bold_profile_count: usize,
+    table_single_line_overflow_source_italic_profile_count: usize,
     derived_table_fill_node_count: usize,
     derived_table_border_node_count: usize,
     derived_table_paint_node_count: usize,
@@ -602,6 +609,37 @@ fn table_cell_single_line_width_fits_v1(
         .is_some_and(|shaped| shaped.total_x_advance.get() <= inner_width_emu)
 }
 
+fn table_cell_source_family_profile_v1(cell: &CurrentTableCell) -> Option<String> {
+    let first = cell.typography.first()?.source_font_name.trim();
+    if first.is_empty() {
+        return None;
+    }
+    let family = first.to_lowercase();
+    cell.typography
+        .iter()
+        .all(|run| {
+            let candidate = run.source_font_name.trim();
+            !candidate.is_empty() && candidate.to_lowercase() == family
+        })
+        .then_some(family)
+}
+
+fn table_cell_source_bold_profile_v1(cell: &CurrentTableCell) -> Option<bool> {
+    let bold = cell.typography.first()?.bold?;
+    cell.typography
+        .iter()
+        .all(|run| run.bold == Some(bold))
+        .then_some(bold)
+}
+
+fn table_cell_source_italic_profile_v1(cell: &CurrentTableCell) -> Option<bool> {
+    let italic = cell.typography.first()?.italic?;
+    cell.typography
+        .iter()
+        .all(|run| run.italic == Some(italic))
+        .then_some(italic)
+}
+
 fn table_cell_source_font_profile_v1(
     cell: &CurrentTableCell,
 ) -> Option<(String, bool, bool)> {
@@ -701,6 +739,19 @@ fn observe_table_text_authority_v1(
             && table_cell_bounded_text_profile_v1(cell, inset).is_some()
         {
             summary.table_bounded_text_profile_cell_count += 1;
+            let source_family = table_cell_source_family_profile_v1(cell);
+            let source_bold = table_cell_source_bold_profile_v1(cell);
+            let source_italic = table_cell_source_italic_profile_v1(cell);
+            if source_family.is_some() {
+                summary.table_bounded_source_family_profile_count += 1;
+            }
+            if source_bold.is_some() {
+                summary.table_bounded_source_bold_profile_count += 1;
+            }
+            if source_italic.is_some() {
+                summary.table_bounded_source_italic_profile_count += 1;
+            }
+
             if let Some((family, bold, italic)) = table_cell_source_font_profile_v1(cell) {
                 summary.table_bounded_source_font_profile_count += 1;
                 *summary
@@ -724,6 +775,17 @@ fn observe_table_text_authority_v1(
                 summary.table_hard_break_free_profile_cell_count += 1;
                 if table_cell_single_line_width_fits_v1(cell, inset, font) {
                     summary.table_single_line_width_fit_cell_count += 1;
+                } else {
+                    summary.table_single_line_overflow_cell_count += 1;
+                    if source_family.is_some() {
+                        summary.table_single_line_overflow_source_family_profile_count += 1;
+                    }
+                    if source_bold.is_some() {
+                        summary.table_single_line_overflow_source_bold_profile_count += 1;
+                    }
+                    if source_italic.is_some() {
+                        summary.table_single_line_overflow_source_italic_profile_count += 1;
+                    }
                 }
             }
         }
