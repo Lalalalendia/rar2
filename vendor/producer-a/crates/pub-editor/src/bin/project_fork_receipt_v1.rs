@@ -6,7 +6,7 @@ use pub_model::{
     Size2D, SourceDescriptor,
 };
 use pub_reader::{PubExplicitShapePaintSource, PubResolvedGraph, PubResolvedNodePayload};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn canonical_id<T: serde::de::DeserializeOwned>(value: &str) -> T {
     serde_json::from_str(&format!("\"{value}\"")).expect("canonical typed id")
@@ -130,7 +130,9 @@ fn main() {
     let edited_fork_state = edited_fork.state_id_v1();
 
     let mut reopened_parent = EditorSession::new(base.clone()).expect("reopen parent");
-    reopened_parent.apply_project(&parent).expect("apply parent");
+    reopened_parent
+        .apply_project(&parent)
+        .expect("apply parent");
     let reopened_parent_bytes =
         serde_json::to_vec(&reopened_parent.project()).expect("serialize reopened parent");
 
@@ -146,10 +148,7 @@ fn main() {
         .export_editable(EditorEditableTarget::Odg, "project-fork-next")
         .expect("fork export");
 
-    let provenance = fork_identity
-        .forked_from
-        .as_ref()
-        .expect("fork provenance");
+    let provenance = fork_identity.forked_from.as_ref().expect("fork provenance");
 
     let initial_state_preserved = fork_initial_state == parent_state;
     let project_id_rekeyed = fork_identity.project_id != parent_identity.project_id;
@@ -216,5 +215,8 @@ fn main() {
         }
     });
 
-    println!("{}", serde_json::to_string_pretty(&receipt).expect("encode receipt"));
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&receipt).expect("encode receipt")
+    );
 }
