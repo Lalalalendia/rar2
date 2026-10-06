@@ -54,8 +54,10 @@ pub async fn build_guest_reader_router(
     .await?;
     let guest_scan_config = config.source_validation.materialize();
     let guest_scanner = ProductionSourceSecurityScanner::new(guest_scan_config.clone())?;
-    let guest_scene_worker =
-        IsolatedGuestSceneProducer::new_with_fonts(guest_scan_config, &guest_config.font_resources)?;
+    let guest_scene_worker = IsolatedGuestSceneProducer::new_with_fonts(
+        guest_scan_config,
+        &guest_config.font_resources,
+    )?;
     let guest_state = GuestReaderHttpState::new(
         guest_rate,
         guest_admission,
