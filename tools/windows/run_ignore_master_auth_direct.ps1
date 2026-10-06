@@ -14,7 +14,7 @@ $Analyzer = Join-Path $RepoRoot "tools/research-runner/analysis/ignore_master_au
 
 $ExpectedPacketBlob = "5bd3790f430e6d95947142d57cd4b1ea9d0bbcae"
 $ExpectedOperationBlob = "fb519d47a4ae85b68ce891895baec45a9123a01b"
-$ExpectedAnalyzerBlob = "01a7b2bbb225c8f052f6bec3f44d92a1e31e19d5"
+$ExpectedAnalyzerBlob = "ae2ce9de0cc30d301cd394490f8737a3f2f2d331"
 
 foreach ($entry in @(
     [pscustomobject]@{ Path = $Packet; Expected = $ExpectedPacketBlob; Label = "packet" },
@@ -34,12 +34,19 @@ python tools/research-runner/validate_packet.py --packet "tools/research-runner/
 if ($LASTEXITCODE -ne 0) { throw "T828 packet validation failed." }
 
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
-    $OutputRoot = Join-Path $RepoRoot "out/pub-research/ignore-master-auth-01"
+    $stamp = [DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss")
+    $OutputRoot = Join-Path $RepoRoot ("out/pub-research/ignore-master-auth-01-" + $stamp)
+} elseif (-not [System.IO.Path]::IsPathRooted($OutputRoot)) {
+    $OutputRoot = Join-Path $RepoRoot $OutputRoot
 }
 
 if (Test-Path -LiteralPath $OutputRoot) {
-    Remove-Item -LiteralPath $OutputRoot -Recurse -Force
+    $existing = @(Get-ChildItem -LiteralPath $OutputRoot -Force -ErrorAction Stop)
+    if ($existing.Count -ne 0) {
+        throw "T828 OutputRoot is not empty; use a fresh path so previous evidence is preserved: $OutputRoot"
+    }
 }
+New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/research-runner/prepare_native_run.ps1 -PacketPath $Packet -OutputRoot $OutputRoot
 if ($LASTEXITCODE -ne 0) { throw "T828 prepare_native_run failed." }
