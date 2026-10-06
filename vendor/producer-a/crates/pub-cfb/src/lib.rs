@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 mod partial_root_recovery;
 pub use partial_root_recovery::{
-    RecoveredRegularStreamPrefixBySid, RecoveredRootRegularStreamPrefix,
-    RegularStreamStorageKind, RootRegularStreamPrefixStatus, RootRegularStreamSourceRange,
-    RootRegularStreamTruncationReason, recover_regular_stream_prefix_by_sid_reader,
+    RecoveredRegularStreamPrefixBySid, RecoveredRootRegularStreamPrefix, RegularStreamStorageKind,
+    RootRegularStreamPrefixStatus, RootRegularStreamSourceRange, RootRegularStreamTruncationReason,
+    recover_regular_stream_prefix_by_sid_reader,
     recover_regular_stream_prefix_by_sid_reader_with_expected_sha,
     recover_root_regular_stream_prefix_reader,
 };
