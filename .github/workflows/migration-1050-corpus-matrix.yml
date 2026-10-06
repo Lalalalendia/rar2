@@ -432,7 +432,7 @@ jobs:
               rel_dir="$(dirname "$rel_idml")"
               container_name="chaptera-scribus-${sha:0:12}"
               set +e
-              timeout --signal=TERM --kill-after=15s 120s docker run --rm --name "$container_name" \
+              timeout --signal=TERM --kill-after=10s 30s docker run --rm --init --shm-size=512m --name "$container_name" \
                 -v "$GITHUB_WORKSPACE:/work" \
                 -w /work \
                 -e HOME="/work/$rel_dir/scribus-home" \
@@ -441,6 +441,7 @@ jobs:
                 -e XDG_DATA_HOME="/work/$rel_dir/scribus-home/.local/share" \
                 -e XDG_RUNTIME_DIR="/work/$rel_dir/scribus-home/runtime" \
                 -e CHAPTERA_SCRIBUS_SLA_OUT="/work/$rel_dir/consumer.sla" \
+                -e QT_X11_NO_MITSHM=1 \
                 "$PINNED_CONSUMER_RUNTIME_IMAGE_TAG" \
                 xvfb-run -a scribus -g -ns \
                   -py tools/ci/scribus_idml_consumer.py -- "/work/$rel_idml"
@@ -452,7 +453,7 @@ jobs:
                 exit "$rc"
               fi
             else
-              timeout --signal=TERM --kill-after=15s 120s env \
+              timeout --signal=TERM --kill-after=10s 30s env \
                 HOME="$dir/scribus-home" \
                 XDG_CONFIG_HOME="$dir/scribus-home/.config" \
                 XDG_CACHE_HOME="$dir/scribus-home/.cache" \
@@ -478,7 +479,7 @@ jobs:
               rel_dir="$(dirname "$rel_odg")"
               container_name="chaptera-libreoffice-${sha:0:12}"
               set +e
-              timeout --signal=TERM --kill-after=15s 120s docker run --rm --name "$container_name" \
+              timeout --signal=TERM --kill-after=10s 30s docker run --rm --init --shm-size=512m --name "$container_name" \
                 -v "$GITHUB_WORKSPACE:/work" \
                 -w /work \
                 "$PINNED_CONSUMER_RUNTIME_IMAGE_TAG" \
@@ -494,7 +495,7 @@ jobs:
                 exit "$rc"
               fi
             else
-              timeout --signal=TERM --kill-after=15s 120s \
+              timeout --signal=TERM --kill-after=10s 30s \
                 libreoffice --headless \
                   --convert-to fodg \
                   --outdir "$dir/libreoffice" \
