@@ -6891,7 +6891,7 @@ impl EditorSession {
             .map_err(|_| EditorError::TableRowColUnsupported { node_id: table_id })?;
         let history = canonical_table_rowcol_history_v1(&before, mutation)
             .map_err(|_| EditorError::TableRowColUnsupported { node_id: table_id })?;
-        let operation = match history.mutation {
+        let operation = match history.mutation.clone() {
             TableRowColMutationV1::InsertRow { .. } => EditOperation::InsertTableRow { history },
             TableRowColMutationV1::DeleteRow { .. } => EditOperation::DeleteTableRow { history },
             TableRowColMutationV1::InsertColumn { .. } => {
@@ -7000,6 +7000,33 @@ impl EditorSession {
                 self.authored_lines = candidate_lines;
                 self.graph = candidate_graph;
                 self.authored_stacks = before_stacks;
+            } else if let Some(history) = table_rowcol_history_v1(&operation) {
+                if !table_rowcol_operation_matches_mutation_v1(&operation) {
+                    return Err(EditorError::StaleTableRowCol {
+                        node_id: history.table_id,
+                    });
+                }
+                let current = table_structure_snapshot_from_graph_v1(
+                    &self.graph,
+                    history.table_id,
+                    history.after.grid.clone(),
+                    history.after.bounds,
+                )
+                .map_err(|_| EditorError::StaleTableRowCol {
+                    node_id: history.table_id,
+                })?;
+                let before = apply_table_rowcol_history_inverse_v1(&current, history).map_err(
+                    |_| EditorError::StaleTableRowCol {
+                        node_id: history.table_id,
+                    },
+                )?;
+                let mut candidate_graph = self.graph.clone();
+                apply_table_structure_snapshot_to_graph_v1(&mut candidate_graph, &before).map_err(
+                    |_| EditorError::StaleTableRowCol {
+                        node_id: history.table_id,
+                    },
+                )?;
+                self.graph = candidate_graph;
             } else if let EditOperation::SetTableTrackExtent { history } = &operation {
                 let grid = effective_table_grids_with_history(&self.graph, &self.undo)
                     .into_iter()
@@ -7110,6 +7137,33 @@ impl EditorSession {
                 self.authored_lines = candidate_lines;
                 self.graph = candidate_graph;
                 self.authored_stacks = after_stacks;
+            } else if let Some(history) = table_rowcol_history_v1(&operation) {
+                if !table_rowcol_operation_matches_mutation_v1(&operation) {
+                    return Err(EditorError::StaleTableRowCol {
+                        node_id: history.table_id,
+                    });
+                }
+                let current = table_structure_snapshot_from_graph_v1(
+                    &self.graph,
+                    history.table_id,
+                    history.before.grid.clone(),
+                    history.before.bounds,
+                )
+                .map_err(|_| EditorError::StaleTableRowCol {
+                    node_id: history.table_id,
+                })?;
+                let after = apply_table_rowcol_history_forward_v1(&current, history).map_err(
+                    |_| EditorError::StaleTableRowCol {
+                        node_id: history.table_id,
+                    },
+                )?;
+                let mut candidate_graph = self.graph.clone();
+                apply_table_structure_snapshot_to_graph_v1(&mut candidate_graph, &after).map_err(
+                    |_| EditorError::StaleTableRowCol {
+                        node_id: history.table_id,
+                    },
+                )?;
+                self.graph = candidate_graph;
             } else if let EditOperation::SetTableTrackExtent { history } = &operation {
                 let grid = effective_table_grids_with_history(&self.graph, &self.undo)
                     .into_iter()
