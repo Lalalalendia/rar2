@@ -10,8 +10,9 @@ mod writer;
 pub use mcld::{
     QuillMcldChild, QuillMcldChunk, QuillMcldConsensusU32, QuillMcldField, QuillMcldFieldValue,
     QuillMcldReadError, QuillMcldRecord, QuillMcldTableMetrics,
-    QuillMcldTextFrameVerticalAlignment, QuillMcldTextInsets, QuillMcldUniformTextInset,
-    QuillMcldVerticalAlignment, bounded_mcld_table_metrics, bounded_mcld_table_uniform_text_inset,
+    QuillMcldTableVerticalAlignment, QuillMcldTextFrameVerticalAlignment, QuillMcldTextInsets,
+    QuillMcldUniformTextInset, QuillMcldVerticalAlignment, bounded_mcld_table_metrics,
+    bounded_mcld_table_uniform_text_inset, bounded_mcld_table_uniform_vertical_alignment,
     bounded_mcld_text_frame_vertical_alignment, bounded_mcld_text_insets,
     bounded_mcld_uniform_text_inset, parse_bounded_mcld,
 };
