@@ -6,7 +6,9 @@ use pub_editor::{
     EditOperation, EditorProject, EditorSession, ImageCropStateV1, LengthEmu, NodeId, RectEmu,
     Sha256Digest,
 };
-use pub_interaction::{DocumentPoint, ResizeHandle, ResizeTransaction, ResizeUpdate};
+use pub_interaction::{
+    DocumentPoint, MoveTransaction, ResizeHandle, ResizeTransaction, ResizeUpdate,
+};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::env;
@@ -15,15 +17,116 @@ use std::path::Path;
 
 use super::acceptance::{
     REPLACEMENT_WITNESS, direct_instance, explicit_loss_flags, export_target, rect_json,
-    select_move, select_story_edit, sha256_hex, state_id, story_state,
+    select_story_edit, sha256_hex, state_id, story_state,
 };
 
 const PROTOCOL_VERSION: &str = "chaptera.editor-desktop-continuity-observation.v2";
+
+fn rects_intersect(a: RectEmu, b: RectEmu) -> bool {
+    let Some(a_right) = a.right() else { return true };
+    let Some(a_bottom) = a.bottom() else { return true };
+    let Some(b_right) = b.right() else { return true };
+    let Some(b_bottom) = b.bottom() else { return true };
+
+    a.x.get() < b_right.get()
+        && a_right.get() > b.x.get()
+        && a.y.get() < b_bottom.get()
+        && a_bottom.get() > b.y.get()
+}
+
+fn wrap_irrelevant_geometry_v1(
+    editor: &EditorSession,
+    node_id: NodeId,
+    candidate: RectEmu,
+) -> bool {
+    let Some(target) = editor.graph().nodes.get(&node_id) else {
+        return false;
+    };
+    if target.payload.story_frame.is_some() {
+        return false;
+    }
+    let parent_id = target.header.parent_id;
+
+    !editor.graph().nodes.iter().any(|(other_id, other)| {
+        *other_id != node_id
+            && other.header.parent_id == parent_id
+            && other.payload.story_frame.is_some()
+            && rects_intersect(candidate, other.header.bounds)
+    })
+}
+
+fn select_move(
+    editor: &EditorSession,
+    visual: &pub_viewer::ViewerGeometryDocument,
+    require_wrap_irrelevant: bool,
+) -> Option<(SceneInstanceV1, NodeId, RectEmu, MoveTransaction)> {
+    const DELTAS: &[(i64, i64)] = &[
+        (127_000, 254_000),
+        (-127_000, 254_000),
+        (127_000, -254_000),
+        (-127_000, -254_000),
+    ];
+
+    for page in &visual.document.pages {
+        let page_origin = page.id.into_canonical();
+        let target_page_id = page.id.as_canonical().to_string();
+        for scene_node in visual
+            .scene
+            .nodes
+            .iter()
+            .filter(|node| node.parent_origin == page_origin)
+        {
+            let Some(instance) = direct_instance(editor, &target_page_id, scene_node.origin) else {
+                continue;
+            };
+            let admission = admit_object_mutation_v1(&instance, ObjectMutationKindV1::MoveNode);
+            let origin_node_id = scene_node.origin.as_canonical().to_string();
+            if !admission.admitted
+                || admission.origin_node_id.as_deref() != Some(origin_node_id.as_str())
+                || geometry_sync_policy_v1(&instance)
+                    != GeometrySyncPolicyV1::ApplyAuthoredOriginGeometry
+            {
+                continue;
+            }
+
+            let before = editor.graph().nodes.get(&scene_node.origin)?.header.bounds;
+            if require_wrap_irrelevant
+                && !wrap_irrelevant_geometry_v1(editor, scene_node.origin, before)
+            {
+                continue;
+            }
+            for &(dx, dy) in DELTAS {
+                let Ok(mut drag) = MoveTransaction::begin(
+                    scene_node.origin,
+                    before,
+                    DocumentPoint::new(LengthEmu::ZERO, LengthEmu::ZERO),
+                ) else {
+                    continue;
+                };
+                let Ok(after) =
+                    drag.update(DocumentPoint::new(LengthEmu::new(dx), LengthEmu::new(dy)))
+                else {
+                    continue;
+                };
+                if editor
+                    .can_move_node_to(scene_node.origin, after.x, after.y)
+                    .is_ok()
+                    && (!require_wrap_irrelevant
+                        || wrap_irrelevant_geometry_v1(editor, scene_node.origin, after))
+                {
+                    return Some((instance, scene_node.origin, before, drag));
+                }
+            }
+        }
+    }
+    None
+}
 
 fn select_resize(
     editor: &EditorSession,
     visual: &pub_viewer::ViewerGeometryDocument,
     excluded: &[NodeId],
+    require_wrap_irrelevant: bool,
 ) -> Option<(SceneInstanceV1, NodeId, RectEmu, ResizeTransaction)> {
     const DELTAS: &[(i64, i64)] = &[(127_000, 127_000), (254_000, 127_000), (127_000, 254_000)];
 
@@ -54,6 +157,11 @@ fn select_resize(
             }
 
             let before = editor.graph().nodes.get(&scene_node.origin)?.header.bounds;
+            if require_wrap_irrelevant
+                && !wrap_irrelevant_geometry_v1(editor, scene_node.origin, before)
+            {
+                continue;
+            }
             for &(dx, dy) in DELTAS {
                 let Ok(mut resize) = ResizeTransaction::begin(
                     scene_node.origin,
@@ -68,7 +176,10 @@ fn select_resize(
                 else {
                     continue;
                 };
-                if editor.can_resize_node_to(scene_node.origin, after).is_ok() {
+                if editor.can_resize_node_to(scene_node.origin, after).is_ok()
+                    && (!require_wrap_irrelevant
+                        || wrap_irrelevant_geometry_v1(editor, scene_node.origin, after))
+                {
                     return Some((instance, scene_node.origin, before, resize));
                 }
             }
@@ -83,6 +194,7 @@ fn select_replace_image(
     replacement_asset: Sha256Digest,
     excluded: &[NodeId],
     require_explicit_crop: bool,
+    require_wrap_irrelevant: bool,
 ) -> Option<(SceneInstanceV1, NodeId, RectEmu, Option<ImageCropStateV1>)> {
     for page in &visual.document.pages {
         let page_origin = page.id.into_canonical();
@@ -114,6 +226,11 @@ fn select_replace_image(
                 continue;
             }
             let frame = editor.graph().nodes.get(&scene_node.origin)?.header.bounds;
+            if require_wrap_irrelevant
+                && !wrap_irrelevant_geometry_v1(editor, scene_node.origin, frame)
+            {
+                continue;
+            }
             return Some((instance, scene_node.origin, frame, crop));
         }
     }
@@ -182,6 +299,8 @@ pub fn run(
         .map_err(|_| "CHAPTERA_REPLACEMENT_BINDING_ID is required".to_owned())?;
     let require_explicit_crop =
         env::var("CHAPTERA_CONTINUITY_REQUIRE_EXPLICIT_CROP").as_deref() == Ok("1");
+    let require_wrap_irrelevant =
+        env::var("CHAPTERA_CONTINUITY_REQUIRE_WRAP_IRRELEVANT").as_deref() == Ok("1");
     if !replacement_binding_id.starts_with("continuity-v2-")
         || replacement_binding_id.len() != "continuity-v2-".len() + 32
         || !replacement_binding_id["continuity-v2-".len()..]
@@ -244,8 +363,14 @@ pub fn run(
     let after_story_state_id_effective = state_id(&editor)?;
 
     let operations_before_drag = editor.operations().len();
-    let (move_instance, moved_node_id, before_move, drag) = select_move(&editor, &visual)
-        .ok_or_else(|| "no admitted direct page-local MoveNode target".to_owned())?;
+    let (move_instance, moved_node_id, before_move, drag) =
+        select_move(&editor, &visual, require_wrap_irrelevant).ok_or_else(|| {
+            if require_wrap_irrelevant {
+                "no admitted wrap-irrelevant direct page-local MoveNode target".to_owned()
+            } else {
+                "no admitted direct page-local MoveNode target".to_owned()
+            }
+        })?;
     let after_move = drag.preview_bounds();
     if editor.operations().len() != operations_before_drag {
         return Err("transient drag emitted a durable editor operation".to_owned());
@@ -260,8 +385,20 @@ pub fn run(
 
     let operations_before_resize = editor.operations().len();
     let (resize_instance, resized_node_id, before_resize, mut resize) =
-        select_resize(&editor, &visual, &[moved_node_id])
-            .ok_or_else(|| "no distinct admitted direct page-local ResizeNode target".to_owned())?;
+        select_resize(
+            &editor,
+            &visual,
+            &[moved_node_id],
+            require_wrap_irrelevant,
+        )
+        .ok_or_else(|| {
+            if require_wrap_irrelevant {
+                "no distinct admitted wrap-irrelevant direct page-local ResizeNode target"
+                    .to_owned()
+            } else {
+                "no distinct admitted direct page-local ResizeNode target".to_owned()
+            }
+        })?;
     let resize_commit = resize
         .commit()
         .map_err(|error| format!("commit transient resize transaction: {error}"))?;
@@ -283,6 +420,7 @@ pub fn run(
         replacement_asset,
         &[moved_node_id, resized_node_id],
         require_explicit_crop,
+        require_wrap_irrelevant,
     )
     .ok_or_else(|| {
         if require_explicit_crop {
@@ -508,6 +646,11 @@ pub fn run(
             "reopen_used_fresh_session": true,
             "export_from_current_editor_state": true,
             "replacement_asset_sha_emitted": false,
+            "wrap_mutation_scope": if require_wrap_irrelevant {
+                "text_frame_non_intersecting"
+            } else {
+                "not_asserted"
+            },
         },
     }))
 }
