@@ -842,6 +842,8 @@ pub fn from_viewer_geometry_with_fonts(
         let mapped = ReaderPaintV1 {
             preset_shape: paint.preset_shape.map(|shape| match shape {
                 pub_viewer::ViewerPresetShape::RoundRect => "round_rect",
+                pub_viewer::ViewerPresetShape::Line => "line",
+                pub_viewer::ViewerPresetShape::LineDashGel => "line_dash_gel",
             }),
             fill_rgb: paint.solid_fill_rgb,
             line: paint.solid_line.as_ref().map(|line| ReaderLineV1 {
