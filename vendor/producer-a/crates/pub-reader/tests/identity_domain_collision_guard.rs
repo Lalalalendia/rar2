@@ -78,3 +78,18 @@ fn changing_only_semantic_role_changes_source_derived_identity() {
     let ids = [document.as_canonical(), page.as_canonical(), node.as_canonical()];
     assert!(ids[0] != ids[1] && ids[0] != ids[2] && ids[1] != ids[2]);
 }
+
+
+#[test]
+fn same_role_different_source_scalars_do_not_share_canonical_id() {
+    let hash = source_hash();
+
+    let first = derive_pub_node_id(&hash, 7).expect("first node id");
+    let second = derive_pub_node_id(&hash, 8).expect("second node id");
+
+    assert_ne!(
+        first.as_canonical(),
+        second.as_canonical(),
+        "source-derived identity must retain the source scalar inside one semantic role",
+    );
+}
