@@ -48,6 +48,9 @@ jobs:
       - name: Lint pub-editor
         run: cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets -- -D warnings
 
+      - name: Prove ROWCOL transition laws
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --lib table_rowcol_history_v1 -- --nocapture
+
       - name: Prove ROWCOL durable lifecycle
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test table_rowcol_project_v1 -- --nocapture
 
