@@ -459,6 +459,44 @@ mod tests {
     }
 
     #[test]
+    fn two_uid_authority_is_shared_across_raster_families() {
+        let cases = [
+            (OFFICE_ART_BLIP_JPEG, 0x6E3, BlipKind::Jpeg),
+            (OFFICE_ART_BLIP_DIB, 0x7A9, BlipKind::Dib),
+            (OFFICE_ART_BLIP_TIFF, 0x6E5, BlipKind::Tiff),
+        ];
+
+        for (rec_type, rec_instance, kind) in cases {
+            let bytes = record_bytes(rec_type, rec_instance, kind, true, false);
+            let record = first_record(&bytes);
+            let validated =
+                validate_blip_record(&bytes, &record).expect("two-UID raster BLIP");
+            assert_eq!(validated.kind, kind);
+            assert_eq!(validated.uid_rule, BlipUidRule::SecondUid);
+
+            let bad = record_bytes(rec_type, rec_instance, kind, true, true);
+            let bad_record = first_record(&bad);
+            assert!(matches!(
+                validate_blip_record(&bad, &bad_record),
+                Err(BlipValidationError::UidMismatch { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn uid_layout_must_match_rec_instance() {
+        let one_instance_two_uid_layout =
+            record_bytes(OFFICE_ART_BLIP_PNG, 0x6E0, BlipKind::Png, true, false);
+        let one_record = first_record(&one_instance_two_uid_layout);
+        assert!(validate_blip_record(&one_instance_two_uid_layout, &one_record).is_err());
+
+        let two_instance_one_uid_layout =
+            record_bytes(OFFICE_ART_BLIP_PNG, 0x6E1, BlipKind::Png, false, false);
+        let two_record = first_record(&two_instance_one_uid_layout);
+        assert!(validate_blip_record(&two_instance_one_uid_layout, &two_record).is_err());
+    }
+
+    #[test]
     fn forged_record_envelope_is_rejected() {
         let bytes = record_bytes(OFFICE_ART_BLIP_PNG, 0x6E0, BlipKind::Png, false, false);
         let mut record = first_record(&bytes);
