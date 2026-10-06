@@ -6,7 +6,8 @@ use pub_editor::{
 };
 use pub_layout::{
     BoundedAuthoringSlice, BoundedNodeGeometryInput, EffectiveTableLayoutInputV1,
-    bounded_table_input_from_effective_grid, project_bounded, resolve_bounded_effective_table_cells,
+    bounded_table_input_from_effective_grid, project_bounded,
+    resolve_bounded_effective_table_cells,
 };
 use pub_model::{
     Affine2D, Document, DocumentId, Page, ResolvedGraph, Sha256Digest, Size2D, SourceDescriptor,
@@ -140,7 +141,9 @@ fn editor_track_history_drives_nonuniform_layout_without_source_metric_reparse()
         )
         .expect("resize second column");
 
-    let grid = session.current_table_grid_v1(table_id()).expect("current grid");
+    let grid = session
+        .current_table_grid_v1(table_id())
+        .expect("current grid");
     let bounds = session
         .current_table_bounds_v1(table_id())
         .expect("current table bounds");
@@ -177,10 +180,7 @@ fn editor_track_history_drives_nonuniform_layout_without_source_metric_reparse()
 
     let resolved = resolve_bounded_effective_table_cells(
         &projection,
-        &[EffectiveTableLayoutInputV1 {
-            grid,
-            bounds,
-        }],
+        &[EffectiveTableLayoutInputV1 { grid, bounds }],
     )
     .expect("resolve current editor table state");
 
@@ -222,7 +222,10 @@ fn editor_track_history_drives_nonuniform_layout_without_source_metric_reparse()
         )
     );
 
-    assert_eq!(session.graph().nodes[&table_id()].header.bounds, source_bounds());
+    assert_eq!(
+        session.graph().nodes[&table_id()].header.bounds,
+        source_bounds()
+    );
     let source_metrics = session.graph().nodes[&table_id()]
         .payload
         .table
