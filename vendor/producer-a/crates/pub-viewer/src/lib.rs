@@ -735,6 +735,7 @@ pub struct ViewerNodePaint {
 #[serde(rename_all = "snake_case")]
 pub enum ViewerPresetShape {
     RoundRect,
+    Ellipse,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -796,16 +797,21 @@ fn bridge_effective_value<T: Clone>(
 fn viewer_preset_shape_from_canonical(
     node: &Node<PubResolvedNodePayload>,
 ) -> Option<ViewerPresetShape> {
-    node.header
-        .source_refs
-        .iter()
-        .any(|source_ref| {
-            source_ref.path.as_deref() == Some("SpContainer/FSP/default-roundrect")
+    let authoritative_projection = |path: &str| {
+        node.header.source_refs.iter().any(|source_ref| {
+            source_ref.path.as_deref() == Some(path)
                 && source_ref.authority == AuthorityClass::Authoritative
                 && source_ref.confidence == Some(ReadConfidence::Exact)
                 && matches!(source_ref.role, SourceRole::Projection)
         })
-        .then_some(ViewerPresetShape::RoundRect)
+    };
+    if authoritative_projection("SpContainer/FSP/default-roundrect") {
+        Some(ViewerPresetShape::RoundRect)
+    } else if authoritative_projection("SpContainer/FSP/default-ellipse") {
+        Some(ViewerPresetShape::Ellipse)
+    } else {
+        None
+    }
 }
 
 fn viewer_node_paint_from_canonical_bridge(
@@ -3893,6 +3899,16 @@ fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
             "viewer.geometry.grouped_image_projection_unavailable",
             ViewerDiagnosticSeverity::FidelityWarning,
             "A grouped image shape falls outside the bounded group geometry profile.",
+        ),
+        GroupedPrimitiveProjected { .. } => (
+            "viewer.geometry.grouped_primitive_projected",
+            ViewerDiagnosticSeverity::Info,
+            "A grouped primitive shape was projected through its exact bounded group geometry chain.",
+        ),
+        GroupedPrimitiveProjectionUnavailable { .. } => (
+            "viewer.geometry.grouped_primitive_projection_unavailable",
+            ViewerDiagnosticSeverity::FidelityWarning,
+            "A grouped primitive shape falls outside the bounded group geometry profile.",
         ),
         GroupedTableProjected { .. } => (
             "viewer.geometry.grouped_table_projected",
