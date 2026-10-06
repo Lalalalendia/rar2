@@ -71,7 +71,17 @@ struct CurrentTable {
     #[serde(default)]
     uniform_cell_text_inset_emu: Option<i64>,
     #[serde(default)]
+    uniform_cell_vertical_alignment: Option<CurrentTableVerticalAlignment>,
+    #[serde(default)]
     borders: Vec<CurrentTableBorderSegment>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CurrentTableVerticalAlignment {
+    Top,
+    Center,
+    Bottom,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,11 +96,29 @@ struct CurrentTableCell {
     #[serde(default)]
     typography: Vec<CurrentTypographyRun>,
     #[serde(default)]
+    paragraph_alignments: Vec<CurrentTableParagraphAlignmentRun>,
+    #[serde(default)]
     bounds: Option<RectEmu>,
     #[serde(default)]
     fill_rgb: Option<[u8; 3]>,
     #[serde(default)]
     fill_visible: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentTableParagraphAlignmentRun {
+    scalar_start: u32,
+    scalar_end: u32,
+    alignment: CurrentTableParagraphAlignment,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CurrentTableParagraphAlignment {
+    Center,
+    Right,
+    InterWord,
+    Distribute,
 }
 
 #[derive(Debug, Deserialize)]
@@ -241,6 +269,10 @@ struct MappingSummary {
     table_cell_resolved_color_count: usize,
     table_cell_inset_bounds_valid_count: usize,
     table_uniform_cell_text_inset_count: usize,
+    table_uniform_vertical_alignment_count: usize,
+    table_cell_paragraph_alignment_valid_count: usize,
+    table_explicit_paragraph_alignment_cell_count: usize,
+    table_explicit_paragraph_alignment_run_count: usize,
     derived_table_fill_node_count: usize,
     derived_table_border_node_count: usize,
     derived_table_paint_node_count: usize,
@@ -510,12 +542,43 @@ fn table_cell_inset_fits_bounds_v1(cell: &CurrentTableCell, inset: i64) -> bool 
     bounds.width.get() > double_inset && bounds.height.get() > double_inset
 }
 
+fn valid_table_cell_paragraph_alignments_v1(cell: &CurrentTableCell) -> bool {
+    let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end) else {
+        return false;
+    };
+    if start > end {
+        return false;
+    }
+
+    let mut previous_end = start;
+    for run in &cell.paragraph_alignments {
+        if run.scalar_start < start
+            || run.scalar_end > end
+            || run.scalar_start >= run.scalar_end
+            || run.scalar_start < previous_end
+        {
+            return false;
+        }
+        match run.alignment {
+            CurrentTableParagraphAlignment::Center
+            | CurrentTableParagraphAlignment::Right
+            | CurrentTableParagraphAlignment::InterWord
+            | CurrentTableParagraphAlignment::Distribute => {}
+        }
+        previous_end = run.scalar_end;
+    }
+    true
+}
+
 fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSummary) {
     let admitted_inset = table
         .uniform_cell_text_inset_emu
         .filter(|inset| *inset >= 0);
     if admitted_inset.is_some() {
         summary.table_uniform_cell_text_inset_count += 1;
+    }
+    if table.uniform_cell_vertical_alignment.is_some() {
+        summary.table_uniform_vertical_alignment_count += 1;
     }
 
     for cell in &table.cells {
@@ -536,6 +599,15 @@ fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSu
         };
         if exact_range {
             summary.table_cell_story_range_count += 1;
+        }
+
+        if !cell.paragraph_alignments.is_empty() {
+            summary.table_explicit_paragraph_alignment_cell_count += 1;
+            summary.table_explicit_paragraph_alignment_run_count +=
+                cell.paragraph_alignments.len();
+        }
+        if exact_range && valid_table_cell_paragraph_alignments_v1(cell) {
+            summary.table_cell_paragraph_alignment_valid_count += 1;
         }
 
         if !cell.typography.is_empty() {
