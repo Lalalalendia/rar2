@@ -1,3 +1,4 @@
+use pub_escher::{inspect_bstore, inspect_delayed_blips, resolve_delayed_blip};
 use pub_model::Sha256Digest;
 use pub_reader::{
     ESCHER_DELAY_STREAM_PATH, ESCHER_STREAM_PATH, build_mature_0x2c_asset_export_bundle_from_bytes,
@@ -33,6 +34,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         Vec::new()
     };
+    let bstore = inspect_bstore(pub_core::StreamPath(ESCHER_STREAM_PATH.into()), &escher)?;
+    let delayed_inventory = inspect_delayed_blips(
+        pub_core::StreamPath(ESCHER_DELAY_STREAM_PATH.into()),
+        &delayed,
+    )?;
     let asset_manifest = build_pub_asset_manifest(&source.graph, &escher, &delayed)?;
     let asset_catalog = build_pub_image_resource_catalog(&source.graph, &asset_manifest)?;
     let asset_states = asset_manifest
@@ -59,6 +65,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "jpeg_signature_offset": record.windows(jpeg.len()).position(|window| window == jpeg),
                 }))
             });
+            let bstore_slot = bstore.slots.iter().find(|slot| slot.slot == asset.slot);
+            let delayed_blip = resolve_delayed_blip(&bstore, &delayed_inventory, asset.slot)
+                .ok()
+                .flatten();
             json!({
                 "slot": asset.slot,
                 "use_count": asset.uses.len(),
@@ -68,6 +78,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "payload_sha256_present": asset.payload_sha256.is_some(),
                 "payload_len": asset.payload_len,
                 "signature_probe": signature_probe,
+                "bstore": bstore_slot.map(|slot| json!({
+                    "bt_win32": slot.bt_win32,
+                    "bt_macos": slot.bt_macos,
+                    "size": slot.size,
+                    "c_ref": slot.c_ref,
+                    "fo_delay": slot.fo_delay,
+                    "cb_name": slot.cb_name,
+                    "has_delayed_blip": slot.has_delayed_blip(),
+                    "embedded_blip_present": slot.embedded_blip_source.is_some(),
+                })),
+                "delayed_blip": delayed_blip.map(|blip| json!({
+                    "rec_type": blip.rec_type,
+                    "rec_instance": blip.rec_instance,
+                    "record_len": blip.record_source.len,
+                    "payload_record_len": blip.payload_source.len,
+                    "kind": blip.kind,
+                    "image_payload_present": blip.image_payload_source.is_some(),
+                })),
             })
         })
         .collect::<Vec<_>>();
