@@ -1,6 +1,12 @@
 name: Publisher visual manual residual corpus
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/publisher-visual-manual-residual.yml"
+      - "tools/corpus/receipts/publisher-visual-manual-residual-2026-10-06.json"
+      - "tools/cloud_reader_manual_oracle_bundle_v1.py"
+      - "tools/cloud_reader_reference_pdf_raster_v1.py"
   workflow_dispatch:
     inputs:
       donor_run_id:
@@ -38,7 +44,59 @@ env:
   EXPECTED_REFERENCE_PAGE_COUNT: "15"
 
 jobs:
+  registry-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate source-free residual corpus authority
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          path = Path("tools/corpus/receipts/publisher-visual-manual-residual-2026-10-06.json")
+          data = json.loads(path.read_text())
+          assert data["schema"] == "chaptera.publisher-visual-manual-residual-corpus.v1"
+          assert len(data["families"]) == 2
+
+          pairs = [pair for family in data["families"] for pair in family["pairs"]]
+          assert len(pairs) == 11
+          assert len({pair["id"] for pair in pairs}) == 11
+          assert sum(pair["pdf_pages"] for pair in pairs) == 15
+
+          sha256 = re.compile(r"^[0-9a-f]{64}$")
+          for pair in pairs:
+              assert pair["pub_bytes"] > 0 and pair["pdf_bytes"] > 0
+              assert pair["pdf_pages"] > 0
+              assert sha256.fullmatch(pair["pub_sha256"])
+              assert sha256.fullmatch(pair["pdf_sha256"])
+
+          normalized = data["normalized_bundle"]
+          assert normalized["pair_count"] == len(pairs)
+          assert normalized["reference_page_count"] == sum(pair["pdf_pages"] for pair in pairs)
+          assert normalized["bytes"] == 5446053
+          assert normalized["sha256"] == "f83b8baa76fda77dfbc5a2bbbb011375fddef8e9af48e9bce60789af45831529"
+          assert normalized["pairs_csv_sha256"] == "d43f6c03b55d415fb5187d19aaa5f432a9443867cd3942731bdcdadac77cd8f8"
+          assert normalized["raw_bundle_committed_to_git"] is False
+          assert data["execution_state"]["raw_bundle_committed_to_git"] is False
+
+          print(json.dumps({
+              "families": len(data["families"]),
+              "pairs": len(pairs),
+              "reference_pages": sum(pair["pdf_pages"] for pair in pairs),
+              "bundle_sha256": normalized["sha256"],
+          }, indent=2, sort_keys=True))
+          PY
+
   visual-oracle:
+    if: github.event_name != 'pull_request'
+    needs: registry-contract
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
