@@ -7,9 +7,7 @@ pub use assets::{
     OFFICE_ART_BLIP_PNG, OFFICE_ART_BLIP_TIFF, OFFICE_ART_BLIP_WMF, OFFICE_ART_BSTORE_CONTAINER,
     OFFICE_ART_FBSE, inspect_bstore, inspect_delayed_blips, resolve_delayed_blip,
 };
-pub use strict_blip::{
-    BlipUidRule, BlipValidationError, ValidatedBlip, validate_blip_record,
-};
+pub use strict_blip::{BlipUidRule, BlipValidationError, ValidatedBlip, validate_blip_record};
 
 use pub_core::{RawSpan, StreamPath};
 use serde::{Deserialize, Serialize};
