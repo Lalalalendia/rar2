@@ -150,12 +150,13 @@ pub use resolve::{
     PubResolvedNodePayload, PubResolvedStoryFrame, resolve_pub_source_graph,
 };
 pub use salvage::{
-    READER_PARTIAL_SOURCE_GRAPH_SCHEMA_V1, READER_SALVAGE_PROBE_SCHEMA_V1, ReaderPartialSourceFact,
+    READER_PARTIAL_SOURCE_GRAPH_SCHEMA_V1, READER_SALVAGE_PROBE_SCHEMA_V1,
+    ReaderPartialQuillProjection, ReaderPartialQuillProjectionError, ReaderPartialSourceFact,
     ReaderPartialSourceGap, ReaderPartialSourceGraph, ReaderPartialSourceGraphError,
     ReaderSalvageCorruptionEvidence, ReaderSalvageEligibility, ReaderSalvageProbe,
     ReaderSalvageStreamState, ReaderSalvageSubsystemProbe, ReaderSalvageTrigger,
     build_reader_partial_source_graph, probe_reader_salvage_candidate,
-    probe_reader_salvage_candidate_with_trigger,
+    probe_reader_salvage_candidate_with_trigger, project_reader_text_from_recovered_quill_prefix,
 };
 pub use salvage_authority::{
     ReaderEvidenceDisposition, ReaderSalvageAuthority, reader_evidence_disposition,
