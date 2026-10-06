@@ -265,3 +265,28 @@ fn v019_project_requires_identity_and_exact_asset_reachability() {
         Err(EditorProjectError::AssetReachabilityMismatch { .. })
     ));
 }
+
+
+#[test]
+fn v019_project_rejects_tampered_effective_table_grid() {
+    let mut producer = EditorSession::new(graph()).expect("producer");
+    producer.create_table(runtime()).expect("CreateTable");
+    producer
+        .set_table_track_extent_v1(
+            node_id(),
+            TableTrackTargetV1::Column(column_ids()[0]),
+            LengthEmu::new(350_000),
+        )
+        .expect("resize column");
+
+    let mut tampered = producer.project();
+    assert_eq!(tampered.schema_version, EDITOR_PROJECT_VERSION_V0_19);
+    tampered.table_grids[0].columns[0].extent = Some(LengthEmu::new(351_000));
+
+    let mut target = EditorSession::new(graph()).expect("target");
+    assert!(matches!(
+        target.apply_project(&tampered),
+        Err(EditorProjectError::TableGridMismatch)
+    ));
+    assert!(target.operations().is_empty());
+}
