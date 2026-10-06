@@ -842,6 +842,57 @@ mod tests {
         compound.into_inner().into_inner()
     }
 
+    fn synthetic_pub_cfb_with_regular_delay_png_and_mini_contents() -> Vec<u8> {
+        let mut compound =
+            cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("synthetic Publisher CFB");
+        compound.create_storage("/Escher").expect("Escher storage");
+
+        let mut contents = vec![0_u8; 64];
+        contents[..4].copy_from_slice(&[0xe8, 0xac, 0x2c, 0x00]);
+        compound
+            .create_stream(CONTENTS_STREAM)
+            .expect("Contents mini stream")
+            .write_all(&contents)
+            .expect("write mini Contents");
+
+        use md4::{Digest, Md4};
+
+        let mut image = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        image.extend_from_slice(b"partial-escher-image");
+        let digest = Md4::digest(&image);
+        let mut uid = [0u8; 16];
+        uid.copy_from_slice(&digest);
+
+        let mut payload = Vec::with_capacity(17 + image.len());
+        payload.extend_from_slice(&uid);
+        payload.push(0xff);
+        payload.extend_from_slice(&image);
+
+        let mut delay = Vec::new();
+        delay.extend_from_slice(&0x6e00u16.to_le_bytes());
+        delay.extend_from_slice(&pub_escher::OFFICE_ART_BLIP_PNG.to_le_bytes());
+        delay.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        delay.extend_from_slice(&payload);
+
+        let filler_len = 5_000usize
+            .checked_sub(delay.len() + 8)
+            .expect("regular EscherDelay filler");
+        delay.extend_from_slice(&0u16.to_le_bytes());
+        delay.extend_from_slice(&0x1234u16.to_le_bytes());
+        delay.extend_from_slice(&(filler_len as u32).to_le_bytes());
+        delay.resize(5_000, 0);
+        assert_eq!(delay.len(), 5_000);
+
+        compound
+            .create_stream(ESCHER_DELAY_STREAM)
+            .expect("regular Escher delay stream")
+            .write_all(&delay)
+            .expect("write regular Escher delay");
+
+        compound.flush().expect("flush synthetic CFB");
+        compound.into_inner().into_inner()
+    }
+
     fn corrupt_first_minifat_entry(mut bytes: Vec<u8>) -> Vec<u8> {
         let sector_shift = u16::from_le_bytes([bytes[30], bytes[31]]);
         let sector_len = 1usize << sector_shift;
@@ -871,6 +922,51 @@ mod tests {
         assert!(probe.has_surviving_evidence());
         assert_eq!(probe.source_sha256, source_sha256(&bytes));
         assert!(!probe.source_modified);
+    }
+
+    #[test]
+    fn damaged_cfb_can_admit_image_only_salvage_from_sid_bound_regular_delay() {
+        let bytes =
+            corrupt_first_minifat_entry(synthetic_pub_cfb_with_regular_delay_png_and_mini_contents());
+        assert!(pub_cfb::inspect_reader(Cursor::new(bytes.clone())).is_err());
+
+        let probe = probe_reader_salvage_candidate(&bytes);
+        assert_eq!(probe.intake.class, FailureIntakeClass::PubDamaged);
+        assert_eq!(
+            probe.eligibility,
+            ReaderSalvageEligibility::EligibleDamagedPublisher
+        );
+        assert!(!probe.cfb_inventory_available);
+        assert!(!probe.has_surviving_evidence());
+        assert_eq!(
+            probe.subsystems.escher_delay,
+            ReaderSalvageStreamState::ContainerUnavailable
+        );
+
+        let evidence = build_reader_partial_escherdelay_evidence(&bytes, &probe)
+            .expect("SID-bound regular EscherDelay evidence");
+        assert_eq!(evidence.validated_images.len(), 1);
+        assert_eq!(evidence.logical_path, ESCHER_DELAY_STREAM);
+        assert_eq!(evidence.source_sha256, probe.source_sha256);
+
+        let graph =
+            build_reader_partial_source_graph(&bytes, &probe).expect("image-only salvage graph");
+        let images = graph
+            .facts
+            .iter()
+            .filter(|fact| matches!(fact, ReaderPartialSourceFact::VerifiedImage { .. }))
+            .count();
+        assert_eq!(images, 1);
+        assert!(
+            !graph
+                .gaps
+                .contains(&ReaderPartialSourceGap::ImageFactsUnavailable)
+        );
+        assert!(
+            graph
+                .gaps
+                .contains(&ReaderPartialSourceGap::GeometryFactsUnavailable)
+        );
     }
 
     #[test]
