@@ -115,12 +115,18 @@ try {
     assert.ok(Math.abs(line.x - 375) < 0.1, "canonical x plus node transform must be preserved");
   }
   assert.ok(Math.abs(shared[1].y - shared[0].y - 20) < 0.1, "server line-height, not browser reflow, places lines");
-  const clip = await page.locator('[data-node-id="resolved"] g[clip-path]').evaluate((element) => {
-    const id = element.getAttribute("clip-path").slice(5, -1);
-    const bounds = document.getElementById(id).firstElementChild;
-    return ["x", "y", "width", "height"].map((key) => Number(bounds.getAttribute(key)));
-  });
-  assert.deepEqual(clip, [emu(350), emu(30), emu(220), emu(80)], "clip remains in canonical node space");
+  const textViewport = await page.locator('[data-node-id="resolved"] [data-text-viewport="fixed-frame"]').evaluate((element) => ({
+    frame: ["x", "y", "width", "height"].map((key) => Number(element.getAttribute(key))),
+    view_box: element.getAttribute("viewBox"),
+    overflow: element.getAttribute("overflow")
+  }));
+  assert.deepEqual(
+    textViewport.frame,
+    [emu(350), emu(30), emu(220), emu(80)],
+    "shared-text viewport remains in canonical node space"
+  );
+  assert.equal(textViewport.view_box, "0 0 220 80", "shared-text clip uses local CSS-pixel coordinates");
+  assert.equal(textViewport.overflow, "hidden", "shared-text viewport remains a fixed-frame clip");
   const borderArt = page.locator('[data-node-id="border"] [data-decorative-border-slot="top_left"]');
   assert.equal(await borderArt.count(), 1, "source-backed decorative border placement must paint as an image");
   assert.deepEqual(
