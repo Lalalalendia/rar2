@@ -395,8 +395,7 @@ fn recover_partial_cfb_raw_directory_prefix_from_bytes(
 
     loop {
         if !is_regular_sector(current, context.num_sectors) {
-            truncation_reason =
-                Some(RootRegularStreamTruncationReason::PhysicalSectorUnavailable);
+            truncation_reason = Some(RootRegularStreamTruncationReason::PhysicalSectorUnavailable);
             break;
         }
         if !seen.insert(current) {
@@ -1475,9 +1474,12 @@ mod tests {
         assert_eq!(recovered.source_sha256, sha256_hex(&damaged));
         assert!(!recovered.source_modified);
         assert!(recovered.entries.iter().any(|entry| entry.sid == 0));
-        assert!(recovered.entries.iter().all(|entry| {
-            usize::try_from(entry.sid).unwrap() < sector_len / DIR_ENTRY_LEN
-        }));
+        assert!(
+            recovered
+                .entries
+                .iter()
+                .all(|entry| { usize::try_from(entry.sid).unwrap() < sector_len / DIR_ENTRY_LEN })
+        );
     }
 
     #[test]
@@ -1497,9 +1499,8 @@ mod tests {
     #[test]
     fn directory_prefix_cycle_fails_closed() {
         let source = cycle_directory_chain_after_first_sector(multi_sector_directory_fixture());
-        let error =
-            recover_partial_cfb_raw_directory_prefix_reader(Cursor::new(source))
-                .expect_err("directory cycle must fail closed");
+        let error = recover_partial_cfb_raw_directory_prefix_reader(Cursor::new(source))
+            .expect_err("directory cycle must fail closed");
         assert!(format!("{error:#}").contains("directory chain cycle"));
     }
 
@@ -1507,13 +1508,10 @@ mod tests {
     fn invalid_recovered_root_entry_fails_closed() {
         let mut source = multi_sector_directory_fixture();
         let sector_len = 1usize << u16::from_le_bytes([source[30], source[31]]);
-        let directory_sector =
-            u32::from_le_bytes([source[48], source[49], source[50], source[51]]);
+        let directory_sector = u32::from_le_bytes([source[48], source[49], source[50], source[51]]);
         let root_offset = (usize::try_from(directory_sector).unwrap() + 1) * sector_len;
         source[root_offset + 66] = 2;
-        assert!(
-            recover_partial_cfb_raw_directory_prefix_reader(Cursor::new(source)).is_err()
-        );
+        assert!(recover_partial_cfb_raw_directory_prefix_reader(Cursor::new(source)).is_err());
     }
 
     #[test]
