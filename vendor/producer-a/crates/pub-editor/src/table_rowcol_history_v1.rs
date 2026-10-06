@@ -1056,6 +1056,45 @@ mod tests {
     }
 
     #[test]
+    fn cannot_delete_last_row_or_column() {
+        let before = base_snapshot();
+
+        let one_row = plan_table_rowcol_mutation_v1(
+            &before,
+            &TableRowColMutationV1::DeleteRow {
+                row_id: before.grid.rows[0].id,
+            },
+        )
+        .expect("delete first row");
+        assert_eq!(
+            plan_table_rowcol_mutation_v1(
+                &one_row,
+                &TableRowColMutationV1::DeleteRow {
+                    row_id: one_row.grid.rows[0].id,
+                },
+            ),
+            Err(TableRowColHistoryErrorV1::CannotDeleteLastTrack)
+        );
+
+        let one_column = plan_table_rowcol_mutation_v1(
+            &before,
+            &TableRowColMutationV1::DeleteColumn {
+                column_id: before.grid.columns[0].id,
+            },
+        )
+        .expect("delete first column");
+        assert_eq!(
+            plan_table_rowcol_mutation_v1(
+                &one_column,
+                &TableRowColMutationV1::DeleteColumn {
+                    column_id: one_column.grid.columns[0].id,
+                },
+            ),
+            Err(TableRowColHistoryErrorV1::CannotDeleteLastTrack)
+        );
+    }
+
+    #[test]
     fn delete_unknown_extent_fails_closed() {
         let mut before = base_snapshot();
         let target = before.grid.rows[0].id;
