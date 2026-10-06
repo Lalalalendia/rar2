@@ -321,7 +321,8 @@ fn build_reader_partial_escherdelay_evidence_from_recovered(
         return None;
     }
 
-    let inventory = inspect_validated_delayed_blips_prefix(semantic_stream.clone(), &recovered.bytes);
+    let inventory =
+        inspect_validated_delayed_blips_prefix(semantic_stream.clone(), &recovered.bytes);
     if inventory.available_prefix_len != recovered.available_prefix_len {
         return None;
     }
@@ -474,13 +475,12 @@ pub fn build_reader_partial_escherdelay_evidence(
             {
                 return None;
             }
-            let recovered =
-                pub_cfb::recover_regular_stream_prefix_by_sid_reader_with_expected_sha(
-                    Cursor::new(bytes),
-                    discovered.stream_sid,
-                    &probe.source_sha256,
-                )
-                .ok()?;
+            let recovered = pub_cfb::recover_regular_stream_prefix_by_sid_reader_with_expected_sha(
+                Cursor::new(bytes),
+                discovered.stream_sid,
+                &probe.source_sha256,
+            )
+            .ok()?;
             if recovered.stream_sid != discovered.stream_sid
                 || recovered.declared_len != discovered.declared_len
             {
@@ -1075,8 +1075,7 @@ mod tests {
     fn corrupt_root_child_link(mut bytes: Vec<u8>) -> Vec<u8> {
         let sector_shift = u16::from_le_bytes([bytes[30], bytes[31]]);
         let sector_len = 1usize << sector_shift;
-        let directory_sector =
-            u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]);
+        let directory_sector = u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]);
         let root_entry_offset = (directory_sector as usize + 1) * sector_len;
         bytes[root_entry_offset + 76..root_entry_offset + 80]
             .copy_from_slice(&0x0000_ffffu32.to_le_bytes());
@@ -1104,12 +1103,10 @@ mod tests {
             .is_err()
         );
 
-        let raw =
-            pub_cfb::inspect_partial_cfb_raw_directory_reader(Cursor::new(bytes.clone()))
-                .expect("raw physical directory");
+        let raw = pub_cfb::inspect_partial_cfb_raw_directory_reader(Cursor::new(bytes.clone()))
+            .expect("raw physical directory");
         assert!(raw.entries.iter().any(|entry| {
-            entry.object_type == 2
-                && entry.descriptive_name.as_deref() == Some("EscherDelayStm")
+            entry.object_type == 2 && entry.descriptive_name.as_deref() == Some("EscherDelayStm")
         }));
 
         let probe = probe_reader_salvage_candidate(&bytes);
@@ -1130,17 +1127,19 @@ mod tests {
         ));
 
         let graph = build_reader_partial_source_graph(&bytes, &probe).expect("partial graph");
-        assert!(graph.facts.iter().any(|fact| matches!(
-            fact,
-            ReaderPartialSourceFact::VerifiedImage { .. }
-        )));
+        assert!(
+            graph
+                .facts
+                .iter()
+                .any(|fact| matches!(fact, ReaderPartialSourceFact::VerifiedImage { .. }))
+        );
     }
 
     #[test]
     fn two_strict_orphan_delay_candidates_fail_closed_as_ambiguous() {
-        let bytes = corrupt_root_child_link(
-            synthetic_pub_cfb_with_delay_png_uid_and_duplicate(true, true),
-        );
+        let bytes = corrupt_root_child_link(synthetic_pub_cfb_with_delay_png_uid_and_duplicate(
+            true, true,
+        ));
         assert!(pub_cfb::inspect_reader(Cursor::new(bytes.clone())).is_err());
 
         let raw =
