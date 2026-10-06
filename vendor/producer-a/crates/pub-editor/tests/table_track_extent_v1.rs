@@ -1,7 +1,10 @@
-use pub_editor::{SetTableTrackExtentErrorV1, TableTrackTargetV1, set_table_track_extent_v1};
+use pub_editor::{
+    SetTableTrackExtentErrorV1, TableTrackTargetV1, plan_table_track_extent_v1,
+    set_table_track_extent_v1,
+};
 use pub_model::{
     EFFECTIVE_TABLE_GRID_V1, EffectiveTableCellV1, EffectiveTableGridV1, EffectiveTableTrackV1,
-    LengthEmu, NodeId, StoryId, TableCellAddress, TableCellId, TableColumnId, TableRowId,
+    LengthEmu, NodeId, RectEmu, StoryId, TableCellAddress, TableCellId, TableColumnId, TableRowId,
 };
 
 fn canonical_id<T: serde::de::DeserializeOwned>(value: &str) -> T {
@@ -26,6 +29,15 @@ fn table_id() -> NodeId {
 
 fn story_id() -> StoryId {
     canonical_id("15000000-0000-4000-8000-000000000001")
+}
+
+fn table_bounds() -> RectEmu {
+    RectEmu::new(
+        LengthEmu::new(10),
+        LengthEmu::new(20),
+        LengthEmu::new(400),
+        LengthEmu::new(200),
+    )
 }
 
 fn grid() -> EffectiveTableGridV1 {
@@ -117,13 +129,60 @@ fn one_column_extent_changes_without_touching_siblings_or_identity() {
 }
 
 #[test]
-fn invalid_or_unknown_track_fails_closed() {
+fn row_resize_moves_only_outer_height_by_exact_delta() {
+    let before = grid();
+    let bounds = table_bounds();
+    let plan = plan_table_track_extent_v1(
+        &before,
+        bounds,
+        TableTrackTargetV1::Row(row_id(1)),
+        LengthEmu::new(150),
+    )
+    .expect("row plan");
+
+    assert_eq!(plan.before_extent, LengthEmu::new(100));
+    assert_eq!(plan.after_extent, LengthEmu::new(150));
+    assert_eq!(plan.before_bounds, bounds);
+    assert_eq!(plan.after_bounds.x, bounds.x);
+    assert_eq!(plan.after_bounds.y, bounds.y);
+    assert_eq!(plan.after_bounds.width, bounds.width);
+    assert_eq!(plan.after_bounds.height, LengthEmu::new(250));
+    assert_eq!(plan.after_grid.rows[1], before.rows[1]);
+    assert_eq!(plan.after_grid.columns, before.columns);
+    assert_eq!(plan.after_grid.cells, before.cells);
+}
+
+#[test]
+fn column_resize_moves_only_outer_width_by_exact_delta() {
+    let before = grid();
+    let bounds = table_bounds();
+    let plan = plan_table_track_extent_v1(
+        &before,
+        bounds,
+        TableTrackTargetV1::Column(col_id(2)),
+        LengthEmu::new(275),
+    )
+    .expect("column plan");
+
+    assert_eq!(plan.before_extent, LengthEmu::new(200));
+    assert_eq!(plan.after_extent, LengthEmu::new(275));
+    assert_eq!(plan.after_bounds.x, bounds.x);
+    assert_eq!(plan.after_bounds.y, bounds.y);
+    assert_eq!(plan.after_bounds.width, LengthEmu::new(475));
+    assert_eq!(plan.after_bounds.height, bounds.height);
+    assert_eq!(plan.after_grid.columns[0], before.columns[0]);
+    assert_eq!(plan.after_grid.rows, before.rows);
+    assert_eq!(plan.after_grid.cells, before.cells);
+}
+
+#[test]
+fn invalid_unknown_missing_and_no_change_fail_closed() {
     let before = grid();
     assert_eq!(
         set_table_track_extent_v1(
             &before,
             TableTrackTargetV1::Row(row_id(1)),
-            LengthEmu::new(0)
+            LengthEmu::new(0),
         ),
         Err(SetTableTrackExtentErrorV1::InvalidExtent)
     );
@@ -131,8 +190,27 @@ fn invalid_or_unknown_track_fails_closed() {
         set_table_track_extent_v1(
             &before,
             TableTrackTargetV1::Column(col_id(9)),
-            LengthEmu::new(300)
+            LengthEmu::new(300),
         ),
         Err(SetTableTrackExtentErrorV1::TrackMissing)
+    );
+    assert_eq!(
+        set_table_track_extent_v1(
+            &before,
+            TableTrackTargetV1::Row(row_id(1)),
+            LengthEmu::new(100),
+        ),
+        Err(SetTableTrackExtentErrorV1::NoChange)
+    );
+
+    let mut unknown = before;
+    unknown.rows[0].extent = None;
+    assert_eq!(
+        set_table_track_extent_v1(
+            &unknown,
+            TableTrackTargetV1::Row(row_id(1)),
+            LengthEmu::new(150),
+        ),
+        Err(SetTableTrackExtentErrorV1::UnknownCurrentExtent)
     );
 }
