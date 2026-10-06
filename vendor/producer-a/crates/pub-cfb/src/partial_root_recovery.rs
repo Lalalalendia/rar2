@@ -125,6 +125,42 @@ pub struct RawPhysicalDirectoryInventory {
     pub rejected_active_entry_count: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", content = "sid", rename_all = "snake_case")]
+pub enum RecoveredDirectoryLink {
+    None,
+    InRecoveredPrefix(u32),
+    OutsideRecoveredPrefix(u32),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecoveredRawDirectoryEntry {
+    pub sid: u32,
+    pub object_type: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub descriptive_name: Option<String>,
+    pub left_sibling: RecoveredDirectoryLink,
+    pub right_sibling: RecoveredDirectoryLink,
+    pub child: RecoveredDirectoryLink,
+    pub start_sector: u32,
+    pub declared_len: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecoveredRawDirectoryPrefix {
+    pub source_sha256: String,
+    pub source_byte_len: u64,
+    pub available_directory_len: u64,
+    pub directory_prefix_sha256: String,
+    pub status: RootRegularStreamPrefixStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncation_reason: Option<RootRegularStreamTruncationReason>,
+    pub source_ranges: Vec<RootRegularStreamSourceRange>,
+    pub entries: Vec<RecoveredRawDirectoryEntry>,
+    pub rejected_active_entry_count: usize,
+    pub source_modified: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiscoveredPhysicalStream {
     pub source_sha256: String,
@@ -133,6 +169,16 @@ pub struct DiscoveredPhysicalStream {
     pub stream_sid: u32,
     pub descriptive_name: String,
     pub declared_len: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PartialCfbFatContext {
+    major: u16,
+    sector_len: usize,
+    num_sectors: usize,
+    mini_stream_cutoff: u64,
+    first_directory_sector: u32,
+    fat: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,7 +285,7 @@ fn recover_regular_stream_prefix_by_sid_reader_inner<R: Read + Seek>(
     Ok(recovered)
 }
 
-fn build_partial_cfb_physical_context(source: &[u8]) -> Result<PartialCfbPhysicalContext> {
+fn build_partial_cfb_fat_context(source: &[u8]) -> Result<PartialCfbFatContext> {
     if source.len() < 512 || source.get(..8) != Some(CFB_SIGNATURE.as_slice()) {
         anyhow::bail!("not a CFB container");
     }
@@ -271,15 +317,31 @@ fn build_partial_cfb_physical_context(source: &[u8]) -> Result<PartialCfbPhysica
     }
 
     let fat = read_fat(source, sector_len, num_sectors, num_fat_sectors)?;
-    let directory_sector_ids =
-        fat_chain_to_end(first_directory_sector, &fat, num_sectors, "directory")?;
+    Ok(PartialCfbFatContext {
+        major,
+        sector_len,
+        num_sectors,
+        mini_stream_cutoff,
+        first_directory_sector,
+        fat,
+    })
+}
+
+fn build_partial_cfb_physical_context(source: &[u8]) -> Result<PartialCfbPhysicalContext> {
+    let base = build_partial_cfb_fat_context(source)?;
+    let directory_sector_ids = fat_chain_to_end(
+        base.first_directory_sector,
+        &base.fat,
+        base.num_sectors,
+        "directory",
+    )?;
     if directory_sector_ids.is_empty() {
         anyhow::bail!("empty CFB directory chain");
     }
 
-    let mut directory = Vec::with_capacity(directory_sector_ids.len() * sector_len);
+    let mut directory = Vec::with_capacity(directory_sector_ids.len() * base.sector_len);
     for sector_id in directory_sector_ids {
-        directory.extend_from_slice(read_sector(source, sector_len, sector_id)?);
+        directory.extend_from_slice(read_sector(source, base.sector_len, sector_id)?);
     }
     if directory.len() < DIR_ENTRY_LEN {
         anyhow::bail!("missing CFB root directory entry");
@@ -289,12 +351,179 @@ fn build_partial_cfb_physical_context(source: &[u8]) -> Result<PartialCfbPhysica
     }
 
     Ok(PartialCfbPhysicalContext {
-        major,
-        sector_len,
-        num_sectors,
-        mini_stream_cutoff,
-        fat,
+        major: base.major,
+        sector_len: base.sector_len,
+        num_sectors: base.num_sectors,
+        mini_stream_cutoff: base.mini_stream_cutoff,
+        fat: base.fat,
         directory,
+    })
+}
+
+/// Recovers only the physically proven prefix of the CFB directory stream.
+///
+/// Complete 128-byte directory entries before the first physical/FAT break are
+/// retained with their exact ordinal SIDs. The red-black sibling/child topology
+/// is never traversed or repaired. Links outside the recovered prefix remain
+/// explicit evidence rather than being followed.
+///
+/// This is directory evidence extraction, not logical path reconstruction and
+/// not CFB repair.
+pub fn recover_partial_cfb_raw_directory_prefix_reader<R: Read + Seek>(
+    mut reader: R,
+) -> Result<RecoveredRawDirectoryPrefix> {
+    reader
+        .seek(SeekFrom::Start(0))
+        .context("failed to seek to partial CFB directory input")?;
+    let mut source = Vec::new();
+    reader
+        .read_to_end(&mut source)
+        .context("failed to read partial CFB directory input")?;
+    recover_partial_cfb_raw_directory_prefix_from_bytes(&source)
+}
+
+fn recover_partial_cfb_raw_directory_prefix_from_bytes(
+    source: &[u8],
+) -> Result<RecoveredRawDirectoryPrefix> {
+    let context = build_partial_cfb_fat_context(source)?;
+    let mut current = context.first_directory_sector;
+    let mut seen = BTreeSet::new();
+    let mut directory = Vec::new();
+    let mut source_ranges = Vec::new();
+    let mut truncation_reason = None;
+    let mut complete = false;
+
+    loop {
+        if !is_regular_sector(current, context.num_sectors) {
+            truncation_reason =
+                Some(RootRegularStreamTruncationReason::PhysicalSectorUnavailable);
+            break;
+        }
+        if !seen.insert(current) {
+            anyhow::bail!("directory chain cycle at sector {current}");
+        }
+        if seen.len() > context.num_sectors {
+            anyhow::bail!("directory chain exceeds physical sector count");
+        }
+
+        let Some(sector) = sector_if_available(source, context.sector_len, current) else {
+            truncation_reason =
+                Some(RootRegularStreamTruncationReason::PhysicalSectorUnavailable);
+            break;
+        };
+        let source_offset =
+            (usize::try_from(current).context("directory sector index does not fit usize")? + 1)
+                .checked_mul(context.sector_len)
+                .context("directory source offset overflow")?;
+        directory.extend_from_slice(sector);
+        source_ranges.push(RootRegularStreamSourceRange {
+            offset: u64::try_from(source_offset)
+                .context("directory source offset does not fit u64")?,
+            len: u64::try_from(context.sector_len)
+                .context("directory sector length does not fit u64")?,
+        });
+
+        let current_usize =
+            usize::try_from(current).context("directory sector index does not fit usize")?;
+        let Some(next) = context.fat.get(current_usize).copied() else {
+            truncation_reason = Some(RootRegularStreamTruncationReason::FatEntryMissing);
+            break;
+        };
+        if next == END_OF_CHAIN {
+            complete = true;
+            break;
+        }
+        if !is_regular_sector(next, context.num_sectors) {
+            truncation_reason = Some(RootRegularStreamTruncationReason::InvalidNextSector);
+            break;
+        }
+        current = next;
+    }
+
+    if directory.len() < DIR_ENTRY_LEN {
+        anyhow::bail!("no complete CFB root directory entry recovered");
+    }
+    if directory[66] != 5 {
+        anyhow::bail!("recovered CFB directory SID 0 is not root");
+    }
+
+    let entry_count = directory.len() / DIR_ENTRY_LEN;
+    let mut entries = Vec::new();
+    let mut rejected_active_entry_count = 0usize;
+    for sid_usize in 0..entry_count {
+        let start = sid_usize
+            .checked_mul(DIR_ENTRY_LEN)
+            .context("recovered directory SID offset overflow")?;
+        let raw = &directory[start..start + DIR_ENTRY_LEN];
+        let object_type = raw[66];
+        if object_type == 0 {
+            continue;
+        }
+        if sid_usize == 0 {
+            if object_type != 5 {
+                anyhow::bail!("recovered CFB directory SID 0 is not root");
+            }
+        } else if !matches!(object_type, 1 | 2) {
+            rejected_active_entry_count += 1;
+            continue;
+        }
+
+        let low_len = read_u32(raw, 120)? as u64;
+        let high_len = read_u32(raw, 124)? as u64;
+        let declared_len = if context.major == 4 {
+            low_len | (high_len << 32)
+        } else {
+            low_len
+        };
+        let sid = u32::try_from(sid_usize).context("recovered directory SID does not fit u32")?;
+        entries.push(RecoveredRawDirectoryEntry {
+            sid,
+            object_type,
+            descriptive_name: directory_name(raw).ok(),
+            left_sibling: recovered_directory_link(raw, 68, entry_count)?,
+            right_sibling: recovered_directory_link(raw, 72, entry_count)?,
+            child: recovered_directory_link(raw, 76, entry_count)?,
+            start_sector: read_u32(raw, 116)?,
+            declared_len,
+        });
+    }
+
+    Ok(RecoveredRawDirectoryPrefix {
+        source_sha256: sha256_hex(source),
+        source_byte_len: u64::try_from(source.len())
+            .context("source byte length does not fit u64")?,
+        available_directory_len: u64::try_from(directory.len())
+            .context("directory prefix length does not fit u64")?,
+        directory_prefix_sha256: sha256_hex(&directory),
+        status: if complete {
+            RootRegularStreamPrefixStatus::Complete
+        } else {
+            RootRegularStreamPrefixStatus::Partial
+        },
+        truncation_reason,
+        source_ranges,
+        entries,
+        rejected_active_entry_count,
+        source_modified: false,
+    })
+}
+
+fn recovered_directory_link(
+    raw: &[u8],
+    offset: usize,
+    recovered_entry_count: usize,
+) -> Result<RecoveredDirectoryLink> {
+    let sid = read_u32(raw, offset)?;
+    if sid == NO_STREAM {
+        return Ok(RecoveredDirectoryLink::None);
+    }
+    let in_prefix = usize::try_from(sid)
+        .ok()
+        .is_some_and(|value| value < recovered_entry_count);
+    Ok(if in_prefix {
+        RecoveredDirectoryLink::InRecoveredPrefix(sid)
+    } else {
+        RecoveredDirectoryLink::OutsideRecoveredPrefix(sid)
     })
 }
 
