@@ -4151,6 +4151,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_17
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_18
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_19
         {
             let actual_grids =
                 effective_table_grids_with_history(&candidate.graph, &candidate.undo);
