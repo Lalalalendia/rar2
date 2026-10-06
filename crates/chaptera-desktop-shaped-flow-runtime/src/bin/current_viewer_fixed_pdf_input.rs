@@ -49,6 +49,12 @@ struct CurrentViewerFontResourceV1 {
     fingerprint_sha256: String,
     face_index: u32,
     bytes: Vec<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bold: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    italic: Option<bool>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -102,7 +108,117 @@ struct CurrentViewerFixedPdfInputV1 {
     pages: Vec<PageRenderPlanV1>,
     images: Vec<CurrentViewerImageAssetV1>,
     font: CurrentViewerFontResourceV1,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    fonts: Vec<CurrentViewerFontResourceV1>,
     census: CurrentViewerPlanCensusV1,
+}
+
+#[derive(Debug, Clone)]
+struct ProducerExactFont {
+    family: String,
+    bold: bool,
+    italic: bool,
+    resource_id: String,
+    sha256: String,
+    face_index: u32,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Default)]
+struct ProducerExactFontRegistry {
+    fonts: BTreeMap<(String, bool, bool), ProducerExactFont>,
+}
+
+impl ProducerExactFontRegistry {
+    #[cfg(target_os = "windows")]
+    fn from_visual(visual: &ViewerGeometryDocument) -> Self {
+        let mut database = fontdb::Database::new();
+        database.load_system_fonts();
+        let families = visual
+            .typography_runs
+            .iter()
+            .map(|run| run.source_font_name.trim())
+            .filter(|name| !name.is_empty())
+            .map(normalize_font_family)
+            .collect::<BTreeSet<_>>();
+        let mut out = Self::default();
+        for family in families {
+            for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+                let expected_weight = if bold {
+                    fontdb::Weight::BOLD
+                } else {
+                    fontdb::Weight::NORMAL
+                };
+                let expected_style = if italic {
+                    fontdb::Style::Italic
+                } else {
+                    fontdb::Style::Normal
+                };
+                let matches = database
+                    .faces()
+                    .filter(|info| {
+                        info.weight == expected_weight
+                            && info.stretch == fontdb::Stretch::Normal
+                            && info.style == expected_style
+                            && info
+                                .families
+                                .iter()
+                                .any(|(name, _)| normalize_font_family(name) == family)
+                    })
+                    .map(|info| info.id)
+                    .collect::<Vec<_>>();
+                let [id] = matches.as_slice() else {
+                    continue;
+                };
+                let Some((bytes, face_index)) =
+                    database.with_face_data(*id, |bytes, face_index| (bytes.to_vec(), face_index))
+                else {
+                    continue;
+                };
+                if bytes.is_empty() {
+                    continue;
+                }
+                let sha256 = sha256_hex(&bytes);
+                let resource_id = format!(
+                    "chaptera.desktop.environment-font.{}.face{}",
+                    sha256, face_index
+                );
+                out.fonts.insert(
+                    (family.clone(), bold, italic),
+                    ProducerExactFont {
+                        family: family.clone(),
+                        bold,
+                        italic,
+                        resource_id,
+                        sha256,
+                        face_index,
+                        bytes,
+                    },
+                );
+            }
+        }
+        out
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn from_visual(_visual: &ViewerGeometryDocument) -> Self {
+        Self::default()
+    }
+
+    fn packet_resources(&self) -> Vec<CurrentViewerFontResourceV1> {
+        self.fonts
+            .values()
+            .map(|font| CurrentViewerFontResourceV1 {
+                resource_id: font.resource_id.clone(),
+                fingerprint_sha256: font.sha256.clone(),
+                face_index: font.face_index,
+                bytes: font.bytes.clone(),
+                source_family: Some(font.family.clone()),
+                bold: Some(font.bold),
+                italic: Some(font.italic),
+            })
+            .collect()
+    }
 }
 
 fn digest(bytes: &[u8]) -> Sha256Digest {
@@ -637,6 +753,7 @@ fn run(
         bytes: &font_bytes,
     };
 
+    let source_fonts = ProducerExactFontRegistry::from_visual(&visual);
     let mut pages = Vec::with_capacity(visual.document.pages.len());
     for page_index in 0..visual.document.pages.len() {
         pages.push(
@@ -736,7 +853,11 @@ fn run(
             fingerprint_sha256: font_sha,
             face_index: 0,
             bytes: font_bytes,
+            source_family: None,
+            bold: None,
+            italic: None,
         },
+        fonts: source_fonts.packet_resources(),
         census,
     };
 
