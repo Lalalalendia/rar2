@@ -69,6 +69,10 @@ def validate_semantics(receipt):
         raise AssertionError("replacement asset SHA must stay redacted")
     if image["frame_before"] != image["frame_after"]:
         raise AssertionError("V2 ReplaceImage must preserve frame geometry")
+    if not image["explicit_crop_present"]:
+        raise AssertionError("newsletter continuity requires an explicit source crop")
+    if not image["crop_preserved"]:
+        raise AssertionError("newsletter continuity requires ReplaceImage to preserve crop")
 
     ordered_states = [
         history["after_story_state_id"],
@@ -177,7 +181,8 @@ def sample_receipt():
             "after_asset_byte_len": 2048,
             "frame_before": {"x": 70, "y": 80, "width": 500, "height": 320},
             "frame_after": {"x": 70, "y": 80, "width": 500, "height": 320},
-            "explicit_crop_present": False,
+            "explicit_crop_present": True,
+            "crop_preserved": True,
             "durable_replace_count": 1,
         },
         "history": {
