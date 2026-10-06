@@ -3555,6 +3555,28 @@ pub fn build_mature_0x2c_from_streams(
                 ReadConfidence::Exact,
             ));
         }
+        if has_default_line_geometry(shape) {
+            source_refs.push(source_ref(
+                &graph.source,
+                &shape.source,
+                Some(format!("escher/client-data-shape-id/{seq_num}")),
+                Some("SpContainer/FSP/default-line".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ));
+            if has_shape_local_dash_gel(shape) {
+                source_refs.push(source_ref(
+                    &graph.source,
+                    &shape.source,
+                    Some(format!("escher/client-data-shape-id/{seq_num}")),
+                    Some("SpContainer/FOPT/line-dashing-dash-gel".into()),
+                    SourceRole::Projection,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ));
+            }
+        }
         if direct_image_rotation_applied || direct_image_cardinal_rotation_degrees.is_some() {
             source_refs.push(source_ref(
                 &graph.source,
@@ -4371,6 +4393,7 @@ const OFFICE_ART_FILL_COLOR: u16 = 0x0181;
 const OFFICE_ART_FILL_BOOLEANS: u16 = 0x01BF;
 const OFFICE_ART_LINE_COLOR: u16 = 0x01C0;
 const OFFICE_ART_LINE_WIDTH: u16 = 0x01CB;
+const OFFICE_ART_LINE_DASHING: u16 = 0x01CE;
 const OFFICE_ART_LINE_BOOLEANS: u16 = 0x01FF;
 
 // OfficeArt boolean property sets persist each use/value pair in mirrored
@@ -4419,6 +4442,14 @@ fn has_default_roundrect_geometry(shape: &pub_escher::SpContainerObservation) ->
 
 fn has_default_ellipse_geometry(shape: &pub_escher::SpContainerObservation) -> bool {
     shape.fsp.as_ref().map(|fsp| fsp.shape_type) == Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
+}
+
+fn has_default_line_geometry(shape: &pub_escher::SpContainerObservation) -> bool {
+    shape.fsp.as_ref().map(|fsp| fsp.shape_type) == Some(OFFICEART_SHAPE_TYPE_LINE)
+}
+
+fn has_shape_local_dash_gel(shape: &pub_escher::SpContainerObservation) -> bool {
+    unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_DASHING) == Some(6)
 }
 
 fn has_explicit_officeart_paint_observation(shape: &pub_escher::SpContainerObservation) -> bool {
