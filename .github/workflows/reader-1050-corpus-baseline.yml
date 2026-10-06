@@ -443,7 +443,8 @@ jobs:
           set -euo pipefail
           "${CARGO_TARGET_DIR}/release/recovery-damage-classifier" \
             out/materialized/native \
-            out/reader1050/recovery-damage-classifier.json
+            out/reader1050/recovery-damage-classifier.json \
+            tools/research-runner/manual/recovery-damage-classifier-01.rescue-evidence.json
 
           python - <<'PY'
           import json
