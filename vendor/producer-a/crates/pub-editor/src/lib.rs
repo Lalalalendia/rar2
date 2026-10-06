@@ -6377,6 +6377,12 @@ impl EditorSession {
         })
     }
 
+    fn has_table_rowcol_history_v1(&self, node_id: NodeId) -> bool {
+        self.undo.iter().any(|operation| {
+            table_rowcol_history_v1(operation).is_some_and(|history| history.table_id == node_id)
+        })
+    }
+
     fn has_node_resize_history_v1(&self, node_id: NodeId) -> bool {
         self.undo.iter().any(|operation| match operation {
             EditOperation::ResizeNode {
@@ -6396,7 +6402,9 @@ impl EditorSession {
         y: LengthEmu,
     ) -> Result<(), EditorError> {
         self.validate_source_identity()?;
-        if self.has_table_track_extent_history_v1(node_id) {
+        if self.has_table_track_extent_history_v1(node_id)
+            || self.has_table_rowcol_history_v1(node_id)
+        {
             return Err(EditorError::NodeMoveUnsupported { node_id });
         }
 
@@ -6568,7 +6576,9 @@ impl EditorSession {
 
     pub fn can_resize_node(&self, node_id: NodeId) -> Result<(), EditorError> {
         self.validate_source_identity()?;
-        if self.has_table_track_extent_history_v1(node_id) {
+        if self.has_table_track_extent_history_v1(node_id)
+            || self.has_table_rowcol_history_v1(node_id)
+        {
             return Err(EditorError::NodeResizeUnsupported { node_id });
         }
 
@@ -8782,6 +8792,12 @@ fn apply_forward(
         EditOperation::SetTableTrackExtent { .. } => {
             unreachable!("table track extents are derived from editor history")
         }
+        EditOperation::InsertTableRow { .. }
+        | EditOperation::DeleteTableRow { .. }
+        | EditOperation::InsertTableColumn { .. }
+        | EditOperation::DeleteTableColumn { .. } => {
+            unreachable!("table row/column lifecycle is applied through the structural snapshot bridge")
+        }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is applied to the authored overlay state")
         }
@@ -9045,6 +9061,12 @@ fn apply_inverse(
         }
         EditOperation::SetTableTrackExtent { .. } => {
             unreachable!("table track extents are derived from editor history")
+        }
+        EditOperation::InsertTableRow { .. }
+        | EditOperation::DeleteTableRow { .. }
+        | EditOperation::InsertTableColumn { .. }
+        | EditOperation::DeleteTableColumn { .. } => {
+            unreachable!("table row/column lifecycle is applied through the structural snapshot bridge")
         }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is reverted in the authored overlay state")
