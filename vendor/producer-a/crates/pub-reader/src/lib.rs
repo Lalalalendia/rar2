@@ -445,6 +445,8 @@ const OFFICEART_FSP_FLIP_V: u32 = 1 << 7;
 
 const FIELD_STORY_ID: u16 = 0x27;
 const FIELD_FRAME_ORDINAL: u16 = 0x28;
+const FIELD_SHAPE_WIDTH: u16 = 0xAA;
+const FIELD_SHAPE_HEIGHT: u16 = 0xAB;
 const FIELD_PREVIOUS_FRAME: u16 = 0x36;
 const FIELD_NEXT_FRAME: u16 = 0x37;
 
@@ -3329,36 +3331,60 @@ pub fn build_mature_0x2c_from_streams(
             None
         };
 
-        let (page_id, bounds, grouped_sources) = if let Some(page_id) = direct_page {
-            let Some(anchor) = shape.client_anchor.as_ref() else {
-                diagnostics.push(PubBridgeDiagnostic::IncompleteEscherAnchor { seq_num });
-                continue;
-            };
-            let Some(bounds) = page_relative_bounds(
-                graph
+        let (page_id, bounds, grouped_sources, direct_image_anchor_recovered_from_contents_extent) =
+            if let Some(page_id) = direct_page {
+                let Some(anchor) = shape.client_anchor.as_ref() else {
+                    diagnostics.push(PubBridgeDiagnostic::IncompleteEscherAnchor { seq_num });
+                    continue;
+                };
+                let page = graph
                     .pages
                     .get(&page_id)
-                    .expect("page id came from graph registry"),
-                anchor,
-            ) else {
-                let complete = anchor_has_unique_geometry_fields(anchor);
-                diagnostics.push(if complete {
-                    PubBridgeDiagnostic::InvalidEscherAnchor { seq_num }
-                } else {
-                    PubBridgeDiagnostic::IncompleteEscherAnchor { seq_num }
-                });
+                    .expect("page id came from graph registry");
+                let (bounds, recovered_from_contents_extent) =
+                    if let Some(bounds) = page_relative_bounds(page, anchor) {
+                        (bounds, false)
+                    } else {
+                        let recovered = if raw_type == Some(RAW_TYPE_SHAPE)
+                            && exact_story_identity.is_none()
+                            && image_slot.is_some()
+                        {
+                            match (
+                                unique_u32_field(&chunk, FIELD_SHAPE_WIDTH)?,
+                                unique_u32_field(&chunk, FIELD_SHAPE_HEIGHT)?,
+                            ) {
+                                (Some((width, _)), Some((height, _))) => {
+                                    page_relative_bounds_from_contents_missing_xe(
+                                        page, anchor, width, height,
+                                    )
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
+                        let Some(bounds) = recovered else {
+                            let complete = anchor_has_unique_geometry_fields(anchor);
+                            diagnostics.push(if complete {
+                                PubBridgeDiagnostic::InvalidEscherAnchor { seq_num }
+                            } else {
+                                PubBridgeDiagnostic::IncompleteEscherAnchor { seq_num }
+                            });
+                            continue;
+                        };
+                        (bounds, true)
+                    };
+                (page_id, bounds, Vec::new(), recovered_from_contents_extent)
+            } else if let Some(projection) = grouped_projection {
+                (
+                    projection.page_id,
+                    projection.bounds,
+                    projection.group_sources,
+                    false,
+                )
+            } else {
                 continue;
             };
-            (page_id, bounds, Vec::new())
-        } else if let Some(projection) = grouped_projection {
-            (
-                projection.page_id,
-                projection.bounds,
-                projection.group_sources,
-            )
-        } else {
-            continue;
-        };
 
         let node_id = derive_pub_node_id(&source_hash, seq_num)?;
         let explicit_paint =
@@ -3579,6 +3605,24 @@ pub fn build_mature_0x2c_from_streams(
             AuthorityClass::Authoritative,
             ReadConfidence::Exact,
         ));
+        if direct_image_anchor_recovered_from_contents_extent {
+            for (field_id, path) in [
+                (FIELD_SHAPE_WIDTH, "Contents/0x01/shape-width"),
+                (FIELD_SHAPE_HEIGHT, "Contents/0x01/shape-height"),
+            ] {
+                if let Some((_, value_source)) = unique_u32_field(&chunk, field_id)? {
+                    source_refs.push(source_ref(
+                        &graph.source,
+                        &value_source,
+                        Some(object_key.clone()),
+                        Some(path.into()),
+                        SourceRole::Projection,
+                        AuthorityClass::Authoritative,
+                        ReadConfidence::Exact,
+                    ));
+                }
+            }
+        }
         if has_default_roundrect_geometry(shape) {
             source_refs.push(source_ref(
                 &graph.source,
@@ -5348,6 +5392,61 @@ fn center_origin_rect_to_page_bounds(page: &Page, rect: [i128; 4]) -> Result<Rec
     ))
 }
 
+fn page_relative_bounds_from_contents_missing_xe(
+    page: &Page,
+    anchor: &PublisherFieldRecord,
+    contents_width: u32,
+    contents_height: u32,
+) -> Option<RectEmu> {
+    if anchor
+        .fields
+        .iter()
+        .filter(|field| field.id == PUBLISHER_FIELD_XE)
+        .count()
+        != 0
+    {
+        return None;
+    }
+
+    let xs = signed_field(anchor, PUBLISHER_FIELD_XS)?;
+    let ys = signed_field(anchor, PUBLISHER_FIELD_YS)?;
+    let ye = signed_field(anchor, PUBLISHER_FIELD_YE)?;
+    page_relative_bounds_from_contents_missing_xe_values(
+        page,
+        xs,
+        ys,
+        ye,
+        contents_width,
+        contents_height,
+    )
+}
+
+fn page_relative_bounds_from_contents_missing_xe_values(
+    page: &Page,
+    xs: i64,
+    ys: i64,
+    ye: i64,
+    contents_width: u32,
+    contents_height: u32,
+) -> Option<RectEmu> {
+    let width = i64::from(contents_width);
+    let height = i64::from(contents_height);
+    if width <= 0 || height <= 0 || ye.checked_sub(ys)? != height {
+        return None;
+    }
+
+    xs.checked_add(width)?;
+    let x = page.size.width.get().checked_div(2)?.checked_add(xs)?;
+    let y = page.size.height.get().checked_div(2)?.checked_add(ys)?;
+
+    Some(RectEmu::new(
+        LengthEmu::new(x),
+        LengthEmu::new(y),
+        LengthEmu::new(width),
+        LengthEmu::new(height),
+    ))
+}
+
 fn page_relative_bounds(page: &Page, anchor: &PublisherFieldRecord) -> Option<RectEmu> {
     let xs = signed_field(anchor, PUBLISHER_FIELD_XS)?;
     let ys = signed_field(anchor, PUBLISHER_FIELD_YS)?;
@@ -5537,6 +5636,43 @@ mod tests {
             LengthEmu::new(300),
             LengthEmu::new(500),
         )
+    }
+
+    #[test]
+    fn direct_image_missing_xe_can_recover_from_exact_contents_extent() {
+        let page = Page {
+            id: test_page_id(99),
+            size: Size2D::new(LengthEmu::new(7_772_400), LengthEmu::new(10_058_400)),
+            bleed: None,
+            margins: None,
+            children: Vec::new(),
+            extensions: Vec::new(),
+        };
+        let bounds = page_relative_bounds_from_contents_missing_xe_values(
+            &page, -3_429_000, 259_080, 2_899_410, 3_429_000, 2_640_330,
+        )
+        .expect("Contents extent should recover the measured missing-XE image anchor");
+        assert_eq!(bounds.x.get(), 457_200);
+        assert_eq!(bounds.width.get(), 3_429_000);
+        assert_eq!(bounds.height.get(), 2_640_330);
+    }
+
+    #[test]
+    fn direct_image_missing_xe_recovery_rejects_cross_stream_height_mismatch() {
+        let page = Page {
+            id: test_page_id(100),
+            size: Size2D::new(LengthEmu::new(7_772_400), LengthEmu::new(10_058_400)),
+            bleed: None,
+            margins: None,
+            children: Vec::new(),
+            extensions: Vec::new(),
+        };
+        assert_eq!(
+            page_relative_bounds_from_contents_missing_xe_values(
+                &page, -3_429_000, 259_080, 2_899_410, 3_429_000, 2_640_329,
+            ),
+            None
+        );
     }
 
     #[test]
