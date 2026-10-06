@@ -127,7 +127,8 @@ pub(super) fn paragraph_alignment_selection_state_v1(
             Some(EffectiveParagraphAlignmentValueV1::Right) => {
                 Some(AuthoredParagraphAlignmentValueV1::Right)
             }
-            Some(EffectiveParagraphAlignmentValueV1::InterWord)
+            Some(EffectiveParagraphAlignmentValueV1::Justify)
+            | Some(EffectiveParagraphAlignmentValueV1::InterWord)
             | Some(EffectiveParagraphAlignmentValueV1::Distribute)
             | None => {
                 unsupported_effective = true;
