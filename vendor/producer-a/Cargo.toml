@@ -30,6 +30,7 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 anyhow = "1"
+md4 = "=0.11.0"
 cfb = "0.14"
 clap = { version = "4", features = ["derive"] }
 harfrust = "=0.13.3"
