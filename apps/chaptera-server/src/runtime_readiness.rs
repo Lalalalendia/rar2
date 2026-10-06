@@ -6,7 +6,7 @@ use crate::{
     blob_runtime::BlobStoreRuntime,
     jobs_runtime::JobsRuntime,
     sqlite_store::SqliteRevisionStore,
-    state::{AppState, DependencyFailure, RuntimeDependency, RuntimePorts},
+    state::{DependencyFailure, RuntimeDependency, RuntimePorts},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,7 +253,7 @@ mod tests {
         time::Duration,
     };
 
-    use crate::schema_migration::SqliteMigrationRuntime;
+    use crate::{schema_migration::SqliteMigrationRuntime, state::AppState};
 
     use super::*;
 
