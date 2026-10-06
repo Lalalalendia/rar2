@@ -52,6 +52,7 @@ pub enum BlipValidationError {
         len: u64,
         stream_len: usize,
     },
+    InconsistentRecordEnvelope,
     UidMismatch {
         rec_type: u16,
         rec_instance: u16,
@@ -94,6 +95,9 @@ impl fmt::Display for BlipValidationError {
                 f,
                 "BLIP span {offset}+{len} lies outside stream length {stream_len}"
             ),
+            Self::InconsistentRecordEnvelope => {
+                write!(f, "OfficeArt BLIP record/header/payload envelope is inconsistent with source bytes")
+            }
             Self::UidMismatch {
                 rec_type,
                 rec_instance,
@@ -120,6 +124,7 @@ pub fn validate_blip_record(
     bytes: &[u8],
     record: &OfficeArtRecord,
 ) -> Result<ValidatedBlip, BlipValidationError> {
+    validate_record_envelope(bytes, record)?;
     if record.header.rec_ver != 0 {
         return Err(BlipValidationError::InvalidRecVer {
             rec_ver: record.header.rec_ver,
@@ -186,6 +191,72 @@ pub fn validate_blip_record(
         format_header_verified: true,
         payload_sha256: hex_lower(&Sha256::digest(blip_file_data)),
     })
+}
+
+fn validate_record_envelope(
+    bytes: &[u8],
+    record: &OfficeArtRecord,
+) -> Result<(), BlipValidationError> {
+    if record.header.source.stream != record.source.stream
+        || record.payload_source.stream != record.source.stream
+        || record.header.source.offset != record.source.offset
+        || record.header.source.len != 8
+        || record
+            .record_source_payload_offset()
+            .is_none_or(|offset| record.payload_source.offset != offset)
+        || record.payload_source.len != u64::from(record.header.rec_len)
+        || record
+            .record_source_declared_len()
+            .is_none_or(|len| record.source.len != len)
+        || record.header.source.end() != Some(record.payload_source.offset)
+        || record.source.end() != record.payload_source.end()
+    {
+        return Err(BlipValidationError::InconsistentRecordEnvelope);
+    }
+
+    let header = span_slice(bytes, &record.header.source)?;
+    if header.len() != 8 {
+        return Err(BlipValidationError::InconsistentRecordEnvelope);
+    }
+    let initial = u16::from_le_bytes([header[0], header[1]]);
+    let rec_ver = (initial & 0x000f) as u8;
+    let rec_instance = initial >> 4;
+    let rec_type = u16::from_le_bytes([header[2], header[3]]);
+    let rec_len = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+    if rec_ver != record.header.rec_ver
+        || rec_instance != record.header.rec_instance
+        || rec_type != record.header.rec_type
+        || rec_len != record.header.rec_len
+    {
+        return Err(BlipValidationError::InconsistentRecordEnvelope);
+    }
+
+    Ok(())
+}
+
+trait OfficeArtRecordEnvelopeExt {
+    fn record_source_payload_offset(&self) -> Option<u64>;
+    fn record_source_declared_len(&self) -> Option<u64>;
+}
+
+impl OfficeArtRecordEnvelopeExt for OfficeArtRecord {
+    fn record_source_payload_offset(&self) -> Option<u64> {
+        self.record_source_offset_plus(8)
+    }
+
+    fn record_source_declared_len(&self) -> Option<u64> {
+        8u64.checked_add(u64::from(self.header.rec_len))
+    }
+}
+
+trait RawRecordOffsetExt {
+    fn record_source_offset_plus(&self, delta: u64) -> Option<u64>;
+}
+
+impl RawRecordOffsetExt for OfficeArtRecord {
+    fn record_source_offset_plus(&self, delta: u64) -> Option<u64> {
+        self.source.offset.checked_add(delta)
+    }
 }
 
 fn raster_grammar(rec_type: u16, rec_instance: u16) -> Result<RasterGrammar, BlipValidationError> {
@@ -406,6 +477,18 @@ mod tests {
         assert!(matches!(
             validate_blip_record(&bad, &bad_record),
             Err(BlipValidationError::UidMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn forged_record_envelope_is_rejected() {
+        let bytes = record_bytes(OFFICE_ART_BLIP_PNG, 0x6E0, BlipKind::Png, false, false);
+        let mut record = first_record(&bytes);
+        record.header.rec_len = record.header.rec_len.saturating_add(1);
+
+        assert!(matches!(
+            validate_blip_record(&bytes, &record),
+            Err(BlipValidationError::InconsistentRecordEnvelope)
         ));
     }
 
