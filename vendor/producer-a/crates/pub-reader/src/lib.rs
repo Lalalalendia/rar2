@@ -5526,11 +5526,7 @@ mod tests {
             BoundedDirectImageTransform::Identity
         );
         assert_eq!(
-            bounded_direct_story_cardinal_transform(
-                &[(32_768, false, false)],
-                0,
-                test_bounds(),
-            ),
+            bounded_direct_story_cardinal_transform(&[(32_768, false, false)], 0, test_bounds(),),
             BoundedDirectImageTransform::Unsupported
         );
         assert_eq!(
