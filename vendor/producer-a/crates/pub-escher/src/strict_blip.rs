@@ -153,7 +153,10 @@ impl fmt::Display for BlipValidationError {
                 write!(f, "invalid bounded image header for {kind:?} BLIP")
             }
             Self::InvalidMetafileFilter { filter } => {
-                write!(f, "OfficeArt metafile filter must be 0xFE, got 0x{filter:02X}")
+                write!(
+                    f,
+                    "OfficeArt metafile filter must be 0xFE, got 0x{filter:02X}"
+                )
             }
             Self::UnsupportedMetafileCompression { compression } => write!(
                 f,
@@ -336,9 +339,7 @@ fn validate_metafile_blip_record(
             BlipMetafileCompression::Deflate,
         ),
         other => {
-            return Err(BlipValidationError::UnsupportedMetafileCompression {
-                compression: other,
-            });
+            return Err(BlipValidationError::UnsupportedMetafileCompression { compression: other });
         }
     };
 
@@ -820,18 +821,11 @@ mod tests {
             validated.logical_payload_len,
             Some(b"synthetic-emf-logical-payload".len() as u64)
         );
-        assert_eq!(
-            validated.payload_source.end(),
-            record.payload_source.end()
-        );
+        assert_eq!(validated.payload_source.end(), record.payload_source.end());
 
         let stored = span_slice(&bytes, &validated.payload_source).expect("stored EMF source span");
-        assert_eq!(
-            validated.payload_sha256,
-            hex_lower(&Sha256::digest(stored))
-        );
-        let expected_logical_sha =
-            hex_lower(&Sha256::digest(b"synthetic-emf-logical-payload"));
+        assert_eq!(validated.payload_sha256, hex_lower(&Sha256::digest(stored)));
+        let expected_logical_sha = hex_lower(&Sha256::digest(b"synthetic-emf-logical-payload"));
         assert_eq!(
             validated.logical_payload_sha256.as_deref(),
             Some(expected_logical_sha.as_str())
@@ -910,13 +904,9 @@ mod tests {
         ));
 
         let mut wrong_size = bytes.clone();
-        let cb_size = u32::from_le_bytes(
-            wrong_size[header..header + 4]
-                .try_into()
-                .expect("cbSize"),
-        );
-        wrong_size[header..header + 4]
-            .copy_from_slice(&cb_size.saturating_add(1).to_le_bytes());
+        let cb_size =
+            u32::from_le_bytes(wrong_size[header..header + 4].try_into().expect("cbSize"));
+        wrong_size[header..header + 4].copy_from_slice(&cb_size.saturating_add(1).to_le_bytes());
         let record = first_record(&wrong_size);
         assert!(matches!(
             validate_blip_record(&wrong_size, &record),
