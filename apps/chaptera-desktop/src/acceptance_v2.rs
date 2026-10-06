@@ -3,7 +3,8 @@ use chaptera_scene_instance::{
     admit_object_mutation_v1, geometry_sync_policy_v1,
 };
 use pub_editor::{
-    EditOperation, EditorProject, EditorSession, LengthEmu, NodeId, RectEmu, Sha256Digest,
+    EditOperation, EditorProject, EditorSession, ImageCropStateV1, LengthEmu, NodeId, RectEmu,
+    Sha256Digest,
 };
 use pub_interaction::{DocumentPoint, ResizeHandle, ResizeTransaction, ResizeUpdate};
 use serde_json::{Value, json};
@@ -81,7 +82,7 @@ fn select_replace_image(
     visual: &pub_viewer::ViewerGeometryDocument,
     replacement_asset: Sha256Digest,
     excluded: &[NodeId],
-) -> Option<(SceneInstanceV1, NodeId, RectEmu)> {
+) -> Option<(SceneInstanceV1, NodeId, RectEmu, ImageCropStateV1)> {
     for page in &visual.document.pages {
         let page_origin = page.id.into_canonical();
         let target_page_id = page.id.as_canonical().to_string();
@@ -107,8 +108,9 @@ fn select_replace_image(
             {
                 continue;
             }
+            let crop = editor.image_crop_for(scene_node.origin)?;
             let frame = editor.graph().nodes.get(&scene_node.origin)?.header.bounds;
-            return Some((instance, scene_node.origin, frame));
+            return Some((instance, scene_node.origin, frame, crop));
         }
     }
     None
@@ -268,13 +270,17 @@ pub fn run(
     }
     let after_resize_state_id = state_id(&editor)?;
 
-    let (replace_instance, replaced_node_id, replace_frame) = select_replace_image(
+    let (replace_instance, replaced_node_id, replace_frame, replace_crop_before) =
+        select_replace_image(
         &editor,
         &visual,
         replacement_asset,
         &[moved_node_id, resized_node_id],
     )
-    .ok_or_else(|| "no distinct admitted direct page-local ReplaceImage target".to_owned())?;
+    .ok_or_else(|| {
+        "no distinct admitted direct page-local ReplaceImage target with explicit source crop"
+            .to_owned()
+    })?;
     let before_asset = editor.image_replacement_for(replaced_node_id);
     let operations_before_replace = editor.operations().len();
     editor
@@ -292,6 +298,12 @@ pub fn run(
         .bounds;
     if replace_frame_after != replace_frame {
         return Err("ReplaceImage changed frame geometry".to_owned());
+    }
+    let replace_crop_after = editor
+        .image_crop_for(replaced_node_id)
+        .ok_or_else(|| "ReplaceImage lost explicit source crop".to_owned())?;
+    if replace_crop_after != replace_crop_before {
+        return Err("ReplaceImage changed explicit source crop".to_owned());
     }
     let after_replace_state_id = state_id(&editor)?;
     let story_state_after_replace = story_state(&editor, story_id)?;
@@ -353,12 +365,16 @@ pub fn run(
         .header
         .bounds;
     let reopened_asset = reopened.image_replacement_for(replaced_node_id);
+    let reopened_crop = reopened
+        .image_crop_for(replaced_node_id)
+        .ok_or_else(|| "fresh reopen lost explicit source crop".to_owned())?;
 
     if reopened_state_id != after_replace_state_id
         || story_state_reopened != after_story_state_id
         || reopened_move != after_move
         || reopened_resize != resize_commit.after
         || reopened_asset != Some(replacement_asset)
+        || reopened_crop != replace_crop_before
     {
         return Err("fresh reopen did not reproduce the full accepted V2 state".to_owned());
     }
@@ -437,7 +453,8 @@ pub fn run(
             "after_asset_byte_len": replacement_bytes.len(),
             "frame_before": rect_json(replace_frame),
             "frame_after": rect_json(replace_frame_after),
-            "explicit_crop_present": false,
+            "explicit_crop_present": true,
+            "crop_preserved": true,
             "durable_replace_count": 1,
         },
         "history": {
