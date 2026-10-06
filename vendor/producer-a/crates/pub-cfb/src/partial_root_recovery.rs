@@ -500,8 +500,7 @@ mod tests {
 
     fn cycle_root_directory_sibling(mut source: Vec<u8>) -> Vec<u8> {
         let sector_len = 1usize << u16::from_le_bytes([source[30], source[31]]);
-        let directory_sector =
-            u32::from_le_bytes([source[48], source[49], source[50], source[51]]);
+        let directory_sector = u32::from_le_bytes([source[48], source[49], source[50], source[51]]);
         let directory_offset = (usize::try_from(directory_sector).unwrap() + 1) * sector_len;
         let root_child_offset = directory_offset + 76;
         let root_child = u32::from_le_bytes([
@@ -511,10 +510,8 @@ mod tests {
             source[root_child_offset + 3],
         ]);
         assert_ne!(root_child, NO_STREAM);
-        let child_offset =
-            directory_offset + usize::try_from(root_child).unwrap() * DIR_ENTRY_LEN;
-        source[child_offset + 68..child_offset + 72]
-            .copy_from_slice(&root_child.to_le_bytes());
+        let child_offset = directory_offset + usize::try_from(root_child).unwrap() * DIR_ENTRY_LEN;
+        source[child_offset + 68..child_offset + 72].copy_from_slice(&root_child.to_le_bytes());
         source
     }
 
