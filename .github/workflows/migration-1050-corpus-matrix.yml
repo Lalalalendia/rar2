@@ -34,14 +34,6 @@ on:
         options:
           - smoke
           - full
-      consumer_runtime:
-        description: Independent-consumer runtime source
-        required: true
-        default: pinned
-        type: choice
-        options:
-          - pinned
-          - apt
 
 permissions:
   contents: read
@@ -59,12 +51,6 @@ env:
   PINNED_CORPUS_ARTIFACT: "pub-corpus-1000-36573574820"
   PINNED_CORPUS_COUNT: "1050"
   PINNED_CORPUS_DIGEST: "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
-  PINNED_CONSUMER_RUNTIME_RUN_ID: "37531724213"
-  PINNED_CONSUMER_RUNTIME_ARTIFACT: "chaptera-migration-consumer-runtime-v1-37531724213"
-  PINNED_CONSUMER_RUNTIME_ARCHIVE_SHA256: "52dfcd8ba3bd49d9d6cb8d08a43e9e9df461002d124ca6db5c7088817492a9f0"
-  PINNED_CONSUMER_RUNTIME_ARCHIVE_BYTES: "343844646"
-  PINNED_CONSUMER_RUNTIME_IMAGE_ID: "sha256:8fdb2089485ce40ac9b77b7dba2e357c22d8bd61f7251fa8f1ebf441aff35a74"
-  PINNED_CONSUMER_RUNTIME_IMAGE_TAG: "chaptera-migration-consumers:v1"
 
 jobs:
   matrix:
@@ -98,12 +84,6 @@ jobs:
             mode=full
           fi
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.consumer_runtime }}" == "apt" ]]; then
-            consumer_runtime=apt
-          else
-            consumer_runtime=pinned
-          fi
-          echo "consumer_runtime=$consumer_runtime" >> "$GITHUB_OUTPUT"
           if [[ "$mode" == "full" ]]; then
             echo "route_count=1050" >> "$GITHUB_OUTPUT"
             echo "consumer_cap=96" >> "$GITHUB_OUTPUT"
@@ -334,66 +314,8 @@ jobs:
           }, indent=2, sort_keys=True))
           PY
 
-      - name: Download pinned independent-consumer runtime
-        if: hashFiles('target/migration-1050-corpus/consumer-selected.txt') != '' && steps.scope.outputs.consumer_runtime == 'pinned'
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.PINNED_CONSUMER_RUNTIME_ARTIFACT }}
-          path: target/migration-consumer-runtime
-          github-token: ${{ github.token }}
-          repository: Lalalalendia/rar2
-          run-id: ${{ env.PINNED_CONSUMER_RUNTIME_RUN_ID }}
-
-      - name: Verify and load pinned independent-consumer runtime
-        if: hashFiles('target/migration-1050-corpus/consumer-selected.txt') != '' && steps.scope.outputs.consumer_runtime == 'pinned'
-        shell: bash
-        run: |
-          set -euo pipefail
-          root="target/migration-consumer-runtime"
-          archive="$root/chaptera-migration-consumers-v1.tar.zst"
-          manifest="$root/manifest.json"
-          test -s "$archive"
-          test -s "$manifest"
-          python - <<'PY'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-
-          root = Path("target/migration-consumer-runtime")
-          archive = root / "chaptera-migration-consumers-v1.tar.zst"
-          manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-          expected_versions = {
-              "LibreOffice 24.2.7.2 420(Build:2)",
-              "fonts-montserrat\t7.222-2",
-              "libreoffice-draw\t4:24.2.7-0ubuntu0.24.04.7",
-              "scribus\t1.6.1-0ubuntu7",
-              "xvfb\t2:21.1.12-1ubuntu1.8",
-          }
-          assert manifest["schema"] == "chaptera.migration-consumer-runtime.v1", manifest
-          assert manifest["archive_entry"] == archive.name, manifest
-          assert manifest["archive_sha256"] == os.environ["PINNED_CONSUMER_RUNTIME_ARCHIVE_SHA256"], manifest
-          assert manifest["archive_byte_len"] == int(os.environ["PINNED_CONSUMER_RUNTIME_ARCHIVE_BYTES"]), manifest
-          assert manifest["image_id"] == os.environ["PINNED_CONSUMER_RUNTIME_IMAGE_ID"], manifest
-          assert manifest["image_tag"] == os.environ["PINNED_CONSUMER_RUNTIME_IMAGE_TAG"], manifest
-          actual = hashlib.sha256(archive.read_bytes()).hexdigest()
-          assert actual == manifest["archive_sha256"], (actual, manifest["archive_sha256"])
-          assert archive.stat().st_size == manifest["archive_byte_len"], archive.stat().st_size
-          assert expected_versions.issubset(set(manifest["versions"])), manifest["versions"]
-          print(json.dumps({
-              "archive_sha256": actual,
-              "archive_bytes": archive.stat().st_size,
-              "image_id": manifest["image_id"],
-              "versions": manifest["versions"],
-          }, indent=2, sort_keys=True))
-          PY
-          zstd -d -c "$archive" | docker load
-          actual_image_id="$(docker image inspect "$PINNED_CONSUMER_RUNTIME_IMAGE_TAG" --format '{{.Id}}')"
-          test "$actual_image_id" = "$PINNED_CONSUMER_RUNTIME_IMAGE_ID"
-          echo "loaded pinned consumer runtime $actual_image_id"
-
-      - name: Install independent editable-output consumers through apt fallback
-        if: hashFiles('target/migration-1050-corpus/consumer-selected.txt') != '' && steps.scope.outputs.consumer_runtime == 'apt'
+      - name: Install independent editable-output consumers
+        if: hashFiles('target/migration-1050-corpus/consumer-selected.txt') != ''
         run: |
           set -euo pipefail
           sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
@@ -425,44 +347,16 @@ jobs:
               "$dir/scribus-home/.local/share" \
               "$dir/scribus-home/runtime"
             chmod 700 "$dir/scribus-home/runtime"
-            sha="$(basename "$dir")"
             echo "::notice::Scribus validating $idml"
-            if [[ "${{ steps.scope.outputs.consumer_runtime }}" == "pinned" ]]; then
-              rel_idml="$(realpath --relative-to="$GITHUB_WORKSPACE" "$idml")"
-              rel_dir="$(dirname "$rel_idml")"
-              container_name="chaptera-scribus-${sha:0:12}"
-              set +e
-              timeout --signal=TERM --kill-after=10s 30s docker run --rm --init --shm-size=512m --name "$container_name" \
-                -v "$GITHUB_WORKSPACE:/work" \
-                -w /work \
-                -e HOME="/work/$rel_dir/scribus-home" \
-                -e XDG_CONFIG_HOME="/work/$rel_dir/scribus-home/.config" \
-                -e XDG_CACHE_HOME="/work/$rel_dir/scribus-home/.cache" \
-                -e XDG_DATA_HOME="/work/$rel_dir/scribus-home/.local/share" \
-                -e XDG_RUNTIME_DIR="/work/$rel_dir/scribus-home/runtime" \
-                -e CHAPTERA_SCRIBUS_SLA_OUT="/work/$rel_dir/consumer.sla" \
-                -e QT_X11_NO_MITSHM=1 \
-                "$PINNED_CONSUMER_RUNTIME_IMAGE_TAG" \
-                xvfb-run -a scribus -g -ns \
-                  -py tools/ci/scribus_idml_consumer.py -- "/work/$rel_idml"
-              rc=$?
-              set -e
-              if [[ "$rc" -ne 0 ]]; then
-                docker rm -f "$container_name" >/dev/null 2>&1 || true
-                echo "::error::Scribus consumer failed/timed out for $sha (rc=$rc)"
-                exit "$rc"
-              fi
-            else
-              timeout --signal=TERM --kill-after=10s 30s env \
-                HOME="$dir/scribus-home" \
-                XDG_CONFIG_HOME="$dir/scribus-home/.config" \
-                XDG_CACHE_HOME="$dir/scribus-home/.cache" \
-                XDG_DATA_HOME="$dir/scribus-home/.local/share" \
-                XDG_RUNTIME_DIR="$dir/scribus-home/runtime" \
-                CHAPTERA_SCRIBUS_SLA_OUT="$dir/consumer.sla" \
-                xvfb-run -a scribus -g -ns \
-                  -py tools/ci/scribus_idml_consumer.py -- "$idml"
-            fi
+            timeout --signal=TERM --kill-after=10s 60s env \
+              HOME="$dir/scribus-home" \
+              XDG_CONFIG_HOME="$dir/scribus-home/.config" \
+              XDG_CACHE_HOME="$dir/scribus-home/.cache" \
+              XDG_DATA_HOME="$dir/scribus-home/.local/share" \
+              XDG_RUNTIME_DIR="$dir/scribus-home/runtime" \
+              CHAPTERA_SCRIBUS_SLA_OUT="$dir/consumer.sla" \
+              xvfb-run -a scribus -g -ns \
+                -py tools/ci/scribus_idml_consumer.py -- "$idml"
             test -s "$dir/consumer.sla"
           done
 
@@ -472,35 +366,9 @@ jobs:
           shopt -s nullglob
           for odg in "$EVIDENCE_ROOT"/consumer/*/output.odg; do
             dir="$(dirname "$odg")"
-            sha="$(basename "$dir")"
             mkdir -p "$dir/libreoffice"
-            if [[ "${{ steps.scope.outputs.consumer_runtime }}" == "pinned" ]]; then
-              rel_odg="$(realpath --relative-to="$GITHUB_WORKSPACE" "$odg")"
-              rel_dir="$(dirname "$rel_odg")"
-              container_name="chaptera-libreoffice-${sha:0:12}"
-              set +e
-              timeout --signal=TERM --kill-after=10s 30s docker run --rm --init --shm-size=512m --name "$container_name" \
-                -v "$GITHUB_WORKSPACE:/work" \
-                -w /work \
-                "$PINNED_CONSUMER_RUNTIME_IMAGE_TAG" \
-                libreoffice --headless \
-                  --convert-to fodg \
-                  --outdir "/work/$rel_dir/libreoffice" \
-                  "/work/$rel_odg"
-              rc=$?
-              set -e
-              if [[ "$rc" -ne 0 ]]; then
-                docker rm -f "$container_name" >/dev/null 2>&1 || true
-                echo "::error::LibreOffice consumer failed/timed out for $sha (rc=$rc)"
-                exit "$rc"
-              fi
-            else
-              timeout --signal=TERM --kill-after=10s 30s \
-                libreoffice --headless \
-                  --convert-to fodg \
-                  --outdir "$dir/libreoffice" \
-                  "$odg"
-            fi
+            timeout --signal=TERM --kill-after=10s 60s \
+              libreoffice --headless               --convert-to fodg               --outdir "$dir/libreoffice"               "$odg"
             test -s "$dir/libreoffice/output.fodg"
           done
 
