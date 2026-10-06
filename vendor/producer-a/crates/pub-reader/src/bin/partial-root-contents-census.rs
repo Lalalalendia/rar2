@@ -31,6 +31,27 @@ struct CensusRow {
     chunk_crosses_trailer_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ContextSemanticSignature {
+    available_prefix_len: u64,
+    family: Option<String>,
+    boundary: String,
+    class: String,
+    complete_chunk_fact_count: usize,
+    ambiguous_reference_count: usize,
+    referenced_chunk_unavailable_count: usize,
+    chunk_parse_failure_count: usize,
+    chunk_crosses_trailer_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct CensusContext {
+    prefix_sha256: String,
+    declared_len: u64,
+    source_count: usize,
+    semantic: ContextSemanticSignature,
+}
+
 #[derive(Debug, Serialize)]
 struct ErrorRow {
     source_sha256: String,
@@ -41,9 +62,12 @@ struct ErrorRow {
 struct CensusSummary {
     schema: &'static str,
     pub_file_count: usize,
-    partial_root_count: usize,
-    class_counts: BTreeMap<String, usize>,
+    partial_source_count: usize,
+    unique_context_count: usize,
+    source_class_counts: BTreeMap<String, usize>,
+    context_class_counts: BTreeMap<String, usize>,
     rows: Vec<CensusRow>,
+    contexts: Vec<CensusContext>,
     non_partial_or_unavailable_count: usize,
     errors: Vec<ErrorRow>,
 }
@@ -115,7 +139,7 @@ fn main() -> Result<()> {
     let mut rows = Vec::new();
     let mut errors = Vec::new();
     let mut non_partial_or_unavailable_count = 0usize;
-    let mut class_counts = BTreeMap::<String, usize>::new();
+    let mut source_class_counts = BTreeMap::<String, usize>::new();
 
     for path in &paths {
         let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
@@ -140,7 +164,7 @@ fn main() -> Result<()> {
 
         let semantic = analyze_reader_partial_contents_prefix(&evidence);
         let class = class_name(semantic.class).to_owned();
-        *class_counts.entry(class.clone()).or_default() += 1;
+        *source_class_counts.entry(class.clone()).or_default() += 1;
 
         rows.push(CensusRow {
             source_sha256: semantic.source_sha256,
@@ -167,12 +191,63 @@ fn main() -> Result<()> {
     });
     errors.sort_by(|left, right| left.source_sha256.cmp(&right.source_sha256));
 
+    let mut context_map =
+        BTreeMap::<(String, u64), (usize, ContextSemanticSignature)>::new();
+    for row in &rows {
+        let key = (row.prefix_sha256.clone(), row.declared_len);
+        let signature = ContextSemanticSignature {
+            available_prefix_len: row.available_prefix_len,
+            family: row.family.clone(),
+            boundary: row.boundary.clone(),
+            class: row.class.clone(),
+            complete_chunk_fact_count: row.complete_chunk_fact_count,
+            ambiguous_reference_count: row.ambiguous_reference_count,
+            referenced_chunk_unavailable_count: row.referenced_chunk_unavailable_count,
+            chunk_parse_failure_count: row.chunk_parse_failure_count,
+            chunk_crosses_trailer_count: row.chunk_crosses_trailer_count,
+        };
+        match context_map.get_mut(&key) {
+            Some((source_count, existing)) => {
+                if *existing != signature {
+                    bail!(
+                        "same partial prefix context produced conflicting semantic classification: {} / {}",
+                        key.0,
+                        key.1
+                    );
+                }
+                *source_count += 1;
+            }
+            None => {
+                context_map.insert(key, (1, signature));
+            }
+        }
+    }
+
+    let mut context_class_counts = BTreeMap::<String, usize>::new();
+    let contexts = context_map
+        .into_iter()
+        .map(|((prefix_sha256, declared_len), (source_count, semantic))| {
+            *context_class_counts
+                .entry(semantic.class.clone())
+                .or_default() += 1;
+            CensusContext {
+                prefix_sha256,
+                declared_len,
+                source_count,
+                semantic,
+            }
+        })
+        .collect::<Vec<_>>();
+
     let summary = CensusSummary {
         schema: SCHEMA,
         pub_file_count: paths.len(),
-        partial_root_count: rows.len(),
-        class_counts,
+        partial_source_count: rows.len(),
+        unique_context_count: contexts.len(),
+        source_class_counts,
+        context_class_counts,
         rows,
+        contexts,
         non_partial_or_unavailable_count,
         errors,
     };
