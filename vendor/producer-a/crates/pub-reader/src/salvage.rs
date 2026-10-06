@@ -6,8 +6,8 @@ use crate::salvage_authority::{ReaderSalvageAuthority, typed_corruption_authorit
 use pub_contents::ContentsFamily;
 use pub_core::StreamPath;
 use pub_escher::{
-    DelayedBlipPrefixGap, inspect_validated_delayed_blips_prefix, parse_officeart_stream,
-    validate_blip_record,
+    BlipKind, BlipUidRule, DelayedBlipPrefixGap, inspect_validated_delayed_blips_prefix,
+    parse_officeart_stream, validate_blip_record,
 };
 use pub_quill::{QuillStoryReadError, parse_confirmed_story_catalog};
 use serde::{Deserialize, Serialize};
@@ -206,9 +206,9 @@ pub struct ReaderPartialEscherDelayImageEvidence {
     pub record_source: pub_core::RawSpan,
     pub payload_source: pub_core::RawSpan,
     pub payload_physical_ranges: Vec<pub_cfb::RootRegularStreamSourceRange>,
-    pub kind: String,
+    pub kind: BlipKind,
     pub effective_uid_hex: String,
-    pub uid_rule: String,
+    pub uid_rule: BlipUidRule,
     pub payload_sha256: String,
     pub byte_len: u64,
 }
@@ -374,13 +374,13 @@ pub fn build_reader_partial_escherdelay_evidence(
             record_source: validated.record_source,
             payload_source: validated.payload_source,
             payload_physical_ranges,
-            kind: format!("{:?}", validated.kind).to_ascii_lowercase(),
+            kind: validated.kind,
             effective_uid_hex: validated
                 .effective_uid
                 .iter()
                 .map(|byte| format!("{byte:02x}"))
                 .collect(),
-            uid_rule: format!("{:?}", validated.uid_rule).to_ascii_lowercase(),
+            uid_rule: validated.uid_rule,
             payload_sha256: validated.payload_sha256,
             byte_len,
         });
