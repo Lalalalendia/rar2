@@ -149,7 +149,10 @@ pub use salvage::{
     build_reader_partial_source_graph, probe_reader_salvage_candidate,
     probe_reader_salvage_candidate_with_trigger,
 };
-pub use salvage_authority::{ReaderSalvageAuthority, typed_corruption_authority};
+pub use salvage_authority::{
+    ReaderEvidenceDisposition, ReaderSalvageAuthority, reader_evidence_disposition,
+    typed_corruption_authority,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
