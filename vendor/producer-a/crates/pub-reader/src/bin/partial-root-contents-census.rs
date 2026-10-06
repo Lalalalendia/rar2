@@ -17,6 +17,7 @@ const SCHEMA: &str = "chaptera.partial-root-contents-census.v1";
 #[derive(Debug, Serialize)]
 struct CensusRow {
     source_sha256: String,
+    stream_sid: u32,
     prefix_sha256: String,
     declared_len: u64,
     available_prefix_len: u64,
@@ -184,6 +185,7 @@ fn main() -> Result<()> {
 
         rows.push(CensusRow {
             source_sha256: semantic.source_sha256,
+            stream_sid: semantic.stream_sid,
             prefix_sha256: semantic.prefix_sha256,
             declared_len: semantic.declared_len,
             available_prefix_len: semantic.available_prefix_len,
