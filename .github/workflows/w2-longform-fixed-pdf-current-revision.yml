@@ -16,7 +16,11 @@ on:
       - "tools/run_yab259_fixed_pdf_closure.py"
       - "apps/chaptera-desktop/src/acceptance_v2.rs"
       - "crates/chaptera-desktop-shaped-flow-runtime/src/bin/current_fixed_pdf_input.rs"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/bin/w2_same_document_kernel.rs"
       - "crates/chaptera-desktop-shaped-flow-runtime/src/lib.rs"
+      - "packages/protocol/w2-compound/**"
+      - "tools/build_w2_compound_receipt.py"
+      - "tools/test_build_w2_compound_receipt.py"
       - "crates/chaptera-desktop-fallback-font-resource/**"
       - "vendor/producer-a/crates/pub-editor/**"
       - "vendor/producer-a/crates/pub-editor/src/lib.rs"
@@ -115,7 +119,7 @@ jobs:
           python -m py_compile tools/run_editor_desktop_continuity_v2.py
           python -m py_compile tools/validate_editor_desktop_continuity_v2_receipt.py
 
-      - name: Acquire pinned Apache POI SampleNewsletter
+      - name: Acquire exact May 2023 recurring newsletter
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -166,10 +170,10 @@ jobs:
           if ((Get-Item $replacement).Length -le 32) { throw "replacement PNG is unexpectedly small" }
           "CHAPTERA_CONTINUITY_REPLACEMENT=$replacement" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Build Stage 0.1 producer and current fixed-PDF input
+      - name: Build Stage 0.1 producer and current W2 output adapters
         run: |
           cargo build -p chaptera-desktop --release --bin chaptera-editor
-          cargo build --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml --release --bin current_fixed_pdf_input --target-dir target
+          cargo build --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml --release --bin current_fixed_pdf_input --bin w2_same_document_kernel --target-dir target
 
       - name: Reproduce accepted Stage 0.1 fresh-reopen project
         shell: pwsh
@@ -202,6 +206,25 @@ jobs:
             throw "pinned fixed-output font SHA-256 mismatch: $hash"
           }
           "CHAPTERA_FIXED_OUTPUT_FONT=$font" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prove same-document previous issue to independent next issue
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $nextProject = Join-Path $env:CHAPTERA_STAGE02_OUT "w2-next-issue.project.json"
+          $nextOdg = Join-Path $env:CHAPTERA_STAGE02_OUT "w2-next-issue.edited.odg"
+          $kernel = Join-Path $env:CHAPTERA_STAGE02_OUT "w2-same-document-kernel.real.json"
+          target/release/w2_same_document_kernel.exe "$env:CHAPTERA_SAMPLE_NEWSLETTER" "$env:CHAPTERA_STAGE01_PROJECT" "$env:CHAPTERA_CONTINUITY_REPLACEMENT" "$env:CHAPTERA_FIXED_OUTPUT_FONT" "$nextProject" "$nextOdg" "$kernel"
+          if (-not (Test-Path $nextProject)) { throw "forked next-issue project was not written" }
+          if (-not (Test-Path $nextOdg)) { throw "forked next-issue ODG was not written" }
+          if (-not (Test-Path $kernel)) { throw "same-document W2 kernel receipt was not written" }
+          $kernelRaw = Get-Content $kernel -Raw
+          $replacementSha = (Get-FileHash $env:CHAPTERA_CONTINUITY_REPLACEMENT -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($kernelRaw.Contains($replacementSha)) { throw "W2 kernel receipt leaked replacement asset SHA" }
+          if ($kernelRaw.Contains((Resolve-Path $env:CHAPTERA_SAMPLE_NEWSLETTER).Path)) { throw "W2 kernel receipt leaked local source path" }
+          if ($kernelRaw.Contains((Resolve-Path $env:CHAPTERA_CONTINUITY_REPLACEMENT).Path)) { throw "W2 kernel receipt leaked local replacement path" }
+          "CHAPTERA_W2_KERNEL_RECEIPT=$kernel" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Assemble fresh-reopened current Editor resource input
         shell: pwsh
@@ -256,6 +279,15 @@ jobs:
           if ($fixed.source.sha256 -ne "aeac4c03181582008c18655ad77b90a957b00eeddcc0b1c45f6d40ca88c765eb") { throw "W2 fixed-output source identity mismatch" }
           if ($fixed.renderer.summary.page_count -ne 10) { throw "W2 fixed-output renderer page count mismatch: $($fixed.renderer.summary.page_count)" }
 
+      - name: Build final same-document W2 compound receipt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $compound = "target/release/w2-compound.real.json"
+          python tools/build_w2_compound_receipt.py --kernel "$env:CHAPTERA_W2_KERNEL_RECEIPT" --fixed-output "$env:CHAPTERA_STAGE02_RECEIPT" --output "$compound"
+          if (-not (Test-Path $compound)) { throw "W2 compound receipt was not written" }
+          Copy-Item "$env:CHAPTERA_W2_KERNEL_RECEIPT" "target/release/w2-same-document-kernel.real.json"
+
       - uses: actions/upload-artifact@v4
         with:
           name: w2-longform-fixed-pdf-current-revision-real
@@ -263,4 +295,6 @@ jobs:
             target/release/editor-desktop-continuity-v2.real.json
             target/release/editor-fixed-pdf-current-revision.real.json
             target/release/editor-fixed-pdf-current-revision.real.pdf
+            target/release/w2-same-document-kernel.real.json
+            target/release/w2-compound.real.json
           if-no-files-found: error
