@@ -74,7 +74,10 @@ def validate_semantics(receipt):
     resize_id = resize["origin_node_id"]
     image_id = image["origin_node_id"]
     wrap_scope = receipt["invariants"].get("wrap_mutation_scope", "not_asserted")
-    if wrap_scope == "text_frame_non_intersecting":
+    if wrap_scope in {
+        "text_frame_non_intersecting",
+        "authority_blocked_not_asserted",
+    }:
         if move_id == resize_id:
             raise AssertionError(
                 "newsletter V2 requires MoveNode on a distinct exact source image"
