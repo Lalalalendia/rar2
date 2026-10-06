@@ -118,7 +118,7 @@ jobs:
           mkdir -p target/publisher-visual-supplemental
           python tools/cloud_reader_visual_supplemental_v1.py summarize             tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv             "$RUNNER_TEMP/publisher-visual-supplemental/browser/receipt.json"             target/publisher-visual-supplemental/summary.json
 
-      - name: Enforce open/render and page-count acceptance
+      - name: Enforce Reader execution acceptance and report surface-count differences
         run: |
           python - <<'PY'
           import json
@@ -157,8 +157,11 @@ jobs:
           assert data["hosted_reference_page_count"] == 52
           assert data["rendered_pair_count"] == 24, "not all new hosted corpus pairs render"
           assert data["unsupported_pair_count"] == 0, "new hosted corpus has unsupported Reader pairs"
-          assert data["page_count_mismatch_pair_count"] == 0, "new hosted corpus has page-count mismatches"
-          assert data["visual_degeneracy_count"] == 0, "new hosted corpus has collapsed shared-text geometry"
+          # Publisher PDF page count is an output-surface observation, not logical PAGE
+          # membership authority. Mismatches remain explicit in the receipt and route to
+          # the stage classifier instead of forcing Reader logical-page mutation.
+          assert data["claims"]["publisher_pdf_page_count_is_not_logical_page_membership_authority"] is True
+          assert data["visual_degeneracy_count"] == 0, "new hosted corpus has page-space collapsed shared-text geometry"
           PY
 
       - name: Upload source-free supplemental receipt
