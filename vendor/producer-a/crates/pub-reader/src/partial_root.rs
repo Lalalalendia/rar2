@@ -1,12 +1,11 @@
 use anyhow::{Context, Result};
 use pub_cfb::{
-    RootRegularStreamPrefixStatus, RootRegularStreamSourceRange,
-    RootRegularStreamTruncationReason, recover_root_regular_stream_prefix_reader,
+    RootRegularStreamPrefixStatus, RootRegularStreamSourceRange, RootRegularStreamTruncationReason,
+    recover_root_regular_stream_prefix_reader,
 };
 use pub_contents::{
-    Contents0x2cDirectorySlot, ContentsFamily, parse_0x2c_header,
-    parse_confirmed_0x2c_chunk, parse_confirmed_0x2c_trailer_root,
-    parse_confirmed_chunk_reference,
+    Contents0x2cDirectorySlot, ContentsFamily, parse_0x2c_header, parse_confirmed_0x2c_chunk,
+    parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
 };
 use pub_core::StreamPath;
 use serde::Serialize;
@@ -42,9 +41,8 @@ pub fn build_reader_partial_root_stream_evidence(
     stream_identity: &str,
 ) -> Result<ReaderPartialRootStreamEvidence> {
     let source_before = sha256_hex(source);
-    let recovered =
-        recover_root_regular_stream_prefix_reader(Cursor::new(source), stream_identity)
-            .with_context(|| format!("recover partial root stream evidence {stream_identity}"))?;
+    let recovered = recover_root_regular_stream_prefix_reader(Cursor::new(source), stream_identity)
+        .with_context(|| format!("recover partial root stream evidence {stream_identity}"))?;
     let source_after = sha256_hex(source);
 
     Ok(ReaderPartialRootStreamEvidence {
@@ -232,33 +230,31 @@ pub fn analyze_reader_partial_contents_prefix(
         };
     }
 
-    let header_prefix = match pub_contents::parse_0x2c_header_prefix(
-        StreamPath("/Contents".into()),
-        prefix,
-    ) {
-        Ok(header) => header,
-        Err(_) => {
-            return ReaderPartialContentsSemanticEvidence {
-                schema_version: READER_PARTIAL_CONTENTS_SEMANTIC_EVIDENCE_SCHEMA_V1.to_owned(),
-                source_sha256: evidence.source_sha256.clone(),
-                stream_sid: evidence.stream_sid,
-                prefix_sha256: evidence.prefix_sha256.clone(),
-                available_prefix_len: evidence.available_prefix_len,
-                declared_len: evidence.declared_len,
-                family: Some(family_name),
-                serialization_revision: Some(preamble.serialization_revision),
-                trailer_offset: None,
-                boundary: ReaderPartialContentsBoundary::HeaderOnlyTrailerUnavailable,
-                class: ReaderPartialContentsClass::ForensicOnly,
-                complete_chunk_facts: Vec::new(),
-                ambiguous_reference_count: 0,
-                referenced_chunk_unavailable_count: 0,
-                chunk_parse_failure_count: 0,
-                chunk_crosses_trailer_count: 0,
-                missing_tail_len,
-            };
-        }
-    };
+    let header_prefix =
+        match pub_contents::parse_0x2c_header_prefix(StreamPath("/Contents".into()), prefix) {
+            Ok(header) => header,
+            Err(_) => {
+                return ReaderPartialContentsSemanticEvidence {
+                    schema_version: READER_PARTIAL_CONTENTS_SEMANTIC_EVIDENCE_SCHEMA_V1.to_owned(),
+                    source_sha256: evidence.source_sha256.clone(),
+                    stream_sid: evidence.stream_sid,
+                    prefix_sha256: evidence.prefix_sha256.clone(),
+                    available_prefix_len: evidence.available_prefix_len,
+                    declared_len: evidence.declared_len,
+                    family: Some(family_name),
+                    serialization_revision: Some(preamble.serialization_revision),
+                    trailer_offset: None,
+                    boundary: ReaderPartialContentsBoundary::HeaderOnlyTrailerUnavailable,
+                    class: ReaderPartialContentsClass::ForensicOnly,
+                    complete_chunk_facts: Vec::new(),
+                    ambiguous_reference_count: 0,
+                    referenced_chunk_unavailable_count: 0,
+                    chunk_parse_failure_count: 0,
+                    chunk_crosses_trailer_count: 0,
+                    missing_tail_len,
+                };
+            }
+        };
 
     let trailer_offset = header_prefix.trailer_offset;
     let Ok(header) = parse_0x2c_header(StreamPath("/Contents".into()), prefix) else {
@@ -406,9 +402,7 @@ pub fn analyze_reader_partial_contents_prefix(
     }
 }
 
-fn partial_contents_evidence_is_consistent(
-    evidence: &ReaderPartialRootStreamEvidence,
-) -> bool {
+fn partial_contents_evidence_is_consistent(evidence: &ReaderPartialRootStreamEvidence) -> bool {
     if evidence.stream_identity != "/Contents"
         || evidence.stream_sid == 0
         || evidence.source_modified
@@ -476,10 +470,8 @@ mod tests {
             build_reader_partial_root_stream_evidence(&source, "/Contents").expect("full evidence");
         let first = evidence.source_ranges.first().expect("first source range");
         let sector_len = 1usize << u16::from_le_bytes([source[30], source[31]]);
-        let start_sector =
-            (usize::try_from(first.offset).unwrap() / sector_len).saturating_sub(1);
-        let fat_sector =
-            u32::from_le_bytes([source[76], source[77], source[78], source[79]]);
+        let start_sector = (usize::try_from(first.offset).unwrap() / sector_len).saturating_sub(1);
+        let fat_sector = u32::from_le_bytes([source[76], source[77], source[78], source[79]]);
         assert_ne!(fat_sector, FREE_SECTOR);
         let fat_offset = (usize::try_from(fat_sector).unwrap() + 1) * sector_len;
         let entry_offset = fat_offset + start_sector * 4;
@@ -526,7 +518,6 @@ mod tests {
         assert!(!evidence.source_modified);
     }
 
-
     fn partial_evidence_for_prefix(
         prefix: Vec<u8>,
         declared_len: u64,
@@ -564,16 +555,12 @@ mod tests {
         bytes[12..14].copy_from_slice(&0x0015u16.to_le_bytes());
         bytes[0x1A..0x1E].copy_from_slice(&128u32.to_le_bytes());
 
-        let chunk = [
-            0x0A, 0x00, 0x00, 0x00,
-            0x27, 0x20, 0x16, 0x00, 0x00, 0x00,
-        ];
+        let chunk = [0x0A, 0x00, 0x00, 0x00, 0x27, 0x20, 0x16, 0x00, 0x00, 0x00];
         bytes[64..64 + chunk.len()].copy_from_slice(&chunk);
 
         let directory = [
-            0x00, 0x88, 0x0E, 0x00, 0x00, 0x00,
-            0x02, 0x18, 0x01, 0x00,
-            0x04, 0xB8, 0x40, 0x00, 0x00, 0x00,
+            0x00, 0x88, 0x0E, 0x00, 0x00, 0x00, 0x02, 0x18, 0x01, 0x00, 0x04, 0xB8, 0x40, 0x00,
+            0x00, 0x00,
         ];
         let trailer_len = 4 + 6 + 6 + 6 + directory.len();
         let mut cursor = 128usize;
@@ -599,7 +586,10 @@ mod tests {
         evidence.prefix_sha256 = "00".repeat(32);
 
         let semantic = analyze_reader_partial_contents_prefix(&evidence);
-        assert_eq!(semantic.boundary, ReaderPartialContentsBoundary::EvidenceInvalid);
+        assert_eq!(
+            semantic.boundary,
+            ReaderPartialContentsBoundary::EvidenceInvalid
+        );
         assert_eq!(semantic.class, ReaderPartialContentsClass::NoSafeFact);
         assert!(semantic.complete_chunk_facts.is_empty());
     }
