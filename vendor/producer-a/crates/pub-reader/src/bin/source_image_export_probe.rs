@@ -1,6 +1,7 @@
 use pub_model::Sha256Digest;
 use pub_reader::{
-    build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
+    ESCHER_DELAY_STREAM_PATH, ESCHER_STREAM_PATH, build_mature_0x2c_asset_export_bundle_from_bytes,
+    build_mature_0x2c_source_graph, build_pub_asset_manifest, build_pub_image_resource_catalog,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -20,6 +21,36 @@ fn main() -> Result<(), Box<dyn Error>> {
     let bytes = fs::read(&input)?;
     let hash = source_hash(&bytes);
     let source = build_mature_0x2c_source_graph(Cursor::new(&bytes), hash)?;
+
+    let escher = pub_cfb::read_stream_reader(Cursor::new(&bytes), ESCHER_STREAM_PATH)?;
+    let inventory = pub_cfb::inspect_reader(Cursor::new(&bytes))?;
+    let delayed = if inventory
+        .entries
+        .iter()
+        .any(|entry| entry.path == ESCHER_DELAY_STREAM_PATH)
+    {
+        pub_cfb::read_stream_reader(Cursor::new(&bytes), ESCHER_DELAY_STREAM_PATH)?
+    } else {
+        Vec::new()
+    };
+    let asset_manifest = build_pub_asset_manifest(&source.graph, &escher, &delayed)?;
+    let asset_catalog = build_pub_image_resource_catalog(&source.graph, &asset_manifest)?;
+    let asset_states = asset_manifest
+        .assets
+        .iter()
+        .map(|asset| {
+            json!({
+                "slot": asset.slot,
+                "use_count": asset.uses.len(),
+                "blip_kind": asset.blip_kind,
+                "blip_record_present": asset.blip_record_source.is_some(),
+                "image_payload_present": asset.image_payload_source.is_some(),
+                "payload_sha256_present": asset.payload_sha256.is_some(),
+                "payload_len": asset.payload_len,
+            })
+        })
+        .collect::<Vec<_>>();
+
     let bundle = build_mature_0x2c_asset_export_bundle_from_bytes(&bytes, &source.graph)?;
 
     let mut resources = bundle
@@ -73,6 +104,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             "resource_count": resources.len(),
             "use_count": use_count,
             "resources": resources,
+            "asset_states": asset_states,
+            "asset_manifest_diagnostics": asset_manifest.diagnostics,
+            "asset_catalog_diagnostics": asset_catalog.diagnostics,
+            "asset_export_diagnostics": bundle.manifest.diagnostics,
         }))?
     );
     Ok(())
