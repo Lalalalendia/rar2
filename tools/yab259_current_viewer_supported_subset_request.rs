@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedResolvedScene, BoundedShapedGlyph, BoundedShapedText,
     BoundedShapingDescriptor, ResolvedPhysicalNode, ResolvedSurface, SceneOriginMapping,
-    font_fingerprint_sha256,
+    compatible_natural_line_height_emu_v1, font_fingerprint_sha256,
 };
 use pub_model::{
     Affine2D, CanonicalId, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D, TableCellId,
@@ -676,8 +676,21 @@ fn append_single_line_table_text_runs_v1(
             || line.scalar_end != cell_end
             || line.scalar_start >= line.scalar_end
             || line.measured_width_emu > content_bounds.width.get()
-            || line.line_height_emu > content_bounds.height.get()
         {
+            summary.table_text_residual_cell_count += 1;
+            continue;
+        }
+        let Some(natural_line_extent_emu) = compatible_natural_line_height_emu_v1(
+            &font.bytes,
+            font.face_index,
+            LengthEmu::new(*font_size_emu),
+        )
+        .map(LengthEmu::get)
+        else {
+            summary.table_text_residual_cell_count += 1;
+            continue;
+        };
+        if natural_line_extent_emu <= 0 || natural_line_extent_emu > content_bounds.height.get() {
             summary.table_text_residual_cell_count += 1;
             continue;
         }
