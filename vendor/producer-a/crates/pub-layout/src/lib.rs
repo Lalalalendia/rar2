@@ -44,8 +44,9 @@ pub use shaped_flow::{
 };
 pub use shaping::{
     BOUNDED_SHAPER_REVISION, BoundedShapeError, BoundedShapedGlyph, BoundedShapedText,
-    BoundedShapingDescriptor, BoundedShapingRuntime, compatible_natural_line_height_emu_v1,
-    font_fingerprint_sha256, shape_bounded_ltr, shape_bounded_ltr_segment,
+    BoundedShapingDescriptor, BoundedShapingRuntime, compatible_natural_baseline_ascent_emu_v1,
+    compatible_natural_line_height_emu_v1, font_fingerprint_sha256, shape_bounded_ltr,
+    shape_bounded_ltr_segment,
 };
 pub use table_layout::{
     BoundedResolvedTableCells, BoundedTableResolveError, BoundedUniformTableMetrics,
