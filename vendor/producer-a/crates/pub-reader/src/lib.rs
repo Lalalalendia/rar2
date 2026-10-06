@@ -25,6 +25,7 @@ mod legacy22_page_role;
 mod master_bridge;
 mod mature_wmf;
 mod ole_presentation;
+mod partial_root;
 mod resolve;
 mod salvage;
 mod salvage_authority;
@@ -104,6 +105,13 @@ pub use ole_presentation::{
     LegacyOleCachedPresentationScan, LegacyOleCachedPresentationSelection, OlePresentation,
     parse_cf_metafilepict_ole_presentation, read_legacy_ole_cached_presentations,
     scan_legacy_ole_cached_presentations, select_unambiguous_legacy_ole_cached_presentation,
+};
+pub use partial_root::{
+    READER_PARTIAL_CONTENTS_SEMANTIC_EVIDENCE_SCHEMA_V1,
+    READER_PARTIAL_ROOT_STREAM_EVIDENCE_SCHEMA_V1, ReaderPartialContentsBoundary,
+    ReaderPartialContentsChunkFact, ReaderPartialContentsClass,
+    ReaderPartialContentsSemanticEvidence, ReaderPartialRootStreamEvidence,
+    analyze_reader_partial_contents_prefix, build_reader_partial_root_stream_evidence,
 };
 use pub_contents::{
     BLOCK_TYPE_FIXED_8, BLOCK_TYPE_REFERENCE_U32, BLOCK_TYPE_U32, CONTENTS_RAW_TYPE_STORY_CATALOG,

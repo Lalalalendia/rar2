@@ -1,4 +1,9 @@
 use anyhow::{Context, Result};
+mod partial_root_recovery;
+pub use partial_root_recovery::{
+    RecoveredRootRegularStreamPrefix, RootRegularStreamPrefixStatus, RootRegularStreamSourceRange,
+    RootRegularStreamTruncationReason, recover_root_regular_stream_prefix_reader,
+};
 use serde::Serialize;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
