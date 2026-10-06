@@ -106,6 +106,7 @@ fn collect_pub_paths(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 fn boundary_name(value: pub_reader::ReaderPartialContentsBoundary) -> &'static str {
     use pub_reader::ReaderPartialContentsBoundary::*;
     match value {
+        EvidenceInvalid => "evidence_invalid",
         FamilyUnrecognized => "family_unrecognized",
         Legacy22SeparateGrammarRequired => "legacy22_separate_grammar_required",
         HeaderOnlyTrailerUnavailable => "header_only_trailer_unavailable",
