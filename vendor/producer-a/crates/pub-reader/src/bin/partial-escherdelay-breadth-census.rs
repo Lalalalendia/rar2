@@ -558,3 +558,48 @@ fn main() -> Result<()> {
 
     Ok(())
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn bundled_cohort_manifest_is_exact_45_source_authority() {
+        let manifest: CohortManifest = serde_json::from_str(include_str!(
+            "../../data/partial-escherdelay-cohort-v1.json"
+        ))
+        .expect("bundled partial EscherDelay cohort manifest");
+
+        assert_eq!(manifest.schema, INPUT_SCHEMA);
+        assert_eq!(manifest.sources.len(), EXPECTED_DENOMINATOR);
+
+        let mut unique_sources = BTreeSet::new();
+        for source in manifest.sources {
+            let source_sha = validate_sha256(&source.source_sha256).expect("source SHA-256");
+            assert!(unique_sources.insert(source_sha));
+            assert!(source.expected_declared_len.is_some_and(|value| value > 0));
+            assert!(
+                source
+                    .expected_available_prefix_len
+                    .is_some_and(|value| value > 0)
+            );
+            assert!(
+                source
+                    .expected_available_prefix_len
+                    .zip(source.expected_declared_len)
+                    .is_some_and(|(available, declared)| available < declared)
+            );
+            validate_sha256(
+                source
+                    .expected_prefix_sha256
+                    .as_deref()
+                    .expect("prefix SHA-256"),
+            )
+            .expect("valid prefix SHA-256");
+        }
+
+        assert_eq!(unique_sources.len(), EXPECTED_DENOMINATOR);
+    }
+}
