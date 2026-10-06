@@ -297,8 +297,19 @@ def validate_observation(
     if invariants["wrap_mutation_scope"] != expected_wrap_mutation_scope:
         raise ContinuityV2Error("producer wrap mutation scope differs from requested acceptance mode")
 
-    ids = {move["origin_node_id"], resize["origin_node_id"], image["origin_node_id"]}
-    if len(ids) != 3:
+    move_id = move["origin_node_id"]
+    resize_id = resize["origin_node_id"]
+    image_id = image["origin_node_id"]
+    if expected_wrap_mutation_scope == "text_frame_non_intersecting":
+        if move_id == resize_id:
+            raise ContinuityV2Error(
+                "newsletter V2 requires MoveNode on a distinct exact source image"
+            )
+        if image_id != resize_id:
+            raise ContinuityV2Error(
+                "newsletter V2 requires ReplaceImage on the resized photo frame"
+            )
+    elif len({move_id, resize_id, image_id}) != 3:
         raise ContinuityV2Error("V2 requires distinct move/resize/image targets")
 
     return {
