@@ -192,6 +192,7 @@ pub fn analyze_reader_partial_contents_prefix(
         return ReaderPartialContentsSemanticEvidence {
             schema_version: READER_PARTIAL_CONTENTS_SEMANTIC_EVIDENCE_SCHEMA_V1.to_owned(),
             source_sha256: evidence.source_sha256.clone(),
+            stream_sid: evidence.stream_sid,
             prefix_sha256: evidence.prefix_sha256.clone(),
             available_prefix_len: evidence.available_prefix_len,
             declared_len: evidence.declared_len,
@@ -242,6 +243,7 @@ pub fn analyze_reader_partial_contents_prefix(
         return ReaderPartialContentsSemanticEvidence {
             schema_version: READER_PARTIAL_CONTENTS_SEMANTIC_EVIDENCE_SCHEMA_V1.to_owned(),
             source_sha256: evidence.source_sha256.clone(),
+            stream_sid: evidence.stream_sid,
             prefix_sha256: evidence.prefix_sha256.clone(),
             available_prefix_len: evidence.available_prefix_len,
             declared_len: evidence.declared_len,
@@ -263,6 +265,7 @@ pub fn analyze_reader_partial_contents_prefix(
         return ReaderPartialContentsSemanticEvidence {
             schema_version: READER_PARTIAL_CONTENTS_SEMANTIC_EVIDENCE_SCHEMA_V1.to_owned(),
             source_sha256: evidence.source_sha256.clone(),
+            stream_sid: evidence.stream_sid,
             prefix_sha256: evidence.prefix_sha256.clone(),
             available_prefix_len: evidence.available_prefix_len,
             declared_len: evidence.declared_len,
