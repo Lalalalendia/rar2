@@ -1,4 +1,7 @@
-use crate::{OfficeArtBody, OfficeArtReadError, OfficeArtRecord, parse_officeart_stream};
+use crate::{
+    OfficeArtBody, OfficeArtReadError, OfficeArtRecord, ValidatedBlip, parse_officeart_stream,
+    parse_record_at, validate_blip_record,
+};
 use pub_core::{RawSpan, StreamPath};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -80,6 +83,38 @@ pub struct DelayedBlip {
 pub struct DelayedBlipInventory {
     pub stream: StreamPath,
     pub records: Vec<DelayedBlip>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DelayedBlipPrefixGap {
+    TruncatedHeader {
+        offset: u64,
+        available: u64,
+    },
+    DeclaredRecordOutOfBounds {
+        offset: u64,
+        rec_type: u16,
+        declared_len: u32,
+        available: u64,
+    },
+    RecordParseFailure {
+        offset: u64,
+    },
+    NonAdvancingRecord {
+        offset: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidatedDelayedBlipPrefixInventory {
+    pub stream: StreamPath,
+    pub stream_len: u64,
+    pub scanned_record_count: u32,
+    pub rejected_complete_blip_count: u32,
+    pub records: Vec<ValidatedBlip>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_gap: Option<DelayedBlipPrefixGap>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,6 +234,130 @@ pub fn inspect_delayed_blips(
     }
 
     Ok(DelayedBlipInventory { stream, records })
+}
+
+/**
+Reads a physically available EscherDelay prefix without pretending the
+available bytes form a complete stream.
+
+Only complete OfficeArt records are traversed. A terminal short header or a
+record whose declared payload crosses the available prefix becomes an explicit
+terminal gap while already validated BLIPs remain available. V1 never scans or
+resynchronizes beyond a broken record boundary.
+
+Complete records that are outside the current strict BLIP validator (or fail
+its integrity checks) are not promoted, but their exact declared record extent
+may still be traversed to reach the next sequential record.
+*/
+pub fn inspect_validated_delayed_blips_prefix(
+    stream: StreamPath,
+    bytes: &[u8],
+) -> ValidatedDelayedBlipPrefixInventory {
+    let mut offset = 0usize;
+    let mut scanned_record_count = 0u32;
+    let mut rejected_complete_blip_count = 0u32;
+    let mut records = Vec::new();
+    let mut terminal_gap = None;
+
+    while offset < bytes.len() {
+        let available = bytes.len() - offset;
+        if available < 8 {
+            terminal_gap = Some(DelayedBlipPrefixGap::TruncatedHeader {
+                offset: offset as u64,
+                available: available as u64,
+            });
+            break;
+        }
+
+        let initial = read_u16(bytes, offset);
+        let rec_type = read_u16(bytes, offset + 2);
+        let rec_len = read_u32(bytes, offset + 4);
+        let payload_len = match usize::try_from(rec_len) {
+            Ok(value) => value,
+            Err(_) => {
+                terminal_gap = Some(DelayedBlipPrefixGap::DeclaredRecordOutOfBounds {
+                    offset: offset as u64,
+                    rec_type,
+                    declared_len: rec_len,
+                    available: available as u64,
+                });
+                break;
+            }
+        };
+        let Some(record_end) = offset
+            .checked_add(8)
+            .and_then(|start| start.checked_add(payload_len))
+        else {
+            terminal_gap = Some(DelayedBlipPrefixGap::DeclaredRecordOutOfBounds {
+                offset: offset as u64,
+                rec_type,
+                declared_len: rec_len,
+                available: available as u64,
+            });
+            break;
+        };
+        if record_end > bytes.len() {
+            terminal_gap = Some(DelayedBlipPrefixGap::DeclaredRecordOutOfBounds {
+                offset: offset as u64,
+                rec_type,
+                declared_len: rec_len,
+                available: available as u64,
+            });
+            break;
+        }
+
+        let record = match parse_record_at(bytes, &stream, offset, bytes.len()) {
+            Ok(record) => record,
+            Err(_) => {
+                terminal_gap = Some(DelayedBlipPrefixGap::RecordParseFailure {
+                    offset: offset as u64,
+                });
+                break;
+            }
+        };
+
+        let next = record
+            .sibling_tail_source
+            .as_ref()
+            .unwrap_or(&record.source)
+            .end()
+            .and_then(|value| usize::try_from(value).ok());
+        let Some(next) = next else {
+            terminal_gap = Some(DelayedBlipPrefixGap::RecordParseFailure {
+                offset: offset as u64,
+            });
+            break;
+        };
+        if next <= offset {
+            terminal_gap = Some(DelayedBlipPrefixGap::NonAdvancingRecord {
+                offset: offset as u64,
+            });
+            break;
+        }
+
+        if (0xF018..=0xF117).contains(&rec_type) {
+            match validate_blip_record(bytes, &record) {
+                Ok(validated) => records.push(validated),
+                Err(_) => {
+                    rejected_complete_blip_count =
+                        rejected_complete_blip_count.saturating_add(1);
+                }
+            }
+        }
+
+        scanned_record_count = scanned_record_count.saturating_add(1);
+        offset = next;
+        let _ = initial;
+    }
+
+    ValidatedDelayedBlipPrefixInventory {
+        stream,
+        stream_len: bytes.len() as u64,
+        scanned_record_count,
+        rejected_complete_blip_count,
+        records,
+        terminal_gap,
+    }
 }
 
 /// Resolves a one-based BStore slot through its exact foDelay offset.
