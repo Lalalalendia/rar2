@@ -154,7 +154,8 @@ pub const EDITOR_PROJECT_VERSION_V0_15: &str = "pub-editor-v0.15";
 pub const EDITOR_PROJECT_VERSION_V0_16: &str = "pub-editor-v0.16";
 pub const EDITOR_PROJECT_VERSION_V0_17: &str = "pub-editor-v0.17";
 pub const EDITOR_PROJECT_VERSION_V0_18: &str = "pub-editor-v0.18";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_18;
+pub const EDITOR_PROJECT_VERSION_V0_19: &str = "pub-editor-v0.19";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_19;
 pub const MAX_MOVE_NODES_V1: usize = 1024;
 pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
@@ -243,6 +244,14 @@ pub struct ResizeNodeBatchEntry {
     pub after: RectEmu,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageCropStateV1 {
+    pub top_raw: Option<u32>,
+    pub bottom_raw: Option<u32>,
+    pub left_raw: Option<u32>,
+    pub right_raw: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthoringTextPresetV1 {
     pub resource_id: String,
@@ -322,6 +331,11 @@ pub enum EditOperation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before_asset: Option<Sha256Digest>,
         after_asset: Sha256Digest,
+    },
+    SetImageCrop {
+        node_id: NodeId,
+        before: ImageCropStateV1,
+        after: ImageCropStateV1,
     },
     MoveNode {
         node_id: NodeId,
@@ -451,6 +465,7 @@ impl EditOperation {
             | Self::ReplaceStoryText { .. }
             | Self::BreakTextFrameForwardLink { .. }
             | Self::ReplaceTableCellText { .. }
+            | Self::SetImageCrop { .. }
             | Self::MoveNode { .. }
             | Self::MoveNodes { .. }
             | Self::ResizeNode { .. }
@@ -522,6 +537,11 @@ impl PersistenceRequirements for EditOperation {
                 feature: "image.replacement".into(),
                 origin: Some(node_id.into_canonical()),
                 property_path: Some("node.image.resource".into()),
+            }],
+            Self::SetImageCrop { node_id, .. } => vec![PersistenceRequirement {
+                feature: IMAGE_CONTENT_TRANSFORM_FEATURE.into(),
+                origin: Some(node_id.into_canonical()),
+                property_path: Some("node.image.crop".into()),
             }],
             Self::MoveNode { node_id, .. } => vec![PersistenceRequirement {
                 feature: "node.geometry.position".into(),
@@ -806,6 +826,13 @@ fn current_image_resources_v1(
             },
         )
         .collect())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EditableExportImageState<'a> {
+    replacements: &'a BTreeMap<NodeId, Sha256Digest>,
+    crop_overrides: &'a BTreeMap<NodeId, ImageCropStateV1>,
+    source_nodes: &'a BTreeMap<NodeId, ResourceId>,
 }
 
 fn source_image_context_from_bundle(
@@ -1112,6 +1139,15 @@ pub enum EditorError {
     StaleImageOperation {
         node_id: NodeId,
     },
+    ImageCropUnsupported {
+        node_id: NodeId,
+    },
+    ImageCropNoChange {
+        node_id: NodeId,
+    },
+    StaleImageCrop {
+        node_id: NodeId,
+    },
     CreateTextBoxInvalidNodeId {
         node_id: NodeId,
     },
@@ -1362,7 +1398,7 @@ impl fmt::Display for EditorError {
             ),
             Self::ImageReplaceUnsupported { node_id } => write!(
                 formatter,
-                "image node {} is outside the bounded crop-free replacement slice",
+                "image node {} is outside the bounded image replacement slice",
                 node_id.as_canonical()
             ),
             Self::MissingReplacementAsset { sha256 } => write!(
@@ -1377,6 +1413,21 @@ impl fmt::Display for EditorError {
             Self::StaleImageOperation { node_id } => write!(
                 formatter,
                 "image node {} no longer matches the replacement operation precondition",
+                node_id.as_canonical()
+            ),
+            Self::ImageCropUnsupported { node_id } => write!(
+                formatter,
+                "image node {} is outside the bounded source-backed crop slice",
+                node_id.as_canonical()
+            ),
+            Self::ImageCropNoChange { node_id } => write!(
+                formatter,
+                "image node {} already has the requested crop state",
+                node_id.as_canonical()
+            ),
+            Self::StaleImageCrop { node_id } => write!(
+                formatter,
+                "image node {} no longer matches the expected crop state",
                 node_id.as_canonical()
             ),
             Self::CreateTextBoxInvalidNodeId { node_id } => write!(
@@ -1688,6 +1739,9 @@ impl EditorError {
             Self::MissingReplacementAsset { .. } => "missing_replacement_asset",
             Self::ImageReplacementNoChange { .. } => "image_replacement_no_change",
             Self::StaleImageOperation { .. } => "stale_image_operation",
+            Self::ImageCropUnsupported { .. } => "image_crop_unsupported",
+            Self::ImageCropNoChange { .. } => "image_crop_no_change",
+            Self::StaleImageCrop { .. } => "stale_image_crop",
             Self::CreateTextBoxInvalidNodeId { .. } => "create_text_box_invalid_node_id",
             Self::CreateTextBoxInvalidStoryId { .. } => "create_text_box_invalid_story_id",
             Self::CreateTextBoxPageMissing { .. } => "create_text_box_page_missing",
@@ -2032,6 +2086,11 @@ fn is_scoped_text_format_operation_v1(operation: &EditOperation) -> bool {
 fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
     if operations
         .iter()
+        .any(|operation| matches!(operation, EditOperation::SetImageCrop { .. }))
+    {
+        EDITOR_PROJECT_VERSION_V0_19
+    } else if operations
+        .iter()
         .any(|operation| matches!(operation, EditOperation::CreateTable { .. }))
     {
         EDITOR_PROJECT_VERSION_V0_18
@@ -2269,6 +2328,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesParagraphAlignmentOperation {
         index: usize,
     },
+    LegacyProjectCarriesImageCropOperation {
+        index: usize,
+    },
     LegacyProjectCarriesTableGrids,
     LegacyProjectCarriesIdentity,
     MissingProjectIdentity,
@@ -2317,7 +2379,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, or {EDITOR_PROJECT_VERSION_V0_18:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, {EDITOR_PROJECT_VERSION_V0_18:?}, or {EDITOR_PROJECT_VERSION_V0_19:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -2388,6 +2450,10 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesParagraphAlignmentOperation { index } => write!(
                 formatter,
                 "editor project operation {index} uses paragraph alignment overrides but the project schema predates pub-editor-v0.15"
+            ),
+            Self::LegacyProjectCarriesImageCropOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses SetImageCrop but the project schema predates pub-editor-v0.19"
             ),
             Self::LegacyProjectCarriesTableGrids => formatter.write_str(
                 "editor projects before pub-editor-v0.6 cannot carry EffectiveTableGridV1 state",
@@ -2604,6 +2670,7 @@ pub struct EditorSession {
     project_identity: Option<EditorProjectIdentity>,
     source_image_assets: BTreeMap<ResourceId, EditorSourceImageAsset>,
     source_image_nodes: BTreeMap<NodeId, ResourceId>,
+    image_crop_overrides: BTreeMap<NodeId, ImageCropStateV1>,
     source_story_state_ids: BTreeMap<StoryId, String>,
     source_typography_runs: Vec<PubTypographyRun>,
     source_typography_size_runs: Vec<PubTypographySizeRun>,
@@ -2636,6 +2703,7 @@ impl EditorSession {
             project_identity: Some(new_project_identity()),
             source_image_assets: BTreeMap::new(),
             source_image_nodes: BTreeMap::new(),
+            image_crop_overrides: BTreeMap::new(),
             source_story_state_ids,
             source_typography_runs: Vec::new(),
             source_typography_size_runs: Vec::new(),
@@ -3461,6 +3529,10 @@ impl EditorSession {
         self.image_replacements.get(&node_id).copied()
     }
 
+    pub fn image_crop_for(&self, node_id: NodeId) -> Option<ImageCropStateV1> {
+        effective_image_crop_state(&self.graph, &self.image_crop_overrides, node_id)
+    }
+
     pub fn import_replacement_asset(
         &mut self,
         mime: impl Into<String>,
@@ -3516,7 +3588,12 @@ impl EditorSession {
             .undo
             .iter()
             .any(|operation| matches!(operation, EditOperation::CreateTable { .. }));
-        if (carries_reorder
+        let carries_crop = self
+            .undo
+            .iter()
+            .any(|operation| matches!(operation, EditOperation::SetImageCrop { .. }));
+        if (carries_crop
+            || carries_reorder
             || carries_text_format
             || carries_paragraph_alignment
             || carries_create_line
@@ -3665,6 +3742,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             return Err(EditorProjectError::UnsupportedSchema {
                 found: project.schema_version.clone(),
@@ -3699,6 +3777,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3722,6 +3801,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3744,6 +3824,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && !project.table_grids.is_empty()
         {
             return Err(EditorProjectError::LegacyProjectCarriesTableGrids);
@@ -3760,6 +3841,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
@@ -3778,6 +3860,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3797,6 +3880,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3815,6 +3899,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3826,6 +3911,7 @@ impl EditorSession {
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3835,7 +3921,9 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesCreateLineOperation { index });
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_18 {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+        {
             if let Some(index) = project
                 .operations
                 .iter()
@@ -3852,6 +3940,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3870,6 +3959,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3885,6 +3975,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::ReorderAuthoredStack { .. })
@@ -3899,6 +3990,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3911,6 +4003,7 @@ impl EditorSession {
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project
                 .operations
@@ -3926,6 +4019,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
@@ -3939,6 +4033,15 @@ impl EditorSession {
                 );
             }
         }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_19 {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(|operation| matches!(operation, EditOperation::SetImageCrop { .. }))
+            {
+                return Err(EditorProjectError::LegacyProjectCarriesImageCropOperation { index });
+            }
+        }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
@@ -3947,6 +4050,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.identity.is_some()
         {
             return Err(EditorProjectError::LegacyProjectCarriesIdentity);
@@ -3958,7 +4062,8 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_15
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_17
-            || project.schema_version == EDITOR_PROJECT_VERSION_V0_18)
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_18
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_19)
             && project.identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
@@ -3973,6 +4078,7 @@ impl EditorSession {
             || !self.redo.is_empty()
             || !self.replacement_assets.is_empty()
             || !self.image_replacements.is_empty()
+            || !self.image_crop_overrides.is_empty()
             || !self.authored_shapes.is_empty()
             || !self.authored_lines.is_empty()
             || !self.authored_stacks.is_empty()
@@ -3988,6 +4094,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_17
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_18
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_19
         {
             let expected = required_editor_asset_refs_v1(&project.operations)
                 .into_iter()
@@ -4058,6 +4165,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_17
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_18
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_19
         {
             let actual_grids =
                 effective_table_grids_with_history(&candidate.graph, &candidate.undo);
@@ -4829,11 +4937,15 @@ impl EditorSession {
         let paragraph_alignments = self
             .effective_full_story_paragraph_alignment_v1()
             .map_err(EditorExportError::Session)?;
+        let image_state = EditableExportImageState {
+            replacements: &self.image_replacements,
+            crop_overrides: &self.image_crop_overrides,
+            source_nodes: &self.source_image_nodes,
+        };
         let plan = editable_export_plan(
             target,
             &self.graph,
-            &self.image_replacements,
-            &self.source_image_nodes,
+            image_state,
             EditableExportTypographyInputs {
                 source_typography_runs: &self.source_typography_runs,
                 source_typography_size_runs: &self.source_typography_size_runs,
@@ -5432,8 +5544,30 @@ impl EditorSession {
             .nodes
             .get(&node_id)
             .ok_or(EditorError::ImageReplaceUnsupported { node_id })?;
-        if node.payload.image_slot.is_none() || node.payload.explicit_image_crop.is_some() {
+        if node.payload.image_slot.is_none() {
             return Err(EditorError::ImageReplaceUnsupported { node_id });
+        }
+        if let Some(crop) = node.payload.explicit_image_crop.as_ref() {
+            let resource_id = self
+                .source_image_nodes
+                .get(&node_id)
+                .ok_or(EditorError::ImageReplaceUnsupported { node_id })?;
+            let source_asset = self
+                .source_image_assets
+                .get(resource_id)
+                .ok_or(EditorError::ImageReplaceUnsupported { node_id })?;
+            if crop.ambiguous
+                || !matches!(source_asset.mime.as_str(), "image/png" | "image/jpeg")
+                || node.header.transform != pub_model::Affine2D::identity()
+                || !self
+                    .graph
+                    .document
+                    .pages
+                    .iter()
+                    .any(|page_id| page_id.into_canonical() == node.header.parent_id)
+            {
+                return Err(EditorError::ImageReplaceUnsupported { node_id });
+            }
         }
         if node.header.bounds.width.get() <= 0
             || node.header.bounds.height.get() <= 0
@@ -5452,6 +5586,79 @@ impl EditorSession {
         }
 
         Ok(())
+    }
+
+    pub fn can_set_image_crop(&self, node_id: NodeId) -> Result<(), EditorError> {
+        self.validate_source_identity()?;
+
+        let node = self
+            .graph
+            .nodes
+            .get(&node_id)
+            .ok_or(EditorError::ImageCropUnsupported { node_id })?;
+        let crop = node
+            .payload
+            .explicit_image_crop
+            .as_ref()
+            .ok_or(EditorError::ImageCropUnsupported { node_id })?;
+        let resource_id = self
+            .source_image_nodes
+            .get(&node_id)
+            .ok_or(EditorError::ImageCropUnsupported { node_id })?;
+        let source_asset = self
+            .source_image_assets
+            .get(resource_id)
+            .ok_or(EditorError::ImageCropUnsupported { node_id })?;
+
+        if self.project_identity.is_none()
+            || node.payload.image_slot.is_none()
+            || crop.ambiguous
+            || !matches!(source_asset.mime.as_str(), "image/png" | "image/jpeg")
+            || node.header.transform != pub_model::Affine2D::identity()
+            || node.header.bounds.width.get() <= 0
+            || node.header.bounds.height.get() <= 0
+            || node.header.bounds.right().is_none()
+            || node.header.bounds.bottom().is_none()
+            || !self
+                .graph
+                .document
+                .pages
+                .iter()
+                .any(|page_id| page_id.into_canonical() == node.header.parent_id)
+        {
+            return Err(EditorError::ImageCropUnsupported { node_id });
+        }
+
+        Ok(())
+    }
+
+    pub fn set_image_crop(
+        &mut self,
+        node_id: NodeId,
+        expected_before: ImageCropStateV1,
+        after: ImageCropStateV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.can_set_image_crop(node_id)?;
+        let before = self
+            .image_crop_for(node_id)
+            .ok_or(EditorError::ImageCropUnsupported { node_id })?;
+        if before != expected_before {
+            return Err(EditorError::StaleImageCrop { node_id });
+        }
+        if before == after {
+            return Err(EditorError::ImageCropNoChange { node_id });
+        }
+
+        let operation = EditOperation::SetImageCrop {
+            node_id,
+            before,
+            after,
+        };
+        apply_crop_forward(&self.graph, &mut self.image_crop_overrides, &operation)?;
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
     }
 
     pub fn replace_image(
@@ -6395,6 +6602,8 @@ impl EditorSession {
                 self.authored_lines = candidate_lines;
                 self.graph = candidate_graph;
                 self.authored_stacks = before_stacks;
+            } else if matches!(operation, EditOperation::SetImageCrop { .. }) {
+                apply_crop_inverse(&self.graph, &mut self.image_crop_overrides, &operation)?;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_inverse(&mut self.image_replacements, &operation)?;
             } else if let Some(story_id) = text_format_operation_story_id_v1(&operation) {
@@ -6486,6 +6695,8 @@ impl EditorSession {
                 self.authored_lines = candidate_lines;
                 self.graph = candidate_graph;
                 self.authored_stacks = after_stacks;
+            } else if matches!(operation, EditOperation::SetImageCrop { .. }) {
+                apply_crop_forward(&self.graph, &mut self.image_crop_overrides, &operation)?;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_forward(&mut self.image_replacements, &operation)?;
             } else if let Some(story_id) = text_format_operation_story_id_v1(&operation) {
@@ -6680,6 +6891,13 @@ fn replay_canonical_operation(
             ..
         } => session
             .replace_image(*node_id, *after_asset)
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::SetImageCrop {
+            node_id,
+            before,
+            after,
+        } => session
+            .set_image_crop(*node_id, *before, *after)
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::MoveNode { node_id, after, .. } => session
             .move_node_to(*node_id, after.x, after.y)
@@ -7218,8 +7436,7 @@ struct EditableExportTypographyInputs<'a> {
 fn editable_export_plan(
     target: EditorEditableTarget,
     graph: &PubResolvedGraph,
-    image_replacements: &BTreeMap<NodeId, Sha256Digest>,
-    source_image_nodes: &BTreeMap<NodeId, ResourceId>,
+    image_state: EditableExportImageState<'_>,
     typography: EditableExportTypographyInputs<'_>,
 ) -> Result<ExportPlan, ScopedCapabilityError> {
     let mut features = BTreeMap::new();
@@ -7393,7 +7610,7 @@ fn editable_export_plan(
                 property_path: Some("node.story_frame".into()),
                 require_preserved: true,
             });
-        } else if let Some(asset_sha) = image_replacements.get(node_id) {
+        } else if let Some(asset_sha) = image_state.replacements.get(node_id) {
             let resource_id = replacement_asset_resource_id(*asset_sha);
             requests.push(SemanticFeatureRequest {
                 feature: IMAGE_BYTES_FEATURE.into(),
@@ -7411,9 +7628,9 @@ fn editable_export_plan(
                 feature: IMAGE_CONTENT_TRANSFORM_FEATURE.into(),
                 origin: Some(node_id.into_canonical()),
                 property_path: Some("image.content_transform".into()),
-                require_preserved: false,
+                require_preserved: image_state.crop_overrides.contains_key(node_id),
             });
-        } else if let Some(resource_id) = source_image_nodes.get(node_id) {
+        } else if let Some(resource_id) = image_state.source_nodes.get(node_id) {
             requests.push(SemanticFeatureRequest {
                 feature: IMAGE_BYTES_FEATURE.into(),
                 origin: Some(resource_id.into_canonical()),
@@ -7430,7 +7647,14 @@ fn editable_export_plan(
                 feature: IMAGE_CONTENT_TRANSFORM_FEATURE.into(),
                 origin: Some(node_id.into_canonical()),
                 property_path: Some("image.content_transform".into()),
-                require_preserved: false,
+                require_preserved: image_state.crop_overrides.contains_key(node_id),
+            });
+        } else if image_state.crop_overrides.contains_key(node_id) {
+            requests.push(SemanticFeatureRequest {
+                feature: IMAGE_CONTENT_TRANSFORM_FEATURE.into(),
+                origin: Some(node_id.into_canonical()),
+                property_path: Some("image.content_transform".into()),
+                require_preserved: true,
             });
         } else {
             requests.push(SemanticFeatureRequest {
@@ -7881,6 +8105,9 @@ fn apply_forward(
         EditOperation::ReplaceImage { .. } => {
             unreachable!("image replacements are applied to editor overlay state")
         }
+        EditOperation::SetImageCrop { .. } => {
+            unreachable!("image crop is applied to editor overlay state")
+        }
         EditOperation::CreateShape { .. } => {
             unreachable!("CreateShape is applied to the authored overlay state")
         }
@@ -8138,6 +8365,9 @@ fn apply_inverse(
         }
         EditOperation::ReplaceImage { .. } => {
             unreachable!("image replacements are applied to editor overlay state")
+        }
+        EditOperation::SetImageCrop { .. } => {
+            unreachable!("image crop is applied to editor overlay state")
         }
         EditOperation::CreateShape { .. } => {
             unreachable!("CreateShape is reverted in the authored overlay state")
@@ -8457,6 +8687,79 @@ fn apply_image_inverse(
     Ok(())
 }
 
+fn source_image_crop_state(graph: &PubResolvedGraph, node_id: NodeId) -> Option<ImageCropStateV1> {
+    let crop = graph
+        .nodes
+        .get(&node_id)?
+        .payload
+        .explicit_image_crop
+        .as_ref()?;
+    if crop.ambiguous {
+        return None;
+    }
+    Some(ImageCropStateV1 {
+        top_raw: crop.top_raw,
+        bottom_raw: crop.bottom_raw,
+        left_raw: crop.left_raw,
+        right_raw: crop.right_raw,
+    })
+}
+
+fn effective_image_crop_state(
+    graph: &PubResolvedGraph,
+    overrides: &BTreeMap<NodeId, ImageCropStateV1>,
+    node_id: NodeId,
+) -> Option<ImageCropStateV1> {
+    overrides
+        .get(&node_id)
+        .copied()
+        .or_else(|| source_image_crop_state(graph, node_id))
+}
+
+fn apply_crop_forward(
+    graph: &PubResolvedGraph,
+    overrides: &mut BTreeMap<NodeId, ImageCropStateV1>,
+    operation: &EditOperation,
+) -> Result<(), EditorError> {
+    let EditOperation::SetImageCrop {
+        node_id,
+        before,
+        after,
+    } = operation
+    else {
+        unreachable!("only SetImageCrop reaches crop overlay apply")
+    };
+    if effective_image_crop_state(graph, overrides, *node_id) != Some(*before) {
+        return Err(EditorError::StaleImageCrop { node_id: *node_id });
+    }
+    overrides.insert(*node_id, *after);
+    Ok(())
+}
+
+fn apply_crop_inverse(
+    graph: &PubResolvedGraph,
+    overrides: &mut BTreeMap<NodeId, ImageCropStateV1>,
+    operation: &EditOperation,
+) -> Result<(), EditorError> {
+    let EditOperation::SetImageCrop {
+        node_id,
+        before,
+        after,
+    } = operation
+    else {
+        unreachable!("only SetImageCrop reaches crop overlay inverse")
+    };
+    if effective_image_crop_state(graph, overrides, *node_id) != Some(*after) {
+        return Err(EditorError::StaleImageCrop { node_id: *node_id });
+    }
+    if source_image_crop_state(graph, *node_id) == Some(*before) {
+        overrides.remove(node_id);
+    } else {
+        overrides.insert(*node_id, *before);
+    }
+    Ok(())
+}
+
 fn snapshot_table_ranges(table: &pub_reader::PubTableSource) -> Vec<TableCellRangeSnapshot> {
     table
         .cells
@@ -8571,6 +8874,242 @@ fn apply_table_cell_state(
     story.text.clear();
     story.text.push_str(replacement_story);
     Ok(())
+}
+
+#[cfg(test)]
+mod image_crop_authoring_tests {
+    use super::*;
+
+    fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
+        serde_json::from_str(&format!("\"{value}\"")).expect("canonical typed id")
+    }
+
+    fn source_hash() -> Sha256Digest {
+        "1111111111111111111111111111111111111111111111111111111111111111"
+            .parse()
+            .expect("source hash")
+    }
+
+    fn crop_graph() -> (PubResolvedGraph, NodeId, ResourceId) {
+        let page_id: PageId = id("10000000-0000-4000-8000-000000000001");
+        let node_id: NodeId = id("20000000-0000-4000-8000-000000000001");
+        let resource_id: ResourceId = id("40000000-0000-4000-8000-000000000001");
+        let hash = source_hash();
+        let bounds = RectEmu::new(
+            LengthEmu::new(100_000),
+            LengthEmu::new(200_000),
+            LengthEmu::new(300_000),
+            LengthEmu::new(400_000),
+        );
+
+        let mut pages = BTreeMap::new();
+        pages.insert(
+            page_id,
+            pub_model::Page {
+                id: page_id,
+                size: pub_model::Size2D::new(LengthEmu::new(5_000_000), LengthEmu::new(5_000_000)),
+                bleed: None,
+                margins: None,
+                children: vec![node_id],
+                extensions: Vec::new(),
+            },
+        );
+
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            node_id,
+            pub_model::Node {
+                kind: pub_model::NodeKind::Shape,
+                header: pub_model::NodeHeader {
+                    id: node_id,
+                    parent_id: page_id.into_canonical(),
+                    bounds,
+                    transform: pub_model::Affine2D::identity(),
+                    source_refs: Vec::new(),
+                    extensions: Vec::new(),
+                },
+                payload: PubResolvedNodePayload {
+                    contents_seq_num: 1,
+                    officeart_shape_type: Some(75),
+                    officeart_spid: Some(1),
+                    image_slot: Some(1),
+                    legacy_ole: None,
+                    explicit_image_crop: Some(pub_reader::PubExplicitImageCropSource {
+                        top_raw: Some(10),
+                        bottom_raw: Some(20),
+                        left_raw: Some(30),
+                        right_raw: Some(40),
+                        ambiguous: false,
+                    }),
+                    explicit_image_cardinal_rotation_degrees: None,
+                    explicit_paint: pub_reader::PubExplicitShapePaintSource::default(),
+                    effective_paint: None,
+                    story_frame: None,
+                    text_frame_inset: None,
+                    table_story: None,
+                    table: None,
+                },
+            },
+        );
+
+        (
+            pub_model::ResolvedGraph {
+                cdm_version: "0.1".into(),
+                resolver_version: "image-crop-authoring-test".into(),
+                source: pub_model::SourceDescriptor {
+                    format: "pub".into(),
+                    format_version: Some("0x2c".into()),
+                    adapter_version: "pub-rs/test".into(),
+                    source_hash: hash,
+                },
+                document: pub_model::Document {
+                    id: id::<pub_model::DocumentId>("30000000-0000-4000-8000-000000000001"),
+                    format_origin: "pub".into(),
+                    source_hash: hash,
+                    pages: vec![page_id],
+                    resources: Vec::new(),
+                    styles: Vec::new(),
+                },
+                pages,
+                nodes,
+                stories: BTreeMap::new(),
+                paragraphs: BTreeMap::new(),
+                text_runs: BTreeMap::new(),
+                resources: BTreeMap::new(),
+                styles: BTreeMap::new(),
+                extensions: BTreeMap::new(),
+            },
+            node_id,
+            resource_id,
+        )
+    }
+
+    fn install_source_png(session: &mut EditorSession, node_id: NodeId, resource_id: ResourceId) {
+        session.source_image_nodes.insert(node_id, resource_id);
+        session.source_image_assets.insert(
+            resource_id,
+            EditorSourceImageAsset {
+                mime: "image/png".into(),
+                bytes: b"source-image-authority".to_vec(),
+            },
+        );
+    }
+
+    #[test]
+    fn crop_is_v0_14_overlay_with_exact_history_replay_and_independent_axes() {
+        let (graph, node_id, resource_id) = crop_graph();
+        let source_bounds = graph.nodes[&node_id].header.bounds;
+        let mut session = EditorSession::new(graph).expect("session");
+        install_source_png(&mut session, node_id, resource_id);
+
+        let before = session.image_crop_for(node_id).expect("source crop");
+        let after = ImageCropStateV1 {
+            top_raw: Some(11),
+            bottom_raw: Some(22),
+            left_raw: Some(33),
+            right_raw: Some(44),
+        };
+
+        let operation = session
+            .set_image_crop(node_id, before, after)
+            .expect("set crop");
+        assert!(matches!(operation, EditOperation::SetImageCrop { .. }));
+        assert_eq!(session.image_crop_for(node_id), Some(after));
+        assert_eq!(session.graph.nodes[&node_id].header.bounds, source_bounds);
+        assert_eq!(
+            session.project().schema_version,
+            EDITOR_PROJECT_VERSION_V0_14
+        );
+
+        assert!(matches!(
+            session.set_image_crop(node_id, before, after),
+            Err(EditorError::StaleImageCrop { .. })
+        ));
+        assert!(matches!(
+            session.set_image_crop(node_id, after, after),
+            Err(EditorError::ImageCropNoChange { .. })
+        ));
+
+        session.undo().expect("crop undo");
+        assert_eq!(session.image_crop_for(node_id), Some(before));
+        session.redo().expect("crop redo");
+        assert_eq!(session.image_crop_for(node_id), Some(after));
+
+        session
+            .move_node_to(node_id, LengthEmu::new(120_000), LengthEmu::new(230_000))
+            .expect("move preserves crop");
+        assert_eq!(session.image_crop_for(node_id), Some(after));
+
+        let resized = RectEmu::new(
+            LengthEmu::new(120_000),
+            LengthEmu::new(230_000),
+            LengthEmu::new(350_000),
+            LengthEmu::new(450_000),
+        );
+        session
+            .resize_node_to(node_id, resized)
+            .expect("resize preserves crop");
+        assert_eq!(session.image_crop_for(node_id), Some(after));
+
+        let project = session.project();
+        assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_14);
+        let (replay_graph, replay_node_id, replay_resource_id) = crop_graph();
+        assert_eq!(replay_node_id, node_id);
+        let mut replay = EditorSession::new(replay_graph).expect("replay session");
+        install_source_png(&mut replay, replay_node_id, replay_resource_id);
+        replay.apply_project(&project).expect("v0.14 crop replay");
+        assert_eq!(replay.image_crop_for(node_id), Some(after));
+        assert_eq!(replay.graph.nodes[&node_id].header.bounds, resized);
+        assert_eq!(replay.project(), project);
+
+        for target in [EditorEditableTarget::Idml, EditorEditableTarget::Odg] {
+            let preview = session
+                .preview_editable_export(target, "crop-test")
+                .expect("crop export preview");
+            assert!(
+                !preview.report.can_serialize,
+                "crop override must fail closed until {target} preserves content transform"
+            );
+        }
+
+        let replacement = session
+            .import_replacement_asset("image/png", b"\x89PNG\r\n\x1a\nreplacement".to_vec())
+            .expect("replacement asset");
+        session
+            .replace_image(node_id, replacement)
+            .expect("safe cropped replacement");
+        assert_eq!(session.image_crop_for(node_id), Some(after));
+        assert_eq!(session.graph.nodes[&node_id].header.bounds, resized);
+    }
+
+    #[test]
+    fn cropped_picture_requires_exact_png_or_jpeg_source_authority() {
+        let (graph, node_id, resource_id) = crop_graph();
+        let mut session = EditorSession::new(graph).expect("session");
+        let before = session.image_crop_for(node_id).expect("source crop");
+        let after = ImageCropStateV1 {
+            top_raw: Some(1),
+            ..before
+        };
+
+        assert!(matches!(
+            session.set_image_crop(node_id, before, after),
+            Err(EditorError::ImageCropUnsupported { .. })
+        ));
+
+        session.source_image_nodes.insert(node_id, resource_id);
+        session.source_image_assets.insert(
+            resource_id,
+            EditorSourceImageAsset {
+                mime: "image/x-ms-bmp-dib".into(),
+                bytes: b"bmp".to_vec(),
+            },
+        );
+        assert!(matches!(
+            session.set_image_crop(node_id, before, after),
+            Err(EditorError::ImageCropUnsupported { .. })
+        ));
+    }
 }
 
 #[cfg(test)]

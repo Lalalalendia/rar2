@@ -2123,6 +2123,22 @@ fn operation_summary(operation: &EditOperation) -> Value {
             "before_asset":before_asset.as_ref().map(|value| value.to_string()),
             "after_asset":after_asset.to_string()
         }),
+        EditOperation::SetImageCrop {
+            node_id,
+            before,
+            after,
+        } => json!({
+            "kind":"set_image_crop",
+            "node_id":node_id.as_canonical().to_string(),
+            "before_crop_state_sha256":sha256_hex(
+                &serde_json::to_vec(before)
+                    .expect("ImageCropStateV1 JSON serialization is infallible")
+            ),
+            "after_crop_state_sha256":sha256_hex(
+                &serde_json::to_vec(after)
+                    .expect("ImageCropStateV1 JSON serialization is infallible")
+            )
+        }),
         EditOperation::MoveNode {
             node_id,
             before,
@@ -2593,6 +2609,41 @@ mod tests {
         );
         assert_eq!(summary["value"], "center");
         assert!(summary.get("story_text").is_none());
+    }
+
+    #[test]
+    fn image_crop_operation_summary_hashes_state_without_raw_crop_values() {
+        let node_id: pub_editor::NodeId =
+            serde_json::from_str("\"11111111-1111-1111-1111-111111111111\"").unwrap();
+        let before = pub_editor::ImageCropStateV1 {
+            top_raw: Some(10),
+            bottom_raw: Some(20),
+            left_raw: Some(30),
+            right_raw: Some(40),
+        };
+        let after = pub_editor::ImageCropStateV1 {
+            top_raw: Some(11),
+            bottom_raw: Some(22),
+            left_raw: Some(33),
+            right_raw: Some(44),
+        };
+        let operation = EditOperation::SetImageCrop {
+            node_id,
+            before,
+            after,
+        };
+
+        let summary = operation_summary(&operation);
+        assert_eq!(summary["kind"], "set_image_crop");
+        assert_eq!(summary["node_id"], node_id.as_canonical().to_string());
+        assert!(summary["before_crop_state_sha256"].is_string());
+        assert!(summary["after_crop_state_sha256"].is_string());
+        assert!(summary.get("before").is_none());
+        assert!(summary.get("after").is_none());
+        let encoded = summary.to_string();
+        for raw in ["top_raw", "bottom_raw", "left_raw", "right_raw"] {
+            assert!(!encoded.contains(raw));
+        }
     }
 
     #[test]

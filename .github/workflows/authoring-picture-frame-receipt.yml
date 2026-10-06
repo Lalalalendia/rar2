@@ -3,12 +3,18 @@ name: Authoring picture frame receipt V1
 on:
   pull_request:
     paths:
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "apps/chaptera-desktop/src/agent.rs"
       - "packages/protocol/authoring-picture-frame/**"
       - "services/editor-api/test_revision_store.py"
       - "tools/validate_authoring_picture_frame_receipt.py"
       - "tools/test_authoring_picture_frame_receipt.py"
       - ".github/workflows/authoring-picture-frame-receipt.yml"
   workflow_dispatch:
+
+concurrency:
+  group: authoring-picture-frame-receipt-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -18,9 +24,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Check crop-core formatting
+        run: |
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
+          cargo fmt -p chaptera-desktop -- --check
+      - name: Run bounded pub-editor crop tests
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor
+      - name: Run source-safe Desktop crop summary test
+        run: cargo test -p chaptera-desktop image_crop_operation_summary_hashes_state_without_raw_crop_values
       - name: Install schema validator
         run: python -m pip install "jsonschema==4.23.0"
       - name: Run picture frame state-axis contract tests
