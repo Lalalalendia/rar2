@@ -426,6 +426,24 @@ jobs:
                   f"Carlton TABLE vertical-alignment authority drift: "
                   f"{mapping.get('table_uniform_vertical_alignment_count')!r}"
               )
+          table_layout_gate = {
+              "bounded_profile": mapping["table_bounded_text_profile_cell_count"],
+              "width_fit": mapping["table_single_line_width_fit_cell_count"],
+              "layout_present": mapping["table_single_line_layout_present_cell_count"],
+              "reasons": mapping["table_single_line_layout_rejection_counts"],
+              "prediction_mismatch": mapping["table_single_line_layout_prediction_mismatch_count"],
+          }
+          print("table_text_layout_gate=" + json.dumps(table_layout_gate, sort_keys=True))
+          if table_layout_gate["bounded_profile"] != 13:
+              raise SystemExit(f"TABLE bounded profile drift: {table_layout_gate!r}")
+          if table_layout_gate["width_fit"] != 10:
+              raise SystemExit(f"TABLE fallback width-fit drift: {table_layout_gate!r}")
+          if table_layout_gate["layout_present"] != 6:
+              raise SystemExit(f"TABLE serialized layout count drift: {table_layout_gate!r}")
+          if table_layout_gate["prediction_mismatch"] != 0:
+              raise SystemExit(f"TABLE layout-gate classifier does not reproduce product admission: {table_layout_gate!r}")
+          if sum(table_layout_gate["reasons"].values()) != mapping["table_nonempty_cell_text_count"]:
+              raise SystemExit(f"TABLE layout-gate reasons do not partition nonempty cells: {table_layout_gate!r}")
           if mapping["table_cell_paint_state_count"] != 17:
               raise SystemExit(f"TABLE known cell-paint state drift: {mapping['table_cell_paint_state_count']!r}")
           if mapping["derived_table_border_node_count"] != 20:

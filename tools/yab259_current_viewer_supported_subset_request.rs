@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, bail};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedResolvedScene, BoundedShapedGlyph, BoundedShapedText,
-    BoundedShapingDescriptor, ResolvedPhysicalNode, ResolvedSurface, SceneOriginMapping,
-    font_fingerprint_sha256,
+    BoundedShapingDescriptor, BoundedShapingRuntime, ResolvedPhysicalNode, ResolvedSurface,
+    SceneOriginMapping, font_fingerprint_sha256, shape_bounded_ltr_segment,
 };
 use pub_model::{
     Affine2D, CanonicalId, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D, TableCellId,
@@ -96,11 +96,31 @@ struct CurrentTableCell {
     #[serde(default)]
     typography: Vec<CurrentTypographyRun>,
     #[serde(default)]
+    paragraph_alignments: Vec<CurrentParagraphAlignmentRun>,
+    #[serde(default)]
+    layout: Option<CurrentTextLayout>,
+    #[serde(default)]
     bounds: Option<RectEmu>,
     #[serde(default)]
     fill_rgb: Option<[u8; 3]>,
     #[serde(default)]
     fill_visible: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CurrentParagraphAlignment {
+    Center,
+    Right,
+    InterWord,
+    Distribute,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentParagraphAlignmentRun {
+    scalar_start: u32,
+    scalar_end: u32,
+    alignment: CurrentParagraphAlignment,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,6 +174,8 @@ struct CurrentCensus {
     page_count: usize,
     node_count: usize,
     duplicate_node_id_count: usize,
+    configured_fallback_font_size_emu: i64,
+    configured_fallback_line_height_emu: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -252,6 +274,11 @@ struct MappingSummary {
     table_cell_inset_bounds_valid_count: usize,
     table_uniform_cell_text_inset_count: usize,
     table_uniform_vertical_alignment_count: usize,
+    table_bounded_text_profile_cell_count: usize,
+    table_single_line_width_fit_cell_count: usize,
+    table_single_line_layout_present_cell_count: usize,
+    table_single_line_layout_rejection_counts: BTreeMap<String, usize>,
+    table_single_line_layout_prediction_mismatch_count: usize,
     derived_table_fill_node_count: usize,
     derived_table_border_node_count: usize,
     derived_table_paint_node_count: usize,
@@ -521,7 +548,200 @@ fn table_cell_inset_fits_bounds_v1(cell: &CurrentTableCell, inset: i64) -> bool 
     bounds.width.get() > double_inset && bounds.height.get() > double_inset
 }
 
-fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSummary) {
+fn table_cell_bounded_text_profile_v1(
+    cell: &CurrentTableCell,
+    inset: i64,
+) -> Option<(u32, i64, i64)> {
+    let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end) else {
+        return None;
+    };
+    if start >= end
+        || u32::try_from(cell.text.chars().count())
+            .ok()
+            .and_then(|len| start.checked_add(len))
+            != Some(end)
+        || !complete_table_cell_typography_v1(cell)
+        || !table_cell_inset_fits_bounds_v1(cell, inset)
+    {
+        return None;
+    }
+
+    let first_size = cell.typography.first()?.text_size_emu;
+    if first_size == 0
+        || !cell
+            .typography
+            .iter()
+            .all(|run| run.text_size_emu == first_size)
+    {
+        return None;
+    }
+    if !matches!(
+        color_range_disposition(&cell.typography, start, end),
+        ColorRangeDisposition::Resolved(_)
+    ) {
+        return None;
+    }
+    let bounds = cell.bounds?;
+    let double_inset = inset.checked_mul(2)?;
+    let inner_width = bounds.width.get().checked_sub(double_inset)?;
+    let inner_height = bounds.height.get().checked_sub(double_inset)?;
+    (inner_width > 0 && inner_height > 0).then_some((first_size, inner_width, inner_height))
+}
+
+fn table_cell_paragraph_alignment_admissible_v1(cell: &CurrentTableCell) -> bool {
+    let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end) else {
+        return false;
+    };
+    let mut previous_end = start;
+    for run in &cell.paragraph_alignments {
+        if run.scalar_start < start
+            || run.scalar_end > end
+            || run.scalar_start >= run.scalar_end
+            || run.scalar_start < previous_end
+            || matches!(
+                run.alignment,
+                CurrentParagraphAlignment::InterWord | CurrentParagraphAlignment::Distribute
+            )
+        {
+            return false;
+        }
+        previous_end = run.scalar_end;
+    }
+    true
+}
+
+fn scaled_line_height_emu_v1(
+    font_size_emu: i64,
+    default_font_size_emu: i64,
+    default_line_height_emu: i64,
+) -> Option<i64> {
+    if font_size_emu <= 0 || default_font_size_emu <= 0 || default_line_height_emu <= 0 {
+        return None;
+    }
+    let numerator = i128::from(font_size_emu).checked_mul(i128::from(default_line_height_emu))?;
+    let denominator = i128::from(default_font_size_emu);
+    let rounded = numerator
+        .checked_add(denominator / 2)?
+        .checked_div(denominator)?;
+    let value = i64::try_from(rounded).ok()?;
+    (value > 0).then_some(value)
+}
+
+fn table_cell_single_line_width_fits_v1(
+    cell: &CurrentTableCell,
+    inset: i64,
+    font: &CurrentFont,
+) -> bool {
+    let Some((font_size_emu, inner_width_emu, _inner_height_emu)) =
+        table_cell_bounded_text_profile_v1(cell, inset)
+    else {
+        return false;
+    };
+    if cell.text.contains(&['\r', '\n'][..]) {
+        return false;
+    }
+    let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end) else {
+        return false;
+    };
+    let Ok(scalar_len) = u32::try_from(cell.text.chars().count()) else {
+        return false;
+    };
+    if start.checked_add(scalar_len) != Some(end) {
+        return false;
+    }
+    let fingerprint = font_fingerprint_sha256(&font.bytes);
+    if font.fingerprint_sha256.is_empty() || fingerprint != font.fingerprint_sha256 {
+        return false;
+    }
+    let runtime = BoundedShapingRuntime {
+        layout: BoundedLayoutEnvironment {
+            engine_revision: "chaptera.table-text-width-fit-measurement.v1".into(),
+            font_set_fingerprint: fingerprint,
+            resource_fingerprint: font.resource_id.clone(),
+        },
+        face_index: font.face_index,
+        font_size_emu: LengthEmu::new(i64::from(font_size_emu)),
+        font_bytes: &font.bytes,
+    };
+    shape_bounded_ltr_segment(&cell.text, start, &runtime)
+        .ok()
+        .is_some_and(|shaped| shaped.total_x_advance.get() <= inner_width_emu)
+}
+
+fn table_single_line_layout_gate_reason_v1(
+    cell: &CurrentTableCell,
+    inset: i64,
+    font: &CurrentFont,
+    default_font_size_emu: i64,
+    default_line_height_emu: i64,
+) -> &'static str {
+    let Some((font_size_emu, inner_width_emu, inner_height_emu)) =
+        table_cell_bounded_text_profile_v1(cell, inset)
+    else {
+        return "bounded_profile_rejected";
+    };
+    if cell.text.contains(&['\r', '\n'][..]) {
+        return "hard_break";
+    }
+    if !table_cell_paragraph_alignment_admissible_v1(cell) {
+        return "paragraph_alignment_rejected";
+    }
+    if font.resource_id.is_empty() || font.bytes.is_empty() {
+        return "font_resource_invalid";
+    }
+    let fingerprint = font_fingerprint_sha256(&font.bytes);
+    if font.fingerprint_sha256.is_empty() || fingerprint != font.fingerprint_sha256 {
+        return "font_fingerprint_mismatch";
+    }
+    let scalar_len = match u32::try_from(cell.text.chars().count()) {
+        Ok(value) => value,
+        Err(_) => return "scalar_range_invalid",
+    };
+    let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end) else {
+        return "scalar_range_invalid";
+    };
+    if start.checked_add(scalar_len) != Some(end) {
+        return "scalar_range_invalid";
+    }
+
+    let runtime = BoundedShapingRuntime {
+        layout: BoundedLayoutEnvironment {
+            engine_revision: "chaptera.table-text-layout-rejection-measurement.v1".into(),
+            font_set_fingerprint: fingerprint,
+            resource_fingerprint: font.resource_id.clone(),
+        },
+        face_index: font.face_index,
+        font_size_emu: LengthEmu::new(i64::from(font_size_emu)),
+        font_bytes: &font.bytes,
+    };
+    let Ok(shaped) = shape_bounded_ltr_segment(&cell.text, start, &runtime) else {
+        return "shape_failed";
+    };
+    if shaped.total_x_advance.get() > inner_width_emu {
+        return "width_overflow";
+    }
+    let Some(line_height_emu) = scaled_line_height_emu_v1(
+        i64::from(font_size_emu),
+        default_font_size_emu,
+        default_line_height_emu,
+    ) else {
+        return "line_height_invalid";
+    };
+    if line_height_emu > inner_height_emu {
+        return "line_height_overflow";
+    }
+    if shaped.glyphs.iter().any(|glyph| glyph.glyph_id == 0) {
+        return "missing_glyph";
+    }
+    "admitted"
+}
+
+fn observe_table_text_authority_v1(
+    table: &CurrentTable,
+    font: &CurrentFont,
+    census: &CurrentCensus,
+    summary: &mut MappingSummary,
+) {
     let admitted_inset = table
         .uniform_cell_text_inset_emu
         .filter(|inset| *inset >= 0);
@@ -586,6 +806,48 @@ fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSu
             && table_cell_inset_fits_bounds_v1(cell, inset)
         {
             summary.table_cell_inset_bounds_valid_count += 1;
+        }
+
+        if let Some(inset) = admitted_inset {
+            if table_cell_bounded_text_profile_v1(cell, inset).is_some() {
+                summary.table_bounded_text_profile_cell_count += 1;
+            }
+            let reason = table_single_line_layout_gate_reason_v1(
+                cell,
+                inset,
+                font,
+                census.configured_fallback_font_size_emu,
+                census.configured_fallback_line_height_emu,
+            );
+            if reason != "bounded_profile_rejected"
+                && reason != "hard_break"
+                && reason != "paragraph_alignment_rejected"
+                && reason != "font_resource_invalid"
+                && reason != "font_fingerprint_mismatch"
+                && reason != "scalar_range_invalid"
+                && reason != "shape_failed"
+                && reason != "width_overflow"
+                && reason != "line_height_invalid"
+                && reason != "line_height_overflow"
+                && reason != "missing_glyph"
+                && reason != "admitted"
+            {
+                return;
+            }
+            *summary
+                .table_single_line_layout_rejection_counts
+                .entry(reason.into())
+                .or_default() += 1;
+            if table_cell_single_line_width_fits_v1(cell, inset, font) {
+                summary.table_single_line_width_fit_cell_count += 1;
+            }
+            if cell.layout.is_some() {
+                summary.table_single_line_layout_present_cell_count += 1;
+            }
+            let predicted_layout = reason == "admitted";
+            if predicted_layout != cell.layout.is_some() {
+                summary.table_single_line_layout_prediction_mismatch_count += 1;
+            }
         }
     }
 }
@@ -764,7 +1026,7 @@ fn main() -> Result<()> {
             }
             if let Some(table) = &node.table {
                 summary.table_node_count += 1;
-                observe_table_text_authority_v1(table, &mut summary);
+                observe_table_text_authority_v1(table, &input.font, &input.census, &mut summary);
                 let table_paint_mapped = append_table_paint_nodes_v1(
                     table,
                     resolved_node_id,
