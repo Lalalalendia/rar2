@@ -956,17 +956,31 @@ pub enum ViewerTextVerticalAlignment {
     Bottom,
 }
 
-fn uniform_text_content_bounds(bounds: RectEmu, inset_emu: u32) -> Option<RectEmu> {
-    let inset = i64::from(inset_emu);
-    let double = inset.checked_mul(2)?;
-    let width = bounds.width.get().checked_sub(double)?;
-    let height = bounds.height.get().checked_sub(double)?;
+fn text_content_bounds(
+    bounds: RectEmu,
+    top_emu: u32,
+    left_emu: u32,
+    bottom_emu: u32,
+    right_emu: u32,
+) -> Option<RectEmu> {
+    let top = i64::from(top_emu);
+    let left = i64::from(left_emu);
+    let bottom = i64::from(bottom_emu);
+    let right = i64::from(right_emu);
+    let width = bounds
+        .width
+        .get()
+        .checked_sub(left.checked_add(right)?)?;
+    let height = bounds
+        .height
+        .get()
+        .checked_sub(top.checked_add(bottom)?)?;
     if width <= 0 || height <= 0 {
         return None;
     }
     Some(RectEmu::new(
-        LengthEmu::new(bounds.x.get().checked_add(inset)?),
-        LengthEmu::new(bounds.y.get().checked_add(inset)?),
+        LengthEmu::new(bounds.x.get().checked_add(left)?),
+        LengthEmu::new(bounds.y.get().checked_add(top)?),
         LengthEmu::new(width),
         LengthEmu::new(height),
     ))
@@ -985,7 +999,13 @@ fn viewer_story_frame_from_projection(
                 .map(|inset| (node, inset))
         })
         .and_then(|(node, inset)| {
-            uniform_text_content_bounds(node.header.bounds, inset.uniform_emu)
+            text_content_bounds(
+                node.header.bounds,
+                inset.top_emu,
+                inset.left_emu,
+                inset.bottom_emu,
+                inset.right_emu,
+            )
         });
     let vertical_alignment = node
         .and_then(|node| node.payload.story_frame.as_ref())
@@ -4706,20 +4726,13 @@ fn project_carlton_march_cmo_instances(
                     .text_frame_inset
                     .as_ref()
                     .and_then(|source| {
-                        let inset = i64::from(source.uniform_emu);
-                        let double = inset.checked_mul(2)?;
-                        let content_x = bounds.x.get().checked_add(inset)?;
-                        let content_y = bounds.y.get().checked_add(inset)?;
-                        let content_width = bounds.width.get().checked_sub(double)?;
-                        let content_height = bounds.height.get().checked_sub(double)?;
-                        (content_width > 0 && content_height > 0).then(|| {
-                            RectEmu::new(
-                                LengthEmu::new(content_x),
-                                LengthEmu::new(content_y),
-                                LengthEmu::new(content_width),
-                                LengthEmu::new(content_height),
-                            )
-                        })
+                        text_content_bounds(
+                            bounds,
+                            source.top_emu,
+                            source.left_emu,
+                            source.bottom_emu,
+                            source.right_emu,
+                        )
                     });
 
             let relation = relations.get(slot.slot_index).copied().with_context(|| {
