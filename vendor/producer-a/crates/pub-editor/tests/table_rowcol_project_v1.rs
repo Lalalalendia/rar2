@@ -228,7 +228,7 @@ fn delete_column_undo_restores_exact_ids_and_text() {
         .replace_table_cell_text(table_id(), cell_ids()[1], "survivor")
         .expect("edit survivor");
     session
-        .replace_table_cell_text(table_id(), cell_ids()[0], "removed".into())
+        .replace_table_cell_text(table_id(), cell_ids()[0], "removed")
         .expect("edit removed");
 
     let removed_column = column_ids()[0];
