@@ -191,6 +191,14 @@ fn corruption_name(value: ReaderSalvageCorruptionEvidence) -> &'static str {
     }
 }
 
+fn reader_outcome_name(value: ReaderOutcome) -> &'static str {
+    match value {
+        ReaderOutcome::NormalOpen => "normal_open",
+        ReaderOutcome::SalvageOpen => "salvage_open",
+        ReaderOutcome::CannotSafelyDisplay => "cannot_safely_display",
+    }
+}
+
 fn rescue_outcome_name(value: RescueOutcome) -> &'static str {
     match value {
         RescueOutcome::NoneNeeded => "none_needed",
@@ -319,8 +327,12 @@ fn forced_recovery_projection(
     }
 
     let graph = build_reader_partial_source_graph(bytes, &forced).ok()?;
+    let facts = fact_counts(&graph.facts);
+    if facts.values().copied().sum::<usize>() == 0 {
+        return None;
+    }
     Some((
-        fact_counts(&graph.facts),
+        facts,
         gap_counts(&graph.gaps),
         forced.cfb_inventory_available,
         forced.has_surviving_evidence(),
@@ -598,7 +610,7 @@ fn main() -> Result<()> {
         let row = classify(&bytes, rescue_evidence.get(&sha));
         *verdict_counts.entry(row.compact_verdict).or_default() += 1;
         *reader_outcome_counts
-            .entry(format!("{:?}", row.reader_outcome).to_ascii_lowercase())
+            .entry(reader_outcome_name(row.reader_outcome).to_owned())
             .or_default() += 1;
         *rescue_outcome_counts
             .entry(rescue_outcome_name(row.rescue_outcome).to_owned())
