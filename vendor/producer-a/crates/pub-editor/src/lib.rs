@@ -4049,7 +4049,8 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_15
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_17
-            || project.schema_version == EDITOR_PROJECT_VERSION_V0_18)
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_18
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_19)
             && project.identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
@@ -4079,6 +4080,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_17
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_18
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_19
         {
             let expected = required_editor_asset_refs_v1(&project.operations)
                 .into_iter()
