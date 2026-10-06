@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, bail};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedResolvedScene, BoundedShapedGlyph, BoundedShapedText,
-    BoundedShapingDescriptor, ResolvedPhysicalNode, ResolvedSurface, SceneOriginMapping,
-    font_fingerprint_sha256,
+    BoundedShapingDescriptor, BoundedShapingRuntime, ResolvedPhysicalNode, ResolvedSurface,
+    SceneOriginMapping, font_fingerprint_sha256, shape_bounded_ltr_segment,
 };
 use pub_model::{
     Affine2D, CanonicalId, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D, TableCellId,
@@ -139,6 +139,12 @@ struct CurrentFont {
     fingerprint_sha256: String,
     face_index: u32,
     bytes: Vec<u8>,
+    #[serde(default)]
+    source_family: Option<String>,
+    #[serde(default)]
+    bold: Option<bool>,
+    #[serde(default)]
+    italic: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -243,6 +249,10 @@ struct MappingSummary {
     table_cell_resolved_color_count: usize,
     table_cell_inset_bounds_valid_count: usize,
     table_uniform_cell_text_inset_count: usize,
+    table_source_regular_resource_count: usize,
+    table_source_bounded_text_profile_cell_count: usize,
+    table_source_hard_break_free_profile_cell_count: usize,
+    table_source_single_line_width_fit_cell_count: usize,
     derived_table_fill_node_count: usize,
     derived_table_border_node_count: usize,
     derived_table_paint_node_count: usize,
@@ -512,7 +522,99 @@ fn table_cell_inset_fits_bounds_v1(cell: &CurrentTableCell, inset: i64) -> bool 
     bounds.width.get() > double_inset && bounds.height.get() > double_inset
 }
 
-fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSummary) {
+fn table_cell_bounded_text_profile_v1(
+    cell: &CurrentTableCell,
+    inset: i64,
+) -> Option<(u32, [u8; 3], i64)> {
+    let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end) else {
+        return None;
+    };
+    if start >= end
+        || u32::try_from(cell.text.chars().count())
+            .ok()
+            .and_then(|len| start.checked_add(len))
+            != Some(end)
+        || !complete_table_cell_typography_v1(cell)
+        || !table_cell_inset_fits_bounds_v1(cell, inset)
+    {
+        return None;
+    }
+
+    let first_size = cell.typography.first()?.text_size_emu;
+    if first_size == 0
+        || !cell
+            .typography
+            .iter()
+            .all(|run| run.text_size_emu == first_size)
+    {
+        return None;
+    }
+    let color = match color_range_disposition(&cell.typography, start, end) {
+        ColorRangeDisposition::Resolved(rgb) => rgb,
+        ColorRangeDisposition::MissingRgb
+        | ColorRangeDisposition::MixedRgb
+        | ColorRangeDisposition::CoverageGap
+        | ColorRangeDisposition::InvalidRange => return None,
+    };
+    let bounds = cell.bounds?;
+    let inner_width = bounds.width.get().checked_sub(inset.checked_mul(2)?)?;
+    (inner_width > 0).then_some((first_size, color, inner_width))
+}
+
+fn table_cell_single_line_width_fits_v1(
+    cell: &CurrentTableCell,
+    inset: i64,
+    font: &CurrentFont,
+) -> bool {
+    let Some((font_size_emu, _color, inner_width_emu)) =
+        table_cell_bounded_text_profile_v1(cell, inset)
+    else {
+        return false;
+    };
+    if cell.text.contains(&['\r', '\n'][..]) {
+        return false;
+    }
+    let runtime = BoundedShapingRuntime {
+        layout: BoundedLayoutEnvironment {
+            engine_revision: "chaptera.table-source-font-single-line-fit.v1".into(),
+            font_set_fingerprint: font.fingerprint_sha256.clone(),
+            resource_fingerprint: font.resource_id.clone(),
+        },
+        face_index: font.face_index,
+        font_size_emu: LengthEmu::new(i64::from(font_size_emu)),
+        font_bytes: &font.bytes,
+    };
+    shape_bounded_ltr_segment(&cell.text, 0, &runtime)
+        .ok()
+        .is_some_and(|shaped| {
+            shaped.glyphs.iter().all(|glyph| glyph.glyph_id != 0)
+                && shaped.total_x_advance.get() <= inner_width_emu
+        })
+}
+
+fn exact_carlton_table_source_regular_v1(input: &CurrentViewerInput) -> Option<&CurrentFont> {
+    let matches = input
+        .fonts
+        .iter()
+        .filter(|font| {
+            font.source_family
+                .as_deref()
+                .is_some_and(|family| family.trim().eq_ignore_ascii_case("arial"))
+                && font.bold == Some(false)
+                && font.italic == Some(false)
+        })
+        .collect::<Vec<_>>();
+    let [font] = matches.as_slice() else {
+        return None;
+    };
+    Some(*font)
+}
+
+fn observe_table_text_authority_v1(
+    table: &CurrentTable,
+    source_regular: Option<&CurrentFont>,
+    summary: &mut MappingSummary,
+) {
     let admitted_inset = table
         .uniform_cell_text_inset_emu
         .filter(|inset| *inset >= 0);
@@ -569,6 +671,20 @@ fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSu
             && table_cell_inset_fits_bounds_v1(cell, inset)
         {
             summary.table_cell_inset_bounds_valid_count += 1;
+        }
+
+        if let Some(inset) = admitted_inset
+            && table_cell_bounded_text_profile_v1(cell, inset).is_some()
+        {
+            summary.table_source_bounded_text_profile_cell_count += 1;
+            if !cell.text.contains(&['\r', '\n'][..]) {
+                summary.table_source_hard_break_free_profile_cell_count += 1;
+                if let Some(font) = source_regular
+                    && table_cell_single_line_width_fits_v1(cell, inset, font)
+                {
+                    summary.table_source_single_line_width_fit_cell_count += 1;
+                }
+            }
         }
     }
 }
@@ -706,6 +822,8 @@ fn main() -> Result<()> {
         }
     }
 
+    let table_source_regular = exact_carlton_table_source_regular_v1(&input);
+
     let mut seen_nodes = BTreeSet::new();
     let mut surfaces = Vec::with_capacity(input.pages.len());
     let mut nodes = Vec::with_capacity(actual_node_count);
@@ -759,7 +877,10 @@ fn main() -> Result<()> {
             }
             if let Some(table) = &node.table {
                 summary.table_node_count += 1;
-                observe_table_text_authority_v1(table, &mut summary);
+                if table_source_regular.is_some() {
+                    summary.table_source_regular_resource_count = 1;
+                }
+                observe_table_text_authority_v1(table, table_source_regular, &mut summary);
                 let table_paint_mapped = append_table_paint_nodes_v1(
                     table,
                     resolved_node_id,
