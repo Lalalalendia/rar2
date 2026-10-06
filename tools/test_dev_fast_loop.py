@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+import subprocess
+import tempfile
+
+MODULE = Path(__file__).with_name("dev_fast_loop.py")
+spec = importlib.util.spec_from_file_location("dev_fast_loop", MODULE)
+mod = importlib.util.module_from_spec(spec)
+assert spec and spec.loader
+spec.loader.exec_module(mod)
+
+
+def commands(checks):
+    return [check.command for check in checks]
+
+
+def write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def git(root: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=root, check=True, stdout=subprocess.DEVNULL)
+
+
+def test_discover_changed_paths() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        git(root, "init", "-b", "main")
+        git(root, "config", "user.email", "fast-loop@example.invalid")
+        git(root, "config", "user.name", "Fast Loop Test")
+        write(root / "committed.py", "VALUE = 1\n")
+        write(root / "staged.py", "VALUE = 1\n")
+        write(root / "working.py", "VALUE = 1\n")
+        git(root, "add", ".")
+        git(root, "commit", "-m", "base")
+        git(root, "checkout", "-b", "feature")
+
+        write(root / "committed.py", "VALUE = 2\n")
+        git(root, "add", "committed.py")
+        git(root, "commit", "-m", "feature")
+        write(root / "staged.py", "VALUE = 2\n")
+        git(root, "add", "staged.py")
+        write(root / "working.py", "VALUE = 2\n")
+        write(root / "untracked.py", "VALUE = 2\n")
+
+        assert mod.discover_changed_paths(root, base="main") == [
+            "committed.py",
+            "staged.py",
+            "untracked.py",
+            "working.py",
+        ]
+
+
+def test_plan_routing_and_dedupe() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        write(root / "Cargo.toml", "[workspace]\nmembers = [\"crates/foo\"]\nresolver = \"2\"\n")
+        write(
+            root / "crates/foo/Cargo.toml",
+            "[package]\nname = \"foo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        write(root / "crates/foo/src/lib.rs", "pub fn a() {}\n")
+        write(root / "crates/foo/src/extra.rs", "pub fn b() {}\n")
+        write(root / "crates/foo/tests/extra.rs", "#[test] fn smoke() {}\n")
+        write(root / "tools/ci/foo.py", "VALUE = 1\n")
+        write(root / "tools/ci/test_foo.py", "print('ok')\n")
+        write(root / "web/a.mjs", "export const value = 1;\n")
+        write(root / "web/a.test.mjs", "import assert from 'node:assert'; assert.ok(true);\n")
+        write(root / ".github/workflows/x.yml", "name: x\non: workflow_dispatch\njobs: {}\n")
+        write(root / "tools/ci/check_workflow_yaml_syntax.rb", "puts 'ok'\n")
+
+        checks = mod.plan_for_paths(
+            root,
+            [
+                "crates/foo/src/lib.rs",
+                "crates/foo/src/extra.rs",
+                "crates/foo/tests/extra.rs",
+                "tools/ci/foo.py",
+                "web/a.mjs",
+                ".github/workflows/x.yml",
+            ],
+        )
+        actual = commands(checks)
+        manifest = "crates/foo/Cargo.toml"
+
+        assert sum(command[:4] == ("cargo", "check", "--manifest-path", manifest) for command in actual) == 1
+        assert sum(command[:4] == ("cargo", "fmt", "--manifest-path", manifest) for command in actual) == 1
+        assert ("cargo", "test", "--manifest-path", manifest, "--test", "extra", "--no-fail-fast") in actual
+        assert any(command[1:3] == ("-m", "py_compile") and "tools/ci/foo.py" in command for command in actual)
+        assert any(command[-1] == "tools/ci/test_foo.py" for command in actual)
+        assert ("node", "--check", "web/a.mjs") in actual
+        assert ("node", "--test", "web/a.test.mjs") in actual
+        assert ("ruby", "tools/ci/check_workflow_yaml_syntax.rb") in actual
+
+
+def test_feature_mode_adds_package_unit_tests_once() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        write(root / "crates/foo/Cargo.toml", "[package]\nname='foo'\nversion='0.1.0'\nedition='2024'\n")
+        write(root / "crates/foo/src/lib.rs", "pub fn a() {}\n")
+        write(root / "crates/foo/src/other.rs", "pub fn b() {}\n")
+        checks = mod.plan_for_paths(
+            root,
+            ["crates/foo/src/lib.rs", "crates/foo/src/other.rs"],
+            mode="feature",
+        )
+        unit = [check for check in checks if check.kind == "rust-unit-tests"]
+        assert len(unit) == 1
+
+
+def main() -> None:
+    test_discover_changed_paths()
+    test_plan_routing_and_dedupe()
+    test_feature_mode_adds_package_unit_tests_once()
+    print("dev fast loop tests: ok")
+
+
+if __name__ == "__main__":
+    main()
