@@ -3918,14 +3918,12 @@ impl EditorSession {
             }
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_19 {
-            if let Some(index) = project
-                .operations
-                .iter()
-                .position(|operation| matches!(operation, EditOperation::SetTableTrackExtent { .. }))
-            {
-                return Err(EditorProjectError::LegacyProjectCarriesTableTrackExtentOperation {
-                    index,
-                });
+            if let Some(index) = project.operations.iter().position(|operation| {
+                matches!(operation, EditOperation::SetTableTrackExtent { .. })
+            }) {
+                return Err(
+                    EditorProjectError::LegacyProjectCarriesTableTrackExtentOperation { index },
+                );
             }
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
@@ -6468,9 +6466,8 @@ impl EditorSession {
         let bounds = self
             .current_table_bounds_v1(table_id)
             .ok_or(EditorError::TableTrackResizeUnsupported { node_id: table_id })?;
-        let history =
-            canonical_table_track_extent_history_v1(&grid, bounds, target, after_extent)
-                .map_err(|_| EditorError::TableTrackResizeUnsupported { node_id: table_id })?;
+        let history = canonical_table_track_extent_history_v1(&grid, bounds, target, after_extent)
+            .map_err(|_| EditorError::TableTrackResizeUnsupported { node_id: table_id })?;
         let operation = EditOperation::SetTableTrackExtent { history };
         self.undo.push(operation.clone());
         self.redo.clear();
