@@ -422,13 +422,12 @@ fn main() -> Result<()> {
         row.outcome = if row.reader_admissible_image_count > 0 {
             CensusOutcome::ImageSalvagePositive
         } else if !row.rejected_disposition_counts.is_empty()
-            && row
-                .rejected_disposition_counts
-                .keys()
-                .all(|key| matches!(
+            && row.rejected_disposition_counts.keys().all(|key| {
+                matches!(
                     key.as_str(),
                     "unsupported_metafile" | "unsupported_picture" | "unsupported_blip_type"
-                ))
+                )
+            })
         {
             CensusOutcome::UnsupportedOnly
         } else if row.terminal_gap.is_some() && row.scanned_record_count == 0 {
@@ -437,8 +436,8 @@ fn main() -> Result<()> {
             CensusOutcome::StrictRasterZero
         };
 
-        let post = fs::read(path)
-            .with_context(|| format!("re-read admitted source {}", source_sha256))?;
+        let post =
+            fs::read(path).with_context(|| format!("re-read admitted source {}", source_sha256))?;
         row.source_modified = Some(sha256_hex(&post) != source_sha256);
         if row.source_modified == Some(true) {
             bail!("source modified during census: {source_sha256}");
