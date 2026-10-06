@@ -11,6 +11,7 @@ on:
       - "tools/dev_fast_loop.py"
       - "tools/test_dev_fast_loop.py"
       - "tools/dev_fast_loop_components.json"
+      - "tools/ci/test_pub_editor_fast_plan.py"
       - ".github/workflows/pub-editor-fast-pr.yml"
   workflow_dispatch:
 
@@ -59,7 +60,9 @@ jobs:
             pub-editor-fast-v1-${{ runner.os }}-rust-1.94.1-${{ hashFiles('vendor/producer-a/Cargo.lock') }}-
 
       - name: Validate fast-loop planner
-        run: python tools/test_dev_fast_loop.py
+        run: |
+          python tools/test_dev_fast_loop.py
+          python tools/ci/test_pub_editor_fast_plan.py
 
       - name: Run impacted pub-editor checks
         shell: bash
