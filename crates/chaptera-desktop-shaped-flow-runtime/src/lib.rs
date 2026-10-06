@@ -6,8 +6,7 @@ use pub_editor::{
 };
 use pub_layout::{
     BoundedAuthoringSlice, BoundedLayoutEnvironment, BoundedParagraphFlowConstraint,
-    BoundedParagraphFlowRun, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
-    BoundedShapingRuntime,
+    BoundedParagraphFlowRun, BoundedShapedFlowRuntime, BoundedShapedFlowScene, BoundedShapingRuntime,
     font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow_with_paragraph_flow,
 };
 use pub_line_placement::{
@@ -127,14 +126,13 @@ fn bounded_authoring_slice_for_pages_v1(
     page_ids: &[PageId],
 ) -> Result<BoundedAuthoringSlice, DesktopShapedFlowRuntimeError> {
     qualified_page_set_error_v1(page_ids)?;
-    let mut authoring = pub_viewer::bounded_authoring_slice_from_resolved(editor.graph()).map_err(
-        |error| {
+    let mut authoring = pub_viewer::bounded_authoring_slice_from_resolved(editor.graph())
+        .map_err(|error| {
             DesktopShapedFlowRuntimeError::new(
                 "authoring_projection_failed",
                 format!("resolved graph could not enter bounded layout projection: {error}"),
             )
-        },
-    )?;
+        })?;
 
     let requested_pages = page_ids.iter().copied().collect::<BTreeSet<_>>();
     let available_pages = authoring
@@ -142,10 +140,7 @@ fn bounded_authoring_slice_for_pages_v1(
         .iter()
         .map(|page| page.id)
         .collect::<BTreeSet<_>>();
-    if let Some(page_id) = page_ids
-        .iter()
-        .find(|page_id| !available_pages.contains(page_id))
-    {
+    if let Some(page_id) = page_ids.iter().find(|page_id| !available_pages.contains(page_id)) {
         return Err(DesktopShapedFlowRuntimeError::new(
             "authoring_projection_failed",
             format!("layout projection missing document page {page_id:?}"),
@@ -612,14 +607,13 @@ fn build_current_story_layout_with_pages_v1(
     let current_paragraph_flow = current_story_paragraph_flow_v1(editor, story_id)?;
     let authoring = match page_ids {
         Some(page_ids) => bounded_authoring_slice_for_pages_v1(editor, page_ids)?,
-        None => pub_viewer::bounded_authoring_slice_from_resolved(editor.graph()).map_err(
-            |error| {
+        None => pub_viewer::bounded_authoring_slice_from_resolved(editor.graph())
+            .map_err(|error| {
                 DesktopShapedFlowRuntimeError::new(
                     "authoring_projection_failed",
                     format!("resolved graph could not enter bounded layout projection: {error}"),
                 )
-            },
-        )?,
+            })?,
     };
     let projection = project_bounded(authoring);
 
