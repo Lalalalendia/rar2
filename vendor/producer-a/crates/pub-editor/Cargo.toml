@@ -19,5 +19,6 @@ sha2.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+pub-layout = { path = "../pub-layout" }
 serde_json.workspace = true
 zip.workspace = true

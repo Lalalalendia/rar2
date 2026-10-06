@@ -7,7 +7,8 @@ use pub_editor::{
     EDITOR_PROJECT_VERSION_V0_11, EDITOR_PROJECT_VERSION_V0_12, EDITOR_PROJECT_VERSION_V0_13,
     EDITOR_PROJECT_VERSION_V0_14, EDITOR_PROJECT_VERSION_V0_15, EDITOR_PROJECT_VERSION_V0_16,
     EDITOR_PROJECT_VERSION_V0_17, EDITOR_PROJECT_VERSION_V0_18, EDITOR_PROJECT_VERSION_V0_19,
-    EditOperation, EditorProject, Sha256Digest, open_mature_0x2c_editor,
+    EDITOR_PROJECT_VERSION_V0_20, EditOperation, EditorProject, Sha256Digest,
+    open_mature_0x2c_editor,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -185,17 +186,23 @@ impl EditorReplayEngine for PubEditorReplayEngine {
         }
 
         let mut session = Self::open(source_bytes, source_sha256)?;
-        session.apply_project(project).map_err(|error| {
+        let mut local_replay = project.clone();
+        if local_replay.identity.is_none()
+            && cloud_replay_requires_local_identity(&local_replay.schema_version)
+        {
+            local_replay.identity = session.project().identity;
+        }
+        session.apply_project(&local_replay).map_err(|error| {
             RevisionMaterializerError::new(
                 "editor_replay_rejected",
                 format!("canonical EditorSession rejected persisted project replay: {error}"),
             )
         })?;
-        let replayed = session.project();
+        let replayed = cloud_revision_project(&session.project());
         if replayed != *project {
             return Err(RevisionMaterializerError::new(
                 "editor_replay_mismatch",
-                "canonical EditorSession replay did not reproduce the exact persisted EditorProject",
+                "canonical EditorSession replay did not reproduce the exact Cloud semantic EditorProject",
             ));
         }
         Ok(replayed)
@@ -477,6 +484,22 @@ pub fn cloud_revision_project(project: &EditorProject) -> EditorProject {
     projected
 }
 
+fn cloud_replay_requires_local_identity(schema_version: &str) -> bool {
+    [
+        EDITOR_PROJECT_VERSION_V0_11,
+        EDITOR_PROJECT_VERSION_V0_12,
+        EDITOR_PROJECT_VERSION_V0_13,
+        EDITOR_PROJECT_VERSION_V0_14,
+        EDITOR_PROJECT_VERSION_V0_15,
+        EDITOR_PROJECT_VERSION_V0_16,
+        EDITOR_PROJECT_VERSION_V0_17,
+        EDITOR_PROJECT_VERSION_V0_18,
+        EDITOR_PROJECT_VERSION_V0_19,
+        EDITOR_PROJECT_VERSION_V0_20,
+    ]
+    .contains(&schema_version)
+}
+
 fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
     let mut rank = if project.table_grids.is_empty() {
         2_u8
@@ -486,6 +509,7 @@ fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
 
     for operation in &project.operations {
         let operation_rank = match operation {
+            EditOperation::SetTableTrackExtent { .. } => 20,
             EditOperation::SetImageCrop { .. } => 19,
             EditOperation::CreateTable { .. } => 18,
             EditOperation::CreateLine { .. } => 17,
@@ -513,6 +537,7 @@ fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
     }
 
     match rank {
+        20 => EDITOR_PROJECT_VERSION_V0_20,
         19 => EDITOR_PROJECT_VERSION_V0_19,
         18 => EDITOR_PROJECT_VERSION_V0_18,
         17 => EDITOR_PROJECT_VERSION_V0_17,
@@ -682,4 +707,25 @@ fn sha256_hex(bytes: &[u8]) -> String {
         write!(&mut out, "{byte:02x}").expect("writing SHA-256 hex into String cannot fail");
     }
     out
+}
+
+#[cfg(test)]
+mod replay_identity_tests {
+    use super::*;
+
+    #[test]
+    fn local_identity_rehydration_starts_at_v011() {
+        assert!(!cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_2
+        ));
+        assert!(!cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_10
+        ));
+        assert!(cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_11
+        ));
+        assert!(cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_20
+        ));
+    }
 }
