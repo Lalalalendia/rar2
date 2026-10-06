@@ -19,6 +19,8 @@ concurrency:
 jobs:
   classify:
     name: Classify pub-editor Continuity V2 scope
+    # Parent build-once admission is already authoritative when it supplies an exact artifact.
+    if: inputs.editor_binary_artifact_name == ''
     runs-on: ubuntu-latest
     outputs:
       continuity_v2_windows: ${{ steps.scope.outputs.continuity_v2_windows }}
@@ -77,8 +79,9 @@ jobs:
 
   real-continuity-v2:
     needs: classify
-    # Classifier failure is fail-closed: preserve the expensive Windows proof.
-    if: ${{ !cancelled() && always() && (needs.classify.result != 'success' || needs.classify.outputs.continuity_v2_windows == 'true') }}
+    # Parent-supplied exact artifact means the parent already admitted this consumer.
+    # Direct/manual fallback still uses the child classifier, fail-closed on classifier failure.
+    if: ${{ !cancelled() && always() && (inputs.editor_binary_artifact_name != '' || needs.classify.result != 'success' || needs.classify.outputs.continuity_v2_windows == 'true') }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

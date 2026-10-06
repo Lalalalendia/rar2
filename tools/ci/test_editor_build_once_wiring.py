@@ -96,6 +96,19 @@ def main():
                 f"parent must not launch heavy Editor DAG for test-only trigger: {test_only}"
             )
 
+    continuity = Path(
+        ".github/workflows/editor-desktop-continuity-v2-windows.yml"
+    ).read_text(encoding="utf-8")
+    require(
+        continuity,
+        (
+            "if: inputs.editor_binary_artifact_name == ''",
+            "inputs.editor_binary_artifact_name != '' || needs.classify.result != 'success'",
+            "Parent-supplied exact artifact means the parent already admitted this consumer.",
+        ),
+        "continuity-consumer",
+    )
+
     fixed = Path(
         ".github/workflows/editor-fixed-pdf-current-revision.yml"
     ).read_text(encoding="utf-8")
