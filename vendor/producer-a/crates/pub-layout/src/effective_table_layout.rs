@@ -630,11 +630,10 @@ mod tests {
         let grid = grid();
         let projection = projection(&grid);
         let mut mismatched = grid.clone();
-        mismatched.cells.swap(0, 1);
+        mismatched.cells[0].id = cell_id(99);
         assert!(matches!(
             resolve_bounded_effective_table_cells(&projection, &[state(mismatched)]),
-            Err(BoundedEffectiveTableResolveError::InvalidGrid { .. })
-                | Err(BoundedEffectiveTableResolveError::TopologyMismatch { .. })
+            Err(BoundedEffectiveTableResolveError::TopologyMismatch { .. })
         ));
     }
 
