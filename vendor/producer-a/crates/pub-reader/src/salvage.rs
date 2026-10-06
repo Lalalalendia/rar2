@@ -262,10 +262,12 @@ pub fn project_reader_text_from_recovered_quill_prefix(
         });
     }
     if actual_len > recovered.declared_len {
-        return Err(ReaderPartialQuillProjectionError::PrefixLongerThanDeclared {
-            available: actual_len,
-            declared: recovered.declared_len,
-        });
+        return Err(
+            ReaderPartialQuillProjectionError::PrefixLongerThanDeclared {
+                available: actual_len,
+                declared: recovered.declared_len,
+            },
+        );
     }
     if source_sha256(&recovered.bytes) != recovered.prefix_sha256 {
         return Err(ReaderPartialQuillProjectionError::PrefixHashMismatch);
