@@ -305,6 +305,47 @@ def plan_train(
     }
 
 
+def verify_composed_head(root: Path, plan: dict, head_ref: str) -> dict:
+    base_sha = plan["base_sha"]
+    head_sha = resolve_commit(root, head_ref)
+    if not run_ok(root, ["git", "merge-base", "--is-ancestor", base_sha, head_sha]):
+        raise TrainError(
+            f"composed head {head_sha} does not descend from train base {base_sha}"
+        )
+
+    expected_paths = sorted({
+        path
+        for candidate in plan["candidates"]
+        for path in candidate["changed_paths"]
+    })
+    actual_paths = changed_paths(root, base_sha, head_sha)
+    if actual_paths != expected_paths:
+        missing = sorted(set(expected_paths) - set(actual_paths))
+        extra = sorted(set(actual_paths) - set(expected_paths))
+        raise TrainError(
+            "composed head path set does not match plan"
+            + (f"; missing={missing}" if missing else "")
+            + (f"; extra={extra}" if extra else "")
+        )
+
+    actual_heavy = heavy_families_for_paths(actual_paths)
+    expected_heavy = sorted(plan.get("heavy_families", []))
+    if actual_heavy != expected_heavy:
+        raise TrainError(
+            f"composed head heavy-family set drifted: expected={expected_heavy}, actual={actual_heavy}"
+        )
+
+    return {
+        "schema": "chaptera.integration-train-verification.v1",
+        "base_sha": base_sha,
+        "head_sha": head_sha,
+        "changed_paths": actual_paths,
+        "heavy_families": actual_heavy,
+        "candidate_count": plan["candidate_count"],
+        "verified": True,
+    }
+
+
 def repo_root() -> Path:
     result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
@@ -328,17 +369,28 @@ def main() -> int:
         help="candidate in LABEL=REF form; repeat 2..8 times",
     )
     parser.add_argument("--branch-name", help="suggested integration branch name")
+    parser.add_argument(
+        "--verify-head",
+        help="optional composed train ref/SHA to verify against the generated plan",
+    )
     parser.add_argument("--receipt", type=Path, help="optional JSON receipt path")
     args = parser.parse_args()
 
     try:
         specs = [parse_candidate(raw) for raw in args.candidate]
+        root = repo_root()
         plan = plan_train(
-            repo_root(),
+            root,
             base_ref=args.base,
             candidates=specs,
             branch_name=args.branch_name,
         )
+        if args.verify_head:
+            plan["composed_verification"] = verify_composed_head(
+                root,
+                plan,
+                args.verify_head,
+            )
     except TrainError as exc:
         print(f"integration train rejected: {exc}", file=sys.stderr)
         return 2
