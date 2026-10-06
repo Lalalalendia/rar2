@@ -147,9 +147,7 @@ impl RuntimeDependencyV1 {
     fn validate(&self) -> Result<(), ProtocolError> {
         require_token(&self.dependency_type, "runtime_dependency_type_invalid")?;
         require_text(&self.id, "runtime_dependency_id_invalid")?;
-        if self.availability == EvidenceAvailabilityV1::Available {
-            require_prefixed_sha256(&self.digest, "runtime_dependency_digest_invalid")?;
-        } else if !self.digest.is_empty() {
+        if self.availability == EvidenceAvailabilityV1::Available || !self.digest.is_empty() {
             require_prefixed_sha256(&self.digest, "runtime_dependency_digest_invalid")?;
         }
         require_text(&self.provenance, "runtime_dependency_provenance_invalid")
