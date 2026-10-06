@@ -14,6 +14,7 @@ pub enum TableRowColGraphErrorV1 {
     MissingTable,
     MissingStory,
     StoryMismatch,
+    RichStoryUnsupported,
     NotSimpleRectangular,
     UnsupportedBorderSegments,
     GridMismatch,
@@ -78,6 +79,13 @@ pub fn table_structure_snapshot_from_graph_v1(
         .ok_or(TableRowColGraphErrorV1::MissingStory)?;
     if table.story_id != Some(story.id) {
         return Err(TableRowColGraphErrorV1::StoryMismatch);
+    }
+    if !story.paragraphs.is_empty()
+        || !story.runs.is_empty()
+        || !story.fields.is_empty()
+        || !story.hyperlinks.is_empty()
+    {
+        return Err(TableRowColGraphErrorV1::RichStoryUnsupported);
     }
 
     let materialized = materialize_bounded_simple_table_cells(table, story)
