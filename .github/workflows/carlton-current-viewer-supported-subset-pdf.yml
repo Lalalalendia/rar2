@@ -281,6 +281,35 @@ jobs:
               raise SystemExit("packet binding page order differs from PageRenderPlan order")
           '@ | python -
 
+      - name: Print bounded TABLE text emission diagnostic
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          @'
+          import json
+          import os
+          from pathlib import Path
+
+          mapping_receipt = json.loads(
+              Path(os.environ["CHAPTERA_SUPPORTED_MAPPING"]).read_text(encoding="utf-8")
+          )
+          renderer_receipt = json.loads(
+              Path(os.environ["CHAPTERA_SUPPORTED_RENDERER"]).read_text(encoding="utf-8")
+          )
+          mapping = mapping_receipt["mapping"]
+          summary = renderer_receipt["renderer_result"]["summary"]
+          fields = {
+              "mapped_cells": mapping.get("mapped_table_text_cell_count"),
+              "mapped_runs": mapping.get("mapped_table_text_run_count"),
+              "residual_cells": mapping.get("table_text_residual_cell_count"),
+              "mapped_text_runs_total": mapping.get("mapped_text_run_count"),
+              "mapped_resources": mapping.get("mapped_resource_node_count"),
+              "residual_signatures": mapping.get("residual_node_signature_counts"),
+              "renderer": summary,
+          }
+          print("table_text_emission_diagnostic=" + json.dumps(fields, sort_keys=True))
+          '@ | python -
+
       - name: Compare supported-subset PDF with published reference
         shell: pwsh
         run: |
@@ -499,17 +528,26 @@ jobs:
           }
 
       - name: Stage retained measurement artifacts
+        if: always()
         shell: pwsh
         run: |
           $out = "target/carlton-supported-subset"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          Copy-Item "$env:CHAPTERA_SUPPORTED_PDF" "$out/carlton-current-edited-supported-subset.pdf"
-          Copy-Item "$env:CHAPTERA_SUPPORTED_MAPPING" "$out/supported-mapping.json"
-          Copy-Item "$env:CHAPTERA_SUPPORTED_RENDERER" "$out/supported-renderer.json"
-          Copy-Item "$env:CHAPTERA_SUPPORTED_DIFF" "$out/supported-reference-diff.json"
-          Copy-Item "$env:CHAPTERA_SUPPORTED_RECEIPT" "$out/carlton-supported-subset.receipt.json"
+          $candidates = @(
+            @{ Source = (Join-Path $env:CHAPTERA_CARLTON_SUPPORTED_ROOT "carlton-current-edited-supported-subset.pdf"); Name = "carlton-current-edited-supported-subset.pdf" },
+            @{ Source = (Join-Path $env:CHAPTERA_CARLTON_SUPPORTED_ROOT "supported-mapping.json"); Name = "supported-mapping.json" },
+            @{ Source = (Join-Path $env:CHAPTERA_CARLTON_SUPPORTED_ROOT "supported-renderer.json"); Name = "supported-renderer.json" },
+            @{ Source = (Join-Path $env:CHAPTERA_CARLTON_SUPPORTED_ROOT "supported-reference-diff.json"); Name = "supported-reference-diff.json" },
+            @{ Source = (Join-Path $env:CHAPTERA_CARLTON_SUPPORTED_ROOT "carlton-supported-subset.receipt.json"); Name = "carlton-supported-subset.receipt.json" }
+          )
+          foreach ($item in $candidates) {
+            if (Test-Path $item.Source) {
+              Copy-Item $item.Source (Join-Path $out $item.Name)
+            }
+          }
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: carlton-current-viewer-supported-subset
           path: target/carlton-supported-subset
