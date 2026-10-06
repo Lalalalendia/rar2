@@ -25,11 +25,7 @@ StateDirectory=chaptera
 CacheDirectory=chaptera
 RuntimeDirectory=chaptera-web
 EnvironmentFile=-/etc/chaptera/chaptera.env
-# Named credentials are looked up in systemd's credential stores. Missing optional
-# credentials are non-fatal at the unit layer; Chaptera requires only the secrets
-# referenced by the active typed config and fails closed if one is absent.
-LoadCredential=oidc_client_secret
-LoadCredential=reader_rate_subject_secret
+LoadCredential=oidc_client_secret:/etc/chaptera/credentials/oidc_client_secret
 
 NoNewPrivileges=yes
 PrivateTmp=yes
