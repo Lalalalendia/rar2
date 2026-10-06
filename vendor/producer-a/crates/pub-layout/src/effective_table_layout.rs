@@ -251,14 +251,10 @@ pub fn resolve_bounded_effective_table_cells(
     for state in states {
         let table_origin = state.grid.table_id;
         if !table_ids.contains(&table_origin) {
-            return Err(BoundedEffectiveTableResolveError::StateForUnknownTable {
-                table_origin,
-            });
+            return Err(BoundedEffectiveTableResolveError::StateForUnknownTable { table_origin });
         }
         if state_map.insert(table_origin, state).is_some() {
-            return Err(BoundedEffectiveTableResolveError::DuplicateState {
-                table_origin,
-            });
+            return Err(BoundedEffectiveTableResolveError::DuplicateState { table_origin });
         }
     }
 
@@ -272,12 +268,11 @@ pub fn resolve_bounded_effective_table_cells(
     let mut origin_mapping = Vec::new();
 
     for table in &projection.tables {
-        let state = state_map
-            .get(&table.origin)
-            .copied()
-            .ok_or(BoundedEffectiveTableResolveError::MissingState {
+        let state = state_map.get(&table.origin).copied().ok_or(
+            BoundedEffectiveTableResolveError::MissingState {
                 table_origin: table.origin,
-            })?;
+            },
+        )?;
         let grid = &state.grid;
         grid.validate()
             .map_err(|_| BoundedEffectiveTableResolveError::InvalidGrid {
@@ -288,9 +283,10 @@ pub fn resolve_bounded_effective_table_cells(
             || grid.columns.len() != usize::try_from(table.columns).unwrap_or(usize::MAX)
             || grid.cells.len() != table.cells.len()
             || table.cells.iter().any(|projected| {
-                !grid.cells.iter().any(|cell| {
-                    cell.id == projected.origin && cell.address == projected.address
-                })
+                !grid
+                    .cells
+                    .iter()
+                    .any(|cell| cell.id == projected.origin && cell.address == projected.address)
             })
         {
             return Err(BoundedEffectiveTableResolveError::TopologyMismatch {
@@ -298,12 +294,11 @@ pub fn resolve_bounded_effective_table_cells(
             });
         }
 
-        let owner = geometry
-            .get(&table.origin)
-            .copied()
-            .ok_or(BoundedEffectiveTableResolveError::MissingTableGeometry {
+        let owner = geometry.get(&table.origin).copied().ok_or(
+            BoundedEffectiveTableResolveError::MissingTableGeometry {
                 table_origin: table.origin,
-            })?;
+            },
+        )?;
         if state.bounds.width.get() <= 0
             || state.bounds.height.get() <= 0
             || state.bounds.right().is_none()
@@ -328,14 +323,17 @@ pub fn resolve_bounded_effective_table_cells(
         let (column_offsets, required_width) =
             checked_offsets(table.origin, &column_extents, false)?;
 
-        if required_width > state.bounds.width.get() || required_height > state.bounds.height.get() {
-            return Err(BoundedEffectiveTableResolveError::MetricsExceedTableBounds {
-                table_origin: table.origin,
-                required_width,
-                required_height,
-                available_width: state.bounds.width.get(),
-                available_height: state.bounds.height.get(),
-            });
+        if required_width > state.bounds.width.get() || required_height > state.bounds.height.get()
+        {
+            return Err(
+                BoundedEffectiveTableResolveError::MetricsExceedTableBounds {
+                    table_origin: table.origin,
+                    required_width,
+                    required_height,
+                    available_width: state.bounds.width.get(),
+                    available_height: state.bounds.height.get(),
+                },
+            );
         }
 
         for projected in &table.cells {
@@ -349,12 +347,11 @@ pub fn resolve_bounded_effective_table_cells(
                     table_origin: table.origin,
                 }
             })?;
-            let row_extent = row_extents
-                .get(row)
-                .and_then(|(_, extent)| *extent)
-                .ok_or(BoundedEffectiveTableResolveError::TopologyMismatch {
+            let row_extent = row_extents.get(row).and_then(|(_, extent)| *extent).ok_or(
+                BoundedEffectiveTableResolveError::TopologyMismatch {
                     table_origin: table.origin,
-                })?;
+                },
+            )?;
             let column_extent = column_extents
                 .get(column)
                 .and_then(|(_, extent)| *extent)
@@ -365,13 +362,11 @@ pub fn resolve_bounded_effective_table_cells(
                 .bounds
                 .x
                 .get()
-                .checked_add(
-                    *column_offsets
-                        .get(column)
-                        .ok_or(BoundedEffectiveTableResolveError::TopologyMismatch {
-                            table_origin: table.origin,
-                        })?,
-                )
+                .checked_add(*column_offsets.get(column).ok_or(
+                    BoundedEffectiveTableResolveError::TopologyMismatch {
+                        table_origin: table.origin,
+                    },
+                )?)
                 .ok_or(BoundedEffectiveTableResolveError::MetricOverflow {
                     table_origin: table.origin,
                 })?;
@@ -379,13 +374,11 @@ pub fn resolve_bounded_effective_table_cells(
                 .bounds
                 .y
                 .get()
-                .checked_add(
-                    *row_offsets
-                        .get(row)
-                        .ok_or(BoundedEffectiveTableResolveError::TopologyMismatch {
-                            table_origin: table.origin,
-                        })?,
-                )
+                .checked_add(*row_offsets.get(row).ok_or(
+                    BoundedEffectiveTableResolveError::TopologyMismatch {
+                        table_origin: table.origin,
+                    },
+                )?)
                 .ok_or(BoundedEffectiveTableResolveError::MetricOverflow {
                     table_origin: table.origin,
                 })?;
