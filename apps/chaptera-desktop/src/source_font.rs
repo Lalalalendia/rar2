@@ -394,6 +394,210 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
+    #[ignore = "exact Carlton source-font fit measurement; invoked by dedicated Windows acceptance"]
+    fn windows_carlton_table_source_font_fit_receipt() {
+        use pub_layout::{
+            BoundedLayoutEnvironment, BoundedShapingRuntime,
+            compatible_natural_line_height_emu_v1, font_fingerprint_sha256,
+            shape_bounded_ltr_segment,
+        };
+        use pub_model::LengthEmu;
+
+        #[derive(serde::Deserialize)]
+        struct MeasurementPacket {
+            pages: Vec<chaptera_viewer_render_plan::PageRenderPlanV1>,
+        }
+
+        let packet_path = std::env::var("CHAPTERA_CARLTON_TABLE_SOURCE_FONT_PACKET")
+            .expect("dedicated Carlton measurement must provide packet path");
+        let receipt_path = std::env::var("CHAPTERA_CARLTON_TABLE_SOURCE_FONT_RECEIPT")
+            .expect("dedicated Carlton measurement must provide receipt path");
+        let packet: MeasurementPacket = serde_json::from_slice(
+            &std::fs::read(&packet_path).expect("read current Viewer packet"),
+        )
+        .expect("parse current Viewer packet");
+
+        let mut bounded = Vec::new();
+        let mut family_counts = BTreeMap::<String, usize>::new();
+        let mut absent_style_count = 0usize;
+
+        for page in &packet.pages {
+            for node in &page.nodes {
+                let Some(table) = node.table.as_ref() else {
+                    continue;
+                };
+                let Some(inset) = table.uniform_cell_text_inset_emu.filter(|value| *value >= 0)
+                else {
+                    continue;
+                };
+                for cell in table.cells.iter().filter(|cell| !cell.text.is_empty()) {
+                    let (Some(start), Some(end), Some(bounds)) =
+                        (cell.story_scalar_start, cell.story_scalar_end, cell.bounds)
+                    else {
+                        continue;
+                    };
+                    let Ok(text_len) = u32::try_from(cell.text.chars().count()) else {
+                        continue;
+                    };
+                    if start >= end || start.checked_add(text_len) != Some(end) {
+                        continue;
+                    }
+                    if cell.typography.is_empty() {
+                        continue;
+                    }
+
+                    let mut cursor = start;
+                    let mut size = None;
+                    let mut color = None;
+                    let mut family = None::<String>;
+                    let mut typography_ok = true;
+                    let mut all_style_absent = true;
+                    for run in &cell.typography {
+                        if run.scalar_start != cursor
+                            || run.scalar_end <= run.scalar_start
+                            || run.scalar_end > end
+                            || run.text_size_emu == 0
+                        {
+                            typography_ok = false;
+                            break;
+                        }
+                        match size {
+                            None => size = Some(run.text_size_emu),
+                            Some(existing) if existing == run.text_size_emu => {}
+                            Some(_) => {
+                                typography_ok = false;
+                                break;
+                            }
+                        }
+                        match (color, run.color_rgb) {
+                            (None, Some(rgb)) => color = Some(rgb),
+                            (Some(existing), Some(rgb)) if existing == rgb => {}
+                            _ => {
+                                typography_ok = false;
+                                break;
+                            }
+                        }
+                        let display = run.source_font_name.trim();
+                        if display.is_empty() {
+                            typography_ok = false;
+                            break;
+                        }
+                        let normalized = display.to_lowercase();
+                        match family.as_ref() {
+                            None => family = Some(normalized),
+                            Some(existing) if *existing == normalized => {}
+                            Some(_) => {
+                                typography_ok = false;
+                                break;
+                            }
+                        }
+                        all_style_absent &= run.bold.is_none() && run.italic.is_none();
+                        cursor = run.scalar_end;
+                    }
+                    if !typography_ok || cursor != end || !all_style_absent {
+                        continue;
+                    }
+
+                    let Some(double_inset) = inset.checked_mul(2) else {
+                        continue;
+                    };
+                    let Some(inner_width) = bounds.width.get().checked_sub(double_inset) else {
+                        continue;
+                    };
+                    let Some(inner_height) = bounds.height.get().checked_sub(double_inset) else {
+                        continue;
+                    };
+                    if inner_width <= 0 || inner_height <= 0 || cell.text.contains(&['\r', '\n'][..]) {
+                        continue;
+                    }
+
+                    let family = family.expect("validated family");
+                    *family_counts.entry(family.clone()).or_default() += 1;
+                    absent_style_count += 1;
+                    bounded.push((
+                        family,
+                        start,
+                        cell.text.clone(),
+                        i64::from(size.expect("validated size")),
+                        inner_width,
+                        inner_height,
+                    ));
+                }
+            }
+        }
+
+        assert_eq!(bounded.len(), 13, "exact Carlton bounded TABLE cohort drift");
+        assert_eq!(absent_style_count, 13, "Carlton style-absence authority drift");
+        assert_eq!(family_counts, BTreeMap::from([("arial".to_owned(), 13)]));
+
+        let mut registry = DesktopSourceFontRegistry::new();
+        assert!(registry.ensure_family("Arial"), "Windows host must resolve unique Arial Regular");
+        let resource = registry
+            .resource_for_family("Arial")
+            .expect("environment-resolved Arial Regular resource");
+        let actual_sha = format!("{:x}", Sha256::digest(resource.bytes));
+        assert_eq!(actual_sha, resource.expected_sha256);
+
+        let mut width_fit = 0usize;
+        let mut natural_extent_fit = 0usize;
+        let mut width_and_natural_fit = 0usize;
+        let mut missing_glyph_cells = 0usize;
+        for (_family, scalar_start, text, font_size_emu, inner_width, inner_height) in &bounded {
+            let runtime = BoundedShapingRuntime {
+                layout: BoundedLayoutEnvironment {
+                    engine_revision: "chaptera.carlton-table-source-font-fit.v1".into(),
+                    font_set_fingerprint: font_fingerprint_sha256(resource.bytes),
+                    resource_fingerprint: resource.resource_id.to_owned(),
+                },
+                face_index: resource.face_index,
+                font_size_emu: LengthEmu::new(*font_size_emu),
+                font_bytes: resource.bytes,
+            };
+            let shaped = shape_bounded_ltr_segment(text, *scalar_start, &runtime)
+                .expect("shape bounded Carlton TABLE cell with environment-resolved Arial");
+            let cell_width_fit = shaped.total_x_advance.get() <= *inner_width;
+            let natural_extent = compatible_natural_line_height_emu_v1(
+                resource.bytes,
+                resource.face_index,
+                LengthEmu::new(*font_size_emu),
+            )
+            .expect("Arial Regular must satisfy bounded natural metric authority");
+            let cell_natural_fit = natural_extent.get() <= *inner_height;
+            width_fit += usize::from(cell_width_fit);
+            natural_extent_fit += usize::from(cell_natural_fit);
+            width_and_natural_fit += usize::from(cell_width_fit && cell_natural_fit);
+            missing_glyph_cells += usize::from(shaped.glyphs.iter().any(|glyph| glyph.glyph_id == 0));
+        }
+
+        let receipt = serde_json::json!({
+            "schema": "chaptera.carlton-table-source-font-fit.v1",
+            "environment": "windows-hosted",
+            "bounded_cells": bounded.len(),
+            "source_family_counts": family_counts,
+            "style_absent_cells": absent_style_count,
+            "resolved_family": "Arial",
+            "resource_id": resource.resource_id,
+            "font_sha256": resource.expected_sha256,
+            "face_index": resource.face_index,
+            "byte_len": resource.bytes.len(),
+            "fallback_width_fit_reference": 10,
+            "source_font_width_fit": width_fit,
+            "source_font_natural_extent_fit": natural_extent_fit,
+            "source_font_width_and_natural_fit": width_and_natural_fit,
+            "missing_glyph_cells": missing_glyph_cells,
+            "host_resolution_disposition": "environment_resolved_not_source_exact"
+        });
+
+        std::fs::write(
+            receipt_path,
+            serde_json::to_vec_pretty(&receipt).expect("serialize Carlton source-font fit receipt"),
+        )
+        .expect("write Carlton source-font fit receipt");
+        println!("{}", serde_json::to_string(&receipt).expect("receipt json"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
     fn windows_environment_font_binds_identical_layout_and_paint_bytes() {
         let mut registry = DesktopSourceFontRegistry::new();
         let source_family = ["Arial", "Times New Roman", "Segoe UI", "Calibri"]

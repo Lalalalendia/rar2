@@ -203,6 +203,20 @@ jobs:
           if (-not (Test-Path $packet)) { throw "current Viewer packet was not written" }
           "CHAPTERA_CURRENT_VIEWER_PACKET=$packet" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Measure bounded TABLE text with environment-resolved source font
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $receipt = Join-Path $env:CHAPTERA_CARLTON_SUPPORTED_ROOT "carlton-table-source-font-fit.json"
+          $env:CHAPTERA_CARLTON_TABLE_SOURCE_FONT_PACKET = $env:CHAPTERA_CURRENT_VIEWER_PACKET
+          $env:CHAPTERA_CARLTON_TABLE_SOURCE_FONT_RECEIPT = $receipt
+
+          cargo test -p chaptera-desktop source_font::tests::windows_carlton_table_source_font_fit_receipt -- --ignored --exact --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "Carlton TABLE source-font fit measurement failed" }
+          if (-not (Test-Path $receipt)) { throw "Carlton TABLE source-font fit receipt was not written" }
+
+          "CHAPTERA_CARLTON_TABLE_SOURCE_FONT_RECEIPT=$receipt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Acquire exact public Yab 259 donor
         shell: pwsh
         run: |
@@ -576,6 +590,7 @@ jobs:
           Copy-Item "$env:CHAPTERA_SUPPORTED_RENDERER" "$out/supported-renderer.json"
           Copy-Item "$env:CHAPTERA_SUPPORTED_DIFF" "$out/supported-reference-diff.json"
           Copy-Item "$env:CHAPTERA_SUPPORTED_RECEIPT" "$out/carlton-supported-subset.receipt.json"
+          Copy-Item "$env:CHAPTERA_CARLTON_TABLE_SOURCE_FONT_RECEIPT" "$out/carlton-table-source-font-fit.json"
 
       - uses: actions/upload-artifact@v4
         with:
