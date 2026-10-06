@@ -1,0 +1,69 @@
+name: Publisher source crop corpus census
+
+on:
+  pull_request:
+    paths:
+      - "tools/census_publisher_source_crop.py"
+      - ".github/workflows/publisher-source-crop-census.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publisher-source-crop-census-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Acquire pinned Apache POI Publisher corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher"
+          mkdir -p target/apache-publisher-crop-census
+          files=(
+            51318.pub 60685.pub
+            LinkAt0And10.pub LinkAt10.pub LinkAt10And20And30.pub
+            LinkAt10And20And30And40.pub LinkAt10Longer.pub LinkAt20.pub
+            Sample.pub Sample2.pub Sample2000.pub Sample2_2010.pub
+            Sample3.pub Sample3_2010.pub Sample4.pub Sample4_2010.pub
+            Sample98.pub SampleBrochure.pub SampleNewsletter.pub Sample_2010.pub
+            Simple.pub
+          )
+          for file in "${files[@]}"; do
+            curl -fsSL --retry 3 --retry-delay 2 "$base/$file"               -o "target/apache-publisher-crop-census/$file"
+          done
+      - name: Build existing source-neutral producer
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p chaptera-producer-a
+      - name: Run source crop census
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/census_publisher_source_crop.py             --producer vendor/producer-a/target/debug/chaptera-producer-a             --output target/apache-publisher-crop-census/census.json             target/apache-publisher-crop-census/*.pub
+          cat target/apache-publisher-crop-census/census.json
+      - name: Report hosted crop candidates
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          rows = json.loads(Path("target/apache-publisher-crop-census/census.json").read_text())
+          hits = [
+              row for row in rows
+              if row.get("unambiguous_nonzero_crop_count", 0) > 0
+          ]
+          print("unambiguous_nonzero_crop_files=", [row["file"] for row in hits])
+          print("opened=", sum(row.get("status") == "opened" for row in rows))
+          print("unsupported=", sum(row.get("status") == "open_unsupported" for row in rows))
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: publisher-source-crop-census-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/apache-publisher-crop-census/census.json
+          if-no-files-found: warn
