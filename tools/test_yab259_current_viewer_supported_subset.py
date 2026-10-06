@@ -77,9 +77,14 @@ class CurrentViewerSupportedSubsetSourceTests(unittest.TestCase):
         self.assertIn("derived TABLE paint census does not partition fill and border primitives", text)
         self.assertIn("derived TABLE paint node cardinality drift", text)
 
-    def test_runner_reuses_order_preserving_donor_and_existing_renderer(self) -> None:
+    def test_runner_defaults_to_exact_alpha_but_retains_explicit_reject_control(self) -> None:
         text = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("prepare_alpha_smask_pdf_donor", text)
         self.assertIn("prepare_order_preserving_pdf_donor", text)
+        self.assertIn('choices=("smask", "reject")', text)
+        self.assertIn('default="smask"', text)
+        self.assertIn('args.image_alpha == "smask"', text)
+        self.assertIn('"image_alpha_mode": args.image_alpha', text)
         self.assertIn("yab259_fixed_pdf_packet_renderer.rs", text)
         self.assertNotIn("pub_reader", text)
         self.assertNotIn("pub_viewer", text)
