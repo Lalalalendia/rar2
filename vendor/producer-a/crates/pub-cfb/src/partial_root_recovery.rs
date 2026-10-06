@@ -521,16 +521,11 @@ mod tests {
     #[test]
     fn complete_prefix_matches_strict_root_reader_exactly() {
         let source = regular_root_fixture();
-        let strict = crate::recover_root_regular_stream_reader(
-            Cursor::new(source.clone()),
-            "/Contents",
-        )
-        .expect("strict complete Contents");
-        let prefix = recover_root_regular_stream_prefix_reader(
-            Cursor::new(source),
-            "/Contents",
-        )
-        .expect("prefix complete Contents");
+        let strict =
+            crate::recover_root_regular_stream_reader(Cursor::new(source.clone()), "/Contents")
+                .expect("strict complete Contents");
+        let prefix = recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Contents")
+            .expect("prefix complete Contents");
 
         assert_eq!(prefix.status, RootRegularStreamPrefixStatus::Complete);
         assert_eq!(prefix.bytes, strict.bytes);
