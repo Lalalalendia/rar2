@@ -1,0 +1,137 @@
+name: Publisher supplemental native surface one-shot
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/publisher-supplemental-native-surface-once.yml"
+      - "tools/windows/run_publisher_supplemental_native_surface_probe.ps1"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/publisher-supplemental-native-surface-once.yml"
+      - "tools/windows/run_publisher_supplemental_native_surface_probe.ps1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: publisher-supplemental-native-surface-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: windows-latest
+    outputs:
+      trusted_sha: ${{ steps.trust.outputs.trusted_sha }}
+    steps:
+      - name: Bind exact candidate
+        id: trust
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            "trusted_sha=${{ github.event.pull_request.head.sha }}" >> $env:GITHUB_OUTPUT
+          } else {
+            "trusted_sha=${{ github.sha }}" >> $env:GITHUB_OUTPUT
+          }
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.trust.outputs.trusted_sha }}
+          persist-credentials: false
+
+      - name: Parse read-only surface probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = "tools/windows/run_publisher_supplemental_native_surface_probe.ps1"
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path).Path,[ref]$tokens,[ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "PowerShell parser rejected supplemental native surface probe"
+          }
+          $text = Get-Content -LiteralPath $path -Raw
+          foreach ($forbidden in @(".Save(", ".SaveAs(", ".ExportAsFixedFormat(", ".PrintOut(", ".Run(")) {
+            if ($text.Contains($forbidden)) { throw "Forbidden mutation/output token: $forbidden" }
+          }
+          if ($text -notmatch [regex]::Escape('$app.Open($resolved, $true, $false)')) {
+            throw "Probe must open exact source read-only"
+          }
+
+  native:
+    needs: contract
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    environment: pub-native-lab
+    runs-on:
+      - self-hosted
+      - Windows
+      - pub-research
+      - publisher-2019
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.contract.outputs.trusted_sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Run exact 083 086 095 Publisher surface probes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cases = @(
+            @{ id = "083"; sha = "5eb5055bc75918ca8dbc7093fa267a3365f25129fd2c3dc88c7be3540f44e4cd"; bytes = 455680; pdf_pages = 2 },
+            @{ id = "086"; sha = "248596cea801913454aa40073d5ce113a931b11a7283c9efc4533caa86a46125"; bytes = 762368; pdf_pages = 2 },
+            @{ id = "095"; sha = "1e7f38b3ce1d0d956815992b15d361c405fc4bbdced5cdabb3c4581327cc183e"; bytes = 396800; pdf_pages = 1 }
+          )
+          $out = Join-Path "${{ github.workspace }}" "target\publisher-supplemental-native-surface"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $summary = @()
+          foreach ($case in $cases) {
+            $source = Join-Path "${{ github.workspace }}" ("out\pinned1050\materialized\native\" + $case.sha + ".pub")
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Missing exact source $($case.id)" }
+            $receipt = Join-Path $out ($case.id + ".json")
+            & pwsh -NoProfile -File tools/windows/run_publisher_supplemental_native_surface_probe.ps1 -InputPath $source -ExpectedSha256 $case.sha -ExpectedBytes $case.bytes -OutputPath $receipt
+            if ($LASTEXITCODE -ne 0) { throw "Native surface probe failed for $($case.id)" }
+            $doc = Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json
+            $summary += [ordered]@{
+              id = $case.id
+              source_sha256 = $case.sha
+              publisher_pdf_pages = $case.pdf_pages
+              native_pages_count = $doc.document.pages_count
+              print_style = $doc.document.print_style
+              view_two_page_spread = $doc.document.view_two_page_spread
+              publication_layout = $doc.document.publication_layout
+              page_width = $doc.document.page_width
+              page_height = $doc.document.page_height
+              pages = @($doc.pages)
+            }
+          }
+          $summaryPath = Join-Path $out "summary.json"
+          [ordered]@{
+            schema = "chaptera.publisher-supplemental-native-surface-summary.v1"
+            trusted_sha = "${{ needs.contract.outputs.trusted_sha }}"
+            cases = @($summary)
+          } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
+          Get-Content -LiteralPath $summaryPath -Raw
+
+      - name: Upload source-free native surface receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publisher-supplemental-native-surface-${{ github.run_id }}
+          path: target/publisher-supplemental-native-surface/**
+          if-no-files-found: error
+          retention-days: 30

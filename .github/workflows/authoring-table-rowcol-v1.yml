@@ -1,0 +1,69 @@
+name: AUTHORING-TABLE-ROWCOL-01
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-editor/src/lib.rs"
+      - "vendor/producer-a/crates/pub-editor/src/table_rowcol_graph_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/src/table_rowcol_history_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/src/writer_assessment.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/table_rowcol_project_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/effective_table_grid_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/table_track_history_project_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/create_table_runtime_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/image_crop_v1.rs"
+      - "apps/chaptera-server/src/revision_materializer.rs"
+      - "apps/chaptera-desktop/src/agent.rs"
+      - ".github/workflows/authoring-table-rowcol-v1.yml"
+  push:
+    branches:
+      - authoring/table-rowcol-v021-fresh-main-03
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rowcol:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Check pub-editor formatting
+        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
+
+      - name: Check pub-editor
+        run: cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets
+
+      - name: Lint pub-editor
+        run: cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets -- -D warnings
+
+      - name: Prove ROWCOL transition laws
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --lib table_rowcol_history_v1 -- --nocapture
+
+      - name: Prove ROWCOL durable lifecycle
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test table_rowcol_project_v1 -- --nocapture
+
+      - name: Re-run table schema and history regressions
+        run: >-
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor
+          --test effective_table_grid_v1
+          --test create_table_runtime_v1
+          --test table_track_history_project_v1
+          --test image_crop_v1
+
+      - name: Check server exhaustive consumer
+        run: cargo check -p chaptera-server
+
+      - name: Check desktop exhaustive consumer
+        run: cargo check -p chaptera-desktop

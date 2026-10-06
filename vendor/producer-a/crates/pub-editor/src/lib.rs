@@ -16,6 +16,8 @@ mod duplicate_authored_rectangle_v1;
 mod imported_paragraph_alignment_v1;
 mod imported_paragraph_flow_v1;
 mod imported_paragraphs_v1;
+mod table_rowcol_graph_v1;
+mod table_rowcol_history_v1;
 mod table_track_extent_v1;
 mod table_track_history_v1;
 mod text_format_property_base_v1;
@@ -68,6 +70,17 @@ pub use imported_paragraph_flow_v1::{
     ImportedParagraphFlowErrorV1,
 };
 pub use imported_paragraphs_v1::{ImportedParagraphProjectionErrorV1, ImportedParagraphV1};
+pub use table_rowcol_graph_v1::{
+    TableRowColGraphErrorV1, apply_table_structure_snapshot_to_graph_v1,
+    table_structure_snapshot_from_graph_v1,
+};
+pub use table_rowcol_history_v1::{
+    TABLE_ROWCOL_HISTORY_V1, TableCellContentSnapshotV1, TableRowColHistoryErrorV1,
+    TableRowColHistoryV1, TableRowColMutationV1, TableStructureSnapshotV1,
+    apply_table_rowcol_history_forward_v1, apply_table_rowcol_history_inverse_v1,
+    canonical_table_rowcol_history_v1, plan_table_rowcol_mutation_v1,
+    validate_table_structure_snapshot_v1,
+};
 pub use table_track_extent_v1::{
     SetTableTrackExtentErrorV1, TableTrackExtentPlanV1, TableTrackTargetV1,
     plan_table_track_extent_v1, set_table_track_extent_v1,
@@ -167,7 +180,8 @@ pub const EDITOR_PROJECT_VERSION_V0_17: &str = "pub-editor-v0.17";
 pub const EDITOR_PROJECT_VERSION_V0_18: &str = "pub-editor-v0.18";
 pub const EDITOR_PROJECT_VERSION_V0_19: &str = "pub-editor-v0.19";
 pub const EDITOR_PROJECT_VERSION_V0_20: &str = "pub-editor-v0.20";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_20;
+pub const EDITOR_PROJECT_VERSION_V0_21: &str = "pub-editor-v0.21";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_21;
 pub const MAX_MOVE_NODES_V1: usize = 1024;
 pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
@@ -398,6 +412,18 @@ pub enum EditOperation {
     SetTableTrackExtent {
         history: SetTableTrackExtentHistoryV1,
     },
+    InsertTableRow {
+        history: TableRowColHistoryV1,
+    },
+    DeleteTableRow {
+        history: TableRowColHistoryV1,
+    },
+    InsertTableColumn {
+        history: TableRowColHistoryV1,
+    },
+    DeleteTableColumn {
+        history: TableRowColHistoryV1,
+    },
     DeleteNode {
         node_id: NodeId,
         page_id: PageId,
@@ -490,6 +516,10 @@ impl EditOperation {
             | Self::CreateLine { .. }
             | Self::CreateTable { .. }
             | Self::SetTableTrackExtent { .. }
+            | Self::InsertTableRow { .. }
+            | Self::DeleteTableRow { .. }
+            | Self::InsertTableColumn { .. }
+            | Self::DeleteTableColumn { .. }
             | Self::DeleteNode { .. }
             | Self::ReorderAuthoredStack { .. }
             | Self::SetTextFormatProperty { .. }
@@ -670,6 +700,26 @@ impl PersistenceRequirements for EditOperation {
                     feature: "table.track_extent".into(),
                     origin: Some(history.table_id.into_canonical()),
                     property_path: Some("table.grid.track.extent".into()),
+                },
+                PersistenceRequirement {
+                    feature: "node.geometry.bounds".into(),
+                    origin: Some(history.table_id.into_canonical()),
+                    property_path: Some("node.bounds".into()),
+                },
+            ],
+            Self::InsertTableRow { history }
+            | Self::DeleteTableRow { history }
+            | Self::InsertTableColumn { history }
+            | Self::DeleteTableColumn { history } => vec![
+                PersistenceRequirement {
+                    feature: "table.structure".into(),
+                    origin: Some(history.table_id.into_canonical()),
+                    property_path: Some("table.grid".into()),
+                },
+                PersistenceRequirement {
+                    feature: "story.text".into(),
+                    origin: Some(history.story_id.into_canonical()),
+                    property_path: Some("story.text".into()),
                 },
                 PersistenceRequirement {
                     feature: "node.geometry.bounds".into(),
@@ -1160,6 +1210,12 @@ pub enum EditorError {
     StaleTableTrackResize {
         node_id: NodeId,
     },
+    TableRowColUnsupported {
+        node_id: NodeId,
+    },
+    StaleTableRowCol {
+        node_id: NodeId,
+    },
     ImageReplaceUnsupported {
         node_id: NodeId,
     },
@@ -1438,6 +1494,16 @@ impl fmt::Display for EditorError {
             Self::StaleTableTrackResize { node_id } => write!(
                 formatter,
                 "table node {} track-resize state no longer matches persisted history",
+                node_id.as_canonical()
+            ),
+            Self::TableRowColUnsupported { node_id } => write!(
+                formatter,
+                "table node {} is outside the bounded row/column lifecycle slice",
+                node_id.as_canonical()
+            ),
+            Self::StaleTableRowCol { node_id } => write!(
+                formatter,
+                "table node {} row/column state no longer matches persisted history",
                 node_id.as_canonical()
             ),
             Self::ImageReplaceUnsupported { node_id } => write!(
@@ -1836,6 +1902,8 @@ impl EditorError {
             Self::StaleNodeResize { .. } => "stale_node_resize",
             Self::TableTrackResizeUnsupported { .. } => "table_track_resize_unsupported",
             Self::StaleTableTrackResize { .. } => "stale_table_track_resize",
+            Self::TableRowColUnsupported { .. } => "table_rowcol_unsupported",
+            Self::StaleTableRowCol { .. } => "stale_table_rowcol",
             Self::NoChange { .. } => "no_change",
             Self::StaleOperation { .. } => "stale_operation",
             Self::TextFormatUnsupported { .. } => "text_format_unsupported",
@@ -2132,6 +2200,11 @@ fn is_scoped_text_format_operation_v1(operation: &EditOperation) -> bool {
 fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
     if operations
         .iter()
+        .any(|operation| table_rowcol_history_v1(operation).is_some())
+    {
+        EDITOR_PROJECT_VERSION_V0_21
+    } else if operations
+        .iter()
         .any(|operation| matches!(operation, EditOperation::SetTableTrackExtent { .. }))
     {
         EDITOR_PROJECT_VERSION_V0_20
@@ -2364,6 +2437,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesTableTrackExtentOperation {
         index: usize,
     },
+    LegacyProjectCarriesTableRowColOperation {
+        index: usize,
+    },
     LegacyProjectCarriesCreateTextBoxOperation {
         index: usize,
     },
@@ -2433,7 +2509,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, {EDITOR_PROJECT_VERSION_V0_18:?}, {EDITOR_PROJECT_VERSION_V0_19:?}, or {EDITOR_PROJECT_VERSION_V0_20:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, {EDITOR_PROJECT_VERSION_V0_18:?}, {EDITOR_PROJECT_VERSION_V0_19:?}, {EDITOR_PROJECT_VERSION_V0_20:?}, or {EDITOR_PROJECT_VERSION_V0_21:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -2484,6 +2560,10 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesTableTrackExtentOperation { index } => write!(
                 formatter,
                 "editor project operation {index} uses SetTableTrackExtent but the project schema predates pub-editor-v0.20"
+            ),
+            Self::LegacyProjectCarriesTableRowColOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses table row/column lifecycle but the project schema predates pub-editor-v0.21"
             ),
             Self::LegacyProjectCarriesCreateTextBoxOperation { index } => write!(
                 formatter,
@@ -3657,7 +3737,12 @@ impl EditorSession {
             .undo
             .iter()
             .any(|operation| matches!(operation, EditOperation::SetTableTrackExtent { .. }));
-        if (carries_table_track_extent
+        let carries_table_rowcol = self
+            .undo
+            .iter()
+            .any(|operation| table_rowcol_history_v1(operation).is_some());
+        if (carries_table_rowcol
+            || carries_table_track_extent
             || carries_crop
             || carries_reorder
             || carries_text_format
@@ -3675,6 +3760,12 @@ impl EditorSession {
             )
         } else {
             let legacy_schema = if self
+                .undo
+                .iter()
+                .any(|operation| table_rowcol_history_v1(operation).is_some())
+            {
+                EDITOR_PROJECT_VERSION_V0_21
+            } else if self
                 .undo
                 .iter()
                 .any(|operation| matches!(operation, EditOperation::SetTableTrackExtent { .. }))
@@ -3822,6 +3913,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
         {
             return Err(EditorProjectError::UnsupportedSchema {
                 found: project.schema_version.clone(),
@@ -3858,6 +3950,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
         {
             if let Some(index) = project
                 .operations
@@ -3883,6 +3976,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
         {
             if let Some(index) = project
                 .operations
@@ -3907,6 +4001,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && !project.table_grids.is_empty()
         {
             return Err(EditorProjectError::LegacyProjectCarriesTableGrids);
@@ -3925,6 +4020,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
@@ -3945,6 +4041,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
         {
             if let Some(index) = project
                 .operations
@@ -3966,6 +4063,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
         {
             if let Some(index) = project
                 .operations
@@ -3986,6 +4084,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
         {
             if let Some(index) = project
                 .operations
@@ -3999,6 +4098,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
         {
             if let Some(index) = project
                 .operations
@@ -4011,6 +4111,7 @@ impl EditorSession {
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
         {
             if let Some(index) = project
                 .operations
@@ -4030,6 +4131,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
         {
             if let Some(index) = project
                 .operations
@@ -4050,6 +4152,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
         {
             if let Some(index) = project
                 .operations
@@ -4067,6 +4170,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::ReorderAuthoredStack { .. })
@@ -4083,6 +4187,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
         {
             if let Some(index) = project
                 .operations
@@ -4097,6 +4202,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
         {
             if let Some(index) = project
                 .operations
@@ -4114,6 +4220,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
@@ -4129,6 +4236,7 @@ impl EditorSession {
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
         {
             if let Some(index) = project
                 .operations
@@ -4138,13 +4246,24 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesImageCropOperation { index });
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_20 {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+        {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::SetTableTrackExtent { .. })
             }) {
                 return Err(
                     EditorProjectError::LegacyProjectCarriesTableTrackExtentOperation { index },
                 );
+            }
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_21 {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(|operation| table_rowcol_history_v1(operation).is_some())
+            {
+                return Err(EditorProjectError::LegacyProjectCarriesTableRowColOperation { index });
             }
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
@@ -4157,6 +4276,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.identity.is_some()
         {
             return Err(EditorProjectError::LegacyProjectCarriesIdentity);
@@ -4170,7 +4290,8 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_17
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_18
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_19
-            || project.schema_version == EDITOR_PROJECT_VERSION_V0_20)
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_20
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_21)
             && project.identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
@@ -4203,6 +4324,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_18
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_19
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_20
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_21
         {
             let expected = required_editor_asset_refs_v1(&project.operations)
                 .into_iter()
@@ -4275,6 +4397,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_18
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_19
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_20
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_21
         {
             let actual_grids =
                 effective_table_grids_with_history(&candidate.graph, &candidate.undo);
@@ -6256,6 +6379,12 @@ impl EditorSession {
         })
     }
 
+    fn has_table_rowcol_history_v1(&self, node_id: NodeId) -> bool {
+        self.undo.iter().any(|operation| {
+            table_rowcol_history_v1(operation).is_some_and(|history| history.table_id == node_id)
+        })
+    }
+
     fn has_node_resize_history_v1(&self, node_id: NodeId) -> bool {
         self.undo.iter().any(|operation| match operation {
             EditOperation::ResizeNode {
@@ -6275,7 +6404,9 @@ impl EditorSession {
         y: LengthEmu,
     ) -> Result<(), EditorError> {
         self.validate_source_identity()?;
-        if self.has_table_track_extent_history_v1(node_id) {
+        if self.has_table_track_extent_history_v1(node_id)
+            || self.has_table_rowcol_history_v1(node_id)
+        {
             return Err(EditorError::NodeMoveUnsupported { node_id });
         }
 
@@ -6447,7 +6578,9 @@ impl EditorSession {
 
     pub fn can_resize_node(&self, node_id: NodeId) -> Result<(), EditorError> {
         self.validate_source_identity()?;
-        if self.has_table_track_extent_history_v1(node_id) {
+        if self.has_table_track_extent_history_v1(node_id)
+            || self.has_table_rowcol_history_v1(node_id)
+        {
             return Err(EditorError::NodeResizeUnsupported { node_id });
         }
 
@@ -6739,6 +6872,203 @@ impl EditorSession {
         Ok(operation)
     }
 
+    fn table_story_has_unremapped_range_metadata_v1(&self, story_id: StoryId) -> bool {
+        self.source_typography_runs
+            .iter()
+            .any(|run| run.story_id == story_id)
+            || self
+                .source_typography_size_runs
+                .iter()
+                .any(|run| run.story_id == story_id)
+            || self
+                .source_paragraph_alignments
+                .iter()
+                .any(|run| run.story_id == story_id)
+            || self
+                .source_paragraph_flow_runs
+                .iter()
+                .any(|run| run.story_id == story_id)
+            || self
+                .undo
+                .iter()
+                .any(|operation| text_format_operation_story_id_v1(operation) == Some(story_id))
+    }
+
+    fn validate_table_rowcol_story_metadata_v1(
+        &self,
+        table_id: NodeId,
+        story_id: StoryId,
+    ) -> Result<(), EditorError> {
+        let current_story_id = self
+            .graph
+            .nodes
+            .get(&table_id)
+            .and_then(|node| node.payload.table.as_ref())
+            .and_then(|table| table.story_id)
+            .ok_or(EditorError::TableRowColUnsupported { node_id: table_id })?;
+        if current_story_id != story_id
+            || self.table_story_has_unremapped_range_metadata_v1(story_id)
+            || self.story_has_paragraph_alignment_history_v1(story_id)?
+        {
+            return Err(EditorError::TableRowColUnsupported { node_id: table_id });
+        }
+        Ok(())
+    }
+
+    pub fn insert_table_row_v1(
+        &mut self,
+        table_id: NodeId,
+        index: u32,
+        row_id: TableRowId,
+        cell_ids: Vec<TableCellId>,
+        extent: LengthEmu,
+    ) -> Result<EditOperation, EditorError> {
+        self.create_table_rowcol_operation_v1(
+            table_id,
+            TableRowColMutationV1::InsertRow {
+                index,
+                row_id,
+                cell_ids,
+                extent,
+            },
+        )
+    }
+
+    pub fn delete_table_row_v1(
+        &mut self,
+        table_id: NodeId,
+        row_id: TableRowId,
+    ) -> Result<EditOperation, EditorError> {
+        self.create_table_rowcol_operation_v1(table_id, TableRowColMutationV1::DeleteRow { row_id })
+    }
+
+    pub fn insert_table_column_v1(
+        &mut self,
+        table_id: NodeId,
+        index: u32,
+        column_id: TableColumnId,
+        cell_ids: Vec<TableCellId>,
+        extent: LengthEmu,
+    ) -> Result<EditOperation, EditorError> {
+        self.create_table_rowcol_operation_v1(
+            table_id,
+            TableRowColMutationV1::InsertColumn {
+                index,
+                column_id,
+                cell_ids,
+                extent,
+            },
+        )
+    }
+
+    pub fn delete_table_column_v1(
+        &mut self,
+        table_id: NodeId,
+        column_id: TableColumnId,
+    ) -> Result<EditOperation, EditorError> {
+        self.create_table_rowcol_operation_v1(
+            table_id,
+            TableRowColMutationV1::DeleteColumn { column_id },
+        )
+    }
+
+    fn create_table_rowcol_operation_v1(
+        &mut self,
+        table_id: NodeId,
+        mutation: TableRowColMutationV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        if self.has_node_resize_history_v1(table_id) {
+            return Err(EditorError::TableRowColUnsupported { node_id: table_id });
+        }
+        let story_id = self
+            .graph
+            .nodes
+            .get(&table_id)
+            .and_then(|node| node.payload.table.as_ref())
+            .and_then(|table| table.story_id)
+            .ok_or(EditorError::TableRowColUnsupported { node_id: table_id })?;
+        self.validate_table_rowcol_story_metadata_v1(table_id, story_id)?;
+        let grid = self
+            .current_table_grid_v1(table_id)
+            .ok_or(EditorError::TableRowColUnsupported { node_id: table_id })?;
+        let bounds = self
+            .current_table_bounds_v1(table_id)
+            .ok_or(EditorError::TableRowColUnsupported { node_id: table_id })?;
+        let before = table_structure_snapshot_from_graph_v1(&self.graph, table_id, grid, bounds)
+            .map_err(|_| EditorError::TableRowColUnsupported { node_id: table_id })?;
+        let history = canonical_table_rowcol_history_v1(&before, mutation)
+            .map_err(|_| EditorError::TableRowColUnsupported { node_id: table_id })?;
+        let operation = match history.mutation.clone() {
+            TableRowColMutationV1::InsertRow { .. } => EditOperation::InsertTableRow { history },
+            TableRowColMutationV1::DeleteRow { .. } => EditOperation::DeleteTableRow { history },
+            TableRowColMutationV1::InsertColumn { .. } => {
+                EditOperation::InsertTableColumn { history }
+            }
+            TableRowColMutationV1::DeleteColumn { .. } => {
+                EditOperation::DeleteTableColumn { history }
+            }
+        };
+        self.consume_canonical_table_rowcol_operation_v1(operation)
+    }
+
+    fn consume_canonical_table_rowcol_operation_v1(
+        &mut self,
+        operation: EditOperation,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let history = table_rowcol_history_v1(&operation)
+            .ok_or(EditorError::SourceIdentityChanged)?
+            .clone();
+        if !table_rowcol_operation_matches_mutation_v1(&operation) {
+            return Err(EditorError::TableRowColUnsupported {
+                node_id: history.table_id,
+            });
+        }
+        if self.has_node_resize_history_v1(history.table_id) {
+            return Err(EditorError::TableRowColUnsupported {
+                node_id: history.table_id,
+            });
+        }
+        self.validate_table_rowcol_story_metadata_v1(history.table_id, history.story_id)?;
+        let grid = self.current_table_grid_v1(history.table_id).ok_or(
+            EditorError::TableRowColUnsupported {
+                node_id: history.table_id,
+            },
+        )?;
+        let bounds = self.current_table_bounds_v1(history.table_id).ok_or(
+            EditorError::TableRowColUnsupported {
+                node_id: history.table_id,
+            },
+        )?;
+        let before =
+            table_structure_snapshot_from_graph_v1(&self.graph, history.table_id, grid, bounds)
+                .map_err(|_| EditorError::StaleTableRowCol {
+                    node_id: history.table_id,
+                })?;
+        let canonical = canonical_table_rowcol_history_v1(&before, history.mutation.clone())
+            .map_err(|_| EditorError::StaleTableRowCol {
+                node_id: history.table_id,
+            })?;
+        if canonical != history {
+            return Err(EditorError::StaleTableRowCol {
+                node_id: history.table_id,
+            });
+        }
+
+        let mut candidate_graph = self.graph.clone();
+        apply_table_structure_snapshot_to_graph_v1(&mut candidate_graph, &history.after).map_err(
+            |_| EditorError::StaleTableRowCol {
+                node_id: history.table_id,
+            },
+        )?;
+        self.graph = candidate_graph;
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
     pub fn undo(&mut self) -> Result<&EditOperation, EditorError> {
         let operation = self.undo.pop().ok_or(EditorError::NothingToUndo)?;
         let result = (|| {
@@ -6780,6 +7110,34 @@ impl EditorSession {
                 self.authored_lines = candidate_lines;
                 self.graph = candidate_graph;
                 self.authored_stacks = before_stacks;
+            } else if let Some(history) = table_rowcol_history_v1(&operation) {
+                if !table_rowcol_operation_matches_mutation_v1(&operation) {
+                    return Err(EditorError::StaleTableRowCol {
+                        node_id: history.table_id,
+                    });
+                }
+                let current = table_structure_snapshot_from_graph_v1(
+                    &self.graph,
+                    history.table_id,
+                    history.after.grid.clone(),
+                    history.after.bounds,
+                )
+                .map_err(|_| EditorError::StaleTableRowCol {
+                    node_id: history.table_id,
+                })?;
+                let before =
+                    apply_table_rowcol_history_inverse_v1(&current, history).map_err(|_| {
+                        EditorError::StaleTableRowCol {
+                            node_id: history.table_id,
+                        }
+                    })?;
+                let mut candidate_graph = self.graph.clone();
+                apply_table_structure_snapshot_to_graph_v1(&mut candidate_graph, &before).map_err(
+                    |_| EditorError::StaleTableRowCol {
+                        node_id: history.table_id,
+                    },
+                )?;
+                self.graph = candidate_graph;
             } else if let EditOperation::SetTableTrackExtent { history } = &operation {
                 let grid = effective_table_grids_with_history(&self.graph, &self.undo)
                     .into_iter()
@@ -6890,6 +7248,34 @@ impl EditorSession {
                 self.authored_lines = candidate_lines;
                 self.graph = candidate_graph;
                 self.authored_stacks = after_stacks;
+            } else if let Some(history) = table_rowcol_history_v1(&operation) {
+                if !table_rowcol_operation_matches_mutation_v1(&operation) {
+                    return Err(EditorError::StaleTableRowCol {
+                        node_id: history.table_id,
+                    });
+                }
+                let current = table_structure_snapshot_from_graph_v1(
+                    &self.graph,
+                    history.table_id,
+                    history.before.grid.clone(),
+                    history.before.bounds,
+                )
+                .map_err(|_| EditorError::StaleTableRowCol {
+                    node_id: history.table_id,
+                })?;
+                let after =
+                    apply_table_rowcol_history_forward_v1(&current, history).map_err(|_| {
+                        EditorError::StaleTableRowCol {
+                            node_id: history.table_id,
+                        }
+                    })?;
+                let mut candidate_graph = self.graph.clone();
+                apply_table_structure_snapshot_to_graph_v1(&mut candidate_graph, &after).map_err(
+                    |_| EditorError::StaleTableRowCol {
+                        node_id: history.table_id,
+                    },
+                )?;
+                self.graph = candidate_graph;
             } else if let EditOperation::SetTableTrackExtent { history } = &operation {
                 let grid = effective_table_grids_with_history(&self.graph, &self.undo)
                     .into_iter()
@@ -7143,6 +7529,12 @@ fn replay_canonical_operation(
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::SetTableTrackExtent { history } => session
             .set_table_track_extent_v1(history.table_id, history.target, history.after_extent)
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::InsertTableRow { .. }
+        | EditOperation::DeleteTableRow { .. }
+        | EditOperation::InsertTableColumn { .. }
+        | EditOperation::DeleteTableColumn { .. } => session
+            .consume_canonical_table_rowcol_operation_v1(expected.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::DeleteNode { .. } => session
             .consume_canonical_delete_node(expected.clone())
@@ -7586,6 +7978,43 @@ fn effective_table_grids(graph: &PubResolvedGraph) -> Vec<EffectiveTableGridV1> 
     grids
 }
 
+fn table_rowcol_history_v1(operation: &EditOperation) -> Option<&TableRowColHistoryV1> {
+    match operation {
+        EditOperation::InsertTableRow { history }
+        | EditOperation::DeleteTableRow { history }
+        | EditOperation::InsertTableColumn { history }
+        | EditOperation::DeleteTableColumn { history } => Some(history),
+        _ => None,
+    }
+}
+
+fn table_rowcol_operation_matches_mutation_v1(operation: &EditOperation) -> bool {
+    matches!(
+        operation,
+        EditOperation::InsertTableRow {
+            history: TableRowColHistoryV1 {
+                mutation: TableRowColMutationV1::InsertRow { .. },
+                ..
+            },
+        } | EditOperation::DeleteTableRow {
+            history: TableRowColHistoryV1 {
+                mutation: TableRowColMutationV1::DeleteRow { .. },
+                ..
+            },
+        } | EditOperation::InsertTableColumn {
+            history: TableRowColHistoryV1 {
+                mutation: TableRowColMutationV1::InsertColumn { .. },
+                ..
+            },
+        } | EditOperation::DeleteTableColumn {
+            history: TableRowColHistoryV1 {
+                mutation: TableRowColMutationV1::DeleteColumn { .. },
+                ..
+            },
+        }
+    )
+}
+
 fn effective_table_grids_with_history(
     graph: &PubResolvedGraph,
     operations: &[EditOperation],
@@ -7597,9 +8026,30 @@ fn effective_table_grids_with_history(
         .map(|(node_id, node)| (*node_id, node.header.bounds))
         .collect::<BTreeMap<_, _>>();
 
-    for operation in operations {
+    let mut structural_anchors = BTreeMap::<NodeId, (usize, &TableRowColHistoryV1)>::new();
+    for (index, operation) in operations.iter().enumerate() {
+        if let Some(history) = table_rowcol_history_v1(operation) {
+            structural_anchors.insert(history.table_id, (index, history));
+        }
+    }
+    for (table_id, (_, history)) in &structural_anchors {
+        if let Some(target) = grids.iter_mut().find(|grid| grid.table_id == *table_id) {
+            *target = history.after.grid.clone();
+        } else {
+            grids.push(history.after.grid.clone());
+        }
+        bounds.insert(*table_id, history.after.bounds);
+    }
+
+    for (index, operation) in operations.iter().enumerate() {
         match operation {
             EditOperation::CreateTable { table } => {
+                if structural_anchors
+                    .get(&table.node_id)
+                    .is_some_and(|(anchor, _)| index <= *anchor)
+                {
+                    continue;
+                }
                 let plan = build_create_table_plan_v1(table)
                     .expect("accepted CreateTable history must remain canonical");
                 let current = grids
@@ -7625,6 +8075,12 @@ fn effective_table_grids_with_history(
                 bounds.insert(table.node_id, table.bounds);
             }
             EditOperation::SetTableTrackExtent { history } => {
+                if structural_anchors
+                    .get(&history.table_id)
+                    .is_some_and(|(anchor, _)| index <= *anchor)
+                {
+                    continue;
+                }
                 let target = grids
                     .iter_mut()
                     .find(|grid| grid.table_id == history.table_id)
@@ -7651,8 +8107,21 @@ fn effective_table_bounds_with_history(
     operations: &[EditOperation],
     table_id: NodeId,
 ) -> Option<RectEmu> {
-    let mut bounds = graph.nodes.get(&table_id)?.header.bounds;
-    for operation in operations {
+    let mut anchor = None;
+    for (index, operation) in operations.iter().enumerate() {
+        let Some(history) = table_rowcol_history_v1(operation) else {
+            continue;
+        };
+        if history.table_id == table_id {
+            anchor = Some((index, history.after.bounds));
+        }
+    }
+
+    let (start_index, mut bounds) = match anchor {
+        Some((index, bounds)) => (index + 1, bounds),
+        None => (0, graph.nodes.get(&table_id)?.header.bounds),
+    };
+    for operation in operations.iter().skip(start_index) {
         let EditOperation::SetTableTrackExtent { history } = operation else {
             continue;
         };
@@ -8377,6 +8846,14 @@ fn apply_forward(
         EditOperation::SetTableTrackExtent { .. } => {
             unreachable!("table track extents are derived from editor history")
         }
+        EditOperation::InsertTableRow { .. }
+        | EditOperation::DeleteTableRow { .. }
+        | EditOperation::InsertTableColumn { .. }
+        | EditOperation::DeleteTableColumn { .. } => {
+            unreachable!(
+                "table row/column lifecycle is applied through the structural snapshot bridge"
+            )
+        }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is applied to the authored overlay state")
         }
@@ -8640,6 +9117,14 @@ fn apply_inverse(
         }
         EditOperation::SetTableTrackExtent { .. } => {
             unreachable!("table track extents are derived from editor history")
+        }
+        EditOperation::InsertTableRow { .. }
+        | EditOperation::DeleteTableRow { .. }
+        | EditOperation::InsertTableColumn { .. }
+        | EditOperation::DeleteTableColumn { .. } => {
+            unreachable!(
+                "table row/column lifecycle is applied through the structural snapshot bridge"
+            )
         }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is reverted in the authored overlay state")
@@ -9137,6 +9622,81 @@ fn apply_table_cell_state(
     story.text.clear();
     story.text.push_str(replacement_story);
     Ok(())
+}
+
+#[cfg(test)]
+mod table_rowcol_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn source_typography_marks_table_story_ranges_as_unremapped() {
+        let source_hash: Sha256Digest =
+            "abababababababababababababababababababababababababababababababab"
+                .parse()
+                .expect("source hash");
+        let story_id: StoryId =
+            serde_json::from_str("\"55000000-0000-4000-8000-000000000001\"").expect("story id");
+        let graph: PubResolvedGraph = pub_model::ResolvedGraph {
+            cdm_version: "0.1".into(),
+            resolver_version: "rowcol-metadata-test".into(),
+            source: pub_model::SourceDescriptor {
+                format: "pub".into(),
+                format_version: Some("0x2c".into()),
+                adapter_version: "pub-rs/test".into(),
+                source_hash,
+            },
+            document: pub_model::Document {
+                id: serde_json::from_str("\"33000000-0000-4000-8000-000000000001\"")
+                    .expect("document id"),
+                format_origin: "pub".into(),
+                source_hash,
+                pages: Vec::new(),
+                resources: Vec::new(),
+                styles: Vec::new(),
+            },
+            pages: BTreeMap::new(),
+            nodes: BTreeMap::new(),
+            stories: BTreeMap::from([(
+                story_id,
+                Story {
+                    id: story_id,
+                    text: "x".into(),
+                    paragraphs: Vec::new(),
+                    runs: Vec::new(),
+                    fields: Vec::new(),
+                    hyperlinks: Vec::new(),
+                    source_refs: Vec::new(),
+                },
+            )]),
+            paragraphs: BTreeMap::new(),
+            text_runs: BTreeMap::new(),
+            resources: BTreeMap::new(),
+            styles: BTreeMap::new(),
+            extensions: BTreeMap::new(),
+        };
+        let mut session = EditorSession::new(graph).expect("session");
+        assert!(!session.table_story_has_unremapped_range_metadata_v1(story_id));
+
+        session.source_typography_runs.push(PubTypographyRun {
+            story_id,
+            story_utf16_start: 0,
+            story_utf16_end: 1,
+            story_scalar_start: 0,
+            story_scalar_end: 1,
+            source_font_index: 0,
+            source_font_name: "Arial".into(),
+            text_size_emu: 152_400,
+            font_inherited: false,
+            size_inherited: false,
+            color_rgb: Some([0, 0, 0]),
+            color_scheme_slot: None,
+            color_inherited: false,
+            bold: None,
+            italic: None,
+        });
+
+        assert!(session.table_story_has_unremapped_range_metadata_v1(story_id));
+    }
 }
 
 #[cfg(test)]
