@@ -46,7 +46,7 @@ jobs:
           p=Path("out/current-reader-portable-parity-runner/RUNNER-METADATA.json")
           d=json.loads(p.read_text())
           assert d["schema"] == "chaptera.current-reader-portable-parity-runner.v1"
-          assert d["repository_commit_sha"] == "d8fda142f29de733562b719c54735916f415a94d"
+          assert d["repository_commit_sha"] == "7bd64489ed56bc6d1f86c28368c3feae96d79a75"
           print(d)
           PY
           chmod +x out/current-reader-portable-parity-runner/target/debug/chaptera
