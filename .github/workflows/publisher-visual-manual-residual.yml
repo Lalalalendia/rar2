@@ -1,0 +1,210 @@
+name: Publisher visual manual residual corpus
+
+on:
+  workflow_dispatch:
+    inputs:
+      donor_run_id:
+        description: "Actions run ID containing the external normalized oracle bundle artifact"
+        required: true
+        type: string
+      artifact_name:
+        description: "Artifact name in the donor run"
+        required: false
+        default: "publisher-visual-manual-residual-2026-10-06"
+        type: string
+  workflow_call:
+    inputs:
+      donor_run_id:
+        required: true
+        type: string
+      artifact_name:
+        required: false
+        default: "publisher-visual-manual-residual-2026-10-06"
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: publisher-visual-manual-residual-${{ github.ref }}-${{ inputs.donor_run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/publisher-visual-manual-residual
+  EXPECTED_BUNDLE_NAME: publisher-visual-manual-residual-2026-10-06.zip
+  EXPECTED_BUNDLE_SHA256: f83b8baa76fda77dfbc5a2bbbb011375fddef8e9af48e9bce60789af45831529
+  EXPECTED_PAIR_COUNT: "11"
+  EXPECTED_REFERENCE_PAGE_COUNT: "15"
+
+jobs:
+  visual-oracle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download exact external oracle artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DONOR_RUN_ID: ${{ inputs.donor_run_id }}
+          ARTIFACT_NAME: ${{ inputs.artifact_name }}
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/manual-residual-source"
+          mkdir -p "$RUNNER_TEMP/manual-residual-source"
+          gh run download "$DONOR_RUN_ID" \
+            -n "$ARTIFACT_NAME" \
+            -D "$RUNNER_TEMP/manual-residual-source"
+
+      - name: Locate and verify normalized bundle identity
+        id: bundle
+        run: |
+          set -euo pipefail
+          mapfile -t matches < <(find "$RUNNER_TEMP/manual-residual-source" -type f -name "$EXPECTED_BUNDLE_NAME" -print)
+          if [ "${#matches[@]}" -ne 1 ]; then
+            printf 'expected exactly one %s, found %s\n' "$EXPECTED_BUNDLE_NAME" "${#matches[@]}" >&2
+            printf '%s\n' "${matches[@]}" >&2
+            exit 1
+          fi
+          bundle="${matches[0]}"
+          actual_sha="$(sha256sum "$bundle" | awk '{print $1}')"
+          test "$actual_sha" = "$EXPECTED_BUNDLE_SHA256"
+          echo "path=$bundle" >> "$GITHUB_OUTPUT"
+          echo "bundle sha256: $actual_sha"
+
+      - name: Install bounded oracle dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir \
+            "PyMuPDF==1.26.4" \
+            "Pillow==12.3.0"
+          python -m py_compile tools/cloud_reader_manual_oracle_bundle_v1.py
+          python -m py_compile tools/cloud_reader_reference_pdf_raster_v1.py
+
+      - name: Fail closed on pair registry drift
+        env:
+          BUNDLE: ${{ steps.bundle.outputs.path }}
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/manual-residual-verify"
+          mkdir -p "$RUNNER_TEMP/manual-residual-verify"
+          python tools/cloud_reader_manual_oracle_bundle_v1.py prepare \
+            "$BUNDLE" \
+            "$RUNNER_TEMP/manual-residual-verify/input" \
+            "$RUNNER_TEMP/manual-residual-verify/reader-fixtures.json" \
+            "$RUNNER_TEMP/manual-residual-verify/pair-registry.json"
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import zipfile
+          from pathlib import Path
+
+          bundle = Path(os.environ["BUNDLE"])
+          expected = json.loads(Path(
+              "tools/corpus/receipts/publisher-visual-manual-residual-2026-10-06.json"
+          ).read_text())
+          normalized = expected["normalized_bundle"]
+
+          assert hashlib.sha256(bundle.read_bytes()).hexdigest() == normalized["sha256"]
+          assert bundle.stat().st_size == normalized["bytes"]
+
+          with zipfile.ZipFile(bundle) as archive:
+              pairs_bytes = archive.read("PAIRS.csv")
+          assert hashlib.sha256(pairs_bytes).hexdigest() == normalized["pairs_csv_sha256"]
+
+          registry = json.loads(Path(
+              os.environ["RUNNER_TEMP"]
+          ).joinpath("manual-residual-verify/pair-registry.json").read_text())
+          assert registry["pair_count"] == normalized["pair_count"]
+          assert registry["reference_page_count"] == normalized["reference_page_count"]
+
+          expected_pairs = {
+              pair["id"]: (pair["pub_sha256"], pair["pdf_sha256"])
+              for family in expected["families"]
+              for pair in family["pairs"]
+          }
+          actual_pairs = {
+              row["basename"]: (row["pub_sha256"], row["pdf_sha256"])
+              for row in registry["pairs"]
+          }
+          assert actual_pairs == expected_pairs, (actual_pairs, expected_pairs)
+          print(json.dumps({
+              "pair_count": registry["pair_count"],
+              "reference_page_count": registry["reference_page_count"],
+              "bundle_sha256": normalized["sha256"],
+              "pairs_csv_sha256": normalized["pairs_csv_sha256"],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Build canonical Cloud Reader worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Install pinned browser acceptance runtime
+        run: |
+          set -euo pipefail
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Run exact 11-pair manual Publisher oracle
+        env:
+          BUNDLE: ${{ steps.bundle.outputs.path }}
+          REPOSITORY_COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          rm -rf target/publisher-visual-manual-residual-receipt
+          python tools/cloud_reader_manual_oracle_bundle_v1.py run \
+            "$BUNDLE" \
+            "$CARGO_TARGET_DIR/debug/chaptera" \
+            target/publisher-visual-manual-residual-receipt
+
+      - name: Enforce receipt shape and print top residuals
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("target/publisher-visual-manual-residual-receipt/summary.json")
+          data = json.loads(path.read_text())
+          assert data["pair_count"] == int(os.environ["EXPECTED_PAIR_COUNT"])
+          assert data["reference_page_count"] == int(os.environ["EXPECTED_REFERENCE_PAGE_COUNT"])
+          print(json.dumps({
+              "repository_commit_sha": data["repository_commit_sha"],
+              "pair_count": data["pair_count"],
+              "reference_page_count": data["reference_page_count"],
+              "compared_pair_count": data["compared_pair_count"],
+              "unsupported_pair_count": data["unsupported_pair_count"],
+              "page_count_mismatch_pair_count": data["page_count_mismatch_pair_count"],
+              "corpus_mean_significant_fraction": data["corpus_mean_significant_fraction"],
+              "worst_pages": data["ranked_pages"][:15],
+              "unsupported_pairs": data["unsupported_pairs"],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-free visual receipt
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: publisher-visual-manual-residual-receipt
+          path: |
+            target/publisher-visual-manual-residual-receipt/summary.json
+            target/publisher-visual-manual-residual-receipt/pairs/*.json
+          if-no-files-found: warn
+          retention-days: 90
