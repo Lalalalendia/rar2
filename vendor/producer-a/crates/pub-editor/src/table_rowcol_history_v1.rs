@@ -178,7 +178,9 @@ fn checked_track_count(count: usize) -> Result<u32, TableRowColHistoryErrorV1> {
     u32::try_from(count).map_err(|_| TableRowColHistoryErrorV1::CountOverflow)
 }
 
-fn reindex_rows(rows: &mut [EffectiveTableTrackV1<TableRowId>]) -> Result<(), TableRowColHistoryErrorV1> {
+fn reindex_rows(
+    rows: &mut [EffectiveTableTrackV1<TableRowId>],
+) -> Result<(), TableRowColHistoryErrorV1> {
     for (index, row) in rows.iter_mut().enumerate() {
         row.index = checked_track_count(index)?;
     }
@@ -525,10 +527,7 @@ fn delete_column(
     let mut after = before.clone();
     after.grid.columns.remove(column_index);
     reindex_columns(&mut after.grid.columns)?;
-    after
-        .grid
-        .cells
-        .retain(|cell| cell.column_id != column_id);
+    after.grid.cells.retain(|cell| cell.column_id != column_id);
     for cell in &mut after.grid.cells {
         if cell.address.column > column_index_u32 {
             cell.address.column -= 1;
@@ -844,8 +843,7 @@ mod tests {
             ],
             extent: LengthEmu::new(325),
         };
-        let after =
-            plan_table_rowcol_mutation_v1(&before, &mutation).expect("insert column plan");
+        let after = plan_table_rowcol_mutation_v1(&before, &mutation).expect("insert column plan");
 
         assert_eq!(after.grid.columns.len(), 3);
         assert_eq!(after.grid.columns[2].id, old_right);
@@ -884,7 +882,14 @@ mod tests {
             },
         )
         .expect("delete row history");
-        assert!(!history.after.grid.rows.iter().any(|row| row.id == removed_row));
+        assert!(
+            !history
+                .after
+                .grid
+                .rows
+                .iter()
+                .any(|row| row.id == removed_row)
+        );
         assert!(
             !history
                 .after
@@ -922,10 +927,7 @@ mod tests {
                 &TableRowColMutationV1::InsertRow {
                     index: 1,
                     row_id: row("01890f47-5000-7abc-8def-0123456789ab"),
-                    cell_ids: vec![
-                        existing,
-                        cell("01890f47-5002-7abc-8def-0123456789ab"),
-                    ],
+                    cell_ids: vec![existing, cell("01890f47-5002-7abc-8def-0123456789ab"),],
                     extent: LengthEmu::new(225),
                 }
             ),
