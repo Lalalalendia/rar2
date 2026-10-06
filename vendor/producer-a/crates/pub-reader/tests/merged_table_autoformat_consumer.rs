@@ -49,6 +49,23 @@ fn exact_carlton_merged_table_autoformat_consumer() {
         table.layout_metrics.is_none(),
         "non-uniform Carlton MCLD metrics must remain fail-closed"
     );
+    let uniform_text_inset = table
+        .uniform_text_inset
+        .as_ref()
+        .expect("exact Carlton TABLE must retain unanimous source-backed text inset");
+    assert_eq!(
+        uniform_text_inset.story_layout_key,
+        layout_relation.story_layout_key,
+        "TABLE text inset must be bound to the exact retained layout relation"
+    );
+    assert!(
+        uniform_text_inset.inset_emu.get() >= 0,
+        "TABLE text inset must remain a bounded non-negative physical length"
+    );
+    assert!(
+        !uniform_text_inset.source_refs.is_empty(),
+        "TABLE text inset must retain exact MCLD provenance"
+    );
     assert_eq!((table.rows, table.columns), (9, 2));
     assert_eq!(table.cells.len(), 17);
     assert!(
