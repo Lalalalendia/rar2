@@ -39,6 +39,7 @@ jobs:
             --producer vendor/producer-a/target/debug/chaptera-producer-a \
             --output target/w2-longform-fixture/qualification.json \
             --workdir target/w2-longform-fixture/files \
+            --include-pinned-corpus \
             285 288 299
           cat target/w2-longform-fixture/qualification.json
 
@@ -63,6 +64,14 @@ jobs:
                   assert row["page_count"] >= 10
               if not row["is_cfb"]:
                   assert row["longform_pub_qualified"] is False
+          pinned = data["pinned_corpus_candidates"]
+          assert len(pinned) == 7
+          for row in pinned:
+              assert row["identity_exact"] is True, row
+              assert row["is_cfb"] is True, row
+              assert row["chaptera_open_status"] == "opened", row
+              if row["longform_pub_qualified"]:
+                  assert row["page_count"] >= 10
 
       - uses: actions/upload-artifact@v4
         if: always()
