@@ -542,13 +542,7 @@ mod tests {
 
     #[test]
     fn png_typed_gif_preserves_strict_uid_authority() {
-        let bytes = record_bytes(
-            OFFICE_ART_BLIP_PNG,
-            0x6E0,
-            BlipKind::Gif,
-            false,
-            false,
-        );
+        let bytes = record_bytes(OFFICE_ART_BLIP_PNG, 0x6E0, BlipKind::Gif, false, false);
         let record = first_record(&bytes);
         let validated = validate_blip_record(&bytes, &record).expect("strict GIF-under-PNG");
         assert_eq!(validated.rec_type, OFFICE_ART_BLIP_PNG);
@@ -561,13 +555,7 @@ mod tests {
 
     #[test]
     fn png_typed_gif_two_uid_uses_second_uid() {
-        let bytes = record_bytes(
-            OFFICE_ART_BLIP_PNG,
-            0x6E1,
-            BlipKind::Gif,
-            true,
-            false,
-        );
+        let bytes = record_bytes(OFFICE_ART_BLIP_PNG, 0x6E1, BlipKind::Gif, true, false);
         let record = first_record(&bytes);
         let validated = validate_blip_record(&bytes, &record).expect("two-UID GIF-under-PNG");
         assert_eq!(validated.kind, BlipKind::Gif);
@@ -576,13 +564,7 @@ mod tests {
 
     #[test]
     fn png_typed_gif_with_bad_effective_uid_is_rejected() {
-        let bytes = record_bytes(
-            OFFICE_ART_BLIP_PNG,
-            0x6E0,
-            BlipKind::Gif,
-            false,
-            true,
-        );
+        let bytes = record_bytes(OFFICE_ART_BLIP_PNG, 0x6E0, BlipKind::Gif, false, true);
         let record = first_record(&bytes);
         assert!(matches!(
             validate_blip_record(&bytes, &record),
