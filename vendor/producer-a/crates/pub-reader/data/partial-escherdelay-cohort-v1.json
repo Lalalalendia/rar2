@@ -1,5 +1,23 @@
 {
   "schema": "chaptera.partial-escherdelay-cohort.v1",
+  "authority": {
+    "audit_sha256": "f2538bbb53486eab2ff434bd75ef58fb112a3d27a8670bba927c37957364c43c",
+    "retained_archive_sha256": "475d191c7ed2f02239c5448357bcb3787e934c449c6c360d8cb7f4fb0aabf57d",
+    "source_audit_sha256": "2c4d3f2825eac2dd0b346d5e243bf4726f556c7996d599ee8900992454c3865b",
+    "exported_bundle_manifest_sha256": "f58a4fb5e9dd44f109d0ef18f458acb37be092b4540b1865d49c87d67f6b23f7",
+    "gdi_decode_audit_sha256": "45d84b5e627240b189a0cd505435eaca3083d127d764329b1115dc00be571603",
+    "historical_positive_files": 41,
+    "historical_raster_positive_files": 41,
+    "historical_emf_only_positive_files": 0,
+    "historical_typed_blip_records": 209,
+    "historical_verified_records": 188,
+    "historical_unique_payload_sha256": 112,
+    "historical_kind_counts": {
+      "jpeg": 154,
+      "png": 24,
+      "emf": 10
+    }
+  },
   "sources": [
     {
       "source_sha256": "066a4718d9d8ae93e8c38df7d1caf387c6260482172d16c8ee7a669a2d99b612",

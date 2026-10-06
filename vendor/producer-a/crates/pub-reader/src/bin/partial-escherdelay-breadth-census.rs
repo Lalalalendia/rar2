@@ -21,10 +21,44 @@ const INPUT_SCHEMA: &str = "chaptera.partial-escherdelay-cohort.v1";
 const OUTPUT_SCHEMA: &str = "chaptera.partial-escherdelay-breadth-census.v1";
 const ESCHER_DELAY_STREAM: &str = "/Escher/EscherDelayStm";
 const EXPECTED_DENOMINATOR: usize = 45;
+const EXPECTED_AUDIT_SHA256: &str =
+    "f2538bbb53486eab2ff434bd75ef58fb112a3d27a8670bba927c37957364c43c";
+const EXPECTED_RETAINED_ARCHIVE_SHA256: &str =
+    "475d191c7ed2f02239c5448357bcb3787e934c449c6c360d8cb7f4fb0aabf57d";
+const EXPECTED_SOURCE_AUDIT_SHA256: &str =
+    "2c4d3f2825eac2dd0b346d5e243bf4726f556c7996d599ee8900992454c3865b";
+const EXPECTED_EXPORTED_BUNDLE_MANIFEST_SHA256: &str =
+    "f58a4fb5e9dd44f109d0ef18f458acb37be092b4540b1865d49c87d67f6b23f7";
+const EXPECTED_GDI_DECODE_AUDIT_SHA256: &str =
+    "45d84b5e627240b189a0cd505435eaca3083d127d764329b1115dc00be571603";
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct HistoricalKindCounts {
+    jpeg: usize,
+    png: usize,
+    emf: usize,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct CohortAuthority {
+    audit_sha256: String,
+    retained_archive_sha256: String,
+    source_audit_sha256: String,
+    exported_bundle_manifest_sha256: String,
+    gdi_decode_audit_sha256: String,
+    historical_positive_files: usize,
+    historical_raster_positive_files: usize,
+    historical_emf_only_positive_files: usize,
+    historical_typed_blip_records: usize,
+    historical_verified_records: usize,
+    historical_unique_payload_sha256: usize,
+    historical_kind_counts: HistoricalKindCounts,
+}
 
 #[derive(Debug, Deserialize)]
 struct CohortManifest {
     schema: String,
+    authority: CohortAuthority,
     sources: Vec<CohortSource>,
 }
 
@@ -86,6 +120,10 @@ struct CensusRow {
 struct CensusSummary {
     schema: &'static str,
     input_manifest_sha256: String,
+    authority: CohortAuthority,
+    delta_image_positive_files_vs_historical: i64,
+    delta_typed_blip_records_vs_historical: i64,
+    delta_strict_validated_resources_vs_historical: i64,
     expected_denominator: usize,
     manifest_source_count: usize,
     located_source_count: usize,
@@ -271,6 +309,40 @@ fn main() -> Result<()> {
             EXPECTED_DENOMINATOR,
             manifest.sources.len()
         );
+    }
+
+    let mut authority = manifest.authority;
+    authority.audit_sha256 = validate_sha256(&authority.audit_sha256)?;
+    authority.retained_archive_sha256 = validate_sha256(&authority.retained_archive_sha256)?;
+    authority.source_audit_sha256 = validate_sha256(&authority.source_audit_sha256)?;
+    authority.exported_bundle_manifest_sha256 =
+        validate_sha256(&authority.exported_bundle_manifest_sha256)?;
+    authority.gdi_decode_audit_sha256 = validate_sha256(&authority.gdi_decode_audit_sha256)?;
+
+    if authority.audit_sha256 != EXPECTED_AUDIT_SHA256
+        || authority.retained_archive_sha256 != EXPECTED_RETAINED_ARCHIVE_SHA256
+        || authority.source_audit_sha256 != EXPECTED_SOURCE_AUDIT_SHA256
+        || authority.exported_bundle_manifest_sha256
+            != EXPECTED_EXPORTED_BUNDLE_MANIFEST_SHA256
+        || authority.gdi_decode_audit_sha256 != EXPECTED_GDI_DECODE_AUDIT_SHA256
+    {
+        bail!("cohort provenance does not match the retained exact-audit authority");
+    }
+    if authority.historical_positive_files != 41
+        || authority.historical_raster_positive_files != 41
+        || authority.historical_emf_only_positive_files != 0
+        || authority.historical_typed_blip_records != 209
+        || authority.historical_verified_records != 188
+        || authority.historical_unique_payload_sha256 != 112
+        || authority.historical_kind_counts.jpeg != 154
+        || authority.historical_kind_counts.png != 24
+        || authority.historical_kind_counts.emf != 10
+        || authority.historical_kind_counts.jpeg
+            + authority.historical_kind_counts.png
+            + authority.historical_kind_counts.emf
+            != authority.historical_verified_records
+    {
+        bail!("cohort historical comparator metadata does not match the retained audit");
     }
 
     let mut expected = BTreeMap::<String, CohortSource>::new();
@@ -527,6 +599,13 @@ fn main() -> Result<()> {
     let summary = CensusSummary {
         schema: OUTPUT_SCHEMA,
         input_manifest_sha256,
+        delta_image_positive_files_vs_historical: image_salvage_positive_files as i64
+            - authority.historical_raster_positive_files as i64,
+        delta_typed_blip_records_vs_historical: total_typed_blip_records as i64
+            - authority.historical_typed_blip_records as i64,
+        delta_strict_validated_resources_vs_historical: total_strict_validated_resources as i64
+            - authority.historical_verified_records as i64,
+        authority,
         expected_denominator: EXPECTED_DENOMINATOR,
         manifest_source_count: EXPECTED_DENOMINATOR,
         located_source_count,
@@ -574,6 +653,26 @@ mod tests {
 
         assert_eq!(manifest.schema, INPUT_SCHEMA);
         assert_eq!(manifest.sources.len(), EXPECTED_DENOMINATOR);
+        assert_eq!(manifest.authority.audit_sha256, EXPECTED_AUDIT_SHA256);
+        assert_eq!(
+            manifest.authority.retained_archive_sha256,
+            EXPECTED_RETAINED_ARCHIVE_SHA256
+        );
+        assert_eq!(
+            manifest.authority.source_audit_sha256,
+            EXPECTED_SOURCE_AUDIT_SHA256
+        );
+        assert_eq!(
+            manifest.authority.exported_bundle_manifest_sha256,
+            EXPECTED_EXPORTED_BUNDLE_MANIFEST_SHA256
+        );
+        assert_eq!(
+            manifest.authority.gdi_decode_audit_sha256,
+            EXPECTED_GDI_DECODE_AUDIT_SHA256
+        );
+        assert_eq!(manifest.authority.historical_raster_positive_files, 41);
+        assert_eq!(manifest.authority.historical_typed_blip_records, 209);
+        assert_eq!(manifest.authority.historical_verified_records, 188);
 
         let mut unique_sources = BTreeSet::new();
         for source in manifest.sources {
