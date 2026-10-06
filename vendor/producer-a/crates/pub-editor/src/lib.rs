@@ -8256,6 +8256,29 @@ fn rebuild_simple_table_story(
     let mut ordered = simple.cells.clone();
     ordered.sort_by_key(|cell| (cell.address.row, cell.address.column, cell.id));
 
+    if table.text_id == AUTHORED_TABLE_SENTINEL_TEXT_ID_V1 && table.source_refs.is_empty() {
+        let ordered_cells = ordered
+            .iter()
+            .map(|semantic| {
+                let materialized = cells.iter().find(|cell| cell.id == semantic.id).ok_or(())?;
+                Ok((semantic.id, materialized.text.clone()))
+            })
+            .collect::<Result<Vec<_>, ()>>()?;
+        let (text, by_id) = rebuild_authored_table_story_v1(&ordered_cells).map_err(|_| ())?;
+        let ranges = ordered
+            .iter()
+            .map(|semantic| {
+                let (utf16_start, utf16_end) = by_id[&semantic.id];
+                TableCellRangeSnapshot {
+                    cell_id: semantic.id,
+                    utf16_start,
+                    utf16_end,
+                }
+            })
+            .collect();
+        return Ok((text, ranges));
+    }
+
     let mut utf16 = Vec::<u16>::new();
     let mut ranges = Vec::with_capacity(ordered.len());
 
