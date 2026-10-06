@@ -1,6 +1,4 @@
-use pub_model::{
-    EffectiveTableGridV1, LengthEmu, TableColumnId, TableRowId,
-};
+use pub_model::{EffectiveTableGridV1, LengthEmu, TableColumnId, TableRowId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableTrackTargetV1 {
@@ -28,7 +26,11 @@ pub fn set_table_track_extent_v1(
     let mut next = grid.clone();
     let matches = match target {
         TableTrackTargetV1::Row(id) => {
-            let matches = next.rows.iter_mut().filter(|track| track.id == id).collect::<Vec<_>>();
+            let matches = next
+                .rows
+                .iter_mut()
+                .filter(|track| track.id == id)
+                .collect::<Vec<_>>();
             if matches.len() == 1 {
                 matches.into_iter().next().expect("one row").extent = Some(extent);
                 1
