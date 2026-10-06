@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use pub_editor::{
     CreateTableRuntimeV1, EDITOR_PROJECT_VERSION_V0_18, EDITOR_PROJECT_VERSION_V0_19,
-    EditOperation, EditorProjectError, EditorSession, LengthEmu, NodeId, PageId, RectEmu, StoryId,
-    TableCellId, TableTrackTargetV1,
+    EditOperation, EditorProjectAsset, EditorProjectError, EditorSession, LengthEmu, NodeId, PageId,
+    RectEmu, StoryId, TableCellId, TableTrackTargetV1,
 };
 use pub_model::{
     Document, DocumentId, ResolvedGraph, Sha256Digest, Size2D, SourceDescriptor, TableColumnId,
@@ -220,4 +220,48 @@ fn v018_project_cannot_smuggle_track_resize_history() {
         Err(EditorProjectError::LegacyProjectCarriesTableTrackExtentOperation { index: 1 })
     ));
     assert!(target.operations().is_empty());
+}
+
+
+#[test]
+fn v019_project_requires_identity_and_exact_asset_reachability() {
+    let mut producer = EditorSession::new(graph()).expect("producer");
+    producer.create_table(runtime()).expect("CreateTable");
+    producer
+        .set_table_track_extent_v1(
+            node_id(),
+            TableTrackTargetV1::Row(row_ids()[0]),
+            LengthEmu::new(225_000),
+        )
+        .expect("resize row");
+
+    let mut missing_identity = producer.project();
+    assert_eq!(
+        missing_identity.schema_version,
+        EDITOR_PROJECT_VERSION_V0_19
+    );
+    missing_identity.identity = None;
+
+    let mut target = EditorSession::new(graph()).expect("identity target");
+    assert!(matches!(
+        target.apply_project(&missing_identity),
+        Err(EditorProjectError::MissingProjectIdentity)
+    ));
+
+    let mut extra_asset = producer.project();
+    let fake_sha: Sha256Digest =
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            .parse()
+            .expect("fake sha");
+    extra_asset.assets.push(EditorProjectAsset {
+        sha256: fake_sha,
+        mime: "image/png".into(),
+        byte_len: 8,
+    });
+
+    let mut target = EditorSession::new(graph()).expect("asset target");
+    assert!(matches!(
+        target.apply_project(&extra_asset),
+        Err(EditorProjectError::AssetReachabilityMismatch { .. })
+    ));
 }
