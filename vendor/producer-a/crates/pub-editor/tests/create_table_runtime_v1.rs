@@ -93,7 +93,11 @@ fn authored_empty_2x2_table_is_one_normal_graph_table_with_durable_grid_ids() {
     assert!(table.border_segments.is_empty());
 
     assert_eq!(
-        plan.grid.rows.iter().map(|track| track.id).collect::<Vec<_>>(),
+        plan.grid
+            .rows
+            .iter()
+            .map(|track| track.id)
+            .collect::<Vec<_>>(),
         row_ids()
     );
     assert_eq!(
@@ -105,7 +109,11 @@ fn authored_empty_2x2_table_is_one_normal_graph_table_with_durable_grid_ids() {
         column_ids()
     );
     assert_eq!(
-        plan.grid.cells.iter().map(|cell| cell.id).collect::<Vec<_>>(),
+        plan.grid
+            .cells
+            .iter()
+            .map(|cell| cell.id)
+            .collect::<Vec<_>>(),
         cell_ids()
     );
     assert!(
