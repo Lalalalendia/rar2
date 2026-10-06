@@ -14,8 +14,8 @@ mod create_shape_runtime_v1;
 mod duplicate_authored_rectangle_v1;
 mod imported_paragraph_alignment_v1;
 mod imported_paragraphs_v1;
-mod text_format_property_base_v1;
 mod table_track_extent_v1;
+mod text_format_property_base_v1;
 mod writer_assessment;
 
 pub use authored_paragraph_alignment_v1::{
