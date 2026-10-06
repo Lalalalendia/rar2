@@ -6,6 +6,7 @@ on:
       - ".github/workflows/publisher-visual-golden-supplemental.yml"
       - "tools/cloud_reader_visual_supplemental_v1.py"
       - "tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv"
+      - "tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json"
       - "apps/cloud-reader/**"
       - "apps/chaptera-server/src/reader_scene_v1.rs"
       - "apps/chaptera-server/src/guest_reader_worker.rs"
@@ -19,6 +20,7 @@ on:
       - ".github/workflows/publisher-visual-golden-supplemental.yml"
       - "tools/cloud_reader_visual_supplemental_v1.py"
       - "tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv"
+      - "tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json"
 
 permissions:
   contents: read
@@ -75,7 +77,17 @@ jobs:
           assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
           print("pinned 1050 verified", digest)
           PY
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
+          python -m py_compile tools/cloud_reader_visual_fingerprint_v1.py
           python -m py_compile tools/cloud_reader_visual_supplemental_v1.py
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          path = Path("tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json")
+          digest = hashlib.sha256(path.read_bytes()).hexdigest()
+          assert digest == "ec3efb6e393899ade89eb96f76c6b9281c0a025f49da4f11263e69a6a40fe60d", digest
+          print("supplemental reference fingerprint:", digest)
+          PY
 
       - name: Prepare 24 new hosted supplemental PUB fixtures
         run: |
@@ -116,7 +128,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/publisher-visual-supplemental
-          python tools/cloud_reader_visual_supplemental_v1.py summarize             tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv             "$RUNNER_TEMP/publisher-visual-supplemental/browser/receipt.json"             target/publisher-visual-supplemental/summary.json
+          python tools/cloud_reader_visual_supplemental_v1.py summarize \
+            tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv \
+            "$RUNNER_TEMP/publisher-visual-supplemental/browser/receipt.json" \
+            tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json \
+            target/publisher-visual-supplemental/summary.json
 
       - name: Enforce Reader execution acceptance and report surface-count differences
         run: |
@@ -133,6 +149,12 @@ jobs:
               "visual_degeneracy_pair_count": data["visual_degeneracy_pair_count"],
               "visual_degeneracy_count": data["visual_degeneracy_count"],
               "visual_reference_fingerprint_state": data["visual_reference_fingerprint_state"],
+              "visual_compared_pair_count": data["visual"]["compared_pair_count"],
+              "visual_compared_page_count": data["visual"]["compared_page_count"],
+              "visual_mean_changed_cell_fraction": data["visual"]["corpus_mean_changed_cell_fraction"],
+              "visual_worst_pages": data["visual"]["worst_pages"][:10],
+              "missing_hosted_reference_pair_count": data["missing_hosted_reference_pair_count"],
+              "missing_hosted_reference_pairs": data["missing_hosted_reference_pairs"],
               "unsupported_pairs": [
                   row["basename"] for row in data["unsupported_pairs"]
               ],
@@ -162,6 +184,9 @@ jobs:
           # the stage classifier instead of forcing Reader logical-page mutation.
           assert data["claims"]["publisher_pdf_page_count_is_not_logical_page_membership_authority"] is True
           assert data["visual_degeneracy_count"] == 0, "new hosted corpus has page-space collapsed shared-text geometry"
+          assert data["visual"]["compared_pair_count"] == 8, "expected 8 hosted pairs with exact Publisher reference fingerprints"
+          assert data["visual"]["compared_page_count"] == 27, "expected 27 hosted pages with exact Publisher reference fingerprints"
+          assert data["visual"]["unavailable_pair_count"] == 0, "available Publisher references failed to compare"
           PY
 
       - name: Upload source-free supplemental receipt
