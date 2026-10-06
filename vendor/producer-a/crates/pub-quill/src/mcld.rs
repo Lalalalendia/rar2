@@ -69,6 +69,16 @@ pub struct QuillMcldUniformTextInset {
     pub sources: Vec<RawSpan>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillMcldTextInsets {
+    pub record_id: u32,
+    pub top_emu: u32,
+    pub left_emu: u32,
+    pub bottom_emu: u32,
+    pub right_emu: u32,
+    pub sources: Vec<RawSpan>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QuillMcldVerticalAlignment {
@@ -274,6 +284,45 @@ pub fn parse_bounded_mcld(
 /// This is intentionally narrower than the known asymmetric Publisher grammar:
 /// the exact within-axis side permutation remains separate research authority.
 /// A non-uniform record therefore stays unprojected rather than being guessed.
+/// Promotes one ordinary TextFrame's four grounded MCLD text insets.
+///
+/// Natural asymmetric Publisher evidence closes the stored side order as:
+/// 0x06=Top, 0x07=Left, 0x08=Bottom, 0x09=Right. Each field must be one
+/// exact u32 on the record's single child; malformed or ambiguous state fails
+/// closed. The older uniform helper remains as the stricter table/legacy gate.
+pub fn bounded_mcld_text_insets(
+    mcld: &QuillMcldChunk,
+    record_id: u32,
+) -> Result<QuillMcldTextInsets, QuillMcldReadError> {
+    let record = mcld
+        .records
+        .iter()
+        .find(|record| record.record_id == record_id)
+        .ok_or(QuillMcldReadError::RecordIdNotFound { record_id })?;
+    if record.children.len() != 1 {
+        return Err(QuillMcldReadError::UnexpectedChildCount {
+            record_id,
+            expected: 1,
+            found: u32::try_from(record.children.len()).unwrap_or(u32::MAX),
+        });
+    }
+
+    let child = &record.children[0];
+    let (top_emu, top_source) = required_u32_field(record_id, 0, child, 0x06)?;
+    let (left_emu, left_source) = required_u32_field(record_id, 0, child, 0x07)?;
+    let (bottom_emu, bottom_source) = required_u32_field(record_id, 0, child, 0x08)?;
+    let (right_emu, right_source) = required_u32_field(record_id, 0, child, 0x09)?;
+
+    Ok(QuillMcldTextInsets {
+        record_id,
+        top_emu,
+        left_emu,
+        bottom_emu,
+        right_emu,
+        sources: vec![top_source, left_source, bottom_source, right_source],
+    })
+}
+
 pub fn bounded_mcld_uniform_text_inset(
     mcld: &QuillMcldChunk,
     record_id: u32,
