@@ -456,6 +456,36 @@ mod tests {
         source
     }
 
+    fn cycle_contents_chain_after_first_sector(mut source: Vec<u8>) -> Vec<u8> {
+        let sector_len = 1usize << u16::from_le_bytes([source[30], source[31]]);
+        let start_sector = root_contents_start_sector(&source);
+        let fat_sector = first_fat_sector(&source);
+        let fat_offset = (usize::try_from(fat_sector).unwrap() + 1) * sector_len;
+        let entry_offset = fat_offset + usize::try_from(start_sector).unwrap() * 4;
+        source[entry_offset..entry_offset + 4].copy_from_slice(&start_sector.to_le_bytes());
+        source
+    }
+
+    fn cycle_root_directory_sibling(mut source: Vec<u8>) -> Vec<u8> {
+        let sector_len = 1usize << u16::from_le_bytes([source[30], source[31]]);
+        let directory_sector =
+            u32::from_le_bytes([source[48], source[49], source[50], source[51]]);
+        let directory_offset = (usize::try_from(directory_sector).unwrap() + 1) * sector_len;
+        let root_child_offset = directory_offset + 76;
+        let root_child = u32::from_le_bytes([
+            source[root_child_offset],
+            source[root_child_offset + 1],
+            source[root_child_offset + 2],
+            source[root_child_offset + 3],
+        ]);
+        assert_ne!(root_child, NO_STREAM);
+        let child_offset =
+            directory_offset + usize::try_from(root_child).unwrap() * DIR_ENTRY_LEN;
+        source[child_offset + 68..child_offset + 72]
+            .copy_from_slice(&root_child.to_le_bytes());
+        source
+    }
+
     #[test]
     fn complete_control_returns_complete_without_changing_contract() {
         let source = regular_root_fixture();
@@ -489,6 +519,24 @@ mod tests {
             recovered.bytes.len()
         );
         assert_eq!(recovered.source_ranges.len(), 1);
+    }
+
+    #[test]
+    fn stream_chain_cycle_fails_closed() {
+        let source = cycle_contents_chain_after_first_sector(regular_root_fixture());
+        let error =
+            recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Contents")
+                .expect_err("stream chain cycle must fail closed");
+        assert!(format!("{error:#}").contains("cycle in root stream"));
+    }
+
+    #[test]
+    fn root_directory_cycle_fails_closed() {
+        let source = cycle_root_directory_sibling(regular_root_fixture());
+        let error =
+            recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Contents")
+                .expect_err("directory sibling cycle must fail closed");
+        assert!(format!("{error:#}").contains("cycle in root directory sibling tree"));
     }
 
     #[test]
