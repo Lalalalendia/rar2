@@ -9,6 +9,7 @@
 mod authored_paragraph_alignment_v1;
 mod authored_stack_lifecycle_v1;
 mod authored_stack_runtime_v1;
+mod create_line_runtime_v1;
 mod create_shape_runtime_v1;
 mod duplicate_authored_rectangle_v1;
 mod imported_paragraph_alignment_v1;
@@ -25,13 +26,17 @@ pub use authored_stack_lifecycle_v1::{
     AUTHORED_STACK_PROTOCOL_V1, AuthoredStackLifecycleErrorV1, AuthoredStackLifecycleKindV1,
     AuthoredStackLifecycleTransitionV1, AuthoredStackV1,
     apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
-    authored_stack_state_id_v1, plan_create_shape_append_v1, plan_delete_shape_remove_v1,
-    validate_authored_stack_v1,
+    authored_stack_state_id_v1, plan_create_line_append_v1, plan_create_shape_append_v1,
+    plan_delete_shape_remove_v1, validate_authored_stack_v1,
 };
 pub use authored_stack_runtime_v1::{
     AuthoredStackReorderErrorV1, AuthoredStackReorderModeV1, AuthoredStackReorderTransitionV1,
     apply_authored_stack_reorder_forward_v1, apply_authored_stack_reorder_inverse_v1,
     plan_reorder_authored_stack_v1,
+};
+pub use create_line_runtime_v1::{
+    AuthoredLineRuntimeV1, CreateLineRuntimeValidationError, LineGeometryV1, PointEmuV1,
+    line_bounds_v1, validate_authored_line_runtime_v1,
 };
 pub use create_shape_runtime_v1::{
     AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1,
@@ -134,7 +139,8 @@ pub const EDITOR_PROJECT_VERSION_V0_13: &str = "pub-editor-v0.13";
 pub const EDITOR_PROJECT_VERSION_V0_14: &str = "pub-editor-v0.14";
 pub const EDITOR_PROJECT_VERSION_V0_15: &str = "pub-editor-v0.15";
 pub const EDITOR_PROJECT_VERSION_V0_16: &str = "pub-editor-v0.16";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_16;
+pub const EDITOR_PROJECT_VERSION_V0_17: &str = "pub-editor-v0.17";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_17;
 pub const MAX_MOVE_NODES_V1: usize = 1024;
 pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
@@ -338,6 +344,14 @@ pub enum EditOperation {
         paint: AuthoredShapePaintV1,
         provenance: AuthoredEntityProvenanceV1,
     },
+    CreateLine {
+        node_id: NodeId,
+        page_id: PageId,
+        parent_id: PageId,
+        geometry: LineGeometryV1,
+        stroke: AuthoredSolidStrokeV1,
+        provenance: AuthoredEntityProvenanceV1,
+    },
     DeleteNode {
         node_id: NodeId,
         page_id: PageId,
@@ -426,6 +440,7 @@ impl EditOperation {
             | Self::ResizeNodes { .. }
             | Self::CreateTextBox { .. }
             | Self::CreateShape { .. }
+            | Self::CreateLine { .. }
             | Self::DeleteNode { .. }
             | Self::ReorderAuthoredStack { .. }
             | Self::SetTextFormatProperty { .. }
@@ -555,6 +570,23 @@ impl PersistenceRequirements for EditOperation {
                     feature: "shape.paint".into(),
                     origin: Some(node_id.into_canonical()),
                     property_path: Some("node.paint".into()),
+                },
+            ],
+            Self::CreateLine { node_id, .. } => vec![
+                PersistenceRequirement {
+                    feature: "node.created_identity".into(),
+                    origin: Some(node_id.into_canonical()),
+                    property_path: Some("node".into()),
+                },
+                PersistenceRequirement {
+                    feature: "line.geometry.endpoints".into(),
+                    origin: Some(node_id.into_canonical()),
+                    property_path: Some("node.line.geometry".into()),
+                },
+                PersistenceRequirement {
+                    feature: "line.stroke".into(),
+                    origin: Some(node_id.into_canonical()),
+                    property_path: Some("node.line.stroke".into()),
                 },
             ],
             Self::DeleteNode { node_id, .. } => vec![PersistenceRequirement {
@@ -1084,6 +1116,27 @@ pub enum EditorError {
     CreateShapeMalformed {
         node_id: NodeId,
     },
+    CreateLineInvalidNodeId {
+        node_id: NodeId,
+    },
+    CreateLinePageMissing {
+        page_id: PageId,
+    },
+    CreateLineIdCollision {
+        node_id: NodeId,
+    },
+    CreateLineInvalidGeometry {
+        node_id: NodeId,
+    },
+    CreateLineInvalidStroke {
+        node_id: NodeId,
+    },
+    CreateLineInvalidProvenance {
+        node_id: NodeId,
+    },
+    CreateLineMalformed {
+        node_id: NodeId,
+    },
     NodeDeleteUnsupported {
         node_id: NodeId,
     },
@@ -1360,6 +1413,41 @@ impl fmt::Display for EditorError {
                 "CreateShape node {} violates the bounded rectangle/identity/page contract",
                 node_id.as_canonical()
             ),
+            Self::CreateLineInvalidNodeId { node_id } => write!(
+                formatter,
+                "CreateLine node {} is not an editor-created UUIDv7",
+                node_id.as_canonical()
+            ),
+            Self::CreateLinePageMissing { page_id } => write!(
+                formatter,
+                "CreateLine page {} is not present in the opened document",
+                page_id.as_canonical()
+            ),
+            Self::CreateLineIdCollision { node_id } => write!(
+                formatter,
+                "CreateLine node {} collides with an existing visual node",
+                node_id.as_canonical()
+            ),
+            Self::CreateLineInvalidGeometry { node_id } => write!(
+                formatter,
+                "CreateLine node {} has invalid or unsafe ordered endpoint geometry",
+                node_id.as_canonical()
+            ),
+            Self::CreateLineInvalidStroke { node_id } => write!(
+                formatter,
+                "CreateLine node {} has invalid explicit stroke",
+                node_id.as_canonical()
+            ),
+            Self::CreateLineInvalidProvenance { node_id } => write!(
+                formatter,
+                "CreateLine node {} is not explicitly author-created",
+                node_id.as_canonical()
+            ),
+            Self::CreateLineMalformed { node_id } => write!(
+                formatter,
+                "CreateLine node {} violates the bounded identity/page contract",
+                node_id.as_canonical()
+            ),
             Self::NodeDeleteUnsupported { node_id } => write!(
                 formatter,
                 "node {} is not an admitted author-created direct page-owned Rectangle",
@@ -1575,6 +1663,13 @@ impl EditorError {
             Self::CreateShapeInvalidPaint { .. } => "create_shape_invalid_paint",
             Self::CreateShapeInvalidProvenance { .. } => "create_shape_invalid_provenance",
             Self::CreateShapeMalformed { .. } => "create_shape_malformed",
+            Self::CreateLineInvalidNodeId { .. } => "create_line_invalid_node_id",
+            Self::CreateLinePageMissing { .. } => "create_line_page_missing",
+            Self::CreateLineIdCollision { .. } => "create_line_id_collision",
+            Self::CreateLineInvalidGeometry { .. } => "create_line_invalid_geometry",
+            Self::CreateLineInvalidStroke { .. } => "create_line_invalid_stroke",
+            Self::CreateLineInvalidProvenance { .. } => "create_line_invalid_provenance",
+            Self::CreateLineMalformed { .. } => "create_line_malformed",
             Self::NodeDeleteUnsupported { .. } => "node_delete_unsupported",
             Self::NodeDeletePageMismatch { .. } => "node_delete_page_mismatch",
             Self::StaleNodeDelete { .. } => "stale_node_delete",
@@ -1895,7 +1990,12 @@ fn is_scoped_text_format_operation_v1(operation: &EditOperation) -> bool {
 }
 
 fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
-    if operations.iter().any(is_scoped_text_format_operation_v1) {
+    if operations
+        .iter()
+        .any(|operation| matches!(operation, EditOperation::CreateLine { .. }))
+    {
+        EDITOR_PROJECT_VERSION_V0_17
+    } else if operations.iter().any(is_scoped_text_format_operation_v1) {
         EDITOR_PROJECT_VERSION_V0_16
     } else if operations.iter().any(|operation| {
         matches!(
@@ -2100,6 +2200,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesCreateShapeOperation {
         index: usize,
     },
+    LegacyProjectCarriesCreateLineOperation {
+        index: usize,
+    },
     LegacyProjectCarriesCreateTextBoxOperation {
         index: usize,
     },
@@ -2166,7 +2269,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, or {EDITOR_PROJECT_VERSION_V0_16:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, or {EDITOR_PROJECT_VERSION_V0_17:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -2205,6 +2308,10 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesCreateShapeOperation { index } => write!(
                 formatter,
                 "editor project operation {index} uses CreateShape but the project schema predates pub-editor-v0.10"
+            ),
+            Self::LegacyProjectCarriesCreateLineOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses CreateLine but the project schema predates pub-editor-v0.17"
             ),
             Self::LegacyProjectCarriesCreateTextBoxOperation { index } => write!(
                 formatter,
@@ -2452,6 +2559,7 @@ pub struct EditorSession {
     replacement_assets: BTreeMap<Sha256Digest, EditorReplacementAsset>,
     image_replacements: BTreeMap<NodeId, Sha256Digest>,
     authored_shapes: BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
+    authored_lines: BTreeMap<NodeId, AuthoredLineRuntimeV1>,
     authored_stacks: BTreeMap<PageId, AuthoredStackV1>,
     undo: Vec<EditOperation>,
     redo: Vec<EditOperation>,
@@ -2483,6 +2591,7 @@ impl EditorSession {
             replacement_assets: BTreeMap::new(),
             image_replacements: BTreeMap::new(),
             authored_shapes: BTreeMap::new(),
+            authored_lines: BTreeMap::new(),
             authored_stacks: BTreeMap::new(),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -3203,6 +3312,16 @@ impl EditorSession {
         self.authored_shapes.get(&node_id)
     }
 
+    pub fn authored_lines(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &AuthoredLineRuntimeV1> + DoubleEndedIterator {
+        self.authored_lines.values()
+    }
+
+    pub fn authored_line(&self, node_id: NodeId) -> Option<&AuthoredLineRuntimeV1> {
+        self.authored_lines.get(&node_id)
+    }
+
     pub fn authored_stack(&self, page_id: PageId) -> Option<AuthoredStackV1> {
         self.graph.pages.contains_key(&page_id).then(|| {
             self.authored_stacks
@@ -3337,7 +3456,14 @@ impl EditorSession {
                     | EditOperation::ClearParagraphAlignmentOverride { .. }
             )
         });
-        if (carries_reorder || carries_text_format || carries_paragraph_alignment)
+        let carries_create_line = self
+            .undo
+            .iter()
+            .any(|operation| matches!(operation, EditOperation::CreateLine { .. }));
+        if (carries_reorder
+            || carries_text_format
+            || carries_paragraph_alignment
+            || carries_create_line)
             && self.project_identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
@@ -3349,6 +3475,12 @@ impl EditorSession {
             )
         } else {
             let legacy_schema = if self
+                .undo
+                .iter()
+                .any(|operation| matches!(operation, EditOperation::CreateLine { .. }))
+            {
+                EDITOR_PROJECT_VERSION_V0_17
+            } else if self
                 .undo
                 .iter()
                 .any(|operation| matches!(operation, EditOperation::CreateShape { .. }))
@@ -3468,6 +3600,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
         {
             return Err(EditorProjectError::UnsupportedSchema {
                 found: project.schema_version.clone(),
@@ -3500,6 +3633,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
         {
             if let Some(index) = project
                 .operations
@@ -3521,6 +3655,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
         {
             if let Some(index) = project
                 .operations
@@ -3541,6 +3676,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && !project.table_grids.is_empty()
         {
             return Err(EditorProjectError::LegacyProjectCarriesTableGrids);
@@ -3555,6 +3691,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
@@ -3571,6 +3708,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
         {
             if let Some(index) = project
                 .operations
@@ -3588,6 +3726,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
         {
             if let Some(index) = project
                 .operations
@@ -3604,6 +3743,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
         {
             if let Some(index) = project
                 .operations
@@ -3613,12 +3753,22 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesCreateShapeOperation { index });
             }
         }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_17 {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(|operation| matches!(operation, EditOperation::CreateLine { .. }))
+            {
+                return Err(EditorProjectError::LegacyProjectCarriesCreateLineOperation { index });
+            }
+        }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
         {
             if let Some(index) = project
                 .operations
@@ -3635,6 +3785,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
         {
             if let Some(index) = project
                 .operations
@@ -3648,6 +3799,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::ReorderAuthoredStack { .. })
@@ -3660,6 +3812,7 @@ impl EditorSession {
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
         {
             if let Some(index) = project
                 .operations
@@ -3669,7 +3822,9 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesTextFormatOperation { index });
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_16 {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+        {
             if let Some(index) = project
                 .operations
                 .iter()
@@ -3682,6 +3837,7 @@ impl EditorSession {
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
@@ -3701,6 +3857,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.identity.is_some()
         {
             return Err(EditorProjectError::LegacyProjectCarriesIdentity);
@@ -3710,7 +3867,8 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_14
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_15
-            || project.schema_version == EDITOR_PROJECT_VERSION_V0_16)
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_17)
             && project.identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
@@ -3726,6 +3884,7 @@ impl EditorSession {
             || !self.replacement_assets.is_empty()
             || !self.image_replacements.is_empty()
             || !self.authored_shapes.is_empty()
+            || !self.authored_lines.is_empty()
             || !self.authored_stacks.is_empty()
         {
             return Err(EditorProjectError::SessionNotEmpty);
@@ -3737,6 +3896,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_14
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_15
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_17
         {
             let expected = required_editor_asset_refs_v1(&project.operations)
                 .into_iter()
@@ -3805,6 +3965,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_14
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_15
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_17
         {
             let actual_grids = effective_table_grids(&candidate.graph);
             if actual_grids != project.table_grids {
@@ -5333,6 +5494,7 @@ impl EditorSession {
         }
         if self.graph.nodes.contains_key(&shape.node_id)
             || self.authored_shapes.contains_key(&shape.node_id)
+            || self.authored_lines.contains_key(&shape.node_id)
         {
             return Err(EditorError::CreateShapeIdCollision {
                 node_id: shape.node_id,
@@ -5368,6 +5530,100 @@ impl EditorSession {
             ) => Err(EditorError::CreateShapeMalformed {
                 node_id: shape.node_id,
             }),
+        }
+    }
+
+    pub fn create_line(
+        &mut self,
+        node_id: NodeId,
+        page_id: PageId,
+        geometry: LineGeometryV1,
+        stroke: AuthoredSolidStrokeV1,
+    ) -> Result<EditOperation, EditorError> {
+        let operation = EditOperation::CreateLine {
+            node_id,
+            page_id,
+            parent_id: page_id,
+            geometry,
+            stroke,
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        self.consume_canonical_create_line(operation)
+    }
+
+    fn consume_canonical_create_line(
+        &mut self,
+        operation: EditOperation,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let line = authored_line_from_operation(&operation)
+            .expect("consume_canonical_create_line receives CreateLine");
+        self.validate_create_line_candidate(&line)?;
+
+        let before_stack = self.current_authored_stack_v1(line.page_id);
+        let transition = plan_create_line_append_v1(&before_stack, &line).map_err(|_| {
+            EditorError::StaleAuthoredStack {
+                page_id: line.page_id,
+            }
+        })?;
+        let after_stack = apply_authored_stack_transition_forward_v1(&before_stack, &transition)
+            .map_err(|_| EditorError::StaleAuthoredStack {
+                page_id: line.page_id,
+            })?;
+
+        self.authored_lines.insert(line.node_id, line);
+        self.install_authored_stack_v1(after_stack);
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    fn validate_create_line_candidate(
+        &self,
+        line: &AuthoredLineRuntimeV1,
+    ) -> Result<(), EditorError> {
+        if !self.graph.pages.contains_key(&line.page_id) {
+            return Err(EditorError::CreateLinePageMissing {
+                page_id: line.page_id,
+            });
+        }
+        if self.graph.nodes.contains_key(&line.node_id)
+            || self.authored_shapes.contains_key(&line.node_id)
+            || self.authored_lines.contains_key(&line.node_id)
+        {
+            return Err(EditorError::CreateLineIdCollision {
+                node_id: line.node_id,
+            });
+        }
+        match validate_authored_line_runtime_v1(line) {
+            Ok(()) => Ok(()),
+            Err(CreateLineRuntimeValidationError::NodeIdNotUuidV7) => {
+                Err(EditorError::CreateLineInvalidNodeId {
+                    node_id: line.node_id,
+                })
+            }
+            Err(
+                CreateLineRuntimeValidationError::CoordinateOutOfRange
+                | CreateLineRuntimeValidationError::DerivedBoundsOverflow,
+            ) => Err(EditorError::CreateLineInvalidGeometry {
+                node_id: line.node_id,
+            }),
+            Err(CreateLineRuntimeValidationError::InvalidStroke) => {
+                Err(EditorError::CreateLineInvalidStroke {
+                    node_id: line.node_id,
+                })
+            }
+            Err(CreateLineRuntimeValidationError::NonAuthorCreatedProvenance) => {
+                Err(EditorError::CreateLineInvalidProvenance {
+                    node_id: line.node_id,
+                })
+            }
+            Err(CreateLineRuntimeValidationError::ParentPageMismatch) => {
+                Err(EditorError::CreateLineMalformed {
+                    node_id: line.node_id,
+                })
+            }
         }
     }
 
@@ -5968,9 +6224,13 @@ impl EditorSession {
                 }
 
                 let mut candidate_shapes = self.authored_shapes.clone();
+                let mut candidate_lines = self.authored_lines.clone();
                 match &operation {
                     EditOperation::CreateShape { .. } => {
                         apply_authored_shape_inverse(&mut candidate_shapes, &operation)?;
+                    }
+                    EditOperation::CreateLine { .. } => {
+                        apply_authored_line_inverse(&mut candidate_lines, &operation)?;
                     }
                     EditOperation::DeleteNode { .. } => {
                         apply_authored_shape_delete_inverse(&mut candidate_shapes, &operation)?;
@@ -5979,6 +6239,7 @@ impl EditorSession {
                     _ => unreachable!("authored-stack page helper only admits lane operations"),
                 }
                 self.authored_shapes = candidate_shapes;
+                self.authored_lines = candidate_lines;
                 self.authored_stacks = before_stacks;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_inverse(&mut self.image_replacements, &operation)?;
@@ -6038,12 +6299,19 @@ impl EditorSession {
                 apply_authored_stack_history_forward_v1(&mut after_stacks, &operation)?;
 
                 let mut candidate_shapes = self.authored_shapes.clone();
+                let mut candidate_lines = self.authored_lines.clone();
                 match &operation {
                     EditOperation::CreateShape { .. } => {
                         let shape = authored_shape_from_operation(&operation)
                             .expect("CreateShape operation reconstructs authored shape");
                         self.validate_create_shape_candidate(&shape)?;
                         candidate_shapes.insert(shape.node_id, shape);
+                    }
+                    EditOperation::CreateLine { .. } => {
+                        let line = authored_line_from_operation(&operation)
+                            .expect("CreateLine operation reconstructs authored line");
+                        self.validate_create_line_candidate(&line)?;
+                        candidate_lines.insert(line.node_id, line);
                     }
                     EditOperation::DeleteNode { .. } => {
                         apply_authored_shape_delete_forward(&mut candidate_shapes, &operation)?;
@@ -6053,6 +6321,7 @@ impl EditorSession {
                 }
 
                 self.authored_shapes = candidate_shapes;
+                self.authored_lines = candidate_lines;
                 self.authored_stacks = after_stacks;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_forward(&mut self.image_replacements, &operation)?;
@@ -6272,6 +6541,9 @@ fn replay_canonical_operation(
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::CreateShape { .. } => session
             .consume_canonical_create_shape(expected.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::CreateLine { .. } => session
+            .consume_canonical_create_line(expected.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::DeleteNode { .. } => session
             .consume_canonical_delete_node(expected.clone())
@@ -7408,6 +7680,9 @@ fn apply_forward(
         EditOperation::CreateShape { .. } => {
             unreachable!("CreateShape is applied to the authored overlay state")
         }
+        EditOperation::CreateLine { .. } => {
+            unreachable!("CreateLine is applied to the authored overlay state")
+        }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is applied to the authored overlay state")
         }
@@ -7660,6 +7935,9 @@ fn apply_inverse(
         EditOperation::CreateShape { .. } => {
             unreachable!("CreateShape is reverted in the authored overlay state")
         }
+        EditOperation::CreateLine { .. } => {
+            unreachable!("CreateLine is reverted in the authored overlay state")
+        }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is reverted in the authored overlay state")
         }
@@ -7682,9 +7960,9 @@ fn apply_inverse(
 
 fn authored_stack_operation_page_id_v1(operation: &EditOperation) -> Option<PageId> {
     match operation {
-        EditOperation::CreateShape { page_id, .. } | EditOperation::DeleteNode { page_id, .. } => {
-            Some(*page_id)
-        }
+        EditOperation::CreateShape { page_id, .. }
+        | EditOperation::CreateLine { page_id, .. }
+        | EditOperation::DeleteNode { page_id, .. } => Some(*page_id),
         EditOperation::ReorderAuthoredStack { transition } => Some(transition.page_id),
         _ => None,
     }
@@ -7714,6 +7992,19 @@ fn apply_authored_stack_history_forward_v1(
                 .cloned()
                 .unwrap_or_else(|| AuthoredStackV1::empty(*page_id));
             let transition = plan_create_shape_append_v1(&before, &shape)
+                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+            let after = apply_authored_stack_transition_forward_v1(&before, &transition)
+                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+            install_authored_stack_in_map_v1(stacks, after);
+        }
+        EditOperation::CreateLine { page_id, .. } => {
+            let line = authored_line_from_operation(operation)
+                .expect("CreateLine reconstructs authored line");
+            let before = stacks
+                .get(page_id)
+                .cloned()
+                .unwrap_or_else(|| AuthoredStackV1::empty(*page_id));
+            let transition = plan_create_line_append_v1(&before, &line)
                 .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
             let after = apply_authored_stack_transition_forward_v1(&before, &transition)
                 .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
@@ -7783,6 +8074,42 @@ fn authored_shape_from_operation(operation: &EditOperation) -> Option<AuthoredSh
         }),
         _ => None,
     }
+}
+
+fn authored_line_from_operation(operation: &EditOperation) -> Option<AuthoredLineRuntimeV1> {
+    match operation {
+        EditOperation::CreateLine {
+            node_id,
+            page_id,
+            parent_id,
+            geometry,
+            stroke,
+            provenance,
+        } => Some(AuthoredLineRuntimeV1 {
+            node_id: *node_id,
+            page_id: *page_id,
+            parent_id: *parent_id,
+            geometry: *geometry,
+            stroke: stroke.clone(),
+            provenance: *provenance,
+        }),
+        _ => None,
+    }
+}
+
+fn apply_authored_line_inverse(
+    authored_lines: &mut BTreeMap<NodeId, AuthoredLineRuntimeV1>,
+    operation: &EditOperation,
+) -> Result<(), EditorError> {
+    let line = authored_line_from_operation(operation)
+        .expect("CreateLine inverse receives CreateLine operation");
+    if authored_lines.get(&line.node_id) != Some(&line) {
+        return Err(EditorError::CreateLineIdCollision {
+            node_id: line.node_id,
+        });
+    }
+    authored_lines.remove(&line.node_id);
+    Ok(())
 }
 
 fn apply_authored_shape_inverse(
@@ -8329,6 +8656,41 @@ mod asset_reachability_tests {
         assert_eq!(
             minimum_identity_project_schema_v1(&[]),
             EDITOR_PROJECT_VERSION_V0_12
+        );
+    }
+
+    #[test]
+    fn create_line_requires_v017_schema_and_round_trips_exact_wire() {
+        let operation = EditOperation::CreateLine {
+            node_id: serde_json::from_str("\"01890f47-0c00-7abc-8def-0123456789ab\"")
+                .expect("canonical editor UUIDv7 NodeId"),
+            page_id: serde_json::from_str("\"11000000-0000-4000-8000-000000000001\"")
+                .expect("canonical PageId"),
+            parent_id: serde_json::from_str("\"11000000-0000-4000-8000-000000000001\"")
+                .expect("canonical PageId"),
+            geometry: LineGeometryV1 {
+                begin: PointEmuV1 { x: 100, y: 200 },
+                end: PointEmuV1 { x: 400, y: 500 },
+            },
+            stroke: AuthoredSolidStrokeV1 {
+                visible: true,
+                color: Srgb8V1 { r: 4, g: 5, b: 6 },
+                width_emu: 25_400,
+            },
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+
+        assert_eq!(
+            minimum_identity_project_schema_v1(std::slice::from_ref(&operation)),
+            EDITOR_PROJECT_VERSION_V0_17
+        );
+        assert!(operation.durable_editor_asset_refs_v1().is_empty());
+
+        let json = serde_json::to_value(&operation).expect("CreateLine JSON");
+        assert_eq!(json["kind"], "create_line");
+        assert_eq!(
+            serde_json::from_value::<EditOperation>(json).expect("CreateLine JSON round-trip"),
+            operation
         );
     }
 
