@@ -241,6 +241,305 @@ pub fn placement_scene_hash_v1(
     Ok(format!("sha256:{digest:x}"))
 }
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JustificationOpportunityKindV1 {
+    InterWord,
+    InterCharacter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JustificationScriptClassV1 {
+    LatinLike,
+    Cursive,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JustificationOpportunityV1 {
+    /// Story-global scalar boundary after which extra/contracted spacing may be applied.
+    pub scalar_boundary: u32,
+    pub kind: JustificationOpportunityKindV1,
+    pub script_class: JustificationScriptClassV1,
+    /// Maximum positive spacing adjustment at this opportunity.
+    pub max_expand_emu: i64,
+    /// Maximum absolute negative spacing adjustment at this opportunity.
+    pub max_contract_emu: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JustifiedLineInputV1 {
+    pub line_index: usize,
+    pub content_width_emu: i64,
+    pub measured_width_emu: i64,
+    /// Ordinary Justify leaves the final line of a paragraph start-aligned.
+    pub paragraph_final_line: bool,
+    pub opportunities: Vec<JustificationOpportunityV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JustificationDispositionV1 {
+    ExactFit,
+    Applied,
+    FinalLineStartAligned,
+    NoLegalOpportunity,
+    CapacityLimited,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedJustificationAdjustmentV1 {
+    pub scalar_boundary: u32,
+    pub delta_emu: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedJustifiedLineV1 {
+    pub line_index: usize,
+    pub residual_before_emu: i64,
+    pub residual_after_emu: i64,
+    pub disposition: JustificationDispositionV1,
+    pub adjustments: Vec<ResolvedJustificationAdjustmentV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JustificationErrorV1 {
+    NonPositiveContentWidth { width_emu: i64 },
+    NegativeMeasuredWidth { width_emu: i64 },
+    ResidualOverflow,
+    NonCanonicalOpportunityOrder,
+    NegativeOpportunityCapacity { scalar_boundary: u32 },
+    CursiveInterCharacterOpportunity { scalar_boundary: u32 },
+    AdjustmentOverflow,
+}
+
+impl fmt::Display for JustificationErrorV1 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NonPositiveContentWidth { width_emu } => {
+                write!(f, "justification content width must be positive, got {width_emu} EMU")
+            }
+            Self::NegativeMeasuredWidth { width_emu } => {
+                write!(f, "justification measured width must be non-negative, got {width_emu} EMU")
+            }
+            Self::ResidualOverflow => write!(f, "justification residual width overflowed"),
+            Self::NonCanonicalOpportunityOrder => {
+                write!(f, "justification opportunities must use strictly increasing scalar boundaries")
+            }
+            Self::NegativeOpportunityCapacity { scalar_boundary } => write!(
+                f,
+                "justification opportunity {scalar_boundary} has negative capacity"
+            ),
+            Self::CursiveInterCharacterOpportunity { scalar_boundary } => write!(
+                f,
+                "justification opportunity {scalar_boundary} would insert arbitrary inter-character spacing inside a cursive run"
+            ),
+            Self::AdjustmentOverflow => write!(f, "justification adjustment overflowed"),
+        }
+    }
+}
+
+impl Error for JustificationErrorV1 {}
+
+fn distribute_residual_over_tier_v1(
+    input: &JustifiedLineInputV1,
+    kind: JustificationOpportunityKindV1,
+    mut residual: i64,
+    deltas: &mut [i64],
+) -> Result<i64, JustificationErrorV1> {
+    while residual != 0 {
+        let expanding = residual > 0;
+        let active: Vec<usize> = input
+            .opportunities
+            .iter()
+            .enumerate()
+            .filter_map(|(index, opportunity)| {
+                if opportunity.kind != kind {
+                    return None;
+                }
+                let used = deltas[index];
+                let remaining_capacity = if expanding {
+                    opportunity.max_expand_emu.checked_sub(used.max(0))?
+                } else {
+                    opportunity
+                        .max_contract_emu
+                        .checked_sub(used.saturating_neg().max(0))?
+                };
+                (remaining_capacity > 0).then_some(index)
+            })
+            .collect();
+
+        if active.is_empty() {
+            break;
+        }
+
+        let active_count =
+            i64::try_from(active.len()).map_err(|_| JustificationErrorV1::AdjustmentOverflow)?;
+        let mut share = residual / active_count;
+        if share == 0 {
+            share = residual.signum();
+        }
+
+        let mut progressed = false;
+        for index in active {
+            if residual == 0 {
+                break;
+            }
+            let opportunity = &input.opportunities[index];
+            let used = deltas[index];
+            let capacity = if residual > 0 {
+                opportunity
+                    .max_expand_emu
+                    .checked_sub(used.max(0))
+                    .ok_or(JustificationErrorV1::AdjustmentOverflow)?
+            } else {
+                opportunity
+                    .max_contract_emu
+                    .checked_sub(used.saturating_neg().max(0))
+                    .ok_or(JustificationErrorV1::AdjustmentOverflow)?
+            };
+            if capacity <= 0 {
+                continue;
+            }
+
+            let magnitude = share.unsigned_abs().min(capacity as u64) as i64;
+            if magnitude == 0 {
+                continue;
+            }
+            let delta = if residual > 0 { magnitude } else { -magnitude };
+            deltas[index] = deltas[index]
+                .checked_add(delta)
+                .ok_or(JustificationErrorV1::AdjustmentOverflow)?;
+            residual = residual
+                .checked_sub(delta)
+                .ok_or(JustificationErrorV1::AdjustmentOverflow)?;
+            progressed = true;
+        }
+
+        if !progressed {
+            break;
+        }
+    }
+
+    Ok(residual)
+}
+
+/// Resolve ordinary Chaptera Justify spacing for one already-shaped line.
+///
+/// The caller supplies legal spacing opportunities derived from shaping/script
+/// analysis. This resolver never mutates Story text, glyph identities, font
+/// size or line breaks. Inter-word opportunities are consumed first; bounded
+/// non-cursive inter-character opportunities are a deterministic fallback.
+/// Cursive inter-character opportunities fail closed.
+///
+/// A paragraph-final line is intentionally returned start-aligned with no
+/// spacing adjustments. Imported Publisher InterWord/Distribute/Kashida
+/// semantics are not represented by this contract.
+pub fn resolve_ordinary_justification_v1(
+    input: &JustifiedLineInputV1,
+) -> Result<ResolvedJustifiedLineV1, JustificationErrorV1> {
+    if input.content_width_emu <= 0 {
+        return Err(JustificationErrorV1::NonPositiveContentWidth {
+            width_emu: input.content_width_emu,
+        });
+    }
+    if input.measured_width_emu < 0 {
+        return Err(JustificationErrorV1::NegativeMeasuredWidth {
+            width_emu: input.measured_width_emu,
+        });
+    }
+
+    let mut previous_boundary = None;
+    for opportunity in &input.opportunities {
+        if opportunity.max_expand_emu < 0 || opportunity.max_contract_emu < 0 {
+            return Err(JustificationErrorV1::NegativeOpportunityCapacity {
+                scalar_boundary: opportunity.scalar_boundary,
+            });
+        }
+        if previous_boundary.is_some_and(|previous| opportunity.scalar_boundary <= previous) {
+            return Err(JustificationErrorV1::NonCanonicalOpportunityOrder);
+        }
+        previous_boundary = Some(opportunity.scalar_boundary);
+
+        if opportunity.kind == JustificationOpportunityKindV1::InterCharacter
+            && opportunity.script_class == JustificationScriptClassV1::Cursive
+        {
+            return Err(JustificationErrorV1::CursiveInterCharacterOpportunity {
+                scalar_boundary: opportunity.scalar_boundary,
+            });
+        }
+    }
+
+    let residual_before_emu = input
+        .content_width_emu
+        .checked_sub(input.measured_width_emu)
+        .ok_or(JustificationErrorV1::ResidualOverflow)?;
+
+    if input.paragraph_final_line {
+        return Ok(ResolvedJustifiedLineV1 {
+            line_index: input.line_index,
+            residual_before_emu,
+            residual_after_emu: residual_before_emu,
+            disposition: JustificationDispositionV1::FinalLineStartAligned,
+            adjustments: Vec::new(),
+        });
+    }
+
+    if residual_before_emu == 0 {
+        return Ok(ResolvedJustifiedLineV1 {
+            line_index: input.line_index,
+            residual_before_emu: 0,
+            residual_after_emu: 0,
+            disposition: JustificationDispositionV1::ExactFit,
+            adjustments: Vec::new(),
+        });
+    }
+
+    let mut deltas = vec![0_i64; input.opportunities.len()];
+    let mut residual = distribute_residual_over_tier_v1(
+        input,
+        JustificationOpportunityKindV1::InterWord,
+        residual_before_emu,
+        &mut deltas,
+    )?;
+    residual = distribute_residual_over_tier_v1(
+        input,
+        JustificationOpportunityKindV1::InterCharacter,
+        residual,
+        &mut deltas,
+    )?;
+
+    let adjustments: Vec<_> = input
+        .opportunities
+        .iter()
+        .zip(deltas)
+        .filter_map(|(opportunity, delta_emu)| {
+            (delta_emu != 0).then_some(ResolvedJustificationAdjustmentV1 {
+                scalar_boundary: opportunity.scalar_boundary,
+                delta_emu,
+            })
+        })
+        .collect();
+
+    let disposition = if adjustments.is_empty() {
+        JustificationDispositionV1::NoLegalOpportunity
+    } else if residual == 0 {
+        JustificationDispositionV1::Applied
+    } else {
+        JustificationDispositionV1::CapacityLimited
+    };
+
+    Ok(ResolvedJustifiedLineV1 {
+        line_index: input.line_index,
+        residual_before_emu,
+        residual_after_emu: residual,
+        disposition,
+        adjustments,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,6 +687,223 @@ mod tests {
             placement_scene_hash_v1(&left).unwrap(),
             placement_scene_hash_v1(&right).unwrap()
         );
+    }
+
+
+    fn justify_opportunity(
+        boundary: u32,
+        kind: JustificationOpportunityKindV1,
+        script_class: JustificationScriptClassV1,
+        expand: i64,
+        contract: i64,
+    ) -> JustificationOpportunityV1 {
+        JustificationOpportunityV1 {
+            scalar_boundary: boundary,
+            kind,
+            script_class,
+            max_expand_emu: expand,
+            max_contract_emu: contract,
+        }
+    }
+
+    #[test]
+    fn ordinary_justify_distributes_latin_residual_across_words_deterministically() {
+        let resolved = resolve_ordinary_justification_v1(&JustifiedLineInputV1 {
+            line_index: 0,
+            content_width_emu: 1_100,
+            measured_width_emu: 1_000,
+            paragraph_final_line: false,
+            opportunities: vec![
+                justify_opportunity(
+                    4,
+                    JustificationOpportunityKindV1::InterWord,
+                    JustificationScriptClassV1::LatinLike,
+                    100,
+                    40,
+                ),
+                justify_opportunity(
+                    8,
+                    JustificationOpportunityKindV1::InterWord,
+                    JustificationScriptClassV1::LatinLike,
+                    100,
+                    40,
+                ),
+            ],
+        })
+        .unwrap();
+
+        assert_eq!(resolved.disposition, JustificationDispositionV1::Applied);
+        assert_eq!(resolved.residual_after_emu, 0);
+        assert_eq!(
+            resolved
+                .adjustments
+                .iter()
+                .map(|adjustment| (adjustment.scalar_boundary, adjustment.delta_emu))
+                .collect::<Vec<_>>(),
+            vec![(4, 50), (8, 50)]
+        );
+    }
+
+    #[test]
+    fn ordinary_justify_can_contract_interword_space_without_changing_text() {
+        let resolved = resolve_ordinary_justification_v1(&JustifiedLineInputV1 {
+            line_index: 2,
+            content_width_emu: 960,
+            measured_width_emu: 1_000,
+            paragraph_final_line: false,
+            opportunities: vec![
+                justify_opportunity(
+                    3,
+                    JustificationOpportunityKindV1::InterWord,
+                    JustificationScriptClassV1::LatinLike,
+                    50,
+                    30,
+                ),
+                justify_opportunity(
+                    7,
+                    JustificationOpportunityKindV1::InterWord,
+                    JustificationScriptClassV1::Other,
+                    50,
+                    30,
+                ),
+            ],
+        })
+        .unwrap();
+
+        assert_eq!(resolved.residual_after_emu, 0);
+        assert_eq!(
+            resolved
+                .adjustments
+                .iter()
+                .map(|adjustment| adjustment.delta_emu)
+                .collect::<Vec<_>>(),
+            vec![-20, -20]
+        );
+    }
+
+    #[test]
+    fn mixed_script_auto_uses_words_before_safe_intercharacter_fallback() {
+        let resolved = resolve_ordinary_justification_v1(&JustifiedLineInputV1 {
+            line_index: 0,
+            content_width_emu: 1_090,
+            measured_width_emu: 1_000,
+            paragraph_final_line: false,
+            opportunities: vec![
+                justify_opportunity(
+                    4,
+                    JustificationOpportunityKindV1::InterWord,
+                    JustificationScriptClassV1::Other,
+                    60,
+                    20,
+                ),
+                justify_opportunity(
+                    6,
+                    JustificationOpportunityKindV1::InterCharacter,
+                    JustificationScriptClassV1::LatinLike,
+                    40,
+                    10,
+                ),
+            ],
+        })
+        .unwrap();
+
+        assert_eq!(resolved.disposition, JustificationDispositionV1::Applied);
+        assert_eq!(resolved.residual_after_emu, 0);
+        assert_eq!(resolved.adjustments[0].delta_emu, 60);
+        assert_eq!(resolved.adjustments[1].delta_emu, 30);
+    }
+
+    #[test]
+    fn final_or_forced_paragraph_line_remains_start_aligned() {
+        let resolved = resolve_ordinary_justification_v1(&JustifiedLineInputV1 {
+            line_index: 3,
+            content_width_emu: 1_200,
+            measured_width_emu: 800,
+            paragraph_final_line: true,
+            opportunities: vec![justify_opportunity(
+                5,
+                JustificationOpportunityKindV1::InterWord,
+                JustificationScriptClassV1::LatinLike,
+                500,
+                0,
+            )],
+        })
+        .unwrap();
+
+        assert_eq!(
+            resolved.disposition,
+            JustificationDispositionV1::FinalLineStartAligned
+        );
+        assert_eq!(resolved.residual_before_emu, 400);
+        assert_eq!(resolved.residual_after_emu, 400);
+        assert!(resolved.adjustments.is_empty());
+    }
+
+    #[test]
+    fn punctuation_does_not_create_an_implicit_spacing_opportunity() {
+        let resolved = resolve_ordinary_justification_v1(&JustifiedLineInputV1 {
+            line_index: 0,
+            content_width_emu: 1_050,
+            measured_width_emu: 1_000,
+            paragraph_final_line: false,
+            opportunities: Vec::new(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            resolved.disposition,
+            JustificationDispositionV1::NoLegalOpportunity
+        );
+        assert_eq!(resolved.residual_after_emu, 50);
+        assert!(resolved.adjustments.is_empty());
+    }
+
+    #[test]
+    fn arbitrary_intercharacter_spacing_inside_cursive_run_fails_closed() {
+        let err = resolve_ordinary_justification_v1(&JustifiedLineInputV1 {
+            line_index: 0,
+            content_width_emu: 1_050,
+            measured_width_emu: 1_000,
+            paragraph_final_line: false,
+            opportunities: vec![justify_opportunity(
+                2,
+                JustificationOpportunityKindV1::InterCharacter,
+                JustificationScriptClassV1::Cursive,
+                50,
+                20,
+            )],
+        })
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            JustificationErrorV1::CursiveInterCharacterOpportunity { scalar_boundary: 2 }
+        );
+    }
+
+    #[test]
+    fn capacity_limited_justify_reports_unconsumed_residual() {
+        let resolved = resolve_ordinary_justification_v1(&JustifiedLineInputV1 {
+            line_index: 0,
+            content_width_emu: 1_100,
+            measured_width_emu: 1_000,
+            paragraph_final_line: false,
+            opportunities: vec![justify_opportunity(
+                4,
+                JustificationOpportunityKindV1::InterWord,
+                JustificationScriptClassV1::LatinLike,
+                30,
+                30,
+            )],
+        })
+        .unwrap();
+
+        assert_eq!(
+            resolved.disposition,
+            JustificationDispositionV1::CapacityLimited
+        );
+        assert_eq!(resolved.adjustments[0].delta_emu, 30);
+        assert_eq!(resolved.residual_after_emu, 70);
     }
 
     #[test]
