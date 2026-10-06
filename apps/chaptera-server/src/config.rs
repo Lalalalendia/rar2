@@ -545,6 +545,23 @@ impl ChapteraConfig {
                 "quarantine and private storage namespaces must differ",
             ));
         }
+        if !matches!(self.storage.provider.as_str(), "s3-compatible" | "filesystem") {
+            return Err(ConfigError::new(
+                "storage_provider_unsupported",
+                "storage.provider must be s3-compatible or filesystem",
+            ));
+        }
+        if self.environment == EnvironmentMode::Prod
+            && self.storage.provider == "filesystem"
+            && (self.auth.is_some()
+                || self.source_ingress.is_some()
+                || self.cloud_reader_guest.is_none())
+        {
+            return Err(ConfigError::new(
+                "filesystem_storage_scope_invalid",
+                "prod filesystem storage is limited to the anonymous Cloud Reader profile",
+            ));
+        }
 
         if self.limits.worker_spool_bytes == 0 || self.limits.min_free_disk_bytes == 0 {
             return Err(ConfigError::new(
