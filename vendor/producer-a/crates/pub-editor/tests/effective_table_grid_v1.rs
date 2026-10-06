@@ -92,6 +92,7 @@ fn graph() -> PubResolvedGraph {
             story_layout_key: 99,
             cell_width: LengthEmu::new(1_000),
             row_pitch: LengthEmu::new(500),
+            uniform_cell_text_inset: None,
             source_refs: Vec::new(),
         }),
         border_segments: Vec::new(),

@@ -63,6 +63,13 @@ pub struct QuillMcldTableMetrics {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillMcldUniformCellInset {
+    pub record_id: u32,
+    pub child_count: u32,
+    pub inset_emu: QuillMcldConsensusU32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuillMcldUniformTextInset {
     pub record_id: u32,
     pub inset_emu: u32,
@@ -160,6 +167,13 @@ pub enum QuillMcldReadError {
         expected: u32,
         found: u32,
         child_index: u32,
+    },
+    NonUniformCellInset {
+        record_id: u32,
+        expected: u32,
+        found: u32,
+        child_index: u32,
+        field_id: u8,
     },
     UnsupportedVerticalAlignmentValue {
         record_id: u32,
@@ -352,6 +366,63 @@ pub fn bounded_mcld_text_frame_vertical_alignment(
         record_id,
         alignment,
         source,
+    })
+}
+
+/// Promotes the grounded four-margin TABLE block only when every
+/// field 0x06..0x09 on every child agrees.
+///
+/// The grounded fixture values are symmetric, so this intentionally returns
+/// one uniform inset and does not assign field IDs to physical sides.
+pub fn bounded_mcld_uniform_cell_inset(
+    mcld: &QuillMcldChunk,
+    record_id: u32,
+) -> Result<QuillMcldUniformCellInset, QuillMcldReadError> {
+    let record = mcld
+        .records
+        .iter()
+        .find(|record| record.record_id == record_id)
+        .ok_or(QuillMcldReadError::RecordIdNotFound { record_id })?;
+
+    let mut observations = Vec::with_capacity(record.children.len().saturating_mul(4));
+    for (child_index, child) in record.children.iter().enumerate() {
+        let child_index = u32::try_from(child_index).unwrap_or(u32::MAX);
+        for field_id in 0x06..=0x09 {
+            let (value, source) = required_u32_field(record_id, child_index, child, field_id)?;
+            observations.push((value, source, child_index, field_id));
+        }
+    }
+
+    let Some((expected, _, _, _)) = observations.first() else {
+        return Err(QuillMcldReadError::MissingRequiredField {
+            record_id,
+            child_index: 0,
+            field_id: 0x06,
+        });
+    };
+
+    for (found, _, child_index, field_id) in observations.iter().skip(1) {
+        if found != expected {
+            return Err(QuillMcldReadError::NonUniformCellInset {
+                record_id,
+                expected: *expected,
+                found: *found,
+                child_index: *child_index,
+                field_id: *field_id,
+            });
+        }
+    }
+
+    Ok(QuillMcldUniformCellInset {
+        record_id,
+        child_count: record.child_count.value,
+        inset_emu: QuillMcldConsensusU32 {
+            value: *expected,
+            sources: observations
+                .into_iter()
+                .map(|(_, source, _, _)| source)
+                .collect(),
+        },
     })
 }
 

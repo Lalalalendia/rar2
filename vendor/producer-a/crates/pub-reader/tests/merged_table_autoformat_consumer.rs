@@ -64,12 +64,31 @@ fn exact_carlton_merged_table_autoformat_consumer() {
     assert_eq!(painted, 17);
     assert_eq!(table.border_segments.len(), 20);
 
+    let inset_rejections = build
+        .diagnostics
+        .iter()
+        .filter_map(|diagnostic| match diagnostic {
+            pub_reader::PubBridgeDiagnostic::TableLayoutMetricsUnavailable { reason, .. }
+                if reason.starts_with("uniform_cell_text_inset:") =>
+            {
+                Some(reason.as_str())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        inset_rejections.len(),
+        1,
+        "exact Carlton TABLE must expose one source-safe uniform-cell-inset rejection"
+    );
+
     println!(
-        "TABLE_MERGED_AUTOFORMAT_CONSUMER tables={} cells={} spanning={} painted={} borders={}",
+        "TABLE_MERGED_AUTOFORMAT_CONSUMER tables={} cells={} spanning={} painted={} borders={} inset_rejection={}",
         tables.len(),
         table.cells.len(),
         spanning,
         painted,
         table.border_segments.len(),
+        inset_rejections[0],
     );
 }

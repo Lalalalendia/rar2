@@ -10,8 +10,9 @@ mod writer;
 pub use mcld::{
     QuillMcldChild, QuillMcldChunk, QuillMcldConsensusU32, QuillMcldField, QuillMcldFieldValue,
     QuillMcldReadError, QuillMcldRecord, QuillMcldTableMetrics,
-    QuillMcldTextFrameVerticalAlignment, QuillMcldUniformTextInset, QuillMcldVerticalAlignment,
-    bounded_mcld_table_metrics, bounded_mcld_text_frame_vertical_alignment,
+    QuillMcldTextFrameVerticalAlignment, QuillMcldUniformCellInset, QuillMcldUniformTextInset,
+    QuillMcldVerticalAlignment, bounded_mcld_table_metrics,
+    bounded_mcld_text_frame_vertical_alignment, bounded_mcld_uniform_cell_inset,
     bounded_mcld_uniform_text_inset, parse_bounded_mcld,
 };
 pub use story::{
@@ -41,10 +42,9 @@ pub use tokn::{
 pub use typography::{
     QUILL_TEXT_SIZE_EMU_PER_POINT, QuillEffectiveBoolean, QuillEffectiveTypographyRun,
     QuillExplicitTypographyRun, QuillParagraphAlignment, QuillParagraphAlignmentRun,
-    QuillParagraphFlowConstraint, QuillParagraphFlowRun, QuillParagraphLineSpacing,
-    QuillParagraphLineSpacingRun, QuillParagraphSelectorSource, QuillScriptFontEntry,
-    QuillScriptFontEntryDisposition, QuillScriptFontMapObservation, QuillTextSizeRun,
-    QuillTypographyCatalog, QuillTypographyRange, QuillTypographyReadError,
+    QuillParagraphLineSpacing, QuillParagraphLineSpacingRun, QuillParagraphSelectorSource,
+    QuillScriptFontEntry, QuillScriptFontEntryDisposition, QuillScriptFontMapObservation,
+    QuillTextSizeRun, QuillTypographyCatalog, QuillTypographyRange, QuillTypographyReadError,
     QuillTypographyStoryIntersection, QuillTypographyValueSource, parse_bounded_typography,
 };
 

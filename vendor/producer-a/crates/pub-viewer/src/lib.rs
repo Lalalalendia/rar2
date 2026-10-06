@@ -566,6 +566,9 @@ pub struct ViewerTable {
     pub rows: u32,
     pub columns: u32,
     pub cells: Vec<ViewerTableCell>,
+    /// Symmetric source-backed TABLE cell text inset. Missing remains unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uniform_cell_text_inset_emu: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub borders: Vec<ViewerTableBorderSegment>,
 }
@@ -594,6 +597,14 @@ pub struct ViewerTableCell {
         skip_serializing_if = "table_span_is_one"
     )]
     pub column_span: u32,
+    /// Story-global Unicode-scalar bounds for this exact cell text.
+    ///
+    /// Missing values remain explicit for non-mature/legacy producers; mature
+    /// TCD/CELLS materialization supplies both values together.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub story_scalar_start: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub story_scalar_end: Option<u32>,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<RectEmu>,
@@ -724,7 +735,6 @@ pub struct ViewerNodePaint {
 #[serde(rename_all = "snake_case")]
 pub enum ViewerPresetShape {
     RoundRect,
-    Ellipse,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -786,21 +796,16 @@ fn bridge_effective_value<T: Clone>(
 fn viewer_preset_shape_from_canonical(
     node: &Node<PubResolvedNodePayload>,
 ) -> Option<ViewerPresetShape> {
-    let authoritative_projection = |path: &str| {
-        node.header.source_refs.iter().any(|source_ref| {
-            source_ref.path.as_deref() == Some(path)
+    node.header
+        .source_refs
+        .iter()
+        .any(|source_ref| {
+            source_ref.path.as_deref() == Some("SpContainer/FSP/default-roundrect")
                 && source_ref.authority == AuthorityClass::Authoritative
                 && source_ref.confidence == Some(ReadConfidence::Exact)
                 && matches!(source_ref.role, SourceRole::Projection)
         })
-    };
-    if authoritative_projection("SpContainer/FSP/default-roundrect") {
-        Some(ViewerPresetShape::RoundRect)
-    } else if authoritative_projection("SpContainer/FSP/default-ellipse") {
-        Some(ViewerPresetShape::Ellipse)
-    } else {
-        None
-    }
+        .then_some(ViewerPresetShape::RoundRect)
 }
 
 fn viewer_node_paint_from_canonical_bridge(
@@ -3728,6 +3733,8 @@ fn viewer_tables_from_resolved(
                 address: cell.address,
                 row_span: cell.row_span,
                 column_span: cell.column_span,
+                story_scalar_start: Some(cell.story_scalar_start),
+                story_scalar_end: Some(cell.story_scalar_end),
                 text: cell.text,
                 bounds: cell.bounds.or_else(|| {
                     resolved_bounds.as_ref().and_then(|resolved| {
@@ -3750,6 +3757,11 @@ fn viewer_tables_from_resolved(
             rows: source.rows,
             columns: source.columns,
             cells,
+            uniform_cell_text_inset_emu: source
+                .layout_metrics
+                .as_ref()
+                .and_then(|metrics| metrics.uniform_cell_text_inset)
+                .map(LengthEmu::get),
             borders,
         });
     }
@@ -3881,16 +3893,6 @@ fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
             "viewer.geometry.grouped_image_projection_unavailable",
             ViewerDiagnosticSeverity::FidelityWarning,
             "A grouped image shape falls outside the bounded group geometry profile.",
-        ),
-        GroupedPrimitiveProjected { .. } => (
-            "viewer.geometry.grouped_primitive_projected",
-            ViewerDiagnosticSeverity::Info,
-            "A grouped primitive shape was projected through its exact bounded group geometry chain.",
-        ),
-        GroupedPrimitiveProjectionUnavailable { .. } => (
-            "viewer.geometry.grouped_primitive_projection_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A grouped primitive shape falls outside the bounded group geometry profile.",
         ),
         GroupedTableProjected { .. } => (
             "viewer.geometry.grouped_table_projected",
@@ -4921,6 +4923,8 @@ mod tests {
                 address: TableCellAddress { row, column },
                 row_span,
                 column_span,
+                story_scalar_start: None,
+                story_scalar_end: None,
                 text: String::new(),
                 bounds: Some(RectEmu::new(
                     LengthEmu::new(x),

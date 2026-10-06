@@ -6,7 +6,9 @@ use pub_contents::{
 use pub_model::{
     RectEmu, SimpleRectangularTable, SimpleTableCell, Story, TableCellAddress, TableCellId,
 };
-use pub_quill::{QuillMcldChunk, QuillStoryCatalog, bounded_mcld_table_metrics};
+use pub_quill::{
+    QuillMcldChunk, QuillStoryCatalog, bounded_mcld_table_metrics, bounded_mcld_uniform_cell_inset,
+};
 
 pub const RAW_TYPE_TABLE: u16 = 0x10;
 pub const TABLE_NUM_ROWS_ID: u16 = 0x66;
@@ -88,6 +90,12 @@ pub struct PubMaterializedTableCell {
     pub address: TableCellAddress,
     pub row_span: u32,
     pub column_span: u32,
+    /// Story-global Unicode-scalar bounds for the materialized cell text.
+    ///
+    /// These are derived only after the TCD/CELLS UTF-16 boundaries and
+    /// Publisher cell separators have been validated.
+    pub story_scalar_start: u32,
+    pub story_scalar_end: u32,
     pub text: String,
     pub bounds: Option<RectEmu>,
     pub fill_rgb: Option<[u8; 3]>,
@@ -130,6 +138,9 @@ pub enum PubTableTextError {
         start: u32,
     },
     InvalidUtf16 {
+        id: TableCellId,
+    },
+    ScalarRangeOverflow {
         id: TableCellId,
     },
 }
@@ -258,8 +269,17 @@ pub fn materialize_bounded_table_cells(
                 cell_end -= 1;
             }
 
+            let prefix = String::from_utf16(&story_utf16[..cell_start])
+                .map_err(|_| PubTableTextError::InvalidUtf16 { id: source.id })?;
             let text = String::from_utf16(&story_utf16[cell_start..cell_end])
                 .map_err(|_| PubTableTextError::InvalidUtf16 { id: source.id })?;
+            let story_scalar_start = u32::try_from(prefix.chars().count())
+                .map_err(|_| PubTableTextError::ScalarRangeOverflow { id: source.id })?;
+            let cell_scalar_len = u32::try_from(text.chars().count())
+                .map_err(|_| PubTableTextError::ScalarRangeOverflow { id: source.id })?;
+            let story_scalar_end = story_scalar_start
+                .checked_add(cell_scalar_len)
+                .ok_or(PubTableTextError::ScalarRangeOverflow { id: source.id })?;
 
             Ok(PubMaterializedTableCell {
                 id: source.id,
@@ -269,6 +289,8 @@ pub fn materialize_bounded_table_cells(
                 },
                 row_span: coordinates.end_row - coordinates.start_row + 1,
                 column_span: coordinates.end_column - coordinates.start_column + 1,
+                story_scalar_start,
+                story_scalar_end,
                 text,
                 bounds: source.bounds,
                 fill_rgb: source.paint.as_ref().map(|paint| paint.solid_fill_rgb),
@@ -293,6 +315,10 @@ pub struct PubTableLayoutMetricsSource {
     pub story_layout_key: u32,
     pub cell_width: LengthEmu,
     pub row_pitch: LengthEmu,
+    /// Symmetric cell-text inset admitted only when MCLD fields 0x06..0x09
+    /// agree across every TABLE child. No side ordering is inferred.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uniform_cell_text_inset: Option<LengthEmu>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<SourceRef>,
 }
@@ -1595,10 +1621,38 @@ fn build_table_layout_metrics(
         )
     }));
 
+    let uniform_cell_text_inset = match bounded_mcld_uniform_cell_inset(mcld, *layout_key) {
+        Ok(inset) => Some(inset),
+        Err(error) => {
+            diagnostics.push(PubBridgeDiagnostic::TableLayoutMetricsUnavailable {
+                seq_num: table_seq_num,
+                text_id,
+                layout_key: Some(*layout_key),
+                reason: format!("uniform_cell_text_inset:{error}"),
+            });
+            None
+        }
+    };
+    if let Some(inset) = uniform_cell_text_inset.as_ref() {
+        source_refs.extend(inset.inset_emu.sources.iter().map(|source| {
+            source_ref(
+                context.source,
+                source,
+                Some(quill_story_object_key(text_id)),
+                Some("MCLD/table/child/fields06-09-uniform".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            )
+        }));
+    }
+
     Some(PubTableLayoutMetricsSource {
         story_layout_key: *layout_key,
         cell_width: LengthEmu::new(i64::from(metrics.cell_width_emu.value)),
         row_pitch: LengthEmu::new(i64::from(metrics.row_pitch_emu.value)),
+        uniform_cell_text_inset: uniform_cell_text_inset
+            .map(|inset| LengthEmu::new(i64::from(inset.inset_emu.value))),
         source_refs,
     })
 }
@@ -2137,6 +2191,10 @@ mod tests {
         assert_eq!(cells.len(), 1);
         assert_eq!(cells[0].id, cell_id);
         assert_eq!(cells[0].text, "A");
+        assert_eq!(
+            (cells[0].story_scalar_start, cells[0].story_scalar_end),
+            (0, 1)
+        );
         assert_eq!(cells[0].bounds, Some(bounds));
     }
 
@@ -2196,7 +2254,86 @@ mod tests {
         assert_eq!(cells[0].row_span, 1);
         assert_eq!(cells[0].column_span, 2);
         assert_eq!(cells[0].text, "Header");
+        assert_eq!(
+            (cells[0].story_scalar_start, cells[0].story_scalar_end),
+            (0, 6)
+        );
         assert_eq!(cells[0].bounds, Some(bounds));
+    }
+
+    #[test]
+    fn materialized_cell_scalar_range_tracks_validated_utf16_boundaries() {
+        let story_id = StoryId::from_canonical(CanonicalId::from_bytes([7; 16]));
+        let first_id = table_cell_id(6);
+        let second_id = table_cell_id(7);
+        let table = PubTableSource {
+            text_id: 3,
+            story_id: Some(story_id),
+            rows: 1,
+            columns: 2,
+            cells_seq_num: None,
+            tcd_story_ordinal: None,
+            cells: vec![
+                PubTableCellSource {
+                    id: first_id,
+                    stored_record_index: 0,
+                    coordinates: Some(PubTableCellCoordinates {
+                        start_row: 0,
+                        end_row: 0,
+                        start_column: 0,
+                        end_column: 0,
+                    }),
+                    utf16_start: 0,
+                    utf16_end: 2,
+                    bounds: None,
+                    paint: None,
+                    source_refs: Vec::new(),
+                },
+                PubTableCellSource {
+                    id: second_id,
+                    stored_record_index: 1,
+                    coordinates: Some(PubTableCellCoordinates {
+                        start_row: 0,
+                        end_row: 0,
+                        start_column: 1,
+                        end_column: 1,
+                    }),
+                    utf16_start: 2,
+                    utf16_end: 5,
+                    bounds: None,
+                    paint: None,
+                    source_refs: Vec::new(),
+                },
+            ],
+            simple_table: None,
+            layout_metrics: None,
+            border_segments: Vec::new(),
+            source_refs: Vec::new(),
+        };
+        // First cell is one supplementary scalar (two UTF-16 units). The
+        // second cell starts at the Publisher CR separator and contains "B".
+        let story = Story {
+            id: story_id,
+            text: "😀\rB\r".into(),
+            paragraphs: Vec::new(),
+            runs: Vec::new(),
+            fields: Vec::new(),
+            hyperlinks: Vec::new(),
+            source_refs: Vec::new(),
+        };
+
+        let cells = materialize_bounded_table_cells(&table, &story).expect("table cells");
+        assert_eq!(cells.len(), 2);
+        assert_eq!(cells[0].text, "😀");
+        assert_eq!(
+            (cells[0].story_scalar_start, cells[0].story_scalar_end),
+            (0, 1)
+        );
+        assert_eq!(cells[1].text, "B");
+        assert_eq!(
+            (cells[1].story_scalar_start, cells[1].story_scalar_end),
+            (2, 3)
+        );
     }
 
     #[test]

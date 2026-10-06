@@ -377,6 +377,7 @@ pub fn build_create_table_plan_v1(
                     story_layout_key: 0,
                     cell_width: column_extent,
                     row_pitch: row_extent,
+                    uniform_cell_text_inset: None,
                     source_refs: Vec::new(),
                 }),
                 border_segments: Vec::new(),

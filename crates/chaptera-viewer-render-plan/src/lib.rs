@@ -95,6 +95,8 @@ pub struct RenderTableV1 {
     pub rows: u32,
     pub columns: u32,
     pub cells: Vec<RenderTableCellV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uniform_cell_text_inset_emu: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub borders: Vec<RenderTableBorderSegmentV1>,
 }
@@ -124,7 +126,15 @@ pub struct RenderTableCellV1 {
         skip_serializing_if = "render_table_span_is_one"
     )]
     pub column_span: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub story_scalar_start: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub story_scalar_end: Option<u32>,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub typography: Vec<RenderTypographyRunV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paragraph_alignments: Vec<RenderParagraphAlignmentRunV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<RectEmu>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1000,6 +1010,62 @@ fn parse_story_id(value: &str, field: &'static str) -> Result<StoryId, RenderPla
         })
 }
 
+fn render_table_cell_typography_v1(
+    visual: &ViewerGeometryDocument,
+    story_id: StoryId,
+    cell_text: &str,
+    scalar_start: Option<u32>,
+    scalar_end: Option<u32>,
+) -> Vec<RenderTypographyRunV1> {
+    let (Some(scalar_start), Some(scalar_end)) = (scalar_start, scalar_end) else {
+        return Vec::new();
+    };
+    if scalar_start > scalar_end {
+        return Vec::new();
+    }
+    let Some(story) = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == story_id)
+    else {
+        return Vec::new();
+    };
+    let story_scalars = story.text.chars().collect::<Vec<_>>();
+    let (Ok(start), Ok(end)) = (usize::try_from(scalar_start), usize::try_from(scalar_end)) else {
+        return Vec::new();
+    };
+    if start > end
+        || end > story_scalars.len()
+        || story_scalars[start..end].iter().collect::<String>() != cell_text
+    {
+        return Vec::new();
+    }
+
+    visual
+        .typography_runs
+        .iter()
+        .filter(|run| run.story_id == story_id)
+        .filter(|run| run.applies_to_story_text(&story.text))
+        .filter_map(|run| {
+            let run_start = run.scalar_start.max(scalar_start);
+            let run_end = run.scalar_end.min(scalar_end);
+            (run_start < run_end).then(|| RenderTypographyRunV1 {
+                scalar_start: run_start,
+                scalar_end: run_end,
+                source_font_name: run.source_font_name.clone(),
+                text_size_emu: run.text_size_emu,
+                font_inherited: run.font_inherited,
+                size_inherited: run.size_inherited,
+                color_rgb: run.color_rgb,
+                color_inherited: run.color_inherited,
+                bold: run.bold.map(|value| value.effective_value),
+                italic: run.italic.map(|value| value.effective_value),
+            })
+        })
+        .collect()
+}
+
 fn render_paragraph_alignment_runs_v1(
     visual: &ViewerGeometryDocument,
     story_id: StoryId,
@@ -1363,12 +1429,43 @@ pub fn build_page_render_plan_v1(
                             column: cell.address.column,
                             row_span: cell.row_span,
                             column_span: cell.column_span,
+                            story_scalar_start: cell.story_scalar_start,
+                            story_scalar_end: cell.story_scalar_end,
                             text: cell.text.clone(),
+                            typography: render_table_cell_typography_v1(
+                                visual,
+                                table.story_id,
+                                &cell.text,
+                                cell.story_scalar_start,
+                                cell.story_scalar_end,
+                            ),
+                            paragraph_alignments: match (
+                                cell.story_scalar_start,
+                                cell.story_scalar_end,
+                            ) {
+                                (Some(start), Some(end)) => visual
+                                    .document
+                                    .stories
+                                    .iter()
+                                    .find(|story| story.id == table.story_id)
+                                    .map(|story| {
+                                        render_paragraph_alignment_runs_v1(
+                                            visual,
+                                            table.story_id,
+                                            &story.text,
+                                            start,
+                                            end,
+                                        )
+                                    })
+                                    .unwrap_or_default(),
+                                _ => Vec::new(),
+                            },
                             bounds: cell.bounds,
                             fill_rgb: cell.fill_rgb,
                             fill_visible: cell.fill_visible,
                         })
                         .collect(),
+                    uniform_cell_text_inset_emu: table.uniform_cell_text_inset_emu,
                     borders: table
                         .borders
                         .iter()
@@ -1458,12 +1555,43 @@ pub fn build_page_render_plan_v1(
                             column: cell.address.column,
                             row_span: cell.row_span,
                             column_span: cell.column_span,
+                            story_scalar_start: cell.story_scalar_start,
+                            story_scalar_end: cell.story_scalar_end,
                             text: cell.text.clone(),
+                            typography: render_table_cell_typography_v1(
+                                visual,
+                                table.story_id,
+                                &cell.text,
+                                cell.story_scalar_start,
+                                cell.story_scalar_end,
+                            ),
+                            paragraph_alignments: match (
+                                cell.story_scalar_start,
+                                cell.story_scalar_end,
+                            ) {
+                                (Some(start), Some(end)) => visual
+                                    .document
+                                    .stories
+                                    .iter()
+                                    .find(|story| story.id == table.story_id)
+                                    .map(|story| {
+                                        render_paragraph_alignment_runs_v1(
+                                            visual,
+                                            table.story_id,
+                                            &story.text,
+                                            start,
+                                            end,
+                                        )
+                                    })
+                                    .unwrap_or_default(),
+                                _ => Vec::new(),
+                            },
                             bounds: cell.bounds,
                             fill_rgb: cell.fill_rgb,
                             fill_visible: cell.fill_visible,
                         })
                         .collect(),
+                    uniform_cell_text_inset_emu: table.uniform_cell_text_inset_emu,
                     borders: table
                         .borders
                         .iter()
@@ -3383,9 +3511,9 @@ mod tests {
     };
     use pub_viewer::{
         ViewerDocument, ViewerEmbeddedImage, ViewerImagePlacementV1, ViewerImageSourceWindowV1,
-        ViewerNodePaint, ViewerPage, ViewerParagraphLineSpacingRun, ViewerScriptFontEntry,
-        ViewerScriptFontMap, ViewerSolidLine, ViewerSource, ViewerTable, ViewerTableCell,
-        ViewerTextFragment, ViewerTypographyRun, viewer_story_text_sha256,
+        ViewerNodePaint, ViewerPage, ViewerParagraphAlignmentRun, ViewerParagraphLineSpacingRun,
+        ViewerScriptFontEntry, ViewerScriptFontMap, ViewerSolidLine, ViewerSource, ViewerTable,
+        ViewerTableCell, ViewerTextFragment, ViewerTypographyRun, viewer_story_text_sha256,
     };
 
     fn canonical(byte: u8) -> CanonicalId {
@@ -4850,7 +4978,29 @@ mod tests {
         // Mature TABLE owns its text through the table payload, not a normal
         // StoryFrame. Keep the fixture aligned with that product boundary.
         visual.text_fragments.clear();
-        visual.typography_runs.clear();
+        visual.document.stories[0].text = "cell".into();
+        visual.typography_runs = vec![ViewerTypographyRun {
+            story_id,
+            scalar_start: 0,
+            scalar_end: 4,
+            source_font_name: "Fixture Sans".into(),
+            text_size_emu: 177_800,
+            font_inherited: false,
+            size_inherited: false,
+            color_rgb: Some([7, 8, 9]),
+            color_inherited: false,
+            bold: None,
+            italic: None,
+            source_story_text_sha256: viewer_story_text_sha256("cell"),
+        }];
+        visual.paragraph_alignments = vec![ViewerParagraphAlignmentRun {
+            story_id,
+            scalar_start: 0,
+            scalar_end: 4,
+            alignment: ViewerParagraphAlignment::Center,
+            source_value: 1,
+            source_story_text_sha256: viewer_story_text_sha256("cell"),
+        }];
         visual.tables.push(ViewerTable {
             node_id,
             story_id,
@@ -4861,11 +5011,14 @@ mod tests {
                 address: TableCellAddress { row: 0, column: 0 },
                 row_span: 1,
                 column_span: 1,
+                story_scalar_start: Some(0),
+                story_scalar_end: Some(4),
                 text: "cell".into(),
                 bounds: Some(cell_bounds),
                 fill_rgb: Some([10, 20, 30]),
                 fill_visible: Some(true),
             }],
+            uniform_cell_text_inset_emu: Some(36_576),
             borders: vec![pub_viewer::ViewerTableBorderSegment {
                 x1_emu: 10,
                 y1_emu: 20,
@@ -4889,10 +5042,27 @@ mod tests {
         assert_eq!(table.cells[0].column, 0);
         assert_eq!(table.cells[0].row_span, 1);
         assert_eq!(table.cells[0].column_span, 1);
+        assert_eq!(table.cells[0].story_scalar_start, Some(0));
+        assert_eq!(table.cells[0].story_scalar_end, Some(4));
         assert_eq!(table.cells[0].text, "cell");
+        assert_eq!(table.cells[0].typography.len(), 1);
+        assert_eq!(table.cells[0].typography[0].scalar_start, 0);
+        assert_eq!(table.cells[0].typography[0].scalar_end, 4);
+        assert_eq!(
+            table.cells[0].typography[0].source_font_name,
+            "Fixture Sans"
+        );
+        assert_eq!(table.cells[0].typography[0].text_size_emu, 177_800);
+        assert_eq!(table.cells[0].typography[0].color_rgb, Some([7, 8, 9]));
+        assert_eq!(table.cells[0].paragraph_alignments.len(), 1);
+        assert_eq!(
+            table.cells[0].paragraph_alignments[0].alignment,
+            RenderParagraphAlignmentV1::Center
+        );
         assert_eq!(table.cells[0].bounds, Some(cell_bounds));
         assert_eq!(table.cells[0].fill_rgb, Some([10, 20, 30]));
         assert_eq!(table.cells[0].fill_visible, Some(true));
+        assert_eq!(table.uniform_cell_text_inset_emu, Some(36_576));
         assert_eq!(table.borders.len(), 1);
         assert_eq!(table.borders[0].x1_emu, 10);
         assert_eq!(table.borders[0].y1_emu, 20);
