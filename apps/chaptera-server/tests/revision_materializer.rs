@@ -28,7 +28,7 @@ use pub_editor::{
     CreateTableRuntimeV1, EDITOR_PROJECT_VERSION_V0_2, EDITOR_PROJECT_VERSION_V0_4,
     EDITOR_PROJECT_VERSION_V0_11, EDITOR_PROJECT_VERSION_V0_15, EDITOR_PROJECT_VERSION_V0_20,
     EditOperation, EditorProject, EditorProjectIdentity, LengthEmu, NodeId, RectEmu, Sha256Digest,
-    StoryId, TableCellId, TableTrackTargetV1, open_mature_0x2c_editor,
+    StoryId, TableTrackTargetV1, open_mature_0x2c_editor,
 };
 use sha2::{Digest, Sha256};
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
