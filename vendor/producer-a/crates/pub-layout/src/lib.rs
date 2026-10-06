@@ -28,7 +28,8 @@ pub use break_policy::{
     BoundedBreakPolicyError, break_policy_for_shaped_text,
 };
 pub use effective_table_layout::{
-    BoundedEffectiveTableResolveError, resolve_bounded_effective_table_cells,
+    BoundedEffectiveTableResolveError, EffectiveTableLayoutInputV1,
+    resolve_bounded_effective_table_cells,
 };
 pub use resolve::{
     BoundedLayoutEnvironment, BoundedResolvedScene, ResolveBlocked, ResolveDiagnostic,
