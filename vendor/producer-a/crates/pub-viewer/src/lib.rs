@@ -724,6 +724,8 @@ pub struct ViewerNodePaint {
 #[serde(rename_all = "snake_case")]
 pub enum ViewerPresetShape {
     RoundRect,
+    Line,
+    LineDashGel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -785,16 +787,25 @@ fn bridge_effective_value<T: Clone>(
 fn viewer_preset_shape_from_canonical(
     node: &Node<PubResolvedNodePayload>,
 ) -> Option<ViewerPresetShape> {
-    node.header
-        .source_refs
-        .iter()
-        .any(|source_ref| {
-            source_ref.path.as_deref() == Some("SpContainer/FSP/default-roundrect")
+    let authoritative_projection = |path: &str| {
+        node.header.source_refs.iter().any(|source_ref| {
+            source_ref.path.as_deref() == Some(path)
                 && source_ref.authority == AuthorityClass::Authoritative
                 && source_ref.confidence == Some(ReadConfidence::Exact)
                 && matches!(source_ref.role, SourceRole::Projection)
         })
-        .then_some(ViewerPresetShape::RoundRect)
+    };
+    if authoritative_projection("SpContainer/FOPT/line-dashing-dash-gel")
+        && authoritative_projection("SpContainer/FSP/default-line")
+    {
+        Some(ViewerPresetShape::LineDashGel)
+    } else if authoritative_projection("SpContainer/FSP/default-line") {
+        Some(ViewerPresetShape::Line)
+    } else if authoritative_projection("SpContainer/FSP/default-roundrect") {
+        Some(ViewerPresetShape::RoundRect)
+    } else {
+        None
+    }
 }
 
 fn viewer_node_paint_from_canonical_bridge(
