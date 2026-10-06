@@ -86,3 +86,54 @@ Batch 01 is normalized into the existing `tools/cloud_reader_manual_oracle_bundl
 - committed original selection manifest: `tools/corpus/receipts/publisher-visual-golden-batch-01-selection.csv`
 
 The binary bundle is intentionally not committed to normal git history. Consumers must verify bundle and pair SHA-256 before using it.
+
+
+## Supplemental comparative corpus — 2026-10-06
+
+A second manual-oracle bundle extends Batch 01 without changing its immutable receipts. It is intentionally separate because `tools/cloud_reader_manual_oracle_bundle_v1.py` admits at most 64 pairs per bundle.
+
+- distinct PUB↔PDF pairs: **31**
+- native Publisher PDF pages: **59**
+- Publisher runtime: **16.0 build 12527 / Publisher 2019**
+- cumulative corpus with Batch 01: **86 distinct pairs / 221 PDF pages**
+- raw PUB/PDF bytes remain external; git retains exact pair identities and classification state
+
+The 31 pairs comprise four provenance groups:
+
+- **Batch 02 081–095:** 15 pairs / 24 pages.
+- **Font-replacement set 096–100 + 102:** 6 distinct pairs / 8 pages.
+- **User `01-main` corpus:** 3 pairs / 20 pages — Story stress, OfficeArt/WMF, and image-heavy A3.
+- **Manual reduction family:** 7 pairs / 7 pages — `1` original → `2` aggregate residual → `2.1–2.5` isolated residuals. These seven pairs share one provenance lineage and must not be treated as seven independent semantic families.
+
+Known font-substitution/degradation witnesses are:
+
+- `batch02-086`
+- `batch02-090`
+- `batch02-091`
+- `batch02-092`
+- `batch02-093`
+- `batch02-replacement-097`
+
+They remain useful comparative/font-environment witnesses but are not clean visual goldens.
+
+ID `101` is deliberately excluded from distinct-pair accounting because its source PUB SHA-256 is identical to ID `099`:
+`00092479c94bf5ac1bb107173d60fb788b91e2c148453468456f98d0bb300597`.
+The independent Publisher export is retained as repeatability evidence: its PDF bytes differ from 099, but a 144-dpi render comparison measured **2/2 unchanged pages and 0.0% changed pixels**.
+
+Canonical source-free receipts:
+
+- `tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv`
+- `tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-summary.json`
+
+### Supplemental normalized manual-oracle bundle
+
+The externally held normalized bundle is directly compatible with `tools/cloud_reader_manual_oracle_bundle_v1.py`:
+
+- bundle: `publisher-visual-golden-supplemental-2026-10-06-manual-oracle.zip`
+- pairs: **31**
+- reference pages: **59**
+- bundle bytes: **23,407,040**
+- bundle SHA-256: `1a4f1fb6682a7761fc74b93dfcdba9d1f622e871dcf292a9402c49bd5cc86da3`
+- `PAIRS.csv` SHA-256: `6293b44b98d13c6216cb1a6bcedf5e2be10bdaa04c05b369ebabfdf91e6c560c`
+
+The normalized bundle was locally validated against the same bounded rules enforced by the manual-oracle loader: 31/31 unique IDs and basenames, exact byte lengths and SHA-256 values, CFB magic for every PUB, exact PDF page counts, safe bundle paths, and all current pair/bundle size limits.
