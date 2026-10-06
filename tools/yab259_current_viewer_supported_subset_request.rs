@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, bail};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedResolvedScene, BoundedShapedGlyph, BoundedShapedText,
-    BoundedShapingDescriptor, ResolvedPhysicalNode, ResolvedSurface, SceneOriginMapping,
-    font_fingerprint_sha256,
+    BoundedShapingDescriptor, BoundedShapingRuntime, ResolvedPhysicalNode, ResolvedSurface,
+    SceneOriginMapping, font_fingerprint_sha256, shape_bounded_ltr_segment,
 };
 use pub_model::{
     Affine2D, CanonicalId, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D, TableCellId,
@@ -96,11 +96,31 @@ struct CurrentTableCell {
     #[serde(default)]
     typography: Vec<CurrentTypographyRun>,
     #[serde(default)]
+    paragraph_alignments: Vec<CurrentParagraphAlignmentRun>,
+    #[serde(default)]
+    layout: Option<CurrentTextLayout>,
+    #[serde(default)]
     bounds: Option<RectEmu>,
     #[serde(default)]
     fill_rgb: Option<[u8; 3]>,
     #[serde(default)]
     fill_visible: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentParagraphAlignmentRun {
+    scalar_start: u32,
+    scalar_end: u32,
+    alignment: CurrentParagraphAlignment,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CurrentParagraphAlignment {
+    Center,
+    Right,
+    InterWord,
+    Distribute,
 }
 
 #[derive(Debug, Deserialize)]
@@ -252,6 +272,15 @@ struct MappingSummary {
     table_cell_inset_bounds_valid_count: usize,
     table_uniform_cell_text_inset_count: usize,
     table_uniform_vertical_alignment_count: usize,
+    table_bounded_text_profile_cell_count: usize,
+    table_hard_break_free_profile_cell_count: usize,
+    table_single_line_width_fit_cell_count: usize,
+    table_paragraph_alignment_admissible_profile_cell_count: usize,
+    table_width_fit_alignment_admissible_cell_count: usize,
+    table_layout_present_nonempty_cell_count: usize,
+    table_layout_present_bounded_profile_cell_count: usize,
+    table_layout_present_width_fit_cell_count: usize,
+    table_layout_present_width_fit_alignment_admissible_cell_count: usize,
     derived_table_fill_node_count: usize,
     derived_table_border_node_count: usize,
     derived_table_paint_node_count: usize,
@@ -521,7 +550,104 @@ fn table_cell_inset_fits_bounds_v1(cell: &CurrentTableCell, inset: i64) -> bool 
     bounds.width.get() > double_inset && bounds.height.get() > double_inset
 }
 
-fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSummary) {
+fn table_cell_bounded_text_profile_v1(
+    cell: &CurrentTableCell,
+    inset: i64,
+) -> Option<(u32, [u8; 3], i64)> {
+    let (Some(start), Some(end)) = (cell.story_scalar_start, cell.story_scalar_end) else {
+        return None;
+    };
+    if start >= end
+        || u32::try_from(cell.text.chars().count())
+            .ok()
+            .and_then(|len| start.checked_add(len))
+            != Some(end)
+        || !complete_table_cell_typography_v1(cell)
+        || !table_cell_inset_fits_bounds_v1(cell, inset)
+    {
+        return None;
+    }
+
+    let first_size = cell.typography.first()?.text_size_emu;
+    if first_size == 0
+        || !cell
+            .typography
+            .iter()
+            .all(|run| run.text_size_emu == first_size)
+    {
+        return None;
+    }
+    let color = match color_range_disposition(&cell.typography, start, end) {
+        ColorRangeDisposition::Resolved(rgb) => rgb,
+        ColorRangeDisposition::MissingRgb
+        | ColorRangeDisposition::MixedRgb
+        | ColorRangeDisposition::CoverageGap
+        | ColorRangeDisposition::InvalidRange => return None,
+    };
+    let bounds = cell.bounds?;
+    let inner_width = bounds.width.get().checked_sub(inset.checked_mul(2)?)?;
+    (inner_width > 0).then_some((first_size, color, inner_width))
+}
+
+fn table_cell_single_line_width_fits_v1(
+    cell: &CurrentTableCell,
+    inset: i64,
+    font: &CurrentFont,
+) -> bool {
+    let Some((font_size_emu, _color, inner_width_emu)) =
+        table_cell_bounded_text_profile_v1(cell, inset)
+    else {
+        return false;
+    };
+    if cell.text.contains(&['\r', '\n'][..]) {
+        return false;
+    }
+
+    let runtime = BoundedShapingRuntime {
+        layout: BoundedLayoutEnvironment {
+            engine_revision: "chaptera.table-text-admission-breakdown.v1".into(),
+            font_set_fingerprint: font.fingerprint_sha256.clone(),
+            resource_fingerprint: font.resource_id.clone(),
+        },
+        face_index: font.face_index,
+        font_size_emu: LengthEmu::new(i64::from(font_size_emu)),
+        font_bytes: &font.bytes,
+    };
+    shape_bounded_ltr_segment(&cell.text, 0, &runtime)
+        .ok()
+        .is_some_and(|shaped| {
+            shaped.glyphs.iter().all(|glyph| glyph.glyph_id != 0)
+                && shaped.total_x_advance.get() <= inner_width_emu
+        })
+}
+
+fn table_cell_paragraph_alignment_admissible_v1(cell: &CurrentTableCell) -> bool {
+    let (Some(cell_start), Some(cell_end)) = (cell.story_scalar_start, cell.story_scalar_end) else {
+        return false;
+    };
+    let mut previous_end = cell_start;
+    for run in &cell.paragraph_alignments {
+        if run.scalar_start < cell_start
+            || run.scalar_end > cell_end
+            || run.scalar_start >= run.scalar_end
+            || run.scalar_start < previous_end
+            || matches!(
+                run.alignment,
+                CurrentParagraphAlignment::InterWord | CurrentParagraphAlignment::Distribute
+            )
+        {
+            return false;
+        }
+        previous_end = run.scalar_end;
+    }
+    true
+}
+
+fn observe_table_text_authority_v1(
+    table: &CurrentTable,
+    font: &CurrentFont,
+    summary: &mut MappingSummary,
+) {
     let admitted_inset = table
         .uniform_cell_text_inset_emu
         .filter(|inset| *inset >= 0);
@@ -586,6 +712,42 @@ fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSu
             && table_cell_inset_fits_bounds_v1(cell, inset)
         {
             summary.table_cell_inset_bounds_valid_count += 1;
+        }
+
+        if cell.layout.is_some() {
+            summary.table_layout_present_nonempty_cell_count += 1;
+        }
+
+        if let Some(inset) = admitted_inset
+            && table_cell_bounded_text_profile_v1(cell, inset).is_some()
+        {
+            summary.table_bounded_text_profile_cell_count += 1;
+            if cell.layout.is_some() {
+                summary.table_layout_present_bounded_profile_cell_count += 1;
+            }
+
+            let alignment_admissible = table_cell_paragraph_alignment_admissible_v1(cell);
+            if alignment_admissible {
+                summary.table_paragraph_alignment_admissible_profile_cell_count += 1;
+            }
+
+            if !cell.text.contains(&['\r', '\n'][..]) {
+                summary.table_hard_break_free_profile_cell_count += 1;
+                let width_fit = table_cell_single_line_width_fits_v1(cell, inset, font);
+                if width_fit {
+                    summary.table_single_line_width_fit_cell_count += 1;
+                    if cell.layout.is_some() {
+                        summary.table_layout_present_width_fit_cell_count += 1;
+                    }
+                    if alignment_admissible {
+                        summary.table_width_fit_alignment_admissible_cell_count += 1;
+                        if cell.layout.is_some() {
+                            summary
+                                .table_layout_present_width_fit_alignment_admissible_cell_count += 1;
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -764,7 +926,7 @@ fn main() -> Result<()> {
             }
             if let Some(table) = &node.table {
                 summary.table_node_count += 1;
-                observe_table_text_authority_v1(table, &mut summary);
+                observe_table_text_authority_v1(table, &input.font, &mut summary);
                 let table_paint_mapped = append_table_paint_nodes_v1(
                     table,
                     resolved_node_id,
