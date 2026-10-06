@@ -80,10 +80,7 @@ impl RuntimePorts {
             "revision_stream".to_owned(),
             snapshot(&self.revision_stream, true),
         );
-        components.insert(
-            "jobs".to_owned(),
-            snapshot(&self.jobs, authenticated_cloud),
-        );
+        components.insert("jobs".to_owned(), snapshot(&self.jobs, authenticated_cloud));
         components.insert("blob_store".to_owned(), snapshot(&self.blob_store, true));
         components.insert(
             "observability".to_owned(),
