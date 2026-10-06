@@ -139,11 +139,11 @@ use pub_model::{
 };
 use pub_quill::{
     QuillEffectiveBoolean, QuillGroundedStoryIdentity, QuillMcldReadError,
-    QuillMcldVerticalAlignment, QuillParagraphAlignment, QuillParagraphLineSpacing,
-    QuillScriptFontEntryDisposition, QuillStoryReadError, QuillTypographyValueSource,
-    bounded_mcld_text_frame_vertical_alignment, bounded_mcld_uniform_text_inset,
-    parse_bounded_fdpp_exact_story_catalog, parse_bounded_mcld, parse_bounded_typography,
-    parse_confirmed_story_catalog,
+    QuillMcldVerticalAlignment, QuillParagraphAlignment, QuillParagraphFlowConstraint,
+    QuillParagraphLineSpacing, QuillScriptFontEntryDisposition, QuillStoryReadError,
+    QuillTypographyValueSource, bounded_mcld_text_frame_vertical_alignment,
+    bounded_mcld_uniform_text_inset, parse_bounded_fdpp_exact_story_catalog, parse_bounded_mcld,
+    parse_bounded_typography, parse_confirmed_story_catalog,
 };
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
@@ -157,7 +157,10 @@ pub use salvage::{
     build_reader_partial_source_graph, probe_reader_salvage_candidate,
     probe_reader_salvage_candidate_with_trigger,
 };
-pub use salvage_authority::{ReaderSalvageAuthority, typed_corruption_authority};
+pub use salvage_authority::{
+    ReaderEvidenceDisposition, ReaderSalvageAuthority, reader_evidence_disposition,
+    typed_corruption_authority,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
@@ -550,6 +553,8 @@ pub struct PubSourceGraphBuild {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_line_spacings: Vec<PubParagraphLineSpacingRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paragraph_flow_runs: Vec<PubParagraphFlowRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub script_font_maps: Vec<PubScriptFontMap>,
 }
 
@@ -620,6 +625,27 @@ pub struct PubParagraphLineSpacingRun {
     pub line_spacing: PubParagraphLineSpacing,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_value: Option<u32>,
+    pub source_ref: SourceRef,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PubParagraphFlowConstraint {
+    StartInNextTextBox,
+    KeepLinesTogether,
+    KeepWithNext,
+    WidowControl,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubParagraphFlowRun {
+    pub story_id: StoryId,
+    pub story_utf16_start: u32,
+    pub story_utf16_end: u32,
+    pub story_scalar_start: u32,
+    pub story_scalar_end: u32,
+    pub constraint: PubParagraphFlowConstraint,
+    pub source_value: u32,
     pub source_ref: SourceRef,
 }
 
@@ -1025,6 +1051,16 @@ pub enum PubBridgeDiagnostic {
     },
     GroupedImageProjectionUnavailable {
         seq_num: u32,
+        reason: String,
+    },
+    GroupedPrimitiveProjected {
+        seq_num: u32,
+        shape_type: u16,
+        depth: usize,
+    },
+    GroupedPrimitiveProjectionUnavailable {
+        seq_num: u32,
+        shape_type: u16,
         reason: String,
     },
     GroupedTableProjected {
@@ -2727,6 +2763,7 @@ pub fn build_mature_0x2c_from_streams(
     let mut typography_size_runs = Vec::new();
     let mut paragraph_alignments = Vec::new();
     let mut paragraph_line_spacings = Vec::new();
+    let mut paragraph_flow_runs = Vec::new();
     let mut script_font_maps = Vec::new();
     if let Some(catalog) = typography_catalog {
         for map in &catalog.script_font_maps {
@@ -2909,6 +2946,68 @@ pub fn build_mature_0x2c_from_streams(
                     &run.fdpp_style_source,
                     Some(quill_story_object_key(syid)),
                     Some("FDPP/ParagraphLineSpacing".into()),
+                    SourceRole::Semantic,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+            });
+        }
+        for run in &catalog.paragraph_flow_runs {
+            let syid = run.story_syid.0;
+            let Some(story_id) = story_by_syid.get(&syid).copied() else {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: format!("paragraph flow references missing Story SYID {syid}"),
+                });
+                continue;
+            };
+            let Some(story) = graph.stories.get(&story_id) else {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: format!("paragraph flow Story {story_id:?} is absent"),
+                });
+                continue;
+            };
+            let Some((story_scalar_start, story_scalar_end)) = utf16_range_to_scalar_range(
+                &story.text,
+                run.story_start_utf16,
+                run.story_end_utf16,
+            ) else {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: format!(
+                        "paragraph flow range {}..{} splits a UTF-16 scalar boundary for Story SYID {syid}",
+                        run.story_start_utf16, run.story_end_utf16
+                    ),
+                });
+                continue;
+            };
+            let (constraint, semantic_name) = match run.constraint {
+                QuillParagraphFlowConstraint::StartInNextTextBox => (
+                    PubParagraphFlowConstraint::StartInNextTextBox,
+                    "StartInNextTextBox",
+                ),
+                QuillParagraphFlowConstraint::KeepLinesTogether => (
+                    PubParagraphFlowConstraint::KeepLinesTogether,
+                    "KeepLinesTogether",
+                ),
+                QuillParagraphFlowConstraint::KeepWithNext => {
+                    (PubParagraphFlowConstraint::KeepWithNext, "KeepWithNext")
+                }
+                QuillParagraphFlowConstraint::WidowControl => {
+                    (PubParagraphFlowConstraint::WidowControl, "WidowControl")
+                }
+            };
+            paragraph_flow_runs.push(PubParagraphFlowRun {
+                story_id,
+                story_utf16_start: run.story_start_utf16,
+                story_utf16_end: run.story_end_utf16,
+                story_scalar_start,
+                story_scalar_end,
+                constraint,
+                source_value: run.source_value,
+                source_ref: source_ref(
+                    &graph.source,
+                    &run.property_source,
+                    Some(quill_story_object_key(syid)),
+                    Some(format!("FDPP/ParagraphFlow/{semantic_name}")),
                     SourceRole::Semantic,
                     AuthorityClass::Authoritative,
                     ReadConfidence::Exact,
@@ -3124,9 +3223,20 @@ pub fn build_mature_0x2c_from_streams(
         };
         let image_slot = exact_image_slot(shape, seq_num, &mut diagnostics);
         let exact_grouped_image_identity = raw_type == Some(RAW_TYPE_SHAPE) && image_slot.is_some();
+        let exact_grouped_primitive_shape_type = if raw_type == Some(RAW_TYPE_SHAPE)
+            && exact_story_identity.is_none()
+            && image_slot.is_none()
+            && has_default_ellipse_geometry(shape)
+        {
+            Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
+        } else {
+            None
+        };
         let grouped_projection = if direct_page.is_none()
             && references.get(&parent_seq).and_then(single_raw_type) == Some(RAW_TYPE_GROUP)
-            && (exact_story_identity.is_some() || exact_grouped_image_identity)
+            && (exact_story_identity.is_some()
+                || exact_grouped_image_identity
+                || exact_grouped_primitive_shape_type.is_some())
         {
             match project_grouped_object_shape(
                 parent_seq,
@@ -3148,6 +3258,12 @@ pub fn build_mature_0x2c_from_streams(
                             seq_num,
                             depth: projection.depth,
                         }
+                    } else if let Some(shape_type) = exact_grouped_primitive_shape_type {
+                        PubBridgeDiagnostic::GroupedPrimitiveProjected {
+                            seq_num,
+                            shape_type,
+                            depth: projection.depth,
+                        }
                     } else {
                         PubBridgeDiagnostic::GroupedImageProjected {
                             seq_num,
@@ -3166,6 +3282,12 @@ pub fn build_mature_0x2c_from_streams(
                     } else if exact_story_identity.is_some() {
                         PubBridgeDiagnostic::GroupedStoryProjectionUnavailable {
                             seq_num,
+                            reason: error.to_string(),
+                        }
+                    } else if let Some(shape_type) = exact_grouped_primitive_shape_type {
+                        PubBridgeDiagnostic::GroupedPrimitiveProjectionUnavailable {
+                            seq_num,
+                            shape_type,
                             reason: error.to_string(),
                         }
                     } else {
@@ -3430,6 +3552,17 @@ pub fn build_mature_0x2c_from_streams(
                 ReadConfidence::Exact,
             ));
         }
+        if has_default_ellipse_geometry(shape) {
+            source_refs.push(source_ref(
+                &graph.source,
+                &shape.source,
+                Some(format!("escher/client-data-shape-id/{seq_num}")),
+                Some("SpContainer/FSP/default-ellipse".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ));
+        }
         if direct_image_rotation_applied || direct_image_cardinal_rotation_degrees.is_some() {
             source_refs.push(source_ref(
                 &graph.source,
@@ -3566,6 +3699,7 @@ pub fn build_mature_0x2c_from_streams(
         typography_size_runs,
         paragraph_alignments,
         paragraph_line_spacings,
+        paragraph_flow_runs,
         script_font_maps,
     })
 }
@@ -4257,6 +4391,7 @@ const LINE_USE_LINE_BIT: u32 = 1 << 19;
 const LINE_LINE_BIT: u32 = 1 << 3;
 const OFFICEART_FSP_CONNECTOR_BIT: u32 = 1 << 8;
 const OFFICEART_SHAPE_TYPE_NOT_PRIMITIVE: u16 = 0x0000;
+const OFFICEART_SHAPE_TYPE_ELLIPSE: u16 = 0x0003;
 const OFFICEART_SHAPE_TYPE_LINE: u16 = 0x0014;
 
 // MS-ODRAW normative property defaults for the bounded solid 2-D paint surface.
@@ -4288,6 +4423,10 @@ fn has_default_roundrect_geometry(shape: &pub_escher::SpContainerObservation) ->
         .iter()
         .flat_map(|record| record.properties.iter())
         .any(|property| property.property_id() == OFFICE_ART_ADJUST_VALUE)
+}
+
+fn has_default_ellipse_geometry(shape: &pub_escher::SpContainerObservation) -> bool {
+    shape.fsp.as_ref().map(|fsp| fsp.shape_type) == Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
 }
 
 fn has_explicit_officeart_paint_observation(shape: &pub_escher::SpContainerObservation) -> bool {
