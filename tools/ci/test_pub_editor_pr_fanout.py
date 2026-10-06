@@ -93,6 +93,19 @@ def assert_continuity_consumer_wiring() -> None:
         ".github/workflows/editor-desktop-continuity-v2-windows.yml" in contract
     ), "cheap contract must run when the Continuity V2 consumer wiring changes"
 
+    umbrella = Path(".github/workflows/editor-heavy-pr-ci.yml").read_text(
+        encoding="utf-8"
+    )
+    for marker in (
+        '"vendor/producer-a/crates/pub-editor/**"',
+        "continuity-v2:",
+        "uses: ./.github/workflows/editor-desktop-continuity-v2-windows.yml",
+    ):
+        assert marker in umbrella, (
+            "Editor heavy umbrella lost Continuity V2 trigger/consumer ownership: "
+            + marker
+        )
+
 
 def assert_textbox_consumer_wiring() -> None:
     workflow_path = Path(".github/workflows/editor-desktop-textbox-restore-v1.yml")
@@ -128,7 +141,6 @@ def assert_fixed_pdf_consumer_wiring() -> None:
     required = (
         "Classify pub-editor fixed-PDF current revision scope",
         "ref: ${{ github.event.pull_request.base.ref || github.sha }}",
-        "vendor/producer-a/crates/pub-editor/**",
         "python tools/ci/pub_editor_pr_fanout.py",
         "needs: classify",
         "needs.classify.result != 'success'",
@@ -147,6 +159,19 @@ def assert_fixed_pdf_consumer_wiring() -> None:
     assert (
         ".github/workflows/editor-fixed-pdf-current-revision.yml" in contract
     ), "cheap contract must run when fixed-PDF consumer wiring changes"
+
+    umbrella = Path(".github/workflows/editor-heavy-pr-ci.yml").read_text(
+        encoding="utf-8"
+    )
+    for marker in (
+        '"vendor/producer-a/crates/pub-editor/**"',
+        "fixed-pdf-current-revision:",
+        "uses: ./.github/workflows/editor-fixed-pdf-current-revision.yml",
+    ):
+        assert marker in umbrella, (
+            "Editor heavy umbrella lost fixed-PDF trigger/consumer ownership: "
+            + marker
+        )
 
 
 def assert_duplicate_consumer_wiring() -> None:

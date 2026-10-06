@@ -7,7 +7,7 @@ def req(text,markers,owner):
 def main():
     umbrella=Path(".github/workflows/editor-heavy-pr-ci.yml").read_text(); producer=Path(".github/workflows/chaptera-editor-windows-binary.yml").read_text()
     req(umbrella,("editor-binary:","artifact_name: chaptera-editor-windows-binary-$"+"{{ github.sha }}","editor_binary_artifact_name: chaptera-editor-windows-binary-$"+"{{ github.sha }}","continuity-v2:","fixed-pdf-current-revision:","carlton-editor-smoke:"),"editor-heavy-pr-ci")
-    req(producer,('candidate_sha = "$'+"{{ github.sha }}"','schema_version = "chaptera.editor-windows-binary.v1"',"cargo build -p chaptera-desktop --release --bin chaptera-editor","validate_editor_binary_artifact.py","retention-days: 1"),"producer")
+    req(producer,('candidate_sha = "' + "$" + '{{ github.sha }}"','schema_version = "chaptera.editor-windows-binary.v1"',"cargo build -p chaptera-desktop --release --bin chaptera-editor","validate_editor_binary_artifact.py","retention-days: 1"),"producer")
     for raw in MIGRATED:
         text=Path(raw).read_text()
         req(text,("workflow_call:","editor_binary_artifact_name:","actions/download-artifact@v4","validate_editor_binary_artifact.py","if: inputs.editor_binary_artifact_name == ''"),raw)
