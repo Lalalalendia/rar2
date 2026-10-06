@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/pub-editor-selective-fanout-contract.yml"
       - ".github/workflows/chaptera-editor-windows-binary.yml"
+      - ".github/workflows/editor-build-once-pr.yml"
       - "tools/ci/validate_editor_binary_artifact.py"
       - "tools/ci/test_validate_editor_binary_artifact.py"
       - "tools/ci/test_editor_build_once_wiring.py"
