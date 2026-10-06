@@ -9,6 +9,11 @@ on:
       - "tools/ci/validate_reader_binary_artifact.py"
       - "tools/ci/test_validate_reader_binary_artifact.py"
       - "tools/ci/test_reader_build_once_wiring.py"
+      - "tools/ci/validate_editor_binary_artifact.py"
+      - "tools/ci/test_validate_editor_binary_artifact.py"
+      - "tools/ci/editor_heavy_pr_fanout.py"
+      - "tools/ci/test_editor_heavy_pr_fanout.py"
+      - "tools/ci/test_editor_build_once_wiring.py"
       - "tools/ci/migration-consumer-runtime.Dockerfile"
       - "tools/ci/test_migration_consumer_runtime_wiring.py"
   workflow_dispatch:
@@ -33,5 +38,11 @@ jobs:
         run: python tools/ci/test_validate_reader_binary_artifact.py
       - name: Guard Reader build-once wiring
         run: python tools/ci/test_reader_build_once_wiring.py
+      - name: Test Editor binary artifact validator
+        run: python tools/ci/test_validate_editor_binary_artifact.py
+      - name: Test Editor heavy fanout
+        run: python tools/ci/test_editor_heavy_pr_fanout.py
+      - name: Guard Editor build-once wiring
+        run: python tools/ci/test_editor_build_once_wiring.py
       - name: Guard migration consumer runtime producer
         run: python tools/ci/test_migration_consumer_runtime_wiring.py
