@@ -5,7 +5,10 @@ use crate::family_classifier::classify_pub_family;
 use crate::salvage_authority::{ReaderSalvageAuthority, typed_corruption_authority};
 use pub_contents::ContentsFamily;
 use pub_core::StreamPath;
-use pub_escher::{parse_officeart_stream, validate_blip_record};
+use pub_escher::{
+    DelayedBlipPrefixGap, inspect_validated_delayed_blips_prefix, parse_officeart_stream,
+    validate_blip_record,
+};
 use pub_quill::{QuillStoryReadError, parse_confirmed_story_catalog};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -198,6 +201,196 @@ impl std::fmt::Display for ReaderPartialSourceGraphError {
 
 impl std::error::Error for ReaderPartialSourceGraphError {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReaderPartialEscherDelayImageEvidence {
+    pub record_source: pub_core::RawSpan,
+    pub payload_source: pub_core::RawSpan,
+    pub payload_physical_ranges: Vec<pub_cfb::RootRegularStreamSourceRange>,
+    pub kind: String,
+    pub effective_uid_hex: String,
+    pub uid_rule: String,
+    pub payload_sha256: String,
+    pub byte_len: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReaderPartialEscherDelayEvidence {
+    pub source_sha256: String,
+    pub stream_sid: u32,
+    pub logical_path: String,
+    pub declared_len: u64,
+    pub available_prefix_len: u64,
+    pub prefix_sha256: String,
+    pub physical_stream_status: pub_cfb::RootRegularStreamPrefixStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncation_reason: Option<pub_cfb::RootRegularStreamTruncationReason>,
+    pub stream_source_ranges: Vec<pub_cfb::RootRegularStreamSourceRange>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_parser_gap: Option<DelayedBlipPrefixGap>,
+    pub rejected_complete_blip_count: usize,
+    pub validated_images: Vec<ReaderPartialEscherDelayImageEvidence>,
+}
+
+fn map_logical_span_to_physical_ranges(
+    source_ranges: &[pub_cfb::RootRegularStreamSourceRange],
+    span: &pub_core::RawSpan,
+    available_prefix_len: u64,
+) -> Option<Vec<pub_cfb::RootRegularStreamSourceRange>> {
+    if span.stream != StreamPath(ESCHER_DELAY_STREAM.into()) {
+        return None;
+    }
+    let span_end = span.offset.checked_add(span.len)?;
+    if span_end > available_prefix_len {
+        return None;
+    }
+
+    let mut logical_cursor = 0u64;
+    let mut mapped_total = 0u64;
+    let mut mapped = Vec::new();
+
+    for range in source_ranges {
+        let logical_end = logical_cursor.checked_add(range.len)?;
+        let overlap_start = span.offset.max(logical_cursor);
+        let overlap_end = span_end.min(logical_end);
+        if overlap_start < overlap_end {
+            let within_range = overlap_start.checked_sub(logical_cursor)?;
+            let physical_offset = range.offset.checked_add(within_range)?;
+            let len = overlap_end.checked_sub(overlap_start)?;
+            mapped.push(pub_cfb::RootRegularStreamSourceRange {
+                offset: physical_offset,
+                len,
+            });
+            mapped_total = mapped_total.checked_add(len)?;
+        }
+        logical_cursor = logical_end;
+        if logical_cursor >= span_end {
+            break;
+        }
+    }
+
+    (mapped_total == span.len).then_some(mapped)
+}
+
+fn sha256_physical_ranges(
+    source: &[u8],
+    ranges: &[pub_cfb::RootRegularStreamSourceRange],
+) -> Option<String> {
+    let mut digest = Sha256::new();
+    for range in ranges {
+        let start = usize::try_from(range.offset).ok()?;
+        let len = usize::try_from(range.len).ok()?;
+        let end = start.checked_add(len)?;
+        digest.update(source.get(start..end)?);
+    }
+    Some(
+        digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
+}
+
+/// Builds strict image evidence from a physically proven SID-bound
+/// EscherDelay prefix when normal CFB access cannot provide the stream.
+///
+/// Stream discovery and physical recovery are independently hash/SID-bound.
+/// Only complete BLIP records accepted by the strict prefix validator can
+/// become Reader image facts. No BStore/page/shape/layout ownership is inferred.
+pub fn build_reader_partial_escherdelay_evidence(
+    bytes: &[u8],
+    probe: &ReaderSalvageProbe,
+) -> Option<ReaderPartialEscherDelayEvidence> {
+    if !probe.eligibility.is_eligible()
+        || probe.subsystems.escher_delay == ReaderSalvageStreamState::Readable
+        || probe.source_sha256 != source_sha256(bytes)
+        || bytes.len() > READER_SALVAGE_MAX_INPUT_BYTES
+    {
+        return None;
+    }
+
+    let discovered =
+        pub_cfb::discover_regular_stream_sid_reader(Cursor::new(bytes), ESCHER_DELAY_STREAM).ok()?;
+    if discovered.source_sha256 != probe.source_sha256
+        || discovered.source_byte_len != bytes.len() as u64
+        || discovered.logical_path != ESCHER_DELAY_STREAM
+        || discovered.declared_len > READER_SALVAGE_MAX_STREAM_BYTES
+    {
+        return None;
+    }
+
+    let recovered = pub_cfb::recover_regular_stream_prefix_by_sid_reader_with_expected_sha(
+        Cursor::new(bytes),
+        discovered.stream_sid,
+        &probe.source_sha256,
+    )
+    .ok()?;
+    if recovered.source_modified
+        || recovered.stream_sid != discovered.stream_sid
+        || recovered.source_byte_len != discovered.source_byte_len
+        || recovered.declared_len != discovered.declared_len
+        || recovered.available_prefix_len > READER_SALVAGE_MAX_STREAM_BYTES
+        || recovered.bytes.len() as u64 != recovered.available_prefix_len
+    {
+        return None;
+    }
+
+    let inventory = inspect_validated_delayed_blips_prefix(
+        StreamPath(ESCHER_DELAY_STREAM.into()),
+        &recovered.bytes,
+    );
+    if inventory.available_prefix_len != recovered.available_prefix_len {
+        return None;
+    }
+
+    let terminal_parser_gap = inventory.terminal_gap.clone();
+    let rejected_complete_blip_count = inventory.rejected_complete_blips.len();
+    let mut validated_images = Vec::new();
+    for validated in inventory.records {
+        let payload_physical_ranges = map_logical_span_to_physical_ranges(
+            &recovered.source_ranges,
+            &validated.payload_source,
+            recovered.available_prefix_len,
+        )?;
+        if sha256_physical_ranges(bytes, &payload_physical_ranges).as_deref()
+            != Some(validated.payload_sha256.as_str())
+        {
+            return None;
+        }
+
+        let byte_len = validated.payload_source.len;
+        validated_images.push(ReaderPartialEscherDelayImageEvidence {
+            record_source: validated.record_source,
+            payload_source: validated.payload_source,
+            payload_physical_ranges,
+            kind: format!("{:?}", validated.kind).to_ascii_lowercase(),
+            effective_uid_hex: validated
+                .effective_uid
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+            uid_rule: format!("{:?}", validated.uid_rule).to_ascii_lowercase(),
+            payload_sha256: validated.payload_sha256,
+            byte_len,
+        });
+    }
+
+    Some(ReaderPartialEscherDelayEvidence {
+        source_sha256: probe.source_sha256.clone(),
+        stream_sid: discovered.stream_sid,
+        logical_path: discovered.logical_path,
+        declared_len: recovered.declared_len,
+        available_prefix_len: recovered.available_prefix_len,
+        prefix_sha256: recovered.prefix_sha256,
+        physical_stream_status: recovered.status,
+        truncation_reason: recovered.truncation_reason,
+        stream_source_ranges: recovered.source_ranges,
+        terminal_parser_gap,
+        rejected_complete_blip_count,
+        validated_images,
+    })
+}
+
 pub fn build_reader_partial_source_graph(
     bytes: &[u8],
     probe: &ReaderSalvageProbe,
@@ -217,10 +410,11 @@ pub fn build_reader_partial_source_graph(
     if current_probe != *probe {
         return Err(ReaderPartialSourceGraphError::ProbeMismatch);
     }
-    if !probe.eligibility.is_eligible() || !probe.has_surviving_evidence() {
+    if !probe.eligibility.is_eligible() {
         return Err(ReaderPartialSourceGraphError::Ineligible);
     }
 
+    let existing_survival = probe.has_surviving_evidence();
     let mut facts = Vec::new();
     let mut gaps = Vec::new();
 
@@ -281,8 +475,30 @@ pub fn build_reader_partial_source_graph(
             verified_image_count += 1;
         }
     }
+    if probe.subsystems.escher_delay != ReaderSalvageStreamState::Readable
+        && let Some(evidence) = build_reader_partial_escherdelay_evidence(bytes, probe)
+    {
+        for image in evidence.validated_images {
+            facts.push(ReaderPartialSourceFact::VerifiedImage {
+                resource_key: format!(
+                    "escher-delay:{}:{}:{}:{}",
+                    probe.source_sha256,
+                    evidence.stream_sid,
+                    image.record_source.offset,
+                    image.payload_sha256
+                ),
+                sha256: image.payload_sha256,
+                byte_len: image.byte_len,
+            });
+            verified_image_count += 1;
+        }
+    }
     if verified_image_count == 0 {
         gaps.push(ReaderPartialSourceGap::ImageFactsUnavailable);
+    }
+
+    if !existing_survival && verified_image_count == 0 {
+        return Err(ReaderPartialSourceGraphError::Ineligible);
     }
 
     // Stream survival alone is not enough to assign source-neutral page/object
@@ -544,6 +760,68 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    #[test]
+    fn logical_payload_span_maps_across_physical_ranges() {
+        let ranges = vec![
+            pub_cfb::RootRegularStreamSourceRange {
+                offset: 1024,
+                len: 8,
+            },
+            pub_cfb::RootRegularStreamSourceRange {
+                offset: 4096,
+                len: 8,
+            },
+        ];
+        let span = pub_core::RawSpan {
+            stream: StreamPath(ESCHER_DELAY_STREAM.into()),
+            offset: 6,
+            len: 6,
+        };
+        let mapped = map_logical_span_to_physical_ranges(&ranges, &span, 16)
+            .expect("logical span must map exactly");
+        assert_eq!(
+            mapped,
+            vec![
+                pub_cfb::RootRegularStreamSourceRange {
+                    offset: 1030,
+                    len: 2,
+                },
+                pub_cfb::RootRegularStreamSourceRange {
+                    offset: 4096,
+                    len: 4,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn logical_payload_span_from_wrong_stream_fails_closed() {
+        let ranges = vec![pub_cfb::RootRegularStreamSourceRange {
+            offset: 1024,
+            len: 16,
+        }];
+        let span = pub_core::RawSpan {
+            stream: StreamPath("/Escher/EscherStm".into()),
+            offset: 0,
+            len: 8,
+        };
+        assert!(map_logical_span_to_physical_ranges(&ranges, &span, 16).is_none());
+    }
+
+    #[test]
+    fn logical_payload_span_crossing_missing_tail_fails_closed() {
+        let ranges = vec![pub_cfb::RootRegularStreamSourceRange {
+            offset: 1024,
+            len: 8,
+        }];
+        let span = pub_core::RawSpan {
+            stream: StreamPath(ESCHER_DELAY_STREAM.into()),
+            offset: 6,
+            len: 4,
+        };
+        assert!(map_logical_span_to_physical_ranges(&ranges, &span, 8).is_none());
+    }
+
     fn synthetic_pub_cfb() -> Vec<u8> {
         let mut compound =
             cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("synthetic Publisher CFB");
@@ -575,6 +853,14 @@ mod tests {
         let mut compound =
             cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("synthetic Publisher CFB");
         compound.create_storage("/Escher").expect("Escher storage");
+        compound
+            .create_storage("/Objects")
+            .expect("Objects storage");
+        compound
+            .create_stream("/Objects/Damaged")
+            .expect("small mini stream")
+            .write_all(b"small")
+            .expect("write mini stream");
 
         let mut contents = vec![0_u8; 5_000];
         contents[..4].copy_from_slice(&[0xe8, 0xac, 0x2c, 0x00]);
@@ -604,6 +890,14 @@ mod tests {
         record.extend_from_slice(&pub_escher::OFFICE_ART_BLIP_PNG.to_le_bytes());
         record.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         record.extend_from_slice(&payload);
+
+        // Keep EscherDelay on the regular FAT path so the damaged-CFB
+        // recovery arm exercises the exact-SID regular-stream substrate.
+        record.extend_from_slice(&0x0000u16.to_le_bytes());
+        record.extend_from_slice(&0xf122u16.to_le_bytes());
+        record.extend_from_slice(&4096u32.to_le_bytes());
+        record.extend_from_slice(&[0u8; 4096]);
+
         compound
             .create_stream(ESCHER_DELAY_STREAM)
             .expect("Escher delay stream")
@@ -621,6 +915,64 @@ mod tests {
         let offset = (minifat_sector as usize + 1) * sector_len;
         bytes[offset..offset + 4].copy_from_slice(&0x1234_5678u32.to_le_bytes());
         bytes
+    }
+
+    #[test]
+    fn damaged_cfb_recovers_sid_bound_delay_image_into_partial_graph() {
+        let bytes = corrupt_first_minifat_entry(synthetic_pub_cfb_with_delay_png());
+        assert!(pub_cfb::inspect_reader(Cursor::new(bytes.clone())).is_err());
+
+        let probe = probe_reader_salvage_candidate(&bytes);
+        assert_eq!(probe.intake.class, FailureIntakeClass::PubDamaged);
+        assert_eq!(
+            probe.eligibility,
+            ReaderSalvageEligibility::EligibleDamagedPublisher
+        );
+        assert!(!probe.cfb_inventory_available);
+        assert_eq!(
+            probe.subsystems.escher_delay,
+            ReaderSalvageStreamState::ContainerUnavailable
+        );
+
+        let evidence =
+            build_reader_partial_escherdelay_evidence(&bytes, &probe).expect("delay evidence");
+        assert_eq!(evidence.validated_images.len(), 1);
+        assert_eq!(evidence.source_sha256, source_sha256(&bytes));
+        assert!(!evidence.stream_source_ranges.is_empty());
+        let image = &evidence.validated_images[0];
+        assert_eq!(image.kind, "png");
+        assert!(!image.payload_physical_ranges.is_empty());
+        assert_eq!(image.byte_len, 21);
+
+        let graph = build_reader_partial_source_graph(&bytes, &probe).expect("partial graph");
+        let verified = graph
+            .facts
+            .iter()
+            .filter_map(|fact| match fact {
+                ReaderPartialSourceFact::VerifiedImage {
+                    sha256, byte_len, ..
+                } => Some((sha256.as_str(), *byte_len)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(verified.len(), 1);
+        assert_eq!(verified[0].0, image.payload_sha256);
+        assert_eq!(verified[0].1, image.byte_len);
+        assert!(
+            !graph
+                .gaps
+                .contains(&ReaderPartialSourceGap::ImageFactsUnavailable)
+        );
+        assert!(
+            graph
+                .gaps
+                .contains(&ReaderPartialSourceGap::TextUnavailable)
+        );
+        assert!(
+            graph
+                .gaps
+                .contains(&ReaderPartialSourceGap::GeometryFactsUnavailable)
+        );
     }
 
     #[test]
