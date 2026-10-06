@@ -96,6 +96,35 @@ pub struct PhysicalDirectoryInventory {
     pub entries: Vec<PhysicalDirectoryEntry>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", content = "sid", rename_all = "snake_case")]
+pub enum RawDirectoryLink {
+    None,
+    InRange(u32),
+    OutOfRange(u32),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RawPhysicalDirectoryEntry {
+    pub sid: u32,
+    pub object_type: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub descriptive_name: Option<String>,
+    pub left_sibling: RawDirectoryLink,
+    pub right_sibling: RawDirectoryLink,
+    pub child: RawDirectoryLink,
+    pub start_sector: u32,
+    pub declared_len: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RawPhysicalDirectoryInventory {
+    pub source_sha256: String,
+    pub source_byte_len: u64,
+    pub entries: Vec<RawPhysicalDirectoryEntry>,
+    pub rejected_active_entry_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiscoveredPhysicalStream {
     pub source_sha256: String,
@@ -289,6 +318,92 @@ pub fn inspect_partial_cfb_physical_directory_reader<R: Read + Seek>(
         source_sha256: sha256_hex(&source),
         source_byte_len: source.len() as u64,
         entries,
+    })
+}
+
+/// Returns individually readable active directory entries without requiring
+/// the red-black sibling/child topology to be valid.
+///
+/// This is intentionally weaker than `inspect_partial_cfb_physical_directory_reader`.
+/// Out-of-range links are retained as typed damage evidence instead of rejecting
+/// the whole inventory. Invalid non-root object types are counted and skipped.
+/// Stream identity remains the exact directory SID in these source bytes.
+pub fn inspect_partial_cfb_raw_directory_reader<R: Read + Seek>(
+    mut reader: R,
+) -> Result<RawPhysicalDirectoryInventory> {
+    reader
+        .seek(SeekFrom::Start(0))
+        .context("failed to seek to raw physical CFB directory input")?;
+    let mut source = Vec::new();
+    reader
+        .read_to_end(&mut source)
+        .context("failed to read raw physical CFB directory input")?;
+
+    let context = build_partial_cfb_physical_context(&source)?;
+    let entry_count = context.directory.len() / DIR_ENTRY_LEN;
+    let mut entries = Vec::new();
+    let mut rejected_active_entry_count = 0usize;
+
+    for sid_usize in 0..entry_count {
+        let start = sid_usize
+            .checked_mul(DIR_ENTRY_LEN)
+            .context("directory SID offset overflow")?;
+        let raw = &context.directory[start..start + DIR_ENTRY_LEN];
+        let object_type = raw[66];
+        if object_type == 0 {
+            continue;
+        }
+
+        if sid_usize == 0 {
+            if object_type != 5 {
+                anyhow::bail!("CFB directory SID 0 is not root");
+            }
+        } else if !matches!(object_type, 1 | 2) {
+            rejected_active_entry_count += 1;
+            continue;
+        }
+
+        let low_len = read_u32(raw, 120)? as u64;
+        let high_len = read_u32(raw, 124)? as u64;
+        let declared_len = if context.major == 4 {
+            low_len | (high_len << 32)
+        } else {
+            low_len
+        };
+        let sid = u32::try_from(sid_usize).context("directory SID does not fit u32")?;
+        entries.push(RawPhysicalDirectoryEntry {
+            sid,
+            object_type,
+            descriptive_name: directory_name(raw).ok(),
+            left_sibling: raw_directory_link(raw, 68, entry_count)?,
+            right_sibling: raw_directory_link(raw, 72, entry_count)?,
+            child: raw_directory_link(raw, 76, entry_count)?,
+            start_sector: read_u32(raw, 116)?,
+            declared_len,
+        });
+    }
+
+    Ok(RawPhysicalDirectoryInventory {
+        source_sha256: sha256_hex(&source),
+        source_byte_len: u64::try_from(source.len())
+            .context("source byte length does not fit u64")?,
+        entries,
+        rejected_active_entry_count,
+    })
+}
+
+fn raw_directory_link(raw: &[u8], offset: usize, entry_count: usize) -> Result<RawDirectoryLink> {
+    let sid = read_u32(raw, offset)?;
+    if sid == NO_STREAM {
+        return Ok(RawDirectoryLink::None);
+    }
+    let in_range = usize::try_from(sid)
+        .ok()
+        .is_some_and(|sid_usize| sid_usize < entry_count);
+    Ok(if in_range {
+        RawDirectoryLink::InRange(sid)
+    } else {
+        RawDirectoryLink::OutOfRange(sid)
     })
 }
 
@@ -894,6 +1009,23 @@ mod tests {
         compound.into_inner().into_inner()
     }
 
+    fn corrupt_directory_link_out_of_range(
+        mut source: Vec<u8>,
+        sid: u32,
+        field_offset: usize,
+    ) -> Vec<u8> {
+        let sector_len = 1usize << u16::from_le_bytes([source[30], source[31]]);
+        let first_directory_sector =
+            u32::from_le_bytes([source[48], source[49], source[50], source[51]]);
+        let directory_offset = (usize::try_from(first_directory_sector).unwrap() + 1) * sector_len;
+        let entry_offset = directory_offset + usize::try_from(sid).unwrap() * DIR_ENTRY_LEN;
+        let entry_count = sector_len / DIR_ENTRY_LEN;
+        let invalid_sid = u32::try_from(entry_count + 100).unwrap();
+        source[entry_offset + field_offset..entry_offset + field_offset + 4]
+            .copy_from_slice(&invalid_sid.to_le_bytes());
+        source
+    }
+
     fn case_colliding_root_fixture() -> Vec<u8> {
         let mut compound =
             cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("collision fixture CFB");
@@ -1179,6 +1311,34 @@ mod tests {
         assert_eq!(by_sid.status, by_name.status);
         assert_eq!(by_sid.truncation_reason, by_name.truncation_reason);
         assert_eq!(by_sid.source_ranges, by_name.source_ranges);
+    }
+
+    #[test]
+    fn raw_directory_inventory_keeps_stream_when_tree_link_is_out_of_range() {
+        let (source, sid, expected) = nested_regular_fixture();
+        let damaged = corrupt_directory_link_out_of_range(source, sid, 68);
+
+        assert!(
+            inspect_partial_cfb_physical_directory_reader(Cursor::new(damaged.clone())).is_err(),
+            "strict topology inventory must reject the damaged link"
+        );
+
+        let raw = inspect_partial_cfb_raw_directory_reader(Cursor::new(damaged.clone()))
+            .expect("raw directory inventory");
+        let entry = raw
+            .entries
+            .iter()
+            .find(|entry| entry.sid == sid)
+            .expect("target stream entry survives");
+        assert!(matches!(
+            entry.left_sibling,
+            RawDirectoryLink::OutOfRange(_)
+        ));
+
+        let recovered = recover_regular_stream_prefix_by_sid_reader(Cursor::new(damaged), sid)
+            .expect("exact-SID payload recovery must ignore unrelated tree links");
+        assert_eq!(recovered.bytes, expected);
+        assert_eq!(recovered.stream_sid, sid);
     }
 
     #[test]
