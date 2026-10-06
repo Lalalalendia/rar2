@@ -59,6 +59,7 @@ fn select_move(
     editor: &EditorSession,
     visual: &pub_viewer::ViewerGeometryDocument,
     require_wrap_irrelevant: bool,
+    required_export_image_asset: Option<Sha256Digest>,
 ) -> Option<(SceneInstanceV1, NodeId, RectEmu, MoveTransaction)> {
     const DELTAS: &[(i64, i64)] = &[
         (127_000, 254_000),
@@ -85,6 +86,9 @@ fn select_move(
                 || admission.origin_node_id.as_deref() != Some(origin_node_id.as_str())
                 || geometry_sync_policy_v1(&instance)
                     != GeometrySyncPolicyV1::ApplyAuthoredOriginGeometry
+                || required_export_image_asset.is_some_and(|asset| {
+                    editor.can_replace_image(scene_node.origin, asset).is_err()
+                })
             {
                 continue;
             }
@@ -127,6 +131,7 @@ fn select_resize(
     visual: &pub_viewer::ViewerGeometryDocument,
     excluded: &[NodeId],
     require_wrap_irrelevant: bool,
+    required_export_image_asset: Option<Sha256Digest>,
 ) -> Option<(SceneInstanceV1, NodeId, RectEmu, ResizeTransaction)> {
     const DELTAS: &[(i64, i64)] = &[(127_000, 127_000), (254_000, 127_000), (127_000, 254_000)];
 
@@ -152,6 +157,9 @@ fn select_resize(
                 || geometry_sync_policy_v1(&instance)
                     != GeometrySyncPolicyV1::ApplyAuthoredOriginGeometry
                 || editor.can_resize_node(scene_node.origin).is_err()
+                || required_export_image_asset.is_some_and(|asset| {
+                    editor.can_replace_image(scene_node.origin, asset).is_err()
+                })
             {
                 continue;
             }
@@ -364,7 +372,13 @@ pub fn run(
 
     let operations_before_drag = editor.operations().len();
     let (move_instance, moved_node_id, before_move, drag) =
-        select_move(&editor, &visual, require_wrap_irrelevant).ok_or_else(|| {
+        select_move(
+            &editor,
+            &visual,
+            require_wrap_irrelevant,
+            require_wrap_irrelevant.then_some(replacement_asset),
+        )
+        .ok_or_else(|| {
             if require_wrap_irrelevant {
                 "no admitted wrap-irrelevant direct page-local MoveNode target".to_owned()
             } else {
@@ -390,6 +404,7 @@ pub fn run(
             &visual,
             &[moved_node_id],
             require_wrap_irrelevant,
+            require_wrap_irrelevant.then_some(replacement_asset),
         )
         .ok_or_else(|| {
             if require_wrap_irrelevant {
