@@ -11,8 +11,7 @@ use pub_layout::{
     BoundedShapedGlyph, BoundedShapingDescriptor, BoundedShapingRuntime, ProjectedNodeGeometry,
     ProjectedPage, ProjectedStory, ProjectedStoryFrame, break_policy_for_shaped_text,
     compatible_natural_baseline_ascent_emu_v1, compatible_natural_line_height_emu_v1,
-    font_fingerprint_sha256, resolve_bounded_shaped_flow,
-    shape_bounded_ltr_segment,
+    font_fingerprint_sha256, resolve_bounded_shaped_flow, shape_bounded_ltr_segment,
 };
 use pub_line_placement::{
     LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
