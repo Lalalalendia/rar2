@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use pub_editor::{
     CreateTableRuntimeV1, EDITOR_PROJECT_VERSION_V0_20, EDITOR_PROJECT_VERSION_V0_21,
     EditOperation, EditorError, EditorProjectError, EditorSession, LengthEmu, NodeId, PageId,
-    RectEmu, StoryId, TableCellId, TableTrackTargetV1,
+    ParagraphId, RectEmu, StoryId, TableCellId, TableTrackTargetV1,
+    apply_create_table_forward_v1,
 };
 use pub_model::{
     Document, DocumentId, ResolvedGraph, Sha256Digest, Size2D, SourceDescriptor, TableColumnId,
@@ -329,6 +330,32 @@ fn pre_v021_project_cannot_smuggle_table_rowcol_history() {
         Err(EditorProjectError::LegacyProjectCarriesTableRowColOperation { index: 1 })
     ));
     assert!(target.operations().is_empty());
+}
+
+#[test]
+fn structural_lifecycle_rejects_rich_table_story() {
+    let mut rich = graph();
+    apply_create_table_forward_v1(&mut rich, &runtime()).expect("materialize source-like table");
+    rich.stories
+        .get_mut(&story_id())
+        .expect("table story")
+        .paragraphs
+        .push(canonical_id::<ParagraphId>(
+            "44000000-0000-4000-8000-000000000001",
+        ));
+
+    let mut session = EditorSession::new(rich).expect("session");
+    assert!(matches!(
+        session.insert_table_row_v1(
+            table_id(),
+            1,
+            inserted_row_id(),
+            inserted_row_cells(),
+            LengthEmu::new(225_000),
+        ),
+        Err(EditorError::TableRowColUnsupported { node_id }) if node_id == table_id()
+    ));
+    assert!(session.operations().is_empty());
 }
 
 #[test]
