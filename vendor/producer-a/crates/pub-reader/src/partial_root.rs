@@ -78,6 +78,7 @@ pub enum ReaderPartialContentsClass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReaderPartialContentsBoundary {
+    EvidenceInvalid,
     FamilyUnrecognized,
     Legacy22SeparateGrammarRequired,
     HeaderOnlyTrailerUnavailable,
@@ -131,6 +132,28 @@ pub fn analyze_reader_partial_contents_prefix(
     let missing_tail_len = evidence
         .declared_len
         .saturating_sub(evidence.available_prefix_len);
+
+    if !partial_contents_evidence_is_consistent(evidence) {
+        return ReaderPartialContentsSemanticEvidence {
+            schema_version: READER_PARTIAL_CONTENTS_SEMANTIC_EVIDENCE_SCHEMA_V1.to_owned(),
+            source_sha256: evidence.source_sha256.clone(),
+            stream_sid: evidence.stream_sid,
+            prefix_sha256: evidence.prefix_sha256.clone(),
+            available_prefix_len: evidence.available_prefix_len,
+            declared_len: evidence.declared_len,
+            family: None,
+            serialization_revision: None,
+            trailer_offset: None,
+            boundary: ReaderPartialContentsBoundary::EvidenceInvalid,
+            class: ReaderPartialContentsClass::NoSafeFact,
+            complete_chunk_facts: Vec::new(),
+            ambiguous_reference_count: 0,
+            referenced_chunk_unavailable_count: 0,
+            chunk_parse_failure_count: 0,
+            chunk_crosses_trailer_count: 0,
+            missing_tail_len,
+        };
+    }
 
     let family = match pub_contents::detect_family(prefix) {
         Ok(family) => family,
@@ -384,6 +407,45 @@ pub fn analyze_reader_partial_contents_prefix(
     }
 }
 
+fn partial_contents_evidence_is_consistent(
+    evidence: &ReaderPartialRootStreamEvidence,
+) -> bool {
+    if evidence.stream_identity != "/Contents"
+        || evidence.stream_sid == 0
+        || evidence.source_modified
+        || evidence.status != RootRegularStreamPrefixStatus::Partial
+        || evidence.available_prefix_len > evidence.declared_len
+        || usize::try_from(evidence.available_prefix_len).ok() != Some(evidence.prefix_bytes.len())
+        || sha256_hex(&evidence.prefix_bytes) != evidence.prefix_sha256
+        || evidence.source_ranges.is_empty()
+    {
+        return false;
+    }
+
+    let mut ranges = evidence.source_ranges.clone();
+    ranges.sort_by_key(|range| range.offset);
+    let mut total = 0u64;
+    let mut previous_end = None;
+    for range in ranges {
+        if range.len == 0 {
+            return false;
+        }
+        let Some(end) = range.offset.checked_add(range.len) else {
+            return false;
+        };
+        if previous_end.is_some_and(|previous| range.offset < previous) {
+            return false;
+        }
+        let Some(next_total) = total.checked_add(range.len) else {
+            return false;
+        };
+        total = next_total;
+        previous_end = Some(end);
+    }
+
+    total == evidence.available_prefix_len
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -477,7 +539,10 @@ mod tests {
             prefix_sha256: sha256_hex(&prefix),
             status: RootRegularStreamPrefixStatus::Partial,
             truncation_reason: Some(RootRegularStreamTruncationReason::UnexpectedEndOfChain),
-            source_ranges: Vec::new(),
+            source_ranges: vec![RootRegularStreamSourceRange {
+                offset: 512,
+                len: prefix.len() as u64,
+            }],
             prefix_bytes: prefix,
             source_modified: false,
         }
@@ -523,6 +588,29 @@ mod tests {
         cursor += 6;
         bytes[cursor..cursor + directory.len()].copy_from_slice(&directory);
         bytes
+    }
+
+    #[test]
+    fn forged_partial_evidence_fails_closed() {
+        let prefix = mature_prefix_without_trailer();
+        let mut evidence = partial_evidence_for_prefix(prefix, 1024);
+        evidence.prefix_sha256 = "00".repeat(32);
+
+        let semantic = analyze_reader_partial_contents_prefix(&evidence);
+        assert_eq!(semantic.boundary, ReaderPartialContentsBoundary::EvidenceInvalid);
+        assert_eq!(semantic.class, ReaderPartialContentsClass::NoSafeFact);
+        assert!(semantic.complete_chunk_facts.is_empty());
+    }
+
+    #[test]
+    fn wrong_stream_identity_fails_closed() {
+        let prefix = mature_prefix_without_trailer();
+        let mut evidence = partial_evidence_for_prefix(prefix, 1024);
+        evidence.stream_identity = "/NotContents".to_owned();
+
+        let semantic = analyze_reader_partial_contents_prefix(&evidence);
+        assert_eq!(semantic.boundary, ReaderPartialContentsBoundary::EvidenceInvalid);
+        assert_eq!(semantic.class, ReaderPartialContentsClass::NoSafeFact);
     }
 
     #[test]
