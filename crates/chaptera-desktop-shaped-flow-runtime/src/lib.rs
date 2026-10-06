@@ -111,9 +111,7 @@ impl fmt::Display for DesktopShapedFlowRuntimeError {
 
 impl std::error::Error for DesktopShapedFlowRuntimeError {}
 
-fn qualified_page_set_error_v1(
-    page_ids: &[PageId],
-) -> Result<(), DesktopShapedFlowRuntimeError> {
+fn qualified_page_set_error_v1(page_ids: &[PageId]) -> Result<(), DesktopShapedFlowRuntimeError> {
     if page_ids.is_empty() {
         return Err(DesktopShapedFlowRuntimeError::new(
             "qualified_pages_missing",
