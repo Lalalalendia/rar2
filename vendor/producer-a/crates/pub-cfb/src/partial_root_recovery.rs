@@ -48,6 +48,20 @@ pub struct RecoveredRootRegularStreamPrefix {
     pub source_ranges: Vec<RootRegularStreamSourceRange>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecoveredRegularStreamPrefixBySid {
+    pub bytes: Vec<u8>,
+    pub stream_sid: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub descriptive_name: Option<String>,
+    pub declared_len: u64,
+    pub available_prefix_len: u64,
+    pub status: RootRegularStreamPrefixStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncation_reason: Option<RootRegularStreamTruncationReason>,
+    pub source_ranges: Vec<RootRegularStreamSourceRange>,
+}
+
 /// Returns only physically proven prefix bytes for one direct-root regular
 /// CFB stream.
 ///
@@ -79,6 +93,32 @@ pub fn recover_root_regular_stream_prefix_reader<R: Read + Seek>(
 
     recover_root_regular_stream_prefix_from_bytes(&source, stream_name)
         .with_context(|| format!("failed to recover root stream prefix {stream_path}"))
+}
+
+/// Returns only physically proven prefix bytes for the exact CFB directory
+/// stream ID.
+///
+/// Stream identity is the directory-entry SID inside these exact source bytes.
+/// The directory name is descriptive metadata only and is never used to select
+/// the stream. V1 is intentionally limited to regular-sector/FAT-backed
+/// streams; MiniFAT-backed streams fail closed.
+///
+/// This is physical evidence extraction, not logical-path reconstruction and
+/// not CFB repair.
+pub fn recover_regular_stream_prefix_by_sid_reader<R: Read + Seek>(
+    mut reader: R,
+    stream_sid: u32,
+) -> Result<RecoveredRegularStreamPrefixBySid> {
+    reader
+        .seek(SeekFrom::Start(0))
+        .context("failed to seek to SID-bound partial CFB recovery input")?;
+    let mut source = Vec::new();
+    reader
+        .read_to_end(&mut source)
+        .context("failed to read SID-bound partial CFB recovery input")?;
+
+    recover_regular_stream_prefix_by_sid_from_bytes(&source, stream_sid)
+        .with_context(|| format!("failed to recover regular stream prefix for SID {stream_sid}"))
 }
 
 fn recover_root_regular_stream_prefix_from_bytes(
@@ -177,6 +217,120 @@ fn recover_root_regular_stream_prefix_from_bytes(
     let start = usize::try_from(stream_sid).context("stream SID does not fit usize")?
         * DIR_ENTRY_LEN;
     let entry = &directory[start..start + DIR_ENTRY_LEN];
+    let recovered = recover_regular_stream_prefix_from_entry(
+        source,
+        major,
+        sector_len,
+        num_sectors,
+        mini_stream_cutoff,
+        &fat,
+        stream_sid,
+        entry,
+        &format!("root stream {stream_name}"),
+    )?;
+
+    Ok(RecoveredRootRegularStreamPrefix {
+        bytes: recovered.bytes,
+        stream_sid: recovered.stream_sid,
+        declared_len: recovered.declared_len,
+        available_prefix_len: recovered.available_prefix_len,
+        status: recovered.status,
+        truncation_reason: recovered.truncation_reason,
+        root_entry_names,
+        source_ranges: recovered.source_ranges,
+    })
+}
+
+fn recover_regular_stream_prefix_by_sid_from_bytes(
+    source: &[u8],
+    stream_sid: u32,
+) -> Result<RecoveredRegularStreamPrefixBySid> {
+    if source.len() < 512 || source.get(..8) != Some(CFB_SIGNATURE.as_slice()) {
+        anyhow::bail!("not a CFB container");
+    }
+
+    let major = read_u16(source, 26)?;
+    let byte_order = read_u16(source, 28)?;
+    if byte_order != 0xfffe {
+        anyhow::bail!("unsupported CFB byte order {byte_order:#06x}");
+    }
+    let sector_shift = read_u16(source, 30)?;
+    let sector_len = match (major, sector_shift) {
+        (3, 9) => 512usize,
+        (4, 12) => 4096usize,
+        _ => anyhow::bail!("unsupported CFB major/sector pair {major}/{sector_shift}"),
+    };
+    if read_u16(source, 32)? != 6 {
+        anyhow::bail!("unsupported CFB mini-sector size");
+    }
+    if source.len() < sector_len || source.len() % sector_len != 0 {
+        anyhow::bail!("unaligned CFB partial recovery input");
+    }
+
+    let num_sectors = source.len() / sector_len - 1;
+    let num_fat_sectors = read_u32(source, 44)? as usize;
+    let first_directory_sector = read_u32(source, 48)?;
+    let mini_stream_cutoff = read_u32(source, 56)? as u64;
+    if mini_stream_cutoff != MINI_STREAM_CUTOFF {
+        anyhow::bail!("unexpected mini-stream cutoff {mini_stream_cutoff}");
+    }
+
+    let fat = read_fat(source, sector_len, num_sectors, num_fat_sectors)?;
+    let directory_sector_ids =
+        fat_chain_to_end(first_directory_sector, &fat, num_sectors, "directory")?;
+    if directory_sector_ids.is_empty() {
+        anyhow::bail!("empty CFB directory chain");
+    }
+
+    let mut directory = Vec::with_capacity(directory_sector_ids.len() * sector_len);
+    for sector_id in directory_sector_ids {
+        directory.extend_from_slice(read_sector(source, sector_len, sector_id)?);
+    }
+    if directory.len() < DIR_ENTRY_LEN {
+        anyhow::bail!("missing CFB root directory entry");
+    }
+    if directory[66] != 5 {
+        anyhow::bail!("first CFB directory entry is not root");
+    }
+
+    let entry_count = directory.len() / DIR_ENTRY_LEN;
+    let sid = usize::try_from(stream_sid).context("stream SID does not fit usize")?;
+    if sid >= entry_count {
+        anyhow::bail!("directory SID {stream_sid} is out of range");
+    }
+    let start = sid
+        .checked_mul(DIR_ENTRY_LEN)
+        .context("directory SID offset overflow")?;
+    let entry = &directory[start..start + DIR_ENTRY_LEN];
+    if entry[66] != 2 {
+        anyhow::bail!("directory SID {stream_sid} is not a stream");
+    }
+
+    recover_regular_stream_prefix_from_entry(
+        source,
+        major,
+        sector_len,
+        num_sectors,
+        mini_stream_cutoff,
+        &fat,
+        stream_sid,
+        entry,
+        &format!("stream SID {stream_sid}"),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recover_regular_stream_prefix_from_entry(
+    source: &[u8],
+    major: u16,
+    sector_len: usize,
+    num_sectors: usize,
+    mini_stream_cutoff: u64,
+    fat: &[u32],
+    stream_sid: u32,
+    entry: &[u8],
+    label: &str,
+) -> Result<RecoveredRegularStreamPrefixBySid> {
     let start_sector = read_u32(entry, 116)?;
     let low_len = read_u32(entry, 120)? as u64;
     let high_len = read_u32(entry, 124)? as u64;
@@ -186,16 +340,14 @@ fn recover_root_regular_stream_prefix_from_bytes(
         low_len
     };
     if stream_len < mini_stream_cutoff {
-        anyhow::bail!(
-            "root stream {stream_name} is {stream_len} bytes and therefore requires MiniFAT"
-        );
+        anyhow::bail!("{label} is {stream_len} bytes and therefore requires MiniFAT");
     }
 
     let stream_len_usize =
-        usize::try_from(stream_len).context("root stream length does not fit usize")?;
+        usize::try_from(stream_len).context("regular stream length does not fit usize")?;
     let needed_sectors = stream_len_usize
         .checked_add(sector_len - 1)
-        .context("root stream sector count overflow")?
+        .context("regular stream sector count overflow")?
         / sector_len;
 
     let mut bytes = Vec::with_capacity(stream_len_usize.min(source.len()));
@@ -210,7 +362,7 @@ fn recover_root_regular_stream_prefix_from_bytes(
             break;
         }
         if !seen_stream.insert(current) {
-            anyhow::bail!("cycle in root stream {stream_name} at sector {current}");
+            anyhow::bail!("cycle in {label} at sector {current}");
         }
 
         let Some(sector) = sector_if_available(source, sector_len, current) else {
@@ -246,19 +398,18 @@ fn recover_root_regular_stream_prefix_from_bytes(
             }
             current = next;
         } else if next != END_OF_CHAIN {
-            anyhow::bail!(
-                "root stream {stream_name} chain continues past declared length via {next}"
-            );
+            anyhow::bail!("{label} chain continues past declared length via {next}");
         }
     }
 
     if bytes.is_empty() {
-        anyhow::bail!("no physical prefix bytes recovered for root stream {stream_name}");
+        anyhow::bail!("no physical prefix bytes recovered for {label}");
     }
 
     let complete = bytes.len() == stream_len_usize && truncation_reason.is_none();
-    Ok(RecoveredRootRegularStreamPrefix {
+    Ok(RecoveredRegularStreamPrefixBySid {
         stream_sid,
+        descriptive_name: directory_name(entry).ok(),
         available_prefix_len: u64::try_from(bytes.len())
             .context("available prefix length does not fit u64")?,
         bytes,
@@ -269,7 +420,6 @@ fn recover_root_regular_stream_prefix_from_bytes(
             RootRegularStreamPrefixStatus::Partial
         },
         truncation_reason,
-        root_entry_names,
         source_ranges,
     })
 }
@@ -473,6 +623,81 @@ mod tests {
         u32::from_le_bytes([source[76], source[77], source[78], source[79]])
     }
 
+    fn directory_bytes(source: &[u8]) -> (usize, Vec<u32>, Vec<u8>) {
+        let sector_len = 1usize << u16::from_le_bytes([source[30], source[31]]);
+        let num_sectors = source.len() / sector_len - 1;
+        let num_fat_sectors = u32::from_le_bytes([
+            source[44], source[45], source[46], source[47],
+        ]) as usize;
+        let first_directory_sector =
+            u32::from_le_bytes([source[48], source[49], source[50], source[51]]);
+        let fat =
+            read_fat(source, sector_len, num_sectors, num_fat_sectors).expect("fixture FAT");
+        let directory_sector_ids =
+            fat_chain_to_end(first_directory_sector, &fat, num_sectors, "fixture directory")
+                .expect("fixture directory chain");
+        let mut directory = Vec::new();
+        for sector_id in &directory_sector_ids {
+            directory.extend_from_slice(
+                read_sector(source, sector_len, *sector_id).expect("fixture directory sector"),
+            );
+        }
+        (sector_len, directory_sector_ids, directory)
+    }
+
+    fn stream_sid_by_name(source: &[u8], expected_name: &str) -> u32 {
+        let (_, _, directory) = directory_bytes(source);
+        for sid in 1..directory.len() / DIR_ENTRY_LEN {
+            let start = sid * DIR_ENTRY_LEN;
+            let entry = &directory[start..start + DIR_ENTRY_LEN];
+            if entry[66] == 2
+                && directory_name(entry).ok().as_deref() == Some(expected_name)
+            {
+                return u32::try_from(sid).expect("fixture SID");
+            }
+        }
+        panic!("stream {expected_name} missing from fixture directory");
+    }
+
+    fn patch_directory_name(source: &mut [u8], sid: u32, new_name: &str) {
+        let (sector_len, directory_sector_ids, _) = directory_bytes(source);
+        let sid = usize::try_from(sid).expect("fixture SID usize");
+        let logical_offset = sid * DIR_ENTRY_LEN;
+        let directory_sector_ordinal = logical_offset / sector_len;
+        let within_sector = logical_offset % sector_len;
+        let directory_sector = directory_sector_ids[directory_sector_ordinal];
+        let raw_offset =
+            (usize::try_from(directory_sector).expect("directory sector") + 1) * sector_len
+                + within_sector;
+        let entry = &mut source[raw_offset..raw_offset + DIR_ENTRY_LEN];
+
+        let mut encoded = new_name.encode_utf16().collect::<Vec<_>>();
+        assert!(encoded.len() <= 31);
+        encoded.push(0);
+        entry[..64].fill(0);
+        for (index, unit) in encoded.iter().enumerate() {
+            entry[index * 2..index * 2 + 2].copy_from_slice(&unit.to_le_bytes());
+        }
+        let byte_len = u16::try_from(encoded.len() * 2).expect("directory name length");
+        entry[64..66].copy_from_slice(&byte_len.to_le_bytes());
+    }
+
+    fn nested_regular_fixture() -> (Vec<u8>, u32, Vec<u8>) {
+        let mut compound =
+            cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("nested fixture CFB");
+        compound.create_storage("/Escher").expect("Escher storage");
+        let expected = vec![0x6b; 9_000];
+        compound
+            .create_stream("/Escher/EscherDelayStm")
+            .expect("nested delay stream")
+            .write_all(&expected)
+            .expect("write nested delay stream");
+        compound.flush().expect("flush nested fixture");
+        let source = compound.into_inner().into_inner();
+        let sid = stream_sid_by_name(&source, "EscherDelayStm");
+        (source, sid, expected)
+    }
+
     fn root_contents_start_sector(source: &[u8]) -> u32 {
         let full = recover_root_regular_stream_prefix_reader(Cursor::new(source.to_vec()), "/Contents")
             .expect("complete root Contents evidence");
@@ -637,5 +862,103 @@ mod tests {
             recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Missing")
                 .expect_err("missing root stream must be rejected");
         assert!(format!("{missing:#}").contains("is absent"));
+    }
+
+    #[test]
+    fn exact_sid_recovers_nested_regular_stream_without_path_selection() {
+        let (source, sid, expected) = nested_regular_fixture();
+        let recovered =
+            recover_regular_stream_prefix_by_sid_reader(Cursor::new(source), sid)
+                .expect("recover nested regular stream by SID");
+        assert_eq!(recovered.stream_sid, sid);
+        assert_eq!(recovered.descriptive_name.as_deref(), Some("EscherDelayStm"));
+        assert_eq!(recovered.status, RootRegularStreamPrefixStatus::Complete);
+        assert_eq!(recovered.bytes, expected);
+        assert_eq!(recovered.available_prefix_len, recovered.declared_len);
+    }
+
+    #[test]
+    fn non_stream_sid_fails_closed() {
+        let (source, _, _) = nested_regular_fixture();
+        let error = recover_regular_stream_prefix_by_sid_reader(Cursor::new(source), 0)
+            .expect_err("root SID must not be recoverable as a stream");
+        assert!(format!("{error:#}").contains("is not a stream"));
+    }
+
+    #[test]
+    fn sid_bound_recovery_rejects_minifat_stream() {
+        let mut compound =
+            cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("small SID fixture");
+        compound
+            .create_stream("/Small")
+            .expect("small stream")
+            .write_all(b"small")
+            .expect("write small stream");
+        compound.flush().expect("flush small SID fixture");
+        let source = compound.into_inner().into_inner();
+        let sid = stream_sid_by_name(&source, "Small");
+
+        let error = recover_regular_stream_prefix_by_sid_reader(Cursor::new(source), sid)
+            .expect_err("MiniFAT stream must remain outside V1");
+        assert!(format!("{error:#}").contains("requires MiniFAT"));
+    }
+
+    #[test]
+    fn sid_bound_stream_cycle_fails_closed() {
+        let (mut source, sid, _) = nested_regular_fixture();
+        let recovered =
+            recover_regular_stream_prefix_by_sid_reader(Cursor::new(source.clone()), sid)
+                .expect("complete SID-bound stream");
+        let first_range = recovered.source_ranges.first().expect("first source range");
+        let sector_len = 1usize << u16::from_le_bytes([source[30], source[31]]);
+        let start_sector =
+            u32::try_from(usize::try_from(first_range.offset).unwrap() / sector_len - 1)
+                .expect("start sector");
+        let fat_sector = first_fat_sector(&source);
+        let fat_offset = (usize::try_from(fat_sector).unwrap() + 1) * sector_len;
+        let entry_offset = fat_offset + usize::try_from(start_sector).unwrap() * 4;
+        source[entry_offset..entry_offset + 4].copy_from_slice(&start_sector.to_le_bytes());
+
+        let error = recover_regular_stream_prefix_by_sid_reader(Cursor::new(source), sid)
+            .expect_err("SID-bound stream cycle must fail closed");
+        assert!(format!("{error:#}").contains("cycle in stream SID"));
+    }
+
+    #[test]
+    fn case_colliding_names_remain_distinct_by_sid() {
+        let mut compound =
+            cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("collision fixture");
+        let lower_payload = vec![0x31; 9_000];
+        let upper_payload = vec![0x72; 9_000];
+        compound
+            .create_stream("/contents")
+            .expect("lower stream")
+            .write_all(&lower_payload)
+            .expect("write lower");
+        compound
+            .create_stream("/CONTENt2")
+            .expect("upper staging stream")
+            .write_all(&upper_payload)
+            .expect("write upper");
+        compound.flush().expect("flush collision fixture");
+        let mut source = compound.into_inner().into_inner();
+
+        let lower_sid = stream_sid_by_name(&source, "contents");
+        let upper_sid = stream_sid_by_name(&source, "CONTENt2");
+        assert_ne!(lower_sid, upper_sid);
+        patch_directory_name(&mut source, upper_sid, "CONTENTS");
+
+        let lower =
+            recover_regular_stream_prefix_by_sid_reader(Cursor::new(source.clone()), lower_sid)
+                .expect("lower by SID");
+        let upper =
+            recover_regular_stream_prefix_by_sid_reader(Cursor::new(source), upper_sid)
+                .expect("upper by SID");
+
+        assert_eq!(lower.descriptive_name.as_deref(), Some("contents"));
+        assert_eq!(upper.descriptive_name.as_deref(), Some("CONTENTS"));
+        assert_eq!(lower.bytes, lower_payload);
+        assert_eq!(upper.bytes, upper_payload);
+        assert_ne!(lower.bytes, upper.bytes);
     }
 }
