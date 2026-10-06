@@ -1,0 +1,84 @@
+name: VALIDATION manual residual source probe
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/validation-manual-residual-source-probe.yml"
+      - "vendor/producer-a/crates/pub-reader/src/bin/residual_object_probe.rs"
+      - "vendor/producer-a/crates/pub-reader/src/bin/source_image_export_probe.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validation-manual-residual-source-probe-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/manual-residual-source-probe
+
+jobs:
+  build-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml --all -- --check
+
+      - name: Build source-neutral probes
+        run: |
+          set -euo pipefail
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --release \
+            --bin residual_object_probe \
+            --bin source_image_export_probe
+
+      - name: Package probe metadata
+        run: |
+          set -euo pipefail
+          mkdir -p target/manual-residual-source-probe-artifact/bin
+          cp "$CARGO_TARGET_DIR/release/residual_object_probe" target/manual-residual-source-probe-artifact/bin/
+          cp "$CARGO_TARGET_DIR/release/source_image_export_probe" target/manual-residual-source-probe-artifact/bin/
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          Path("target/manual-residual-source-probe-artifact/RUNNER-METADATA.json").write_text(
+              json.dumps(
+                  {
+                      "schema": "chaptera.manual-residual-source-probe-runner.v1",
+                      "repository_commit_sha": os.environ["GITHUB_SHA"],
+                      "private_pub_bytes_in_artifact": False,
+                      "publisher_pdf_bytes_in_artifact": False,
+                      "probe_outputs_in_artifact": False,
+                      "binaries": [
+                          "bin/residual_object_probe",
+                          "bin/source_image_export_probe",
+                      ],
+                  },
+                  indent=2,
+                  sort_keys=True,
+              )
+              + "\n"
+          )
+          PY
+
+      - name: Upload source-safe probe runner
+        uses: actions/upload-artifact@v4
+        with:
+          name: manual-residual-source-probe-runner
+          path: target/manual-residual-source-probe-artifact
+          if-no-files-found: error
+          retention-days: 1
