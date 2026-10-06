@@ -9635,8 +9635,7 @@ mod table_rowcol_metadata_tests {
                 .parse()
                 .expect("source hash");
         let story_id: StoryId =
-            serde_json::from_str("\"55000000-0000-4000-8000-000000000001\"")
-                .expect("story id");
+            serde_json::from_str("\"55000000-0000-4000-8000-000000000001\"").expect("story id");
         let graph: PubResolvedGraph = pub_model::ResolvedGraph {
             cdm_version: "0.1".into(),
             resolver_version: "rowcol-metadata-test".into(),
