@@ -1,6 +1,4 @@
 # Guest-only production profile for the public Cloud Reader.
-# S3-compatible credentials/endpoint are supplied through the AWS SDK provider
-# chain, not stored in this file.
 environment = "prod"
 listen = "127.0.0.1:8080"
 public_origin = "https://reader.chaptera.online"
@@ -21,7 +19,7 @@ quota_export_cap = 1
 quota_background_cap = 1
 
 [storage]
-provider = "s3-compatible"
+provider = "filesystem"
 quarantine_namespace = "chaptera-reader-quarantine"
 private_namespace = "chaptera-reader-private"
 
