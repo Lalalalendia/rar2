@@ -374,6 +374,7 @@ pub fn build_create_table_plan_v1(
                 cells: source_cells,
                 simple_table: Some(simple_table),
                 layout_relation: None,
+                uniform_cell_text_inset: None,
                 layout_metrics: Some(PubTableLayoutMetricsSource {
                     story_layout_key: 0,
                     cell_width: column_extent,
