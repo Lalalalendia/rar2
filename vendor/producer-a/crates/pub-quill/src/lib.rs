@@ -18,9 +18,10 @@ pub use mcld::{
 pub use story::{
     QUILL_DESCRIPTOR_LIST_END, QUILL_DESCRIPTOR_LIST_ROOT_OFFSET, QUILL_DESCRIPTOR_PRESENCE_MARKER,
     QUILL_DESCRIPTOR_SIZE, QuillChunkDescriptor, QuillDescriptorListNode, QuillFdppStoryCatalog,
-    QuillFdppStorySlice, QuillGroundedStoryIdentity, QuillStoryCatalog, QuillStoryReadError,
-    QuillStorySlice, QuillStrsChunk, QuillSyidChunk, QuillTcdChunk, QuillTextChunk,
-    parse_bounded_fdpp_exact_story_catalog, parse_confirmed_story_catalog,
+    QuillFdppStorySlice, QuillGroundedStoryIdentity, QuillPartialStoryCatalog, QuillStoryCatalog,
+    QuillStoryReadError, QuillStorySlice, QuillStrsChunk, QuillSyidChunk, QuillTcdChunk,
+    QuillTextChunk, parse_bounded_fdpp_exact_story_catalog, parse_confirmed_story_catalog,
+    parse_confirmed_story_catalog_prefix,
 };
 pub use writer::{
     QuillBooleanToggleWritePlan, QuillStoryTextEdit, QuillStoryTextWritePlan, QuillStoryWriteError,

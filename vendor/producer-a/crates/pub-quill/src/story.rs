@@ -103,6 +103,18 @@ pub struct QuillStoryCatalog {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillPartialStoryCatalog {
+    pub declared_stream_len: u64,
+    pub available_prefix_len: u64,
+    pub missing_tail_len: u64,
+    pub descriptor_nodes: Vec<QuillDescriptorListNode>,
+    pub syid: QuillSyidChunk,
+    pub strs: QuillStrsChunk,
+    pub text: QuillTextChunk,
+    pub stories: Vec<QuillStorySlice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuillGroundedStoryIdentity {
     pub syid: QuillSyid,
     pub source: RawSpan,
@@ -173,6 +185,10 @@ pub enum QuillStoryReadError {
     TextLengthMismatch {
         expected_bytes: u64,
         actual_bytes: u32,
+    },
+    PrefixLongerThanDeclared {
+        available: u64,
+        declared: u64,
     },
     TcdStoryOrdinalOutOfBounds {
         story_ordinal: u16,
@@ -302,6 +318,103 @@ pub fn parse_confirmed_story_catalog(
         stories,
         tcd,
         tokn,
+    })
+}
+
+/// Parses the strict descriptor/SYID/STRS/TEXT Story core from a physically
+/// proven Quill prefix.
+///
+/// Unlike `parse_confirmed_story_catalog`, this recovery-oriented entry point
+/// deliberately does not require optional TCD/TOKN chunks to remain readable.
+/// A Story is emitted only when every descriptor, SYID, STRS and TEXT byte
+/// needed for that Story is fully contained in `bytes`. The missing tail is
+/// reported explicitly and is never padded or interpreted.
+pub fn parse_confirmed_story_catalog_prefix(
+    stream: StreamPath,
+    bytes: &[u8],
+    declared_stream_len: u64,
+) -> Result<QuillPartialStoryCatalog, QuillStoryReadError> {
+    let available_prefix_len =
+        u64::try_from(bytes.len()).map_err(|_| QuillStoryReadError::TextLengthOverflow)?;
+    if available_prefix_len > declared_stream_len {
+        return Err(QuillStoryReadError::PrefixLongerThanDeclared {
+            available: available_prefix_len,
+            declared: declared_stream_len,
+        });
+    }
+
+    let descriptor_nodes = parse_descriptor_nodes(stream.clone(), bytes)?;
+    let descriptors = descriptor_nodes
+        .iter()
+        .flat_map(|node| node.descriptors.iter())
+        .collect::<Vec<_>>();
+    let syid_descriptor = required_descriptor(&descriptors, SYID)?;
+    let strs_descriptor = required_descriptor(&descriptors, STRS)?;
+    let text_descriptor = required_descriptor(&descriptors, TEXT)?;
+
+    let syid = parse_syid(stream.clone(), bytes, syid_descriptor)?;
+    let strs = parse_strs(stream.clone(), bytes, strs_descriptor)?;
+    let text = parse_text(stream.clone(), bytes, text_descriptor)?;
+
+    if syid.count.value != strs.count.value {
+        return Err(QuillStoryReadError::StoryCountMismatch {
+            syid_count: syid.count.value,
+            strs_count: strs.count.value,
+        });
+    }
+
+    let expected_bytes = strs.lengths.iter().try_fold(0_u64, |sum, length| {
+        u64::from(length.value)
+            .checked_mul(2)
+            .and_then(|len| sum.checked_add(len))
+    });
+    let Some(expected_bytes) = expected_bytes else {
+        return Err(QuillStoryReadError::TextLengthOverflow);
+    };
+    if expected_bytes != u64::from(text_descriptor.data_length.value) {
+        return Err(QuillStoryReadError::TextLengthMismatch {
+            expected_bytes,
+            actual_bytes: text_descriptor.data_length.value,
+        });
+    }
+
+    let text_start = usize::try_from(text_descriptor.data_offset.value)
+        .map_err(|_| QuillStoryReadError::TextLengthOverflow)?;
+    let mut cursor = text_start;
+    let mut stories = Vec::with_capacity(syid.ids.len());
+    for (index, (id, length)) in syid.ids.iter().zip(&strs.lengths).enumerate() {
+        let byte_len = usize::try_from(length.value)
+            .ok()
+            .and_then(|units| units.checked_mul(2))
+            .ok_or(QuillStoryReadError::TextLengthOverflow)?;
+        let end = cursor
+            .checked_add(byte_len)
+            .ok_or(QuillStoryReadError::TextLengthOverflow)?;
+        let utf16le = bytes
+            .get(cursor..end)
+            .ok_or(QuillStoryReadError::TextLengthOverflow)?
+            .to_vec();
+        stories.push(QuillStorySlice {
+            index: u32::try_from(index).map_err(|_| QuillStoryReadError::TextLengthOverflow)?,
+            syid: id.value,
+            syid_source: id.source.clone(),
+            utf16_code_units: length.value,
+            length_source: length.source.clone(),
+            text_source: span(stream.clone(), cursor, byte_len),
+            utf16le,
+        });
+        cursor = end;
+    }
+
+    Ok(QuillPartialStoryCatalog {
+        declared_stream_len,
+        available_prefix_len,
+        missing_tail_len: declared_stream_len - available_prefix_len,
+        descriptor_nodes,
+        syid,
+        strs,
+        text,
+        stories,
     })
 }
 
@@ -884,6 +997,38 @@ mod tests {
         w32(&mut bytes, 0x130, 1);
         bytes[0x150..0x156].copy_from_slice(&[b'A', 0, b'B', 0, b'C', 0]);
         (stream, bytes)
+    }
+
+    #[test]
+    fn partial_story_core_retains_text_when_optional_tcd_tail_is_missing() {
+        let (stream, bytes) = tcd_fixture();
+        let declared = u64::try_from(bytes.len()).unwrap();
+        let prefix = &bytes[..0x160];
+
+        assert!(parse_confirmed_story_catalog(stream.clone(), prefix).is_err());
+
+        let recovered =
+            parse_confirmed_story_catalog_prefix(stream, prefix, declared).expect("story core");
+        assert_eq!(recovered.available_prefix_len, 0x160);
+        assert_eq!(recovered.missing_tail_len, declared - 0x160);
+        assert_eq!(recovered.stories.len(), 2);
+        assert_eq!(recovered.stories[0].utf16le, [b'A', 0, b'B', 0]);
+        assert_eq!(recovered.stories[1].utf16le, [b'C', 0]);
+    }
+
+    #[test]
+    fn partial_story_core_rejects_prefix_longer_than_declared_stream() {
+        let (stream, bytes) = fixture();
+        let error = parse_confirmed_story_catalog_prefix(
+            stream,
+            &bytes,
+            u64::try_from(bytes.len() - 1).unwrap(),
+        )
+        .expect_err("declared stream shorter than proven bytes must fail");
+        assert!(matches!(
+            error,
+            QuillStoryReadError::PrefixLongerThanDeclared { .. }
+        ));
     }
 
     fn tcd_fixture() -> (StreamPath, Vec<u8>) {
