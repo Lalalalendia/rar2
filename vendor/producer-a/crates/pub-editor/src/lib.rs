@@ -47,8 +47,7 @@ pub use create_shape_runtime_v1::{
 pub use create_table_runtime_v1::{
     AUTHORED_TABLE_SENTINEL_CONTENTS_SEQ_NUM_V1, AUTHORED_TABLE_SENTINEL_TEXT_ID_V1,
     CreateTablePlanV1, CreateTableRuntimeV1, CreateTableRuntimeValidationError,
-    build_create_table_plan_v1, rebuild_authored_table_story_v1,
-    validate_create_table_runtime_v1,
+    build_create_table_plan_v1, rebuild_authored_table_story_v1, validate_create_table_runtime_v1,
 };
 pub use duplicate_authored_rectangle_v1::{
     DUPLICATE_OFFSET_EMU_V1, DUPLICATE_PLACEMENT_POLICY_V1, DuplicateAuthoredRectangleErrorV1,
