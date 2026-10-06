@@ -109,7 +109,7 @@ jobs:
             echo "consumer_cap=96" >> "$GITHUB_OUTPUT"
           else
             echo "route_count=96" >> "$GITHUB_OUTPUT"
-            echo "consumer_cap=96" >> "$GITHUB_OUTPUT"
+            echo "consumer_cap=12" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Download pinned exact 1050 corpus
