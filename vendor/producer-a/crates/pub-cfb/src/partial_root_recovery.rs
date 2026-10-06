@@ -74,6 +74,38 @@ pub struct RecoveredRegularStreamPrefixBySid {
     pub source_modified: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PhysicalDirectoryEntry {
+    pub sid: u32,
+    pub object_type: u8,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub left_sibling_sid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub right_sibling_sid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub child_sid: Option<u32>,
+    pub start_sector: u32,
+    pub declared_len: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PhysicalDirectoryInventory {
+    pub source_sha256: String,
+    pub source_byte_len: u64,
+    pub entries: Vec<PhysicalDirectoryEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DiscoveredPhysicalStream {
+    pub source_sha256: String,
+    pub source_byte_len: u64,
+    pub logical_path: String,
+    pub stream_sid: u32,
+    pub descriptive_name: String,
+    pub declared_len: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PartialCfbPhysicalContext {
     major: u16,
@@ -234,6 +266,240 @@ fn build_partial_cfb_physical_context(source: &[u8]) -> Result<PartialCfbPhysica
         mini_stream_cutoff,
         fat,
         directory,
+    })
+}
+
+/// Returns fully proven live CFB directory entries without reading target
+/// stream payload bytes. V1 requires the entire directory stream itself to be
+/// physically readable. SIDs are preserved exactly.
+pub fn inspect_partial_cfb_physical_directory_reader<R: Read + Seek>(
+    mut reader: R,
+) -> Result<PhysicalDirectoryInventory> {
+    reader
+        .seek(SeekFrom::Start(0))
+        .context("failed to seek to physical CFB directory input")?;
+    let mut source = Vec::new();
+    reader
+        .read_to_end(&mut source)
+        .context("failed to read physical CFB directory input")?;
+
+    let context = build_partial_cfb_physical_context(&source)?;
+    let entries = physical_directory_entries(&context)?;
+    Ok(PhysicalDirectoryInventory {
+        source_sha256: sha256_hex(&source),
+        source_byte_len: source.len() as u64,
+        entries,
+    })
+}
+
+/// Resolves one absolute nested logical stream path to an exact CFB directory
+/// SID using only fully proven physical directory bytes. Path/name are
+/// discovery evidence only; the returned source SHA and SID bind the later
+/// physical stream read.
+pub fn discover_regular_stream_sid_reader<R: Read + Seek>(
+    mut reader: R,
+    logical_path: &str,
+) -> Result<DiscoveredPhysicalStream> {
+    let components = logical_path
+        .strip_prefix('/')
+        .filter(|path| !path.is_empty())
+        .map(|path| path.split('/').collect::<Vec<_>>())
+        .with_context(|| {
+            format!("physical discovery requires absolute non-root path: {logical_path}")
+        })?;
+    if components
+        .iter()
+        .any(|component| component.is_empty() || *component == "." || *component == "..")
+    {
+        anyhow::bail!("physical discovery path contains an invalid component: {logical_path}");
+    }
+
+    reader
+        .seek(SeekFrom::Start(0))
+        .context("failed to seek to physical CFB discovery input")?;
+    let mut source = Vec::new();
+    reader
+        .read_to_end(&mut source)
+        .context("failed to read physical CFB discovery input")?;
+    let context = build_partial_cfb_physical_context(&source)?;
+
+    let mut parent_sid = 0u32;
+    let mut storage_ancestors = BTreeSet::from([0u32]);
+    let mut discovered = None;
+
+    for (index, component) in components.iter().enumerate() {
+        let sid = find_unambiguous_child_sid(&context, parent_sid, component, &storage_ancestors)?;
+        let entry = physical_directory_entry(&context, sid)?;
+        let is_last = index + 1 == components.len();
+
+        if is_last {
+            if entry.object_type != 2 {
+                anyhow::bail!(
+                    "physical discovery target {logical_path} resolves to non-stream SID {sid}"
+                );
+            }
+            discovered = Some(entry);
+            break;
+        }
+
+        if entry.object_type != 1 {
+            anyhow::bail!("physical discovery component {component} at SID {sid} is not a storage");
+        }
+        if !storage_ancestors.insert(sid) {
+            anyhow::bail!("cycle in physical directory storage ancestry at SID {sid}");
+        }
+        parent_sid = sid;
+    }
+
+    let entry = discovered.with_context(|| format!("physical stream {logical_path} is absent"))?;
+    Ok(DiscoveredPhysicalStream {
+        source_sha256: sha256_hex(&source),
+        source_byte_len: source.len() as u64,
+        logical_path: logical_path.to_owned(),
+        stream_sid: entry.sid,
+        descriptive_name: entry.name,
+        declared_len: entry.declared_len,
+    })
+}
+
+fn physical_directory_entries(
+    context: &PartialCfbPhysicalContext,
+) -> Result<Vec<PhysicalDirectoryEntry>> {
+    let entry_count = context.directory.len() / DIR_ENTRY_LEN;
+    let mut entries = Vec::new();
+
+    for sid in 0..entry_count {
+        let start = sid
+            .checked_mul(DIR_ENTRY_LEN)
+            .context("directory SID offset overflow")?;
+        let raw = &context.directory[start..start + DIR_ENTRY_LEN];
+        let object_type = raw[66];
+        if object_type == 0 {
+            continue;
+        }
+        if sid == 0 {
+            if object_type != 5 {
+                anyhow::bail!("CFB directory SID 0 is not root");
+            }
+        } else if !matches!(object_type, 1 | 2) {
+            anyhow::bail!("unexpected CFB directory object type {object_type} at SID {sid}");
+        }
+
+        entries.push(physical_directory_entry(
+            context,
+            u32::try_from(sid).context("directory SID does not fit u32")?,
+        )?);
+    }
+
+    Ok(entries)
+}
+
+fn physical_directory_entry(
+    context: &PartialCfbPhysicalContext,
+    sid: u32,
+) -> Result<PhysicalDirectoryEntry> {
+    let entry_count = context.directory.len() / DIR_ENTRY_LEN;
+    let sid_usize = usize::try_from(sid).context("directory SID does not fit usize")?;
+    if sid_usize >= entry_count {
+        anyhow::bail!("directory SID {sid} is out of range");
+    }
+    let start = sid_usize
+        .checked_mul(DIR_ENTRY_LEN)
+        .context("directory SID offset overflow")?;
+    let raw = &context.directory[start..start + DIR_ENTRY_LEN];
+    let object_type = raw[66];
+    if object_type == 0 {
+        anyhow::bail!("directory SID {sid} is unused");
+    }
+    if sid == 0 {
+        if object_type != 5 {
+            anyhow::bail!("CFB directory SID 0 is not root");
+        }
+    } else if !matches!(object_type, 1 | 2) {
+        anyhow::bail!("unexpected CFB directory object type {object_type} at SID {sid}");
+    }
+
+    let low_len = read_u32(raw, 120)? as u64;
+    let high_len = read_u32(raw, 124)? as u64;
+    let declared_len = if context.major == 4 {
+        low_len | (high_len << 32)
+    } else {
+        low_len
+    };
+
+    Ok(PhysicalDirectoryEntry {
+        sid,
+        object_type,
+        name: directory_name(raw)?,
+        left_sibling_sid: validated_directory_link(raw, 68, entry_count, sid, "left sibling")?,
+        right_sibling_sid: validated_directory_link(raw, 72, entry_count, sid, "right sibling")?,
+        child_sid: validated_directory_link(raw, 76, entry_count, sid, "child")?,
+        start_sector: read_u32(raw, 116)?,
+        declared_len,
+    })
+}
+
+fn validated_directory_link(
+    raw: &[u8],
+    offset: usize,
+    entry_count: usize,
+    owner_sid: u32,
+    label: &str,
+) -> Result<Option<u32>> {
+    let sid = read_u32(raw, offset)?;
+    if sid == NO_STREAM {
+        return Ok(None);
+    }
+    let sid_usize = usize::try_from(sid).context("directory link SID does not fit usize")?;
+    if sid_usize >= entry_count {
+        anyhow::bail!("{label} of SID {owner_sid} references out-of-range SID {sid}");
+    }
+    Ok(Some(sid))
+}
+
+fn find_unambiguous_child_sid(
+    context: &PartialCfbPhysicalContext,
+    parent_sid: u32,
+    expected_name: &str,
+    storage_ancestors: &BTreeSet<u32>,
+) -> Result<u32> {
+    let parent = physical_directory_entry(context, parent_sid)?;
+    if !matches!(parent.object_type, 1 | 5) {
+        anyhow::bail!("directory SID {parent_sid} is not a storage/root");
+    }
+    let Some(root_child) = parent.child_sid else {
+        anyhow::bail!("directory component {expected_name} is absent under SID {parent_sid}");
+    };
+
+    let mut pending = vec![root_child];
+    let mut seen = BTreeSet::new();
+    let mut matching_sid = None;
+
+    while let Some(sid) = pending.pop() {
+        if !seen.insert(sid) {
+            anyhow::bail!("cycle in directory sibling tree under SID {parent_sid} at SID {sid}");
+        }
+        if storage_ancestors.contains(&sid) {
+            anyhow::bail!(
+                "physical directory child tree under SID {parent_sid} reaches ancestor SID {sid}"
+            );
+        }
+        let entry = physical_directory_entry(context, sid)?;
+        if entry.name.eq_ignore_ascii_case(expected_name) && matching_sid.replace(sid).is_some() {
+            anyhow::bail!(
+                "ambiguous case-insensitive directory component {expected_name} under SID {parent_sid}"
+            );
+        }
+        if let Some(left) = entry.left_sibling_sid {
+            pending.push(left);
+        }
+        if let Some(right) = entry.right_sibling_sid {
+            pending.push(right);
+        }
+    }
+
+    matching_sid.with_context(|| {
+        format!("directory component {expected_name} is absent under SID {parent_sid}")
     })
 }
 
@@ -608,6 +874,9 @@ fn directory_name(entry: &[u8]) -> Result<String> {
 }
 
 #[cfg(test)]
+mod physical_directory_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::io::{Cursor, Write};
@@ -915,9 +1184,8 @@ mod tests {
     #[test]
     fn exact_sid_recovers_nested_regular_stream_without_path_selection() {
         let (source, sid, expected) = nested_regular_fixture();
-        let recovered =
-            recover_regular_stream_prefix_by_sid_reader(Cursor::new(source.clone()), sid)
-                .expect("recover nested regular stream by SID");
+        let recovered = recover_regular_stream_prefix_by_sid_reader(Cursor::new(source), sid)
+            .expect("recover nested regular stream by SID");
         assert_eq!(recovered.stream_sid, sid);
         assert_eq!(recovered.source_sha256, sha256_hex(&source));
         assert_eq!(recovered.source_byte_len, source.len() as u64);
