@@ -7,7 +7,8 @@ use pub_editor::{
     EDITOR_PROJECT_VERSION_V0_11, EDITOR_PROJECT_VERSION_V0_12, EDITOR_PROJECT_VERSION_V0_13,
     EDITOR_PROJECT_VERSION_V0_14, EDITOR_PROJECT_VERSION_V0_15, EDITOR_PROJECT_VERSION_V0_16,
     EDITOR_PROJECT_VERSION_V0_17, EDITOR_PROJECT_VERSION_V0_18, EDITOR_PROJECT_VERSION_V0_19,
-    EditOperation, EditorProject, Sha256Digest, open_mature_0x2c_editor,
+    EDITOR_PROJECT_VERSION_V0_20, EditOperation, EditorProject, Sha256Digest,
+    open_mature_0x2c_editor,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -486,6 +487,7 @@ fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
 
     for operation in &project.operations {
         let operation_rank = match operation {
+            EditOperation::SetTableTrackExtent { .. } => 20,
             EditOperation::SetImageCrop { .. } => 19,
             EditOperation::CreateTable { .. } => 18,
             EditOperation::CreateLine { .. } => 17,
@@ -513,6 +515,7 @@ fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
     }
 
     match rank {
+        20 => EDITOR_PROJECT_VERSION_V0_20,
         19 => EDITOR_PROJECT_VERSION_V0_19,
         18 => EDITOR_PROJECT_VERSION_V0_18,
         17 => EDITOR_PROJECT_VERSION_V0_17,
