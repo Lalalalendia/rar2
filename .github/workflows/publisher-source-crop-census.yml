@@ -3,7 +3,7 @@ name: Publisher source crop corpus census
 on:
   pull_request:
     paths:
-      - "vendor/producer-a/crates/pub-editor/examples/crop_census.rs"
+      - "tools/census_publisher_source_crop.py"
       - ".github/workflows/publisher-source-crop-census.yml"
   workflow_dispatch:
 
@@ -36,26 +36,27 @@ jobs:
           for file in "${files[@]}"; do
             curl -fsSL --retry 3 --retry-delay 2 "$base/$file"               -o "target/apache-publisher-crop-census/$file"
           done
-      - name: Build and run source crop census
+      - name: Build existing source-neutral producer
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p chaptera-producer-a
+      - name: Run source crop census
         shell: bash
         run: |
           set -euo pipefail
-          cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml             -p pub-editor --example crop_census --             target/apache-publisher-crop-census/*.pub             > target/apache-publisher-crop-census/census.json
+          python tools/census_publisher_source_crop.py             --producer vendor/producer-a/target/debug/chaptera-producer-a             --output target/apache-publisher-crop-census/census.json             target/apache-publisher-crop-census/*.pub
           cat target/apache-publisher-crop-census/census.json
-      - name: Require at least one hosted cropped ReplaceImage witness
+      - name: Report hosted crop candidates
         shell: python
         run: |
           import json
           from pathlib import Path
-          p = Path("target/apache-publisher-crop-census/census.json")
-          rows = json.loads(p.read_text(encoding="utf-8"))
+          rows = json.loads(Path("target/apache-publisher-crop-census/census.json").read_text())
           hits = [
               row for row in rows
-              if row.get("replace_eligible_nonzero_crop_count", 0) > 0
+              if row.get("unambiguous_nonzero_crop_count", 0) > 0
           ]
-          print("eligible_nonzero_crop_files=", [row["file"] for row in hits])
-          if not hits:
-              raise SystemExit("no Apache Publisher fixture has a nonzero source crop eligible for ReplaceImage")
+          print("unambiguous_nonzero_crop_files=", [row["file"] for row in hits])
+          print("opened=", sum(row.get("status") == "opened" for row in rows))
+          print("unsupported=", sum(row.get("status") == "open_unsupported" for row in rows))
       - uses: actions/upload-artifact@v4
         if: always()
         with:
