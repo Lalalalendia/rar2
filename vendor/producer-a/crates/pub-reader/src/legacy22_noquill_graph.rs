@@ -913,6 +913,7 @@ fn build_legacy_table_projection(
         tcd_story_ordinal: None,
         cells,
         simple_table,
+        layout_relation: None,
         layout_metrics: None,
         border_segments: Vec::new(),
         source_refs: vec![
