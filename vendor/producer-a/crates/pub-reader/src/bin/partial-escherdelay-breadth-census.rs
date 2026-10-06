@@ -322,8 +322,7 @@ fn main() -> Result<()> {
     if authority.audit_sha256 != EXPECTED_AUDIT_SHA256
         || authority.retained_archive_sha256 != EXPECTED_RETAINED_ARCHIVE_SHA256
         || authority.source_audit_sha256 != EXPECTED_SOURCE_AUDIT_SHA256
-        || authority.exported_bundle_manifest_sha256
-            != EXPECTED_EXPORTED_BUNDLE_MANIFEST_SHA256
+        || authority.exported_bundle_manifest_sha256 != EXPECTED_EXPORTED_BUNDLE_MANIFEST_SHA256
         || authority.gdi_decode_audit_sha256 != EXPECTED_GDI_DECODE_AUDIT_SHA256
     {
         bail!("cohort provenance does not match the retained exact-audit authority");
@@ -638,7 +637,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,17 +677,13 @@ mod tests {
             let source_sha = validate_sha256(&source.source_sha256).expect("source SHA-256");
             assert!(unique_sources.insert(source_sha));
             assert!(source.expected_declared_len.is_some_and(|value| value > 0));
-            assert!(
-                source
-                    .expected_available_prefix_len
-                    .is_some_and(|value| value > 0)
-            );
-            assert!(
-                source
-                    .expected_available_prefix_len
-                    .zip(source.expected_declared_len)
-                    .is_some_and(|(available, declared)| available < declared)
-            );
+            assert!(source
+                .expected_available_prefix_len
+                .is_some_and(|value| value > 0));
+            assert!(source
+                .expected_available_prefix_len
+                .zip(source.expected_declared_len)
+                .is_some_and(|(available, declared)| available < declared));
             validate_sha256(
                 source
                     .expected_prefix_sha256
