@@ -2,9 +2,7 @@ use crate::{
     TableCellContentSnapshotV1, TableRowColHistoryErrorV1, TableStructureSnapshotV1,
     validate_table_structure_snapshot_v1,
 };
-use pub_model::{
-    EffectiveTableGridV1, NodeId, RectEmu, SimpleRectangularTable, SimpleTableCell,
-};
+use pub_model::{EffectiveTableGridV1, NodeId, RectEmu, SimpleRectangularTable, SimpleTableCell};
 use pub_reader::{
     PubResolvedGraph, PubTableCellCoordinates, PubTableCellSource,
     materialize_bounded_simple_table_cells,
@@ -30,10 +28,7 @@ impl From<TableRowColHistoryErrorV1> for TableRowColGraphErrorV1 {
     }
 }
 
-fn topology_matches_grid(
-    table: &pub_reader::PubTableSource,
-    grid: &EffectiveTableGridV1,
-) -> bool {
+fn topology_matches_grid(table: &pub_reader::PubTableSource, grid: &EffectiveTableGridV1) -> bool {
     let Some(simple) = table.simple_table.as_ref() else {
         return false;
     };
@@ -44,9 +39,9 @@ fn topology_matches_grid(
         return false;
     }
     simple.cells.iter().all(|simple_cell| {
-        grid.cells.iter().any(|cell| {
-            cell.id == simple_cell.id && cell.address == simple_cell.address
-        })
+        grid.cells
+            .iter()
+            .any(|cell| cell.id == simple_cell.id && cell.address == simple_cell.address)
     })
 }
 
@@ -74,7 +69,9 @@ pub fn table_structure_snapshot_from_graph_v1(
     if !topology_matches_grid(table, &grid) {
         return Err(TableRowColGraphErrorV1::GridMismatch);
     }
-    let story_id = table.story_id.ok_or(TableRowColGraphErrorV1::MissingStory)?;
+    let story_id = table
+        .story_id
+        .ok_or(TableRowColGraphErrorV1::MissingStory)?;
     let story = graph
         .stories
         .get(&story_id)
