@@ -131,12 +131,19 @@ fn track_resize_is_v019_history_with_exact_undo_redo_and_fresh_replay() {
         EditOperation::SetTableTrackExtent { .. }
     ));
 
-    let current_grid = session.current_table_grid_v1(node_id()).expect("current grid");
+    let current_grid = session
+        .current_table_grid_v1(node_id())
+        .expect("current grid");
     assert_eq!(current_grid.rows[0].extent, Some(LengthEmu::new(250_000)));
     assert_eq!(current_grid.rows[1].extent, Some(LengthEmu::new(200_000)));
-    assert_eq!(current_grid.columns[0].extent, Some(LengthEmu::new(300_000)));
     assert_eq!(
-        session.current_table_bounds_v1(node_id()).expect("current bounds"),
+        current_grid.columns[0].extent,
+        Some(LengthEmu::new(300_000))
+    );
+    assert_eq!(
+        session
+            .current_table_bounds_v1(node_id())
+            .expect("current bounds"),
         RectEmu::new(
             LengthEmu::new(100_000),
             LengthEmu::new(200_000),
@@ -148,7 +155,10 @@ fn track_resize_is_v019_history_with_exact_undo_redo_and_fresh_replay() {
     let project = session.project();
     assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_19);
     assert_eq!(project.operations.len(), 2);
-    assert_eq!(project.table_grids[0].rows[0].extent, Some(LengthEmu::new(250_000)));
+    assert_eq!(
+        project.table_grids[0].rows[0].extent,
+        Some(LengthEmu::new(250_000))
+    );
 
     session.undo().expect("undo track resize");
     assert_eq!(
@@ -160,7 +170,10 @@ fn track_resize_is_v019_history_with_exact_undo_redo_and_fresh_replay() {
         Some(LengthEmu::new(200_000))
     );
     assert_eq!(
-        session.current_table_bounds_v1(node_id()).expect("bounds after undo").height,
+        session
+            .current_table_bounds_v1(node_id())
+            .expect("bounds after undo")
+            .height,
         LengthEmu::new(400_000)
     );
 
