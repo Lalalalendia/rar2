@@ -185,9 +185,7 @@ fn disposition_name(value: RejectedDelayedBlipDisposition) -> &'static str {
 fn terminal_gap_name(value: &DelayedBlipPrefixGap) -> &'static str {
     match value {
         DelayedBlipPrefixGap::TruncatedHeader { .. } => "truncated_header",
-        DelayedBlipPrefixGap::DeclaredRecordOutOfBounds { .. } => {
-            "declared_record_out_of_bounds"
-        }
+        DelayedBlipPrefixGap::DeclaredRecordOutOfBounds { .. } => "declared_record_out_of_bounds",
         DelayedBlipPrefixGap::RecordParseFailure { .. } => "record_parse_failure",
         DelayedBlipPrefixGap::NonAdvancingRecord { .. } => "non_advancing_record",
     }
@@ -220,18 +218,15 @@ fn blank_row(source_sha256: String, source_copy_count: usize) -> CensusRow {
 
 fn main() -> Result<()> {
     let mut args = env::args_os().skip(1);
-    let root = PathBuf::from(
-        args.next()
-            .context("usage: partial-escherdelay-breadth-census CORPUS_DIR MANIFEST.json OUTPUT.json")?,
-    );
-    let manifest_path = PathBuf::from(
-        args.next()
-            .context("usage: partial-escherdelay-breadth-census CORPUS_DIR MANIFEST.json OUTPUT.json")?,
-    );
-    let output = PathBuf::from(
-        args.next()
-            .context("usage: partial-escherdelay-breadth-census CORPUS_DIR MANIFEST.json OUTPUT.json")?,
-    );
+    let root = PathBuf::from(args.next().context(
+        "usage: partial-escherdelay-breadth-census CORPUS_DIR MANIFEST.json OUTPUT.json",
+    )?);
+    let manifest_path = PathBuf::from(args.next().context(
+        "usage: partial-escherdelay-breadth-census CORPUS_DIR MANIFEST.json OUTPUT.json",
+    )?);
+    let output = PathBuf::from(args.next().context(
+        "usage: partial-escherdelay-breadth-census CORPUS_DIR MANIFEST.json OUTPUT.json",
+    )?);
     if args.next().is_some() {
         bail!("partial-escherdelay-breadth-census accepts CORPUS_DIR MANIFEST.json OUTPUT.json");
     }
