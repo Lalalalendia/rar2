@@ -23,10 +23,18 @@ use super::acceptance::{
 const PROTOCOL_VERSION: &str = "chaptera.editor-desktop-continuity-observation.v2";
 
 fn rects_intersect(a: RectEmu, b: RectEmu) -> bool {
-    let Some(a_right) = a.right() else { return true };
-    let Some(a_bottom) = a.bottom() else { return true };
-    let Some(b_right) = b.right() else { return true };
-    let Some(b_bottom) = b.bottom() else { return true };
+    let Some(a_right) = a.right() else {
+        return true;
+    };
+    let Some(a_bottom) = a.bottom() else {
+        return true;
+    };
+    let Some(b_right) = b.right() else {
+        return true;
+    };
+    let Some(b_bottom) = b.bottom() else {
+        return true;
+    };
 
     a.x.get() < b_right.get()
         && a_right.get() > b.x.get()
@@ -311,6 +319,8 @@ pub fn run(
         env::var("CHAPTERA_CONTINUITY_REQUIRE_EXPLICIT_CROP").as_deref() == Ok("1");
     let require_wrap_irrelevant =
         env::var("CHAPTERA_CONTINUITY_REQUIRE_WRAP_IRRELEVANT").as_deref() == Ok("1");
+    let newsletter_two_object =
+        env::var("CHAPTERA_CONTINUITY_NEWSLETTER_TWO_OBJECT").as_deref() == Ok("1");
     if !replacement_binding_id.starts_with("continuity-v2-")
         || replacement_binding_id.len() != "continuity-v2-".len() + 32
         || !replacement_binding_id["continuity-v2-".len()..]
@@ -348,7 +358,7 @@ pub fn run(
         .import_replacement_asset(replacement_mime, replacement_bytes.clone())
         .map_err(|error| format!("import replacement asset: {error}"))?;
 
-    let export_image_nodes = if require_wrap_irrelevant {
+    let export_image_nodes = if require_wrap_irrelevant || newsletter_two_object {
         let resources = editor
             .current_image_resources_v1()
             .map_err(|error| format!("resolve current exact image resources: {error}"))?;
@@ -396,7 +406,11 @@ pub fn run(
             &editor,
             &visual,
             require_wrap_irrelevant,
-            export_image_nodes.as_ref(),
+            if newsletter_two_object || require_wrap_irrelevant {
+                export_image_nodes.as_ref()
+            } else {
+                None
+            },
         )
         .ok_or_else(|| {
             if require_wrap_irrelevant {
@@ -424,7 +438,7 @@ pub fn run(
             &visual,
             &[moved_node_id],
             require_wrap_irrelevant,
-            require_wrap_irrelevant.then_some(replacement_asset),
+            (newsletter_two_object || require_wrap_irrelevant).then_some(replacement_asset),
         )
         .ok_or_else(|| {
             if require_wrap_irrelevant {
@@ -448,7 +462,7 @@ pub fn run(
     }
     let after_resize_state_id = state_id(&editor)?;
 
-    let replace_excluded = if require_wrap_irrelevant {
+    let replace_excluded = if newsletter_two_object || require_wrap_irrelevant {
         vec![moved_node_id]
     } else {
         vec![moved_node_id, resized_node_id]
@@ -461,13 +475,13 @@ pub fn run(
             &replace_excluded,
             require_explicit_crop,
             require_wrap_irrelevant,
-            require_wrap_irrelevant.then_some(resized_node_id),
+            (newsletter_two_object || require_wrap_irrelevant).then_some(resized_node_id),
         )
         .ok_or_else(|| {
             if require_explicit_crop {
                 "no admitted direct page-local ReplaceImage target with explicit source crop"
                     .to_owned()
-            } else if require_wrap_irrelevant {
+            } else if newsletter_two_object || require_wrap_irrelevant {
                 "resized newsletter image is not an admitted ReplaceImage target".to_owned()
             } else {
                 "no distinct admitted direct page-local ReplaceImage target".to_owned()
@@ -691,6 +705,8 @@ pub fn run(
             "replacement_asset_sha_emitted": false,
             "wrap_mutation_scope": if require_wrap_irrelevant {
                 "text_frame_non_intersecting"
+            } else if newsletter_two_object {
+                "authority_blocked_not_asserted"
             } else {
                 "not_asserted"
             },
