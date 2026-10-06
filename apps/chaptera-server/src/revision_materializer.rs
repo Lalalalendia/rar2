@@ -709,7 +709,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
-
 #[cfg(test)]
 mod replay_identity_tests {
     use super::*;
