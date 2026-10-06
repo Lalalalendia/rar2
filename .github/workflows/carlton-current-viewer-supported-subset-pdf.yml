@@ -458,6 +458,13 @@ jobs:
                       "missing_or_mixed": mapping["table_bounded_source_font_missing_or_mixed_count"],
                       "families": mapping["table_bounded_source_font_family_counts"],
                       "styles": mapping["table_bounded_source_font_style_counts"],
+                      "family_profile": mapping["table_bounded_source_family_profile_count"],
+                      "bold_profile": mapping["table_bounded_source_bold_profile_count"],
+                      "italic_profile": mapping["table_bounded_source_italic_profile_count"],
+                      "overflow_cells": mapping["table_single_line_overflow_cell_count"],
+                      "overflow_family_profile": mapping["table_single_line_overflow_source_family_profile_count"],
+                      "overflow_bold_profile": mapping["table_single_line_overflow_source_bold_profile_count"],
+                      "overflow_italic_profile": mapping["table_single_line_overflow_source_italic_profile_count"],
                   },
                   sort_keys=True,
               )
