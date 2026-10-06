@@ -348,6 +348,13 @@ function New-Baseline {
             throw "Dedicated T825 master unexpectedly starts as two-page."
         }
 
+        # Make the dedicated single-page master itself asymmetric before conversion.
+        # This is separate from Document.LayoutGuides.MirrorGuides, which remains false.
+        $dedicatedMaster.LayoutGuides.MarginLeft = 48
+        $dedicatedMaster.LayoutGuides.MarginRight = 96
+        $dedicatedMaster.LayoutGuides.MarginTop = 36
+        $dedicatedMaster.LayoutGuides.MarginBottom = 72
+
         [void](Add-TaggedRectangle -Page $dedicatedMaster -Role "MASTER-LEFT-RECT" -Left 54 -Top 90 -Width 108 -Height 72 -Rgb 0x000000FF)
         [void](Add-TaggedRectangle -Page $dedicatedMaster -Role "MASTER-RIGHT-RECT" -Left 360 -Top 198 -Width 108 -Height 72 -Rgb 0x0000FF00)
         [void](Add-TaggedTextBox -Page $dedicatedMaster -Role "MASTER-TEXT" -Text "T825 MASTER ASYMMETRIC" -Left 180 -Top 54 -Width 216 -Height 36)
