@@ -32,7 +32,7 @@ install -d -m 0755 "${RELEASE}/tools"
 
 install -m 0755 "${ROOT_DIR}/chaptera" "${RELEASE}/chaptera"
 install -m 0755 "${ROOT_DIR}/tools/migration_pdf_worker_isolation.py"   "${RELEASE}/tools/migration_pdf_worker_isolation.py"
-install -m 0755 "${ROOT_DIR}/run_cloud_reader_host_acceptance.py"   "${RELEASE}/run_cloud_reader_host_acceptance.py"
+install -m 0755 "${ROOT_DIR}/run_cloud_reader_guest_host_acceptance.py"   "${RELEASE}/run_cloud_reader_guest_host_acceptance.py"
 
 if [[ ! -f "${CONFIG_DIR}/chaptera.toml" ]]; then
   install -m 0640 -o root -g chaptera     "${ROOT_DIR}/chaptera.reader.prod.example.toml"     "${CONFIG_DIR}/chaptera.toml"
