@@ -64,6 +64,48 @@ JSON is available for agent orchestration:
 python tools/dev_fast_loop.py --json --plan
 \`\`\`
 
+## Rust compiler cache and timing receipts
+
+On `--run`, the fast loop now uses an installed `sccache` automatically. It sets only `RUSTC_WRAPPER` and a local `SCCACHE_DIR`; it does **not** share Cargo target directories between worktrees and does not force a `CARGO_INCREMENTAL` value.
+
+The default cache directory lives under Git's common directory as `chaptera-sccache-v1`, so sibling worktrees can reuse compiler outputs without sharing Cargo fingerprints or build directories.
+
+Cache modes:
+
+```bash
+python tools/dev_fast_loop.py --run --rust-cache auto
+python tools/dev_fast_loop.py --run --rust-cache off
+python tools/dev_fast_loop.py --run --rust-cache require
+```
+
+`auto` is the default and falls back to normal Cargo compilation if `sccache` is unavailable. `require` fails immediately when it cannot use sccache.
+
+Official installation options include:
+
+```powershell
+winget install Mozilla.sccache
+```
+
+```bash
+brew install sccache
+# or, when cargo-binstall is already available:
+cargo binstall sccache
+```
+
+Every real `--run` appends an ignored JSONL receipt to:
+
+```text
+.chaptera-local/dev-fast-loop/history.jsonl
+```
+
+The receipt records exact HEAD, changed paths, cache status, each command's duration/exit status, total duration and budget result. For a standalone receipt:
+
+```bash
+python tools/dev_fast_loop.py --run --receipt .chaptera-local/dev-fast-loop/current.json
+```
+
+Use `--no-history` only for synthetic/tooling tests where persistent local telemetry is undesirable.
+
 ## Timing target
 
 The warm edit-loop target is **10–60 seconds**. A first cold Rust compile can exceed that target; the script reports total time and warns when the configured budget is exceeded rather than silently widening coverage.

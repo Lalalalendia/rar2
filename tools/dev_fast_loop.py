@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import fnmatch
 import json
+import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -33,6 +36,14 @@ class ComponentRule(NamedTuple):
     name: str
     paths: tuple[str, ...]
     commands: tuple[tuple[str, ...], ...]
+
+
+class RustCacheConfig(NamedTuple):
+    mode: str
+    enabled: bool
+    executable: str | None
+    directory: str | None
+    reason: str
 
 
 def load_component_registry(root: Path) -> list[ComponentRule]:
@@ -137,6 +148,91 @@ def resolve_base_ref(root: Path, base: str) -> str | None:
         if _git_ref_exists(root, candidate):
             return candidate
     return None
+
+
+def git_common_dir(root: Path) -> Path:
+    lines = _run_lines(root, ["git", "rev-parse", "--git-common-dir"])
+    if len(lines) != 1:
+        raise RuntimeError("git common dir did not resolve to one path")
+    raw = Path(lines[0])
+    return (raw if raw.is_absolute() else root / raw).resolve()
+
+
+def current_head_sha(root: Path) -> str | None:
+    lines = _run_lines(root, ["git", "rev-parse", "--verify", "HEAD"], check=False)
+    return lines[0] if len(lines) == 1 else None
+
+
+def configure_rust_cache(
+    root: Path,
+    mode: str,
+    *,
+    which=shutil.which,
+    environ: dict[str, str] | None = None,
+) -> tuple[RustCacheConfig, dict[str, str]]:
+    env = dict(os.environ if environ is None else environ)
+    if mode == "off":
+        return (
+            RustCacheConfig("off", False, None, None, "disabled by --rust-cache=off"),
+            env,
+        )
+
+    existing_wrapper = env.get("RUSTC_WRAPPER")
+    if existing_wrapper:
+        wrapper_name = Path(existing_wrapper).name.lower()
+        if "sccache" not in wrapper_name:
+            if mode == "require":
+                raise RuntimeError(
+                    "sccache required but RUSTC_WRAPPER already points to a different compiler wrapper"
+                )
+            return (
+                RustCacheConfig(
+                    mode,
+                    False,
+                    None,
+                    None,
+                    "existing non-sccache RUSTC_WRAPPER preserved",
+                ),
+                env,
+            )
+        executable = existing_wrapper
+    else:
+        executable = which("sccache")
+        if executable is None:
+            if mode == "require":
+                raise RuntimeError(
+                    "sccache is required but not installed or not available on PATH"
+                )
+            return (
+                RustCacheConfig(
+                    mode,
+                    False,
+                    None,
+                    None,
+                    "sccache not installed; normal Cargo compilation retained",
+                ),
+                env,
+            )
+        env["RUSTC_WRAPPER"] = executable
+
+    directory = env.get("SCCACHE_DIR")
+    if directory:
+        cache_dir = Path(directory).expanduser().resolve()
+    else:
+        cache_dir = git_common_dir(root) / "chaptera-sccache-v1"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        env["SCCACHE_DIR"] = str(cache_dir)
+
+    return (
+        RustCacheConfig(
+            mode,
+            True,
+            executable,
+            str(cache_dir),
+            "installed sccache compiler wrapper enabled",
+        ),
+        env,
+    )
 
 
 def discover_changed_paths(root: Path, *, base: str = "main", head: str | None = None) -> list[str]:
@@ -412,30 +508,119 @@ def print_plan(paths: list[str], checks: list[Check], *, mode: str, as_json: boo
     print("deep/product acceptance scheduled: no")
 
 
-def execute_plan(root: Path, checks: list[Check], *, budget_seconds: float) -> int:
+def _write_run_receipts(
+    root: Path,
+    receipt: dict,
+    *,
+    standalone_receipt: Path | None,
+    write_history: bool,
+) -> None:
+    if write_history:
+        history = root / ".chaptera-local" / "dev-fast-loop" / "history.jsonl"
+        history.parent.mkdir(parents=True, exist_ok=True)
+        with history.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(receipt, sort_keys=True) + "\n")
+
+    if standalone_receipt is not None:
+        target = standalone_receipt
+        if not target.is_absolute():
+            target = root / target
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+
+def execute_plan(
+    root: Path,
+    checks: list[Check],
+    *,
+    paths: list[str],
+    mode: str,
+    budget_seconds: float,
+    rust_cache: RustCacheConfig,
+    env: dict[str, str],
+    standalone_receipt: Path | None = None,
+    write_history: bool = True,
+) -> tuple[int, dict]:
     started = time.monotonic()
+    check_results: list[dict] = []
+    exit_code = 0
+
+    if rust_cache.enabled:
+        print(
+            f"rust compiler cache: sccache ({rust_cache.directory})",
+            flush=True,
+        )
+    else:
+        print(f"rust compiler cache: {rust_cache.reason}", flush=True)
+
     for index, check in enumerate(checks, start=1):
         print(f"[{index}/{len(checks)}] {check.kind}: {check.display()}", flush=True)
         check_started = time.monotonic()
         try:
-            result = subprocess.run(check.command, cwd=root, check=False)
+            result = subprocess.run(check.command, cwd=root, check=False, env=env)
+            command_exit = result.returncode
         except FileNotFoundError as exc:
+            command_exit = 127
             print(f"fast-loop tool missing: {exc.filename}", file=sys.stderr)
-            return 127
         elapsed = time.monotonic() - check_started
+        check_results.append(
+            {
+                "kind": check.kind,
+                "command": list(check.command),
+                "reason": check.reason,
+                "seconds": round(elapsed, 6),
+                "exit_code": command_exit,
+            }
+        )
         print(f"  -> {elapsed:.2f}s", flush=True)
-        if result.returncode != 0:
-            print(f"fast loop failed at {check.kind} (exit {result.returncode})", file=sys.stderr)
-            return result.returncode
+        if command_exit != 0:
+            exit_code = command_exit
+            print(
+                f"fast loop failed at {check.kind} (exit {command_exit})",
+                file=sys.stderr,
+            )
+            break
+
     total = time.monotonic() - started
-    print(f"fast loop green in {total:.2f}s")
+    if exit_code == 0:
+        print(f"fast loop green in {total:.2f}s")
     if total > budget_seconds:
         print(
             f"warning: edit-loop budget exceeded ({total:.2f}s > {budget_seconds:.2f}s); "
             "measure the slow check before adding more coverage",
             file=sys.stderr,
         )
-    return 0
+
+    receipt = {
+        "schema": "chaptera.dev-fast-loop-run.v1",
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "head_sha": current_head_sha(root),
+        "mode": mode,
+        "changed_paths": paths,
+        "success": exit_code == 0,
+        "exit_code": exit_code,
+        "budget_seconds": budget_seconds,
+        "total_seconds": round(total, 6),
+        "rust_cache": {
+            "mode": rust_cache.mode,
+            "enabled": rust_cache.enabled,
+            "executable": rust_cache.executable,
+            "directory": rust_cache.directory,
+            "reason": rust_cache.reason,
+        },
+        "checks": check_results,
+        "deep_acceptance_scheduled": False,
+    }
+    _write_run_receipts(
+        root,
+        receipt,
+        standalone_receipt=standalone_receipt,
+        write_history=write_history,
+    )
+    return exit_code, receipt
 
 
 def repo_root() -> Path:
@@ -462,6 +647,22 @@ def main() -> int:
     action.add_argument("--run", action="store_true", help="execute the planned fast checks fail-fast")
     parser.add_argument("--json", action="store_true", help="emit the plan as JSON")
     parser.add_argument("--budget-seconds", type=float, default=60.0)
+    parser.add_argument(
+        "--rust-cache",
+        choices=("auto", "off", "require"),
+        default="auto",
+        help="use installed sccache automatically, disable it, or require it (default: auto)",
+    )
+    parser.add_argument(
+        "--receipt",
+        type=Path,
+        help="optional standalone JSON run receipt; history is always written under .chaptera-local unless disabled",
+    )
+    parser.add_argument(
+        "--no-history",
+        action="store_true",
+        help="do not append the ignored .chaptera-local fast-loop timing history",
+    )
     args = parser.parse_args()
 
     root = repo_root()
@@ -471,7 +672,23 @@ def main() -> int:
     checks = plan_for_paths(root, paths, mode=args.mode)
     print_plan(paths, checks, mode=args.mode, as_json=args.json)
     if args.run:
-        return execute_plan(root, checks, budget_seconds=args.budget_seconds)
+        try:
+            rust_cache, env = configure_rust_cache(root, args.rust_cache)
+        except RuntimeError as exc:
+            print(f"fast-loop rust cache error: {exc}", file=sys.stderr)
+            return 2
+        exit_code, _ = execute_plan(
+            root,
+            checks,
+            paths=paths,
+            mode=args.mode,
+            budget_seconds=args.budget_seconds,
+            rust_cache=rust_cache,
+            env=env,
+            standalone_receipt=args.receipt,
+            write_history=not args.no_history,
+        )
+        return exit_code
     return 0
 
 
