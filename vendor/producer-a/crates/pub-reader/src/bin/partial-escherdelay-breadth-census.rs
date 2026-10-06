@@ -67,8 +67,10 @@ struct CensusRow {
     truncation_reason: Option<String>,
     terminal_gap: Option<DelayedBlipPrefixGap>,
     scanned_record_count: u32,
-    strict_validated_image_count: usize,
+    strict_validated_resource_count: usize,
+    strict_validated_raster_count: usize,
     strict_validated_metafile_count: usize,
+    validated_but_product_unadmitted_count: usize,
     validated_kind_counts: BTreeMap<String, usize>,
     rejected_complete_blip_count: usize,
     rejected_disposition_counts: BTreeMap<String, usize>,
@@ -88,7 +90,10 @@ struct CensusSummary {
     missing_source_count: usize,
     image_salvage_positive_files: usize,
     total_reader_admissible_images: usize,
+    total_strict_validated_resources: usize,
+    total_strict_validated_rasters: usize,
     total_strict_validated_metafiles: usize,
+    total_validated_but_product_unadmitted: usize,
     validated_kind_counts: BTreeMap<String, usize>,
     rejected_disposition_counts: BTreeMap<String, usize>,
     rejected_kind_counts: BTreeMap<String, usize>,
@@ -213,8 +218,10 @@ fn blank_row(source_sha256: String, source_copy_count: usize) -> CensusRow {
         truncation_reason: None,
         terminal_gap: None,
         scanned_record_count: 0,
-        strict_validated_image_count: 0,
+        strict_validated_resource_count: 0,
+        strict_validated_raster_count: 0,
         strict_validated_metafile_count: 0,
+        validated_but_product_unadmitted_count: 0,
         validated_kind_counts: BTreeMap::new(),
         rejected_complete_blip_count: 0,
         rejected_disposition_counts: BTreeMap::new(),
@@ -387,7 +394,8 @@ fn main() -> Result<()> {
             bail!("prefix inventory length mismatch for {source_sha256}");
         }
         row.scanned_record_count = inventory.scanned_record_count;
-        row.strict_validated_image_count = inventory
+        row.strict_validated_resource_count = inventory.records.len();
+        row.strict_validated_raster_count = inventory
             .records
             .iter()
             .filter(|validated| is_reader_raster_kind(validated.kind))
@@ -397,6 +405,9 @@ fn main() -> Result<()> {
             .iter()
             .filter(|validated| is_metafile_kind(validated.kind))
             .count();
+        row.validated_but_product_unadmitted_count = row
+            .strict_validated_resource_count
+            .saturating_sub(row.strict_validated_raster_count);
         row.terminal_gap = inventory.terminal_gap.clone();
 
         for validated in &inventory.records {
@@ -419,11 +430,11 @@ fn main() -> Result<()> {
             .as_ref()
             .map_or(0, |value| value.validated_images.len());
 
-        if row.reader_admissible_image_count != row.strict_validated_image_count {
+        if row.reader_admissible_image_count != row.strict_validated_raster_count {
             bail!(
-                "strict parser/product projection disagreement for {}: {} vs {}",
+                "strict raster parser/product projection disagreement for {}: {} vs {}",
                 source_sha256,
-                row.strict_validated_image_count,
+                row.strict_validated_raster_count,
                 row.reader_admissible_image_count
             );
         }
@@ -461,7 +472,10 @@ fn main() -> Result<()> {
     let mut terminal_gap_counts = BTreeMap::<String, usize>::new();
     let mut outcome_counts = BTreeMap::<String, usize>::new();
     let mut total_reader_admissible_images = 0usize;
+    let mut total_strict_validated_resources = 0usize;
+    let mut total_strict_validated_rasters = 0usize;
     let mut total_strict_validated_metafiles = 0usize;
+    let mut total_validated_but_product_unadmitted = 0usize;
 
     for row in &rows {
         for (kind, count) in &row.validated_kind_counts {
@@ -484,7 +498,10 @@ fn main() -> Result<()> {
             .entry(outcome_name(&row.outcome).to_owned())
             .or_default() += 1;
         total_reader_admissible_images += row.reader_admissible_image_count;
+        total_strict_validated_resources += row.strict_validated_resource_count;
+        total_strict_validated_rasters += row.strict_validated_raster_count;
         total_strict_validated_metafiles += row.strict_validated_metafile_count;
+        total_validated_but_product_unadmitted += row.validated_but_product_unadmitted_count;
     }
 
     let located_source_count = rows
@@ -505,7 +522,10 @@ fn main() -> Result<()> {
         missing_source_count,
         image_salvage_positive_files,
         total_reader_admissible_images,
+        total_strict_validated_resources,
+        total_strict_validated_rasters,
         total_strict_validated_metafiles,
+        total_validated_but_product_unadmitted,
         validated_kind_counts,
         rejected_disposition_counts,
         rejected_kind_counts,
