@@ -28,6 +28,7 @@ struct CensusRow {
     ambiguous_reference_count: usize,
     referenced_chunk_unavailable_count: usize,
     chunk_parse_failure_count: usize,
+    chunk_crosses_trailer_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -154,6 +155,7 @@ fn main() -> Result<()> {
             ambiguous_reference_count: semantic.ambiguous_reference_count,
             referenced_chunk_unavailable_count: semantic.referenced_chunk_unavailable_count,
             chunk_parse_failure_count: semantic.chunk_parse_failure_count,
+            chunk_crosses_trailer_count: semantic.chunk_crosses_trailer_count,
         });
     }
 
