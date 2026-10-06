@@ -38,6 +38,7 @@ pub struct RootRegularStreamSourceRange {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RecoveredRootRegularStreamPrefix {
     pub bytes: Vec<u8>,
+    pub stream_sid: u32,
     pub declared_len: u64,
     pub available_prefix_len: u64,
     pub status: RootRegularStreamPrefixStatus,
@@ -257,6 +258,7 @@ fn recover_root_regular_stream_prefix_from_bytes(
 
     let complete = bytes.len() == stream_len_usize && truncation_reason.is_none();
     Ok(RecoveredRootRegularStreamPrefix {
+        stream_sid,
         available_prefix_len: u64::try_from(bytes.len())
             .context("available prefix length does not fit u64")?,
         bytes,
@@ -461,6 +463,7 @@ mod tests {
             recover_root_regular_stream_prefix_reader(Cursor::new(source), "/Contents")
                 .expect("complete Contents");
         assert_eq!(recovered.status, RootRegularStreamPrefixStatus::Complete);
+        assert!(recovered.stream_sid > 0);
         assert_eq!(recovered.available_prefix_len, recovered.declared_len);
         assert!(recovered.truncation_reason.is_none());
         assert_eq!(recovered.bytes.len(), 9_000);
