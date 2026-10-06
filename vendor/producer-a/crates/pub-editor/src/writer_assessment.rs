@@ -141,6 +141,7 @@ impl EditorSession {
                 | EditOperation::CreateShape { .. }
                 | EditOperation::CreateLine { .. }
                 | EditOperation::CreateTable { .. }
+                | EditOperation::SetTableTrackExtent { .. }
                 | EditOperation::DeleteNode { .. }
                 | EditOperation::ReorderAuthoredStack { .. }
                 | EditOperation::SetTextFormatProperty { .. }
@@ -245,6 +246,7 @@ impl EditorSession {
                 | EditOperation::CreateShape { .. }
                 | EditOperation::CreateLine { .. }
                 | EditOperation::CreateTable { .. }
+                | EditOperation::SetTableTrackExtent { .. }
                 | EditOperation::DeleteNode { .. }
                 | EditOperation::ReorderAuthoredStack { .. }
                 | EditOperation::SetTextFormatProperty { .. }
