@@ -134,7 +134,9 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
 
         screenshots = fixture.get("screenshots", [])
         geometry = fixture.get("page_geometry", [])
-        if len(screenshots) != candidate_pages or len(geometry) != candidate_pages:
+        page_census = fixture.get("page_census", [])
+        if (len(screenshots) != candidate_pages or len(geometry) != candidate_pages
+                or len(page_census) != candidate_pages):
             raise ValueError(f"incomplete browser receipt for {pair['basename']}")
 
         fractions = []
@@ -159,6 +161,7 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
                 "warning_state": pair.get("warning_state"),
                 "page": index + 1,
                 **metrics,
+                "candidate_census": page_census[index],
                 "reference_media_extent_delta": {
                     "width_pt": round(width_pt - ref_page["media_width_pt"], 6),
                     "height_pt": round(height_pt - ref_page["media_height_pt"], 6),
