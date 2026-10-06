@@ -1,0 +1,183 @@
+use pub_model::Sha256Digest;
+use pub_reader::{build_mature_0x2c_source_graph, PubBridgeDiagnostic};
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::{collections::BTreeMap, env, error::Error, fs, io::Cursor};
+
+fn source_hash(bytes: &[u8]) -> Sha256Digest {
+    let digest = Sha256::digest(bytes);
+    let mut raw = [0_u8; 32];
+    raw.copy_from_slice(&digest);
+    Sha256Digest::from_bytes(raw)
+}
+
+fn diagnostic_summary(diagnostic: &PubBridgeDiagnostic) -> Option<Value> {
+    use PubBridgeDiagnostic::*;
+
+    match diagnostic {
+        MissingEscherGeometry { seq_num } => {
+            Some(json!({"code": "missing_escher_geometry", "seq_num": seq_num}))
+        }
+        AmbiguousEscherGeometry { seq_num, matches } => Some(json!({
+            "code": "ambiguous_escher_geometry",
+            "seq_num": seq_num,
+            "matches": matches,
+        })),
+        AmbiguousImageSlot { seq_num, slots } => Some(json!({
+            "code": "ambiguous_image_slot",
+            "seq_num": seq_num,
+            "slot_count": slots.len(),
+        })),
+        IncompleteEscherAnchor { seq_num } => {
+            Some(json!({"code": "incomplete_escher_anchor", "seq_num": seq_num}))
+        }
+        InvalidEscherAnchor { seq_num } => {
+            Some(json!({"code": "invalid_escher_anchor", "seq_num": seq_num}))
+        }
+        GroupedImageProjected { seq_num, depth } => Some(json!({
+            "code": "grouped_image_projected",
+            "seq_num": seq_num,
+            "depth": depth,
+        })),
+        GroupedImageProjectionUnavailable { seq_num, .. } => Some(json!({
+            "code": "grouped_image_projection_unavailable",
+            "seq_num": seq_num,
+        })),
+        GroupedStoryProjected { seq_num, depth } => Some(json!({
+            "code": "grouped_story_projected",
+            "seq_num": seq_num,
+            "depth": depth,
+        })),
+        GroupedStoryProjectionUnavailable { seq_num, .. } => Some(json!({
+            "code": "grouped_story_projection_unavailable",
+            "seq_num": seq_num,
+        })),
+        GroupedTableProjected { seq_num, depth } => Some(json!({
+            "code": "grouped_table_projected",
+            "seq_num": seq_num,
+            "depth": depth,
+        })),
+        GroupedTableProjectionUnavailable { seq_num, .. } => Some(json!({
+            "code": "grouped_table_projection_unavailable",
+            "seq_num": seq_num,
+        })),
+        _ => None,
+    }
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input = env::args()
+        .nth(1)
+        .ok_or("usage: residual_object_probe INPUT.pub")?;
+    let bytes = fs::read(&input)?;
+    let hash = source_hash(&bytes);
+    let source = build_mature_0x2c_source_graph(Cursor::new(&bytes), hash)?;
+
+    let mut page_membership = BTreeMap::<String, Vec<String>>::new();
+    for (page_id, page) in &source.graph.pages {
+        for node_id in &page.children {
+            page_membership
+                .entry(node_id.as_canonical().to_string())
+                .or_default()
+                .push(page_id.as_canonical().to_string());
+        }
+    }
+
+    let mut nodes = source
+        .graph
+        .nodes
+        .iter()
+        .map(|(node_id, node)| {
+            let canonical_node_id = node_id.as_canonical().to_string();
+            json!({
+                "node_id": canonical_node_id,
+                "page_membership": page_membership
+                    .get(&node_id.as_canonical().to_string())
+                    .cloned()
+                    .unwrap_or_default(),
+                "parent_id": node.header.parent_id.to_string(),
+                "kind": &node.kind,
+                "bounds": &node.header.bounds,
+                "transform": &node.header.transform,
+                "contents_seq_num": node.payload.contents_seq_num,
+                "officeart_shape_type": node.payload.officeart_shape_type,
+                "officeart_spid": node.payload.officeart_spid,
+                "image_slot": node.payload.image_slot,
+                "image_crop_present": node.payload.explicit_image_crop.is_some(),
+                "image_crop_ambiguous": node
+                    .payload
+                    .explicit_image_crop
+                    .as_ref()
+                    .is_some_and(|crop| crop.ambiguous),
+                "image_cardinal_rotation_degrees":
+                    node.payload.explicit_image_cardinal_rotation_degrees,
+                "image_recolor_present": node.payload.explicit_image_recolor.is_some(),
+                "explicit_paint": &node.payload.explicit_paint,
+                "effective_paint_present": node.payload.effective_paint.is_some(),
+                "story_frame_present": node.payload.story_frame.is_some(),
+                "story_id": node
+                    .payload
+                    .story_frame
+                    .as_ref()
+                    .and_then(|frame| frame.story_id)
+                    .map(|story_id| story_id.as_canonical().to_string()),
+                "text_frame_inset_present": node.payload.text_frame_inset.is_some(),
+                "table_present": node.payload.table.is_some(),
+                "table_story_present": node.payload.table_story.is_some(),
+            })
+        })
+        .collect::<Vec<_>>();
+    nodes.sort_by(|left, right| {
+        left["contents_seq_num"]
+            .as_u64()
+            .cmp(&right["contents_seq_num"].as_u64())
+            .then_with(|| left["node_id"].as_str().cmp(&right["node_id"].as_str()))
+    });
+
+    let mut pages = source
+        .graph
+        .pages
+        .iter()
+        .map(|(page_id, page)| {
+            json!({
+                "page_id": page_id.as_canonical().to_string(),
+                "size": &page.size,
+                "child_node_ids": page
+                    .children
+                    .iter()
+                    .map(|node_id| node_id.as_canonical().to_string())
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    pages.sort_by(|left, right| left["page_id"].as_str().cmp(&right["page_id"].as_str()));
+
+    let diagnostics = source
+        .diagnostics
+        .iter()
+        .filter_map(diagnostic_summary)
+        .collect::<Vec<_>>();
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "schema": "chaptera.manual-residual-object-probe.v1",
+            "source_sha256": hash.to_string(),
+            "source_bytes": bytes.len(),
+            "page_count": pages.len(),
+            "node_count": nodes.len(),
+            "pages": pages,
+            "nodes": nodes,
+            "relevant_diagnostics": diagnostics,
+            "source_page_paint_orders": source.source_page_paint_orders,
+            "claims": {
+                "story_text_emitted": false,
+                "asset_bytes_emitted": false,
+                "source_paths_emitted": false,
+                "raw_stream_offsets_emitted": false,
+            }
+        }))?
+    );
+
+    Ok(())
+}
