@@ -4,6 +4,11 @@ on:
   pull_request:
     paths:
       - "tools/qualify_w2_longform_fixture.py"
+      - "tools/run_editor_desktop_continuity_v2.py"
+      - "tools/validate_editor_desktop_continuity_v2_receipt.py"
+      - "tools/verify_editable_export_geometry.py"
+      - "apps/chaptera-desktop/src/acceptance_v2.rs"
+      - "packages/product/editor-desktop-continuity/v2/**"
       - ".github/workflows/w2-longform-fixture-qualification.yml"
   workflow_dispatch:
 
@@ -79,3 +84,105 @@ jobs:
           name: w2-longform-fixture-qualification-${{ github.event.pull_request.head.sha || github.sha }}
           path: target/w2-longform-fixture/qualification.json
           if-no-files-found: error
+
+  longform-editor-continuity:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install continuity validator
+        run: python -m pip install "jsonschema==4.23.0"
+
+      - name: Acquire exact 10-page May 2023 newsletter PUB
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture = Join-Path $env:RUNNER_TEMP "may-2023-newsletter.pub"
+          $url = "https://raw.githubusercontent.com/Lalalalendia/lalamu/main/pub-corpus/corpus/native/unclassified/aeac4c03181582008c18655ad77b90a957b00eeddcc0b1c45f6d40ca88c765eb.pub"
+          Invoke-WebRequest -Uri $url -OutFile $fixture
+          $hash = (Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item $fixture).Length
+          if ($hash -ne "aeac4c03181582008c18655ad77b90a957b00eeddcc0b1c45f6d40ca88c765eb") {
+            throw "May 2023 newsletter SHA-256 mismatch: $hash"
+          }
+          if ($bytes -ne 4286464) {
+            throw "May 2023 newsletter byte length mismatch: $bytes"
+          }
+          $raw = [System.IO.File]::ReadAllBytes($fixture)
+          $magic = [System.BitConverter]::ToString($raw[0..7]).Replace("-", "").ToLowerInvariant()
+          if ($magic -ne "d0cf11e0a1b11ae1") {
+            throw "May 2023 newsletter is not CFB: $magic"
+          }
+          "CHAPTERA_W2_LONGFORM_FIXTURE=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Generate deterministic replacement PNG
+        shell: pwsh
+        run: |
+          $replacement = Join-Path $env:RUNNER_TEMP "w2-longform-replacement.png"
+          $env:CHAPTERA_W2_LONGFORM_REPLACEMENT = $replacement
+          @'
+          import binascii
+          import os
+          import pathlib
+          import struct
+          import zlib
+
+          def chunk(kind, data):
+              body = kind + data
+              return struct.pack(">I", len(data)) + body + struct.pack(">I", binascii.crc32(body) & 0xffffffff)
+
+          width = 2
+          height = 2
+          ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+          row0 = b"\x00" + bytes([0x18, 0x62, 0xA0, 0xFF, 0xF2, 0xC1, 0x4E, 0xFF])
+          row1 = b"\x00" + bytes([0x51, 0xA8, 0x54, 0xFF, 0xD9, 0x50, 0x50, 0xFF])
+          png = (
+              b"\x89PNG\r\n\x1a\n"
+              + chunk(b"IHDR", ihdr)
+              + chunk(b"IDAT", zlib.compress(row0 + row1, 9))
+              + chunk(b"IEND", b"")
+          )
+          pathlib.Path(os.environ["CHAPTERA_W2_LONGFORM_REPLACEMENT"]).write_bytes(png)
+          '@ | python -
+          "CHAPTERA_W2_LONGFORM_REPLACEMENT=$replacement" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build current Chaptera Editor
+        run: cargo build -p chaptera-desktop --release --bin chaptera-editor
+
+      - name: Run bounded Editor continuity on exact 10-page PUB
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $out = Join-Path $env:RUNNER_TEMP "chaptera-w2-longform-continuity"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $project = Join-Path $out "may-2023-newsletter.project.json"
+          $export = Join-Path $out "may-2023-newsletter.edited.odg"
+          $receipt = Join-Path $out "may-2023-newsletter.continuity.json"
+          python tools/run_editor_desktop_continuity_v2.py `
+            --fixture "$env:CHAPTERA_W2_LONGFORM_FIXTURE" `
+            --replacement "$env:CHAPTERA_W2_LONGFORM_REPLACEMENT" `
+            --project-output "$project" `
+            --export-output "$export" `
+            --receipt-output "$receipt" `
+            --expected-source-hash "aeac4c03181582008c18655ad77b90a957b00eeddcc0b1c45f6d40ca88c765eb" `
+            --expected-source-bytes 4286464 `
+            -- target/release/chaptera-editor.exe --desktop-acceptance-v2 "{fixture}" "{replacement}" "{project}" "{export}"
+          python tools/validate_editor_desktop_continuity_v2_receipt.py "$receipt"
+          Copy-Item $receipt "target/w2-longform-editor-continuity.json"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: w2-longform-editor-continuity-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/w2-longform-editor-continuity.json
+          if-no-files-found: warn
