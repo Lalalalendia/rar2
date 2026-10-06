@@ -1,0 +1,66 @@
+{
+  "schema": "chaptera.dev-fast-components.v1",
+  "rules": [
+    {
+      "name": "pub-editor paragraph alignment",
+      "paths": [
+        "vendor/producer-a/crates/pub-editor/src/authored_paragraph_alignment_v1.rs",
+        "vendor/producer-a/crates/pub-editor/src/imported_paragraph_alignment_v1.rs",
+        "vendor/producer-a/crates/pub-editor/src/imported_paragraphs_v1.rs"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor",
+          "paragraph_alignment",
+          "--lib"
+        ]
+      ]
+    },
+    {
+      "name": "pub-editor table row/column history",
+      "paths": [
+        "vendor/producer-a/crates/pub-editor/src/table_rowcol_graph_v1.rs",
+        "vendor/producer-a/crates/pub-editor/src/table_rowcol_history_v1.rs"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor",
+          "--lib",
+          "table_rowcol_history_v1",
+          "--",
+          "--nocapture"
+        ]
+      ]
+    },
+    {
+      "name": "pub-editor scoped text-format property history",
+      "paths": [
+        "vendor/producer-a/crates/pub-editor/src/text_format_property_base_v1.rs"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor",
+          "text_format_property_base_v1",
+          "--lib",
+          "--",
+          "--nocapture"
+        ]
+      ]
+    }
+  ]
+}

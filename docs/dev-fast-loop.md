@@ -25,9 +25,16 @@ The edit loop routes only local checks that can be inferred safely from the chan
 - changed GitHub workflow YAML → repository YAML syntax guard;
 - changed Rust source → nearest package \`cargo fmt --check\` + \`cargo check\`;
 - changed Rust integration test → its exact \`cargo test --test <target>\`;
+- important mismatched component/test names → source-free commands from \`tools/dev_fast_loop_components.json\`;
 - changed Cargo workspace manifest/lockfile → affected workspace fmt/check.
 
 The command never schedules visual goldens, full corpora, native Publisher, installer/update, package/release or unrelated product acceptance.
+
+### Component micro-test registry
+
+\`tools/dev_fast_loop_components.json\` is the small data-driven exception table for components whose production module and fast regression test do not share a filename. Registry commands must stay source-free, deterministic, and suitable for the local edit loop. Network acquisition, ignored real-PUB acceptance, native Publisher, visual or packaging commands do not belong there.
+
+The initial rules cover pub-editor paragraph alignment, table row/column history, and scoped text-format property history using bounded \`--lib\` tests already owned by their existing workflows. The registry is schema-validated and malformed entries fail closed.
 
 ## Feature loop
 

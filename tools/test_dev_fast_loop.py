@@ -126,6 +126,56 @@ def test_same_stem_rust_source_discovers_exact_integration_test() -> None:
         )
 
 
+def test_component_registry_routes_aliases_dedupes_and_ignores_unrelated() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        write(
+            root / mod.COMPONENT_REGISTRY_PATH,
+            """{
+  "schema": "chaptera.dev-fast-components.v1",
+  "rules": [
+    {
+      "name": "owned alias",
+      "paths": ["crates/foo/src/owned.rs"],
+      "commands": [["python", "-c", "print('owned')"]]
+    },
+    {
+      "name": "duplicate command",
+      "paths": ["crates/foo/src/owned.rs"],
+      "commands": [["python", "-c", "print('owned')"]]
+    }
+  ]
+}
+""",
+        )
+        write(
+            root / "crates/foo/Cargo.toml",
+            "[package]\nname='foo'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        write(root / "crates/foo/src/owned.rs", "pub fn owned() {}\n")
+        write(root / "crates/foo/src/other.rs", "pub fn other() {}\n")
+
+        owned = mod.plan_for_paths(root, ["crates/foo/src/owned.rs"])
+        component = [check for check in owned if check.kind == "component-micro-test"]
+        assert len(component) == 1
+        assert component[0].command == ("python", "-c", "print('owned')")
+
+        unrelated = mod.plan_for_paths(root, ["crates/foo/src/other.rs"])
+        assert not any(check.kind == "component-micro-test" for check in unrelated)
+
+
+def test_component_registry_malformed_fails_closed() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        write(root / mod.COMPONENT_REGISTRY_PATH, '{"schema":"wrong","rules":[]}\n')
+        try:
+            mod.plan_for_paths(root, ["README.md"])
+        except RuntimeError as exc:
+            assert "registry schema" in str(exc)
+        else:
+            raise AssertionError("malformed component registry must fail closed")
+
+
 def test_feature_mode_adds_package_unit_tests_once() -> None:
     with tempfile.TemporaryDirectory() as raw:
         root = Path(raw)
@@ -145,6 +195,8 @@ def main() -> None:
     test_discover_changed_paths()
     test_plan_routing_and_dedupe()
     test_same_stem_rust_source_discovers_exact_integration_test()
+    test_component_registry_routes_aliases_dedupes_and_ignores_unrelated()
+    test_component_registry_malformed_fails_closed()
     test_feature_mode_adds_package_unit_tests_once()
     print("dev fast loop tests: ok")
 
