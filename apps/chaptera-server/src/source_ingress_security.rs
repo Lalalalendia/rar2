@@ -528,11 +528,9 @@ mod tests {
             status: PubScanStatusV1::ParseFailed,
             calls: AtomicUsize::new(0),
         });
-        let scanner = ProductionSourceSecurityScanner::with_runner(
-            base_config(env::temp_dir()),
-            runner,
-        )
-        .unwrap();
+        let scanner =
+            ProductionSourceSecurityScanner::with_runner(base_config(env::temp_dir()), runner)
+                .unwrap();
 
         let outcome = scan_bytes(&scanner, &bytes).await.unwrap();
         assert!(matches!(
