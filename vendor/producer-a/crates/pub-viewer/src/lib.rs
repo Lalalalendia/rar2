@@ -2159,7 +2159,7 @@ pub fn open_pub_or_salvage_with_trigger(
         Ok(document) => Ok(ViewerProductOpenOutcome::Normal(Box::new(document))),
         Err(normal_error) => {
             let probe = probe_reader_salvage_candidate_with_trigger(bytes, trigger);
-            if probe.eligibility.is_eligible() && probe.has_surviving_evidence() {
+            if probe.eligibility.is_eligible() {
                 match build_reader_partial_source_graph(bytes, &probe) {
                     Ok(graph) => Ok(ViewerProductOpenOutcome::Salvage(graph)),
                     Err(_) => Err(normal_error),
