@@ -120,7 +120,12 @@ fn create_table_and_cell_edit_survive_undo_redo_and_fresh_project_replay() {
     let mut session = EditorSession::new(graph()).expect("session");
 
     let create = session.create_table(table.clone()).expect("CreateTable");
-    assert_eq!(create, EditOperation::CreateTable { table: table.clone() });
+    assert_eq!(
+        create,
+        EditOperation::CreateTable {
+            table: table.clone()
+        }
+    );
     assert!(session.graph().nodes.contains_key(&node_id()));
     assert!(session.graph().stories.contains_key(&story_id()));
     assert_eq!(
