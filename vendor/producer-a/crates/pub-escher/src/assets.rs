@@ -269,7 +269,6 @@ pub fn inspect_validated_delayed_blips_prefix(
             break;
         }
 
-        let initial = read_u16(bytes, offset);
         let rec_type = read_u16(bytes, offset + 2);
         let rec_len = read_u32(bytes, offset + 4);
         let payload_len = match usize::try_from(rec_len) {
@@ -347,7 +346,6 @@ pub fn inspect_validated_delayed_blips_prefix(
 
         scanned_record_count = scanned_record_count.saturating_add(1);
         offset = next;
-        let _ = initial;
     }
 
     ValidatedDelayedBlipPrefixInventory {
