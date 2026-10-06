@@ -323,6 +323,21 @@ export function resolvedTextLinePaintPlan(node) {
   });
 }
 
+export function resolvedTextViewportGeometry(bounds) {
+  const x = safeInteger(bounds?.x, "text.viewport.bounds.x");
+  const y = safeInteger(bounds?.y, "text.viewport.bounds.y");
+  const width = safeInteger(bounds?.width, "text.viewport.bounds.width");
+  const height = safeInteger(bounds?.height, "text.viewport.bounds.height");
+  if (width <= 0 || height <= 0) return null;
+  return Object.freeze({
+    x,
+    y,
+    width,
+    height,
+    view_box: "0 0 " + (width / EMU_PER_CSS_PX) + " " + (height / EMU_PER_CSS_PX)
+  });
+}
+
 function appendPreviewText(group, node, plan = null) {
   if (!node.text) return;
   const bounds = node.text_bounds ?? node.bounds;
@@ -359,24 +374,26 @@ function appendText(group, defs, node, fonts, index) {
     }
   }
 
-  const clipId = "chaptera-reader-text-clip-" + index;
-  const clipPath = svgNode("clipPath", { id: clipId });
-  clipPath.appendChild(svgNode("rect", {
-    x: plan.bounds.x,
-    y: plan.bounds.y,
-    width: plan.bounds.width,
-    height: plan.bounds.height
-  }));
-  defs.appendChild(clipPath);
+  const viewportGeometry = resolvedTextViewportGeometry(plan.bounds);
+  if (!viewportGeometry) {
+    appendPreviewText(group, node, plan);
+    return;
+  }
 
-  // Clip in canonical node space before changing the text's local units.
-  // The enclosing node transform still applies to both clip and line paint.
-  const clipped = svgNode("g", { "clip-path": "url(#" + clipId + ")" });
-  const local = svgNode("g", {
-    transform: "translate(" + plan.bounds.x + " " + plan.bounds.y + ") scale(" + EMU_PER_CSS_PX + ")"
+  // Keep the fixed text-frame clip and the pixel-sized glyph coordinate system
+  // in the same nested SVG viewport. This avoids mixing page-EMU clip geometry
+  // with the local CSS-pixel text coordinates. The enclosing node transform
+  // still applies to the viewport as one unit.
+  const local = svgNode("svg", {
+    x: viewportGeometry.x,
+    y: viewportGeometry.y,
+    width: viewportGeometry.width,
+    height: viewportGeometry.height,
+    viewBox: viewportGeometry.view_box,
+    overflow: "hidden",
+    "data-text-viewport": "fixed-frame"
   });
-  clipped.appendChild(local);
-  group.appendChild(clipped);
+  group.appendChild(local);
 
   for (const line of plan.lines) {
     const text = svgNode("text", {
