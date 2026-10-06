@@ -575,6 +575,25 @@ mod tests {
         bytes
     }
 
+    fn strict_png_record(corrupt_uid: bool) -> Vec<u8> {
+        use md4::{Digest, Md4};
+
+        let mut data = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        data.extend_from_slice(b"prefix-salvage");
+        let digest = Md4::digest(&data);
+        let mut uid = [0u8; 16];
+        uid.copy_from_slice(&digest);
+        if corrupt_uid {
+            uid[0] ^= 0x5A;
+        }
+
+        let mut payload = Vec::with_capacity(17 + data.len());
+        payload.extend_from_slice(&uid);
+        payload.push(0xFF);
+        payload.extend_from_slice(&data);
+        record(0x6E00, OFFICE_ART_BLIP_PNG, &payload)
+    }
+
     #[test]
     fn reads_fbse_slot_without_collapsing_identity() {
         let mut fbse = vec![0_u8; 36];
@@ -697,4 +716,94 @@ mod tests {
             Some(25)
         );
     }
+
+ 
+    #[test]
+    fn prefix_retains_complete_blip_before_truncated_terminal_header() {
+        let first = strict_png_record(false);
+        let mut bytes = first.clone();
+        bytes.extend_from_slice(&[0x00, 0x6E, 0x1E, 0xF0]);
+
+        let observed =
+            inspect_validated_delayed_blips_prefix(stream("/Escher/EscherDelayStm"), &bytes);
+        assert_eq!(observed.records.len(), 1);
+        assert_eq!(observed.scanned_record_count, 1);
+        assert_eq!(observed.rejected_complete_blip_count, 0);
+        assert_eq!(observed.records[0].record_source.offset, 0);
+        assert_eq!(observed.records[0].record_source.end(), Some(first.len() as u64));
+        assert!(matches!(
+            observed.terminal_gap,
+            Some(DelayedBlipPrefixGap::TruncatedHeader {
+                offset,
+                available: 4
+            }) if offset == first.len() as u64
+        ));
+    }
+
+    #[test]
+    fn prefix_retains_complete_blip_before_declared_record_oob() {
+        let first = strict_png_record(false);
+        let mut bytes = first.clone();
+        bytes.extend_from_slice(&0x6E00u16.to_le_bytes());
+        bytes.extend_from_slice(&OFFICE_ART_BLIP_PNG.to_le_bytes());
+        bytes.extend_from_slice(&100u32.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 12]);
+
+        let observed =
+            inspect_validated_delayed_blips_prefix(stream("/Escher/EscherDelayStm"), &bytes);
+        assert_eq!(observed.records.len(), 1);
+        assert_eq!(observed.scanned_record_count, 1);
+        assert!(matches!(
+            observed.terminal_gap,
+            Some(DelayedBlipPrefixGap::DeclaredRecordOutOfBounds {
+                offset,
+                rec_type: OFFICE_ART_BLIP_PNG,
+                declared_len: 100,
+                ..
+            }) if offset == first.len() as u64
+        ));
+    }
+
+    #[test]
+    fn complete_bad_uid_record_is_rejected_without_resync_or_losing_neighbors() {
+        let first = strict_png_record(false);
+        let bad = strict_png_record(true);
+        let third = strict_png_record(false);
+        let mut bytes = first.clone();
+        bytes.extend_from_slice(&bad);
+        bytes.extend_from_slice(&third);
+
+        let observed =
+            inspect_validated_delayed_blips_prefix(stream("/Escher/EscherDelayStm"), &bytes);
+        assert_eq!(observed.scanned_record_count, 3);
+        assert_eq!(observed.rejected_complete_blip_count, 1);
+        assert_eq!(observed.records.len(), 2);
+        assert!(observed.terminal_gap.is_none());
+        assert_eq!(observed.records[0].record_source.offset, 0);
+        assert_eq!(
+            observed.records[1].record_source.offset,
+            (first.len() + bad.len()) as u64
+        );
+    }
+
+    #[test]
+    fn complete_supported_prefix_matches_strict_record_boundaries() {
+        let first = strict_png_record(false);
+        let second = strict_png_record(false);
+        let mut bytes = first.clone();
+        bytes.extend_from_slice(&second);
+
+        let strict = inspect_delayed_blips(stream("/Escher/EscherDelayStm"), &bytes)
+            .expect("complete delay stream");
+        let prefix =
+            inspect_validated_delayed_blips_prefix(stream("/Escher/EscherDelayStm"), &bytes);
+
+        assert_eq!(strict.records.len(), 2);
+        assert_eq!(prefix.records.len(), 2);
+        assert!(prefix.terminal_gap.is_none());
+        for (strict_record, validated_record) in strict.records.iter().zip(&prefix.records) {
+            assert_eq!(strict_record.record_source, validated_record.record_source);
+        }
+    }
 }
+
