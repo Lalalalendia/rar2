@@ -7,6 +7,26 @@ on:
         required: false
         type: string
         default: ""
+  pull_request:
+    paths:
+      - ".github/workflows/editor-fixed-pdf-current-revision.yml"
+      - "tools/ci/pub_editor_pr_fanout.py"
+      - "tools/ci/test_pub_editor_pr_fanout.py"
+      - "tools/run_editor_fixed_pdf_current_revision_v2.py"
+      - "tools/run_editor_desktop_continuity_v2.py"
+      - "tools/validate_editor_desktop_continuity_v2_receipt.py"
+      - "tools/run_yab259_current_fixed_pdf_resource_request.py"
+      - "tools/yab259_current_fixed_pdf_resource_request.rs"
+      - "tools/run_yab259_fixed_pdf_packet_renderer.py"
+      - "tools/yab259_fixed_pdf_packet_renderer.rs"
+      - "tools/run_yab259_fixed_pdf_closure.py"
+      - "apps/chaptera-desktop/src/acceptance_v2.rs"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/bin/current_fixed_pdf_input.rs"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/lib.rs"
+      - "crates/chaptera-desktop-fallback-font-resource/**"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-editor/src/lib.rs"
+      - "vendor/producer-a/crates/pub-layout/src/shaped_flow.rs"
   workflow_dispatch:
 
 permissions:
