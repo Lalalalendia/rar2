@@ -25,10 +25,12 @@ use chaptera_server::{
     },
 };
 use pub_editor::{
-    EDITOR_PROJECT_VERSION_V0_2, EDITOR_PROJECT_VERSION_V0_4, EDITOR_PROJECT_VERSION_V0_11,
-    EDITOR_PROJECT_VERSION_V0_15, EditOperation, EditorProject, EditorProjectIdentity, LengthEmu,
-    RectEmu, Sha256Digest,
+    CreateTableRuntimeV1, EDITOR_PROJECT_VERSION_V0_2, EDITOR_PROJECT_VERSION_V0_4,
+    EDITOR_PROJECT_VERSION_V0_11, EDITOR_PROJECT_VERSION_V0_15, EDITOR_PROJECT_VERSION_V0_20,
+    EditOperation, EditorProject, EditorProjectIdentity, LengthEmu, NodeId, RectEmu, Sha256Digest,
+    StoryId, TableCellId, TableTrackTargetV1, open_mature_0x2c_editor,
 };
+use pub_model::{TableColumnId, TableRowId};
 use sha2::{Digest, Sha256};
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 
@@ -812,6 +814,66 @@ async fn real_sample_newsletter_materializes_exact_historical_revision() {
     assert_eq!(
         project_sha256(&baseline).unwrap(),
         "575fbcb664f2a6b672a05861a4d2aff6aca339204a50e3401d04e1920d946348"
+    );
+
+    let source_hash = Sha256Digest::from_str(SAMPLE_SOURCE_SHA256).unwrap();
+    let mut table_author = open_mature_0x2c_editor(&bytes, source_hash).unwrap();
+    let page_id = table_author.graph().document.pages[0];
+    let table_id: NodeId =
+        serde_json::from_str("\"01890f47-5000-7abc-8def-0123456789ab\"").unwrap();
+    let story_id: StoryId =
+        serde_json::from_str("\"01890f47-5001-7abc-8def-0123456789ab\"").unwrap();
+    let row_ids: Vec<TableRowId> = [
+        "01890f47-5010-7abc-8def-0123456789ab",
+        "01890f47-5011-7abc-8def-0123456789ab",
+    ]
+    .into_iter()
+    .map(|value| serde_json::from_str(&format!("\"{value}\"")).unwrap())
+    .collect();
+    let column_ids: Vec<TableColumnId> = [
+        "01890f47-5020-7abc-8def-0123456789ab",
+        "01890f47-5021-7abc-8def-0123456789ab",
+    ]
+    .into_iter()
+    .map(|value| serde_json::from_str(&format!("\"{value}\"")).unwrap())
+    .collect();
+    let cell_ids: Vec<TableCellId> = [
+        "01890f47-5030-7abc-8def-0123456789ab",
+        "01890f47-5031-7abc-8def-0123456789ab",
+        "01890f47-5032-7abc-8def-0123456789ab",
+        "01890f47-5033-7abc-8def-0123456789ab",
+    ]
+    .into_iter()
+    .map(|value| serde_json::from_str(&format!("\"{value}\"")).unwrap())
+    .collect();
+
+    table_author
+        .create_table(CreateTableRuntimeV1 {
+            node_id: table_id,
+            story_id,
+            page_id,
+            bounds: rect(100_000, 200_000, 600_000, 400_000),
+            row_ids,
+            column_ids: column_ids.clone(),
+            cell_ids,
+        })
+        .unwrap();
+    table_author
+        .set_table_track_extent_v1(
+            table_id,
+            TableTrackTargetV1::Column(column_ids[1]),
+            LengthEmu::new(350_000),
+        )
+        .unwrap();
+
+    let cloud_v020 = cloud_revision_project(&table_author.project());
+    assert_eq!(cloud_v020.schema_version, EDITOR_PROJECT_VERSION_V0_20);
+    assert!(cloud_v020.identity.is_none());
+    assert_eq!(
+        editor
+            .replay_project(&bytes, SAMPLE_SOURCE_SHA256, &cloud_v020)
+            .unwrap(),
+        cloud_v020
     );
 
     let before = rect(526_710, 1_191_292, 4_436_165, 587_274);
