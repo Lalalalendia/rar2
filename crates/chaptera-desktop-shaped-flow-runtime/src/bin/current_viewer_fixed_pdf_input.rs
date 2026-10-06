@@ -148,7 +148,10 @@ impl ProducerExactFontRegistry {
                         info.weight == expected_weight
                             && info.stretch == fontdb::Stretch::Normal
                             && info.style == expected_style
-                            && info.families.iter().any(|(name, _)| normalize_font_family(name) == family)
+                            && info
+                                .families
+                                .iter()
+                                .any(|(name, _)| normalize_font_family(name) == family)
                     })
                     .map(|info| info.id)
                     .collect::<Vec<_>>();
