@@ -1,12 +1,13 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
+use pub_reader::reader_evidence_disposition;
 use pub_viewer::{
+    build_reader_partial_source_graph, classify_failure_candidate, classify_pub_family,
+    open_pub_or_salvage, probe_reader_salvage_candidate,
+    probe_reader_salvage_candidate_with_trigger, viewer_geometry_environment_v0_1,
     FailureIntakeClass, ReaderPartialSourceFact, ReaderPartialSourceGap,
     ReaderSalvageCorruptionEvidence, ReaderSalvageEligibility, ReaderSalvageTrigger,
-    ViewerProductOpenOutcome, build_reader_partial_source_graph, classify_failure_candidate,
-    classify_pub_family, open_pub_or_salvage, probe_reader_salvage_candidate,
-    probe_reader_salvage_candidate_with_trigger, viewer_geometry_environment_v0_1,
+    ViewerProductOpenOutcome,
 };
-use pub_reader::reader_evidence_disposition;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -284,12 +285,7 @@ fn salvage_values(
 ) -> (SalvageValue, SalvageValue, SalvageValue) {
     let text = if facts.get("text_range").copied().unwrap_or(0) > 0 {
         SalvageValue::Proven
-    } else if gaps
-        .get("text_semantic_ambiguity")
-        .copied()
-        .unwrap_or(0)
-        > 0
-    {
+    } else if gaps.get("text_semantic_ambiguity").copied().unwrap_or(0) > 0 {
         SalvageValue::Ambiguous
     } else {
         SalvageValue::Unavailable
@@ -303,12 +299,7 @@ fn salvage_values(
 
     let geometry = if facts.get("grounded_geometry").copied().unwrap_or(0) > 0 {
         SalvageValue::Proven
-    } else if gaps
-        .get("geometry_facts_unavailable")
-        .copied()
-        .unwrap_or(0)
-        > 0
-    {
+    } else if gaps.get("geometry_facts_unavailable").copied().unwrap_or(0) > 0 {
         SalvageValue::Unavailable
     } else {
         SalvageValue::Ambiguous
@@ -340,7 +331,10 @@ fn load_rescue_evidence(path: Option<&Path>) -> Result<BTreeMap<String, RescueEv
             bail!("invalid rescue evidence source sha256 {sha:?}");
         }
         for (field, digest) in [
-            ("producer_receipt_sha256", row.producer_receipt_sha256.as_deref()),
+            (
+                "producer_receipt_sha256",
+                row.producer_receipt_sha256.as_deref(),
+            ),
             (
                 "product_validation_sha256",
                 row.product_validation_sha256.as_deref(),
@@ -401,10 +395,7 @@ fn forced_recovery_projection(
     ))
 }
 
-fn apply_external_rescue(
-    row: &mut ClassifierRow,
-    evidence: Option<&RescueEvidenceRow>,
-) {
+fn apply_external_rescue(row: &mut ClassifierRow, evidence: Option<&RescueEvidenceRow>) {
     let Some(evidence) = evidence else {
         return;
     };
@@ -439,12 +430,8 @@ fn classify(bytes: &[u8], rescue_evidence: Option<&RescueEvidenceRow>) -> Classi
     let family = classify_pub_family(bytes);
     let registry = reader_evidence_disposition(&source_sha256);
     let registry_owner = registry.as_ref().map(|entry| entry.owner.clone());
-    let registry_evidence_class = registry
-        .as_ref()
-        .map(|entry| entry.evidence_class.clone());
-    let registry_disposition = registry
-        .as_ref()
-        .map(|entry| entry.disposition.clone());
+    let registry_evidence_class = registry.as_ref().map(|entry| entry.evidence_class.clone());
+    let registry_disposition = registry.as_ref().map(|entry| entry.disposition.clone());
     let existing_format_owner = registry.as_ref().is_some_and(|entry| {
         entry.evidence_class == "format_gap" && entry.disposition == "existing_format_owner"
     });
@@ -501,8 +488,7 @@ fn classify(bytes: &[u8], rescue_evidence: Option<&RescueEvidenceRow>) -> Classi
             let probe = probe_reader_salvage_candidate(bytes);
             let facts = fact_counts(&graph.facts);
             let gaps = gap_counts(&graph.gaps);
-            let (salvage_text, salvage_images, salvage_geometry) =
-                salvage_values(&facts, &gaps);
+            let (salvage_text, salvage_images, salvage_geometry) = salvage_values(&facts, &gaps);
             let mut row = ClassifierRow {
                 source_sha256,
                 byte_len: bytes.len(),
@@ -617,7 +603,8 @@ fn classify(bytes: &[u8], rescue_evidence: Option<&RescueEvidenceRow>) -> Classi
                 salvage_eligibility: Some(eligibility_name(probe.eligibility)),
                 corruption_evidence: probe.corruption_evidence.map(corruption_name),
                 has_surviving_evidence: forced_survives.or(Some(probe.has_surviving_evidence())),
-                cfb_inventory_available: forced_cfb_inventory.or(Some(probe.cfb_inventory_available)),
+                cfb_inventory_available: forced_cfb_inventory
+                    .or(Some(probe.cfb_inventory_available)),
                 contents_family: forced_contents_family.or(probe.contents_family.clone()),
                 salvage_fact_counts: fact_counts_value,
                 salvage_gap_counts: gap_counts_value,
@@ -699,21 +686,15 @@ fn collect_pub_paths(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 
 fn main() -> Result<()> {
     let mut args = env::args_os().skip(1);
-    let root = PathBuf::from(
-        args.next().context(
-            "usage: recovery-damage-classifier CORPUS_DIR OUTPUT.json [RESCUE_EVIDENCE.json]",
-        )?,
-    );
-    let output = PathBuf::from(
-        args.next().context(
-            "usage: recovery-damage-classifier CORPUS_DIR OUTPUT.json [RESCUE_EVIDENCE.json]",
-        )?,
-    );
+    let root = PathBuf::from(args.next().context(
+        "usage: recovery-damage-classifier CORPUS_DIR OUTPUT.json [RESCUE_EVIDENCE.json]",
+    )?);
+    let output = PathBuf::from(args.next().context(
+        "usage: recovery-damage-classifier CORPUS_DIR OUTPUT.json [RESCUE_EVIDENCE.json]",
+    )?);
     let rescue_evidence_path = args.next().map(PathBuf::from);
     if args.next().is_some() {
-        bail!(
-            "recovery-damage-classifier accepts CORPUS_DIR OUTPUT.json [RESCUE_EVIDENCE.json]"
-        );
+        bail!("recovery-damage-classifier accepts CORPUS_DIR OUTPUT.json [RESCUE_EVIDENCE.json]");
     }
 
     let rescue_evidence = load_rescue_evidence(rescue_evidence_path.as_deref())?;
