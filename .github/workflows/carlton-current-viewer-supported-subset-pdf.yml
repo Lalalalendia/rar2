@@ -334,18 +334,19 @@ jobs:
               )
           if sum(prefix_signatures.values()) != prefix_candidates:
               raise SystemExit("Story-prefix signatures do not partition candidates")
-          if prefix_outcomes != {"fallback:shared_layout_incomplete": 3}:
-              raise SystemExit(f"Story-prefix outcome drift: {prefix_outcomes!r}")
+          if prefix_outcomes != {"shared_resolved": 3}:
+              raise SystemExit(f"Story-prefix overset admission drift: {prefix_outcomes!r}")
 
           if current_story_extent != 1:
               raise SystemExit(
                   f"Cmo marker-equivalence recovery did not leave exactly the true partial StoryExtentMismatch: "
                   f"story_extent={current_story_extent!r}"
               )
-          if current_shared_incomplete - 4 != prefix_candidates:
+
+          admitted_partial_overset = viewer_census["shared_resolved_partial_story_overset_count"]
+          if admitted_partial_overset != 5:
               raise SystemExit(
-                  f"SharedLayoutIncomplete increase is not exactly the prefix cohort: "
-                  f"shared_incomplete={current_shared_incomplete!r} candidates={prefix_candidates!r}"
+                  f"ordinary partial Story overset admission drift: {admitted_partial_overset!r}"
               )
 
           if sum(viewer_census["shared_layout_incomplete_spacing_authority_counts"].values()) != current_shared_incomplete:
@@ -364,8 +365,16 @@ jobs:
               raise SystemExit("cause census does not cover every SharedLayoutIncomplete node")
           if sum(viewer_census["shared_layout_incomplete_cause_authority_counts"].values()) != current_shared_incomplete:
               raise SystemExit("cause/authority cross-tab does not cover every SharedLayoutIncomplete node")
-          if current_shared_incomplete != 7:
-              raise SystemExit(f"supported-subset SLI residual drift: {current_shared_incomplete!r}")
+          if current_shared_incomplete != 2:
+              raise SystemExit(f"supported-subset SLI residual drift after overset admission: {current_shared_incomplete!r}")
+          if viewer_census["shared_layout_incomplete_cause_counts"] != {"first_line_height_rejection": 2}:
+              raise SystemExit(
+                  f"remaining SLI cause drift: {viewer_census['shared_layout_incomplete_cause_counts']!r}"
+              )
+          if 7 - current_shared_incomplete != admitted_partial_overset:
+              raise SystemExit(
+                  "admitted partial Story overset count does not exactly explain the SLI reduction"
+              )
 
           first_line_recoveries = viewer_census["first_line_capacity_recovery_count"]
           first_line_signatures = viewer_census["first_line_capacity_recovery_signature_counts"]
@@ -376,11 +385,9 @@ jobs:
               )
           if sum(first_line_signatures.values()) != first_line_recoveries:
               raise SystemExit("first-line capacity recovery signatures do not partition recoveries")
-          if 12 - current_shared_incomplete + prefix_candidates != first_line_recoveries:
-              raise SystemExit("first-line recovery identity changed outside the prefix reclassification")
 
           expected_fallback = {
-              "shared_layout_incomplete": 7,
+              "shared_layout_incomplete": 2,
               "story_extent_mismatch": 1,
           }
           if mapping["backend_fallback_reason_counts"] != expected_fallback:

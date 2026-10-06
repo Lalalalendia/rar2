@@ -58,6 +58,7 @@ struct CurrentViewerPlanCensusV1 {
     projected_instance_count: usize,
     duplicate_node_id_count: usize,
     shared_resolved_text_node_count: usize,
+    shared_resolved_partial_story_overset_count: usize,
     backend_fallback_text_node_count: usize,
     backend_fallback_reason_counts: BTreeMap<String, usize>,
     text_font_binding_counts: BTreeMap<String, usize>,
@@ -451,6 +452,17 @@ fn census(
                     ..
                 } => {
                     out.shared_resolved_text_node_count += 1;
+                    if node.projected_scene_instance.is_none()
+                        && layout
+                            .lines
+                            .last()
+                            .is_some_and(|line| line.consumed_scalar_end < text.scalar_end)
+                        && layout.lines.iter().any(|line| {
+                            line.scalar_end > line.scalar_start && line.measured_width_emu > 0
+                        })
+                    {
+                        out.shared_resolved_partial_story_overset_count += 1;
+                    }
                     if is_story_prefix_candidate {
                         *out.story_prefix_whole_story_candidate_outcome_counts
                             .entry("shared_resolved".to_owned())
@@ -461,6 +473,10 @@ fn census(
                     let frame_height_emu = bounds.height.get();
                     let resolved_line_count = i64::try_from(layout.lines.len()).unwrap_or(i64::MAX);
                     if node.projected_scene_instance.is_none()
+                        && layout
+                            .lines
+                            .last()
+                            .is_some_and(|line| line.consumed_scalar_end == text.scalar_end)
                         && frame_height_emu > 0
                         && *font_size_emu > 0
                         && *line_height_emu > 0
@@ -745,11 +761,12 @@ fn run(
     .map_err(|error| format!("write {}: {error}", output_path.display()))?;
 
     eprintln!(
-        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={} text_font_bindings={:?} shared_layout_incomplete_spacing={:?} shared_layout_incomplete_family={:?} shared_layout_incomplete_binding={:?} shared_layout_incomplete_paths={:?} shared_layout_incomplete_consumption={:?} shared_layout_incomplete_causes={:?} shared_layout_incomplete_cause_authority={:?} first_line_capacity_recoveries={} first_line_capacity_recovery_signatures={:?} fallback_font_size_emu={} fallback_line_height_emu={}",
+        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} shared_resolved_partial_story_overset={} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={} text_font_bindings={:?} shared_layout_incomplete_spacing={:?} shared_layout_incomplete_family={:?} shared_layout_incomplete_binding={:?} shared_layout_incomplete_paths={:?} shared_layout_incomplete_consumption={:?} shared_layout_incomplete_causes={:?} shared_layout_incomplete_cause_authority={:?} first_line_capacity_recoveries={} first_line_capacity_recovery_signatures={:?} fallback_font_size_emu={} fallback_line_height_emu={}",
         packet.census.page_count,
         packet.census.node_count,
         packet.census.projected_instance_count,
         packet.census.shared_resolved_text_node_count,
+        packet.census.shared_resolved_partial_story_overset_count,
         packet.census.backend_fallback_text_node_count,
         packet.census.missing_shaping_evidence_count,
         packet.census.duplicate_node_id_count,

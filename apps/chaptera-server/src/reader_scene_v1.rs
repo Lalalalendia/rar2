@@ -2733,6 +2733,18 @@ mod tests {
         match actual_sha256.as_str() {
             "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" => {
                 assert_eq!(
+                    shared_frames, 41,
+                    "exact Carlton must recover exactly one configured-font ordinary partial Story overset"
+                );
+                assert_eq!(
+                    backend_fallbacks,
+                    BTreeMap::from([
+                        ("shared_layout_incomplete", 2_usize),
+                        ("story_extent_mismatch", 1_usize),
+                    ]),
+                    "exact Carlton must leave only the two zero-line first-line rejects plus true extent residual"
+                );
+                assert_eq!(
                     projected_text_nodes, 4,
                     "exact Carlton projected carrier count drift"
                 );
@@ -2754,12 +2766,21 @@ mod tests {
                     "exact Carlton projected source-backed line count drift"
                 );
                 assert_eq!(
-                    sli_probe_cause_counts.values().sum::<usize>(),
-                    3,
-                    "post-#1498 exact Carlton product-font SLI diagnostic population drift"
+                    sli_probe_cause_counts,
+                    BTreeMap::from([("first_line_height_rejection", 2_usize)]),
+                    "exact Carlton product-font residual must be only the two zero-line first-line rejects"
                 );
             }
             "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e" => {
+                assert_eq!(
+                    shared_frames, 24,
+                    "Virginia Devinettes shared-layout population must remain unchanged"
+                );
+                assert_eq!(
+                    backend_fallbacks,
+                    BTreeMap::from([("shared_layout_incomplete", 1_usize)]),
+                    "Virginia mixed-size fail-closed control must remain one SharedLayoutIncomplete"
+                );
                 assert_eq!(
                     projected_text_nodes, 0,
                     "Virginia Devinettes must remain a zero-projected control"
