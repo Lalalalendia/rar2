@@ -23,6 +23,10 @@ def main() -> int:
         print("scribus produced no SLA", file=sys.stderr)
         return 4
 
+    # Scribus stays alive after a -py script unless the application is
+    # explicitly told to quit. In CI that leaves docker/xvfb-run waiting even
+    # though the consumer proof is already complete.
+    scribus.fileQuit()
     return 0
 
 
