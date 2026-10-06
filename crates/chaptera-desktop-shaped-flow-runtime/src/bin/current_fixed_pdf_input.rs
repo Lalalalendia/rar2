@@ -157,6 +157,19 @@ fn classify_kind_family(
     )
 }
 
+fn validate_stage02_target_topology(
+    move_node_id: NodeId,
+    resize_node_id: NodeId,
+    replacement_node_id: NodeId,
+) -> Result<(), String> {
+    if move_node_id == resize_node_id || move_node_id == replacement_node_id {
+        return Err(
+            "Stage-0 MoveNode target must remain distinct from ResizeNode/ReplaceImage".into(),
+        );
+    }
+    Ok(())
+}
+
 fn exact_project_targets(project: &EditorProject) -> Result<ProjectTargets, String> {
     if project.schema_version != PROJECT_SCHEMA {
         return Err(format!(
@@ -229,11 +242,12 @@ fn exact_project_targets(project: &EditorProject) -> Result<ProjectTargets, Stri
                 replacement_node_id,
                 ..
             } = &targets
-                && (move_node_id == resize_node_id
-                    || move_node_id == replacement_node_id
-                    || resize_node_id == replacement_node_id)
             {
-                return Err("Stage-0 object mutation targets must be distinct".into());
+                validate_stage02_target_topology(
+                    *move_node_id,
+                    *resize_node_id,
+                    *replacement_node_id,
+                )?;
             }
             Ok(targets)
         }
@@ -430,6 +444,31 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn stage02_target_topology_allows_distinct_and_resize_then_replace_same_frame() {
+        let moved: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"").unwrap();
+        let resized: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000002\"").unwrap();
+        let replaced: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000003\"").unwrap();
+
+        assert!(validate_stage02_target_topology(moved, resized, replaced).is_ok());
+        assert!(validate_stage02_target_topology(moved, resized, resized).is_ok());
+    }
+
+    #[test]
+    fn stage02_target_topology_keeps_move_target_distinct() {
+        let moved: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"").unwrap();
+        let other: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000002\"").unwrap();
+
+        assert!(validate_stage02_target_topology(moved, moved, other).is_err());
+        assert!(validate_stage02_target_topology(moved, other, moved).is_err());
+        assert!(validate_stage02_target_topology(moved, moved, moved).is_err());
     }
 
     #[test]
