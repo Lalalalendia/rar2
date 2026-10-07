@@ -99,6 +99,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/publisher-visual-supplemental"
           python tools/cloud_reader_visual_supplemental_v1.py prepare             tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv             out/pinned1050/materialized/native             "$RUNNER_TEMP/publisher-visual-supplemental/fixtures"             "$RUNNER_TEMP/publisher-visual-supplemental/manifest.json"
 
+      - name: Classify exact 094 mixed-size layout stops
+        env:
+          CHAPTERA_READER_SCENE_PROBE_PUB: ${{ github.workspace }}/out/pinned1050/materialized/native/bbaefcbdcdd2dbe51a636ed554c14d6f5353c98e795b5f88d26f79542e5d93ba.pub
+          CHAPTERA_READER_SCENE_PROBE_SHA256: bbaefcbdcdd2dbe51a636ed554c14d6f5353c98e795b5f88d26f79542e5d93ba
+        run: cargo test -p chaptera-server real_reference_text_layout_fallback_census_probe -- --ignored --nocapture
+
       - name: Build canonical Cloud Reader worker
         run: cargo build -p chaptera-server --bin chaptera --jobs 2
 
