@@ -223,7 +223,6 @@ try {
     active = { fixture, receipt };
     await page.goto(origin);
     await page.locator("#pub-file").setInputFiles(source);
-    await page.locator("#open-file").click();
     await page.waitForFunction(() => document.querySelectorAll("#pages svg.page").length > 0);
     await page.evaluate(() => document.fonts.ready);
     assert.equal(await page.locator("#pages svg.page").count(), fixturePages);
