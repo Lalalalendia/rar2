@@ -9,6 +9,7 @@ on:
       - "services/editor-api/create_shape_v1.py"
       - "apps/chaptera-desktop/src/agent.rs"
       - "vendor/producer-a/crates/pub-editor/src/session_geometry.rs"
+      - "vendor/producer-a/crates/pub-editor-geometry-core/**"
       - ".github/workflows/resize-nodes-v1.yml"
   workflow_dispatch:
 

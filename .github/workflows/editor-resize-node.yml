@@ -15,6 +15,7 @@ on:
       - "tools/chaptera-resize-producer/**"
       - "tools/run_local_resize_node_receipt.ps1"
       - "vendor/producer-a/crates/pub-editor/src/session_geometry.rs"
+      - "vendor/producer-a/crates/pub-editor-geometry-core/**"
       - ".github/workflows/editor-resize-node.yml"
   workflow_dispatch:
 

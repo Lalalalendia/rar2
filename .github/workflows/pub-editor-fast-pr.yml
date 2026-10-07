@@ -13,6 +13,8 @@ on:
       - "vendor/producer-a/crates/pub-editor-table-core/src/**"
       - "vendor/producer-a/crates/pub-editor-table-core/tests/**"
       - "vendor/producer-a/crates/pub-editor-table-core/Cargo.toml"
+      - "vendor/producer-a/crates/pub-editor-geometry-core/src/**"
+      - "vendor/producer-a/crates/pub-editor-geometry-core/Cargo.toml"
       - "vendor/producer-a/Cargo.toml"
       - "tools/dev_fast_loop.py"
       - "tools/test_dev_fast_loop.py"

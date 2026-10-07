@@ -6,6 +6,11 @@
 //! outside this module.
 
 use super::*;
+use pub_editor_geometry_core::{
+    GeometryNodeSnapshotV1, MoveNodesTransitionErrorV1, ResizeNodesTransitionErrorV1,
+    validate_move_nodes_transition_v1 as validate_move_nodes_transition_core_v1,
+    validate_resize_nodes_transition_v1 as validate_resize_nodes_transition_core_v1,
+};
 
 impl EditorSession {
     fn has_table_track_extent_history_v1(&self, node_id: NodeId) -> bool {
@@ -134,45 +139,8 @@ impl EditorSession {
         }
 
         entries.sort_by_key(|entry| entry.node_id);
-        for pair in entries.windows(2) {
-            if pair[0].node_id == pair[1].node_id {
-                return Err(EditorError::MoveNodesDuplicate {
-                    node_id: pair[0].node_id,
-                });
-            }
-        }
-
-        let page_parent = page_id.into_canonical();
+        validate_move_nodes_transition(&self.graph, page_id, &entries, true)?;
         for entry in &entries {
-            let node =
-                self.graph
-                    .nodes
-                    .get(&entry.node_id)
-                    .ok_or(EditorError::NodeMoveUnsupported {
-                        node_id: entry.node_id,
-                    })?;
-            if node.header.parent_id != page_parent {
-                return Err(EditorError::MoveNodesPageMismatch {
-                    node_id: entry.node_id,
-                    page_id,
-                });
-            }
-            if node.header.bounds != entry.before {
-                return Err(EditorError::StaleNodeMove {
-                    node_id: entry.node_id,
-                });
-            }
-            if entry.before.width != entry.after.width || entry.before.height != entry.after.height
-            {
-                return Err(EditorError::MoveNodesSizeChanged {
-                    node_id: entry.node_id,
-                });
-            }
-            if entry.before == entry.after {
-                return Err(EditorError::NodeMoveNoChange {
-                    node_id: entry.node_id,
-                });
-            }
             self.can_move_node_to(entry.node_id, entry.after.x, entry.after.y)?;
         }
 
@@ -301,74 +269,82 @@ impl EditorSession {
     }
 }
 
+fn geometry_node_snapshot_v1(
+    graph: &PubResolvedGraph,
+    node_id: NodeId,
+) -> Option<GeometryNodeSnapshotV1> {
+    let node = graph.nodes.get(&node_id)?;
+    Some(GeometryNodeSnapshotV1 {
+        node_id,
+        parent_id: node.header.parent_id,
+        bounds: node.header.bounds,
+        transform: node.header.transform.clone(),
+    })
+}
+
+fn move_transition_error_to_editor_v1(error: MoveNodesTransitionErrorV1) -> EditorError {
+    match error {
+        MoveNodesTransitionErrorV1::Empty => EditorError::MoveNodesEmpty,
+        MoveNodesTransitionErrorV1::TooLarge { found } => EditorError::MoveNodesTooLarge { found },
+        MoveNodesTransitionErrorV1::Duplicate { node_id } => {
+            EditorError::MoveNodesDuplicate { node_id }
+        }
+        MoveNodesTransitionErrorV1::SizeChanged { node_id } => {
+            EditorError::MoveNodesSizeChanged { node_id }
+        }
+        MoveNodesTransitionErrorV1::NoChange { node_id } => {
+            EditorError::NodeMoveNoChange { node_id }
+        }
+        MoveNodesTransitionErrorV1::NodeUnsupported { node_id } => {
+            EditorError::NodeMoveUnsupported { node_id }
+        }
+        MoveNodesTransitionErrorV1::PageMismatch { node_id, page_id } => {
+            EditorError::MoveNodesPageMismatch { node_id, page_id }
+        }
+        MoveNodesTransitionErrorV1::Stale { node_id } => EditorError::StaleNodeMove { node_id },
+    }
+}
+
+fn resize_transition_error_to_editor_v1(error: ResizeNodesTransitionErrorV1) -> EditorError {
+    match error {
+        ResizeNodesTransitionErrorV1::InvalidCount { found } => {
+            EditorError::ResizeNodesInvalidCount { found }
+        }
+        ResizeNodesTransitionErrorV1::Duplicate { node_id } => {
+            EditorError::ResizeNodesDuplicate { node_id }
+        }
+        ResizeNodesTransitionErrorV1::NotCanonical { node_id } => {
+            EditorError::ResizeNodesNotCanonical { node_id }
+        }
+        ResizeNodesTransitionErrorV1::PageMismatch { node_id, page_id } => {
+            EditorError::ResizeNodesPageMismatch { node_id, page_id }
+        }
+        ResizeNodesTransitionErrorV1::NodeUnsupported { node_id } => {
+            EditorError::NodeResizeUnsupported { node_id }
+        }
+        ResizeNodesTransitionErrorV1::NonPositive { node_id } => {
+            EditorError::NodeResizeNonPositive { node_id }
+        }
+        ResizeNodesTransitionErrorV1::Overflow { node_id } => {
+            EditorError::NodeResizeOverflow { node_id }
+        }
+        ResizeNodesTransitionErrorV1::Stale { node_id } => EditorError::StaleNodeResize { node_id },
+        ResizeNodesTransitionErrorV1::NoSizeChange => EditorError::ResizeNodesNoSizeChange,
+    }
+}
+
 pub(super) fn validate_move_nodes_transition(
     graph: &PubResolvedGraph,
     page_id: PageId,
     entries: &[MoveNodeBatchEntry],
     forward: bool,
 ) -> Result<(), EditorError> {
-    if entries.is_empty() {
-        return Err(EditorError::MoveNodesEmpty);
-    }
-    if entries.len() > MAX_MOVE_NODES_V1 {
-        return Err(EditorError::MoveNodesTooLarge {
-            found: entries.len(),
-        });
-    }
-
-    let page_parent = page_id.into_canonical();
-    let mut previous = None;
-    for entry in entries {
-        if previous.is_some_and(|node_id| node_id >= entry.node_id) {
-            return Err(EditorError::MoveNodesDuplicate {
-                node_id: entry.node_id,
-            });
-        }
-        previous = Some(entry.node_id);
-
-        if entry.before.width != entry.after.width || entry.before.height != entry.after.height {
-            return Err(EditorError::MoveNodesSizeChanged {
-                node_id: entry.node_id,
-            });
-        }
-        if entry.before == entry.after {
-            return Err(EditorError::NodeMoveNoChange {
-                node_id: entry.node_id,
-            });
-        }
-        let node = graph
-            .nodes
-            .get(&entry.node_id)
-            .ok_or(EditorError::NodeMoveUnsupported {
-                node_id: entry.node_id,
-            })?;
-        if node.header.parent_id != page_parent {
-            return Err(EditorError::MoveNodesPageMismatch {
-                node_id: entry.node_id,
-                page_id,
-            });
-        }
-        if node.header.transform != pub_model::Affine2D::identity()
-            || entry.before.width.get() <= 0
-            || entry.before.height.get() <= 0
-            || entry.before.right().is_none()
-            || entry.before.bottom().is_none()
-            || entry.after.right().is_none()
-            || entry.after.bottom().is_none()
-        {
-            return Err(EditorError::NodeMoveUnsupported {
-                node_id: entry.node_id,
-            });
-        }
-
-        let expected = if forward { entry.before } else { entry.after };
-        if node.header.bounds != expected {
-            return Err(EditorError::StaleNodeMove {
-                node_id: entry.node_id,
-            });
-        }
-    }
-    Ok(())
+    let nodes = entries
+        .iter()
+        .filter_map(|entry| geometry_node_snapshot_v1(graph, entry.node_id))
+        .collect::<Vec<_>>();
+    validate_move_nodes_transition_core_v1(page_id, entries, &nodes, forward)
+        .map_err(move_transition_error_to_editor_v1)
 }
 
 pub(super) fn validate_resize_nodes_transition(
@@ -377,76 +353,10 @@ pub(super) fn validate_resize_nodes_transition(
     entries: &[ResizeNodeBatchEntry],
     forward: bool,
 ) -> Result<(), EditorError> {
-    if entries.len() < 2 || entries.len() > MAX_RESIZE_NODES_V1 {
-        return Err(EditorError::ResizeNodesInvalidCount {
-            found: entries.len(),
-        });
-    }
-
-    let page_parent = page_id.into_canonical();
-    let mut previous = None;
-    let mut has_size_change = false;
-    for entry in entries {
-        if let Some(previous_id) = previous {
-            if previous_id == entry.node_id {
-                return Err(EditorError::ResizeNodesDuplicate {
-                    node_id: entry.node_id,
-                });
-            }
-            if previous_id > entry.node_id {
-                return Err(EditorError::ResizeNodesNotCanonical {
-                    node_id: entry.node_id,
-                });
-            }
-        }
-        previous = Some(entry.node_id);
-
-        let node = graph
-            .nodes
-            .get(&entry.node_id)
-            .ok_or(EditorError::NodeResizeUnsupported {
-                node_id: entry.node_id,
-            })?;
-        if node.header.parent_id != page_parent {
-            return Err(EditorError::ResizeNodesPageMismatch {
-                node_id: entry.node_id,
-                page_id,
-            });
-        }
-        if node.header.transform != pub_model::Affine2D::identity()
-            || entry.before.width.get() <= 0
-            || entry.before.height.get() <= 0
-            || entry.before.right().is_none()
-            || entry.before.bottom().is_none()
-        {
-            return Err(EditorError::NodeResizeUnsupported {
-                node_id: entry.node_id,
-            });
-        }
-        if entry.after.width.get() <= 0 || entry.after.height.get() <= 0 {
-            return Err(EditorError::NodeResizeNonPositive {
-                node_id: entry.node_id,
-            });
-        }
-        if entry.after.right().is_none() || entry.after.bottom().is_none() {
-            return Err(EditorError::NodeResizeOverflow {
-                node_id: entry.node_id,
-            });
-        }
-        if entry.before.width != entry.after.width || entry.before.height != entry.after.height {
-            has_size_change = true;
-        }
-
-        let expected = if forward { entry.before } else { entry.after };
-        if node.header.bounds != expected {
-            return Err(EditorError::StaleNodeResize {
-                node_id: entry.node_id,
-            });
-        }
-    }
-
-    if !has_size_change {
-        return Err(EditorError::ResizeNodesNoSizeChange);
-    }
-    Ok(())
+    let nodes = entries
+        .iter()
+        .filter_map(|entry| geometry_node_snapshot_v1(graph, entry.node_id))
+        .collect::<Vec<_>>();
+    validate_resize_nodes_transition_core_v1(page_id, entries, &nodes, forward)
+        .map_err(resize_transition_error_to_editor_v1)
 }

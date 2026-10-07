@@ -19,6 +19,7 @@ members = [
   "crates/pub-odg",
   "crates/pub-writer",
   "crates/pub-editor-authoring-core",
+  "crates/pub-editor-geometry-core",
   "crates/pub-editor-table-core",
   "crates/pub-editor",
   "producer",

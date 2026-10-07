@@ -16,9 +16,11 @@ spec.loader.exec_module(mod)
 PUB_EDITOR_SRC = ROOT / "vendor" / "producer-a" / "crates" / "pub-editor" / "src"
 AUTHORING_CORE_SRC = ROOT / "vendor" / "producer-a" / "crates" / "pub-editor-authoring-core" / "src"
 TABLE_CORE_SRC = ROOT / "vendor" / "producer-a" / "crates" / "pub-editor-table-core" / "src"
+GEOMETRY_CORE_SRC = ROOT / "vendor" / "producer-a" / "crates" / "pub-editor-geometry-core" / "src"
 PREFIX = "vendor/producer-a/crates/pub-editor/src/"
 AUTHORING_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-authoring-core/src/"
 TABLE_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-table-core/src/"
+GEOMETRY_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-geometry-core/src/"
 
 
 def is_pub_editor_test(command: tuple[str, ...]) -> bool:
@@ -30,6 +32,7 @@ def is_pub_editor_test(command: tuple[str, ...]) -> bool:
             "pub-editor",
             "pub-editor-authoring-core",
             "pub-editor-table-core",
+            "pub-editor-geometry-core",
         }:
             return True
     if "--manifest-path" in command:
@@ -40,6 +43,7 @@ def is_pub_editor_test(command: tuple[str, ...]) -> bool:
                 manifest.endswith("/pub-editor/Cargo.toml")
                 or manifest.endswith("/pub-editor-authoring-core/Cargo.toml")
                 or manifest.endswith("/pub-editor-table-core/Cargo.toml")
+                or manifest.endswith("/pub-editor-geometry-core/Cargo.toml")
             )
     return False
 
@@ -90,6 +94,18 @@ def main() -> int:
             if not is_bounded_test(command):
                 unbounded.append((rel, command))
 
+    for source in sorted(GEOMETRY_CORE_SRC.glob("*.rs")):
+        rel = GEOMETRY_CORE_PREFIX + source.name
+        checks = mod.plan_for_paths(ROOT, [rel], mode="edit")
+        test_commands = [check.command for check in checks if is_pub_editor_test(check.command)]
+
+        if source.name != "lib.rs" and not test_commands:
+            uncovered.append(rel)
+
+        for command in test_commands:
+            if not is_bounded_test(command):
+                unbounded.append((rel, command))
+
     lib_checks = mod.plan_for_paths(ROOT, [PREFIX + "lib.rs"], mode="edit")
     lib_tests = [check.command for check in lib_checks if is_pub_editor_test(check.command)]
     if not lib_tests or not all("--lib" in command for command in lib_tests):
@@ -125,7 +141,7 @@ def main() -> int:
 
     print(
         "pub-editor fast plan contract: ok "
-        f"({len(list(PUB_EDITOR_SRC.glob('*.rs'))) + len(list(AUTHORING_CORE_SRC.glob('*.rs'))) + len(list(TABLE_CORE_SRC.glob('*.rs')))} source modules audited)"
+        f"({len(list(PUB_EDITOR_SRC.glob('*.rs'))) + len(list(AUTHORING_CORE_SRC.glob('*.rs'))) + len(list(TABLE_CORE_SRC.glob('*.rs'))) + len(list(GEOMETRY_CORE_SRC.glob('*.rs')))} source modules audited)"
     )
     return 0
 
