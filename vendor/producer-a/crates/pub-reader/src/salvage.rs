@@ -365,6 +365,11 @@ fn discover_reader_partial_escherdelay_carrier(
     if inventory.source_sha256 != source_sha256 || inventory.source_byte_len != bytes.len() as u64 {
         return None;
     }
+    if inventory.entries.iter().any(|entry| {
+        matches!(entry.object_type, 1 | 2) && entry.descriptive_name.is_none()
+    }) {
+        return None;
+    }
 
     let escher_storage_count = inventory
         .entries
@@ -1321,6 +1326,22 @@ mod tests {
         bytes
     }
 
+    fn corrupt_second_delay_name_terminator(mut bytes: Vec<u8>) -> Vec<u8> {
+        let marker = "EscherDelayStm\0"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        let matches = bytes
+            .windows(marker.len())
+            .enumerate()
+            .filter_map(|(offset, window)| (window == marker.as_slice()).then_some(offset))
+            .collect::<Vec<_>>();
+        assert!(matches.len() >= 2, "duplicate delay-name fixture");
+        let offset = matches[1] + marker.len() - 2;
+        bytes[offset..offset + 2].copy_from_slice(&(b'X' as u16).to_le_bytes());
+        bytes
+    }
+
     fn synthetic_pub_cfb_with_duplicate_delay_names() -> Vec<u8> {
         let mut compound =
             cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("duplicate carrier fixture");
@@ -1384,6 +1405,23 @@ mod tests {
         assert!(
             discover_reader_partial_escherdelay_carrier(&bytes, &source_sha, true).is_none(),
             "raw-name fallback must fail closed when EscherDelayStm is not unique"
+        );
+    }
+
+    #[test]
+    fn truncated_cfb_raw_carrier_fallback_rejects_hidden_duplicate_with_bad_name() {
+        let mut bytes =
+            corrupt_second_delay_name_terminator(synthetic_pub_cfb_with_duplicate_delay_names());
+        bytes.extend_from_slice(&[0xaa; 37]);
+        let source_sha = source_sha256(&bytes);
+
+        assert!(
+            pub_cfb::discover_regular_stream_sid_reader(Cursor::new(&bytes), ESCHER_DELAY_STREAM,)
+                .is_err()
+        );
+        assert!(
+            discover_reader_partial_escherdelay_carrier(&bytes, &source_sha, true).is_none(),
+            "raw-name fallback must not infer uniqueness while an active stream name is unreadable"
         );
     }
 
