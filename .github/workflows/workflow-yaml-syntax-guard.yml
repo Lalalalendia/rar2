@@ -16,6 +16,7 @@ on:
       - "tools/ci/test_migration_consumer_runtime_wiring.py"
       - "tools/ci/test_shaped_flow_runtime_routing.py"
       - "tools/ci/test_pub_viewer_authoring_projection_routing.py"
+      - "tools/ci/test_pub_viewer_images_routing.py"
       - "tools/ci/test_pub_reader_paint_projection_routing.py"
       - "tools/ci/test_pub_reader_page_projection_routing.py"
       - "tools/ci/test_pub_reader_source_paint_order_routing.py"
@@ -62,6 +63,8 @@ jobs:
         run: python tools/ci/test_shaped_flow_runtime_routing.py
       - name: Guard pub-viewer authoring projection routing
         run: python tools/ci/test_pub_viewer_authoring_projection_routing.py
+      - name: Guard pub-viewer image routing
+        run: python tools/ci/test_pub_viewer_images_routing.py
       - name: Guard pub-reader paint projection routing
         run: python tools/ci/test_pub_reader_paint_projection_routing.py
       - name: Guard pub-reader page projection routing
