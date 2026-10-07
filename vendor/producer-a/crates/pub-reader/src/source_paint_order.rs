@@ -350,13 +350,21 @@ pub(super) fn project_grouped_object_shape(
             bail!("OfficeArt parent-group link does not match Contents ancestry");
         }
         if shape_has_nonzero_rotation(group_shape) {
-            bail!("group ancestor has nonzero rotation");
+            let rotation_ops = group_shape
+                .fopts
+                .iter()
+                .flat_map(|record| record.properties.iter())
+                .filter(|property| property.property_id() == OFFICE_ART_PROPERTY_ROTATION)
+                .map(|property| property.op)
+                .collect::<Vec<_>>();
+            bail!("group ancestor has nonzero rotation ops={rotation_ops:?}");
         }
+        let group_fsp_flags = group_shape.fsp.as_ref().map(|fsp| fsp.flags).unwrap_or(0);
         if shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_H) {
-            bail!("group ancestor has horizontal flip");
+            bail!("group ancestor has horizontal flip fsp_flags=0x{group_fsp_flags:08x}");
         }
         if shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_V) {
-            bail!("group ancestor has vertical flip");
+            bail!("group ancestor has vertical flip fsp_flags=0x{group_fsp_flags:08x}");
         }
 
         let fspgr = group_shape
