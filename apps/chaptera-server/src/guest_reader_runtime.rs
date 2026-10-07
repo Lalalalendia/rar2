@@ -12,6 +12,7 @@ use crate::{
     upload_admission::SqliteUploadAdmissionAuthority,
 };
 
+// CI routing control: this module owns guest Reader runtime composition.
 pub async fn build_guest_reader_router(
     config: &ChapteraConfig,
     secrets: &ResolvedSecrets,
