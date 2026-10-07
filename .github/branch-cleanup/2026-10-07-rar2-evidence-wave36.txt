@@ -1,0 +1,5 @@
+# Wave 36 — completed Brochure paint localization + prior GC owner
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+measure/brochure-effective-paint-01 682fc10400f23a1a9719899de1c4326ad52c7697
+ops/branch-gc-20261007-evidence-wave35 118cbca00be20e190a1d0c38d0d1983ad30f6653
