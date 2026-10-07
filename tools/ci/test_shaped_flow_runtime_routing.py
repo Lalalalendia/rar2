@@ -67,19 +67,32 @@ require_all(
 forbid("editor-desktop-shaped-flow-runtime-v1.yml", BROAD)
 require_all(
     "editor-desktop-shaped-flow-runtime-v1.yml",
-    (CARGO, LIB, FONT, TYPO, PAGES, RESOURCES),
+    (CARGO, LIB, FONT, TYPO),
 )
+forbid("editor-desktop-shaped-flow-runtime-v1.yml", PAGES)
+forbid("editor-desktop-shaped-flow-runtime-v1.yml", RESOURCES)
 
 expected_library_sources = {
     f"{RUNTIME}/src/{path.name}"
     for path in Path(RUNTIME, "src").glob("*.rs")
 }
-central = text("editor-desktop-shaped-flow-runtime-v1.yml")
-missing_central = sorted(path for path in expected_library_sources if path not in central)
-if missing_central:
+owner_workflows = (
+    "editor-desktop-shaped-flow-runtime-v1.yml",
+    "editor-current-fixed-pdf-resource-input.yml",
+    "editor-newsletter-continuity-v1.yml",
+    "w2-longform-fixed-pdf-current-revision.yml",
+    "editor-build-once-pr.yml",
+)
+owner_bodies = {name: text(name) for name in owner_workflows}
+missing_owner = sorted(
+    path
+    for path in expected_library_sources
+    if not any(path in body for body in owner_bodies.values())
+)
+if missing_owner:
     raise SystemExit(
-        "editor-desktop-shaped-flow-runtime-v1.yml: top-level library source has no central owner: "
-        + ", ".join(missing_central)
+        "top-level shaped-flow library source has no workflow owner: "
+        + ", ".join(missing_owner)
     )
 
 print("shaped-flow runtime routing contract: PASS")
