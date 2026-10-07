@@ -73,6 +73,9 @@ jobs:
       - name: Test Reader PR fanout classifier
         run: python tools/ci/test_reader_pr_fanout.py
 
+      - name: Guard Reader paint projection routing
+        run: python tools/ci/test_pub_reader_paint_projection_routing.py
+
       - name: Enforce active-content inertness
         run: |
           python tools/reader_active_content_guard.py --self-test
