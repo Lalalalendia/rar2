@@ -10,7 +10,12 @@ from typing import Iterable
 
 
 PUB_EDITOR_PREFIX = "vendor/producer-a/crates/pub-editor/"
+PUB_EDITOR_AUTHORING_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-authoring-core/"
 PUB_EDITOR_LIB = PUB_EDITOR_PREFIX + "src/lib.rs"
+
+
+def is_pub_editor_domain_path(path: str) -> bool:
+    return is_pub_editor_domain_path(path) or path.startswith(PUB_EDITOR_AUTHORING_CORE_PREFIX)
 
 # Deliberately tiny first allowlist. These modules are feature-owned and are
 # not consumed by the Desktop Continuity V2 acceptance transaction.
@@ -228,7 +233,7 @@ def classify_continuity_v2_windows(
         return True, "direct_continuity_owner_changed"
 
     pub_editor_paths = [
-        path for path in paths if path.startswith(PUB_EDITOR_PREFIX)
+        path for path in paths if is_pub_editor_domain_path(path)
     ]
     if not pub_editor_paths:
         return False, "no_continuity_owner_changed"
@@ -257,7 +262,7 @@ def classify_textbox_restore(
         return True, "direct_textbox_owner_changed"
 
     pub_editor_paths = [
-        path for path in paths if path.startswith(PUB_EDITOR_PREFIX)
+        path for path in paths if is_pub_editor_domain_path(path)
     ]
     if not pub_editor_paths:
         return False, "no_textbox_owner_changed"
@@ -286,7 +291,7 @@ def classify_fixed_pdf_current_revision(
         return True, "direct_fixed_pdf_owner_changed"
 
     pub_editor_paths = [
-        path for path in paths if path.startswith(PUB_EDITOR_PREFIX)
+        path for path in paths if is_pub_editor_domain_path(path)
     ]
     if not pub_editor_paths:
         return False, "no_fixed_pdf_owner_changed"
@@ -321,7 +326,7 @@ def classify_duplicate_rectangle(
         return True, "direct_duplicate_owner_changed"
 
     pub_editor_paths = [
-        path for path in paths if path.startswith(PUB_EDITOR_PREFIX)
+        path for path in paths if is_pub_editor_domain_path(path)
     ]
     if not pub_editor_paths:
         return False, "no_duplicate_owner_changed"
@@ -356,7 +361,7 @@ def classify_authored_stack_runtime(
         return True, "direct_authored_stack_runtime_owner_changed"
 
     pub_editor_paths = [
-        path for path in paths if path.startswith(PUB_EDITOR_PREFIX)
+        path for path in paths if is_pub_editor_domain_path(path)
     ]
     if not pub_editor_paths:
         return False, "no_authored_stack_runtime_owner_changed"
@@ -390,7 +395,7 @@ def classify_authored_stack_lifecycle(
     if any(matches(path, DIRECT_AUTHORED_STACK_LIFECYCLE_OWNERS) for path in paths):
         return True, "direct_authored_stack_lifecycle_owner_changed"
 
-    pub_editor_paths = [path for path in paths if path.startswith(PUB_EDITOR_PREFIX)]
+    pub_editor_paths = [path for path in paths if is_pub_editor_domain_path(path)]
     if not pub_editor_paths:
         return False, "no_authored_stack_lifecycle_owner_changed"
 
@@ -423,7 +428,7 @@ def classify_fixed_output_image_resources(
     if any(matches(path, DIRECT_FIXED_OUTPUT_IMAGE_RESOURCES_OWNERS) for path in paths):
         return True, "direct_fixed_output_image_resources_owner_changed"
 
-    pub_editor_paths = [path for path in paths if path.startswith(PUB_EDITOR_PREFIX)]
+    pub_editor_paths = [path for path in paths if is_pub_editor_domain_path(path)]
     if not pub_editor_paths:
         return False, "no_fixed_output_image_resources_owner_changed"
 
