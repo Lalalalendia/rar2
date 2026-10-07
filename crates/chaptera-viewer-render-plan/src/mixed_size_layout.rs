@@ -493,22 +493,17 @@ pub(super) fn classify_mixed_size_layout_incomplete_v1(
         };
     }
 
-    let evaluation = match evaluate_mixed_size_text_layout_v1(
-        fragment,
-        font,
-        node_id,
-        bounds,
-        &fingerprint,
-    ) {
-        Ok(value) => value,
-        Err(_) => {
-            return SharedLayoutIncompleteCauseV1 {
-                path: "mixed_size_path",
-                consumption: "unknown",
-                cause: "other_fail_closed",
-            };
-        }
-    };
+    let evaluation =
+        match evaluate_mixed_size_text_layout_v1(fragment, font, node_id, bounds, &fingerprint) {
+            Ok(value) => value,
+            Err(_) => {
+                return SharedLayoutIncompleteCauseV1 {
+                    path: "mixed_size_path",
+                    consumption: "unknown",
+                    cause: "other_fail_closed",
+                };
+            }
+        };
     let consumption = if evaluation.lines.is_empty() {
         "zero_lines"
     } else {
@@ -534,16 +529,11 @@ pub(super) fn resolve_mixed_size_text_layout_v1(
     fingerprint: &str,
     vertical_alignment: Option<ViewerTextVerticalAlignment>,
 ) -> RenderTextLayoutV1 {
-    let evaluation = match evaluate_mixed_size_text_layout_v1(
-        fragment,
-        font,
-        node_id,
-        bounds,
-        fingerprint,
-    ) {
-        Ok(value) => value,
-        Err(reason) => return fallback_layout(reason),
-    };
+    let evaluation =
+        match evaluate_mixed_size_text_layout_v1(fragment, font, node_id, bounds, fingerprint) {
+            Ok(value) => value,
+            Err(reason) => return fallback_layout(reason),
+        };
 
     if evaluation.cursor != fragment.scalar_end {
         return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
