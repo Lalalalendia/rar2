@@ -679,3 +679,69 @@ test("default RoundRectangle preset uses bounded short-side radius", () => {
     { tag: "rect", attrs: { x: 1, y: 2, width: 30, height: 40 } }
   );
 });
+
+
+test("bounded preview typography preserves local fallback sizes, color and installed font", () => {
+  const fonts = new Map([[
+    "chaptera.fallback",
+    { family: "ChapteraReader_deadbeef", resource: { resource_id: "chaptera.fallback" } }
+  ]]);
+  const plan = previewTextPaintPlan({
+    text: "A😀BC",
+    text_preview: {
+      fallback_font_resource_id: "chaptera.fallback",
+      default_font_size_emu: 114300,
+      color_rgb: [120, 45, 200],
+      runs: [
+        { scalar_start: 0, scalar_end: 1, font_size_emu: 304800 },
+        { scalar_start: 2, scalar_end: 4, font_size_emu: 152400 }
+      ]
+    }
+  }, fonts);
+
+  assert.equal(plan.font_family, "ChapteraReader_deadbeef");
+  assert.equal(plan.color, "rgb(120 45 200)");
+  assert.deepEqual(
+    plan.segments.map((segment) => [segment.text, segment.font_size_emu, segment.authority]),
+    [
+      ["A", 304800, "bounded_typography_size"],
+      ["😀", 114300, "fallback_default"],
+      ["BC", 152400, "bounded_typography_size"]
+    ]
+  );
+});
+
+test("bounded preview typography fails closed to one default segment on invalid ranges", () => {
+  const plan = previewTextPaintPlan({
+    text: "abcd",
+    text_preview: {
+      fallback_font_resource_id: "chaptera.fallback",
+      default_font_size_emu: 114300,
+      runs: [
+        { scalar_start: 0, scalar_end: 3, font_size_emu: 152400 },
+        { scalar_start: 2, scalar_end: 4, font_size_emu: 304800 }
+      ]
+    }
+  });
+
+  assert.equal(plan.font_family, "system-ui, sans-serif");
+  assert.deepEqual(plan.segments, [{
+    text: "abcd",
+    font_size_emu: 114300,
+    authority: "fallback_default"
+  }]);
+});
+
+test("bounded preview typography stays source-neutral", () => {
+  assert.doesNotThrow(() => assertReaderSceneSourceNeutral({
+    nodes: [{
+      text: "headline",
+      text_preview: {
+        fallback_font_resource_id: "chaptera.fallback",
+        default_font_size_emu: 114300,
+        color_rgb: [10, 20, 30],
+        runs: [{ scalar_start: 0, scalar_end: 8, font_size_emu: 381000 }]
+      }
+    }]
+  }));
+});
