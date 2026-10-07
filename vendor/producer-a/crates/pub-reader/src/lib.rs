@@ -192,9 +192,7 @@ pub use salvage_authority::{
 };
 use serde::{Deserialize, Serialize};
 pub use source_paint_order::{PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1, PubSourcePagePaintOrderV1};
-use source_paint_order::{
-    append_grouped_carrier_participants, index_escher_by_contents_seq, source_page_paint_orders_v1,
-};
+use source_paint_order::{index_escher_by_contents_seq, source_page_paint_orders_v1};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
 pub use story_provenance::has_exact_mature_quill_story_identity_v1;
@@ -4722,7 +4720,7 @@ mod tests {
         let mut rejected = BTreeSet::new();
         let mut ordered = BTreeMap::from([(page_id, vec![direct_before])]);
 
-        assert!(append_grouped_carrier_participants(
+        assert!(source_paint_order::append_grouped_carrier_participants(
             carrier_seq,
             &grouped_by_carrier,
             &mut seen_seq,
@@ -4735,7 +4733,7 @@ mod tests {
         );
         assert!(rejected.is_empty());
 
-        assert!(append_grouped_carrier_participants(
+        assert!(source_paint_order::append_grouped_carrier_participants(
             carrier_seq,
             &grouped_by_carrier,
             &mut seen_seq,
