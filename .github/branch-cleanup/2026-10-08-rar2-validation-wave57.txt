@@ -1,0 +1,3 @@
+# Validation Wave 57 — assimilated legacy OLE validation refs
+validation/legacy22-ole-1050 3e13531924b89ecff09e595b0b10edb2631eb633
+validation/legacy-ole-preview-1050-02-main 1233c85ca219ef64e84b2208d5430e37f82297b2
