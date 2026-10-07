@@ -34,6 +34,7 @@ on:
       - "crates/chaptera-desktop-shaped-flow-runtime/src/fixed_pdf_resources.rs"
       - "crates/chaptera-desktop-fallback-font-resource/**"
       - "vendor/producer-a/crates/pub-editor/**"
+      - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
       - "vendor/producer-a/crates/pub-odg/**"
       - "vendor/producer-a/crates/pub-layout/src/shaped_flow.rs"
       - "crates/chaptera-scene-instance/**"

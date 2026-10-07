@@ -170,6 +170,44 @@
       ]
     },
     {
+      "name": "pub-editor table session adapters",
+      "paths": [
+        "vendor/producer-a/crates/pub-editor/src/session_table.rs"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor",
+          "--test",
+          "create_table_history_v1"
+        ],
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor",
+          "--test",
+          "table_rowcol_project_v1"
+        ],
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor",
+          "--test",
+          "table_track_history_project_v1"
+        ]
+      ]
+    },
+    {
       "name": "pub-editor table row/column history",
       "paths": [
         "vendor/producer-a/crates/pub-editor/src/table_rowcol_graph_v1.rs",

@@ -110,6 +110,7 @@ def main() -> int:
 
     representative = {
         PREFIX + "duplicate_authored_rectangle_v1.rs": "duplicate_authored_rectangle_v1",
+        PREFIX + "session_table.rs": "table_rowcol_project_v1",
         AUTHORING_CORE_PREFIX + "create_table_runtime_v1.rs": "create_table_runtime_v1",
         AUTHORING_CORE_PREFIX + "authored_stack_lifecycle_v1.rs": "authored_stack_lifecycle_v1",
         TABLE_CORE_PREFIX + "table_track_extent_v1.rs": "table_track_extent_v1",

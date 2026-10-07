@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "vendor/producer-a/crates/pub-editor/**"
+      - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
       - "packages/protocol/project-fork/**"
       - "tools/validate_project_fork_receipt.py"
       - ".github/workflows/w2-project-fork-receipt-v1.yml"
