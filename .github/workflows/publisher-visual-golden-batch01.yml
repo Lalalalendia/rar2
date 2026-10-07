@@ -24,6 +24,7 @@ on:
       - "vendor/producer-a/crates/pub-reader/src/story_materialization.rs"
       - "vendor/producer-a/crates/pub-reader/src/quill_admission.rs"
       - "vendor/producer-a/crates/pub-reader/src/publication_document.rs"
+      - "vendor/producer-a/crates/pub-reader/src/contents_access.rs"
 
 permissions:
   contents: read
