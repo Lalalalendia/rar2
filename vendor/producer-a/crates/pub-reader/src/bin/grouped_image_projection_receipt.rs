@@ -19,6 +19,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let hash = source_hash(&bytes);
     let build = build_mature_0x2c_source_graph(Cursor::new(&bytes), hash)?;
 
+    let page_number_by_id = build
+        .effective_pages
+        .page_ids
+        .iter()
+        .enumerate()
+        .map(|(index, page_id)| (*page_id, index + 1))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
     let mut rows = build
         .diagnostics
         .iter()
@@ -33,6 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "node_id": derive_pub_node_id(&hash, *seq_num).ok()?.as_canonical().to_string(),
                 "seq_num": seq_num,
                 "target_page_id": target_page_id.map(|page| page.as_canonical().to_string()),
+                "target_page_number": target_page_id.and_then(|page| page_number_by_id.get(page).copied()),
                 "image_slot": image_slot,
                 "group_depth_to_page": group_ancestry.len(),
                 "group_ancestry": group_ancestry,
