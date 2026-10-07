@@ -9,6 +9,7 @@ import {
   imageRecolorPaintPlan,
   imageResourcePaintPlan,
   presetShapePaintGeometry,
+  previewTextPaintPlan,
   resolvedTextLinePaintPlan,
   resolvedTextViewportGeometry,
   tableBorderPaintPlan,
