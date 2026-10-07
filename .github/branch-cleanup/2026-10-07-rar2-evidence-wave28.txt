@@ -1,0 +1,8 @@
+# Wave 28 — exact closed OLE/WMF validation refs
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+validation/legacy-ole-preview-1050-01 c7d45371d5c17b667db0edd9972f03c701311c50
+validation/legacy-ole-wmf-patternbrush-1050-01 c538277f88c061dab41ed15365b6bb1f7c683f37
+validation/legacy-ole-wmf-patternbrush-1050-final 82d0b836b3b2e6f1d3567dea8c16ac162edaa14c
+validation/legacy-ole-wmf-region-compat-1050-01 140588662cbf8eb3e6e236a8ded4e26d89a851c1
+ops/branch-gc-20261007-evidence-wave27 12ee4706aec1c4335e5a8b27c2057bfab9ba1557
