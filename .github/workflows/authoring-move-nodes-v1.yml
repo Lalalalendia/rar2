@@ -7,7 +7,6 @@ on:
       - "services/editor-api/test_move_nodes.py"
       - "apps/chaptera-desktop/src/agent.rs"
       - "vendor/producer-a/crates/pub-editor/src/session_geometry.rs"
-      - "vendor/producer-a/crates/pub-editor-geometry-core/**"
       - ".github/workflows/authoring-move-nodes-v1.yml"
   workflow_dispatch:
 

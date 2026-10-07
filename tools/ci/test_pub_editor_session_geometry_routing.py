@@ -30,7 +30,7 @@ for name in (
     "resize-nodes-v1.yml",
 ):
     assert GEOMETRY in pr_block(name), name
-    assert GEOMETRY_CORE in pr_block(name), name
+    assert GEOMETRY_CORE not in pr_block(name), name
 
 assert "vendor/producer-a/crates/pub-editor/src/**" in pr_block("pub-editor-fast-pr.yml")
 assert "vendor/producer-a/crates/pub-editor-geometry-core/src/**" in pr_block("pub-editor-fast-pr.yml")

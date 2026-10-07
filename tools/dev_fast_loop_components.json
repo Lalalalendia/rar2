@@ -115,6 +115,14 @@
           "-p",
           "pub-editor-geometry-core",
           "--lib"
+        ],
+        [
+          "cargo",
+          "check",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor"
         ]
       ]
     },
