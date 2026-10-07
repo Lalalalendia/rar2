@@ -27,15 +27,38 @@ function previewForeignObject(bounds, attrs) {
   });
 }
 
-function previewTextStyle(div, plan = null) {
+export function previewTextPaintPlan(node, resolvedPlan = null) {
+  const preview = node?.preview_text_style ?? null;
+  const previewFontSize = preview?.font_size_emu == null
+    ? null
+    : safeInteger(preview.font_size_emu, "preview.font_size_emu");
+  const fontSizeEmu = resolvedPlan?.font_size_emu
+    ?? previewFontSize
+    ?? PREVIEW_FONT_SIZE_EMU;
+  const lineHeightEmu = resolvedPlan?.line_height_emu
+    ?? (previewFontSize == null
+      ? PREVIEW_LINE_HEIGHT_EMU
+      : Math.round(fontSizeEmu * PREVIEW_LINE_HEIGHT_EMU / PREVIEW_FONT_SIZE_EMU));
+  const color = resolvedPlan?.color
+    ?? rgb(preview?.color_rgb)
+    ?? "#000";
+  return Object.freeze({
+    font_size_emu: fontSizeEmu,
+    line_height_emu: lineHeightEmu,
+    color
+  });
+}
+
+function previewTextStyle(div, node, plan = null) {
+  const preview = previewTextPaintPlan(node, plan);
   div.style.width = "100%";
   div.style.height = "100%";
   div.style.overflow = "hidden";
   div.style.whiteSpace = "pre-wrap";
   div.style.fontFamily = "system-ui, sans-serif";
-  div.style.fontSize = ((plan?.font_size_emu ?? PREVIEW_FONT_SIZE_EMU) / EMU_PER_CSS_PX) + "px";
-  div.style.lineHeight = ((plan?.line_height_emu ?? PREVIEW_LINE_HEIGHT_EMU) / EMU_PER_CSS_PX) + "px";
-  div.style.color = "#000";
+  div.style.fontSize = (preview.font_size_emu / EMU_PER_CSS_PX) + "px";
+  div.style.lineHeight = (preview.line_height_emu / EMU_PER_CSS_PX) + "px";
+  div.style.color = preview.color;
 }
 
 function safeInteger(value, label) {
@@ -345,7 +368,7 @@ function appendPreviewText(group, node, plan = null) {
     "data-text-authority": "browser-preview-only"
   });
   const div = document.createElementNS(XHTML_NS, "div");
-  previewTextStyle(div, plan);
+  previewTextStyle(div, node, plan);
   div.textContent = node.text;
   foreign.appendChild(div);
   group.appendChild(foreign);
@@ -507,7 +530,7 @@ function appendTableText(group, node) {
       "data-text-authority": "browser-preview-only"
     });
     const div = document.createElementNS(XHTML_NS, "div");
-    previewTextStyle(div);
+    previewTextStyle(div, node);
     div.style.padding = "2px";
     div.style.boxSizing = "border-box";
     div.textContent = cell.text.replace(/\r/g, "\n");
