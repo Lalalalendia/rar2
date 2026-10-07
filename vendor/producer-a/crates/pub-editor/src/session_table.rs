@@ -219,7 +219,7 @@ impl EditorSession {
         Ok(operation)
     }
 
-    fn table_story_has_unremapped_range_metadata_v1(&self, story_id: StoryId) -> bool {
+    pub(super) fn table_story_has_unremapped_range_metadata_v1(&self, story_id: StoryId) -> bool {
         self.source_typography_runs
             .iter()
             .any(|run| run.story_id == story_id)
@@ -359,7 +359,7 @@ impl EditorSession {
         self.consume_canonical_table_rowcol_operation_v1(operation)
     }
 
-    fn consume_canonical_table_rowcol_operation_v1(
+    pub(super) fn consume_canonical_table_rowcol_operation_v1(
         &mut self,
         operation: EditOperation,
     ) -> Result<EditOperation, EditorError> {
