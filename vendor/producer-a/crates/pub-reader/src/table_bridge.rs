@@ -408,7 +408,7 @@ fn populate_bounded_table_cell_fill(
         .fspgr
         .as_ref()
         .context("plain TABLE OfficeArt owner has no FSPGR")?;
-    let group_rect = coordinate_rect_i128(group_coords)?;
+    let group_rect = super::source_paint_order::coordinate_rect_i128(group_coords)?;
     let target_rect =
         rect_edges(*context.table_bounds).context("plain TABLE owner bounds overflow")?;
 
@@ -419,8 +419,10 @@ fn populate_bounded_table_cell_fill(
         .filter(|shape| shape.parent_group_shape_source.as_ref() == Some(&owner.source))
         .filter_map(|shape| {
             let anchor = shape.child_anchor.as_ref()?;
-            let child_rect = coordinate_rect_i128(anchor).ok()?;
-            let projected = project_rect_trunc(child_rect, group_rect, target_rect).ok()?;
+            let child_rect = super::source_paint_order::coordinate_rect_i128(anchor).ok()?;
+            let projected =
+                super::source_paint_order::project_rect_trunc(child_rect, group_rect, target_rect)
+                    .ok()?;
             Some((shape, projected))
         })
         .collect::<Vec<_>>();
