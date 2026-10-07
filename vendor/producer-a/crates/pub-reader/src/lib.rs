@@ -1485,6 +1485,7 @@ pub fn build_mature_0x2c_from_streams(
                 &graph.pages,
                 &escher_inventory,
                 &escher_by_contents_seq,
+                exact_grouped_image_identity && exact_story_identity.is_none(),
             ) {
                 Ok(Some(projection)) => {
                     diagnostics.push(if raw_type == Some(RAW_TYPE_TABLE) {
@@ -1551,8 +1552,13 @@ pub fn build_mature_0x2c_from_streams(
             None
         };
 
-        let (page_id, bounds, grouped_sources, direct_image_anchor_recovered_from_contents_extent) =
-            if let Some(page_id) = direct_page {
+        let (
+            page_id,
+            bounds,
+            grouped_sources,
+            grouped_child_rotation_op,
+            direct_image_anchor_recovered_from_contents_extent,
+        ) = if let Some(page_id) = direct_page {
                 let Some(anchor) = shape.client_anchor.as_ref() else {
                     diagnostics.push(PubBridgeDiagnostic::IncompleteEscherAnchor { seq_num });
                     continue;
@@ -1594,12 +1600,19 @@ pub fn build_mature_0x2c_from_streams(
                         };
                         (bounds, true)
                     };
-                (page_id, bounds, Vec::new(), recovered_from_contents_extent)
+                (
+                    page_id,
+                    bounds,
+                    Vec::new(),
+                    None,
+                    recovered_from_contents_extent,
+                )
             } else if let Some(projection) = grouped_projection {
                 (
                     projection.page_id,
                     projection.bounds,
                     projection.group_sources,
+                    projection.child_rotation_op,
                     false,
                 )
             } else {
@@ -1756,6 +1769,10 @@ pub fn build_mature_0x2c_from_streams(
             && exact_story_identity.is_none()
             && image_slot.is_some()
             && grouped_sources.is_empty();
+        let grouped_image_candidate = raw_type == Some(RAW_TYPE_SHAPE)
+            && exact_story_identity.is_none()
+            && image_slot.is_some()
+            && !grouped_sources.is_empty();
         let direct_story_candidate =
             raw_type == Some(RAW_TYPE_SHAPE) && story_frame.is_some() && grouped_sources.is_empty();
         let direct_rotation_properties = shape
@@ -1765,18 +1782,18 @@ pub fn build_mature_0x2c_from_streams(
             .filter(|property| property.property_id() == OFFICE_ART_PROPERTY_ROTATION)
             .map(|property| (property.op, property.f_bid(), property.f_complex()))
             .collect::<Vec<_>>();
-        let direct_image_rotation_properties = if direct_image_candidate {
+        let image_rotation_properties = if direct_image_candidate {
             direct_rotation_properties.clone()
+        } else if grouped_image_candidate {
+            grouped_child_rotation_op
+                .map(|rotation_op| vec![(rotation_op, false, false)])
+                .unwrap_or_default()
         } else {
             Vec::new()
         };
         let direct_fsp_flags = shape.fsp.as_ref().map(|fsp| fsp.flags).unwrap_or(0);
-        let direct_image_transform = if direct_image_candidate {
-            bounded_direct_image_transform(
-                &direct_image_rotation_properties,
-                direct_fsp_flags,
-                bounds,
-            )
+        let image_transform = if direct_image_candidate || grouped_image_candidate {
+            bounded_direct_image_transform(&image_rotation_properties, direct_fsp_flags, bounds)
         } else {
             BoundedDirectImageTransform::Identity
         };
@@ -1785,25 +1802,27 @@ pub fn build_mature_0x2c_from_streams(
         } else {
             None
         };
-        let direct_image_cardinal_rotation_degrees =
-            if direct_image_candidate && explicit_image_crop.is_none() {
-                bounded_direct_image_cardinal_content_rotation_degrees(
-                    &direct_image_rotation_properties,
-                    direct_fsp_flags,
-                )
-            } else {
-                None
-            };
-        let (node_transform, direct_image_rotation_applied) =
-            if let Some(transform) = direct_story_transform {
-                (transform, false)
-            } else {
-                match direct_image_transform {
-                    BoundedDirectImageTransform::Identity
-                    | BoundedDirectImageTransform::Unsupported => (Affine2D::identity(), false),
-                    BoundedDirectImageTransform::Applied(transform) => (transform, true),
-                }
-            };
+        let image_cardinal_rotation_degrees = if (direct_image_candidate
+            || grouped_image_candidate)
+            && explicit_image_crop.is_none()
+        {
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &image_rotation_properties,
+                direct_fsp_flags,
+            )
+        } else {
+            None
+        };
+        let (node_transform, image_rotation_applied) = if let Some(transform) = direct_story_transform
+        {
+            (transform, false)
+        } else {
+            match image_transform {
+                BoundedDirectImageTransform::Identity
+                | BoundedDirectImageTransform::Unsupported => (Affine2D::identity(), false),
+                BoundedDirectImageTransform::Applied(transform) => (transform, true),
+            }
+        };
 
         let object_key = contents_object_key(seq_num);
         let mut source_refs = vec![source_ref(
@@ -1890,7 +1909,7 @@ pub fn build_mature_0x2c_from_streams(
                 ));
             }
         }
-        if direct_image_rotation_applied || direct_image_cardinal_rotation_degrees.is_some() {
+        if image_rotation_applied || image_cardinal_rotation_degrees.is_some() {
             source_refs.push(source_ref(
                 &graph.source,
                 &shape.source,
@@ -1993,8 +2012,7 @@ pub fn build_mature_0x2c_from_streams(
                     image_slot,
                     legacy_ole: None,
                     explicit_image_crop,
-                    explicit_image_cardinal_rotation_degrees:
-                        direct_image_cardinal_rotation_degrees,
+                    explicit_image_cardinal_rotation_degrees: image_cardinal_rotation_degrees,
                     explicit_image_recolor,
                     explicit_paint,
                     effective_paint,
