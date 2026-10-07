@@ -1017,6 +1017,11 @@ pub enum PubBridgeDiagnostic {
     },
     GroupedImageProjectionUnavailable {
         seq_num: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_page_id: Option<PageId>,
+        image_slot: u32,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        group_ancestry: Vec<u32>,
         reason: String,
     },
     GroupedPrimitiveProjected {
@@ -3054,8 +3059,18 @@ pub fn build_mature_0x2c_from_streams(
                             reason: error.to_string(),
                         }
                     } else {
+                        let (target_page_id, group_ancestry) =
+                            grouped_object_target_page_trace(
+                                parent_seq,
+                                &references,
+                                &page_seq_to_id,
+                            );
                         PubBridgeDiagnostic::GroupedImageProjectionUnavailable {
                             seq_num,
+                            target_page_id,
+                            image_slot: image_slot
+                                .expect("grouped image identity requires exact image slot"),
+                            group_ancestry,
                             reason: error.to_string(),
                         }
                     });
@@ -3840,6 +3855,39 @@ struct GroupedObjectProjection {
     bounds: RectEmu,
     depth: usize,
     group_sources: Vec<RawSpan>,
+}
+
+fn grouped_object_target_page_trace(
+    first_group_seq: u32,
+    references: &BTreeMap<u32, Contents0x2cChunkReference>,
+    page_seq_to_id: &BTreeMap<u32, PageId>,
+) -> (Option<PageId>, Vec<u32>) {
+    let mut current_group_seq = first_group_seq;
+    let mut seen = BTreeSet::new();
+    let mut ancestry = Vec::new();
+
+    for _ in 0..64 {
+        if !seen.insert(current_group_seq) {
+            return (None, ancestry);
+        }
+        ancestry.push(current_group_seq);
+
+        let Some(reference) = references.get(&current_group_seq) else {
+            return (None, ancestry);
+        };
+        let Some(parent_seq) = single_parent_seq(reference) else {
+            return (None, ancestry);
+        };
+        if let Some(&page_id) = page_seq_to_id.get(&parent_seq) {
+            return (Some(page_id), ancestry);
+        }
+        if references.get(&parent_seq).and_then(single_raw_type) != Some(RAW_TYPE_GROUP) {
+            return (None, ancestry);
+        }
+        current_group_seq = parent_seq;
+    }
+
+    (None, ancestry)
 }
 
 fn project_grouped_object_shape(
