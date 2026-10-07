@@ -78,12 +78,12 @@ pub(super) fn page_relative_bounds(page: &Page, anchor: &PublisherFieldRecord) -
     ))
 }
 
-fn signed_field(record: &PublisherFieldRecord, id: u16) -> Option<i64> {
+pub(super) fn signed_field(record: &PublisherFieldRecord, id: u16) -> Option<i64> {
     let field = unique_escher_field(record, id)?;
     Some(i64::from(i32::from_le_bytes(field.value.to_le_bytes())))
 }
 
-fn unique_escher_field(record: &PublisherFieldRecord, id: u16) -> Option<&PublisherField> {
+pub(super) fn unique_escher_field(record: &PublisherFieldRecord, id: u16) -> Option<&PublisherField> {
     let mut matches = record.fields.iter().filter(|field| field.id == id);
     let first = matches.next()?;
     if matches.next().is_some() {
