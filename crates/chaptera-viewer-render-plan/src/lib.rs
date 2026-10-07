@@ -2510,12 +2510,7 @@ pub fn classify_shared_layout_incomplete_cause_v1(
         Ok(value) => value,
         Err(RenderTextLayoutFallbackReasonV1::MixedTypographySize) => {
             let bounds = node.text_bounds.unwrap_or(node.bounds);
-            return classify_mixed_size_layout_incomplete_v1(
-                fragment,
-                font,
-                node.node_id,
-                &bounds,
-            );
+            return classify_mixed_size_layout_incomplete_v1(fragment, font, node.node_id, &bounds);
         }
         Err(_) => {
             return SharedLayoutIncompleteCauseV1 {
