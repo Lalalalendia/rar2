@@ -10,7 +10,9 @@ pub struct PubSourcePagePaintOrderV1 {
     pub node_ids: Vec<NodeId>,
 }
 
-pub(super) fn index_escher_by_contents_seq(inventory: &SpContainerInventory) -> BTreeMap<u32, Vec<usize>> {
+pub(super) fn index_escher_by_contents_seq(
+    inventory: &SpContainerInventory,
+) -> BTreeMap<u32, Vec<usize>> {
     let mut index = BTreeMap::<u32, Vec<usize>>::new();
 
     for (shape_index, shape) in inventory.shapes.iter().enumerate() {
