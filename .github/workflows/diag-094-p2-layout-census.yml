@@ -21,12 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      CARGO_TARGET_DIR: \${{ github.workspace }}/target/diag-094-p2-layout-census
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/diag-094-p2-layout-census
       FIXTURE_SHA: bbaefcbdcdd2dbe51a636ed554c14d6f5353c98e795b5f88d26f79542e5d93ba
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -37,7 +37,7 @@ jobs:
         with:
           name: pub-corpus-1000-36573574820
           path: out/pinned1050
-          github-token: \${{ github.token }}
+          github-token: ${{ github.token }}
           repository: Lalalalendia/rar2
           run-id: 36573574820
 
@@ -51,8 +51,8 @@ jobs:
 
       - name: Run source-free page-local text-layout census
         env:
-          CHAPTERA_094_PUB: \${{ github.workspace }}/out/pinned1050/materialized/native/bbaefcbdcdd2dbe51a636ed554c14d6f5353c98e795b5f88d26f79542e5d93ba.pub
-          CHAPTERA_094_LAYOUT_CENSUS_OUTPUT: \${{ github.workspace }}/target/diag-094-p2-layout-census/094-layout-census.json
+          CHAPTERA_094_PUB: ${{ github.workspace }}/out/pinned1050/materialized/native/bbaefcbdcdd2dbe51a636ed554c14d6f5353c98e795b5f88d26f79542e5d93ba.pub
+          CHAPTERA_094_LAYOUT_CENSUS_OUTPUT: ${{ github.workspace }}/target/diag-094-p2-layout-census/094-layout-census.json
         run: |
           cargo test -p chaptera-server --test reader_094_layout_probe \
             exact_094_page_layout_census -- --ignored --nocapture
