@@ -1,0 +1,53 @@
+# Evidence-heavy branch GC wave 25 - 2026-10-07
+# Exact-SHA only; open/current/default refs runtime-protected.
+# Closed merged, terminal, superseded, or measurement/evidence-only owners.
+measure/carlton-scheme-color-authority-1405 98d9073e748be9de02fd9b3e3dd0decbeb23f1f3  # PR #1441 explicit terminal/superseded
+validation/quill-scheme-color-carlton-1433-v2 34ff7a7f14793f369621392d6c6ae79645889858  # PR #1439 explicit terminal/superseded
+validation/quill-scheme-color-carlton-1433 414e46a06c4c7a075230e90d0b379555f789a612  # PR #1436 explicit terminal/superseded
+validation/paragraph-scoped-alignment-consumer-01 1aa7c17f68c31611aaceaf666a95576e01ccfcb1  # PR #1435 explicit terminal/superseded
+measure/first-line-fit-1411-control d83385bc8cc9ace0fef686e36756285c65525f73  # PR #1421 explicit measurement-only closure
+validation/carlton-size-only-overlap-1396 c0008624ce8552636664ea8508efe1431cb3a7ec  # PR #1397 explicit measurement-only closure
+measure/carlton-first-line-fit-1139 d9524ea2fa5bdcdb96ffea7b9b9e7d09b1c20ef3  # PR #1390 explicit terminal/superseded
+measure/carlton-paragraph-spacing-coverage-01 f51cb889d104f70212aee54e0f1cfb9e66640928  # PR #1386 explicit terminal/superseded
+measure/carlton-paragraph-spacing-activation-1139 d60297505db1c32a95a65b307af22bbdf800c936  # PR #1376 explicit terminal/superseded
+research/struct-txn-escher-01-current e68173c397bdb3ab102d5c39ddc9f8f5d2308d8c  # PR #1346 explicit terminal/superseded
+research/editable-paragraph-alignment-center-consumer-01 de410c6fbf57d192e7c7e56f91e11fc09757dd99  # PR #1238 exact merged
+measure/ci-desktop-mainrs-selection-negative b72d9785e13ffaecb50d4fe0ae0049ce9e22ba30  # PR #1220 explicit terminal/superseded
+measure/ci-desktop-mainrs-selection-owner-positive 34b8f7a31ea4ebb4b50f814c8be70431c0b3b694  # PR #1219 explicit terminal/superseded
+measure/ci-desktop-mainrs-continuity-negative 9c2d6a6384ae24a5323691f4b7dfb9cf0205aed7  # PR #1217 explicit terminal/superseded
+measure/ci-desktop-mainrs-continuity-owner-positive 4b59334caa8aacdc418bd8a2210e171fabf68e08  # PR #1216 explicit terminal/superseded
+research/recover-artifact-family-replay-yab80 1dd2fda26065cc941419370af1d5f9a359e1ce7c  # PR #1197 explicit terminal/superseded
+research/mature-033-page-object-ownership-1061 dd2be17f844224dac155828e9344d1a524cca245  # PR #1110 explicit terminal/superseded
+research/mature-029-imposition8a-signature-1065 c1c296c6323222c5e2b139a3d19253fc8a9a823a  # PR #1094 explicit terminal/superseded
+research/mature-029-source-order-receipt-1065 e25f407c16801833817d2bf1933e6e8bb470d047  # PR #1074 explicit terminal/superseded
+research/pub-vba-classifier-v22-realworld-01 8e7e7071e67875b84f7e30b0e90f829c416a03e7  # PR #1071 explicit terminal/superseded
+research/mature-029-spread-raster-falsifier-1057 8da8b66f1eb077fbfee5a7a0d1e4bbe1efa7dd0b  # PR #1067 explicit terminal/superseded
+research/mature-029-spread-secondary-left-1057 70ecc950492637e998b109f14562c1db22573040  # PR #1058 explicit terminal/superseded
+research/pub-vba-ms-press-2007-estate-01 fe1442c6727c347bb32088dbb658c33d7d2c0890  # PR #1051 explicit terminal/superseded
+research/mature-029-secondary-ab-current-main-1028 a8667b9a4a0728584205521c16285ed72d69dc38  # PR #1044 explicit terminal/superseded
+research/pub-vba-source-estate-v2-1 911e5994c13dcd909b1fec7098a3a7a4d808b198  # PR #1029 explicit terminal/superseded
+research/pub-vba-source-estate-v2 d9758a5a3be625d495e23a8842e46d9e1e23a01a  # PR #1024 explicit terminal/superseded
+research/page-membership-scene-census-1012 280c484893891a834c2da3f93ac4909402dc3782  # PR #1018 explicit terminal/superseded
+research/mature-multimaster-page-role-1002-v2 d1f42f6cae1a618d14b2f30721272403bfae1a9a  # PR #1010 explicit terminal/superseded
+research/mature-multimaster-page-role-1002 a413d7063472a69055cab6d8134a0e9b775615bd  # PR #1003 explicit terminal/superseded
+research/mature-primary-secondary-page-role-451 da5275d95cdbe264f93c37be0aef3032ed7e2f0f  # PR #987 explicit terminal/superseded
+research/mature-master-bank-033-451 c125d39198b36857c9f616b0a5d10e09383f072d  # PR #986 explicit measurement-only closure
+research/mature-multimaster-origin-029 311e6647163991aca82cf1b18f6a77f242f3cd15  # PR #985 explicit terminal/superseded
+research/mature-zero-leader-detached-tail-060-451 037c543ff35b8aaa99c847a2c3dd9587d7f1b55f  # PR #979 explicit measurement-only closure
+research/mature-detached-tail-061-451 e289d0c9b7f4febc6480ab107e2d243f72d7e9da  # PR #977 explicit measurement-only closure
+research/mature-interleaved-special-generalize-451 0453a232f256789329d644ad63df6ef6ee9c5d2b  # PR #973 explicit measurement-only closure
+research/pub-vba-source-estate-01 1042fb22e18659d0185ed9cdebb3337a0bc1d1c7  # PR #970 explicit terminal/superseded
+research/mature-terminal-service-tail-451 e55a23810ff8e3109ef8f0432f9ff8e91ec1a913  # PR #963 explicit measurement-only closure
+research/pub-vba-hsvba-positive-01 878aeea7e587a84cd475594b61f22df28bf8697c  # PR #962 explicit terminal/superseded
+research/batch01-mature-page-fields-451 d7145477070ea560bb21b16240f5374e78737a22  # PR #960 explicit measurement-only closure
+research/borderart-catalog-name-census 35d0250221ebbb3e0bef0cf4fb327961cf96213d  # PR #956 explicit terminal/superseded
+research/borderart-native-auth 4a926024b94bde7f2d7f239a5cadbf1e460e8b60  # PR #949 explicit terminal/superseded
+research/pub-vba-aspose-estate-01 83f2bb4ac279202177821070493d518da5abe5ef  # PR #943 explicit terminal/superseded
+research/legacy22-zero-group-descendants-01 f62b3d0a1c78d259bdcaf868527f60194291cbac  # PR #929 explicit terminal/superseded
+research/batch01-scene-projection-invariant-02 d6387faba51db57557464609d5b841ea56d6ad24  # PR #918 explicit terminal/superseded
+research/mixed-layout-candidate-cost-01 221f99cd0d8e098b17f67b370f0bb72d0b3748ce  # PR #916 explicit terminal/superseded
+research/batch01-scene-source-links-868 d11d5292b0b5acd632f8fead8d81b797bba2740a  # PR #911 explicit terminal/superseded
+validation/carlton-table-text-single-line-fit-01 a9d0492d090f72a6e6f831b0d85da81578b8c559  # PR #1641 authority corrected; terminal owner #1649
+measure/post1498-shared-layout-incomplete-causes f362ded3e202253db70f58ed573009cc23cdf991  # PR #1503 superseded by authoritative #1508/#1529
+measure/cloud-sli-cause-census-post-marker-01 271b92058820f02ba099d2760377f22451e29ebf  # PR #1507 PR explicitly superseded; current tail is formatting-only
+ops/branch-gc-20261007-evidence-wave24 50495de8031af954f0671459bb8bc5aea8690fcf  # PR #1806 execution-only PR closed unmerged
