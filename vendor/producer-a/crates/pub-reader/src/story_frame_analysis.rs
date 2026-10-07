@@ -3,6 +3,7 @@
 //! This module gathers source evidence and corpus correlations. It does not
 //! own production source-graph construction, resolved StoryFrame semantics,
 //! page projection, paint, or typography.
+//! Routing control: this file is a research-only correlation owner.
 
 use super::*;
 
