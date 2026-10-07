@@ -1,0 +1,84 @@
+name: VALIDATION current Reader portable parity runner 20261008
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/validation-current-reader-portable-parity-runner-20261008.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validation-current-reader-portable-parity-runner-20261008-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/parity-runner
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build canonical Cloud Reader worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Install pinned portable Playwright runtime
+        run: |
+          set -euo pipefail
+          npm install --no-save playwright@1.55.0
+          npx playwright install chromium
+
+      - name: Assemble source-safe portable runner
+        run: |
+          set -euo pipefail
+          root="out/current-reader-portable-parity-runner"
+          mkdir -p "$root/target/debug" "$root/apps" "$root/tools" "$root/node_modules"
+          cp "$CARGO_TARGET_DIR/debug/chaptera" "$root/target/debug/chaptera"
+          cp -R apps/cloud-reader "$root/apps/cloud-reader"
+          cp -R apps/web "$root/apps/web"
+          cp tools/migration_pdf_worker_isolation.py "$root/tools/migration_pdf_worker_isolation.py"
+          cp tools/cloud_reader_manual_oracle_bundle_v1.py "$root/tools/cloud_reader_manual_oracle_bundle_v1.py"
+          cp tools/cloud_reader_reference_pdf_raster_v1.py "$root/tools/cloud_reader_reference_pdf_raster_v1.py"
+          cp tools/pdf_reference_diff_v1.py "$root/tools/pdf_reference_diff_v1.py"
+          cp -R node_modules/playwright "$root/node_modules/playwright"
+          cp -R node_modules/playwright-core "$root/node_modules/playwright-core"
+          cp -R "$HOME/.cache/ms-playwright" "$root/ms-playwright"
+          cat > "$root/RUNNER-METADATA.json" <<EOF
+          {
+            "schema": "chaptera.current-reader-portable-parity-runner.v2",
+            "product_base_sha": "64aca523b62a31d7b17fe8c07535d8db5254c2cd",
+            "validation_head_sha": "${{ github.event.pull_request.head.sha }}",
+            "runner_os": "ubuntu-22.04",
+            "rust_toolchain": "1.94.1",
+            "node_major": 22,
+            "playwright": "1.55.0",
+            "browser_bytes_included": true,
+            "manual_oracle_tools_included": true,
+            "raw_pub_bytes_included": false,
+            "raw_pdf_bytes_included": false
+          }
+          EOF
+          test -x "$root/target/debug/chaptera"
+          "$root/target/debug/chaptera" --help >/dev/null
+
+      - name: Upload portable runner
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-reader-portable-parity-runner-20261008
+          path: out/current-reader-portable-parity-runner
+          retention-days: 1
+          if-no-files-found: error
