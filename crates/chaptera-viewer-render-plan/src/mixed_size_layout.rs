@@ -520,7 +520,7 @@ mod tests {
     fn mixed_fragment(text: &str) -> RenderTextFragmentV1 {
         let scalar_end = u32::try_from(text.chars().count()).expect("bounded fixture");
         RenderTextFragmentV1 {
-            story_id: StoryId::from_canonical(CanonicalId::from_bytes([3; 16])),
+            story_id: StoryId::from_canonical(pub_model::CanonicalId::from_bytes([3; 16])),
             scalar_start: 0,
             scalar_end,
             text: text.to_owned(),
@@ -570,7 +570,7 @@ mod tests {
             bytes,
         };
         let fragment = mixed_fragment("aa\rbb");
-        let node_id = NodeId::from_canonical(CanonicalId::from_bytes([4; 16]));
+        let node_id = NodeId::from_canonical(pub_model::CanonicalId::from_bytes([4; 16]));
 
         let one_line_bounds = RectEmu::new(
             LengthEmu::ZERO,
