@@ -1,4 +1,4 @@
-name: Cancel obsolete automatic Publisher native runs
+name: Cancel obsolete Publisher native run records
 
 on:
   workflow_dispatch:
@@ -7,12 +7,6 @@ on:
       - main
     paths:
       - ".github/workflows/native-main-obsolete-run-canceller.yml"
-      - ".github/workflows/mature-029-native-page-spread-once.yml"
-      - ".github/workflows/master-projection-stack-auth-once.yml"
-      - ".github/workflows/quill-story-readonly-oracle-v2.yml"
-      - ".github/workflows/carlton-heading-alignment-native-once.yml"
-      - ".github/workflows/borderart-native-once.yml"
-      - ".github/workflows/paragraph-metrics-auth-once.yml"
 
 permissions:
   actions: write
@@ -25,23 +19,14 @@ concurrency:
 jobs:
   cancel-obsolete:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Cancel automatic Publisher native backlog
+      - name: Cancel explicit legacy Publisher/provider runs
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TARGET_WORKFLOW_PATHS: |
-            .github/workflows/mature-029-native-page-spread-once.yml
-            .github/workflows/master-projection-stack-auth-once.yml
-            .github/workflows/quill-story-readonly-oracle-v2.yml
-            .github/workflows/carlton-heading-alignment-native-once.yml
-            .github/workflows/borderart-native-once.yml
-            .github/workflows/paragraph-metrics-auth-once.yml
-            .github/workflows/publisher-supplemental-native-surface-once.yml
-            .github/workflows/t828-ignore-master-native-once.yml
-            .github/workflows/supplemental-surface-stage-once.yml
-          STALE_PROVIDER_RUN_IDS: |
+          STALE_RUN_IDS: |
             36715683731
             36715220690
             36714192669
@@ -70,63 +55,35 @@ jobs:
             return 1
           }
 
-          while IFS= read -r workflow_path; do
-            [[ -n "$workflow_path" ]] || continue
-            runs_file="$(mktemp)"
-            gh api --paginate --method GET "repos/$GH_REPO/actions/runs" \
-              -f event=push \
-              -f per_page=100 \
-              | jq -r --arg path "$workflow_path" '
-                  .workflow_runs[]
-                  | select(.path == $path)
-                  | select(.head_branch == "main")
-                  | select(
-                      .status == "queued"
-                      or .status == "pending"
-                      or .status == "in_progress"
-                      or .status == "waiting"
-                      or .status == "requested"
-                    )
-                  | [.id, .run_number, .status, .head_sha]
-                  | @tsv
-                ' >"$runs_file"
-
-            while IFS=$'\t' read -r id run_number status head_sha; do
-              [[ -n "$id" ]] || continue
-              echo "OBSOLETE workflow=$workflow_path run=$run_number id=$id status=$status sha=${head_sha:0:12}"
-              if ! cancel_run "$id"; then
-                echo "::warning::Could not cancel active automatic native run $id"
-                unresolved=$((unresolved + 1))
-              fi
-            done <"$runs_file"
-            rm -f "$runs_file"
-          done <<<"$TARGET_WORKFLOW_PATHS"
-
           while IFS= read -r id; do
             [[ -n "$id" ]] || continue
             state="$(gh api --method GET "repos/$GH_REPO/actions/runs/$id" --jq '.status' 2>/dev/null || true)"
             [[ -n "$state" ]] || continue
             if [[ "$state" == "completed" ]]; then
+              echo "DONE id=$id"
               continue
             fi
-            echo "STALE_PROVIDER id=$id status=$state"
+
+            echo "STALE id=$id status=$state"
             if cancel_run "$id"; then
               continue
             fi
+
             if gh api --method DELETE "repos/$GH_REPO/actions/runs/$id" >/dev/null 2>&1; then
               echo "DELETE id=$id"
               deleted=$((deleted + 1))
             else
-              echo "::warning::Provider-orphan run $id could not be cancelled, force-cancelled, or deleted"
+              echo "::warning::Run $id could not be cancelled, force-cancelled, or deleted"
               unresolved=$((unresolved + 1))
             fi
-          done <<<"$STALE_PROVIDER_RUN_IDS"
+          done <<<"$STALE_RUN_IDS"
 
           {
-            echo "### Publisher native queue cleanup"
+            echo "### Publisher/native stale-run cleanup"
             echo "- cancelled: $cancelled"
             echo "- force-cancelled: $forced"
             echo "- deleted stale records: $deleted"
             echo "- unresolved provider records: $unresolved"
-            echo "- GitHub Publisher-native self-hosted execution: forbidden; native execution is local/manual handoff only"
+            echo "- no repository-wide Actions-history scan is performed"
+            echo "- Publisher-native self-hosted execution remains forbidden"
           } >>"$GITHUB_STEP_SUMMARY"
