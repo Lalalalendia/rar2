@@ -193,13 +193,13 @@ pub use salvage_authority::{
     typed_corruption_authority,
 };
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use source_paint_order::project_rect_trunc;
 pub use source_paint_order::{PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1, PubSourcePagePaintOrderV1};
 use source_paint_order::{
     grouped_object_target_page_trace, index_escher_by_contents_seq, project_grouped_object_shape,
     source_page_paint_orders_v1,
 };
-#[cfg(test)]
-use source_paint_order::project_rect_trunc;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
 pub use story_frame_analysis::{
