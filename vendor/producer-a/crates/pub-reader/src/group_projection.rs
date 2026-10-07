@@ -149,7 +149,7 @@ pub(super) fn project_grouped_object_shape(
     Ok(None)
 }
 
-fn coordinate_rect_i128(rect: &pub_escher::OfficeArtCoordinateRect) -> Result<[i128; 4]> {
+pub(super) fn coordinate_rect_i128(rect: &pub_escher::OfficeArtCoordinateRect) -> Result<[i128; 4]> {
     let out = [
         i128::from(rect.x_left),
         i128::from(rect.y_top),
