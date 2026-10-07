@@ -36,6 +36,7 @@ def pr_block(name: str) -> str:
 for name in (
     "quill-story-fdpp-exact.yml",
     "migration-1050-corpus-matrix.yml",
+    "editable-source-image-export-v1.yml",
 ):
     assert NEG_STORY_ANALYSIS in pr_block(name), name
 
