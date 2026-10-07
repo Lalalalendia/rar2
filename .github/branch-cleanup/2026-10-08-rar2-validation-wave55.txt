@@ -1,0 +1,5 @@
+# Validation Wave 55 — zero-unique refs already fully reachable from main
+validation/carlton-table-mcld-inset-classifier-01 e00f1f7c71bc4d47fcf54b20dc18a5aa10a076e0
+validation/legacy-ole-wmf-object-usage-01 be8168e348a1cec1d37e9a3122ec700e760ca411
+validation/manual-reduction-fingerprint-7-01 a439e4df0e47861925176143c0d946d39bf6abb0
+validation/manual-residual-typography-color-01 e00f1f7c71bc4d47fcf54b20dc18a5aa10a076e0
