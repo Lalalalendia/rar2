@@ -1,4 +1,5 @@
 name: Cloud Reader reference PUB-PDF pairs
+# qualification: Virginia post-mixed-size baseline
 
 on:
   workflow_call:
