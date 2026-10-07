@@ -420,7 +420,9 @@ fn populate_bounded_table_cell_fill(
         .filter_map(|shape| {
             let anchor = shape.child_anchor.as_ref()?;
             let child_rect = super::group_projection::coordinate_rect_i128(anchor).ok()?;
-            let projected = super::group_projection::project_rect_trunc(child_rect, group_rect, target_rect).ok()?;
+            let projected =
+                super::group_projection::project_rect_trunc(child_rect, group_rect, target_rect)
+                    .ok()?;
             Some((shape, projected))
         })
         .collect::<Vec<_>>();
