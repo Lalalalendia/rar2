@@ -32,6 +32,7 @@ mod ole_presentation;
 mod page_projection;
 mod paint_projection;
 mod partial_root;
+mod quill_admission;
 mod resolve;
 mod salvage;
 mod salvage_authority;
@@ -178,13 +179,12 @@ use pub_model::{
     StoryId, derive_source_canonical_id,
 };
 use pub_quill::{
-    QuillEffectiveBoolean, QuillGroundedStoryIdentity, QuillMcldReadError,
-    QuillMcldVerticalAlignment, QuillParagraphAlignment, QuillParagraphFlowConstraint,
-    QuillParagraphLineSpacing, QuillScriptFontEntryDisposition, QuillStoryReadError,
+    QuillEffectiveBoolean, QuillMcldVerticalAlignment, QuillParagraphAlignment,
+    QuillParagraphFlowConstraint, QuillParagraphLineSpacing, QuillScriptFontEntryDisposition,
     QuillTypographyValueSource, bounded_mcld_text_frame_vertical_alignment,
-    bounded_mcld_text_insets, parse_bounded_fdpp_exact_story_catalog, parse_bounded_mcld,
-    parse_bounded_typography, parse_confirmed_story_catalog,
+    bounded_mcld_text_insets,
 };
+use quill_admission::{QuillAdmission, admit_quill_projection_inputs};
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
     PubResolvedNodePayload, PubResolvedStoryFrame, resolve_pub_source_graph,
@@ -573,104 +573,18 @@ pub fn build_mature_0x2c_from_streams(
     let mut graph = PubSourceGraph::empty(source, document);
     graph.pages = pages;
 
-    let quill_stream = StreamPath(QUILL_STREAM_PATH.into());
-    let mut fdpp_story_catalog = None;
-    let quill_catalog = match parse_confirmed_story_catalog(quill_stream.clone(), quill) {
-        Ok(catalog) => Some(catalog),
-        Err(QuillStoryReadError::MissingRequiredChunk { name })
-            if physical_empty_story_catalog && name == *b"STRS" =>
-        {
-            diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
-                reason: "physical-empty Story catalog has no live Story references and Quill omits STRS; admitting geometry-only publication without fabricating Story text".to_owned(),
-            });
-            None
-        }
-        Err(ordinary_error) => {
-            let Some(story_catalog) = grounded_story_catalog.as_ref() else {
-                return Err(ordinary_error).context("parse grounded Quill story catalog");
-            };
-            let identities = story_catalog
-                .entries
-                .iter()
-                .map(|entry| QuillGroundedStoryIdentity {
-                    syid: pub_core::QuillSyid(entry.text_id),
-                    source: entry.text_id_source.clone(),
-                })
-                .collect::<Vec<_>>();
-            match parse_bounded_fdpp_exact_story_catalog(quill_stream.clone(), quill, &identities)
-                .context("parse bounded exact-FDPP Story fallback")?
-            {
-                Some(catalog) => {
-                    diagnostics.push(PubBridgeDiagnostic::FdppExactStoryFallback {
-                        story_count: catalog.stories.len(),
-                    });
-                    fdpp_story_catalog = Some(catalog);
-                    None
-                }
-                None => {
-                    return Err(ordinary_error).context("parse grounded Quill story catalog");
-                }
-            }
-        }
-    };
-    let typography_catalog = if let Some(quill_catalog) = quill_catalog.as_ref() {
-        match parse_bounded_typography(quill, quill_catalog) {
-            Ok(catalog) => {
-                let mut unknown = catalog.unknown_block_types_assumed_zero_length.clone();
-                unknown.extend(
-                    catalog
-                        .inheritance_unknown_block_types_assumed_zero_length
-                        .iter()
-                        .copied(),
-                );
-                unknown.sort_unstable();
-                unknown.dedup();
-                if !unknown.is_empty() {
-                    diagnostics.push(PubBridgeDiagnostic::TypographyUnknownFixedBlockTypes {
-                        block_types: unknown,
-                    });
-                }
-                Some(catalog)
-            }
-            Err(error) => {
-                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
-                    reason: error.to_string(),
-                });
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let mcld = if let Some(quill_catalog) = quill_catalog.as_ref() {
-        match parse_bounded_mcld(quill_stream.clone(), quill, &quill_catalog.descriptor_nodes) {
-            Ok(mcld) => Some(mcld),
-            Err(QuillMcldReadError::MissingMcldDescriptor) => None,
-            Err(QuillMcldReadError::RecordCountMismatch {
-                record_count,
-                record_id_count,
-            }) => {
-                diagnostics.push(PubBridgeDiagnostic::McldRecordCountMismatch {
-                    record_count,
-                    record_id_count,
-                });
-                None
-            }
-            Err(QuillMcldReadError::RecordIdOutsideOuterBound {
-                outer_value,
-                max_live_record_id,
-            }) => {
-                diagnostics.push(PubBridgeDiagnostic::McldOuterBoundViolation {
-                    outer_value,
-                    max_live_record_id,
-                });
-                None
-            }
-            Err(error) => return Err(error).context("parse bounded Quill MCLD"),
-        }
-    } else {
-        None
-    };
+    let QuillAdmission {
+        quill_catalog,
+        fdpp_story_catalog,
+        typography_catalog,
+        mcld,
+    } = admit_quill_projection_inputs(
+        quill,
+        grounded_story_catalog.as_ref(),
+        physical_empty_story_catalog,
+        &mut diagnostics,
+    )?;
+
     let story_by_syid = materialize_story_catalogs(
         &source_hash,
         quill_catalog.as_ref(),
