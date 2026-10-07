@@ -81,6 +81,7 @@ fast = pr_block("pub-editor-fast-pr.yml")
 assert NEG_TEST not in fast
 assert (
     TEST in fast
+    or "vendor/producer-a/crates/pub-editor/tests/**" in fast
     or "vendor/producer-a/crates/pub-editor/**" in fast
 ), "fast PR must admit the Story text-session integration test"
 
