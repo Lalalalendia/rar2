@@ -4,7 +4,14 @@
 //! bounded picture crop/recolor/color helpers. It deliberately does not own
 //! Reader graph construction, page-role projection, typography, or geometry.
 
-use super::*;
+use super::{
+    BTreeSet, MatureColorScheme, OFFICE_ART_PROPERTY_CROP_FROM_BOTTOM,
+    OFFICE_ART_PROPERTY_CROP_FROM_LEFT, OFFICE_ART_PROPERTY_CROP_FROM_RIGHT,
+    OFFICE_ART_PROPERTY_CROP_FROM_TOP, OFFICE_ART_TERTIARY_FOPT, PubEffectiveFillSource,
+    PubEffectiveLineSource, PubEffectivePaintAuthority, PubEffectivePaintValue,
+    PubEffectiveShapePaintSource, PubExplicitFillSource, PubExplicitImageCropSource,
+    PubExplicitImageRecolorSource, PubExplicitLineSource, PubExplicitShapePaintSource,
+};
 
 pub(super) const OFFICE_ART_PICTURE_RECOLOR: u16 = 0x011A;
 pub(super) const OFFICE_ART_PICTURE_RECOLOR_EXTRA_START: u16 = 0x011B;
