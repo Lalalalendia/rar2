@@ -185,6 +185,8 @@ use pub_model::{
     NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D, SourceDescriptor,
     SourceGraph, SourceRef, SourceRole, Story, StoryId,
 };
+#[cfg(test)]
+use pub_model::CanonicalId;
 use pub_quill::{
     QuillEffectiveBoolean, QuillMcldVerticalAlignment, QuillParagraphAlignment,
     QuillParagraphFlowConstraint, QuillParagraphLineSpacing, QuillScriptFontEntryDisposition,
