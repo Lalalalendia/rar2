@@ -201,31 +201,19 @@
       ]
     },
     {
-      "name": "pub-editor table track extent/history",
+      "name": "pub-editor table track extent core",
       "paths": [
-        "vendor/producer-a/crates/pub-editor/src/table_track_extent_v1.rs",
-        "vendor/producer-a/crates/pub-editor/src/table_track_history_v1.rs"
+        "vendor/producer-a/crates/pub-editor-table-core/src/table_track_extent_v1.rs"
       ],
       "commands": [
         [
           "cargo",
           "test",
           "--manifest-path",
-          "vendor/producer-a/Cargo.toml",
-          "-p",
-          "pub-editor",
+          "vendor/producer-a/crates/pub-editor-table-core/Cargo.toml",
           "--test",
-          "table_track_history_project_v1"
-        ],
-        [
-          "cargo",
-          "test",
-          "--manifest-path",
-          "vendor/producer-a/Cargo.toml",
-          "-p",
-          "pub-editor",
-          "--test",
-          "table_track_layout_integration_v1"
+          "table_track_history_v1",
+          "--no-fail-fast"
         ]
       ]
     },
