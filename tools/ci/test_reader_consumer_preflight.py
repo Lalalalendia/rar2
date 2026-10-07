@@ -25,6 +25,12 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
             "2024",
         )
         self.assertEqual(
+            MODULE.edition_for(
+                "vendor/producer-a/crates/pub-reader/src/bin/source_image_export_probe.rs"
+            ),
+            "2024",
+        )
+        self.assertEqual(
             MODULE.edition_for("crates/chaptera-viewer-render-plan/src/lib.rs"),
             "2024",
         )
