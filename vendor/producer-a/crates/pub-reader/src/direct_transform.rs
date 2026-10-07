@@ -206,6 +206,73 @@ pub(super) fn bounded_direct_image_transform(
         .unwrap_or(BoundedDirectImageTransform::Unsupported)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct BoundedNodeTransformProjection {
+    pub(super) transform: Affine2D,
+    pub(super) image_cardinal_rotation_degrees: Option<i16>,
+    pub(super) image_rotation_applied: bool,
+}
+
+pub(super) fn bounded_node_transform_projection(
+    shape: &pub_escher::SpContainerObservation,
+    bounds: RectEmu,
+    direct_image_candidate: bool,
+    grouped_image_rotation_op: Option<u32>,
+    direct_story_candidate: bool,
+    image_crop_present: bool,
+) -> BoundedNodeTransformProjection {
+    let direct_rotation_properties = shape
+        .fopts
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == OFFICE_ART_PROPERTY_ROTATION)
+        .map(|property| (property.op, property.f_bid(), property.f_complex()))
+        .collect::<Vec<_>>();
+    let image_rotation_properties = if direct_image_candidate {
+        direct_rotation_properties.clone()
+    } else {
+        grouped_image_rotation_op
+            .map(|rotation_op| vec![(rotation_op, false, false)])
+            .unwrap_or_default()
+    };
+    let fsp_flags = shape.fsp.as_ref().map(|fsp| fsp.flags).unwrap_or(0);
+    let image_candidate = direct_image_candidate || grouped_image_rotation_op.is_some();
+    let image_transform = if image_candidate {
+        bounded_direct_image_transform(&image_rotation_properties, fsp_flags, bounds)
+    } else {
+        BoundedDirectImageTransform::Identity
+    };
+    let story_transform = if direct_story_candidate {
+        bounded_direct_story_transform(&direct_rotation_properties, fsp_flags, bounds)
+    } else {
+        None
+    };
+    let image_cardinal_rotation_degrees = if image_candidate && !image_crop_present {
+        bounded_direct_image_cardinal_content_rotation_degrees(
+            &image_rotation_properties,
+            fsp_flags,
+        )
+    } else {
+        None
+    };
+    let (transform, image_rotation_applied) = if let Some(transform) = story_transform {
+        (transform, false)
+    } else {
+        match image_transform {
+            BoundedDirectImageTransform::Identity | BoundedDirectImageTransform::Unsupported => {
+                (Affine2D::identity(), false)
+            }
+            BoundedDirectImageTransform::Applied(transform) => (transform, true),
+        }
+    };
+
+    BoundedNodeTransformProjection {
+        transform,
+        image_cardinal_rotation_degrees,
+        image_rotation_applied,
+    }
+}
+
 pub(super) fn bounded_direct_story_transform(
     rotation_properties: &[(u32, bool, bool)],
     fsp_flags: u32,
