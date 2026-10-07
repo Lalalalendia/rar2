@@ -604,12 +604,6 @@ def classify(
     result["local_portable"] = any(
         matches(path, LOCAL_PORTABLE) for path in local_portable_paths
     )
-    virginia_paths = [
-        path for path in product_paths if path != READER_TYPOGRAPHY_PROJECTION
-    ]
-    result["virginia_page_role"] = any(
-        matches(path, VIRGINIA_PAGE_ROLE) for path in virginia_paths
-    )
     # Golden tests still call ViewerApp and paint helpers owned by main.rs.
     # A path alone cannot prove those dependencies unchanged. Only an exact
     # standalone-comment proof may suppress their visual/typography allocation.
@@ -631,7 +625,7 @@ def classify(
     virginia_paths = [
         path
         for path in product_paths
-        if path not in {READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER}
+        if path not in {READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_TYPOGRAPHY_PROJECTION}
         and not path.startswith("vendor/producer-a/crates/pub-reader/src/bin/")
         and not path.startswith("vendor/producer-a/crates/pub-viewer/src/bin/")
     ]
