@@ -179,3 +179,5 @@ pub(super) fn bounded_authoring_slice_from_resolved_pages(
         unknown_layout_state: Vec::new(),
     })
 }
+
+// CI routing negative control: authoring projection owner only.
