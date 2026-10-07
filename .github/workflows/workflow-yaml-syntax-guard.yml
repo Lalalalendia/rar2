@@ -14,6 +14,7 @@ on:
       - "tools/ci/test_editor_build_once_wiring.py"
       - "tools/ci/migration-consumer-runtime.Dockerfile"
       - "tools/ci/test_migration_consumer_runtime_wiring.py"
+      - "tools/ci/test_shaped_flow_runtime_routing.py"
   workflow_dispatch:
 
 concurrency:
@@ -42,3 +43,5 @@ jobs:
         run: python tools/ci/test_editor_build_once_wiring.py
       - name: Guard migration consumer runtime producer
         run: python tools/ci/test_migration_consumer_runtime_wiring.py
+      - name: Guard shaped-flow runtime routing
+        run: python tools/ci/test_shaped_flow_runtime_routing.py
