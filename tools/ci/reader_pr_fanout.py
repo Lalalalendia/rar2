@@ -335,6 +335,7 @@ CLOUD_REFERENCE = (
     READER_PAGE_PROJECTION,
     READER_SOURCE_PAINT_ORDER,
     READER_TYPOGRAPHY_PROJECTION,
+    READER_SOURCE_GRAPH_MODEL,
     "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs",
     "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs",
     "tools/acquire_carlton_march_pair.py",
@@ -370,6 +371,7 @@ VISUAL_BATCH01 = (
     READER_PAGE_PROJECTION,
     READER_SOURCE_PAINT_ORDER,
     READER_TYPOGRAPHY_PROJECTION,
+    READER_SOURCE_GRAPH_MODEL,
 )
 
 TYPOGRAPHY_GOLDEN = (
