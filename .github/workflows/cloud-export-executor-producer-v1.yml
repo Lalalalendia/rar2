@@ -19,6 +19,7 @@ on:
       - "vendor/producer-a/crates/pub-editor/**"
       - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
       - "!vendor/producer-a/crates/pub-editor/src/session_image.rs"
+      - "!vendor/producer-a/crates/pub-editor/tests/story_text_session_v1.rs"
       - ".github/workflows/cloud-export-executor-producer-v1.yml"
   workflow_dispatch:
 

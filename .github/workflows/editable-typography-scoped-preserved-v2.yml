@@ -10,6 +10,7 @@ on:
       - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
       - "!vendor/producer-a/crates/pub-editor/src/session_image.rs"
       - "!vendor/producer-a/crates/pub-editor/src/session_text.rs"
+      - "!vendor/producer-a/crates/pub-editor/tests/story_text_session_v1.rs"
   workflow_dispatch:
 
 permissions:
