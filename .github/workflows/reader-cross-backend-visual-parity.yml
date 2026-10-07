@@ -1,4 +1,5 @@
 name: Reader cross-backend visual parity
+# Manual parity owner also emits linked-Story slice proof censuses.
 
 on:
   workflow_dispatch:
