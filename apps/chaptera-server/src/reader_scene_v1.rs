@@ -1185,8 +1185,10 @@ pub fn from_viewer_geometry_with_fonts(
                 if mapped_layout.is_some() {
                     projected_text_layout_count += 1;
                 }
-                let projected_preview_text_style =
-                    node.text.as_ref().and_then(preview_text_style_from_render_text);
+                let projected_preview_text_style = node
+                    .text
+                    .as_ref()
+                    .and_then(preview_text_style_from_render_text);
                 let projected_node = ReaderNodeV1 {
                     node_id: instance.instance_id.clone(),
                     origin_node_id: Some(instance.origin_node_id.clone()),
