@@ -82,11 +82,12 @@ pub(super) fn project_grouped_object_shape(
     let mut current_group_seq = first_group_seq;
     let mut seen = BTreeSet::new();
     let mut group_sources = Vec::new();
-    let mut image_transform = admit_bounded_grouped_image_transform
-        .then_some(direct_transform::BoundedGroupedImageTransform {
+    let mut image_transform = admit_bounded_grouped_image_transform.then_some(
+        direct_transform::BoundedGroupedImageTransform {
             child_rotation_op,
             ancestor_horizontal_flip: false,
-        });
+        },
+    );
 
     for depth in 1..=2 {
         if !seen.insert(current_group_seq) {
@@ -221,12 +222,7 @@ fn mirror_rect_horizontally(rect: [i128; 4], source_space: [i128; 4]) -> Result<
     let axis_sum = source_space[0]
         .checked_add(source_space[2])
         .context("group horizontal-flip axis overflow")?;
-    let mirrored = [
-        axis_sum - rect[2],
-        rect[1],
-        axis_sum - rect[0],
-        rect[3],
-    ];
+    let mirrored = [axis_sum - rect[2], rect[1], axis_sum - rect[0], rect[3]];
     if mirrored[2] <= mirrored[0] || mirrored[3] <= mirrored[1] {
         bail!("horizontally mirrored grouped rectangle is non-positive");
     }
