@@ -6,7 +6,8 @@ use std::{
 
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, RenderTextFragmentV1, RenderTextLayoutDispositionV1,
-    build_page_render_plan_with_text_layout_resolvers_v1, effective_source_font_family_v1,
+    build_page_render_plan_with_text_layout_resolvers_v1, classify_mixed_size_layout_v1,
+    effective_source_font_family_v1,
 };
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde_json::{Value, json};
@@ -206,6 +207,59 @@ fn exact_094_page_layout_census() {
                     .or_default() += 1;
             }
 
+            let mut spacing_runs = bundle
+                .geometry
+                .paragraph_line_spacings
+                .iter()
+                .filter(|run| run.story_id == text.story_id)
+                .filter(|run| run.applies_to_story_text(&story.text))
+                .filter(|run| {
+                    run.scalar_end > text.scalar_start && run.scalar_start < text.scalar_end
+                })
+                .collect::<Vec<_>>();
+            spacing_runs.sort_by_key(|run| (run.scalar_start, run.scalar_end));
+            let line_spacing_signature = match spacing_runs.as_slice() {
+                [run]
+                    if run.scalar_start <= text.scalar_start
+                        && run.scalar_end >= text.scalar_end =>
+                {
+                    match run.line_spacing {
+                        pub_viewer::ViewerParagraphLineSpacing::Proportional {
+                            point_equivalent_emu,
+                        } => json!({
+                            "kind":"proportional",
+                            "point_equivalent_emu":point_equivalent_emu
+                        }),
+                        pub_viewer::ViewerParagraphLineSpacing::Absolute { spacing_emu } => json!({
+                            "kind":"absolute",
+                            "spacing_emu":spacing_emu
+                        }),
+                    }
+                }
+                [] => json!({"kind":"absent"}),
+                _ => json!({"kind":"partial_or_ambiguous","run_count":spacing_runs.len()}),
+            };
+
+            let diagnostic_bounds = fallback_node.text_bounds.unwrap_or(fallback_node.bounds);
+            let mixed_size_diagnostic =
+                classify_mixed_size_layout_v1(text, &fallback, &diagnostic_bounds).map(|row| {
+                    json!({
+                        "outcome":row.outcome,
+                        "placed_line_count":row.placed_line_count,
+                        "consumed_scalar_end":row.consumed_scalar_end,
+                        "story_scalar_end":row.story_scalar_end,
+                        "used_height_emu":row.used_height_emu,
+                        "available_height_emu":row.available_height_emu,
+                        "remaining_height_emu":row.remaining_height_emu,
+                        "failure_candidate_count":row.failure_candidate_count,
+                        "failure_width_fit_count":row.failure_width_fit_count,
+                        "failure_height_fit_count":row.failure_height_fit_count,
+                        "failure_mandatory_candidate_seen":row.failure_mandatory_candidate_seen,
+                        "failure_min_candidate_width_emu":row.failure_min_candidate_width_emu,
+                        "failure_min_candidate_line_height_emu":row.failure_min_candidate_line_height_emu,
+                    })
+                });
+
             let fallback_signature = layout_signature(text);
             let arial_signature = layout_signature(arial_text);
             let fallback_kind = signature_kind(&fallback_signature);
@@ -233,6 +287,9 @@ fn exact_094_page_layout_census() {
                 "effective_source_family_sha256":effective_family_normalized.as_deref().map(sha256_text),
                 "source_family_is_arial":source_family_is_arial,
                 "paragraph_alignment_counts":alignment_counts,
+                "paragraph_line_spacing_run_count":spacing_runs.len(),
+                "paragraph_line_spacing":line_spacing_signature,
+                "mixed_size_layout_diagnostic":mixed_size_diagnostic,
                 "bounds_emu":{
                     "x":fallback_node.bounds.x.get(),
                     "y":fallback_node.bounds.y.get(),

@@ -3229,6 +3229,211 @@ fn shape_mixed_line_candidate_v1(
     })
 }
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MixedSizeLayoutDiagnosticV1 {
+    pub outcome: &'static str,
+    pub placed_line_count: usize,
+    pub consumed_scalar_end: u32,
+    pub story_scalar_end: u32,
+    pub used_height_emu: i64,
+    pub available_height_emu: i64,
+    pub remaining_height_emu: i64,
+    pub failure_candidate_count: usize,
+    pub failure_width_fit_count: usize,
+    pub failure_height_fit_count: usize,
+    pub failure_mandatory_candidate_seen: bool,
+    pub failure_min_candidate_width_emu: Option<i64>,
+    pub failure_min_candidate_line_height_emu: Option<i64>,
+}
+
+/// Source-safe diagnostic replay of the existing mixed-size layout loop.
+///
+/// This does not alter product admission or painting. It exists to distinguish
+/// the first fail-closed frontier (height, width/break, or mixed) for an exact
+/// already-observed SharedLayoutIncomplete witness.
+pub fn classify_mixed_size_layout_v1(
+    fragment: &RenderTextFragmentV1,
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+    bounds: &RectEmu,
+) -> Option<MixedSizeLayoutDiagnosticV1> {
+    if bounds.width.get() <= 0
+        || bounds.height.get() <= 0
+        || font.resource_id.is_empty()
+        || font.bytes.is_empty()
+        || font.default_font_size_emu <= 0
+        || font.default_line_height_emu <= 0
+    {
+        return None;
+    }
+
+    let fingerprint = font_fingerprint_sha256(font.bytes);
+    if font.expected_sha256.is_empty() || fingerprint != font.expected_sha256 {
+        return None;
+    }
+
+    let runs = admitted_typography_runs_v1(fragment, font.default_font_size_emu).ok()?;
+    if runs.len() < 2
+        || runs
+            .iter()
+            .all(|run| run.font_size_emu == runs[0].font_size_emu)
+    {
+        return None;
+    }
+
+    let scalars: Vec<char> = fragment.text.chars().collect();
+    let scalar_count = u32::try_from(scalars.len()).ok()?;
+    if fragment.scalar_start != 0 || fragment.scalar_end != scalar_count {
+        return None;
+    }
+
+    let mut policy_glyphs = Vec::new();
+    let mut prepared_runs = Vec::with_capacity(runs.len());
+    for run in &runs {
+        let run_text = scalar_text_range_v1(&scalars, run.scalar_start, run.scalar_end)?;
+        let runtime = BoundedShapingRuntime {
+            layout: BoundedLayoutEnvironment {
+                engine_revision: SHARED_TEXT_LAYOUT_REVISION_V1.to_owned(),
+                font_set_fingerprint: fingerprint.clone(),
+                resource_fingerprint: font.resource_id.to_owned(),
+            },
+            face_index: font.face_index,
+            font_size_emu: LengthEmu::new(run.font_size_emu),
+            font_bytes: font.bytes,
+        };
+        let shaped = shape_bounded_ltr_segment(&run_text, run.scalar_start, &runtime).ok()?;
+        prepared_runs.push(prepare_typography_run_v1(*run, &shaped).ok()?);
+        policy_glyphs.extend(shaped.glyphs);
+    }
+    let policy = break_policy_for_shaped_text(&fragment.text, &policy_glyphs).ok()?;
+
+    let mut cursor = fragment.scalar_start;
+    let mut cursor_safe_without_reshaping = true;
+    let mut used_height_emu = 0_i64;
+    let mut placed_line_count = 0_usize;
+
+    while cursor < fragment.scalar_end {
+        let mut chosen = None;
+        let mut failure_candidate_count = 0_usize;
+        let mut failure_width_fit_count = 0_usize;
+        let mut failure_height_fit_count = 0_usize;
+        let mut failure_mandatory_candidate_seen = false;
+        let mut failure_min_candidate_width_emu = None::<i64>;
+        let mut failure_min_candidate_line_height_emu = None::<i64>;
+
+        for candidate in policy
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.scalar_boundary > cursor)
+        {
+            failure_candidate_count += 1;
+            failure_mandatory_candidate_seen |= candidate.kind == BoundedBreakKind::Mandatory;
+
+            let evaluated = if cursor_safe_without_reshaping
+                && candidate.safe_without_reshaping
+                && candidate.kind == BoundedBreakKind::Allowed
+            {
+                reuse_mixed_line_candidate_v1(
+                    &scalars,
+                    cursor,
+                    candidate.scalar_boundary,
+                    &prepared_runs,
+                    font,
+                )
+                .ok()?
+            } else {
+                shape_mixed_line_candidate_v1(
+                    &scalars,
+                    cursor,
+                    candidate.scalar_boundary,
+                    candidate.kind,
+                    &runs,
+                    font,
+                    &fingerprint,
+                )
+                .ok()?
+            };
+
+            failure_min_candidate_width_emu = Some(
+                failure_min_candidate_width_emu
+                    .map_or(evaluated.measured_width_emu, |value| {
+                        value.min(evaluated.measured_width_emu)
+                    }),
+            );
+            failure_min_candidate_line_height_emu = Some(
+                failure_min_candidate_line_height_emu
+                    .map_or(evaluated.line_height_emu, |value| {
+                        value.min(evaluated.line_height_emu)
+                    }),
+            );
+
+            let fits_width = evaluated.measured_width_emu <= bounds.width.get();
+            let fits_height = used_height_emu
+                .checked_add(evaluated.line_height_emu)
+                .is_some_and(|height| height <= bounds.height.get());
+            failure_width_fit_count += usize::from(fits_width);
+            failure_height_fit_count += usize::from(fits_height);
+
+            if fits_width && fits_height {
+                chosen = Some((evaluated, candidate.safe_without_reshaping));
+            }
+            if candidate.kind == BoundedBreakKind::Mandatory {
+                break;
+            }
+        }
+
+        let Some((chosen, chosen_boundary_safe_without_reshaping)) = chosen else {
+            let outcome = if failure_candidate_count == 0 {
+                "no_break_candidate"
+            } else if failure_width_fit_count > 0 && failure_height_fit_count == 0 {
+                "height_exhausted"
+            } else if failure_width_fit_count == 0 && failure_height_fit_count > 0 {
+                "width_no_legal_break"
+            } else if failure_width_fit_count > 0 && failure_height_fit_count > 0 {
+                "mixed_width_height_frontier"
+            } else {
+                "width_and_height_no_fit"
+            };
+            return Some(MixedSizeLayoutDiagnosticV1 {
+                outcome,
+                placed_line_count,
+                consumed_scalar_end: cursor,
+                story_scalar_end: fragment.scalar_end,
+                used_height_emu,
+                available_height_emu: bounds.height.get(),
+                remaining_height_emu: bounds.height.get().saturating_sub(used_height_emu),
+                failure_candidate_count,
+                failure_width_fit_count,
+                failure_height_fit_count,
+                failure_mandatory_candidate_seen,
+                failure_min_candidate_width_emu,
+                failure_min_candidate_line_height_emu,
+            });
+        };
+
+        used_height_emu = used_height_emu.checked_add(chosen.line_height_emu)?;
+        cursor = chosen.consumed_scalar_end;
+        cursor_safe_without_reshaping = chosen_boundary_safe_without_reshaping;
+        placed_line_count = placed_line_count.checked_add(1)?;
+    }
+
+    Some(MixedSizeLayoutDiagnosticV1 {
+        outcome: "complete",
+        placed_line_count,
+        consumed_scalar_end: cursor,
+        story_scalar_end: fragment.scalar_end,
+        used_height_emu,
+        available_height_emu: bounds.height.get(),
+        remaining_height_emu: bounds.height.get().saturating_sub(used_height_emu),
+        failure_candidate_count: 0,
+        failure_width_fit_count: 0,
+        failure_height_fit_count: 0,
+        failure_mandatory_candidate_seen: false,
+        failure_min_candidate_width_emu: None,
+        failure_min_candidate_line_height_emu: None,
+    })
+}
+
 fn resolve_mixed_size_text_layout_v1(
     fragment: &RenderTextFragmentV1,
     font: &ExplicitRenderTextFontResourceV1<'_>,
