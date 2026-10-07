@@ -21,6 +21,7 @@ VIEWER_AUTHORING_PROJECTION = (
 READER_PAINT_PROJECTION = "vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
 READER_PAGE_PROJECTION = "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
 READER_SOURCE_PAINT_ORDER = "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
+READER_STORY_FRAME_ANALYSIS = "vendor/producer-a/crates/pub-reader/src/story_frame_analysis.rs"
 
 
 TEST_REGION_EVIDENCE_CANDIDATES = {
@@ -562,7 +563,7 @@ def classify(
         path
         for path in semantic_paths
         if not is_rust_integration_test_path(path)
-        and path != VIEWER_AUTHORING_PROJECTION
+        and path not in {VIEWER_AUTHORING_PROJECTION, READER_STORY_FRAME_ANALYSIS}
     ]
     mapping = {
         "tier_a": TIER_A,

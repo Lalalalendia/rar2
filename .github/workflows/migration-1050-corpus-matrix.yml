@@ -13,6 +13,7 @@ on:
       - "vendor/producer-a/crates/pub-reader/src/**"
       - "!vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
       - "!vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
+      - "!vendor/producer-a/crates/pub-reader/src/story_frame_analysis.rs"
       - "tools/ci/scribus_idml_consumer.py"
   push:
     branches:
