@@ -5,6 +5,9 @@ mod font_resource;
 
 use chaptera_caret_layout_feed::build_caret_map_from_shaped_flow_v1;
 use chaptera_text_caret_map_adapter::ResolvedTextCaretMapV1;
+use fixed_pdf_pages::bounded_authoring_slice_for_pages_v1;
+#[cfg(test)]
+use fixed_pdf_pages::qualified_page_set_error_v1;
 use pub_editor::{
     EditorSession, EffectiveParagraphAlignmentValueV1, ImportedParagraphFlowConstraintV1,
 };
