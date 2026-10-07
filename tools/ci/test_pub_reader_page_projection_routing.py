@@ -32,9 +32,14 @@ def pr_block(name: str) -> str:
     return text[start:end]
 
 
-# Direct semantic consumers retained after extraction.
-assert PAGE in pr_block("master-projection-active-reader-bridge.yml")
-assert PAGE in pr_block("publisher-visual-golden-supplemental.yml")
+# Do not add new standalone PR consumers after the split: the source-fanout
+# ratchet forbids widening an existing leaf. Master bridge compatibility is
+# compiled inside Tier A; visual/page semantics stay on central owned scopes.
+for name in (
+    "master-projection-active-reader-bridge.yml",
+    "publisher-visual-golden-supplemental.yml",
+):
+    assert PAGE not in pr_block(name), name
 
 # Unrelated broad subscribers must fence the page-only seam.
 for name in (
