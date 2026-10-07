@@ -35,6 +35,8 @@ jobs:
             -o "$fixture"
           echo "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf  $fixture" | sha256sum -c -
           test "$(stat -c%s "$fixture")" = "291840"
+          echo "CHAPTERA_READER_SCENE_PROBE_PUB=$fixture" >> "$GITHUB_ENV"
+          echo "CHAPTERA_READER_SCENE_PROBE_SHA256=6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf" >> "$GITHUB_ENV"
           cat > "$RUNNER_TEMP/cross-backend-manifest.json" <<EOF
           {
             "fixtures": [{
@@ -56,6 +58,9 @@ jobs:
 
       - name: Build canonical Cloud Reader scene producer
         run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Census Cloud shared-layout fallback causes
+        run: cargo test -p chaptera-server real_reference_text_layout_fallback_census_probe -- --ignored --nocapture
 
       - name: Render Cloud Reader pages at 144 DPI
         env:
