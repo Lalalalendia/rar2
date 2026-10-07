@@ -146,4 +146,3 @@ pub fn current_story_boolean_typography_v1(
     }
     Ok(out)
 }
-
