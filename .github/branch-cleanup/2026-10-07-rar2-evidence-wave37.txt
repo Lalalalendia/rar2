@@ -1,0 +1,5 @@
+# Wave 37 — completed Brochure incomplete-fill localization + prior GC owner
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+measure/brochure-incomplete-fill-authority-01 9def3bb68d8c2746b9cf07c320f615a1a5c6c713
+ops/branch-gc-20261007-evidence-wave36 caaaff742745896b7b205c3d1a051fa16e4e5d5c
