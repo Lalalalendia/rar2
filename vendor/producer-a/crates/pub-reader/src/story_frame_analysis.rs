@@ -4,6 +4,8 @@
 //! own production source-graph construction, resolved StoryFrame semantics,
 //! page projection, paint, or typography.
 
+use pub_quill::parse_confirmed_story_catalog;
+
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
