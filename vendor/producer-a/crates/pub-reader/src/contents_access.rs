@@ -83,3 +83,27 @@ pub(super) fn single_parent_seq(reference: &Contents0x2cChunkReference) -> Optio
 pub(super) fn seq_u32(seq_num: usize) -> Result<u32> {
     u32::try_from(seq_num).map_err(|_| anyhow!("Contents seqNum does not fit u32: {seq_num}"))
 }
+
+pub(super) fn unique_u32_field(
+    chunk: &Contents0x2cChunk,
+    id: u16,
+) -> Result<Option<(u32, RawSpan)>> {
+    let mut matches = chunk.fields.iter().filter(|field| field.id == id);
+    let Some(field) = matches.next() else {
+        return Ok(None);
+    };
+    if matches.next().is_some() {
+        bail!("duplicate Contents field 0x{id:02X} in one chunk");
+    }
+
+    match &field.body {
+        RawContentsBlockBody::U32 {
+            value,
+            value_source,
+        } => Ok(Some((*value, value_source.clone()))),
+        _ => bail!(
+            "Contents field 0x{id:02X} at {} is not a confirmed u32/reference body",
+            field.source.offset
+        ),
+    }
+}

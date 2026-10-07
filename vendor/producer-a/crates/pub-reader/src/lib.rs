@@ -73,7 +73,7 @@ pub use borderart_assets::{
 pub use cmo_bridge::{PubCmoProjectionBridgeV1, build_mature_0x2c_cmo_projection_bridge_v1};
 use contents_access::{
     build_reference_index, chunk_for_reference, seq_u32, single_parent_seq, single_raw_type,
-    unique_block, unique_reference_by_raw_type,
+    unique_block, unique_reference_by_raw_type, unique_u32_field,
 };
 pub use diagnostics::PubBridgeDiagnostic;
 pub use failure_envelope::{
@@ -1358,27 +1358,6 @@ fn unique_story_id_scalar(chunk: &Contents0x2cChunk) -> Result<Option<u32>> {
         RawContentsBlockBody::U32 { value, .. } => Ok(Some(*value)),
         _ => bail!(
             "Contents Story field 0x{FIELD_STORY_ID:02X} at {} is not a confirmed u16/u32 scalar body",
-            field.source.offset
-        ),
-    }
-}
-
-fn unique_u32_field(chunk: &Contents0x2cChunk, id: u16) -> Result<Option<(u32, RawSpan)>> {
-    let mut matches = chunk.fields.iter().filter(|field| field.id == id);
-    let Some(field) = matches.next() else {
-        return Ok(None);
-    };
-    if matches.next().is_some() {
-        bail!("duplicate Contents field 0x{id:02X} in one chunk");
-    }
-
-    match &field.body {
-        RawContentsBlockBody::U32 {
-            value,
-            value_source,
-        } => Ok(Some((*value, value_source.clone()))),
-        _ => bail!(
-            "Contents field 0x{id:02X} at {} is not a confirmed u32/reference body",
             field.source.offset
         ),
     }
