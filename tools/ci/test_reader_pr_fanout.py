@@ -331,6 +331,25 @@ fn main() -> eframe::Result<()> {
         update_accept=False,
     )
     assert_scope(
+        [mod.VIEWER_IMAGES],
+        tier_a=True,
+        reader_windows_smoke=True,
+        reader_windows=False,
+        editor_windows=False,
+        visual_oracle=True,
+        cloud_reference=True,
+        virginia_page_role=False,
+        visual_batch01=True,
+        typography_golden=False,
+        android_core=True,
+        android=False,
+        web=False,
+        local_portable=False,
+        installer=False,
+        path_identity=False,
+        update_accept=False,
+    )
+    assert_scope(
         ["crates/chaptera-viewer-render-plan/src/lib.rs"],
         tier_a=True,
         reader_windows_smoke=True,
