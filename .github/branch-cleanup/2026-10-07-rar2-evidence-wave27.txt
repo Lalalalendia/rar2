@@ -1,6 +1,7 @@
 # Wave 27 — exact closed evidence/control refs
 # Each entry is <branch> <expected-current-sha>.
 # Runtime guard rechecks open PR heads and exact SHA before deletion.
+# synchronize trigger: manifest semantics unchanged
 measure/cloud-image-descriptor-census-02 febdeac24dec7e0acb1058c6b570075451af2b2f
 measure/viewer-source-font-clipping-census-01 c2dd5a0d577b8bca5bae530df9d1dbb0087f3568
 measure/pub-reader-story-frame-analysis-routing-01 e6b43a1037eb9d9009d26aa08de8495a004fb8b5
