@@ -1,0 +1,6 @@
+# Wave 42 — completed Virginia border/recolor discriminators
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+measure/virginia-table-border-composition-01 fa0e1c154728da3e35b48b093d1a9a818898ea51
+measure/virginia-p21-color-effect-795 1c9ba259d96b5b06dd85a4a87b6a6207f6311fc4
+ops/branch-gc-20261007-evidence-wave41 a11e8b768faeaa0322a84dcfa77506cd3dffa6f4
