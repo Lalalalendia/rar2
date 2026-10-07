@@ -71,6 +71,25 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         self.assertIn("--all-targets", vendor_clippy["argv"])
         self.assertEqual(vendor_clippy["argv"][-2:], ["-D", "warnings"])
 
+    def test_pub_viewer_images_leaf_skips_cmo_lib_harness_only(self) -> None:
+        image_plan = MODULE.build_plan(
+            ["vendor/producer-a/crates/pub-viewer/src/images.rs"],
+            "BASE",
+            "HEAD",
+        )
+        image_ids = {command["id"] for command in image_plan["commands"]}
+        self.assertIn("vendor-source-free-tests", image_ids)
+        self.assertNotIn("pub-viewer-cmo-slot-compose", image_ids)
+
+        shared_plan = MODULE.build_plan(
+            ["vendor/producer-a/crates/pub-viewer/src/lib.rs"],
+            "BASE",
+            "HEAD",
+        )
+        shared_ids = {command["id"] for command in shared_plan["commands"]}
+        self.assertIn("vendor-source-free-tests", shared_ids)
+        self.assertIn("pub-viewer-cmo-slot-compose", shared_ids)
+
     def test_vendor_workspace_change_qualifies_donor_pub_model(self) -> None:
         plan = MODULE.build_plan(
             ["vendor/producer-a/Cargo.toml"],
