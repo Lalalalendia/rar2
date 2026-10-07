@@ -1,0 +1,10 @@
+# Wave 24 — evidence/measurement refs with durable closure
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+measure/desktop-lint-delta-111-v2 fa3361222b6a817ab346143d0d240ac21ac3a947
+measure/desktop-lint-delta-111-negative-v2 ddcb363803e6b960b22c1428e90bd8756532727e
+measure/desktop-win-arm64-cache-280 fb68587284db80d1658738c17c99b968131978a7
+research/package-carlton-align-841-windows 6ce5baef9732ec021b58cedfe08cc092125ca1b6
+research/package-factory-t891-t892-portable 4e2d7602a46cf4b02ceaa4db2ac1a34b4ac9d8aa
+research/package-table-border-oracle-windows-03 9ec6024ad8012af1d7e9d4c85fd07aa62ad35a76
+ops/branch-gc-20261007-evidence-wave23 45cf50847d37114565777b1b75ab47fc46708a8f
