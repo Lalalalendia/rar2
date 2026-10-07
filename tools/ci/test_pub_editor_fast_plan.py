@@ -109,6 +109,7 @@ def main() -> int:
         raise SystemExit("pub-editor fast plan contains full-crate tests: " + details)
 
     representative = {
+        PREFIX + "session_geometry.rs": "move_nodes_v1",
         PREFIX + "duplicate_authored_rectangle_v1.rs": "duplicate_authored_rectangle_v1",
         AUTHORING_CORE_PREFIX + "create_table_runtime_v1.rs": "create_table_runtime_v1",
         AUTHORING_CORE_PREFIX + "authored_stack_lifecycle_v1.rs": "authored_stack_lifecycle_v1",

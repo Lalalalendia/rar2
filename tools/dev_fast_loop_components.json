@@ -102,6 +102,44 @@
       ]
     },
     {
+      "name": "pub-editor geometry session",
+      "paths": [
+        "vendor/producer-a/crates/pub-editor/src/session_geometry.rs"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor",
+          "--test",
+          "move_nodes_v1"
+        ],
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor",
+          "--test",
+          "resize_node_v1"
+        ],
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor",
+          "--test",
+          "resize_nodes_v1"
+        ]
+      ]
+    },
+    {
       "name": "pub-editor image session",
       "paths": [
         "vendor/producer-a/crates/pub-editor/src/session_image.rs"
