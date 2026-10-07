@@ -23,8 +23,8 @@ pub use borderart::{
     ViewerDecorativeBorderSlotV1, ViewerDecorativeBorderV1,
 };
 pub use images::{
-    VIEWER_IMAGE_SOURCE_Q16_ONE, ViewerEmbeddedImage, ViewerImagePlacementV1,
-    ViewerImageRecolorV1, ViewerImageSourceWindowV1,
+    VIEWER_IMAGE_SOURCE_Q16_ONE, ViewerEmbeddedImage, ViewerImagePlacementV1, ViewerImageRecolorV1,
+    ViewerImageSourceWindowV1,
 };
 use images::{
     resolved_page_for_node_v1, retain_viewer_image_uses_for_selected_pages_v1,
@@ -101,11 +101,11 @@ use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
     FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
     LegacyOleCachedPresentationSelection, MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
-    PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority, PubParagraphAlignment,
-    PubParagraphFlowConstraint,
-    PubParagraphFlowRun, PubParagraphLineSpacing, PubResolveDiagnostic, PubResolvedGraph,
-    PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
-    PubSourceGraphBuild, PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
+    PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
+    PubParagraphAlignment, PubParagraphFlowConstraint, PubParagraphFlowRun,
+    PubParagraphLineSpacing, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
+    PubResolvedNodePayload, PubScriptFontEntryDisposition, PubSourceGraphBuild,
+    PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
     analyze_legacy_0x22_page_roles, analyze_mature_0x2c_page_roles, build_failure_envelope,
     build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
