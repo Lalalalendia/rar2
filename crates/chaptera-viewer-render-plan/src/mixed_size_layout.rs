@@ -512,3 +512,108 @@ pub(super) fn resolve_mixed_size_text_layout_v1(
         lines: evaluation.lines,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mixed_fragment(text: &str) -> RenderTextFragmentV1 {
+        let scalar_end = u32::try_from(text.chars().count()).expect("bounded fixture");
+        RenderTextFragmentV1 {
+            story_id: StoryId::from_canonical(CanonicalId::from_bytes([3; 16])),
+            scalar_start: 0,
+            scalar_end,
+            text: text.to_owned(),
+            line_count: 0,
+            typography: vec![
+                RenderTypographyRunV1 {
+                    scalar_start: 0,
+                    scalar_end: 3,
+                    source_font_name: "Noto Serif".to_owned(),
+                    text_size_emu: 12 * 12_700,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
+                    bold: None,
+                    italic: None,
+                },
+                RenderTypographyRunV1 {
+                    scalar_start: 3,
+                    scalar_end,
+                    source_font_name: "Noto Serif".to_owned(),
+                    text_size_emu: 18 * 12_700,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
+                    bold: None,
+                    italic: None,
+                },
+            ],
+            paragraph_alignments: Vec::new(),
+            backend_font_resource_id: None,
+            layout: None,
+        }
+    }
+
+    #[test]
+    fn mixed_size_partial_layout_admits_only_after_visible_height_exhaustion() {
+        let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let fingerprint = font_fingerprint_sha256(bytes);
+        let font = ExplicitRenderTextFontResourceV1 {
+            resource_id: "test:noto-serif",
+            expected_sha256: &fingerprint,
+            face_index: 0,
+            default_font_size_emu: 12 * 12_700,
+            default_line_height_emu: 14 * 12_700,
+            bytes,
+        };
+        let fragment = mixed_fragment("aa\rbb");
+        let node_id = NodeId::from_canonical(CanonicalId::from_bytes([4; 16]));
+
+        let one_line_bounds = RectEmu::new(
+            LengthEmu::ZERO,
+            LengthEmu::ZERO,
+            LengthEmu::new(10_000_000),
+            LengthEmu::new(14 * 12_700),
+        );
+        let partial = resolve_mixed_size_text_layout_v1(
+            &fragment,
+            &font,
+            node_id,
+            &one_line_bounds,
+            &fingerprint,
+            None,
+        );
+        assert!(matches!(
+            partial.disposition,
+            RenderTextLayoutDispositionV1::SharedResolved { .. }
+        ));
+        assert_eq!(partial.lines.len(), 1);
+        assert_eq!(partial.lines[0].text, "aa");
+        assert_eq!(partial.lines[0].consumed_scalar_end, 3);
+
+        let zero_line_bounds = RectEmu::new(
+            LengthEmu::ZERO,
+            LengthEmu::ZERO,
+            LengthEmu::new(10_000_000),
+            LengthEmu::new(14 * 12_700 - 1),
+        );
+        let zero_line = resolve_mixed_size_text_layout_v1(
+            &fragment,
+            &font,
+            node_id,
+            &zero_line_bounds,
+            &fingerprint,
+            None,
+        );
+        assert_eq!(
+            zero_line.disposition,
+            RenderTextLayoutDispositionV1::BackendFallback {
+                reason: RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete,
+            }
+        );
+        assert!(zero_line.lines.is_empty());
+    }
+}
