@@ -1,4 +1,5 @@
 //! Existing-node geometry session orchestration.
+//! Leaf-routing control: ordinary move/resize edits stay on geometry ownership.
 //!
 //! This owner contains move/resize capability, canonical batch consumption,
 //! and transition validation only. Paragraph formatting, authored duplication,
