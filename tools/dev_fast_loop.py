@@ -21,6 +21,23 @@ RUST_SUFFIX = ".rs"
 NODE_SUFFIXES = {".js", ".mjs", ".cjs"}
 WORKFLOW_PREFIX = ".github/workflows/"
 COMPONENT_REGISTRY_PATH = "tools/dev_fast_loop_components.json"
+PUB_EDITOR_LIB_PATH = "vendor/producer-a/crates/pub-editor/src/lib.rs"
+PUB_EDITOR_SRC_PREFIX = "vendor/producer-a/crates/pub-editor/src/"
+PUB_EDITOR_PACKAGE_MANIFEST_PATH = "vendor/producer-a/crates/pub-editor/Cargo.toml"
+PUB_EDITOR_BUILD_METADATA_PATHS = {
+    PUB_EDITOR_PACKAGE_MANIFEST_PATH,
+    "vendor/producer-a/Cargo.toml",
+    "vendor/producer-a/Cargo.lock",
+}
+PUB_EDITOR_UNFILTERED_LIB_TEST = (
+    "cargo",
+    "test",
+    "--manifest-path",
+    "vendor/producer-a/Cargo.toml",
+    "-p",
+    "pub-editor",
+    "--lib",
+)
 
 
 class Check(NamedTuple):
@@ -120,6 +137,130 @@ def component_registry_checks(root: Path, paths: Iterable[str]) -> list[Check]:
             )
     return checks
 
+
+def _git_show_text(root: Path, revision: str, repo_path: str) -> str | None:
+    result = subprocess.run(
+        ["git", "show", f"{revision}:{repo_path}"],
+        cwd=root,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return result.stdout if result.returncode == 0 else None
+
+
+def strip_pub_editor_facade(source: str) -> str:
+    """Remove only plain module declarations and public re-export blocks."""
+    lines = source.splitlines(keepends=True)
+    output: list[str] = []
+    index = 0
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if stripped.startswith("mod ") and stripped.endswith(";"):
+            index += 1
+            continue
+        if stripped.startswith("pub use ") and "::" in stripped:
+            if stripped.endswith(";"):
+                index += 1
+                continue
+            index += 1
+            while index < len(lines):
+                if lines[index].strip() == "};":
+                    index += 1
+                    break
+                index += 1
+            continue
+        output.append(lines[index])
+        index += 1
+    return "".join(output)
+
+
+def pub_editor_lib_facade_only_change(
+    root: Path,
+    paths: Iterable[str],
+    *,
+    base: str,
+    head: str | None,
+) -> bool:
+    normalized = {_normalize_path(path) for path in paths}
+    if PUB_EDITOR_LIB_PATH not in normalized:
+        return False
+    resolved_base = resolve_base_ref(root, base)
+    if resolved_base is None:
+        return False
+    base_source = _git_show_text(root, resolved_base, PUB_EDITOR_LIB_PATH)
+    if head is None:
+        try:
+            head_source = (root / PUB_EDITOR_LIB_PATH).read_text(encoding="utf-8")
+        except OSError:
+            return False
+    else:
+        head_source = _git_show_text(root, head, PUB_EDITOR_LIB_PATH)
+    if base_source is None or head_source is None:
+        return False
+    return strip_pub_editor_facade(base_source) == strip_pub_editor_facade(head_source)
+
+
+def _component_registry_has_owned_micro_test(root: Path, repo_path: str) -> bool:
+    for rule in load_component_registry(root):
+        if not any(fnmatch.fnmatchcase(repo_path, pattern) for pattern in rule.paths):
+            continue
+        if any(command != PUB_EDITOR_UNFILTERED_LIB_TEST for command in rule.commands):
+            return True
+    return False
+
+
+def pub_editor_changed_modules_have_micro_tests(
+    root: Path,
+    paths: Iterable[str],
+) -> bool:
+    normalized = {_normalize_path(path) for path in paths}
+    if normalized & PUB_EDITOR_BUILD_METADATA_PATHS:
+        return False
+
+    module_paths = sorted(
+        path
+        for path in normalized
+        if path.startswith(PUB_EDITOR_SRC_PREFIX)
+        and path.endswith(RUST_SUFFIX)
+        and path != PUB_EDITOR_LIB_PATH
+    )
+    if not module_paths:
+        return True
+
+    manifest = root / PUB_EDITOR_PACKAGE_MANIFEST_PATH
+    for path in module_paths:
+        if _component_registry_has_owned_micro_test(root, path):
+            continue
+        if rust_same_stem_integration_target(root, manifest, path) is not None:
+            continue
+        return False
+    return True
+
+
+def narrow_checks_for_diff(
+    root: Path,
+    paths: Iterable[str],
+    checks: Iterable[Check],
+    *,
+    base: str,
+    head: str | None,
+    mode: str,
+) -> list[Check]:
+    result = list(checks)
+    normalized = tuple(paths)
+    if mode != "edit":
+        return result
+    if not pub_editor_lib_facade_only_change(root, normalized, base=base, head=head):
+        return result
+    if not pub_editor_changed_modules_have_micro_tests(root, normalized):
+        return result
+    return [
+        check
+        for check in result
+        if check.command != PUB_EDITOR_UNFILTERED_LIB_TEST
+    ]
 
 def _run_lines(root: Path, args: Sequence[str], *, check: bool = True) -> list[str]:
     result = subprocess.run(
@@ -275,6 +416,44 @@ def manifest_kind(manifest: Path) -> str | None:
     if "workspace" in parsed:
         return "workspace"
     return None
+
+
+def rust_unit_test_selectors(manifest: Path) -> tuple[str, ...]:
+    """Keep the existing library loop, or select testable binary targets.
+
+    Cargo packages need not have a library. Discovering targets from the
+    manifest and Cargo's conventional paths keeps planning runtime-independent.
+    """
+    parsed = _manifest_table(manifest)
+    package = parsed.get("package", {})
+    library = parsed.get("lib", {})
+    if library.get("test", True) and (
+        "lib" in parsed
+        or (package.get("autolib", True) and (manifest.parent / "src/lib.rs").is_file())
+    ):
+        return ("--lib",)
+
+    explicit = parsed.get("bin", [])
+    claimed_paths = {item.get("path") for item in explicit if item.get("path")}
+    named = {
+        item["name"]: item.get("test", True)
+        for item in explicit
+        if isinstance(item.get("name"), str)
+    }
+    if package.get("autobins", True):
+        inferred: dict[str, str] = {}
+        name = package.get("name")
+        if isinstance(name, str) and (manifest.parent / "src/main.rs").is_file():
+            inferred[name] = "src/main.rs"
+        binary_dir = manifest.parent / "src/bin"
+        for path in sorted(binary_dir.glob("*.rs")):
+            inferred[path.stem] = path.relative_to(manifest.parent).as_posix()
+        for path in sorted(binary_dir.glob("*/main.rs")):
+            inferred[path.parent.name] = path.relative_to(manifest.parent).as_posix()
+        for name, path in inferred.items():
+            if name not in named and path not in claimed_paths:
+                named[name] = True
+    return tuple(part for name in sorted(named) if named[name] for part in ("--bin", name))
 
 
 def nearest_package_manifest(root: Path, repo_path: str) -> Path | None:
@@ -459,10 +638,11 @@ def plan_for_paths(root: Path, paths: Iterable[str], *, mode: str = "edit") -> l
             ("cargo", "check", "--manifest-path", manifest),
             f"compile affected Rust package: {manifest}",
         ))
-        if mode == "feature":
+        selectors = rust_unit_test_selectors(root / manifest)
+        if mode == "feature" and selectors:
             checks.append(Check(
                 "rust-unit-tests",
-                ("cargo", "test", "--manifest-path", manifest, "--lib"),
+                ("cargo", "test", "--manifest-path", manifest, *selectors),
                 f"feature-loop unit tests for affected Rust package: {manifest}",
             ))
 
@@ -679,6 +859,14 @@ def main() -> int:
         root, base=args.base, head=args.head
     )
     checks = plan_for_paths(root, paths, mode=args.mode)
+    checks = narrow_checks_for_diff(
+        root,
+        paths,
+        checks,
+        base=args.base,
+        head=args.head,
+        mode=args.mode,
+    )
     print_plan(paths, checks, mode=args.mode, as_json=args.json)
     if args.run:
         try:

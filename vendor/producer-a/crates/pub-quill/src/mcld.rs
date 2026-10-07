@@ -119,6 +119,10 @@ pub enum QuillMcldReadError {
         record_count: u32,
         record_id_count: u32,
     },
+    RecordIdOutsideOuterBound {
+        outer_value: u32,
+        max_live_record_id: u32,
+    },
     DuplicateRecordId {
         record_id: u32,
     },
@@ -196,10 +200,10 @@ impl std::error::Error for QuillMcldReadError {}
 /// Publisher fixtures.
 ///
 /// The outer layout is:
-/// - u32 record_count
+/// - u32 opaque outer value (retained as `record_count` for schema compatibility)
 /// - u32 record_id_count
 /// - u32 record_ids[record_id_count]
-/// - record bodies in ordinal order, keyed by the parallel record_id table
+/// - exactly one record body per live record id, in parallel-table order
 ///
 /// Each record begins with a sized header block, followed by u32 child_count.
 /// Each child is another sized block. Sizes include their own u32 size field.
@@ -243,12 +247,6 @@ pub fn parse_bounded_mcld(
     let mut cursor = Cursor::new(stream.clone(), bytes, start);
     let record_count = cursor.read_u32()?;
     let record_id_count = cursor.read_u32()?;
-    if record_count.value != record_id_count.value {
-        return Err(QuillMcldReadError::RecordCountMismatch {
-            record_count: record_count.value,
-            record_id_count: record_id_count.value,
-        });
-    }
 
     let mut record_ids = Vec::with_capacity(record_id_count.value as usize);
     let mut seen = BTreeSet::new();
@@ -262,7 +260,16 @@ pub fn parse_bounded_mcld(
         record_ids.push(record_id);
     }
 
-    let mut records = Vec::with_capacity(record_count.value as usize);
+    if let Some(max_live_record_id) = record_ids.iter().map(|record_id| record_id.value).max() {
+        if record_count.value < max_live_record_id {
+            return Err(QuillMcldReadError::RecordIdOutsideOuterBound {
+                outer_value: record_count.value,
+                max_live_record_id,
+            });
+        }
+    }
+
+    let mut records = Vec::with_capacity(record_id_count.value as usize);
     for record_id in &record_ids {
         records.push(parse_record(&mut cursor, record_id.value)?);
     }
@@ -946,12 +953,78 @@ mod tests {
         }
     }
 
+    fn decoded_u16(value: u16, offset: u64) -> Decoded<u16> {
+        Decoded {
+            value,
+            source: test_span(offset),
+            raw: value.to_le_bytes().to_vec(),
+        }
+    }
+
     fn decoded_u32(value: u32, offset: u64) -> Decoded<u32> {
         Decoded {
             value,
             source: test_span(offset),
             raw: value.to_le_bytes().to_vec(),
         }
+    }
+
+    fn decoded_bytes4(value: [u8; 4], offset: u64) -> Decoded<[u8; 4]> {
+        Decoded {
+            value,
+            source: test_span(offset),
+            raw: value.to_vec(),
+        }
+    }
+
+    fn mcld_descriptor_nodes(chunk_len: usize) -> Vec<QuillDescriptorListNode> {
+        vec![QuillDescriptorListNode {
+            source: test_span(0),
+            service: decoded_u16(0, 0),
+            count: decoded_u16(1, 2),
+            next: decoded_u32(u32::MAX, 4),
+            descriptors: vec![crate::QuillChunkDescriptor {
+                source: test_span(8),
+                presence_marker: decoded_u16(0x0018, 8),
+                name: decoded_bytes4(MCLD, 10),
+                option_a: decoded_u16(0, 14),
+                option_b: decoded_u16(0, 16),
+                option_c: decoded_u16(0, 18),
+                bit_type: decoded_bytes4(*b"TEST", 20),
+                data_offset: decoded_u32(0, 24),
+                data_length: decoded_u32(
+                    u32::try_from(chunk_len).expect("synthetic MCLD length"),
+                    28,
+                ),
+            }],
+        }]
+    }
+
+    fn synthetic_mcld_bytes(outer_value: u32, record_ids: &[u32]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&outer_value.to_le_bytes());
+        bytes.extend_from_slice(
+            &u32::try_from(record_ids.len())
+                .expect("synthetic record-id count")
+                .to_le_bytes(),
+        );
+        for record_id in record_ids {
+            bytes.extend_from_slice(&record_id.to_le_bytes());
+        }
+        for _ in record_ids {
+            bytes.extend_from_slice(&4_u32.to_le_bytes());
+            bytes.extend_from_slice(&0_u32.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn parse_synthetic_mcld(
+        outer_value: u32,
+        record_ids: &[u32],
+    ) -> Result<QuillMcldChunk, QuillMcldReadError> {
+        let bytes = synthetic_mcld_bytes(outer_value, record_ids);
+        let descriptors = mcld_descriptor_nodes(bytes.len());
+        parse_bounded_mcld(StreamPath("test".into()), &bytes, &descriptors)
     }
 
     fn inset_field(id: u8, value: u32, offset: u64) -> QuillMcldField {
@@ -999,6 +1072,60 @@ mod tests {
                 children,
             }],
         }
+    }
+
+    #[test]
+    fn bounded_mcld_accepts_dense_live_id_table() {
+        let chunk = parse_synthetic_mcld(3, &[1, 2, 3]).expect("dense MCLD");
+        assert_eq!(chunk.record_count.value, 3);
+        assert_eq!(chunk.record_id_count.value, 3);
+        assert_eq!(chunk.records.len(), 3);
+    }
+
+    #[test]
+    fn bounded_mcld_accepts_sparse_live_id_table() {
+        let chunk = parse_synthetic_mcld(10, &[1, 2, 4, 5, 6, 7, 9, 10]).expect("sparse MCLD");
+        assert_eq!(chunk.record_count.value, 10);
+        assert_eq!(chunk.record_id_count.value, 8);
+        assert_eq!(chunk.records.len(), 8);
+    }
+
+    #[test]
+    fn bounded_mcld_accepts_outer_value_above_max_live_id() {
+        let chunk = parse_synthetic_mcld(12, &[7, 8, 9, 10]).expect("outer high-water gap");
+        assert_eq!(chunk.record_count.value, 12);
+        assert_eq!(chunk.record_id_count.value, 4);
+        assert_eq!(chunk.records.len(), 4);
+    }
+
+    #[test]
+    fn bounded_mcld_rejects_duplicate_live_id() {
+        assert!(matches!(
+            parse_synthetic_mcld(10, &[1, 2, 2]),
+            Err(QuillMcldReadError::DuplicateRecordId { record_id: 2 })
+        ));
+    }
+
+    #[test]
+    fn bounded_mcld_rejects_live_id_above_outer_bound() {
+        assert!(matches!(
+            parse_synthetic_mcld(9, &[7, 8, 10]),
+            Err(QuillMcldReadError::RecordIdOutsideOuterBound {
+                outer_value: 9,
+                max_live_record_id: 10,
+            })
+        ));
+    }
+
+    #[test]
+    fn bounded_mcld_rejects_trailing_chunk_bytes() {
+        let mut bytes = synthetic_mcld_bytes(3, &[1, 2, 3]);
+        bytes.push(0xaa);
+        let descriptors = mcld_descriptor_nodes(bytes.len());
+        assert!(matches!(
+            parse_bounded_mcld(StreamPath("test".into()), &bytes, &descriptors),
+            Err(QuillMcldReadError::TrailingChunkBytes { remaining: 1 })
+        ));
     }
 
     #[test]

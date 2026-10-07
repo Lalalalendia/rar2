@@ -122,6 +122,23 @@ def main():
     if "Build current fixed-PDF input" not in fixed:
         raise SystemExit("fixed-PDF consumer lost non-Editor helper build")
 
+    w2 = Path(
+        ".github/workflows/w2-longform-fixed-pdf-current-revision.yml"
+    ).read_text(encoding="utf-8")
+    require(
+        w2,
+        (
+            "needs: classify",
+            "needs.classify.result != 'success'",
+            "needs.classify.outputs.fixed_pdf_current_revision == 'true'",
+        ),
+        "w2-longform-consumer",
+    )
+    if "if: ${{ !cancelled() && always() }}" in w2:
+        raise SystemExit(
+            "w2-longform-consumer: Windows validation must honor the fixed-PDF classifier"
+        )
+
     trust = Path("tools/ci/check_chaptera_ci_trust.py").read_text(encoding="utf-8")
     if f'"{PARENT}": {{' not in trust:
         raise SystemExit("Carlton PR trust/admission ownership did not move to parent")
