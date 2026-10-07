@@ -1,0 +1,6 @@
+# Wave 35 — completed Virginia measurement refs with durable successor authority
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+measure/viewer-virginia-p6-p7-table-remainder-01 7969f2b83c787fd74200d99cbf05aecef910f54a
+measure/virginia-p10-residual-01 9209c358864e27dbeb126ea87e017a528e7b6d33
+ops/branch-gc-20261007-evidence-wave34 569c0cda5917f438296e3157cb88a51afad363b2
