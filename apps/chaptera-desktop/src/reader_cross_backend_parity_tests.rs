@@ -180,10 +180,12 @@ fn sample_newsletter_cross_backend_page_rasters_144dpi() {
     let mut pages = Vec::new();
     for page_index in 0..visual.document.pages.len() {
         let page = &visual.document.pages[page_index];
-        let width_px =
-            ((page.width_emu as f32 * CROSS_BACKEND_DPI / EMU_PER_INCH).round().max(1.0)) as u32;
-        let height_px =
-            ((page.height_emu as f32 * CROSS_BACKEND_DPI / EMU_PER_INCH).round().max(1.0)) as u32;
+        let width_px = ((page.width_emu as f32 * CROSS_BACKEND_DPI / EMU_PER_INCH)
+            .round()
+            .max(1.0)) as u32;
+        let height_px = ((page.height_emu as f32 * CROSS_BACKEND_DPI / EMU_PER_INCH)
+            .round()
+            .max(1.0)) as u32;
 
         let visual_for_app = visual.clone();
         let mut harness = Harness::builder()
@@ -205,7 +207,9 @@ fn sample_newsletter_cross_backend_page_rasters_144dpi() {
         assert_eq!(image.height(), height_px);
 
         let filename = format!("SampleNewsletter-page-{}.png", page_index + 1);
-        image.save(output.join(&filename)).expect("save desktop page raster");
+        image
+            .save(output.join(&filename))
+            .expect("save desktop page raster");
         pages.push(serde_json::json!({
             "page": page_index + 1,
             "page_id": page.id,
