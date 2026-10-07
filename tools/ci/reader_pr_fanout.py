@@ -31,6 +31,7 @@ READER_ANCHOR_GEOMETRY = "vendor/producer-a/crates/pub-reader/src/anchor_geometr
 READER_STORY_MATERIALIZATION = "vendor/producer-a/crates/pub-reader/src/story_materialization.rs"
 READER_QUILL_ADMISSION = "vendor/producer-a/crates/pub-reader/src/quill_admission.rs"
 READER_PUBLICATION_DOCUMENT = "vendor/producer-a/crates/pub-reader/src/publication_document.rs"
+READER_CONTENTS_ACCESS = "vendor/producer-a/crates/pub-reader/src/contents_access.rs"
 
 
 TEST_REGION_EVIDENCE_CANDIDATES = {
@@ -629,7 +630,7 @@ def classify(
     typography_paths = [
         path
         for path in visual_paths
-        if path not in {VIEWER_IMAGES, READER_PAINT_PROJECTION, READER_PAGE_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_ANCHOR_GEOMETRY}
+        if path not in {VIEWER_IMAGES, READER_PAINT_PROJECTION, READER_PAGE_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_ANCHOR_GEOMETRY, READER_CONTENTS_ACCESS}
     ]
     result["typography_golden"] = any(
         matches(path, TYPOGRAPHY_GOLDEN) for path in typography_paths
@@ -639,7 +640,7 @@ def classify(
     virginia_paths = [
         path
         for path in product_paths
-        if path not in {VIEWER_IMAGES, READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_TYPOGRAPHY_PROJECTION, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_SOURCE_GRAPH_MODEL, READER_ANCHOR_GEOMETRY, READER_STORY_MATERIALIZATION, READER_QUILL_ADMISSION}
+        if path not in {VIEWER_IMAGES, READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_TYPOGRAPHY_PROJECTION, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_SOURCE_GRAPH_MODEL, READER_ANCHOR_GEOMETRY, READER_STORY_MATERIALIZATION, READER_QUILL_ADMISSION, READER_CONTENTS_ACCESS}
         and not path.startswith("vendor/producer-a/crates/pub-reader/src/bin/")
         and not path.startswith("vendor/producer-a/crates/pub-viewer/src/bin/")
     ]
