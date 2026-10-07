@@ -20,6 +20,7 @@ VIEWER_AUTHORING_PROJECTION = (
 )
 READER_PAINT_PROJECTION = "vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
 READER_PAGE_PROJECTION = "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
+READER_TYPOGRAPHY_PROJECTION = "vendor/producer-a/crates/pub-reader/src/typography_projection.rs"
 READER_SOURCE_PAINT_ORDER = "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
 
 
@@ -628,6 +629,15 @@ def classify(
     result["virginia_page_role"] = any(
         matches(path, VIRGINIA_PAGE_ROLE) for path in virginia_paths
     )
+    # Typography projection is a source-neutral Reader DTO seam. Its direct
+    # contracts are Tier A, typography/visual acceptance and cross-platform
+    # Reader-core compilation. It does not need the Windows shared-core product
+    # smoke merely because it lives under pub-reader/src/.
+    if product_paths and all(
+        path == READER_TYPOGRAPHY_PROJECTION for path in product_paths
+    ):
+        result["reader_windows_smoke"] = False
+
     # Full Reader Windows product/package acceptance supersedes the bounded
     # shared-core smoke when both surfaces are touched.
     if result["reader_windows"]:
