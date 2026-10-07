@@ -6,7 +6,6 @@ on:
       - ".github/workflows/master-projection-active-reader-bridge.yml"
       - "vendor/producer-a/crates/pub-reader/Cargo.toml"
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
-      - "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
       - "vendor/producer-a/crates/pub-reader/src/master_bridge.rs"
       - "vendor/producer-a/crates/pub-reader/src/bin/master_projection_bridge_receipt.rs"
       - "crates/pub-master-projection/**"
