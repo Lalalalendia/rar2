@@ -2967,6 +2967,7 @@ mod tests {
             table: None,
             text: None,
             text_layout: None,
+            text_preview: None,
         }
     }
 
