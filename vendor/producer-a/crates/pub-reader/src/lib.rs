@@ -758,7 +758,7 @@ pub fn build_mature_0x2c_from_streams(
             page_id,
             bounds,
             grouped_sources,
-            grouped_child_rotation_op,
+            grouped_image_transform,
             direct_image_anchor_recovered_from_contents_extent,
         ) = if let Some(page_id) = direct_page {
             let Some(anchor) = shape.client_anchor.as_ref() else {
@@ -814,7 +814,7 @@ pub fn build_mature_0x2c_from_streams(
                 projection.page_id,
                 projection.bounds,
                 projection.group_sources,
-                projection.child_rotation_op,
+                projection.image_transform,
                 false,
             )
         } else {
@@ -977,7 +977,7 @@ pub fn build_mature_0x2c_from_streams(
             shape,
             bounds,
             direct_image_candidate,
-            grouped_child_rotation_op,
+            grouped_image_transform,
             direct_story_candidate,
             explicit_image_crop.is_some(),
         );
