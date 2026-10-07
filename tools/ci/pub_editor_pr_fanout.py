@@ -113,7 +113,7 @@ DIRECT_AUTHORED_STACK_RUNTIME_OWNERS = (
     "vendor/producer-a/crates/pub-editor-authoring-core/src/authored_stack_lifecycle_v1.rs",
     "vendor/producer-a/crates/pub-editor-authoring-core/src/authored_stack_runtime_v1.rs",
     "vendor/producer-a/crates/pub-editor-authoring-core/src/create_shape_runtime_v1.rs",
-    "vendor/producer-a/crates/pub-editor/tests/authored_stack_lifecycle_v1.rs",
+    "vendor/producer-a/crates/pub-editor-authoring-core/tests/authored_stack_lifecycle_v1.rs",
     "vendor/producer-a/crates/pub-editor/tests/authored_stack_runtime_v1.rs",
     "vendor/producer-a/crates/pub-editor/tests/create_shape_runtime_v1.rs",
     "vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs",
@@ -127,7 +127,7 @@ DIRECT_AUTHORED_STACK_LIFECYCLE_OWNERS = (
     "tools/ci/test_pub_editor_pr_fanout.py",
     "vendor/producer-a/crates/pub-editor-authoring-core/src/authored_stack_lifecycle_v1.rs",
     "vendor/producer-a/crates/pub-editor-authoring-core/src/create_shape_runtime_v1.rs",
-    "vendor/producer-a/crates/pub-editor/tests/authored_stack_lifecycle_v1.rs",
+    "vendor/producer-a/crates/pub-editor-authoring-core/tests/authored_stack_lifecycle_v1.rs",
     "vendor/producer-a/crates/pub-editor/tests/create_shape_runtime_v1.rs",
     "vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs",
 )

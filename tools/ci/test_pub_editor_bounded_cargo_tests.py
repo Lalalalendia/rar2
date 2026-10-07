@@ -9,7 +9,7 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 ALLOWED_FULL = "pub-editor-full-regression.yml"
 
 RUN_RE = re.compile(r"^(?P<indent>\s*)run:\s*(?P<body>.*)$")
-PUB_EDITOR_PACKAGE = re.compile(r"(?:-p|--package)\s+pub-editor\b")
+PUB_EDITOR_PACKAGE = re.compile(r"(?:-p|--package)\s+pub-editor(?:-authoring-core)?\b")
 
 
 def run_blocks(text: str) -> list[str]:
@@ -82,13 +82,13 @@ def main() -> int:
 
     if violations:
         raise SystemExit(
-            "unbounded pub-editor cargo test outside canonical deep workflow:\n  - "
+            "unbounded pub-editor-domain cargo test outside canonical deep workflow:\n  - "
             + "\n  - ".join(violations)
         )
 
     print(
         "pub-editor bounded cargo-test guard: ok "
-        f"({audited} pub-editor cargo test invocation(s) audited)"
+        f"({audited} pub-editor-domain cargo test invocation(s) audited)"
     )
     return 0
 

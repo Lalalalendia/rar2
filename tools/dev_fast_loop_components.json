@@ -19,23 +19,12 @@
       ]
     },
     {
-      "name": "pub-editor authored stack",
+      "name": "pub-editor authored stack session adapters",
       "paths": [
-        "vendor/producer-a/crates/pub-editor-authoring-core/src/authored_stack_lifecycle_v1.rs",
         "vendor/producer-a/crates/pub-editor-authoring-core/src/authored_stack_runtime_v1.rs",
         "vendor/producer-a/crates/pub-editor-authoring-core/src/create_shape_runtime_v1.rs"
       ],
       "commands": [
-        [
-          "cargo",
-          "test",
-          "--manifest-path",
-          "vendor/producer-a/Cargo.toml",
-          "-p",
-          "pub-editor",
-          "--test",
-          "authored_stack_lifecycle_v1"
-        ],
         [
           "cargo",
           "test",
@@ -88,27 +77,7 @@
           "--manifest-path",
           "vendor/producer-a/Cargo.toml",
           "-p",
-          "pub-editor",
-          "--test",
-          "create_table_runtime_v1"
-        ],
-        [
-          "cargo",
-          "test",
-          "--manifest-path",
-          "vendor/producer-a/Cargo.toml",
-          "-p",
-          "pub-editor",
-          "--test",
-          "create_table_history_v1"
-        ],
-        [
-          "cargo",
-          "test",
-          "--manifest-path",
-          "vendor/producer-a/Cargo.toml",
-          "-p",
-          "pub-editor",
+          "pub-editor-authoring-core",
           "--test",
           "create_table_stack_v1"
         ]

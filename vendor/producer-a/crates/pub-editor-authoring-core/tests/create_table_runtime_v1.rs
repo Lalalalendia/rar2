@@ -1,9 +1,11 @@
-use pub_editor::{
+use pub_editor_authoring_core::{
     AUTHORED_TABLE_SENTINEL_CONTENTS_SEQ_NUM_V1, AUTHORED_TABLE_SENTINEL_TEXT_ID_V1,
-    CreateTableRuntimeV1, CreateTableRuntimeValidationError, LengthEmu, NodeId, PageId, RectEmu,
-    StoryId, TableCellId, build_create_table_plan_v1, rebuild_authored_table_story_v1,
+    CreateTableRuntimeV1, CreateTableRuntimeValidationError, build_create_table_plan_v1,
+    rebuild_authored_table_story_v1,
 };
-use pub_model::{NodeKind, TableColumnId, TableRowId};
+use pub_model::{
+    LengthEmu, NodeId, NodeKind, PageId, RectEmu, StoryId, TableCellId, TableColumnId, TableRowId,
+};
 use pub_reader::materialize_bounded_simple_table_cells;
 
 fn canonical_id<T: serde::de::DeserializeOwned>(value: &str) -> T {

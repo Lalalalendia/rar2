@@ -1,11 +1,11 @@
-use pub_editor::{
+use pub_editor_authoring_core::{
     AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1,
     AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
-    AuthoredStackLifecycleErrorV1, AuthoredStackLifecycleKindV1, AuthoredStackV1, LengthEmu,
-    NodeId, PageId, RectEmu, Srgb8V1, apply_authored_stack_transition_forward_v1,
-    apply_authored_stack_transition_inverse_v1, authored_stack_state_id_v1,
-    plan_create_shape_append_v1, plan_delete_shape_remove_v1,
+    AuthoredStackLifecycleErrorV1, AuthoredStackLifecycleKindV1, AuthoredStackV1, Srgb8V1,
+    apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
+    authored_stack_state_id_v1, plan_create_shape_append_v1, plan_delete_shape_remove_v1,
 };
+use pub_model::{LengthEmu, NodeId, PageId, RectEmu};
 
 fn canonical_id<T: serde::de::DeserializeOwned>(value: &str) -> T {
     serde_json::from_str(&format!("\"{value}\"")).expect("canonical typed id")

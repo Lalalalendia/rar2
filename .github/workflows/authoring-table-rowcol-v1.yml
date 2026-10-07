@@ -10,7 +10,7 @@ on:
       - "vendor/producer-a/crates/pub-editor/tests/table_rowcol_project_v1.rs"
       - "vendor/producer-a/crates/pub-editor/tests/effective_table_grid_v1.rs"
       - "vendor/producer-a/crates/pub-editor/tests/table_track_history_project_v1.rs"
-      - "vendor/producer-a/crates/pub-editor/tests/create_table_runtime_v1.rs"
+      - "vendor/producer-a/crates/pub-editor-authoring-core/tests/create_table_runtime_v1.rs"
       - "vendor/producer-a/crates/pub-editor/tests/image_crop_v1.rs"
       - "apps/chaptera-server/src/revision_materializer.rs"
       - "apps/chaptera-desktop/src/agent.rs"
@@ -54,11 +54,16 @@ jobs:
       - name: Prove ROWCOL durable lifecycle
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test table_rowcol_project_v1 -- --nocapture
 
-      - name: Re-run table schema and history regressions
+      - name: Re-run authored table schema
+        run: >-
+          cargo test --manifest-path vendor/producer-a/Cargo.toml
+          -p pub-editor-authoring-core
+          --test create_table_runtime_v1
+
+      - name: Re-run table history regressions
         run: >-
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor
           --test effective_table_grid_v1
-          --test create_table_runtime_v1
           --test table_track_history_project_v1
           --test image_crop_v1
 

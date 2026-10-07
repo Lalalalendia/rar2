@@ -1,7 +1,7 @@
-use pub_editor::{
-    AuthoredStackV1, NodeId, PageId, apply_authored_stack_transition_forward_v1,
-    plan_create_table_append_v1,
+use pub_editor_authoring_core::{
+    AuthoredStackV1, apply_authored_stack_transition_forward_v1, plan_create_table_append_v1,
 };
+use pub_model::{NodeId, PageId};
 
 fn canonical_id<T: serde::de::DeserializeOwned>(value: &str) -> T {
     serde_json::from_str(&format!("\"{}\"", value)).expect("canonical typed id")
