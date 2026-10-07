@@ -5,8 +5,11 @@ use pub_escher::{
     RejectedDelayedBlipDisposition,
 };
 use pub_reader::{
-    build_reader_partial_escherdelay_evidence, probe_reader_salvage_candidate,
-    ReaderSalvageEligibility,
+    build_reader_partial_source_graph, probe_reader_salvage_candidate,
+    recovered_resource::{
+        ReaderRecoveredResourcePlacementStatus, ReaderRecoveredResourcePreviewStatus,
+    },
+    ReaderPartialSourceFact, ReaderSalvageEligibility,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -18,7 +21,7 @@ use std::{
 };
 
 const INPUT_SCHEMA: &str = "chaptera.partial-escherdelay-cohort.v1";
-const OUTPUT_SCHEMA: &str = "chaptera.partial-escherdelay-breadth-census.v1";
+const OUTPUT_SCHEMA: &str = "chaptera.partial-escherdelay-breadth-census.v2";
 const ESCHER_DELAY_STREAM: &str = "/Escher/EscherDelayStm";
 const EXPECTED_DENOMINATOR: usize = 45;
 const EXPECTED_AUDIT_SHA256: &str =
@@ -79,6 +82,7 @@ struct CohortSource {
 #[serde(rename_all = "snake_case")]
 enum CensusOutcome {
     ImageSalvagePositive,
+    MetafileResourceOnlyPositive,
     StrictRasterZero,
     PhysicalDiscoveryFail,
     PhysicalPrefixFail,
@@ -105,6 +109,9 @@ struct CensusRow {
     strict_validated_resource_count: usize,
     strict_validated_raster_count: usize,
     strict_validated_metafile_count: usize,
+    product_admitted_metafile_count: usize,
+    previewable_metafile_count: usize,
+    unowned_detached_metafile_count: usize,
     validated_but_product_unadmitted_count: usize,
     validated_kind_counts: BTreeMap<String, usize>,
     rejected_complete_blip_count: usize,
@@ -129,12 +136,17 @@ struct CensusSummary {
     located_source_count: usize,
     missing_source_count: usize,
     image_salvage_positive_files: usize,
+    product_admitted_metafile_files: usize,
+    metafile_only_product_positive_files: usize,
     total_scanned_records: u64,
     total_typed_blip_records: usize,
     total_reader_admissible_images: usize,
     total_strict_validated_resources: usize,
     total_strict_validated_rasters: usize,
     total_strict_validated_metafiles: usize,
+    total_product_admitted_metafiles: usize,
+    total_previewable_metafiles: usize,
+    total_unowned_detached_metafiles: usize,
     total_validated_but_product_unadmitted: usize,
     validated_kind_counts: BTreeMap<String, usize>,
     rejected_disposition_counts: BTreeMap<String, usize>,
@@ -185,6 +197,7 @@ fn collect_pub_paths(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 fn outcome_name(value: &CensusOutcome) -> &'static str {
     match value {
         CensusOutcome::ImageSalvagePositive => "image_salvage_positive",
+        CensusOutcome::MetafileResourceOnlyPositive => "metafile_resource_only_positive",
         CensusOutcome::StrictRasterZero => "strict_raster_zero",
         CensusOutcome::PhysicalDiscoveryFail => "physical_discovery_fail",
         CensusOutcome::PhysicalPrefixFail => "physical_prefix_fail",
@@ -264,6 +277,9 @@ fn blank_row(source_sha256: String, source_copy_count: usize) -> CensusRow {
         strict_validated_resource_count: 0,
         strict_validated_raster_count: 0,
         strict_validated_metafile_count: 0,
+        product_admitted_metafile_count: 0,
+        previewable_metafile_count: 0,
+        unowned_detached_metafile_count: 0,
         validated_but_product_unadmitted_count: 0,
         validated_kind_counts: BTreeMap::new(),
         rejected_complete_blip_count: 0,
@@ -480,9 +496,6 @@ fn main() -> Result<()> {
             .iter()
             .filter(|validated| is_metafile_kind(validated.kind))
             .count();
-        row.validated_but_product_unadmitted_count = row
-            .strict_validated_resource_count
-            .saturating_sub(row.strict_validated_raster_count);
         row.terminal_gap = inventory.terminal_gap.clone();
 
         for validated in &inventory.records {
@@ -502,10 +515,52 @@ fn main() -> Result<()> {
                 .or_default() += 1;
         }
 
-        let evidence = build_reader_partial_escherdelay_evidence(&bytes, &probe);
-        row.reader_admissible_image_count = evidence
+        let graph = build_reader_partial_source_graph(&bytes, &probe).ok();
+        row.reader_admissible_image_count = graph.as_ref().map_or(0, |value| {
+            value
+                .facts
+                .iter()
+                .filter(|fact| matches!(fact, ReaderPartialSourceFact::VerifiedImage { .. }))
+                .count()
+        });
+        if graph.as_ref().is_some_and(|value| {
+            value
+                .recovered_resources
+                .iter()
+                .any(|resource| !is_metafile_kind(resource.kind))
+        }) {
+            bail!(
+                "unexpected non-metafile recovered resource in EscherDelay V1 census for {}",
+                source_sha256
+            );
+        }
+        row.product_admitted_metafile_count = graph
             .as_ref()
-            .map_or(0, |value| value.validated_images.len());
+            .map_or(0, |value| value.recovered_resources.len());
+        row.previewable_metafile_count = graph.as_ref().map_or(0, |value| {
+            value
+                .recovered_resources
+                .iter()
+                .filter(|resource| {
+                    !matches!(
+                        resource.preview_status,
+                        ReaderRecoveredResourcePreviewStatus::NotProven
+                    )
+                })
+                .count()
+        });
+        row.unowned_detached_metafile_count = graph.as_ref().map_or(0, |value| {
+            value
+                .recovered_resources
+                .iter()
+                .filter(|resource| {
+                    matches!(
+                        resource.placement_status,
+                        ReaderRecoveredResourcePlacementStatus::DetachedOwnershipNotProven
+                    )
+                })
+                .count()
+        });
 
         if row.reader_admissible_image_count != row.strict_validated_raster_count {
             bail!(
@@ -515,6 +570,22 @@ fn main() -> Result<()> {
                 row.reader_admissible_image_count
             );
         }
+        if row.product_admitted_metafile_count != row.strict_validated_metafile_count {
+            bail!(
+                "strict metafile parser/product projection disagreement for {}: {} vs {}",
+                source_sha256,
+                row.strict_validated_metafile_count,
+                row.product_admitted_metafile_count
+            );
+        }
+        row.validated_but_product_unadmitted_count = row
+            .strict_validated_resource_count
+            .checked_sub(
+                row.reader_admissible_image_count
+                    .checked_add(row.product_admitted_metafile_count)
+                    .context("product-admitted resource count overflow")?,
+            )
+            .context("product admitted more resources than strict validation produced")?;
 
         let rejected_only_unsupported = row.rejected_disposition_counts.keys().all(|key| {
             matches!(
@@ -527,6 +598,8 @@ fn main() -> Result<()> {
 
         row.outcome = if row.reader_admissible_image_count > 0 {
             CensusOutcome::ImageSalvagePositive
+        } else if row.product_admitted_metafile_count > 0 {
+            CensusOutcome::MetafileResourceOnlyPositive
         } else if has_unsupported_only_evidence && rejected_only_unsupported {
             CensusOutcome::UnsupportedOnly
         } else if row.terminal_gap.is_some() && row.scanned_record_count == 0 {
@@ -554,6 +627,9 @@ fn main() -> Result<()> {
     let mut total_strict_validated_resources = 0usize;
     let mut total_strict_validated_rasters = 0usize;
     let mut total_strict_validated_metafiles = 0usize;
+    let mut total_product_admitted_metafiles = 0usize;
+    let mut total_previewable_metafiles = 0usize;
+    let mut total_unowned_detached_metafiles = 0usize;
     let mut total_validated_but_product_unadmitted = 0usize;
 
     for row in &rows {
@@ -582,6 +658,9 @@ fn main() -> Result<()> {
         total_strict_validated_resources += row.strict_validated_resource_count;
         total_strict_validated_rasters += row.strict_validated_raster_count;
         total_strict_validated_metafiles += row.strict_validated_metafile_count;
+        total_product_admitted_metafiles += row.product_admitted_metafile_count;
+        total_previewable_metafiles += row.previewable_metafile_count;
+        total_unowned_detached_metafiles += row.unowned_detached_metafile_count;
         total_validated_but_product_unadmitted += row.validated_but_product_unadmitted_count;
     }
 
@@ -593,6 +672,14 @@ fn main() -> Result<()> {
     let image_salvage_positive_files = rows
         .iter()
         .filter(|row| matches!(row.outcome, CensusOutcome::ImageSalvagePositive))
+        .count();
+    let product_admitted_metafile_files = rows
+        .iter()
+        .filter(|row| row.product_admitted_metafile_count > 0)
+        .count();
+    let metafile_only_product_positive_files = rows
+        .iter()
+        .filter(|row| matches!(row.outcome, CensusOutcome::MetafileResourceOnlyPositive))
         .count();
 
     let summary = CensusSummary {
@@ -610,12 +697,17 @@ fn main() -> Result<()> {
         located_source_count,
         missing_source_count,
         image_salvage_positive_files,
+        product_admitted_metafile_files,
+        metafile_only_product_positive_files,
         total_scanned_records,
         total_typed_blip_records,
         total_reader_admissible_images,
         total_strict_validated_resources,
         total_strict_validated_rasters,
         total_strict_validated_metafiles,
+        total_product_admitted_metafiles,
+        total_previewable_metafiles,
+        total_unowned_detached_metafiles,
         total_validated_but_product_unadmitted,
         validated_kind_counts,
         rejected_disposition_counts,
