@@ -2455,6 +2455,7 @@ mod tests {
         let mut fallback_sli_probe_path_counts = BTreeMap::<&'static str, usize>::new();
         let mut fallback_sli_probe_consumption_counts = BTreeMap::<&'static str, usize>::new();
         let mut fallback_sli_probe_cause_counts = BTreeMap::<&'static str, usize>::new();
+        let mut fallback_sli_probe_page_stop_counts = BTreeMap::<String, usize>::new();
 
         let configured_probe = (actual_sha256
             == "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3")
@@ -2579,6 +2580,14 @@ mod tests {
                     .or_default() += 1;
                 *fallback_sli_probe_cause_counts
                     .entry(cause.cause)
+                    .or_default() += 1;
+                *fallback_sli_probe_page_stop_counts
+                    .entry(format!(
+                        "p{}:{}:{}",
+                        page_index + 1,
+                        cause.consumption,
+                        cause.cause
+                    ))
                     .or_default() += 1;
             }
 
@@ -2723,6 +2732,9 @@ mod tests {
                 .expect("serialize fallback-only SLI consumption census");
         let fallback_sli_probe_cause_json = serde_json::to_string(&fallback_sli_probe_cause_counts)
             .expect("serialize fallback-only SLI cause census");
+        let fallback_sli_probe_page_stop_json =
+            serde_json::to_string(&fallback_sli_probe_page_stop_counts)
+                .expect("serialize fallback-only SLI page stop census");
 
         assert_eq!(
             fallback_sli_probe_cause_counts.values().sum::<usize>(),
@@ -2806,7 +2818,7 @@ mod tests {
         }
 
         println!(
-            "CLOUD_READER_SLI_CAUSE_CENSUS source_sha256={} configured_paths={} configured_consumption={} configured_causes={} fallback_paths={} fallback_consumption={} fallback_causes={}",
+            "CLOUD_READER_SLI_CAUSE_CENSUS source_sha256={} configured_paths={} configured_consumption={} configured_causes={} fallback_paths={} fallback_consumption={} fallback_causes={} fallback_page_stops={}",
             actual_sha256,
             sli_probe_path_json,
             sli_probe_consumption_json,
@@ -2814,6 +2826,7 @@ mod tests {
             fallback_sli_probe_path_json,
             fallback_sli_probe_consumption_json,
             fallback_sli_probe_cause_json,
+            fallback_sli_probe_page_stop_json,
         );
 
         println!(
