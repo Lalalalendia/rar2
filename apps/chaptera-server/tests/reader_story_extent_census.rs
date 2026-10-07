@@ -83,7 +83,28 @@ fn sample_newsletter_story_extent_mismatch_census() {
                 .or_default() += 1;
 
             let cause = if text.scalar_start != 0 {
-                "nonzero_scalar_start"
+                if text.scalar_end > story_len {
+                    "nonzero_end_beyond_story"
+                } else if fragment_len != text.scalar_end.saturating_sub(text.scalar_start) {
+                    "nonzero_fragment_len_mismatch"
+                } else {
+                    let slice_matches = story
+                        .text
+                        .chars()
+                        .skip(usize::try_from(text.scalar_start).expect("bounded scalar start"))
+                        .take(
+                            usize::try_from(text.scalar_end - text.scalar_start)
+                                .expect("bounded scalar extent"),
+                        )
+                        .eq(text.text.chars());
+                    if !slice_matches {
+                        "nonzero_story_slice_text_mismatch"
+                    } else if frame_count > 1 {
+                        "nonzero_multi_frame_exact_story_slice"
+                    } else {
+                        "nonzero_single_frame_exact_story_slice"
+                    }
+                }
             } else if text.scalar_end < story_len {
                 let prefix_matches = story
                     .text
