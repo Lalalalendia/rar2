@@ -1244,6 +1244,7 @@ fn utf16_range_to_scalar_range(text: &str, start_utf16: u32, end_utf16: u32) -> 
     Some((boundary(text, start_utf16)?, boundary(text, end_utf16)?))
 }
 
+#[derive(Debug, Clone)]
 struct PubPublicationColorScheme {
     seq_num: u32,
     scheme: MatureColorScheme,
