@@ -1,0 +1,6 @@
+# Wave 40 — completed Virginia TABLE AutoFormat acceptance refs
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+measure/virginia-table-native-autoformat-acceptance-01 ee14f5180472a14f2b145a456684f05c9d3063fa
+measure/virginia-table-native-autoformat-product-acceptance-02 33e13284226b72152ca408ff2dc9d4a6a8fa026e
+ops/branch-gc-20261007-evidence-wave39 439015501d26683a5c3b6b419c790d2af23a6880
