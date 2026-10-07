@@ -2220,10 +2220,10 @@ where
     Ok(plan)
 }
 
-fn unique_complete_paragraph_alignment_run_v1<'a>(
-    fragment: &'a RenderTextFragmentV1,
+fn unique_complete_paragraph_alignment_run_v1(
+    fragment: &RenderTextFragmentV1,
     scalar_range: std::ops::Range<u32>,
-) -> Option<&'a RenderParagraphAlignmentRunV1> {
+) -> Option<&RenderParagraphAlignmentRunV1> {
     let scalar_start = scalar_range.start;
     let scalar_end = scalar_range.end;
     let mut matching = fragment.paragraph_alignments.iter().filter(|run| {
@@ -2235,21 +2235,39 @@ fn unique_complete_paragraph_alignment_run_v1<'a>(
     matching.next().is_none().then_some(run)
 }
 
-fn interword_distribution_spans_v1(
-    fragment: &RenderTextFragmentV1,
+struct InterwordDistributionInputV1<'a> {
     scalar_start: u32,
     scalar_end: u32,
     consumed_scalar_end: u32,
-    text: &str,
+    text: &'a str,
     measured_width_emu: i64,
     content_width_emu: i64,
-    font_resource_id: &str,
-    font_fingerprint_sha256: &str,
+    font_resource_id: &'a str,
+    font_fingerprint_sha256: &'a str,
     font_size_emu: i64,
-    shaping_environment: &BoundedShapingDescriptor,
+    shaping_environment: &'a BoundedShapingDescriptor,
     units_per_em: u32,
-    glyphs: &[BoundedShapedGlyph],
+    glyphs: &'a [BoundedShapedGlyph],
+}
+
+fn interword_distribution_spans_v1(
+    fragment: &RenderTextFragmentV1,
+    input: InterwordDistributionInputV1<'_>,
 ) -> Option<Vec<RenderResolvedTextSpanV1>> {
+    let InterwordDistributionInputV1 {
+        scalar_start,
+        scalar_end,
+        consumed_scalar_end,
+        text,
+        measured_width_emu,
+        content_width_emu,
+        font_resource_id,
+        font_fingerprint_sha256,
+        font_size_emu,
+        shaping_environment,
+        units_per_em,
+        glyphs,
+    } = input;
     let run = unique_complete_paragraph_alignment_run_v1(fragment, scalar_start..scalar_end)?;
     if run.alignment != RenderParagraphAlignmentV1::InterWord
         || run.source_value != 3
@@ -3020,18 +3038,20 @@ fn resolve_text_layout_v1(
             let measured_width_emu = line.measured_width.get();
             let spans = interword_distribution_spans_v1(
                 fragment,
-                line.scalar_start,
-                line.scalar_end,
-                line.consumed_scalar_end,
-                &line.text,
-                measured_width_emu,
-                bounds.width.get(),
-                font.resource_id,
-                &fingerprint,
-                font_size_emu,
-                &shaping_environment,
-                line.units_per_em,
-                &line.glyphs,
+                InterwordDistributionInputV1 {
+                    scalar_start: line.scalar_start,
+                    scalar_end: line.scalar_end,
+                    consumed_scalar_end: line.consumed_scalar_end,
+                    text: &line.text,
+                    measured_width_emu,
+                    content_width_emu: bounds.width.get(),
+                    font_resource_id: font.resource_id,
+                    font_fingerprint_sha256: &fingerprint,
+                    font_size_emu,
+                    shaping_environment: &shaping_environment,
+                    units_per_em: line.units_per_em,
+                    glyphs: &line.glyphs,
+                },
             )
             .unwrap_or_default();
             RenderResolvedTextLineV1 {
@@ -4605,18 +4625,20 @@ mod tests {
 
         let spans = interword_distribution_spans_v1(
             &fragment,
-            0,
-            9,
-            9,
-            "aa bb cc ",
-            90,
-            100,
-            "font:test",
-            "sha:test",
-            100,
-            &environment,
-            1000,
-            &glyphs,
+            InterwordDistributionInputV1 {
+                scalar_start: 0,
+                scalar_end: 9,
+                consumed_scalar_end: 9,
+                text: "aa bb cc ",
+                measured_width_emu: 90,
+                content_width_emu: 100,
+                font_resource_id: "font:test",
+                font_fingerprint_sha256: "sha:test",
+                font_size_emu: 100,
+                shaping_environment: &environment,
+                units_per_em: 1000,
+                glyphs: &glyphs,
+            },
         )
         .expect("non-final InterWord line must distribute across word gaps");
 
@@ -4650,18 +4672,20 @@ mod tests {
         assert!(
             interword_distribution_spans_v1(
                 &fragment,
-                0,
-                9,
-                9,
-                "aa bb cc ",
-                90,
-                100,
-                "font:test",
-                "sha:test",
-                100,
-                &environment,
-                1000,
-                &glyphs,
+                InterwordDistributionInputV1 {
+                    scalar_start: 0,
+                    scalar_end: 9,
+                    consumed_scalar_end: 9,
+                    text: "aa bb cc ",
+                    measured_width_emu: 90,
+                    content_width_emu: 100,
+                    font_resource_id: "font:test",
+                    font_fingerprint_sha256: "sha:test",
+                    font_size_emu: 100,
+                    shaping_environment: &environment,
+                    units_per_em: 1000,
+                    glyphs: &glyphs,
+                },
             )
             .is_none(),
             "final paragraph line must retain ordinary leading alignment"
@@ -4703,18 +4727,20 @@ mod tests {
         assert!(
             interword_distribution_spans_v1(
                 &fragment,
-                0,
-                8,
-                8,
-                "aa bb cc",
-                80,
-                100,
-                "font:test",
-                "sha:test",
-                100,
-                &environment,
-                1000,
-                &glyphs,
+                InterwordDistributionInputV1 {
+                    scalar_start: 0,
+                    scalar_end: 8,
+                    consumed_scalar_end: 8,
+                    text: "aa bb cc",
+                    measured_width_emu: 80,
+                    content_width_emu: 100,
+                    font_resource_id: "font:test",
+                    font_fingerprint_sha256: "sha:test",
+                    font_size_emu: 100,
+                    shaping_environment: &environment,
+                    units_per_em: 1000,
+                    glyphs: &glyphs,
+                },
             )
             .is_none()
         );
@@ -4724,18 +4750,20 @@ mod tests {
         assert!(
             interword_distribution_spans_v1(
                 &fragment,
-                0,
-                8,
-                8,
-                "aa\tbb cc",
-                80,
-                100,
-                "font:test",
-                "sha:test",
-                100,
-                &environment,
-                1000,
-                &glyphs,
+                InterwordDistributionInputV1 {
+                    scalar_start: 0,
+                    scalar_end: 8,
+                    consumed_scalar_end: 8,
+                    text: "aa\tbb cc",
+                    measured_width_emu: 80,
+                    content_width_emu: 100,
+                    font_resource_id: "font:test",
+                    font_fingerprint_sha256: "sha:test",
+                    font_size_emu: 100,
+                    shaping_environment: &environment,
+                    units_per_em: 1000,
+                    glyphs: &glyphs,
+                },
             )
             .is_none()
         );
