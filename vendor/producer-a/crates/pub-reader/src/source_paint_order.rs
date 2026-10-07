@@ -1,4 +1,5 @@
 use super::*;
+// CI routing control: standalone source paint-order ownership proof.
 
 pub const PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1: &str = "chaptera.pub-source-page-paint-order.v1";
 
