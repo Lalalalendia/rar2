@@ -4,7 +4,9 @@ use pub_layout::BoundedAuthoringSlice;
 use pub_model::PageId;
 use std::collections::BTreeSet;
 
-pub(crate) fn qualified_page_set_error_v1(page_ids: &[PageId]) -> Result<(), DesktopShapedFlowRuntimeError> {
+pub(crate) fn qualified_page_set_error_v1(
+    page_ids: &[PageId],
+) -> Result<(), DesktopShapedFlowRuntimeError> {
     if page_ids.is_empty() {
         return Err(DesktopShapedFlowRuntimeError::new(
             "qualified_pages_missing",
@@ -70,4 +72,3 @@ pub(crate) fn bounded_authoring_slice_for_pages_v1(
 
     Ok(authoring)
 }
-
