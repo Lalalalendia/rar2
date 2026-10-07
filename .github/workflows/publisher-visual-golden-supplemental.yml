@@ -119,7 +119,16 @@ jobs:
           rows = data["grouped_image_projection_failures"]
           print(json.dumps(rows, indent=2, sort_keys=True))
           assert data["source_sha256"] == "99ffa361aa8d0ba3a851ff86986bede358743945b6a8ea2e6bf19401bb00cd06"
-          assert rows
+          assert len(rows) == 4, rows
+          assert sorted(
+              (row["target_page_number"], row["reason"]) for row in rows
+          ) == [
+              (4, "group ancestor has horizontal flip"),
+              (4, "group ancestor has horizontal flip"),
+              (14, "group ancestor has nonzero rotation"),
+              (14, "group ancestor has nonzero rotation"),
+          ], rows
+          assert all("grouped child" not in row["reason"] for row in rows), rows
           PY
 
       - name: Build canonical Cloud Reader worker
@@ -220,6 +229,20 @@ jobs:
               "086_248596cea8019134",
               "095_1e7f38b3ce1d0d95",
           }, data["visual"]["unavailable_pairs"]
+
+          exact_05_pair = next(
+              row for row in data["visual"]["pairs"]
+              if row["fixture"] == "05-modern2c-officeart-wmf"
+          )
+          exact_05_page7 = next(
+              row for row in data["visual"]["pages"]
+              if row["fixture"] == "05-modern2c-officeart-wmf" and row["page"] == 7
+          )
+          # Paid pre-admission evidence was 0.2187848772 pair mean and
+          # 0.269775390625 on page 7. The bounded child-rotation profile must
+          # preserve the already-proven improvement after this architectural restack.
+          assert exact_05_pair["mean_changed_cell_fraction"] < 0.21, exact_05_pair
+          assert exact_05_page7["changed_cell_fraction"] < 0.13, exact_05_page7
           PY
 
       - name: Upload source-free supplemental receipt
@@ -227,6 +250,8 @@ jobs:
         if: always()
         with:
           name: publisher-visual-golden-supplemental-receipt
-          path: target/publisher-visual-supplemental/summary.json
+          path: |
+            target/publisher-visual-supplemental/summary.json
+            target/publisher-visual-supplemental/grouped-image-projection-05.json
           if-no-files-found: error
           retention-days: 90
