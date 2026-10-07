@@ -15,6 +15,7 @@ spec.loader.exec_module(mod)
 
 PUB_EDITOR_SRC = ROOT / "vendor" / "producer-a" / "crates" / "pub-editor" / "src"
 PREFIX = "vendor/producer-a/crates/pub-editor/src/"
+AUTHORING_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-authoring-core/src/"
 
 
 def is_pub_editor_test(command: tuple[str, ...]) -> bool:
@@ -73,9 +74,10 @@ def main() -> int:
 
     representative = {
         PREFIX + "duplicate_authored_rectangle_v1.rs": "duplicate_authored_rectangle_v1",
-        PREFIX + "create_table_runtime_v1.rs": "create_table_runtime_v1",
+        AUTHORING_CORE_PREFIX + "create_table_runtime_v1.rs": "create_table_runtime_v1",
         PREFIX + "table_track_extent_v1.rs": "table_track_extent_v1",
-        PREFIX + "authored_stack_runtime_v1.rs": "authored_stack_runtime_v1",
+        AUTHORING_CORE_PREFIX + "authored_stack_runtime_v1.rs": "authored_stack_runtime_v1",
+        AUTHORING_CORE_PREFIX + "create_line_runtime_v1.rs": "create_line_runtime_v1",
     }
     for path, target in representative.items():
         checks = mod.plan_for_paths(ROOT, [path], mode="edit")
