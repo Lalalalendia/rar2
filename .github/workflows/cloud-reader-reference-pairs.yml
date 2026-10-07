@@ -2,6 +2,10 @@ name: Cloud Reader reference PUB-PDF pairs
 
 on:
   workflow_call:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - ".github/workflows/cloud-reader-reference-pairs.yml"
   workflow_dispatch:
   push:
     branches: [main]
