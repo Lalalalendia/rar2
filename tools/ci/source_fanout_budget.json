@@ -1,0 +1,33 @@
+{
+  "schema": "chaptera.source-fanout-budget.v1",
+  "new_leaf_max_conditional_workflows": 6,
+  "tracked_roots": [
+    "vendor/producer-a/crates/",
+    "crates/",
+    "apps/chaptera-desktop/src/",
+    "apps/chaptera-server/src/"
+  ],
+  "shared_roots": {
+    "vendor/producer-a/crates/pub-editor/src/lib.rs": {
+      "max_lines": 10403
+    },
+    "apps/chaptera-desktop/src/main.rs": {
+      "max_lines": 8677
+    },
+    "vendor/producer-a/crates/pub-viewer/src/lib.rs": {
+      "max_lines": 7026
+    },
+    "crates/chaptera-viewer-render-plan/src/lib.rs": {
+      "max_lines": 6499
+    },
+    "vendor/producer-a/crates/pub-reader/src/lib.rs": {
+      "max_lines": 6184
+    },
+    "vendor/producer-a/crates/pub-quill/src/typography.rs": {
+      "max_lines": 4662
+    },
+    "apps/chaptera-desktop/src/agent.rs": {
+      "max_lines": 3061
+    }
+  }
+}
