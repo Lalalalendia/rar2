@@ -2658,9 +2658,10 @@ mod tests {
                     .iter()
                     .map(|run| run.text_size_emu)
                     .collect::<std::collections::BTreeSet<_>>();
-                let has_visible_partial_line = layout.lines.iter().any(|line| {
-                    line.scalar_end > line.scalar_start && line.measured_width_emu > 0
-                });
+                let has_visible_partial_line = layout
+                    .lines
+                    .iter()
+                    .any(|line| line.scalar_end > line.scalar_start && line.measured_width_emu > 0);
                 let has_incomplete_consumption = layout
                     .lines
                     .last()
