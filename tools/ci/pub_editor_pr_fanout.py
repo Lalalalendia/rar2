@@ -11,11 +11,16 @@ from typing import Iterable
 
 PUB_EDITOR_PREFIX = "vendor/producer-a/crates/pub-editor/"
 PUB_EDITOR_AUTHORING_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-authoring-core/"
+PUB_EDITOR_TABLE_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-table-core/"
 PUB_EDITOR_LIB = PUB_EDITOR_PREFIX + "src/lib.rs"
 
 
 def is_pub_editor_domain_path(path: str) -> bool:
-    return path.startswith(PUB_EDITOR_PREFIX) or path.startswith(PUB_EDITOR_AUTHORING_CORE_PREFIX)
+    return (
+        path.startswith(PUB_EDITOR_PREFIX)
+        or path.startswith(PUB_EDITOR_AUTHORING_CORE_PREFIX)
+        or path.startswith(PUB_EDITOR_TABLE_CORE_PREFIX)
+    )
 
 # Deliberately tiny first allowlist. These modules are feature-owned and are
 # not consumed by the Desktop Continuity V2 acceptance transaction.
