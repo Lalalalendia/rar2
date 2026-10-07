@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "vendor/producer-a/crates/pub-editor/src/lib.rs"
+      - "vendor/producer-a/crates/pub-editor/src/session_image.rs"
       - "tools/ci/pub_editor_pr_fanout.py"
       - ".github/workflows/editor-fixed-output-current-image-resources.yml"
   workflow_dispatch:
