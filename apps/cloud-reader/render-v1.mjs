@@ -27,15 +27,107 @@ function previewForeignObject(bounds, attrs) {
   });
 }
 
-function previewTextStyle(div, plan = null) {
+function previewTextStyle(div, plan = null, preview = null) {
   div.style.width = "100%";
   div.style.height = "100%";
   div.style.overflow = "hidden";
   div.style.whiteSpace = "pre-wrap";
-  div.style.fontFamily = "system-ui, sans-serif";
-  div.style.fontSize = ((plan?.font_size_emu ?? PREVIEW_FONT_SIZE_EMU) / EMU_PER_CSS_PX) + "px";
-  div.style.lineHeight = ((plan?.line_height_emu ?? PREVIEW_LINE_HEIGHT_EMU) / EMU_PER_CSS_PX) + "px";
-  div.style.color = "#000";
+  div.style.fontFamily = preview?.font_family ?? "system-ui, sans-serif";
+  div.style.fontSize = ((preview?.default_font_size_emu ?? plan?.font_size_emu ?? PREVIEW_FONT_SIZE_EMU) / EMU_PER_CSS_PX) + "px";
+  div.style.lineHeight = preview ? "normal" : ((plan?.line_height_emu ?? PREVIEW_LINE_HEIGHT_EMU) / EMU_PER_CSS_PX) + "px";
+  div.style.color = preview?.color ?? "#000";
+}
+
+export function previewTextPaintPlan(node, fonts = new Map()) {
+  if (typeof node?.text !== "string" || node.text.length === 0) return null;
+  const preview = node.text_preview;
+  if (!preview || typeof preview !== "object") return null;
+
+  const defaultFontSize = Number(preview.default_font_size_emu);
+  if (!Number.isSafeInteger(defaultFontSize) || defaultFontSize <= 0) return null;
+
+  const installed = fonts.get(preview.fallback_font_resource_id) ?? null;
+  const fontFamily = installed?.family ?? "system-ui, sans-serif";
+  const color = rgb(preview.color_rgb) ?? "rgb(0 0 0)";
+  const scalars = Array.from(node.text);
+  const fallbackSegment = Object.freeze({
+    text: node.text,
+    font_size_emu: defaultFontSize,
+    authority: "fallback_default"
+  });
+
+  const rawRuns = Array.isArray(preview.runs) ? preview.runs : [];
+  if (rawRuns.length === 0) {
+    return Object.freeze({
+      font_family: fontFamily,
+      fallback_font_resource_id: preview.fallback_font_resource_id,
+      default_font_size_emu: defaultFontSize,
+      color,
+      segments: [fallbackSegment]
+    });
+  }
+
+  const runs = [];
+  for (const raw of rawRuns) {
+    const start = Number(raw?.scalar_start);
+    const end = Number(raw?.scalar_end);
+    const size = Number(raw?.font_size_emu);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)
+        || !Number.isSafeInteger(size) || start < 0 || start >= end
+        || end > scalars.length || size <= 0) {
+      return Object.freeze({
+        font_family: fontFamily,
+        fallback_font_resource_id: preview.fallback_font_resource_id,
+        default_font_size_emu: defaultFontSize,
+        color,
+        segments: [fallbackSegment]
+      });
+    }
+    runs.push({ start, end, size });
+  }
+  runs.sort((left, right) => left.start - right.start || left.end - right.end || left.size - right.size);
+  if (runs.some((run, index) => index > 0 && run.start < runs[index - 1].end)) {
+    return Object.freeze({
+      font_family: fontFamily,
+      fallback_font_resource_id: preview.fallback_font_resource_id,
+      default_font_size_emu: defaultFontSize,
+      color,
+      segments: [fallbackSegment]
+    });
+  }
+
+  const segments = [];
+  let cursor = 0;
+  for (const run of runs) {
+    if (cursor < run.start) {
+      segments.push(Object.freeze({
+        text: scalars.slice(cursor, run.start).join(""),
+        font_size_emu: defaultFontSize,
+        authority: "fallback_default"
+      }));
+    }
+    segments.push(Object.freeze({
+      text: scalars.slice(run.start, run.end).join(""),
+      font_size_emu: run.size,
+      authority: "bounded_typography_size"
+    }));
+    cursor = run.end;
+  }
+  if (cursor < scalars.length) {
+    segments.push(Object.freeze({
+      text: scalars.slice(cursor).join(""),
+      font_size_emu: defaultFontSize,
+      authority: "fallback_default"
+    }));
+  }
+
+  return Object.freeze({
+    font_family: fontFamily,
+    fallback_font_resource_id: preview.fallback_font_resource_id,
+    default_font_size_emu: defaultFontSize,
+    color,
+    segments
+  });
 }
 
 function safeInteger(value, label) {
@@ -338,15 +430,26 @@ export function resolvedTextViewportGeometry(bounds) {
   });
 }
 
-function appendPreviewText(group, node, plan = null) {
+function appendPreviewText(group, node, fonts, plan = null) {
   if (!node.text) return;
   const bounds = node.text_bounds ?? node.bounds;
+  const preview = previewTextPaintPlan(node, fonts);
   const foreign = previewForeignObject(bounds, {
-    "data-text-authority": "browser-preview-only"
+    "data-text-authority": preview ? "browser-preview-bounded-typography" : "browser-preview-only"
   });
   const div = document.createElementNS(XHTML_NS, "div");
-  previewTextStyle(div, plan);
-  div.textContent = node.text;
+  previewTextStyle(div, plan, preview);
+  if (preview) {
+    for (const segment of preview.segments) {
+      const span = document.createElementNS(XHTML_NS, "span");
+      span.style.fontSize = (segment.font_size_emu / EMU_PER_CSS_PX) + "px";
+      span.dataset.textSizeAuthority = segment.authority;
+      span.textContent = segment.text;
+      div.appendChild(span);
+    }
+  } else {
+    div.textContent = node.text;
+  }
   foreign.appendChild(div);
   group.appendChild(foreign);
 }
@@ -356,7 +459,7 @@ function appendText(group, defs, node, fonts, index) {
   const plan = resolvedTextLinePaintPlan(node);
   const installed = plan ? fonts.get(plan.font_resource_id) ?? null : null;
   if (!plan || !installed) {
-    appendPreviewText(group, node, plan);
+    appendPreviewText(group, node, fonts, plan);
     return;
   }
 
@@ -367,7 +470,7 @@ function appendText(group, defs, node, fonts, index) {
       const spanInstalled = fonts.get(span.font_resource_id) ?? null;
       if (!spanInstalled
           || spanInstalled.resource.expected_sha256 !== span.font_fingerprint_sha256) {
-        appendPreviewText(group, node, plan);
+        appendPreviewText(group, node, fonts, plan);
         return;
       }
       spanFonts.set(span.font_resource_id, spanInstalled);
