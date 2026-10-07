@@ -18,6 +18,7 @@ EVIDENCE_ONLY_PATHS = {
 VIEWER_AUTHORING_PROJECTION = (
     "vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
 )
+VIEWER_IMAGES = "vendor/producer-a/crates/pub-viewer/src/images.rs"
 READER_PAINT_PROJECTION = "vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
 READER_PAGE_PROJECTION = "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
 READER_SOURCE_PAINT_ORDER = "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
@@ -622,7 +623,7 @@ def classify(
     typography_paths = [
         path
         for path in visual_paths
-        if path not in {READER_PAINT_PROJECTION, READER_PAGE_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_ANCHOR_GEOMETRY}
+        if path not in {VIEWER_IMAGES, READER_PAINT_PROJECTION, READER_PAGE_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_ANCHOR_GEOMETRY}
     ]
     result["typography_golden"] = any(
         matches(path, TYPOGRAPHY_GOLDEN) for path in typography_paths
