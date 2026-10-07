@@ -153,6 +153,35 @@ def test_existing_fanout_increase() -> None:
     expect_error(evaluate(root, base, head), "FANOUT REGRESSION")
 
 
+def test_existing_fanout_swap_passes() -> None:
+    root, base = init_repo()
+    (root / ".github/workflows/a.yml").write_text(
+        'name: a\non:\n  pull_request:\n    paths:\n      - "other/**"\n',
+        encoding="utf-8",
+    )
+    (root / ".github/workflows/b.yml").write_text(
+        'name: b\non:\n  pull_request:\n    paths:\n      - "src/leaf.rs"\n',
+        encoding="utf-8",
+    )
+    head = commit(root, "head")
+    assert evaluate(root, base, head) == []
+
+
+def test_existing_fanout_net_growth_fails() -> None:
+    root, base = init_repo()
+    (root / ".github/workflows/a.yml").write_text(
+        'name: a\non:\n  pull_request:\n    paths:\n      - "other/**"\n',
+        encoding="utf-8",
+    )
+    for name in ("b", "c"):
+        (root / f".github/workflows/{name}.yml").write_text(
+            f'name: {name}\non:\n  pull_request:\n    paths:\n      - "src/leaf.rs"\n',
+            encoding="utf-8",
+        )
+    head = commit(root, "head")
+    expect_error(evaluate(root, base, head), "net new conditional consumers: 1")
+
+
 def test_new_leaf_budget() -> None:
     root, base = init_repo()
     (root / "src/new.rs").write_text("fn new_leaf() {}\n", encoding="utf-8")
@@ -197,6 +226,8 @@ def main() -> int:
     test_yaml_paths()
     test_budget_ratchet()
     test_existing_fanout_increase()
+    test_existing_fanout_swap_passes()
+    test_existing_fanout_net_growth_fails()
     test_new_leaf_budget()
     test_monolith_growth()
     test_monolith_shrink_requires_ceiling_drop()
