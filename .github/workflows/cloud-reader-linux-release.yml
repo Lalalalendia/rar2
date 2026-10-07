@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "apps/cloud-reader/**"
       - "apps/chaptera-server/**"
       - "crates/chaptera-untrusted-pub-scan/**"
       - "deploy/config/chaptera.reader.prod.example.toml"
