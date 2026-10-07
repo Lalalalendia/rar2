@@ -96,7 +96,10 @@ pub(super) fn seq_u32(seq_num: usize) -> Result<u32> {
     u32::try_from(seq_num).map_err(|_| anyhow!("Contents seqNum does not fit u32: {seq_num}"))
 }
 
-pub(super) fn unique_u32_field(chunk: &Contents0x2cChunk, id: u16) -> Result<Option<(u32, RawSpan)>> {
+pub(super) fn unique_u32_field(
+    chunk: &Contents0x2cChunk,
+    id: u16,
+) -> Result<Option<(u32, RawSpan)>> {
     let mut matches = chunk.fields.iter().filter(|field| field.id == id);
     let Some(field) = matches.next() else {
         return Ok(None);
