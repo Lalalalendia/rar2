@@ -12,22 +12,65 @@ pub(super) struct GroupedObjectProjection {
     pub(super) bounds: RectEmu,
     pub(super) depth: usize,
     pub(super) group_sources: Vec<RawSpan>,
+    pub(super) child_rotation_op: Option<u32>,
+}
+
+pub(super) struct GroupedProjectionContext<'a> {
+    references: &'a BTreeMap<u32, Contents0x2cChunkReference>,
+    page_seq_to_id: &'a BTreeMap<u32, PageId>,
+    pages: &'a BTreeMap<PageId, Page>,
+    escher_inventory: &'a SpContainerInventory,
+    escher_by_contents_seq: &'a BTreeMap<u32, Vec<usize>>,
+}
+
+impl<'a> GroupedProjectionContext<'a> {
+    pub(super) fn new(
+        references: &'a BTreeMap<u32, Contents0x2cChunkReference>,
+        page_seq_to_id: &'a BTreeMap<u32, PageId>,
+        pages: &'a BTreeMap<PageId, Page>,
+        escher_inventory: &'a SpContainerInventory,
+        escher_by_contents_seq: &'a BTreeMap<u32, Vec<usize>>,
+    ) -> Self {
+        Self {
+            references,
+            page_seq_to_id,
+            pages,
+            escher_inventory,
+            escher_by_contents_seq,
+        }
+    }
 }
 
 pub(super) fn project_grouped_object_shape(
     first_group_seq: u32,
     child_shape: &pub_escher::SpContainerObservation,
-    references: &BTreeMap<u32, Contents0x2cChunkReference>,
-    page_seq_to_id: &BTreeMap<u32, PageId>,
-    pages: &BTreeMap<PageId, Page>,
-    escher_inventory: &SpContainerInventory,
-    escher_by_contents_seq: &BTreeMap<u32, Vec<usize>>,
+    context: &GroupedProjectionContext<'_>,
+    admit_translation_only_child_image_rotation: bool,
 ) -> Result<Option<GroupedObjectProjection>> {
-    if shape_has_nonzero_rotation(child_shape)
-        || shape_has_fsp_flag(child_shape, OFFICEART_FSP_FLIP_H)
-        || shape_has_fsp_flag(child_shape, OFFICEART_FSP_FLIP_V)
-    {
-        bail!("grouped child has rotation or flip");
+    let child_rotation_op = if shape_has_nonzero_rotation(child_shape) {
+        if !admit_translation_only_child_image_rotation {
+            bail!("grouped child has nonzero rotation");
+        }
+        let rotations = child_shape
+            .fopts
+            .iter()
+            .flat_map(|record| record.properties.iter())
+            .filter(|property| property.property_id() == OFFICE_ART_PROPERTY_ROTATION)
+            .collect::<Vec<_>>();
+        match rotations.as_slice() {
+            [property] if !property.f_bid() && !property.f_complex() && property.op as i32 != 0 => {
+                Some(property.op)
+            }
+            _ => bail!("grouped child rotation profile is ambiguous"),
+        }
+    } else {
+        None
+    };
+    if shape_has_fsp_flag(child_shape, OFFICEART_FSP_FLIP_H) {
+        bail!("grouped child has horizontal flip");
+    }
+    if shape_has_fsp_flag(child_shape, OFFICEART_FSP_FLIP_V) {
+        bail!("grouped child has vertical flip");
     }
 
     let child_anchor = child_shape
@@ -44,19 +87,21 @@ pub(super) fn project_grouped_object_shape(
         if !seen.insert(current_group_seq) {
             bail!("group ancestry cycle");
         }
-        let group_reference = references
+        let group_reference = context
+            .references
             .get(&current_group_seq)
             .context("group Contents reference missing")?;
         if single_raw_type(group_reference) != Some(RAW_TYPE_GROUP) {
             bail!("group ancestry raw type is not 0x30");
         }
 
-        let group_matches = escher_by_contents_seq
+        let group_matches = context
+            .escher_by_contents_seq
             .get(&current_group_seq)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         let group_shape = match group_matches {
-            [index] => &escher_inventory.shapes[*index],
+            [index] => &context.escher_inventory.shapes[*index],
             [] => bail!("group Escher shape missing"),
             _ => bail!("group Escher shape ambiguous"),
         };
@@ -79,14 +124,20 @@ pub(super) fn project_grouped_object_shape(
 
         let parent_seq =
             single_parent_seq(group_reference).context("group parent is missing or ambiguous")?;
-        if let Some(&page_id) = page_seq_to_id.get(&parent_seq) {
+        if let Some(&page_id) = context.page_seq_to_id.get(&parent_seq) {
             let anchor = group_shape
                 .client_anchor
                 .as_ref()
                 .context("top group is missing ClientAnchor")?;
             let absolute = publisher_anchor_rect_i128(anchor)?;
+            if child_rotation_op.is_some()
+                && (depth != 1 || !translation_only_group_map(group_coords, absolute))
+            {
+                bail!("grouped child rotation requires translation-only depth-1 parent group");
+            }
             rect = project_rect_trunc(rect, group_coords, absolute)?;
-            let page = pages
+            let page = context
+                .pages
                 .get(&page_id)
                 .context("group page id is missing from graph")?;
             let bounds = center_origin_rect_to_page_bounds(page, rect)?;
@@ -95,13 +146,19 @@ pub(super) fn project_grouped_object_shape(
                 bounds,
                 depth,
                 group_sources,
+                child_rotation_op,
             }));
         }
 
         if depth == 2 {
             bail!("group ancestry exceeds bounded depth 2");
         }
-        if references.get(&parent_seq).and_then(single_raw_type) != Some(RAW_TYPE_GROUP) {
+        if context
+            .references
+            .get(&parent_seq)
+            .and_then(single_raw_type)
+            != Some(RAW_TYPE_GROUP)
+        {
             bail!("group parent is neither DOCUMENT page nor group");
         }
 
@@ -130,6 +187,10 @@ pub(super) fn coordinate_rect_i128(
         bail!("coordinate rectangle is non-positive");
     }
     Ok(out)
+}
+
+fn translation_only_group_map(source: [i128; 4], target: [i128; 4]) -> bool {
+    source[2] - source[0] == target[2] - target[0] && source[3] - source[1] == target[3] - target[1]
 }
 
 fn publisher_anchor_rect_i128(anchor: &PublisherFieldRecord) -> Result<[i128; 4]> {
@@ -225,4 +286,25 @@ fn center_origin_rect_to_page_bounds(page: &Page, rect: [i128; 4]) -> Result<Rec
         LengthEmu::new(to_i64(width, "grouped width")?),
         LengthEmu::new(to_i64(height, "grouped height")?),
     ))
+}
+
+#[cfg(test)]
+mod grouped_rotation_tests {
+    use super::translation_only_group_map;
+
+    #[test]
+    fn translation_only_group_map_accepts_equal_extents() {
+        assert!(translation_only_group_map(
+            [108_041_202, 110_367_519, 113_739_460, 113_040_661],
+            [-2_143_998, 182_319, 3_554_260, 2_855_461],
+        ));
+    }
+
+    #[test]
+    fn translation_only_group_map_rejects_anisotropic_scale() {
+        assert!(!translation_only_group_map(
+            [107_442_022, 108_754_329, 113_987_230, 112_497_502],
+            [-3_987_897, -1_596_946, 4_327_889, 2_562_119],
+        ));
+    }
 }
