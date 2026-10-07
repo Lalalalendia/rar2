@@ -71,15 +71,34 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         self.assertIn("--all-targets", vendor_clippy["argv"])
         self.assertEqual(vendor_clippy["argv"][-2:], ["-D", "warnings"])
 
-    def test_pub_viewer_images_leaf_skips_cmo_lib_harness_only(self) -> None:
+    def test_pub_viewer_images_leaf_uses_exact_micro_target_only(self) -> None:
         image_plan = MODULE.build_plan(
             ["vendor/producer-a/crates/pub-viewer/src/images.rs"],
             "BASE",
             "HEAD",
         )
         image_ids = {command["id"] for command in image_plan["commands"]}
-        self.assertIn("vendor-source-free-tests", image_ids)
+        self.assertIn("pub-viewer-images-tests", image_ids)
+        self.assertNotIn("vendor-source-free-tests", image_ids)
         self.assertNotIn("pub-viewer-cmo-slot-compose", image_ids)
+        image_tests = next(
+            command
+            for command in image_plan["commands"]
+            if command["id"] == "pub-viewer-images-tests"
+        )
+        self.assertEqual(
+            image_tests["argv"],
+            [
+                "cargo",
+                "test",
+                "--manifest-path",
+                "vendor/producer-a/Cargo.toml",
+                "-p",
+                "pub-viewer",
+                "--test",
+                "image_placement_v1",
+            ],
+        )
 
         shared_plan = MODULE.build_plan(
             ["vendor/producer-a/crates/pub-viewer/src/lib.rs"],
@@ -89,6 +108,7 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         shared_ids = {command["id"] for command in shared_plan["commands"]}
         self.assertIn("vendor-source-free-tests", shared_ids)
         self.assertIn("pub-viewer-cmo-slot-compose", shared_ids)
+        self.assertNotIn("pub-viewer-images-tests", shared_ids)
 
     def test_vendor_workspace_change_qualifies_donor_pub_model(self) -> None:
         plan = MODULE.build_plan(

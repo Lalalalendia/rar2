@@ -153,6 +153,34 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
             for package in packages
             for item in ("-p", VENDOR_PACKAGE_SPECS.get(package, package))
         ]
+        pub_viewer_images_only = set(paths) == {PUB_VIEWER_IMAGES}
+        source_free_command = (
+            {
+                "id": "pub-viewer-images-tests",
+                "argv": [
+                    "cargo",
+                    "test",
+                    "--manifest-path",
+                    "vendor/producer-a/Cargo.toml",
+                    "-p",
+                    "pub-viewer",
+                    "--test",
+                    "image_placement_v1",
+                ],
+            }
+            if pub_viewer_images_only
+            else {
+                "id": "vendor-source-free-tests",
+                "argv": [
+                    "cargo",
+                    "test",
+                    "--manifest-path",
+                    "vendor/producer-a/Cargo.toml",
+                    *flags,
+                    "--lib",
+                ],
+            }
+        )
         commands.extend(
             [
                 {
@@ -169,20 +197,9 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
                         "warnings",
                     ],
                 },
-                {
-                    "id": "vendor-source-free-tests",
-                    "argv": [
-                        "cargo",
-                        "test",
-                        "--manifest-path",
-                        "vendor/producer-a/Cargo.toml",
-                        *flags,
-                        "--lib",
-                    ],
-                },
+                source_free_command,
             ]
         )
-        pub_viewer_images_only = set(paths) == {PUB_VIEWER_IMAGES}
         if "pub-viewer" in affected and not pub_viewer_images_only:
             commands.append(
                 {
