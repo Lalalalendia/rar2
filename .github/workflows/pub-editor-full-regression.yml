@@ -1,0 +1,50 @@
+name: Pub Editor full regression
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pub-editor-full-regression-${{ github.sha }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/pub-editor-full
+  CARGO_INCREMENTAL: "1"
+
+jobs:
+  full:
+    name: Pub Editor deep regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Restore rolling pub-editor deep cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/pub-editor-full
+          key: pub-editor-full-v1-${{ runner.os }}-rust-1.94.1-${{ hashFiles('vendor/producer-a/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            pub-editor-full-v1-${{ runner.os }}-rust-1.94.1-${{ hashFiles('vendor/producer-a/Cargo.lock') }}-
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
+
+      - name: Lint all pub-editor targets
+        run: cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets -- -D warnings
+
+      - name: Run complete pub-editor regression
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor
