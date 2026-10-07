@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import argparse
 import ast
+import io
 import json
 import re
 import subprocess
+import tarfile
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
@@ -270,6 +273,7 @@ def extract_pull_request_paths(text: str, *, workflow: str = "<workflow>") -> li
     return patterns
 
 
+@lru_cache(maxsize=None)
 def glob_regex(pattern: str) -> re.Pattern[str]:
     result = ["^"]
     i = 0
@@ -326,15 +330,34 @@ def admitted_by_patterns(path: str, patterns: Iterable[str]) -> bool:
 
 def workflows_at(repo: Path, revision: str) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
-    for path in git_paths(repo, revision, WORKFLOW_DIR):
-        if not path.endswith(WORKFLOW_SUFFIXES):
-            continue
-        text = git_show(repo, revision, path)
-        if text is None:
-            continue
-        patterns = extract_pull_request_paths(text, workflow=path)
-        if patterns is not None:
-            result[path] = patterns
+    try:
+        archive = subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "archive",
+                "--format=tar",
+                revision,
+                WORKFLOW_DIR.rstrip("/"),
+            ],
+            stderr=subprocess.STDOUT,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise BudgetError(exc.output.decode(errors="replace").strip()) from exc
+
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as bundle:
+        for member in bundle.getmembers():
+            path = member.name
+            if not member.isfile() or not path.endswith(WORKFLOW_SUFFIXES):
+                continue
+            extracted = bundle.extractfile(member)
+            if extracted is None:
+                continue
+            text = extracted.read().decode("utf-8")
+            patterns = extract_pull_request_paths(text, workflow=path)
+            if patterns is not None:
+                result[path] = patterns
     return result
 
 
@@ -360,6 +383,26 @@ def line_count(text: str) -> int:
     return len(text.splitlines())
 
 
+def changed_workflow_paths(repo: Path, base_revision: str, head_revision: str) -> set[str]:
+    output = git(repo, "diff", "--name-status", f"{base_revision}...{head_revision}")
+    changed: set[str] = set()
+    for line in output.splitlines():
+        fields = line.split("\t")
+        if len(fields) < 2:
+            continue
+        for path in fields[1:]:
+            if path.startswith(WORKFLOW_DIR) and path.endswith(WORKFLOW_SUFFIXES):
+                changed.add(path)
+    return changed
+
+
+def workflow_patterns_at(repo: Path, revision: str, path: str) -> list[str] | None:
+    text = git_show(repo, revision, path)
+    if text is None:
+        return None
+    return extract_pull_request_paths(text, workflow=path)
+
+
 def evaluate(
     *,
     repo: Path,
@@ -375,8 +418,8 @@ def evaluate(
 
     base_files = tracked_rust_paths(repo, base_revision, tracked_roots)
     head_files = tracked_rust_paths(repo, head_revision, tracked_roots)
-    base_workflows = workflows_at(repo, base_revision)
-    head_workflows = workflows_at(repo, head_revision)
+    existing_files = base_files & head_files
+    new_files = head_files - base_files
 
     if base_budget is not None:
         for path in sorted(set(base_budget["shared_roots"]) - set(shared_roots)):
@@ -385,33 +428,43 @@ def evaluate(
                     f"shared-root exemption removed while source still exists: {path}"
                 )
 
-    for path in sorted(base_files & head_files):
-        before = matching_workflows(path, base_workflows)
-        after = matching_workflows(path, head_workflows)
-        if len(after) > len(before):
-            added = sorted(after - before)
-            errors.append(
-                "FANOUT REGRESSION\n"
-                f"source: {path}\n"
-                f"base conditional workflows: {len(before)}\n"
-                f"head conditional workflows: {len(after)}\n"
-                "new consumers:\n  - "
-                + "\n  - ".join(added or ["<count increased without a new named workflow>"])
-            )
-
-    for path in sorted(head_files - base_files):
-        if path in shared_roots:
+    # Existing files can gain fanout only when a workflow's path filter changes.
+    # Inspect just those workflows instead of recomputing the whole source x workflow graph.
+    for workflow in sorted(changed_workflow_paths(repo, base_revision, head_revision)):
+        before_patterns = workflow_patterns_at(repo, base_revision, workflow)
+        after_patterns = workflow_patterns_at(repo, head_revision, workflow)
+        if after_patterns is None:
             continue
-        after = matching_workflows(path, head_workflows)
-        if len(after) > leaf_limit:
-            errors.append(
-                "NEW LEAF EXCEEDS FANOUT BUDGET\n"
-                f"source: {path}\n"
-                f"conditional workflows: {len(after)}\n"
-                f"budget: {leaf_limit}\n"
-                "consumers:\n  - "
-                + "\n  - ".join(sorted(after))
+        for path in sorted(existing_files):
+            before = (
+                admitted_by_patterns(path, before_patterns)
+                if before_patterns is not None
+                else False
             )
+            after = admitted_by_patterns(path, after_patterns)
+            if after and not before:
+                errors.append(
+                    "FANOUT REGRESSION\n"
+                    f"source: {path}\n"
+                    f"new conditional consumer: {workflow}"
+                )
+
+    # Only genuinely new leaf files need a full head fanout count. One git archive
+    # loads all workflow YAML at once; ordinary source-only PRs with no new files skip it.
+    new_leaves = sorted(path for path in new_files if path not in shared_roots)
+    if new_leaves:
+        head_workflows = workflows_at(repo, head_revision)
+        for path in new_leaves:
+            after = matching_workflows(path, head_workflows)
+            if len(after) > leaf_limit:
+                errors.append(
+                    "NEW LEAF EXCEEDS FANOUT BUDGET\n"
+                    f"source: {path}\n"
+                    f"conditional workflows: {len(after)}\n"
+                    f"budget: {leaf_limit}\n"
+                    "consumers:\n  - "
+                    + "\n  - ".join(sorted(after))
+                )
 
     for path, config in sorted(shared_roots.items()):
         text = git_show(repo, head_revision, path)
@@ -459,19 +512,14 @@ def main() -> int:
     if errors:
         raise SystemExit("source fanout budget guard failed:\n\n" + "\n\n".join(errors))
 
-    tracked = tracked_rust_paths(repo, args.head, head_budget["tracked_roots"])
-    conditional = workflows_at(repo, args.head)
-    worst_path = None
-    worst_count = -1
-    for path in tracked:
-        count = len(matching_workflows(path, conditional))
-        if count > worst_count:
-            worst_path = path
-            worst_count = count
+    changed_workflows = changed_workflow_paths(repo, args.base, args.head)
+    base_files = tracked_rust_paths(repo, args.base, head_budget["tracked_roots"])
+    head_files = tracked_rust_paths(repo, args.head, head_budget["tracked_roots"])
     print(
         "source fanout budget: ok "
-        f"({len(tracked)} tracked Rust files, {len(conditional)} conditional workflows, "
-        f"worst={worst_count} at {worst_path})"
+        f"({len(head_files)} tracked Rust files, "
+        f"{len(head_files - base_files)} new Rust files, "
+        f"{len(changed_workflows)} changed workflows audited)"
     )
     return 0
 
