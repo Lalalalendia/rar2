@@ -15,6 +15,7 @@ on:
       - "!vendor/producer-a/crates/pub-reader/src/grouped_projection.rs"
       - "!vendor/producer-a/crates/pub-reader/src/source_graph_model.rs"
       - "!vendor/producer-a/crates/pub-reader/src/anchor_geometry.rs"
+      - "!vendor/producer-a/crates/pub-reader/src/publication_document.rs"
       - "vendor/producer-a/crates/pub-reader/tests/story_provenance.rs"
       - "!vendor/producer-a/crates/pub-reader/src/bin/**"
   workflow_dispatch:
