@@ -33,19 +33,19 @@ use chaptera_scene_instance::{
     inherited_master_instance_v1,
 };
 use pub_layout::{
-    BoundedAuthoringSlice, BoundedLayoutProjection, BoundedNodeGeometryInput,
-    BoundedParagraphFlowConstraint, BoundedParagraphFlowRun, BoundedTextFlowEnvironment,
-    BoundedTextMetrics, BoundedUniformTableMetrics, ProjectedStoryFrame, ProjectionDiagnostic,
-    ResolveDiagnostic, ResolvedPhysicalNode, project_bounded, resolve_bounded_geometry,
-    resolve_bounded_text_flow_with_paragraph_flow, resolve_bounded_uniform_table_cells,
+    BoundedLayoutProjection, BoundedParagraphFlowConstraint, BoundedParagraphFlowRun,
+    BoundedTextFlowEnvironment, BoundedTextMetrics, BoundedUniformTableMetrics,
+    ProjectedStoryFrame, ProjectionDiagnostic, ResolveDiagnostic, ResolvedPhysicalNode,
+    project_bounded, resolve_bounded_geometry, resolve_bounded_text_flow_with_paragraph_flow,
+    resolve_bounded_uniform_table_cells,
 };
 pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
 #[cfg(feature = "cmo-slot-compose")]
 use pub_model::CanonicalId;
 use pub_model::{
     Affine2D, AuthorityClass, LengthEmu, Node, NodeId, NodeKind, PageId, ReadConfidence, RectEmu,
-    ResourceId, Sha256Digest, SourceDerivedIdInput, SourceRole, StoryId, TableCellAddress,
-    TableCellId, derive_source_canonical_id,
+    ResourceId, Sha256Digest, SourceDerivedIdInput, SourceRole, StoryFrame, StoryId,
+    TableCellAddress, TableCellId, derive_source_canonical_id,
 };
 use pub_paint_bridge::{
     PubEffectiveFillSourceV1, PubEffectiveLineSourceV1, PubEffectivePaintAuthorityV1,
