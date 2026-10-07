@@ -6,9 +6,7 @@
 
 use anyhow::Result;
 use pub_model::{NodeId, PageId, ResourceId};
-use pub_reader::{
-    PubExplicitImageCropSource, PubExplicitImageRecolorSource, PubResolvedGraph,
-};
+use pub_reader::{PubExplicitImageCropSource, PubExplicitImageRecolorSource, PubResolvedGraph};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
