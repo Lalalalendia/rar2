@@ -1,6 +1,8 @@
 use pub_model::{EffectiveTableGridV1, LengthEmu, RectEmu, TableColumnId, TableRowId};
 use serde::{Deserialize, Serialize};
 
+// Compile-boundary control: table-track laws remain session-neutral in this crate.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "axis", content = "track_id", rename_all = "snake_case")]
 pub enum TableTrackTargetV1 {
