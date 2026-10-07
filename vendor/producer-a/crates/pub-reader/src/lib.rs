@@ -164,7 +164,8 @@ use pub_contents::{
     BLOCK_TYPE_FIXED_8, BLOCK_TYPE_REFERENCE_U32, BLOCK_TYPE_U32, CONTENTS_RAW_TYPE_STORY_CATALOG,
     Contents0x2cChunk, Contents0x2cChunkReference, DOCUMENT_PAGE_LIST_ID, MatureColorScheme,
     RawContentsBlockBody, StoryCatalogReadError, parse_0x2c_header,
-    parse_bounded_empty_mature_story_catalog_variant, parse_confirmed_0x2c_trailer_root, parse_confirmed_controlling_page_list, parse_confirmed_document_page_list,
+    parse_bounded_empty_mature_story_catalog_variant, parse_confirmed_0x2c_trailer_root,
+    parse_confirmed_controlling_page_list, parse_confirmed_document_page_list,
     parse_confirmed_margins_page_extent, parse_confirmed_mature_color_scheme,
     parse_confirmed_mature_story_catalog, parse_confirmed_oid_identity_payload,
 };
