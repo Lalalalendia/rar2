@@ -21,7 +21,7 @@
       "max_lines": 6499
     },
     "vendor/producer-a/crates/pub-reader/src/lib.rs": {
-      "max_lines": 5693
+      "max_lines": 5470
     },
     "vendor/producer-a/crates/pub-quill/src/typography.rs": {
       "max_lines": 4662
