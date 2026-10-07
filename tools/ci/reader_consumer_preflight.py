@@ -46,7 +46,16 @@ def edition_for(path: str) -> str:
     p = Path(path)
     manifests: list[tuple[Path, Path]] = []
     if path.startswith("vendor/producer-a/crates/"):
-        manifests.append((p.parents[1] / "Cargo.toml", Path("vendor/producer-a/Cargo.toml")))
+        crate_manifest = next(
+            (
+                parent / "Cargo.toml"
+                for parent in p.parents
+                if parent.parent == Path("vendor/producer-a/crates")
+            ),
+            None,
+        )
+        if crate_manifest is not None:
+            manifests.append((crate_manifest, Path("vendor/producer-a/Cargo.toml")))
     elif path.startswith("crates/chaptera-viewer-render-plan/"):
         manifests.append((Path("crates/chaptera-viewer-render-plan/Cargo.toml"), Path("Cargo.toml")))
     elif path.startswith("apps/chaptera-desktop/"):
