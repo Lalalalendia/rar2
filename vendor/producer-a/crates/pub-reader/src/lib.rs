@@ -1902,6 +1902,7 @@ use anchor_geometry::{
     anchor_has_unique_geometry_fields, page_relative_bounds,
     page_relative_bounds_from_contents_missing_xe,
     page_relative_bounds_from_contents_missing_xe_values, record_missing_anchor_fields,
+    signed_field, unique_escher_field,
 };
 
 fn build_story_frame(
