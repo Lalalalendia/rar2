@@ -70,6 +70,16 @@ if "const AUTO_MAX_PAGE_WIDTH = 960;" not in APP:
 if "\\n<link rel=\"stylesheet\"" in HTML:
     raise SystemExit("cloud-reader HTML must not expose a literal \\n before the stylesheet link")
 
+for needle in [
+    'property="og:url" content="https://reader.chaptera.online/"',
+    'property="og:image" content="https://chaptera.online/social-preview.png"',
+    'property="og:image:width" content="1200"',
+    'property="og:image:height" content="630"',
+    'name="twitter:card" content="summary_large_image"',
+]:
+    if needle not in HTML:
+        raise SystemExit(f"cloud-reader social preview metadata missing: {needle!r}")
+
 print("cloud-reader read-only/ephemeral-consent/simple-viewer contract: ok")
 
 for needle in ["#page-select", "#zoom-select", "#search-query", "#story-text", "#assets", "#limitations"]:
