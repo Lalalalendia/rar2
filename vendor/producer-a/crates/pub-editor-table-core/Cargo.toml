@@ -9,3 +9,6 @@ publish = false
 [dependencies]
 pub-model = { path = "../pub-model" }
 serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
