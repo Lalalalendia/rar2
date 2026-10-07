@@ -1,6 +1,7 @@
 //! Image-specific EditorSession orchestration.
 //!
 //! This module owns image replacement/crop session state and its overlay
+//! Leaf timing control: image-session edits remain isolated here.
 //! transitions. Project persistence and editable-export assembly remain in the
 //! root facade because they consume multiple editor domains.
 
