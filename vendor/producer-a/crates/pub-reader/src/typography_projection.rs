@@ -103,7 +103,9 @@ pub struct PubTypographyBooleanV1 {
     pub effective_value: bool,
 }
 
-pub(super) fn project_effective_boolean_v1(source: &QuillEffectiveBoolean) -> PubTypographyBooleanV1 {
+pub(super) fn project_effective_boolean_v1(
+    source: &QuillEffectiveBoolean,
+) -> PubTypographyBooleanV1 {
     PubTypographyBooleanV1 {
         local_toggle: source.local_toggle,
         inherited_value: source.inherited_value,
@@ -147,7 +149,6 @@ pub struct PubTypographySizeRun {
     pub text_size_emu: u32,
     pub size_inherited: bool,
 }
-
 
 pub(super) struct PubTypographyProjection {
     pub(super) typography_runs: Vec<PubTypographyRun>,
@@ -487,11 +488,8 @@ pub(super) fn project_typography_catalog(
                     });
                     continue;
                 };
-                let color_rgb = bounded_quill_text_rgb(
-                    run.color_rgb,
-                    run.color_scheme_slot,
-                    color_scheme,
-                );
+                let color_rgb =
+                    bounded_quill_text_rgb(run.color_rgb, run.color_scheme_slot, color_scheme);
                 typography_runs.push(PubTypographyRun {
                     story_id,
                     story_utf16_start: run.story_start_utf16,
@@ -539,11 +537,8 @@ pub(super) fn project_typography_catalog(
                     });
                     continue;
                 };
-                let color_rgb = bounded_quill_text_rgb(
-                    run.color_rgb,
-                    run.color_scheme_slot,
-                    color_scheme,
-                );
+                let color_rgb =
+                    bounded_quill_text_rgb(run.color_rgb, run.color_scheme_slot, color_scheme);
                 typography_runs.push(PubTypographyRun {
                     story_id,
                     story_utf16_start: run.story_start_utf16,
@@ -564,7 +559,6 @@ pub(super) fn project_typography_catalog(
             }
         }
     }
-
 
     PubTypographyProjection {
         typography_runs,
