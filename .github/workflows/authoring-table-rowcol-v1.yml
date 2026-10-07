@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "vendor/producer-a/crates/pub-editor/src/lib.rs"
+      - "vendor/producer-a/crates/pub-editor/src/session_table.rs"
       - "vendor/producer-a/crates/pub-editor/src/table_rowcol_graph_v1.rs"
       - "vendor/producer-a/crates/pub-editor/src/table_rowcol_history_v1.rs"
       - "vendor/producer-a/crates/pub-editor/src/writer_assessment.rs"
