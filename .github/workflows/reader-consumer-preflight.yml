@@ -95,6 +95,8 @@ jobs:
         run: python tools/ci/test_pub_reader_story_materialization_routing.py
       - name: Guard Reader Quill admission routing
         run: python tools/ci/test_pub_reader_quill_admission_routing.py
+      - name: Guard Reader publication document routing
+        run: python tools/ci/test_pub_reader_publication_document_routing.py
 
       - name: Enforce active-content inertness
         run: |
