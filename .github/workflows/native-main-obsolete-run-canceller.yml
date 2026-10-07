@@ -40,6 +40,7 @@ jobs:
             .github/workflows/paragraph-metrics-auth-once.yml
             .github/workflows/publisher-supplemental-native-surface-once.yml
             .github/workflows/t828-ignore-master-native-once.yml
+            .github/workflows/supplemental-surface-stage-once.yml
           STALE_PROVIDER_RUN_IDS: |
             36715683731
             36715220690
