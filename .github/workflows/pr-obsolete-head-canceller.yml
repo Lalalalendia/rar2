@@ -1,6 +1,7 @@
 name: Cancel obsolete PR head runs
 
 on:
+  # fanout: global-pr-required
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, closed]
   workflow_dispatch:
