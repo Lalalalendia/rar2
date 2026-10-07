@@ -271,6 +271,13 @@ pub struct ReaderPartialEscherDelayImageEvidence {
     pub byte_len: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReaderPartialEscherDelayDiscoveryMode {
+    LogicalPath,
+    UniqueRawCarrierNames,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReaderPartialEscherDelayMetafileEvidence {
     pub record_source: pub_core::RawSpan,
@@ -290,7 +297,13 @@ pub struct ReaderPartialEscherDelayMetafileEvidence {
 pub struct ReaderPartialEscherDelayEvidence {
     pub source_sha256: String,
     pub stream_sid: u32,
+    pub discovery_mode: ReaderPartialEscherDelayDiscoveryMode,
+    /// Requested logical target. It is a proven path only when
+    /// logical_path_proven is true.
     pub logical_path: String,
+    pub logical_path_proven: bool,
+    pub physical_context_gap_count: usize,
+    pub raw_directory_rejected_active_entry_count: usize,
     pub declared_len: u64,
     pub available_prefix_len: u64,
     pub prefix_sha256: String,
@@ -303,6 +316,99 @@ pub struct ReaderPartialEscherDelayEvidence {
     pub rejected_complete_blip_count: usize,
     pub validated_images: Vec<ReaderPartialEscherDelayImageEvidence>,
     pub validated_metafiles: Vec<ReaderPartialEscherDelayMetafileEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReaderPartialEscherDelayCarrier {
+    stream_sid: u32,
+    source_byte_len: u64,
+    declared_len: u64,
+    discovery_mode: ReaderPartialEscherDelayDiscoveryMode,
+    logical_path: String,
+    logical_path_proven: bool,
+    physical_context_gap_count: usize,
+    raw_directory_rejected_active_entry_count: usize,
+}
+
+fn discover_reader_partial_escherdelay_carrier(
+    bytes: &[u8],
+    source_sha256: &str,
+    allow_raw_fallback: bool,
+) -> Option<ReaderPartialEscherDelayCarrier> {
+    if let Ok(discovered) =
+        pub_cfb::discover_regular_stream_sid_reader(Cursor::new(bytes), ESCHER_DELAY_STREAM)
+    {
+        if discovered.source_sha256 != source_sha256
+            || discovered.source_byte_len != bytes.len() as u64
+            || discovered.logical_path != ESCHER_DELAY_STREAM
+            || discovered.declared_len > READER_SALVAGE_MAX_STREAM_BYTES
+        {
+            return None;
+        }
+        return Some(ReaderPartialEscherDelayCarrier {
+            stream_sid: discovered.stream_sid,
+            source_byte_len: discovered.source_byte_len,
+            declared_len: discovered.declared_len,
+            discovery_mode: ReaderPartialEscherDelayDiscoveryMode::LogicalPath,
+            logical_path: discovered.logical_path,
+            logical_path_proven: true,
+            physical_context_gap_count: 0,
+            raw_directory_rejected_active_entry_count: 0,
+        });
+    }
+
+    if !allow_raw_fallback {
+        return None;
+    }
+
+    let inventory = pub_cfb::inspect_truncated_cfb_raw_directory_reader(Cursor::new(bytes)).ok()?;
+    if inventory.source_sha256 != source_sha256 || inventory.source_byte_len != bytes.len() as u64 {
+        return None;
+    }
+    if inventory
+        .entries
+        .iter()
+        .any(|entry| matches!(entry.object_type, 1 | 2) && entry.descriptive_name.is_none())
+    {
+        return None;
+    }
+
+    let escher_storage_count = inventory
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.object_type == 1
+                && entry
+                    .descriptive_name
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("Escher"))
+        })
+        .count();
+    let mut delay_streams = inventory.entries.iter().filter(|entry| {
+        entry.object_type == 2
+            && entry
+                .descriptive_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("EscherDelayStm"))
+    });
+    let delay_stream = delay_streams.next()?;
+    if escher_storage_count != 1
+        || delay_streams.next().is_some()
+        || delay_stream.declared_len > READER_SALVAGE_MAX_STREAM_BYTES
+    {
+        return None;
+    }
+
+    Some(ReaderPartialEscherDelayCarrier {
+        stream_sid: delay_stream.sid,
+        source_byte_len: inventory.source_byte_len,
+        declared_len: delay_stream.declared_len,
+        discovery_mode: ReaderPartialEscherDelayDiscoveryMode::UniqueRawCarrierNames,
+        logical_path: ESCHER_DELAY_STREAM.to_owned(),
+        logical_path_proven: false,
+        physical_context_gap_count: inventory.gaps.len(),
+        raw_directory_rejected_active_entry_count: inventory.rejected_active_entry_count,
+    })
 }
 
 fn map_logical_span_to_physical_ranges(
@@ -383,23 +489,30 @@ pub fn build_reader_partial_escherdelay_evidence(
         return None;
     }
 
-    let discovered =
-        pub_cfb::discover_regular_stream_sid_reader(Cursor::new(bytes), ESCHER_DELAY_STREAM)
-            .ok()?;
-    if discovered.source_sha256 != probe.source_sha256
-        || discovered.source_byte_len != bytes.len() as u64
-        || discovered.logical_path != ESCHER_DELAY_STREAM
-        || discovered.declared_len > READER_SALVAGE_MAX_STREAM_BYTES
-    {
-        return None;
-    }
-
-    let recovered = pub_cfb::recover_regular_stream_prefix_by_sid_reader_with_expected_sha(
-        Cursor::new(bytes),
-        discovered.stream_sid,
+    let discovered = discover_reader_partial_escherdelay_carrier(
+        bytes,
         &probe.source_sha256,
-    )
-    .ok()?;
+        probe.subsystems.escher_delay == ReaderSalvageStreamState::ContainerUnavailable,
+    )?;
+
+    let recovered = match discovered.discovery_mode {
+        ReaderPartialEscherDelayDiscoveryMode::LogicalPath => {
+            pub_cfb::recover_regular_stream_prefix_by_sid_reader_with_expected_sha(
+                Cursor::new(bytes),
+                discovered.stream_sid,
+                &probe.source_sha256,
+            )
+            .ok()?
+        }
+        ReaderPartialEscherDelayDiscoveryMode::UniqueRawCarrierNames => {
+            pub_cfb::recover_truncated_regular_stream_prefix_by_sid_reader_with_expected_sha(
+                Cursor::new(bytes),
+                discovered.stream_sid,
+                &probe.source_sha256,
+            )
+            .ok()?
+        }
+    };
     if recovered.source_modified
         || recovered.stream_sid != discovered.stream_sid
         || recovered.source_byte_len != discovered.source_byte_len
@@ -490,7 +603,12 @@ pub fn build_reader_partial_escherdelay_evidence(
     Some(ReaderPartialEscherDelayEvidence {
         source_sha256: probe.source_sha256.clone(),
         stream_sid: discovered.stream_sid,
+        discovery_mode: discovered.discovery_mode,
         logical_path: discovered.logical_path,
+        logical_path_proven: discovered.logical_path_proven,
+        physical_context_gap_count: discovered.physical_context_gap_count,
+        raw_directory_rejected_active_entry_count: discovered
+            .raw_directory_rejected_active_entry_count,
         declared_len: recovered.declared_len,
         available_prefix_len: recovered.available_prefix_len,
         prefix_sha256: recovered.prefix_sha256,
@@ -1208,6 +1326,117 @@ mod tests {
         let offset = (minifat_sector as usize + 1) * sector_len;
         bytes[offset..offset + 4].copy_from_slice(&0x1234_5678u32.to_le_bytes());
         bytes
+    }
+
+    fn corrupt_second_delay_name_terminator(mut bytes: Vec<u8>) -> Vec<u8> {
+        let marker = "EscherDelayStm\0"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        let matches = bytes
+            .windows(marker.len())
+            .enumerate()
+            .filter_map(|(offset, window)| (window == marker.as_slice()).then_some(offset))
+            .collect::<Vec<_>>();
+        assert!(matches.len() >= 2, "duplicate delay-name fixture");
+        let offset = matches[1] + marker.len() - 2;
+        bytes[offset..offset + 2].copy_from_slice(&(b'X' as u16).to_le_bytes());
+        bytes
+    }
+
+    fn synthetic_pub_cfb_with_duplicate_delay_names() -> Vec<u8> {
+        let mut compound =
+            cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("duplicate carrier fixture");
+        compound.create_storage("/Escher").expect("Escher storage");
+        compound.create_storage("/Other").expect("Other storage");
+        compound
+            .create_stream("/Escher/EscherDelayStm")
+            .expect("primary delay stream")
+            .write_all(&vec![0x11; 5_000])
+            .expect("primary delay bytes");
+        compound
+            .create_stream("/Other/EscherDelayStm")
+            .expect("duplicate delay stream")
+            .write_all(&vec![0x22; 5_000])
+            .expect("duplicate delay bytes");
+
+        let mut contents = vec![0_u8; 5_000];
+        contents[..4].copy_from_slice(&[0xe8, 0xac, 0x2c, 0x00]);
+        compound
+            .create_stream(CONTENTS_STREAM)
+            .expect("Contents stream")
+            .write_all(&contents)
+            .expect("write Contents");
+        compound.flush().expect("flush duplicate carrier fixture");
+        compound.into_inner().into_inner()
+    }
+
+    #[test]
+    fn truncated_cfb_raw_carrier_fallback_marks_logical_path_unproven() {
+        let mut bytes = synthetic_pub_cfb_with_delay_png();
+        bytes.extend_from_slice(&[0xaa; 37]);
+        let source_sha = source_sha256(&bytes);
+
+        assert!(
+            pub_cfb::discover_regular_stream_sid_reader(Cursor::new(&bytes), ESCHER_DELAY_STREAM,)
+                .is_err(),
+            "strict logical-path discovery must reject the truncated container first"
+        );
+
+        let carrier = discover_reader_partial_escherdelay_carrier(&bytes, &source_sha, true)
+            .expect("unique raw carrier fallback");
+        assert_eq!(
+            carrier.discovery_mode,
+            ReaderPartialEscherDelayDiscoveryMode::UniqueRawCarrierNames
+        );
+        assert!(!carrier.logical_path_proven);
+        assert_eq!(carrier.logical_path, ESCHER_DELAY_STREAM);
+        assert!(carrier.physical_context_gap_count > 0);
+    }
+
+    #[test]
+    fn truncated_cfb_raw_carrier_fallback_rejects_duplicate_delay_names() {
+        let mut bytes = synthetic_pub_cfb_with_duplicate_delay_names();
+        bytes.extend_from_slice(&[0xaa; 37]);
+        let source_sha = source_sha256(&bytes);
+
+        assert!(
+            pub_cfb::discover_regular_stream_sid_reader(Cursor::new(&bytes), ESCHER_DELAY_STREAM,)
+                .is_err()
+        );
+        assert!(
+            discover_reader_partial_escherdelay_carrier(&bytes, &source_sha, true).is_none(),
+            "raw-name fallback must fail closed when EscherDelayStm is not unique"
+        );
+    }
+
+    #[test]
+    fn truncated_cfb_raw_carrier_fallback_rejects_hidden_duplicate_with_bad_name() {
+        let mut bytes =
+            corrupt_second_delay_name_terminator(synthetic_pub_cfb_with_duplicate_delay_names());
+        bytes.extend_from_slice(&[0xaa; 37]);
+        let source_sha = source_sha256(&bytes);
+
+        assert!(
+            pub_cfb::discover_regular_stream_sid_reader(Cursor::new(&bytes), ESCHER_DELAY_STREAM,)
+                .is_err()
+        );
+        assert!(
+            discover_reader_partial_escherdelay_carrier(&bytes, &source_sha, true).is_none(),
+            "raw-name fallback must not infer uniqueness while an active stream name is unreadable"
+        );
+    }
+
+    #[test]
+    fn raw_carrier_fallback_requires_explicit_container_unavailable_gate() {
+        let mut bytes = synthetic_pub_cfb_with_delay_png();
+        bytes.extend_from_slice(&[0xaa; 37]);
+        let source_sha = source_sha256(&bytes);
+
+        assert!(
+            discover_reader_partial_escherdelay_carrier(&bytes, &source_sha, false).is_none(),
+            "raw-name carrier discovery must not activate outside the explicit container-unavailable path"
+        );
     }
 
     #[test]
