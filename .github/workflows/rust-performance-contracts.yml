@@ -28,7 +28,7 @@ jobs:
           fetch-depth: 0
 
       - name: Test performance contract router
-        run: python -m unittest tools/perf/test_rust_perf_contract_router.py
+        run: PYTHONPATH=tools/perf python -m unittest tools/perf/test_rust_perf_contract_router.py
 
       - name: Select contracts from exact PR diff
         id: route
