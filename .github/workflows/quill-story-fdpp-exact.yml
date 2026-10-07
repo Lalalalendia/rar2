@@ -6,6 +6,7 @@ on:
       - ".github/workflows/quill-story-fdpp-exact.yml"
       - "vendor/producer-a/crates/pub-quill/src/**"
       - "vendor/producer-a/crates/pub-reader/src/**"
+      - "!vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
       - "vendor/producer-a/crates/pub-reader/tests/story_provenance.rs"
       - "!vendor/producer-a/crates/pub-reader/src/bin/**"
   workflow_dispatch:
