@@ -1,0 +1,12 @@
+# Wave 27 — exact closed evidence/control refs
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+measure/cloud-image-descriptor-census-02 febdeac24dec7e0acb1058c6b570075451af2b2f
+measure/viewer-source-font-clipping-census-01 c2dd5a0d577b8bca5bae530df9d1dbb0087f3568
+measure/pub-reader-story-frame-analysis-routing-01 e6b43a1037eb9d9009d26aa08de8495a004fb8b5
+measure/pub-reader-story-frame-analysis-routing-02 eede74e0f783fe198ad2c1a6e4d9a7d8be0f1d33
+measure/cloud-arial-liberation-sans-01 b8c9c267f2dd60c193d0d1b1891ef35eecfc51d5
+measure/cloud-cmo-text-inset-defaults-01 fced4c4de1c1775dc55922096b2305ec04bb6069
+measure/cloud-cmo7-typography-authority-main-01 cd315be5258a4eb550b55bf613031f394b7953b6
+measure/cloud-cmo7-size-authority-01 b515d2d22955d1caadf6cbb748e5b00b83973ceb
+ops/branch-gc-20261007-evidence-wave26 8343da3cb26b77454c79966b32f37b53e99af71f
