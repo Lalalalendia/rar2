@@ -1,3 +1,4 @@
+// CI routing control: fixed-PDF resource owner only; no product semantics.
 use super::{
     CURRENT_FIXED_PDF_RESOURCE_INPUT_V1, DesktopShapedFlowRuntimeError,
     ExplicitDesktopFontResourceV1, build_current_story_layout_with_pages_v1,
