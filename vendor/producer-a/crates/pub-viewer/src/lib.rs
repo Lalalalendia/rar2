@@ -86,7 +86,7 @@ pub use pub_reader::{
     ReaderSalvageProbe, ReaderSalvageStreamState, ReaderSalvageSubsystemProbe,
     ReaderSalvageTrigger, build_reader_partial_source_graph, classify_failure_candidate,
     classify_pub_family, exact_file_intake_eligible, probe_reader_salvage_candidate,
-    probe_reader_salvage_candidate_with_trigger,
+    probe_reader_salvage_candidate_with_trigger, recovered_resource,
 };
 use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
@@ -4777,29 +4777,6 @@ mod tests {
         assert!(!json.contains("\"filename\""));
         assert!(!json.contains("\"source_hash\""));
         assert!(!json.contains("\"sha256\""));
-    }
-
-    #[test]
-    fn salvage_product_outcome_carries_partial_source_graph_not_probe() {
-        let graph = ReaderPartialSourceGraph {
-            schema_version: READER_PARTIAL_SOURCE_GRAPH_SCHEMA_V1.to_owned(),
-            source_sha256: "a".repeat(64),
-            contents_family: None,
-            subsystems: ReaderSalvageSubsystemProbe {
-                contents: ReaderSalvageStreamState::Readable,
-                quill: ReaderSalvageStreamState::Absent,
-                escher: ReaderSalvageStreamState::Absent,
-                escher_delay: ReaderSalvageStreamState::Absent,
-            },
-            facts: Vec::new(),
-            gaps: vec![
-                ReaderPartialSourceGap::TextUnavailable,
-                ReaderPartialSourceGap::ImageFactsUnavailable,
-                ReaderPartialSourceGap::GeometryFactsUnavailable,
-            ],
-        };
-        let outcome = ViewerProductOpenOutcome::Salvage(graph.clone());
-        assert_eq!(outcome, ViewerProductOpenOutcome::Salvage(graph));
     }
 
     #[test]

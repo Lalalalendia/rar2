@@ -6,8 +6,8 @@ use crate::salvage_authority::{ReaderSalvageAuthority, typed_corruption_authorit
 use pub_contents::ContentsFamily;
 use pub_core::StreamPath;
 use pub_escher::{
-    BlipKind, BlipUidRule, DelayedBlipPrefixGap, inspect_validated_delayed_blips_prefix,
-    parse_officeart_stream, validate_blip_record,
+    BlipKind, BlipMetafileCompression, BlipUidRule, DelayedBlipPrefixGap,
+    inspect_validated_delayed_blips_prefix, parse_officeart_stream, validate_blip_record,
 };
 use pub_quill::{QuillStoryReadError, parse_confirmed_story_catalog};
 use serde::{Deserialize, Serialize};
@@ -182,7 +182,65 @@ pub struct ReaderPartialSourceGraph {
     pub contents_family: Option<String>,
     pub subsystems: ReaderSalvageSubsystemProbe,
     pub facts: Vec<ReaderPartialSourceFact>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recovered_resources: Vec<ReaderPartialRecoveredResource>,
     pub gaps: Vec<ReaderPartialSourceGap>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReaderPartialPhysicalRange {
+    pub offset: u64,
+    pub len: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReaderRecoveredResourcePlacementStatus {
+    DetachedOwnershipNotProven,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReaderRecoveredResourceRenderStatus {
+    NotProven,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReaderRecoveredResourcePreviewStatus {
+    NotProven,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReaderPartialRecoveredResource {
+    pub resource_key: String,
+    pub source_sha256: String,
+    pub stream_sid: u32,
+    pub logical_stream: String,
+    pub record_offset: u64,
+    pub record_len: u64,
+    pub stored_payload_offset: u64,
+    pub stored_payload_len: u64,
+    pub stored_physical_ranges: Vec<ReaderPartialPhysicalRange>,
+    pub kind: BlipKind,
+    pub effective_uid_hex: String,
+    pub uid_rule: BlipUidRule,
+    pub stored_sha256: String,
+    pub logical_sha256: String,
+    pub logical_byte_len: u64,
+    pub compression: BlipMetafileCompression,
+    pub placement_status: ReaderRecoveredResourcePlacementStatus,
+    pub render_status: ReaderRecoveredResourceRenderStatus,
+    pub preview_status: ReaderRecoveredResourcePreviewStatus,
+}
+
+/// Public type namespace for source-bound recovered WMF/EMF resources.
+pub mod recovered_resource {
+    pub use super::{
+        ReaderPartialEscherDelayMetafileEvidence, ReaderPartialPhysicalRange,
+        ReaderPartialRecoveredResource, ReaderRecoveredResourcePlacementStatus,
+        ReaderRecoveredResourcePreviewStatus, ReaderRecoveredResourceRenderStatus,
+    };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -214,6 +272,21 @@ pub struct ReaderPartialEscherDelayImageEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReaderPartialEscherDelayMetafileEvidence {
+    pub record_source: pub_core::RawSpan,
+    pub payload_source: pub_core::RawSpan,
+    pub payload_physical_ranges: Vec<pub_cfb::RootRegularStreamSourceRange>,
+    pub kind: BlipKind,
+    pub effective_uid_hex: String,
+    pub uid_rule: BlipUidRule,
+    pub stored_sha256: String,
+    pub stored_byte_len: u64,
+    pub logical_sha256: String,
+    pub logical_byte_len: u64,
+    pub compression: BlipMetafileCompression,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReaderPartialEscherDelayEvidence {
     pub source_sha256: String,
     pub stream_sid: u32,
@@ -229,6 +302,7 @@ pub struct ReaderPartialEscherDelayEvidence {
     pub terminal_parser_gap: Option<DelayedBlipPrefixGap>,
     pub rejected_complete_blip_count: usize,
     pub validated_images: Vec<ReaderPartialEscherDelayImageEvidence>,
+    pub validated_metafiles: Vec<ReaderPartialEscherDelayMetafileEvidence>,
 }
 
 fn map_logical_span_to_physical_ranges(
@@ -347,36 +421,70 @@ pub fn build_reader_partial_escherdelay_evidence(
     let terminal_parser_gap = inventory.terminal_gap.clone();
     let rejected_complete_blip_count = inventory.rejected_complete_blips.len();
     let mut validated_images = Vec::new();
+    let mut validated_metafiles = Vec::new();
     for validated in inventory.records {
-        if !reader_partial_image_kind_admitted_v1(validated.kind) {
+        if reader_partial_image_kind_admitted_v1(validated.kind) {
+            let payload_physical_ranges = map_logical_span_to_physical_ranges(
+                &recovered.source_ranges,
+                &validated.payload_source,
+                recovered.available_prefix_len,
+            )?;
+            if sha256_physical_ranges(bytes, &payload_physical_ranges).as_deref()
+                != Some(validated.payload_sha256.as_str())
+            {
+                return None;
+            }
+
+            let byte_len = validated.payload_source.len;
+            validated_images.push(ReaderPartialEscherDelayImageEvidence {
+                record_source: validated.record_source,
+                payload_source: validated.payload_source,
+                payload_physical_ranges,
+                kind: validated.kind,
+                effective_uid_hex: validated
+                    .effective_uid
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect(),
+                uid_rule: validated.uid_rule,
+                payload_sha256: validated.payload_sha256,
+                byte_len,
+            });
             continue;
         }
-        let payload_physical_ranges = map_logical_span_to_physical_ranges(
-            &recovered.source_ranges,
-            &validated.payload_source,
-            recovered.available_prefix_len,
-        )?;
-        if sha256_physical_ranges(bytes, &payload_physical_ranges).as_deref()
-            != Some(validated.payload_sha256.as_str())
-        {
-            return None;
-        }
 
-        let byte_len = validated.payload_source.len;
-        validated_images.push(ReaderPartialEscherDelayImageEvidence {
-            record_source: validated.record_source,
-            payload_source: validated.payload_source,
-            payload_physical_ranges,
-            kind: validated.kind,
-            effective_uid_hex: validated
-                .effective_uid
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect(),
-            uid_rule: validated.uid_rule,
-            payload_sha256: validated.payload_sha256,
-            byte_len,
-        });
+        if reader_partial_metafile_kind_admitted_v1(validated.kind) {
+            let payload_physical_ranges = map_logical_span_to_physical_ranges(
+                &recovered.source_ranges,
+                &validated.payload_source,
+                recovered.available_prefix_len,
+            )?;
+            if sha256_physical_ranges(bytes, &payload_physical_ranges).as_deref()
+                != Some(validated.payload_sha256.as_str())
+            {
+                return None;
+            }
+            let logical_sha256 = validated.logical_payload_sha256?;
+            let logical_byte_len = validated.logical_payload_len?;
+            let compression = validated.metafile_compression?;
+            validated_metafiles.push(ReaderPartialEscherDelayMetafileEvidence {
+                record_source: validated.record_source,
+                payload_source: validated.payload_source.clone(),
+                payload_physical_ranges,
+                kind: validated.kind,
+                effective_uid_hex: validated
+                    .effective_uid
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect(),
+                uid_rule: validated.uid_rule,
+                stored_sha256: validated.payload_sha256,
+                stored_byte_len: validated.payload_source.len,
+                logical_sha256,
+                logical_byte_len,
+                compression,
+            });
+        }
     }
 
     Some(ReaderPartialEscherDelayEvidence {
@@ -392,6 +500,7 @@ pub fn build_reader_partial_escherdelay_evidence(
         terminal_parser_gap,
         rejected_complete_blip_count,
         validated_images,
+        validated_metafiles,
     })
 }
 
@@ -400,6 +509,10 @@ fn reader_partial_image_kind_admitted_v1(kind: BlipKind) -> bool {
         kind,
         BlipKind::Jpeg | BlipKind::Png | BlipKind::Gif | BlipKind::Dib | BlipKind::Tiff
     )
+}
+
+fn reader_partial_metafile_kind_admitted_v1(kind: BlipKind) -> bool {
+    matches!(kind, BlipKind::Emf | BlipKind::Wmf)
 }
 
 pub fn build_reader_partial_source_graph(
@@ -427,6 +540,7 @@ pub fn build_reader_partial_source_graph(
 
     let existing_survival = probe.has_surviving_evidence();
     let mut facts = Vec::new();
+    let mut recovered_resources = Vec::new();
     let mut gaps = Vec::new();
 
     if probe.subsystems.quill == ReaderSalvageStreamState::Readable {
@@ -492,6 +606,7 @@ pub fn build_reader_partial_source_graph(
     if probe.subsystems.escher_delay != ReaderSalvageStreamState::Readable
         && let Some(evidence) = build_reader_partial_escherdelay_evidence(bytes, probe)
     {
+        let stream_sid = evidence.stream_sid;
         for image in evidence.validated_images {
             if !reader_partial_image_kind_admitted_v1(image.kind) {
                 continue;
@@ -500,7 +615,7 @@ pub fn build_reader_partial_source_graph(
                 resource_key: format!(
                     "escher-delay:{}:{}:{}:{}",
                     probe.source_sha256,
-                    evidence.stream_sid,
+                    stream_sid,
                     image.record_source.offset,
                     image.payload_sha256
                 ),
@@ -509,12 +624,49 @@ pub fn build_reader_partial_source_graph(
             });
             verified_image_count += 1;
         }
+        for metafile in evidence.validated_metafiles {
+            recovered_resources.push(ReaderPartialRecoveredResource {
+                resource_key: format!(
+                    "escher-delay-metafile:{}:{}:{}:{}",
+                    probe.source_sha256,
+                    stream_sid,
+                    metafile.record_source.offset,
+                    metafile.stored_sha256
+                ),
+                source_sha256: probe.source_sha256.clone(),
+                stream_sid,
+                logical_stream: ESCHER_DELAY_STREAM.to_owned(),
+                record_offset: metafile.record_source.offset,
+                record_len: metafile.record_source.len,
+                stored_payload_offset: metafile.payload_source.offset,
+                stored_payload_len: metafile.stored_byte_len,
+                stored_physical_ranges: metafile
+                    .payload_physical_ranges
+                    .into_iter()
+                    .map(|range| ReaderPartialPhysicalRange {
+                        offset: range.offset,
+                        len: range.len,
+                    })
+                    .collect(),
+                kind: metafile.kind,
+                effective_uid_hex: metafile.effective_uid_hex,
+                uid_rule: metafile.uid_rule,
+                stored_sha256: metafile.stored_sha256,
+                logical_sha256: metafile.logical_sha256,
+                logical_byte_len: metafile.logical_byte_len,
+                compression: metafile.compression,
+                placement_status:
+                    ReaderRecoveredResourcePlacementStatus::DetachedOwnershipNotProven,
+                render_status: ReaderRecoveredResourceRenderStatus::NotProven,
+                preview_status: ReaderRecoveredResourcePreviewStatus::NotProven,
+            });
+        }
     }
     if verified_image_count == 0 {
         gaps.push(ReaderPartialSourceGap::ImageFactsUnavailable);
     }
 
-    if !existing_survival && verified_image_count == 0 {
+    if !existing_survival && verified_image_count == 0 && recovered_resources.is_empty() {
         return Err(ReaderPartialSourceGraphError::Ineligible);
     }
 
@@ -536,6 +688,7 @@ pub fn build_reader_partial_source_graph(
         contents_family: probe.contents_family.clone(),
         subsystems: probe.subsystems,
         facts,
+        recovered_resources,
         gaps,
     })
 }
@@ -888,6 +1041,14 @@ mod tests {
     }
 
     fn synthetic_pub_cfb_with_delay_png_uid(valid_uid: bool) -> Vec<u8> {
+        synthetic_pub_cfb_with_delay_resources(valid_uid, true)
+    }
+
+    fn synthetic_pub_cfb_with_delay_metafiles_only() -> Vec<u8> {
+        synthetic_pub_cfb_with_delay_resources(true, false)
+    }
+
+    fn synthetic_pub_cfb_with_delay_resources(valid_uid: bool, include_png: bool) -> Vec<u8> {
         let mut compound =
             cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("synthetic Publisher CFB");
         compound.create_storage("/Escher").expect("Escher storage");
@@ -910,43 +1071,100 @@ mod tests {
 
         use md4::{Digest, Md4};
 
-        let mut image = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
-        image.extend_from_slice(b"salvage-image");
-        let digest = Md4::digest(&image);
-        let mut uid = [0u8; 16];
-        uid.copy_from_slice(&digest);
-        if !valid_uid {
-            uid[0] ^= 0x5a;
+        let mut record = Vec::new();
+        if include_png {
+            let mut image = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+            image.extend_from_slice(b"salvage-image");
+            let digest = Md4::digest(&image);
+            let mut uid = [0u8; 16];
+            uid.copy_from_slice(&digest);
+            if !valid_uid {
+                uid[0] ^= 0x5a;
+            }
+
+            let mut payload = Vec::with_capacity(17 + image.len());
+            payload.extend_from_slice(&uid);
+            payload.push(0xff);
+            payload.extend_from_slice(&image);
+            record.extend_from_slice(&0x6e00u16.to_le_bytes());
+            record.extend_from_slice(&pub_escher::OFFICE_ART_BLIP_PNG.to_le_bytes());
+            record.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            record.extend_from_slice(&payload);
         }
 
-        let mut payload = Vec::with_capacity(17 + image.len());
-        payload.extend_from_slice(&uid);
-        payload.push(0xff);
-        payload.extend_from_slice(&image);
-        let mut record = Vec::new();
-        record.extend_from_slice(&0x6e00u16.to_le_bytes());
-        record.extend_from_slice(&pub_escher::OFFICE_ART_BLIP_PNG.to_le_bytes());
-        record.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        record.extend_from_slice(&payload);
+        // Include strict uncompressed + DEFLATE EMF/WMF resources in the same
+        // recovered prefix. The product projection must preserve stored source
+        // identity separately from logical/uncompressed identity.
+        let append_metafile = |record: &mut Vec<u8>,
+                               rec_type: u16,
+                               rec_instance: u16,
+                               logical: &[u8],
+                               stored: &[u8],
+                               compression: u8| {
+            let metafile_uid = Md4::digest(logical);
+            let mut metafile_payload = Vec::with_capacity(50 + stored.len());
+            metafile_payload.extend_from_slice(&metafile_uid);
+            metafile_payload.extend_from_slice(&(logical.len() as u32).to_le_bytes());
+            metafile_payload.extend_from_slice(&[0u8; 16]); // rcBounds
+            metafile_payload.extend_from_slice(&[0u8; 8]); // ptSize
+            metafile_payload.extend_from_slice(&(stored.len() as u32).to_le_bytes());
+            metafile_payload.push(compression);
+            metafile_payload.push(0xfe); // filter
+            metafile_payload.extend_from_slice(stored);
+            record.extend_from_slice(&(rec_instance << 4).to_le_bytes());
+            record.extend_from_slice(&rec_type.to_le_bytes());
+            record.extend_from_slice(&(metafile_payload.len() as u32).to_le_bytes());
+            record.extend_from_slice(&metafile_payload);
+        };
 
-        // Include a strict uncompressed EMF in the same recovered prefix.
-        // The shared #1656 validator must admit the resource envelope, while
-        // ReaderPartialEscherDelayEvidence remains raster-only until #1659.
-        let metafile = b"synthetic-emf-resource";
-        let metafile_uid = Md4::digest(metafile);
-        let mut metafile_payload = Vec::with_capacity(50 + metafile.len());
-        metafile_payload.extend_from_slice(&metafile_uid);
-        metafile_payload.extend_from_slice(&(metafile.len() as u32).to_le_bytes());
-        metafile_payload.extend_from_slice(&[0u8; 16]); // rcBounds
-        metafile_payload.extend_from_slice(&[0u8; 8]); // ptSize
-        metafile_payload.extend_from_slice(&(metafile.len() as u32).to_le_bytes());
-        metafile_payload.push(0xfe); // uncompressed
-        metafile_payload.push(0xfe); // filter
-        metafile_payload.extend_from_slice(metafile);
-        record.extend_from_slice(&0x3d40u16.to_le_bytes());
-        record.extend_from_slice(&pub_escher::OFFICE_ART_BLIP_EMF.to_le_bytes());
-        record.extend_from_slice(&(metafile_payload.len() as u32).to_le_bytes());
-        record.extend_from_slice(&metafile_payload);
+        let emf = b"synthetic-emf-resource";
+        append_metafile(
+            &mut record,
+            pub_escher::OFFICE_ART_BLIP_EMF,
+            0x03d4,
+            emf,
+            emf,
+            0xfe,
+        );
+        let wmf = b"synthetic-wmf-resource";
+        append_metafile(
+            &mut record,
+            pub_escher::OFFICE_ART_BLIP_WMF,
+            0x0216,
+            wmf,
+            wmf,
+            0xfe,
+        );
+
+        let emf_deflate_logical = b"synthetic-emf-deflate";
+        let emf_deflate_stored: &[u8] = &[
+            0x78, 0x9c, 0x2b, 0xae, 0xcc, 0x2b, 0xc9, 0x48, 0x2d, 0xc9, 0x4c, 0xd6, 0x4d, 0xcd,
+            0x4d, 0xd3, 0x4d, 0x49, 0x4d, 0xcb, 0x49, 0x2c, 0x49, 0x05, 0x00, 0x5c, 0xfe, 0x08,
+            0x43,
+        ];
+        append_metafile(
+            &mut record,
+            pub_escher::OFFICE_ART_BLIP_EMF,
+            0x03d4,
+            emf_deflate_logical,
+            emf_deflate_stored,
+            0x00,
+        );
+
+        let wmf_deflate_logical = b"synthetic-wmf-deflate";
+        let wmf_deflate_stored: &[u8] = &[
+            0x78, 0x9c, 0x2b, 0xae, 0xcc, 0x2b, 0xc9, 0x48, 0x2d, 0xc9, 0x4c, 0xd6, 0x2d, 0xcf,
+            0x4d, 0xd3, 0x4d, 0x49, 0x4d, 0xcb, 0x49, 0x2c, 0x49, 0x05, 0x00, 0x5d, 0xc4, 0x08,
+            0x55,
+        ];
+        append_metafile(
+            &mut record,
+            pub_escher::OFFICE_ART_BLIP_WMF,
+            0x0216,
+            wmf_deflate_logical,
+            wmf_deflate_stored,
+            0x00,
+        );
 
         // Keep EscherDelay on the regular FAT path so the damaged-CFB
         // recovery arm exercises the exact-SID regular-stream substrate.
@@ -963,6 +1181,24 @@ mod tests {
 
         compound.flush().expect("flush synthetic CFB");
         compound.into_inner().into_inner()
+    }
+
+    fn corrupt_contents_start_sector(mut bytes: Vec<u8>) -> Vec<u8> {
+        let mut marker = Vec::new();
+        for unit in "Contents".encode_utf16() {
+            marker.extend_from_slice(&unit.to_le_bytes());
+        }
+        let offset = bytes
+            .windows(marker.len())
+            .position(|window| window == marker)
+            .expect("Contents directory entry");
+        assert_eq!(
+            offset % 128,
+            0,
+            "Contents marker must begin a directory entry"
+        );
+        bytes[offset + 116..offset + 120].copy_from_slice(&0xffff_fffau32.to_le_bytes());
+        bytes
     }
 
     fn corrupt_first_minifat_entry(mut bytes: Vec<u8>) -> Vec<u8> {
@@ -1000,8 +1236,23 @@ mod tests {
         assert_eq!(
             evidence.validated_images.len(),
             1,
-            "strict EMF must not leak into raster-shaped Reader evidence"
+            "strict metafiles must not leak into raster-shaped Reader evidence"
         );
+        assert_eq!(evidence.validated_metafiles.len(), 4);
+        assert!(evidence.validated_metafiles.iter().any(|value| {
+            value.kind == BlipKind::Emf
+                && value.compression == BlipMetafileCompression::Uncompressed
+        }));
+        assert!(evidence.validated_metafiles.iter().any(|value| {
+            value.kind == BlipKind::Emf && value.compression == BlipMetafileCompression::Deflate
+        }));
+        assert!(evidence.validated_metafiles.iter().any(|value| {
+            value.kind == BlipKind::Wmf
+                && value.compression == BlipMetafileCompression::Uncompressed
+        }));
+        assert!(evidence.validated_metafiles.iter().any(|value| {
+            value.kind == BlipKind::Wmf && value.compression == BlipMetafileCompression::Deflate
+        }));
         assert_eq!(evidence.source_sha256, source_sha256(&bytes));
         assert!(!evidence.stream_source_ranges.is_empty());
         let image = &evidence.validated_images[0];
@@ -1023,6 +1274,26 @@ mod tests {
         assert_eq!(verified.len(), 1);
         assert_eq!(verified[0].0, image.payload_sha256);
         assert_eq!(verified[0].1, image.byte_len);
+        assert_eq!(graph.recovered_resources.len(), 4);
+        assert!(graph.recovered_resources.iter().all(|resource| {
+            resource.source_sha256 == source_sha256(&bytes)
+                && resource.stream_sid == evidence.stream_sid
+                && !resource.stored_physical_ranges.is_empty()
+                && resource.stored_sha256.len() == 64
+                && resource.logical_sha256.len() == 64
+                && matches!(
+                    resource.placement_status,
+                    ReaderRecoveredResourcePlacementStatus::DetachedOwnershipNotProven
+                )
+                && matches!(
+                    resource.render_status,
+                    ReaderRecoveredResourceRenderStatus::NotProven
+                )
+                && matches!(
+                    resource.preview_status,
+                    ReaderRecoveredResourcePreviewStatus::NotProven
+                )
+        }));
         assert!(
             !graph
                 .gaps
@@ -1032,6 +1303,54 @@ mod tests {
             graph
                 .gaps
                 .contains(&ReaderPartialSourceGap::TextUnavailable)
+        );
+        assert!(
+            graph
+                .gaps
+                .contains(&ReaderPartialSourceGap::GeometryFactsUnavailable)
+        );
+    }
+
+    #[test]
+    fn damaged_cfb_metafile_only_survival_is_product_useful_without_verified_image() {
+        let bytes = corrupt_contents_start_sector(corrupt_first_minifat_entry(
+            synthetic_pub_cfb_with_delay_metafiles_only(),
+        ));
+        assert!(pub_cfb::inspect_reader(Cursor::new(bytes.clone())).is_err());
+
+        let probe = probe_reader_salvage_candidate(&bytes);
+        assert_eq!(
+            probe.eligibility,
+            ReaderSalvageEligibility::EligibleDamagedPublisher
+        );
+        assert!(!probe.has_surviving_evidence());
+        assert_eq!(
+            probe.subsystems.contents,
+            ReaderSalvageStreamState::ContainerUnavailable
+        );
+
+        let evidence =
+            build_reader_partial_escherdelay_evidence(&bytes, &probe).expect("metafile evidence");
+        assert!(evidence.validated_images.is_empty());
+        assert_eq!(evidence.validated_metafiles.len(), 4);
+
+        let graph = build_reader_partial_source_graph(&bytes, &probe)
+            .expect("metafile-only recovery must be product-useful");
+        assert!(
+            !graph
+                .facts
+                .iter()
+                .any(|fact| matches!(fact, ReaderPartialSourceFact::VerifiedImage { .. }))
+        );
+        assert_eq!(graph.recovered_resources.len(), 4);
+        assert!(graph.recovered_resources.iter().all(|resource| {
+            resource.source_sha256 == source_sha256(&bytes)
+                && resource.stream_sid == evidence.stream_sid
+        }));
+        assert!(
+            graph
+                .gaps
+                .contains(&ReaderPartialSourceGap::ImageFactsUnavailable)
         );
         assert!(
             graph
