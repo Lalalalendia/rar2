@@ -1,0 +1,7 @@
+# Wave 29 — closed measurement/evidence refs with durable terminal disposition
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+integration/pilot-reader-001 20baa3ab03595f9cbe37a947a1c60f6153dec57d
+ci/migration-consumer-runtime-measurement 9ea125522067dd420475f4b46c3a7a2da837e6c9
+ci/migration-consumer-runtime-cutover-01 33d64603f660775d7494befacd6b9e989bfbb756
+ops/branch-gc-20261007-evidence-wave28 4c6a506a9c6c67f4f9d804973242c1c4d17c42f3
