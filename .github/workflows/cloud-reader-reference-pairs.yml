@@ -1,4 +1,5 @@
 name: Cloud Reader reference PUB-PDF pairs
+# control: typography projection base census proof
 
 on:
   workflow_call:
