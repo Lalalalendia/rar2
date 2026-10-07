@@ -14,8 +14,6 @@ mod imported_paragraphs_v1;
 mod link_text_frame_tail_v1;
 mod table_rowcol_graph_v1;
 mod table_rowcol_history_v1;
-mod table_track_extent_v1;
-mod table_track_history_v1;
 mod text_format_property_base_v1;
 mod writer_assessment;
 
@@ -70,14 +68,12 @@ pub use table_rowcol_history_v1::{
     canonical_table_rowcol_history_v1, plan_table_rowcol_mutation_v1,
     validate_table_structure_snapshot_v1,
 };
-pub use table_track_extent_v1::{
-    SetTableTrackExtentErrorV1, TableTrackExtentPlanV1, TableTrackTargetV1,
-    plan_table_track_extent_v1, set_table_track_extent_v1,
-};
-pub use table_track_history_v1::{
-    SetTableTrackExtentHistoryV1, TABLE_TRACK_EXTENT_HISTORY_V1, TableTrackExtentHistoryErrorV1,
+pub use pub_editor_table_core::{
+    SetTableTrackExtentErrorV1, SetTableTrackExtentHistoryV1, TABLE_TRACK_EXTENT_HISTORY_V1,
+    TableTrackExtentHistoryErrorV1, TableTrackExtentPlanV1, TableTrackTargetV1,
     apply_table_track_extent_history_forward_v1, apply_table_track_extent_history_inverse_v1,
-    canonical_table_track_extent_history_v1,
+    canonical_table_track_extent_history_v1, plan_table_track_extent_v1,
+    set_table_track_extent_v1,
 };
 pub use text_format_property_base_v1::{
     TEXT_FORMAT_PROPERTY_STATE_V1, TextFormatPropertyBaseRunV1, TextFormatPropertyOverrideRunV1,
