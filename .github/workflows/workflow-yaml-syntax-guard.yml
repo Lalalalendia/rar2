@@ -25,6 +25,7 @@ on:
       - "tools/ci/test_pub_reader_typography_projection_routing.py"
       - "tools/ci/test_pub_reader_direct_transform_routing.py"
       - "tools/ci/test_pub_reader_grouped_projection_routing.py"
+      - "tools/ci/test_pub_reader_source_graph_model_routing.py"
       - "tools/ci/test_no_publisher_selfhosted_actions.py"
   workflow_dispatch:
 
@@ -76,5 +77,7 @@ jobs:
         run: python tools/ci/test_pub_reader_direct_transform_routing.py
       - name: Guard pub-reader grouped projection routing
         run: python tools/ci/test_pub_reader_grouped_projection_routing.py
+      - name: Guard pub-reader source graph model routing
+        run: python tools/ci/test_pub_reader_source_graph_model_routing.py
       - name: Guard Publisher native execution boundary
         run: python tools/ci/test_no_publisher_selfhosted_actions.py
