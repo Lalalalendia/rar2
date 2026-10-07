@@ -1,6 +1,6 @@
 use super::{
-    DesktopShapedFlowRuntimeError, ExplicitDesktopFontResourceV1,
-    CURRENT_FIXED_PDF_RESOURCE_INPUT_V1, build_current_story_layout_with_pages_v1,
+    CURRENT_FIXED_PDF_RESOURCE_INPUT_V1, DesktopShapedFlowRuntimeError,
+    ExplicitDesktopFontResourceV1, build_current_story_layout_with_pages_v1,
 };
 use crate::fixed_pdf_pages::qualified_page_set_error_v1;
 use pub_editor::{EditorCurrentImageResourceV1, EditorSession};
@@ -99,4 +99,3 @@ pub fn build_current_fixed_pdf_resource_input_for_pages_v1(
         },
     })
 }
-
