@@ -475,12 +475,11 @@ pub(super) fn resolve_mixed_size_text_layout_v1(
         };
 
     if evaluation.cursor != fragment.scalar_end {
-        let has_visible_partial_line = evaluation.lines.iter().any(|line| {
-            line.scalar_end > line.scalar_start && line.measured_width_emu > 0
-        });
-        if !has_visible_partial_line
-            || evaluation.stop_cause != Some("height_capacity_exhausted")
-        {
+        let has_visible_partial_line = evaluation
+            .lines
+            .iter()
+            .any(|line| line.scalar_end > line.scalar_start && line.measured_width_emu > 0);
+        if !has_visible_partial_line || evaluation.stop_cause != Some("height_capacity_exhausted") {
             return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
         }
     }
