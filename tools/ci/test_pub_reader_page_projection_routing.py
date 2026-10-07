@@ -50,8 +50,10 @@ for name in (
 
 # Corpus/page-membership owners remain fail-closed for this semantic seam.
 assert NEG_PAGE not in pr_block("migration-1050-corpus-matrix.yml")
-assert PAGE in workflow("cloud-reader-reference-pairs.yml")
-assert PAGE in workflow("publisher-visual-golden-batch01.yml")
+# Cloud reference and Batch01 are reusable workflows invoked by reader-pr-ci.
+# Do not add a second direct page_projection push subscription.
+assert PAGE not in workflow("cloud-reader-reference-pairs.yml")
+assert PAGE not in workflow("publisher-visual-golden-batch01.yml")
 
 scope = mod.classify([PAGE])
 expected = {
