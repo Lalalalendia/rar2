@@ -32,9 +32,9 @@ use chaptera_scene_instance::{
     SceneInstanceV1, SceneProjectionKindV1, cmo_story_slot_instance_v1,
     inherited_master_instance_v1,
 };
-pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
 #[cfg(test)]
 use pub_layout::{BoundedAuthoringSlice, BoundedNodeGeometryInput};
+pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
 use pub_layout::{
     BoundedLayoutProjection, BoundedParagraphFlowConstraint, BoundedParagraphFlowRun,
     BoundedTextFlowEnvironment, BoundedTextMetrics, BoundedUniformTableMetrics,
