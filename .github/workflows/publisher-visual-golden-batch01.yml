@@ -54,6 +54,7 @@ jobs:
         with:
           toolchain: "1.94.1"
 
+      # Warm-cache measurement control: Cargo manifests intentionally unchanged.
       - name: Build Batch01 Cargo cache key
         id: batch01-cargo-cache-key
         shell: bash
