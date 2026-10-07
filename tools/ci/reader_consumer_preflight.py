@@ -29,6 +29,8 @@ VENDOR_PACKAGE_SPECS = {
     "pub-model": "pub-model@0.1.0-donor",
 }
 
+PUB_VIEWER_IMAGES = "vendor/producer-a/crates/pub-viewer/src/images.rs"
+
 
 def changed_paths(base: str, head: str) -> list[str]:
     return sorted(
@@ -180,7 +182,8 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
                 },
             ]
         )
-        if "pub-viewer" in affected:
+        pub_viewer_images_only = set(paths) == {PUB_VIEWER_IMAGES}
+        if "pub-viewer" in affected and not pub_viewer_images_only:
             commands.append(
                 {
                     "id": "pub-viewer-cmo-slot-compose",
