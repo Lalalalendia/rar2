@@ -2064,6 +2064,13 @@ fn operation_id(operation: &EditOperation) -> String {
 
 fn operation_summary(operation: &EditOperation) -> Value {
     match operation {
+        EditOperation::LinkTextFrameTail { transition } => json!({
+            "kind":"link_text_frame_tail",
+            "story_id":transition.story_id.as_canonical().to_string(),
+            "source_frame_id":transition.source_frame_id.as_canonical().to_string(),
+            "target_frame_id":transition.target_frame_id.as_canonical().to_string(),
+            "target_empty_story_id":transition.target_empty_story.id.as_canonical().to_string()
+        }),
         EditOperation::ReplaceStoryRange {
             story_id,
             start_scalar,
