@@ -2432,6 +2432,7 @@ mod tests {
         let mut shared_frames = 0_usize;
         let mut shared_lines = 0_usize;
         let mut shared_nonempty_lines = 0_usize;
+        let mut mixed_size_partial_shared_frames = 0_usize;
         let mut layout_none = 0_usize;
         let mut backend_fallbacks = BTreeMap::<&'static str, usize>::new();
         let mut projected_text_nodes = 0_usize;
@@ -2652,6 +2653,30 @@ mod tests {
                     layout_none += 1;
                     continue;
                 };
+                let distinct_text_sizes = text
+                    .typography
+                    .iter()
+                    .map(|run| run.text_size_emu)
+                    .collect::<std::collections::BTreeSet<_>>();
+                let has_visible_partial_line = layout.lines.iter().any(|line| {
+                    line.scalar_end > line.scalar_start && line.measured_width_emu > 0
+                });
+                let has_incomplete_consumption = layout
+                    .lines
+                    .last()
+                    .is_some_and(|line| line.consumed_scalar_end < text.scalar_end);
+                if matches!(
+                    layout.disposition,
+                    RenderTextLayoutDispositionV1::SharedResolved { .. }
+                ) && distinct_text_sizes.len() > 1
+                    && has_visible_partial_line
+                    && has_incomplete_consumption
+                {
+                    // Production admits an incomplete mixed-size SharedResolved
+                    // layout only after height-capacity exhaustion. Keep this
+                    // source-safe aggregate as the exact admission discriminator.
+                    mixed_size_partial_shared_frames += 1;
+                }
                 match layout.disposition {
                     RenderTextLayoutDispositionV1::SharedResolved {
                         font_resource_id,
@@ -2801,6 +2826,10 @@ mod tests {
                     0,
                     "Virginia Devinettes qualification expects no remaining SharedLayoutIncomplete node"
                 );
+                assert_eq!(
+                    mixed_size_partial_shared_frames, 1,
+                    "Virginia Devinettes must gain exactly one mixed-size visible partial SharedResolved frame; production only admits this incomplete state after height-capacity exhaustion"
+                );
             }
             _ => {}
         }
@@ -2817,13 +2846,14 @@ mod tests {
         );
 
         println!(
-            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={}",
+            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} mixed_size_partial_shared_frames={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={}",
             actual_sha256,
             bundle.geometry.document.pages.len(),
             text_nodes,
             shared_frames,
             shared_lines,
             shared_nonempty_lines,
+            mixed_size_partial_shared_frames,
             layout_none,
             backend_fallbacks_json,
             projected_text_nodes,
