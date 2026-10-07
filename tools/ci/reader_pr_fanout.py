@@ -19,6 +19,9 @@ VIEWER_AUTHORING_PROJECTION = (
     "vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
 )
 READER_PAINT_PROJECTION = "vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
+READER_PAGE_PROJECTION = "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
+READER_SOURCE_PAINT_ORDER = "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
+READER_STORY_FRAME_ANALYSIS = "vendor/producer-a/crates/pub-reader/src/story_frame_analysis.rs"
 
 
 TEST_REGION_EVIDENCE_CANDIDATES = {
@@ -325,6 +328,8 @@ CLOUD_REFERENCE = (
     "crates/chaptera-viewer-render-plan/**",
     "vendor/producer-a/crates/pub-viewer/**",
     "vendor/producer-a/crates/pub-reader/src/lib.rs",
+    READER_PAGE_PROJECTION,
+    READER_SOURCE_PAINT_ORDER,
     "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs",
     "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs",
     "tools/acquire_carlton_march_pair.py",
@@ -357,6 +362,8 @@ VISUAL_BATCH01 = (
     "crates/chaptera-viewer-render-plan/**",
     "vendor/producer-a/crates/pub-viewer/**",
     "vendor/producer-a/crates/pub-reader/src/lib.rs",
+    READER_PAGE_PROJECTION,
+    READER_SOURCE_PAINT_ORDER,
 )
 
 TYPOGRAPHY_GOLDEN = (
@@ -556,7 +563,7 @@ def classify(
         path
         for path in semantic_paths
         if not is_rust_integration_test_path(path)
-        and path != VIEWER_AUTHORING_PROJECTION
+        and path not in {VIEWER_AUTHORING_PROJECTION, READER_STORY_FRAME_ANALYSIS}
     ]
     mapping = {
         "tier_a": TIER_A,
@@ -603,7 +610,9 @@ def classify(
     ]
     result["visual_oracle"] = any(matches(path, VISUAL_ORACLE) for path in visual_paths)
     typography_paths = [
-        path for path in visual_paths if path != READER_PAINT_PROJECTION
+        path
+        for path in visual_paths
+        if path not in {READER_PAINT_PROJECTION, READER_PAGE_PROJECTION, READER_SOURCE_PAINT_ORDER}
     ]
     result["typography_golden"] = any(
         matches(path, TYPOGRAPHY_GOLDEN) for path in typography_paths
@@ -613,7 +622,7 @@ def classify(
     virginia_paths = [
         path
         for path in product_paths
-        if path != READER_PAINT_PROJECTION
+        if path not in {READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER}
         and not path.startswith("vendor/producer-a/crates/pub-reader/src/bin/")
         and not path.startswith("vendor/producer-a/crates/pub-viewer/src/bin/")
     ]

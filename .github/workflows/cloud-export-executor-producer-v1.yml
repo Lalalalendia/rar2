@@ -17,6 +17,7 @@ on:
       - "tools/run_cloud_migration_receipt.py"
       - "tools/ci/scribus_idml_consumer.py"
       - "vendor/producer-a/crates/pub-editor/**"
+      - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
       - ".github/workflows/cloud-export-executor-producer-v1.yml"
   workflow_dispatch:
 

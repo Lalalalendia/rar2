@@ -428,26 +428,49 @@ def evaluate(
                     f"shared-root exemption removed while source still exists: {path}"
                 )
 
-    # Existing files can gain fanout only when a workflow's path filter changes.
-    # Inspect just those workflows instead of recomputing the whole source x workflow graph.
+    # Existing files may transfer ownership between conditional workflows, but
+    # their total conditional-workflow fanout must not increase. This keeps the
+    # ratchet compatible with semantic source splits where a new leaf replaces
+    # unrelated old consumers with explicit true owners.
+    workflow_deltas: dict[str, dict[str, list[str]]] = {
+        path: {"added": [], "removed": []} for path in existing_files
+    }
     for workflow in sorted(changed_workflow_paths(repo, base_revision, head_revision)):
         before_patterns = workflow_patterns_at(repo, base_revision, workflow)
         after_patterns = workflow_patterns_at(repo, head_revision, workflow)
-        if after_patterns is None:
-            continue
         for path in sorted(existing_files):
             before = (
                 admitted_by_patterns(path, before_patterns)
                 if before_patterns is not None
                 else False
             )
-            after = admitted_by_patterns(path, after_patterns)
+            after = (
+                admitted_by_patterns(path, after_patterns)
+                if after_patterns is not None
+                else False
+            )
             if after and not before:
-                errors.append(
-                    "FANOUT REGRESSION\n"
-                    f"source: {path}\n"
-                    f"new conditional consumer: {workflow}"
+                workflow_deltas[path]["added"].append(workflow)
+            elif before and not after:
+                workflow_deltas[path]["removed"].append(workflow)
+
+    for path in sorted(existing_files):
+        added = workflow_deltas[path]["added"]
+        removed = workflow_deltas[path]["removed"]
+        net = len(added) - len(removed)
+        if net > 0:
+            detail = [
+                "FANOUT REGRESSION",
+                f"source: {path}",
+                f"net new conditional consumers: {net}",
+                "added:",
+                *[f"  - {workflow}" for workflow in added],
+            ]
+            if removed:
+                detail.extend(
+                    ["removed:", *[f"  - {workflow}" for workflow in removed]]
                 )
+            errors.append("\n".join(detail))
 
     # Only genuinely new leaf files need a full head fanout count. One git archive
     # loads all workflow YAML at once; ordinary source-only PRs with no new files skip it.
@@ -480,6 +503,14 @@ def evaluate(
                 f"ceiling: {ceiling}\n"
                 f"head: {actual}\n"
                 "new feature logic must move to an owned module/crate"
+            )
+        elif actual < ceiling:
+            errors.append(
+                "MONOLITH CEILING NOT RATCHETED\n"
+                f"source: {path}\n"
+                f"recorded ceiling: {ceiling}\n"
+                f"head: {actual}\n"
+                "lower max_lines to the exact current size in the same PR"
             )
 
     return errors

@@ -19,6 +19,8 @@ on:
       - "crates/chaptera-viewer-render-plan/**"
       - "vendor/producer-a/crates/pub-viewer/**"
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
+      - "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
 
 permissions:
   contents: read
