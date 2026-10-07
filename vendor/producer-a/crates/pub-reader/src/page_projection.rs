@@ -5,6 +5,7 @@
 //! OfficeArt paint, StoryFrame correlation, or Viewer rendering.
 
 use super::*;
+// CI routing control: standalone page-projection ownership proof.
 
 pub const PUB_PAGE_ROLE_OBSERVATION_SCHEMA_V1: &str = "chaptera.pub-page-role-observation.v1";
 
