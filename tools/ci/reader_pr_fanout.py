@@ -23,6 +23,7 @@ READER_PAGE_PROJECTION = "vendor/producer-a/crates/pub-reader/src/page_projectio
 READER_SOURCE_PAINT_ORDER = "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
 READER_STORY_FRAME_ANALYSIS = "vendor/producer-a/crates/pub-reader/src/story_frame_analysis.rs"
 READER_TYPOGRAPHY_PROJECTION = "vendor/producer-a/crates/pub-reader/src/typography_projection.rs"
+READER_DIRECT_TRANSFORM = "vendor/producer-a/crates/pub-reader/src/direct_transform.rs"
 
 
 TEST_REGION_EVIDENCE_CANDIDATES = {
@@ -615,7 +616,7 @@ def classify(
     typography_paths = [
         path
         for path in visual_paths
-        if path not in {READER_PAINT_PROJECTION, READER_PAGE_PROJECTION, READER_SOURCE_PAINT_ORDER}
+        if path not in {READER_PAINT_PROJECTION, READER_PAGE_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_DIRECT_TRANSFORM}
     ]
     result["typography_golden"] = any(
         matches(path, TYPOGRAPHY_GOLDEN) for path in typography_paths
@@ -625,7 +626,7 @@ def classify(
     virginia_paths = [
         path
         for path in product_paths
-        if path not in {READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_TYPOGRAPHY_PROJECTION}
+        if path not in {READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_TYPOGRAPHY_PROJECTION, READER_DIRECT_TRANSFORM}
         and not path.startswith("vendor/producer-a/crates/pub-reader/src/bin/")
         and not path.startswith("vendor/producer-a/crates/pub-viewer/src/bin/")
     ]
