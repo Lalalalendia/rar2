@@ -1,5 +1,5 @@
 // Real Caddy + synthetic same-origin Chaptera + Chromium.
-// Rust unit tests prove the same five files are embedded in the chaptera binary;
+// Rust unit tests prove the admitted Reader assets are embedded in the chaptera binary;
 // this test proves the simplified edge wiring without scanner/BlobStore/TTL.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -14,7 +14,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const output = resolve(process.env.READER_RELEASE_OUTPUT ?? join(root, "target/cloud-reader-release"));
 const caddyBinary = process.env.READER_CADDY ?? "caddy";
 const hash = (data) => createHash("sha256").update(data).digest("hex");
-const assets = ["index.html", "reader.css", "reader-app.mjs", "reader-model.mjs", "render-v1.mjs", "observability-v1.mjs"];
+const assets = ["favicon.svg", "index.html", "reader.css", "reader-app.mjs", "reader-model.mjs", "render-v1.mjs", "observability-v1.mjs"];
 const fixtureBytes = Buffer.from("public synthetic release fixture");
 const fixtureSha = hash(fixtureBytes);
 const scene = {
@@ -46,6 +46,7 @@ const compatibilityReport = {
 const seen = [];
 let site;
 const contentTypes = {
+  "favicon.svg": "image/svg+xml",
   "index.html": "text/html; charset=utf-8",
   "reader.css": "text/css; charset=utf-8",
   "reader-app.mjs": "text/javascript; charset=utf-8",
@@ -173,7 +174,6 @@ try {
   });
   await page.goto(origin);
   await page.locator("#pub-file").setInputFiles({ name: "synthetic.pub", mimeType: "application/octet-stream", buffer: fixtureBytes });
-  await page.locator("#open-file").click();
   await page.waitForFunction(() => document.querySelector("#status").textContent.startsWith("Opened with display limitations"));
   assert.equal(await page.locator("#pages svg").count(), 1);
   assert.equal(await page.locator("#story-text").inputValue(), "Released Reader preview.");

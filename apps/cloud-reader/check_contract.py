@@ -5,19 +5,22 @@ ROOT = Path(__file__).resolve().parent
 HTML = (ROOT / "index.html").read_text(encoding="utf-8")
 APP = (ROOT / "reader-app.mjs").read_text(encoding="utf-8")
 MODEL = (ROOT / "reader-model.mjs").read_text(encoding="utf-8")
+CSS = (ROOT / "reader.css").read_text(encoding="utf-8")
 SURFACE = HTML + APP + MODEL
 RENDERER = (ROOT / "render-v1.mjs").read_text(encoding="utf-8")
 
 required = [
-    "Open a Publisher (.PUB) file online",
+    "Open a PUB file",
+    "Choose or drop a .PUB file",
+    "Read-only · your original PUB is not modified.",
+    'id="details-dialog"',
+    'id="reader-warning"',
     "/v1/reader/guest-sessions",
     "/v1/reader/documents/",
     "x-chaptera-reader-session",
     "expected_byte_len: file.size",
-    "research contribution are separate actions",
-    "temporary service processing only",
-    "read-only",
-    "Send this file to help Chaptera support it",
+    "Contribute this exact file?",
+    "the exact file will be retained separately",
     "chaptera-intake-consent-v1",
     "chaptera-intake-retention-v1",
     "x-chaptera-reader-contribution",
@@ -48,7 +51,20 @@ for needle in forbidden:
 if 'body: file' not in APP:
     raise SystemExit("guest upload must remain raw-body, not filename-bearing multipart")
 
-print("cloud-reader read-only/ephemeral-consent contract: ok")
+for needle in [
+    "height:100dvh",
+    "html,body{height:100%;overflow:hidden",
+    ".viewer{",
+    "overflow:auto;",
+    "overscroll-behavior:contain",
+]:
+    if needle not in CSS:
+        raise SystemExit(f"cloud-reader fixed-shell contract missing: {needle!r}")
+
+if 'if (file) openFile(file);' not in APP:
+    raise SystemExit("cloud-reader file selection must auto-open the selected PUB")
+
+print("cloud-reader read-only/ephemeral-consent/simple-viewer contract: ok")
 
 for needle in ["#page-select", "#zoom-select", "#search-query", "#story-text", "#assets", "#limitations"]:
     if needle not in APP:

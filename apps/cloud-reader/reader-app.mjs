@@ -55,8 +55,7 @@ function clearContribution() {
   $("#cancel-contribution").disabled = false;
   if (dialog.open) dialog.close();
   if (restoreFocus) {
-    const target = fileButton.disabled ? fileInput : fileButton;
-    if (!target.disabled) target.focus();
+    if (!fileInput.disabled) fileInput.focus();
     else if (!$("#cancel-open").hidden) $("#cancel-open").focus();
   }
 }
@@ -108,7 +107,7 @@ function message(text, isError = false) {
 function busy(value) {
   const cancel = $("#cancel-open");
   const active = document.activeElement;
-  const moveToCancel = value && [fileButton, fileInput, documentButton].includes(active);
+  const moveToCancel = value && [fileInput, documentButton].includes(active);
   const restoreFocus = !value && active === cancel;
   if (moveToCancel) openingFocusTarget = active;
   fileButton.disabled = value || !fileInput.files?.length;
@@ -134,6 +133,10 @@ function clearCompatibilityReport() {
 
 function clearReader() {
   clearContribution();
+  const detailsDialog = $("#details-dialog");
+  if (detailsDialog?.open) detailsDialog.close();
+  $("#reopen-file").hidden = true;
+  $("#reader-warning").hidden = true;
   const compatibilityHome = $("#compatibility-home");
   const compatibilityReport = $("#compatibility-report");
   if (compatibilityHome && compatibilityReport.parentElement !== compatibilityHome) {
@@ -370,9 +373,12 @@ async function render(payload, operation) {
     pageSelect.appendChild(option);
     pagesHost.children[index].setAttribute("aria-label", "Page " + (index + 1) + " of " + pages.length);
   });
-  $("#fidelity").textContent = payload.fidelity?.state === "supported" ? "Opened" : "Partial display";
+  const partial = payload.fidelity?.state !== "supported";
+  $("#fidelity").textContent = partial ? "Some elements may display inaccurately." : "";
+  $("#reader-warning").hidden = !partial;
   $("#page-count").textContent = pages.length + (pages.length === 1 ? " page" : " pages");
-  $("#revision").textContent = "Read-only document";
+  $("#revision").textContent = "Read-only · your original PUB is not modified.";
+  $("#reopen-file").hidden = false;
   const compatibilitySlot = $("#compatibility-inspector-slot");
   if (compatibilitySlot) compatibilitySlot.append($("#compatibility-report"));
   $("#reader").hidden = false;
@@ -474,7 +480,12 @@ async function openFile(file) {
     if (isCurrent(operation)) message(errorMessage(error), true);
   } finally {
     accessToken = null;
-    if (operation.generation === generation) { pending = null; busy(false); }
+    if (operation.generation === generation) {
+      pending = null;
+      busy(false);
+      fileInput.value = "";
+      fileButton.disabled = true;
+    }
   }
 }
 
@@ -609,7 +620,11 @@ $("#cancel-open").addEventListener("click", () => {
   busy(false);
   message("Opening cancelled. Choose a file to try again.");
 });
-fileInput.addEventListener("change", () => { fileButton.disabled = !fileInput.files?.length; });
+fileInput.addEventListener("change", () => {
+  const file = fileInput.files?.[0];
+  fileButton.disabled = !file;
+  if (file) openFile(file);
+});
 fileButton.addEventListener("click", () => openFile(fileInput.files?.[0]));
 documentButton.addEventListener("click", openDocument);
 documentInput.addEventListener("keydown", (event) => { if (event.key === "Enter") openDocument(); });
@@ -642,6 +657,11 @@ viewer.addEventListener("scroll", () => {
   updatePageControls(closest);
 });
 new ResizeObserver(() => { if (zoomSelect.value === "fit") applyZoom(); }).observe(viewer);
+const detailsDialog = $("#details-dialog");
+const openDetails = () => { if (!detailsDialog.open) detailsDialog.showModal(); };
+$("#open-details").addEventListener("click", openDetails);
+$("#warning-details").addEventListener("click", openDetails);
+$("#close-details").addEventListener("click", () => detailsDialog.close());
 storySelect.addEventListener("change", () => showStory(Number(storySelect.value)));
 $("#copy-text").addEventListener("click", async () => {
   const currentGeneration = generation;
@@ -683,6 +703,7 @@ $("#search-form").addEventListener("submit", (event) => {
 document.addEventListener("keydown", (event) => {
   if (scene && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
     event.preventDefault();
+    if (!detailsDialog.open) detailsDialog.showModal();
     $("#text-panel").open = true;
     $("#search-query").focus();
   }
