@@ -326,6 +326,7 @@ CLOUD_REFERENCE = (
     "crates/chaptera-viewer-render-plan/**",
     "vendor/producer-a/crates/pub-viewer/**",
     "vendor/producer-a/crates/pub-reader/src/lib.rs",
+    READER_PAGE_PROJECTION,
     "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs",
     "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs",
     "tools/acquire_carlton_march_pair.py",
@@ -358,6 +359,7 @@ VISUAL_BATCH01 = (
     "crates/chaptera-viewer-render-plan/**",
     "vendor/producer-a/crates/pub-viewer/**",
     "vendor/producer-a/crates/pub-reader/src/lib.rs",
+    READER_PAGE_PROJECTION,
 )
 
 TYPOGRAPHY_GOLDEN = (
