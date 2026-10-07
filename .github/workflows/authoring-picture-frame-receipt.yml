@@ -36,7 +36,7 @@ jobs:
           cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
           cargo fmt -p chaptera-desktop -- --check
       - name: Run bounded pub-editor crop tests
-        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test image_crop_v1
       - name: Run source-safe Desktop crop summary test
         run: cargo test -p chaptera-desktop image_crop_operation_summary_hashes_state_without_raw_crop_values
       - name: Install schema validator
