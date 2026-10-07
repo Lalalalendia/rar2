@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chaptera_scene_instance::SceneProjectionKindV1;
 use chaptera_viewer_render_plan::{
@@ -35,6 +35,8 @@ pub struct ReaderSceneV1 {
     pub resources: Vec<ReaderImageResourceV1>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fonts: Vec<ReaderFontResourceV1>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub text_layout_fallback_counts: BTreeMap<String, u64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<ReaderDiagnosticV1>,
 }
@@ -383,9 +385,9 @@ fn is_zero_i64(value: &i64) -> bool {
 
 fn reader_text_layout_from_render_text(
     text: &RenderTextFragmentV1,
-) -> (Option<ReaderTextLayoutV1>, bool) {
+) -> (Option<ReaderTextLayoutV1>, bool, Option<&'static str>) {
     let Some(layout) = text.layout.as_ref() else {
-        return (None, true);
+        return (None, true, Some("layout_missing"));
     };
     let RenderTextLayoutDispositionV1::SharedResolved {
         font_resource_id,
@@ -394,7 +396,10 @@ fn reader_text_layout_from_render_text(
         line_height_emu,
     } = &layout.disposition
     else {
-        return (None, true);
+        let RenderTextLayoutDispositionV1::BackendFallback { reason } = &layout.disposition else {
+            unreachable!("render text layout disposition must stay exhaustive");
+        };
+        return (None, true, Some(reason.code()));
     };
 
     let partial = layout.lines.iter().any(|line| !line.spans.is_empty());
@@ -435,7 +440,7 @@ fn reader_text_layout_from_render_text(
             })
             .collect(),
     };
-    (Some(mapped), partial)
+    (Some(mapped), partial, None)
 }
 
 fn projected_node_kind(
@@ -899,6 +904,7 @@ pub fn from_viewer_geometry_with_fonts(
     let mut projected_text_layout_count = 0_usize;
     let mut projected_kind_partial = false;
     let mut text_layout_partial = false;
+    let mut text_layout_fallback_counts = BTreeMap::<String, u64>::new();
     for page_index in 0..geometry.document.pages.len() {
         let plan = match build_page_render_plan_with_text_layout_resolvers_v1(
             geometry,
@@ -966,11 +972,16 @@ pub fn from_viewer_geometry_with_fonts(
         }
 
         for node in plan.nodes {
-            let (mapped_layout, layout_partial) = match node.text.as_ref() {
+            let (mapped_layout, layout_partial, fallback_reason) = match node.text.as_ref() {
                 Some(text) => reader_text_layout_from_render_text(text),
-                None => (None, false),
+                None => (None, false, None),
             };
             text_layout_partial |= layout_partial;
+            if let Some(reason) = fallback_reason {
+                *text_layout_fallback_counts
+                    .entry(reason.to_owned())
+                    .or_insert(0) += 1;
+            }
 
             if let Some(instance) = node.projected_scene_instance.as_ref() {
                 if !projected_instance_ids.insert(instance.instance_id.clone()) {
@@ -1424,6 +1435,7 @@ pub fn from_viewer_geometry_with_fonts(
         stories,
         resources,
         fonts,
+        text_layout_fallback_counts,
         diagnostics,
     };
 
