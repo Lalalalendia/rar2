@@ -1,4 +1,5 @@
 //! Bounded production projection for grouped OfficeArt objects.
+//! Post-H-flip steady-state fanout control.
 //!
 //! This module owns ChildAnchor/FSPGR/ClientAnchor composition for bounded
 //! group ancestry. Direct page-local geometry and graph orchestration remain
