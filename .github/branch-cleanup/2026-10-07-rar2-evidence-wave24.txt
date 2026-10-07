@@ -1,0 +1,9 @@
+# Evidence-heavy branch GC wave 24 - 2026-10-07
+# Exact-SHA only. Current/open/default refs are runtime-protected.
+# All targets have explicit successor / terminal-consumption proof.
+
+validation/supplemental-worst-page-cause-census-01 53c2c2a6f3ade1fbbfa08b243a418178dce71d45
+validation/carlton-table-text-layout-rejection-01 5143c722672170fbc579e62791d5d586bdb41fb2
+research/partial-escherdelay-breadth-census-01 669f55d4e094cb1a76b3253ad73f2435c755ce97
+measure/cloud-sli-fallback-discriminator-clean-01 97e1508885b772c72db143ba6283162848f6bc0b
+measure/pub-viewer-authoring-projection-routing-01 adb845221e5e93f55ad1103b935e142b719de8e1
