@@ -1,0 +1,3 @@
+# Wave 46 — reconciled superseded Virginia TABLE paint measurement
+measure/virginia-table-paint-carrier-01 527454d708653c9db5d66c4082cc08698fa37213
+ops/branch-gc-20261007-evidence-wave45 f04872575f88b9976bb82cd59688eee84bf45cd7
