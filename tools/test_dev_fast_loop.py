@@ -307,6 +307,97 @@ def test_run_receipt_records_timings_and_cache_state() -> None:
         assert history_rows[0]["head_sha"] == receipt["head_sha"]
 
 
+def test_pub_editor_facade_only_diff_skips_unfiltered_lib_test() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        git(root, "init", "-b", "main")
+        git(root, "config", "user.email", "fast-loop@example.invalid")
+        git(root, "config", "user.name", "Fast Loop Test")
+        write(
+            root / mod.COMPONENT_REGISTRY_PATH,
+            """{
+  "schema": "chaptera.dev-fast-components.v1",
+  "rules": [
+    {
+      "name": "pub-editor facade/core",
+      "paths": ["vendor/producer-a/crates/pub-editor/src/lib.rs"],
+      "commands": [["cargo", "test", "--manifest-path", "vendor/producer-a/Cargo.toml", "-p", "pub-editor", "--lib"]]
+    }
+  ]
+}
+""",
+        )
+        write(
+            root / "vendor/producer-a/Cargo.toml",
+            "[workspace]\nmembers=['crates/pub-editor']\nresolver='2'\n",
+        )
+        write(
+            root / "vendor/producer-a/crates/pub-editor/Cargo.toml",
+            "[package]\nname='pub-editor'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        lib = root / mod.PUB_EDITOR_LIB_PATH
+        write(lib, "mod owned;\npub use owned::Owned;\npub struct Core;\n")
+        write(
+            root / "vendor/producer-a/crates/pub-editor/src/owned.rs",
+            "pub struct Owned;\n",
+        )
+        git(root, "add", ".")
+        git(root, "commit", "-m", "base")
+        git(root, "checkout", "-b", "feature")
+
+        write(
+            lib,
+            "mod owned;\nmod extra;\npub use owned::Owned;\npub use extra::Extra;\npub struct Core;\n",
+        )
+        write(
+            root / "vendor/producer-a/crates/pub-editor/src/extra.rs",
+            "pub struct Extra;\n",
+        )
+        write(
+            root / "vendor/producer-a/crates/pub-editor/tests/extra.rs",
+            "#[test] fn smoke() {}\n",
+        )
+        git(root, "add", ".")
+        git(root, "commit", "-m", "facade")
+
+        paths = mod.discover_changed_paths(root, base="main", head="HEAD")
+        checks = mod.plan_for_paths(root, paths, mode="edit")
+        narrowed = mod.narrow_checks_for_diff(
+            root,
+            paths,
+            checks,
+            base="main",
+            head="HEAD",
+            mode="edit",
+        )
+        actual = commands(narrowed)
+        assert mod.PUB_EDITOR_UNFILTERED_LIB_TEST not in actual
+        assert (
+            "cargo",
+            "test",
+            "--manifest-path",
+            "vendor/producer-a/crates/pub-editor/Cargo.toml",
+            "--test",
+            "extra",
+            "--no-fail-fast",
+        ) in actual
+
+        write(
+            lib,
+            "mod owned;\nmod extra;\npub use owned::Owned;\npub use extra::Extra;\npub struct Core;\npub fn core_value() -> u8 { 1 }\n",
+        )
+        checks = mod.plan_for_paths(root, [mod.PUB_EDITOR_LIB_PATH], mode="edit")
+        narrowed = mod.narrow_checks_for_diff(
+            root,
+            [mod.PUB_EDITOR_LIB_PATH],
+            checks,
+            base="main",
+            head=None,
+            mode="edit",
+        )
+        assert mod.PUB_EDITOR_UNFILTERED_LIB_TEST in commands(narrowed)
+
+
 def test_feature_mode_adds_package_unit_tests_once() -> None:
     with tempfile.TemporaryDirectory() as raw:
         root = Path(raw)
@@ -330,6 +421,7 @@ def main() -> None:
     test_component_registry_malformed_fails_closed()
     test_rust_cache_auto_off_require_and_git_common_dir()
     test_run_receipt_records_timings_and_cache_state()
+    test_pub_editor_facade_only_diff_skips_unfiltered_lib_test()
     test_feature_mode_adds_package_unit_tests_once()
     print("dev fast loop tests: ok")
 
