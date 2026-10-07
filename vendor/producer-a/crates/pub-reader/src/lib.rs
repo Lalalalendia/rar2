@@ -1,4 +1,5 @@
 //! Bounded Microsoft Publisher 2002+ source adapter.
+//! CI control: exact current #1795 base semantics, comment-only Reader root witness.
 //!
 //! This crate is the first format-aware layer above the raw CFB/Contents/Quill/
 //! Escher readers. It projects only evidence-backed mature-0x2C semantics into
