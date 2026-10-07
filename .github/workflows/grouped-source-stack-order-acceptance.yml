@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-reader/src/group_projection.rs"
       - "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
       - ".github/workflows/grouped-source-stack-order-acceptance.yml"
   workflow_dispatch:
