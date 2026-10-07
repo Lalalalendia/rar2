@@ -26,3 +26,11 @@ jobs:
           path: vendor/producer-a/target/release/partial-escherdelay-breadth-census
           if-no-files-found: error
           retention-days: 1
+
+      - name: Upload exact census manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: partial-escherdelay-cohort-v1-exact
+          path: vendor/producer-a/crates/pub-reader/data/partial-escherdelay-cohort-v1.json
+          if-no-files-found: error
+          retention-days: 1
