@@ -108,13 +108,13 @@ pub use ole_presentation::{
     parse_cf_metafilepict_ole_presentation, read_legacy_ole_cached_presentations,
     scan_legacy_ole_cached_presentations, select_unambiguous_legacy_ole_cached_presentation,
 };
-pub use page_projection::{
-    PUB_PAGE_ROLE_OBSERVATION_SCHEMA_V1, PubControllingFieldObservation,
-    PubControllingObservation, PubDocumentPageListEntryObservation,
-    PubEffectivePageProjection, PubEffectivePageProjectionAuthority, PubPageRoleObservation,
-    PubPageRoleObservationReceipt, analyze_mature_0x2c_page_roles,
-};
 use page_projection::derive_effective_page_projection;
+pub use page_projection::{
+    PUB_PAGE_ROLE_OBSERVATION_SCHEMA_V1, PubControllingFieldObservation, PubControllingObservation,
+    PubDocumentPageListEntryObservation, PubEffectivePageProjection,
+    PubEffectivePageProjectionAuthority, PubPageRoleObservation, PubPageRoleObservationReceipt,
+    analyze_mature_0x2c_page_roles,
+};
 #[cfg(test)]
 use page_projection::{build_effective_page_projection, resolve_scenario_page_ids_from_evidence};
 pub use paint_projection::resolve_bounded_effective_officeart_paint;
