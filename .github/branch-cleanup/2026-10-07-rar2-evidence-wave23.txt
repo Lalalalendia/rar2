@@ -1,0 +1,11 @@
+# Wave 23 — evidence refs with durable Notion closure/provenance
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+measure/manual-oracle-source-raster-03 cad084ca34434a72cb63356cdbb83167bd9f9ff9
+measure/fill-boolean-product-acceptance-01 6f37f31a531c2ddd8507f457a038a5ffe045dd2c
+measure/fill-boolean-base-control-01 cbe76239c4cbab35cde3a4c15dabc949c28ee099
+research/batch01-scene-projection-868 d8601f725458c7a84e0595d0d3fd135767d4bc35
+research/reader1050-trophy-sibling-ab f05046ddeadf0ea7f6773ae2f8b9508d4704be7a
+research/quill-story-packag-donor-diff 1769456cb52c6bcd10715daf9252b67c9097a8b9
+research/quill-story-packag-skeleton-diff dad86126a4c7b2e8ce136bb92b7da6b61b9d094f
+research/quill-story-perspective-donor-diff 857fc6b6ac936e9addf07cd2dcbb89690429fcb7
