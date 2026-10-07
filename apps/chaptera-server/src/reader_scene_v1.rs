@@ -84,6 +84,16 @@ pub struct ReaderNodeV1 {
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_layout: Option<ReaderTextLayoutV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_text_style: Option<ReaderPreviewTextStyleV1>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReaderPreviewTextStyleV1 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_size_emu: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_rgb: Option<[u8; 3]>,
 }
 
 #[derive(Debug, Serialize)]
@@ -379,6 +389,57 @@ fn take_direct_render_text(
 
 fn is_zero_i64(value: &i64) -> bool {
     *value == 0
+}
+
+fn preview_text_style_from_render_text(
+    text: &RenderTextFragmentV1,
+) -> Option<ReaderPreviewTextStyleV1> {
+    let scalar_len = u32::try_from(text.text.chars().count()).ok()?;
+    let expected_len = text.scalar_end.checked_sub(text.scalar_start)?;
+    let paint_end = if scalar_len == expected_len && text.text.ends_with('\r') {
+        text.scalar_end.checked_sub(1)?
+    } else {
+        text.scalar_end
+    };
+    if paint_end <= text.scalar_start {
+        return None;
+    }
+
+    let mut cursor = text.scalar_start;
+    let mut font_size_emu = None;
+    for run in &text.typography {
+        if run.scalar_start != cursor
+            || run.scalar_end <= run.scalar_start
+            || run.scalar_end > text.scalar_end
+        {
+            return None;
+        }
+        if run.scalar_start < paint_end {
+            if run.text_size_emu == 0 {
+                return None;
+            }
+            let size = i64::from(run.text_size_emu);
+            match font_size_emu {
+                None => font_size_emu = Some(size),
+                Some(existing) if existing == size => {}
+                Some(_) => font_size_emu = None,
+            }
+        }
+        cursor = run.scalar_end;
+    }
+    if cursor != text.scalar_end {
+        return None;
+    }
+
+    let color_rgb = uniform_text_color_rgb_v1(text);
+    if font_size_emu.is_none() && color_rgb.is_none() {
+        None
+    } else {
+        Some(ReaderPreviewTextStyleV1 {
+            font_size_emu,
+            color_rgb,
+        })
+    }
 }
 
 fn reader_text_layout_from_render_text(
@@ -891,6 +952,7 @@ pub fn from_viewer_geometry_with_fonts(
     let mut source_font_family_unresolved = false;
     let mut render_text_by_node = HashMap::<String, String>::new();
     let mut text_layout_by_node = HashMap::new();
+    let mut preview_text_style_by_node = HashMap::new();
     let mut text_bounds_by_node = HashMap::<String, ReaderRectV1>::new();
     let mut decorative_border_by_node = HashMap::<String, ReaderDecorativeBorderV1>::new();
     let mut projected_nodes_by_target = HashMap::<String, Vec<ReaderNodeV1>>::new();
@@ -1121,6 +1183,8 @@ pub fn from_viewer_geometry_with_fonts(
                 if mapped_layout.is_some() {
                     projected_text_layout_count += 1;
                 }
+                let projected_preview_text_style =
+                    node.text.as_ref().and_then(preview_text_style_from_render_text);
                 let projected_node = ReaderNodeV1 {
                     node_id: instance.instance_id.clone(),
                     origin_node_id: Some(instance.origin_node_id.clone()),
@@ -1143,6 +1207,7 @@ pub fn from_viewer_geometry_with_fonts(
                         .transpose()?,
                     text: node.text.as_ref().map(|text| text.text.clone()),
                     text_layout: mapped_layout,
+                    preview_text_style: projected_preview_text_style,
                 };
                 match instance.projection_kind {
                     SceneProjectionKindV1::CmoStorySlot => {
@@ -1239,6 +1304,7 @@ pub fn from_viewer_geometry_with_fonts(
             table: table_by_node.remove(&node_id),
             text: take_direct_render_text(&mut render_text_by_node, &text_by_node, &node_id),
             text_layout: text_layout_by_node.remove(&node_id),
+            preview_text_style: preview_text_style_by_node.remove(&node_id),
             node_id: node_id.clone(),
             page_id,
             parent_node_id,
@@ -2875,6 +2941,7 @@ mod tests {
             table: None,
             text: None,
             text_layout: None,
+            preview_text_style: None,
         }
     }
 
