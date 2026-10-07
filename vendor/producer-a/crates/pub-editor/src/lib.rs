@@ -13,8 +13,8 @@ mod imported_paragraph_flow_v1;
 mod imported_paragraphs_v1;
 mod link_text_frame_tail_v1;
 mod session_image;
-mod session_text;
 mod session_table;
+mod session_text;
 use session_image::{
     apply_crop_forward, apply_crop_inverse, apply_image_forward, apply_image_inverse,
 };

@@ -6,6 +6,7 @@ on:
       - "vendor/producer-a/crates/pub-editor/**"
       - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
       - "!vendor/producer-a/crates/pub-editor/src/session_image.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_text.rs"
       - "vendor/producer-a/crates/pub-editor-authoring-core/src/authored_stack_lifecycle_v1.rs"
       - "vendor/producer-a/crates/pub-editor-authoring-core/src/create_shape_runtime_v1.rs"
       - "vendor/producer-a/crates/pub-editor/src/lib.rs"

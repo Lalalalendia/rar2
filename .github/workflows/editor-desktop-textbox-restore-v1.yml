@@ -15,6 +15,7 @@ on:
       - "vendor/producer-a/crates/pub-editor/**"
       - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
       - "!vendor/producer-a/crates/pub-editor/src/session_image.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_text.rs"
       - "tools/ci/pub_editor_pr_fanout.py"
       - ".github/workflows/editor-desktop-textbox-restore-v1.yml"
   workflow_dispatch:

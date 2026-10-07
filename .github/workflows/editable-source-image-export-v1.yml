@@ -6,6 +6,7 @@ on:
       - ".github/workflows/editable-source-image-export-v1.yml"
       - "vendor/producer-a/crates/pub-editor/**"
       - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_text.rs"
       - "vendor/producer-a/crates/pub-reader/Cargo.toml"
       - "vendor/producer-a/crates/pub-reader/src/**"
       - "!vendor/producer-a/crates/pub-reader/src/page_projection.rs"
