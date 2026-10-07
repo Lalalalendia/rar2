@@ -1,5 +1,6 @@
 use super::*;
 
+// CI routing control: no semantic change.
 pub(super) fn materialize_story_catalogs(
     source_hash: &Sha256Digest,
     quill_catalog: Option<&pub_quill::QuillStoryCatalog>,
