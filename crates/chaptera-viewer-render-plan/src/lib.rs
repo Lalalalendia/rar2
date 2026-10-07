@@ -36,8 +36,9 @@ use std::fmt;
 mod mixed_size_layout;
 use mixed_size_layout::{
     AdmittedTypographyRunV1, MixedLineCandidateV1, admitted_font_size_emu,
-    admitted_typography_runs_v1, prepare_typography_run_v1, resolve_mixed_size_text_layout_v1,
-    reuse_mixed_line_candidate_v1, scalar_text_range_v1, shape_mixed_line_candidate_v1,
+    admitted_typography_runs_v1, classify_mixed_size_layout_incomplete_v1,
+    prepare_typography_run_v1, resolve_mixed_size_text_layout_v1, reuse_mixed_line_candidate_v1,
+    scalar_text_range_v1, shape_mixed_line_candidate_v1,
 };
 
 pub const PAGE_RENDER_PLAN_SCHEMA_V1: &str = "chaptera.page-render-plan.v1";
@@ -2508,11 +2509,13 @@ pub fn classify_shared_layout_incomplete_cause_v1(
     let font_size_emu = match admitted_font_size_emu(fragment, font.default_font_size_emu) {
         Ok(value) => value,
         Err(RenderTextLayoutFallbackReasonV1::MixedTypographySize) => {
-            return SharedLayoutIncompleteCauseV1 {
-                path: "mixed_size_path",
-                consumption: "unknown",
-                cause: "mixed_size_fail_closed",
-            };
+            let bounds = node.text_bounds.unwrap_or(node.bounds);
+            return classify_mixed_size_layout_incomplete_v1(
+                fragment,
+                font,
+                node.node_id,
+                &bounds,
+            );
         }
         Err(_) => {
             return SharedLayoutIncompleteCauseV1 {
