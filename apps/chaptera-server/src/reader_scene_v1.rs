@@ -961,6 +961,7 @@ pub fn from_viewer_geometry_with_fonts(
     let mut inherited_master_nodes_by_page = HashMap::<String, Vec<ReaderNodeV1>>::new();
     let mut projected_instance_ids = HashSet::<String>::new();
     let mut projected_text_layout_count = 0_usize;
+    let mut projected_text_preview_count = 0_usize;
     let mut projected_kind_partial = false;
     let mut text_layout_partial = false;
     let mut text_layout_fallback_counts = BTreeMap::<String, u64>::new();
@@ -1196,6 +1197,9 @@ pub fn from_viewer_geometry_with_fonts(
                 if mapped_layout.is_some() {
                     projected_text_layout_count += 1;
                 }
+                if mapped_preview.is_some() {
+                    projected_text_preview_count += 1;
+                }
                 let projected_node = ReaderNodeV1 {
                     node_id: instance.instance_id.clone(),
                     origin_node_id: Some(instance.origin_node_id.clone()),
@@ -1367,12 +1371,6 @@ pub fn from_viewer_geometry_with_fonts(
         })
         .collect::<Result<Vec<_>, String>>()?;
 
-    let projected_text_preview_count = projected_nodes_by_target
-        .values()
-        .chain(inherited_master_nodes_by_page.values())
-        .flat_map(|nodes| nodes.iter())
-        .filter(|node| node.text_preview.is_some())
-        .count();
     let text_preview_count = direct_text_preview_count + projected_text_preview_count;
 
     let mut fonts = Vec::new();
