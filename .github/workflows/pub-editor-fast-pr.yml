@@ -7,7 +7,7 @@ on:
       - "vendor/producer-a/crates/pub-editor/src/**"
       - "vendor/producer-a/crates/pub-editor/tests/**"
       - "vendor/producer-a/crates/pub-editor/Cargo.toml"
-      - "vendor/producer-a/Cargo.lock"
+      - "vendor/producer-a/Cargo.toml"
       - "tools/dev_fast_loop.py"
       - "tools/test_dev_fast_loop.py"
       - "tools/dev_fast_loop_components.json"
@@ -55,9 +55,9 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target/pub-editor-fast
-          key: pub-editor-fast-v1-${{ runner.os }}-rust-1.94.1-${{ hashFiles('vendor/producer-a/Cargo.lock') }}-${{ github.event.pull_request.head.sha || github.sha }}
+          key: pub-editor-fast-v1-${{ runner.os }}-rust-1.94.1-${{ hashFiles('vendor/producer-a/Cargo.toml', 'vendor/producer-a/crates/*/Cargo.toml', 'crates/chaptera-text-format-overlay/Cargo.toml') }}-${{ github.event.pull_request.head.sha || github.sha }}
           restore-keys: |
-            pub-editor-fast-v1-${{ runner.os }}-rust-1.94.1-${{ hashFiles('vendor/producer-a/Cargo.lock') }}-
+            pub-editor-fast-v1-${{ runner.os }}-rust-1.94.1-${{ hashFiles('vendor/producer-a/Cargo.toml', 'vendor/producer-a/crates/*/Cargo.toml', 'crates/chaptera-text-format-overlay/Cargo.toml') }}-
 
       - name: Validate fast-loop planner
         run: |
