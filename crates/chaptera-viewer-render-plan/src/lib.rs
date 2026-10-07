@@ -2250,10 +2250,7 @@ fn interword_distribution_spans_v1(
     units_per_em: u32,
     glyphs: &[BoundedShapedGlyph],
 ) -> Option<Vec<RenderResolvedTextSpanV1>> {
-    let run = unique_complete_paragraph_alignment_run_v1(
-        fragment,
-        scalar_start..scalar_end,
-    )?;
+    let run = unique_complete_paragraph_alignment_run_v1(fragment, scalar_start..scalar_end)?;
     if run.alignment != RenderParagraphAlignmentV1::InterWord
         || run.source_value != 3
         || consumed_scalar_end >= run.scalar_end
@@ -2279,7 +2276,8 @@ fn interword_distribution_spans_v1(
 
     // UAX #14 soft breaks are consumed after the breaking space. Publisher
     // InterWord expands gaps between visible words, not the trailing break
-    // space itself, so trim only trailing ASCII spaces from the paint span.
+    // space itself. Exclude trailing ASCII spaces from the visible residual
+    // width and gap set, but preserve them in span text/source coverage.
     let visible_scalar_len = chars
         .iter()
         .rposition(|ch| *ch != ' ')
@@ -2304,8 +2302,7 @@ fn interword_distribution_spans_v1(
         }
         let local = usize::try_from(glyph.cluster - scalar_start).ok()?;
         let slot = local.checked_add(1)?;
-        advance_prefix_emu[slot] =
-            advance_prefix_emu[slot].checked_add(glyph.x_advance.get())?;
+        advance_prefix_emu[slot] = advance_prefix_emu[slot].checked_add(glyph.x_advance.get())?;
     }
     for index in 1..advance_prefix_emu.len() {
         advance_prefix_emu[index] =
@@ -2325,7 +2322,7 @@ fn interword_distribution_spans_v1(
     let mut boundaries = Vec::with_capacity(gap_boundaries.len().checked_add(2)?);
     boundaries.push(0);
     boundaries.extend(gap_boundaries);
-    boundaries.push(visible_scalar_len);
+    boundaries.push(scalar_len);
 
     let mut spans = Vec::with_capacity(boundaries.len().saturating_sub(1));
     for (span_index, pair) in boundaries.windows(2).enumerate() {
@@ -2335,18 +2332,14 @@ fn interword_distribution_spans_v1(
             return None;
         }
 
-        let distributed_before = i64::try_from(
-            residual_i128
-                .checked_mul(i128::try_from(span_index).ok()?)?
-                / gap_count,
-        )
-        .ok()?;
+        let distributed_before =
+            i64::try_from(residual_i128.checked_mul(i128::try_from(span_index).ok()?)? / gap_count)
+                .ok()?;
         let span_start = scalar_start.checked_add(u32::try_from(local_start).ok()?)?;
         let span_end = scalar_start.checked_add(u32::try_from(local_end).ok()?)?;
         let span_width_emu =
             advance_prefix_emu[local_end].checked_sub(advance_prefix_emu[local_start])?;
-        let x_offset_emu =
-            advance_prefix_emu[local_start].checked_add(distributed_before)?;
+        let x_offset_emu = advance_prefix_emu[local_start].checked_add(distributed_before)?;
         let span_glyphs = glyphs
             .iter()
             .filter(|glyph| glyph.cluster >= span_start && glyph.cluster < span_end)
@@ -2384,8 +2377,7 @@ fn resolved_line_x_offset_emu_v1(
 ) -> i64 {
     let scalar_start = scalar_range.start;
     let scalar_end = scalar_range.end;
-    let Some(run) =
-        unique_complete_paragraph_alignment_run_v1(fragment, scalar_start..scalar_end)
+    let Some(run) = unique_complete_paragraph_alignment_run_v1(fragment, scalar_start..scalar_end)
     else {
         return 0;
     };
@@ -4631,10 +4623,15 @@ mod tests {
         assert_eq!(spans.len(), 3);
         assert_eq!(spans[0].scalar_start..spans[0].scalar_end, 0..3);
         assert_eq!(spans[1].scalar_start..spans[1].scalar_end, 3..6);
-        assert_eq!(spans[2].scalar_start..spans[2].scalar_end, 6..8);
-        assert!(
-            spans.iter().all(|span| span.scalar_end <= 8),
-            "the consumed soft-break space must not become a paint span"
+        assert_eq!(spans[2].scalar_start..spans[2].scalar_end, 6..9);
+        assert_eq!(
+            spans
+                .iter()
+                .map(|span| span.text.as_str())
+                .collect::<Vec<_>>()
+                .concat(),
+            "aa bb cc ",
+            "span execution must preserve the exact shared line text"
         );
         assert_eq!(
             spans
@@ -4643,7 +4640,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![0, 40, 80]
         );
-        assert_eq!(spans[2].x_offset_emu + spans[2].measured_width_emu, 100);
+        assert_eq!(
+            spans[2].x_offset_emu + spans[2].measured_width_emu - 10,
+            100,
+            "the visible last word must reach the content edge; the trailing break space stays source-preserved"
+        );
 
         fragment.paragraph_alignments[0].scalar_end = 9;
         assert!(
