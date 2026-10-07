@@ -191,7 +191,7 @@ pub use salvage::{
     ReaderSalvageProbe, ReaderSalvageStreamState, ReaderSalvageSubsystemProbe,
     ReaderSalvageTrigger, build_reader_partial_escherdelay_evidence,
     build_reader_partial_source_graph, probe_reader_salvage_candidate,
-    probe_reader_salvage_candidate_with_trigger,
+    probe_reader_salvage_candidate_with_trigger, recovered_resource,
 };
 pub use salvage_authority::{
     ReaderEvidenceDisposition, ReaderSalvageAuthority, reader_evidence_disposition,
