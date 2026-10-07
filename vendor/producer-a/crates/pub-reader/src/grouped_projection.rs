@@ -12,7 +12,7 @@ pub(super) struct GroupedObjectProjection {
     pub(super) bounds: RectEmu,
     pub(super) depth: usize,
     pub(super) group_sources: Vec<RawSpan>,
-    pub(super) child_rotation_op: Option<u32>,
+    pub(super) image_transform: Option<direct_transform::BoundedGroupedImageTransform>,
 }
 
 pub(super) struct GroupedProjectionContext<'a> {
@@ -45,10 +45,10 @@ pub(super) fn project_grouped_object_shape(
     first_group_seq: u32,
     child_shape: &pub_escher::SpContainerObservation,
     context: &GroupedProjectionContext<'_>,
-    admit_translation_only_child_image_rotation: bool,
+    admit_bounded_grouped_image_transform: bool,
 ) -> Result<Option<GroupedObjectProjection>> {
     let child_rotation_op = if shape_has_nonzero_rotation(child_shape) {
-        if !admit_translation_only_child_image_rotation {
+        if !admit_bounded_grouped_image_transform {
             bail!("grouped child has nonzero rotation");
         }
         let rotations = child_shape
@@ -82,6 +82,12 @@ pub(super) fn project_grouped_object_shape(
     let mut current_group_seq = first_group_seq;
     let mut seen = BTreeSet::new();
     let mut group_sources = Vec::new();
+    let mut image_transform = admit_bounded_grouped_image_transform.then_some(
+        direct_transform::BoundedGroupedImageTransform {
+            child_rotation_op,
+            ancestor_horizontal_flip: false,
+        },
+    );
 
     for depth in 1..=2 {
         if !seen.insert(current_group_seq) {
@@ -108,11 +114,17 @@ pub(super) fn project_grouped_object_shape(
         if current_shape.parent_group_shape_source.as_ref() != Some(&group_shape.source) {
             bail!("OfficeArt parent-group link does not match Contents ancestry");
         }
-        if shape_has_nonzero_rotation(group_shape)
-            || shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_H)
-            || shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_V)
-        {
-            bail!("group ancestor has rotation or flip");
+        let ancestor_rotation = shape_has_nonzero_rotation(group_shape);
+        let ancestor_flip_h = shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_H);
+        let ancestor_flip_v = shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_V);
+        if ancestor_rotation {
+            bail!("group ancestor has nonzero rotation");
+        }
+        if ancestor_flip_v {
+            bail!("group ancestor has vertical flip");
+        }
+        if ancestor_flip_h && !admit_bounded_grouped_image_transform {
+            bail!("group ancestor has horizontal flip");
         }
 
         let fspgr = group_shape
@@ -135,6 +147,16 @@ pub(super) fn project_grouped_object_shape(
             {
                 bail!("grouped child rotation requires translation-only depth-1 parent group");
             }
+            if ancestor_flip_h {
+                if depth != 1 || child_rotation_op.is_some() {
+                    bail!("group ancestor horizontal flip requires unrotated depth-1 image");
+                }
+                rect = mirror_rect_horizontally(rect, group_coords)?;
+                image_transform
+                    .as_mut()
+                    .expect("ancestor flip admission is image-only")
+                    .ancestor_horizontal_flip = true;
+            }
             rect = project_rect_trunc(rect, group_coords, absolute)?;
             let page = context
                 .pages
@@ -146,10 +168,13 @@ pub(super) fn project_grouped_object_shape(
                 bounds,
                 depth,
                 group_sources,
-                child_rotation_op,
+                image_transform,
             }));
         }
 
+        if ancestor_flip_h {
+            bail!("group ancestor horizontal flip requires direct page parent");
+        }
         if depth == 2 {
             bail!("group ancestry exceeds bounded depth 2");
         }
@@ -191,6 +216,17 @@ pub(super) fn coordinate_rect_i128(
 
 fn translation_only_group_map(source: [i128; 4], target: [i128; 4]) -> bool {
     source[2] - source[0] == target[2] - target[0] && source[3] - source[1] == target[3] - target[1]
+}
+
+fn mirror_rect_horizontally(rect: [i128; 4], source_space: [i128; 4]) -> Result<[i128; 4]> {
+    let axis_sum = source_space[0]
+        .checked_add(source_space[2])
+        .context("group horizontal-flip axis overflow")?;
+    let mirrored = [axis_sum - rect[2], rect[1], axis_sum - rect[0], rect[3]];
+    if mirrored[2] <= mirrored[0] || mirrored[3] <= mirrored[1] {
+        bail!("horizontally mirrored grouped rectangle is non-positive");
+    }
+    Ok(mirrored)
 }
 
 fn publisher_anchor_rect_i128(anchor: &PublisherFieldRecord) -> Result<[i128; 4]> {
@@ -290,7 +326,7 @@ fn center_origin_rect_to_page_bounds(page: &Page, rect: [i128; 4]) -> Result<Rec
 
 #[cfg(test)]
 mod grouped_rotation_tests {
-    use super::translation_only_group_map;
+    use super::{mirror_rect_horizontally, translation_only_group_map};
 
     #[test]
     fn translation_only_group_map_accepts_equal_extents() {
@@ -306,5 +342,13 @@ mod grouped_rotation_tests {
             [107_442_022, 108_754_329, 113_987_230, 112_497_502],
             [-3_987_897, -1_596_946, 4_327_889, 2_562_119],
         ));
+    }
+
+    #[test]
+    fn horizontal_group_flip_mirrors_child_inside_fspgr_space() {
+        assert_eq!(
+            mirror_rect_horizontally([10, 20, 30, 40], [0, 0, 100, 100]).unwrap(),
+            [70, 20, 90, 40]
+        );
     }
 }
