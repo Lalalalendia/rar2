@@ -1,0 +1,7 @@
+# Wave 51 — terminal validation/control refs
+validation/legacy22-image0002-current-raster-1050-01 e9c483ed3c03447e60f3c9617afba69269b4e26d
+validation/legacy-ole-wmf-region-pattern-profile-01 fa5bc876a0b859b340c43ac8d4c0fb85ce123be5
+validation/legacy-ole-wmf-residual13-01 94cc51370593de1c3ae8516724b90f1bf8b426f6
+validation/reader-visual-post-source-font-01 b45b275793ee2190d4c64a7690986e225ed0c2e4
+validation/virginia-p1-rotation-postfix-01 0dfb191477cd2af934748f323f7513a2d49ef084
+ops/branch-gc-20261007-evidence-wave50 acecc58a143c5c2d124d9464359703bbdcb053d6
