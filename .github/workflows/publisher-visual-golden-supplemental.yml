@@ -15,6 +15,7 @@ on:
       - "vendor/producer-a/crates/pub-viewer/src/**"
       - "!vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-reader/src/group_projection.rs"
       - "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
       - "vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
       - "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
@@ -105,7 +106,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/publisher-visual-supplemental
-          cargo run --quiet -p pub-reader --bin grouped_image_projection_receipt -- \
+          cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin grouped_image_projection_receipt -- \
             "$RUNNER_TEMP/publisher-visual-supplemental/fixtures/05-modern2c-officeart-wmf.pub" \
             > target/publisher-visual-supplemental/grouped-image-projection-05.json
           python - <<'PY'
