@@ -71,6 +71,10 @@ pub use borderart_assets::{
 };
 #[cfg(feature = "cmo-authority-bridge")]
 pub use cmo_bridge::{PubCmoProjectionBridgeV1, build_mature_0x2c_cmo_projection_bridge_v1};
+use contents_reference::{
+    build_reference_index, chunk_for_reference, seq_u32, single_parent_seq, single_raw_type,
+    unique_block, unique_reference_by_raw_type, unique_u32_field,
+};
 pub use diagnostics::PubBridgeDiagnostic;
 pub use failure_envelope::{
     CHAPTERA_FAILURE_ENVELOPE_SCHEMA_V1, CHAPTERA_READER_BUILD_ID, FailureArchitecture,
@@ -85,10 +89,6 @@ pub use failure_intake::{
 pub use family_classifier::{
     PubFamilyClassification, PubFamilyConfidence, PubFamilyProfile, PubFamilyReason,
     PubReaderRoute, classify_pub_family,
-};
-use contents_reference::{
-    build_reference_index, chunk_for_reference, seq_u32, single_parent_seq, single_raw_type,
-    unique_block, unique_reference_by_raw_type, unique_u32_field,
 };
 use grouped_projection::{
     GroupedProjectionContext, coordinate_rect_i128, project_grouped_object_shape,
