@@ -102,6 +102,36 @@
       ]
     },
     {
+      "name": "pub-editor image session",
+      "paths": [
+        "vendor/producer-a/crates/pub-editor/src/session_image.rs"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor",
+          "--test",
+          "image_crop_v1"
+        ],
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor",
+          "--lib",
+          "asset_reachability_tests::current_image_resources",
+          "--",
+          "--nocapture"
+        ]
+      ]
+    },
+    {
       "name": "pub-editor imported paragraph flow",
       "paths": [
         "vendor/producer-a/crates/pub-editor/src/imported_paragraph_flow_v1.rs"

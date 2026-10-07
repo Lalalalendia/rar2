@@ -8,6 +8,7 @@ on:
       - "vendor/producer-a/crates/pub-export/**"
       - "vendor/producer-a/crates/pub-editor/**"
       - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_image.rs"
   workflow_dispatch:
 
 permissions:
