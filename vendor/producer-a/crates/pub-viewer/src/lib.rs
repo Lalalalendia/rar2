@@ -4031,7 +4031,7 @@ fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
             ViewerDiagnosticSeverity::FidelityWarning,
             "Legacy text bytes are preserved, but their character encoding is not proven; page geometry remains available without guessing text.",
         ),
-        McldRecordCountMismatch { .. } => (
+        McldRecordCountMismatch { .. } | McldOuterBoundViolation { .. } => (
             "viewer.table.mcld_layout_metrics_unavailable",
             ViewerDiagnosticSeverity::FidelityWarning,
             "A Quill layout-metrics table uses a structure outside the bounded MCLD profile; core document content remains available.",
@@ -5998,6 +5998,22 @@ mod tests {
         let mapped = map_bridge_diagnostic(&PubBridgeDiagnostic::McldRecordCountMismatch {
             record_count: 44,
             record_id_count: 4,
+        });
+
+        assert_eq!(mapped.code, "viewer.table.mcld_layout_metrics_unavailable");
+        assert_eq!(mapped.severity, ViewerDiagnosticSeverity::FidelityWarning);
+        assert!(
+            mapped
+                .message
+                .contains("core document content remains available")
+        );
+    }
+
+    #[test]
+    fn out_of_bound_mcld_id_is_reported_as_bounded_fidelity_loss() {
+        let mapped = map_bridge_diagnostic(&PubBridgeDiagnostic::McldOuterBoundViolation {
+            outer_value: 9,
+            max_live_record_id: 10,
         });
 
         assert_eq!(mapped.code, "viewer.table.mcld_layout_metrics_unavailable");

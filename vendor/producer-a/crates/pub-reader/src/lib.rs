@@ -1047,6 +1047,10 @@ pub enum PubBridgeDiagnostic {
         record_count: u32,
         record_id_count: u32,
     },
+    McldOuterBoundViolation {
+        outer_value: u32,
+        max_live_record_id: u32,
+    },
     FdppExactStoryFallback {
         story_count: usize,
     },
@@ -2684,6 +2688,16 @@ pub fn build_mature_0x2c_from_streams(
                 diagnostics.push(PubBridgeDiagnostic::McldRecordCountMismatch {
                     record_count,
                     record_id_count,
+                });
+                None
+            }
+            Err(QuillMcldReadError::RecordIdOutsideOuterBound {
+                outer_value,
+                max_live_record_id,
+            }) => {
+                diagnostics.push(PubBridgeDiagnostic::McldOuterBoundViolation {
+                    outer_value,
+                    max_live_record_id,
                 });
                 None
             }
