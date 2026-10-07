@@ -14,6 +14,7 @@ mod borderart;
 mod borderart_assets;
 #[cfg(feature = "cmo-authority-bridge")]
 mod cmo_bridge;
+mod contents_reference;
 mod diagnostics;
 mod direct_transform;
 mod failure_envelope;
@@ -83,6 +84,10 @@ pub use failure_intake::{
 pub use family_classifier::{
     PubFamilyClassification, PubFamilyConfidence, PubFamilyProfile, PubFamilyReason,
     PubReaderRoute, classify_pub_family,
+};
+use contents_reference::{
+    build_reference_index, chunk_for_reference, seq_u32, single_parent_seq, single_raw_type,
+    unique_block, unique_reference_by_raw_type, unique_u32_field,
 };
 use grouped_projection::{
     GroupedProjectionContext, coordinate_rect_i128, project_grouped_object_shape,
@@ -157,9 +162,8 @@ pub use partial_root::{
 use pub_contents::{
     BLOCK_TYPE_FIXED_8, BLOCK_TYPE_REFERENCE_U32, BLOCK_TYPE_U32, CONTENTS_RAW_TYPE_STORY_CATALOG,
     Contents0x2cChunk, Contents0x2cChunkReference, DOCUMENT_PAGE_LIST_ID, MatureColorScheme,
-    RawContentsBlock, RawContentsBlockBody, StoryCatalogReadError, parse_0x2c_header,
-    parse_bounded_empty_mature_story_catalog_variant, parse_confirmed_0x2c_chunk,
-    parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
+    RawContentsBlockBody, StoryCatalogReadError, parse_0x2c_header,
+    parse_bounded_empty_mature_story_catalog_variant, parse_confirmed_0x2c_trailer_root,
     parse_confirmed_controlling_page_list, parse_confirmed_document_page_list,
     parse_confirmed_margins_page_extent, parse_confirmed_mature_color_scheme,
     parse_confirmed_mature_story_catalog, parse_confirmed_oid_identity_payload,
@@ -1240,28 +1244,6 @@ fn utf16_range_to_scalar_range(text: &str, start_utf16: u32, end_utf16: u32) -> 
     Some((boundary(text, start_utf16)?, boundary(text, end_utf16)?))
 }
 
-fn build_reference_index(
-    contents: &[u8],
-    directory: &pub_contents::Contents0x2cDirectory,
-) -> Result<BTreeMap<u32, Contents0x2cChunkReference>> {
-    let mut references = BTreeMap::new();
-
-    for seq_num in 0..directory.slots.len() {
-        let Some(reference) = parse_confirmed_chunk_reference(contents, directory, seq_num)
-            .with_context(|| format!("parse Contents directory reference seq {seq_num}"))?
-        else {
-            continue;
-        };
-        let key = seq_u32(reference.seq_num)?;
-        if references.insert(key, reference).is_some() {
-            bail!("duplicate Contents directory seq {key}");
-        }
-    }
-
-    Ok(references)
-}
-
-#[derive(Debug, Clone)]
 struct PubPublicationColorScheme {
     seq_num: u32,
     scheme: MatureColorScheme,
@@ -1345,69 +1327,6 @@ fn require_consensus_page_extent(extents: &[(u32, u32)]) -> Result<(u32, u32)> {
     }
 
     Ok(first)
-}
-
-fn unique_reference_by_raw_type<'a>(
-    references: &'a BTreeMap<u32, Contents0x2cChunkReference>,
-    raw_type: u16,
-    label: &str,
-) -> Result<&'a Contents0x2cChunkReference> {
-    let mut matches = references
-        .values()
-        .filter(|reference| single_raw_type(reference) == Some(raw_type));
-    let first = matches
-        .next()
-        .with_context(|| format!("missing {label} raw type 0x{raw_type:02X}"))?;
-    if matches.next().is_some() {
-        bail!("multiple {label} raw type 0x{raw_type:02X} objects");
-    }
-    Ok(first)
-}
-
-fn chunk_for_reference(
-    stream: StreamPath,
-    contents: &[u8],
-    reference: &Contents0x2cChunkReference,
-) -> Result<Contents0x2cChunk> {
-    if reference.chunk_offsets.len() != 1 {
-        bail!(
-            "Contents seq {} has {} chunk offsets, expected exactly one",
-            reference.seq_num,
-            reference.chunk_offsets.len()
-        );
-    }
-
-    parse_confirmed_0x2c_chunk(stream, contents, reference.chunk_offsets[0].value)
-        .with_context(|| format!("parse Contents chunk seq {}", reference.seq_num))
-}
-
-fn unique_block(chunk: &Contents0x2cChunk, id: u16) -> Result<&RawContentsBlock> {
-    let mut matches = chunk.fields.iter().filter(|field| field.id == id);
-    let first = matches
-        .next()
-        .with_context(|| format!("missing Contents field 0x{id:02X}"))?;
-    if matches.next().is_some() {
-        bail!("duplicate Contents field 0x{id:02X}");
-    }
-    Ok(first)
-}
-
-fn single_raw_type(reference: &Contents0x2cChunkReference) -> Option<u16> {
-    match reference.raw_types.as_slice() {
-        [field] => Some(field.value),
-        _ => None,
-    }
-}
-
-fn single_parent_seq(reference: &Contents0x2cChunkReference) -> Option<u32> {
-    match reference.parent_seq_nums.as_slice() {
-        [field] => Some(field.value),
-        _ => None,
-    }
-}
-
-fn seq_u32(seq_num: usize) -> Result<u32> {
-    u32::try_from(seq_num).map_err(|_| anyhow!("Contents seqNum does not fit u32: {seq_num}"))
 }
 
 fn derive_pub_id(
@@ -1562,27 +1481,6 @@ fn unique_story_id_scalar(chunk: &Contents0x2cChunk) -> Result<Option<u32>> {
         RawContentsBlockBody::U32 { value, .. } => Ok(Some(*value)),
         _ => bail!(
             "Contents Story field 0x{FIELD_STORY_ID:02X} at {} is not a confirmed u16/u32 scalar body",
-            field.source.offset
-        ),
-    }
-}
-
-fn unique_u32_field(chunk: &Contents0x2cChunk, id: u16) -> Result<Option<(u32, RawSpan)>> {
-    let mut matches = chunk.fields.iter().filter(|field| field.id == id);
-    let Some(field) = matches.next() else {
-        return Ok(None);
-    };
-    if matches.next().is_some() {
-        bail!("duplicate Contents field 0x{id:02X} in one chunk");
-    }
-
-    match &field.body {
-        RawContentsBlockBody::U32 {
-            value,
-            value_source,
-        } => Ok(Some((*value, value_source.clone()))),
-        _ => bail!(
-            "Contents field 0x{id:02X} at {} is not a confirmed u32/reference body",
             field.source.offset
         ),
     }
