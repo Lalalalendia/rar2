@@ -4,181 +4,140 @@
 <meta charset="utf-8">
 <title>Open a PUB file — Chaptera</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="stylesheet" href="./reader.css">
+<link rel="icon" type="image/svg+xml" href="./favicon.svg">\n<link rel="stylesheet" href="./reader.css">
 </head>
 <body>
 <a class="skip" href="#reader">Skip to the reader</a>
 
 <div class="app-shell">
-  <aside class="sidebar" aria-label="Chaptera navigation">
-    <a class="sidebar-brand" href="./" aria-label="Chaptera Cloud Reader home">
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="Chaptera Cloud Reader home">
       <span class="brand-mark" aria-hidden="true">C</span>
       <span class="brand-copy"><strong>Chaptera</strong><span>Cloud Reader</span></span>
     </a>
+    <label id="reopen-file" class="topbar-open" for="pub-file" hidden>Open another PUB</label>
+  </header>
 
-    <nav class="sidebar-nav">
-      <a class="nav-item active" href="#open-workspace"><span aria-hidden="true">↗</span><span>Open PUB</span></a>
-      <a class="nav-item" href="#reader"><span aria-hidden="true">▤</span><span>Reader</span></a>
-      <a class="nav-item" href="#text-panel"><span aria-hidden="true">⌕</span><span>Recovered text</span></a>
-      <a class="nav-item" href="#limitations-panel"><span aria-hidden="true">◫</span><span>Compatibility</span></a>
-    </nav>
+  <main>
+    <div id="open-workspace" class="workspace-shell">
+      <section class="open-card" aria-label="Open a Publisher file">
+        <h1>Open a PUB file</h1>
 
-    <div class="sidebar-spacer"></div>
-    <div class="sidebar-note">
-      <span class="status-dot" aria-hidden="true"></span>
-      <div><strong>Read-only</strong><span>Your original PUB is never modified.</span></div>
-    </div>
-  </aside>
+        <div id="drop" class="drop">
+          <div class="drop-icon" aria-hidden="true">↑</div>
+          <label class="file-label" for="pub-file">Choose or drop a .PUB file</label>
+          <input id="pub-file" class="visually-hidden" type="file" accept=".pub,application/vnd.ms-publisher" aria-describedby="privacy">
+          <button id="open-file" type="button" hidden tabindex="-1" aria-hidden="true">Open</button>
+          <button id="cancel-open" type="button" class="secondary" hidden>Cancel</button>
+        </div>
 
-  <div class="app-frame">
-    <header class="topbar">
-      <div class="topbar-title">
-        <span class="topbar-kicker">Publisher viewer</span>
-        <strong>Cloud Reader</strong>
-      </div>
-      <div class="topbar-actions">
-        <span class="topbar-hint">Temporary processing · automatic expiry</span>
-        <label class="topbar-open" for="pub-file">Open PUB</label>
-      </div>
-    </header>
+        <p id="status" role="status" aria-live="polite">Choose a Publisher file.</p>
+        <p id="privacy" class="trust-line">Read-only · your original PUB is not modified.</p>
 
-    <main>
-      <section class="intro" aria-labelledby="title">
-        <p class="eyebrow">OPEN MICROSOFT PUBLISHER FILES IN THE BROWSER</p>
-        <h1 id="title">Open a Publisher (.PUB) file online</h1>
-        <p>Upload a Publisher document, inspect every available page, search recovered text and see an explicit compatibility status before relying on the result.</p>
+        <div id="compatibility-home" hidden>
+          <div id="compatibility-report" class="compatibility" hidden aria-label="Compatibility report">
+            <div class="compatibility-head"><strong>Compatibility</strong><span id="compatibility-state"></span></div>
+            <p id="compatibility-summary" class="small"></p>
+            <ul id="compatibility-limitations"></ul>
+            <p id="compatibility-routes" class="small"></p>
+            <p id="compatibility-next" class="small"></p>
+          </div>
+        </div>
+
+        <div id="contribution-panel" class="contribution" hidden>
+          <strong>Help Chaptera support this file</strong>
+          <p class="small">This file cannot be fully opened yet. You can separately choose to contribute the exact file for compatibility research.</p>
+          <button id="open-contribution" class="secondary" type="button">Send this file for compatibility research</button>
+        </div>
+
+        <input id="document-id" type="hidden">
+        <button id="open-document" type="button" hidden>Open saved document</button>
       </section>
 
-      <div id="open-workspace" class="workspace-shell">
-        <section class="card open-card" aria-label="Open a document">
-          <div class="panel-heading">
-            <div>
-              <span class="panel-kicker">Document</span>
-              <h2>Open a PUB file</h2>
+      <section id="reader" class="reader" hidden aria-label="Document reader">
+        <div class="reader-stage">
+          <div class="toolbar controls" aria-label="Page and zoom controls">
+            <div class="control-group">
+              <button id="previous-page" class="icon-button secondary" aria-label="Previous page">←</button>
+              <label for="page-select">Page</label>
+              <select id="page-select" aria-label="Choose page"></select>
+              <button id="next-page" class="icon-button secondary" aria-label="Next page">→</button>
             </div>
-            <span class="panel-badge">.PUB</span>
+            <div class="control-group">
+              <label for="zoom-select">Zoom</label>
+              <select id="zoom-select">
+                <option value="fit">Fit width</option>
+                <option value="0.5">50%</option>
+                <option value="0.75">75%</option>
+                <option value="1">100%</option>
+                <option value="1.5">150%</option>
+                <option value="2">200%</option>
+              </select>
+            </div>
+            <button id="open-details" type="button" class="details-button secondary">Details</button>
           </div>
 
-          <div id="drop" class="drop">
-            <div class="drop-icon" aria-hidden="true">↑</div>
-            <label class="file-label" for="pub-file">Choose a PUB file</label>
-            <input id="pub-file" type="file" accept=".pub,application/vnd.ms-publisher" aria-describedby="privacy">
-            <p>or drop a file anywhere in this panel</p>
-            <div class="actions">
-              <button id="open-file" disabled>Open read-only</button>
-              <button id="cancel-open" class="secondary" hidden>Cancel opening</button>
-            </div>
+          <div id="reader-warning" class="reader-warning" hidden>
+            <span id="fidelity"></span>
+            <button id="warning-details" type="button" class="link-button">Details</button>
           </div>
 
-          <p id="status" role="status" aria-live="polite">Choose a Publisher (.PUB) file.</p>
-
-          <div id="compatibility-home">
-            <div id="compatibility-report" class="compatibility" hidden aria-label="Compatibility report">
-              <div class="compatibility-head"><strong>Compatibility</strong><span id="compatibility-state"></span></div>
-              <p id="compatibility-summary" class="small"></p>
-              <ul id="compatibility-limitations"></ul>
-              <p id="compatibility-routes" class="small"></p>
-              <p id="compatibility-next" class="small"></p>
-            </div>
+          <div id="viewer" class="viewer" tabindex="0" role="region" aria-label="Document pages">
+            <div id="pages"></div>
           </div>
 
-          <p id="privacy" class="notice">The filename is not sent. Viewing authorizes temporary service processing only.
-          The uploaded file expires automatically. Viewing and research contribution are separate actions;
-          retaining a file for research requires separate explicit consent.</p>
-
-          <div id="contribution-panel" class="contribution" hidden>
-            <strong>Help Chaptera support this file</strong>
-            <p class="small">This file looks like a Publisher document that Chaptera cannot fully open yet. You can separately choose to contribute the exact file for compatibility research.</p>
-            <button id="open-contribution" class="secondary" type="button">Send this file to help Chaptera support it</button>
+          <div class="reader-footer">
+            <span id="revision">Read-only · your original PUB is not modified.</span>
+            <span id="page-count" class="visually-hidden"></span>
           </div>
-
-          <details class="saved">
-            <summary>Open a saved document</summary>
-            <div class="toolbar saved-toolbar">
-              <label for="document-id">Saved document ID</label>
-              <input id="document-id" autocomplete="off" placeholder="document-…">
-              <button id="open-document" class="secondary">Open saved document</button>
-            </div>
-          </details>
-        </section>
-
-        <section id="reader" class="reader" hidden aria-label="Document reader">
-          <div class="reader-stage">
-            <div id="summary" class="summary">
-              <div class="summary-primary"><strong id="fidelity"></strong><span id="page-count"></span></div>
-              <span id="revision" class="small"></span>
-            </div>
-
-            <div class="toolbar controls" aria-label="Page and zoom controls">
-              <div class="control-group">
-                <button id="previous-page" class="icon-button secondary" aria-label="Previous page">←</button>
-                <label for="page-select">Page</label>
-                <select id="page-select" aria-label="Choose page"></select>
-                <button id="next-page" class="icon-button secondary" aria-label="Next page">→</button>
-              </div>
-              <div class="control-group">
-                <label for="zoom-select">Zoom</label>
-                <select id="zoom-select">
-                  <option value="fit">Fit width</option>
-                  <option value="0.5">50%</option>
-                  <option value="0.75">75%</option>
-                  <option value="1">100%</option>
-                  <option value="1.5">150%</option>
-                  <option value="2">200%</option>
-                </select>
-              </div>
-              <span class="small control-help">PgUp / PgDn in the page view</span>
-            </div>
-
-            <div id="viewer" class="viewer" tabindex="0" role="region" aria-label="Document pages">
-              <div id="pages"></div>
-            </div>
-          </div>
-
-          <aside class="reader-details" aria-label="Document details">
-            <div class="details-title">
-              <span class="panel-kicker">Inspector</span>
-              <strong>Document details</strong>
-            </div>
-
-            <div id="compatibility-inspector-slot"></div>
-
-            <details id="text-panel">
-              <summary>Recovered text</summary>
-              <form id="search-form" class="toolbar search-toolbar">
-                <label for="search-query">Find text</label>
-                <input id="search-query" type="search" maxlength="200">
-                <button type="submit" class="secondary">Find</button>
-              </form>
-              <p id="search-status" role="status" class="small"></p>
-              <ol id="search-results"></ol>
-              <label for="story-select">Text section</label>
-              <select id="story-select"></select>
-              <label class="visually-hidden" for="story-text">Recovered document text</label>
-              <textarea id="story-text" readonly spellcheck="false" rows="8"></textarea>
-              <button id="copy-text" class="secondary">Copy section text</button>
-              <p id="copy-status" role="status" class="small"></p>
-            </details>
-
-            <details>
-              <summary id="assets-summary">Available images</summary>
-              <p class="small">Only images provided for this viewing session can be saved here.</p>
-              <ul id="assets"></ul>
-            </details>
-
-            <details id="limitations-panel">
-              <summary id="diagnostics">Display limitations</summary>
-              <p>Partial means some content is approximate or unavailable. Compare with the original before relying on page appearance.</p>
-              <ul id="limitations"></ul>
-            </details>
-          </aside>
-        </section>
-      </div>
-    </main>
-
-    <footer>Chaptera Cloud Reader · Your document remains read-only.</footer>
-  </div>
+        </div>
+      </section>
+    </div>
+  </main>
 </div>
+
+<dialog id="details-dialog" aria-labelledby="details-title">
+  <div class="details-dialog">
+    <div class="details-dialog-head">
+      <div>
+        <strong id="details-title">Details</strong>
+        <span>Compatibility and recovered content</span>
+      </div>
+      <button id="close-details" type="button" class="secondary">Close</button>
+    </div>
+
+    <div id="compatibility-inspector-slot"></div>
+
+    <details id="text-panel">
+      <summary>Recovered text</summary>
+      <form id="search-form" class="toolbar search-toolbar">
+        <label for="search-query">Find text</label>
+        <input id="search-query" type="search" maxlength="200">
+        <button type="submit" class="secondary">Find</button>
+      </form>
+      <p id="search-status" role="status" class="small"></p>
+      <ol id="search-results"></ol>
+      <label for="story-select">Text section</label>
+      <select id="story-select"></select>
+      <label class="visually-hidden" for="story-text">Recovered document text</label>
+      <textarea id="story-text" readonly spellcheck="false" rows="8"></textarea>
+      <button id="copy-text" class="secondary">Copy section text</button>
+      <p id="copy-status" role="status" class="small"></p>
+    </details>
+
+    <details>
+      <summary id="assets-summary">Available images</summary>
+      <p class="small">Only images provided for this viewing session can be saved here.</p>
+      <ul id="assets"></ul>
+    </details>
+
+    <details id="limitations-panel">
+      <summary id="diagnostics">Display details</summary>
+      <p>Some content may be approximate or unavailable. Compare with the original before relying on page appearance.</p>
+      <ul id="limitations"></ul>
+    </details>
+  </div>
+</dialog>
 
 <dialog id="contribution-dialog" aria-labelledby="contribution-title">
   <div class="dialog-body">

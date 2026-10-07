@@ -13,6 +13,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 ASSET_SOURCES = {
+    "favicon.svg": "apps/cloud-reader/favicon.svg",
     "index.html": "apps/cloud-reader/index.html",
     "reader.css": "apps/cloud-reader/reader.css",
     "reader-app.mjs": "apps/cloud-reader/reader-app.mjs",
