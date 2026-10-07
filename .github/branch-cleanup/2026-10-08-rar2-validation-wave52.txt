@@ -1,0 +1,7 @@
+# Wave 52 — completed validation acceptance refs
+validation/legacy22-line-1050 6fec8666d668db741971d6aed33c42b8dab01300
+validation/legacy22-table0001-visible-1050-v2 3b9b62b621bef9684a11aaa0e51f64fdaec58c95
+validation/legacy-ole-raster-rejection-census-01 1793ee57d144dff98f2579857ded1134b8951994
+validation/legacy22-image-stretchdib-1050-01 cd425843e80a8cf4d2812ff0ddbd61c121617d17
+validation/legacy-ole-wmf-patternbrush-post-region-1050 45c95f0cad07a02b04f073fadee18d02518ab682
+ops/branch-gc-20261008-validation-wave51 b52ba761f35a1ed1395a4f40e66a4cad0a8a11c1
