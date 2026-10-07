@@ -1,3 +1,4 @@
+// CI routing control only: authoring projection owner must stay narrowly admitted.
 //! Source-neutral resolved-graph -> bounded-authoring projection seam.
 //!
 //! This module is intentionally limited to the layout-authoring bridge used by
