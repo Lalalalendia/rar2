@@ -1,0 +1,66 @@
+name: DIAG 094 p2 text-layout census
+
+on:
+  push:
+    branches:
+      - "diag/094-p2-layout-census"
+    paths:
+      - "apps/chaptera-server/tests/reader_094_layout_probe.rs"
+      - ".github/workflows/diag-094-p2-layout-census.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: diag-094-p2-layout-census
+  cancel-in-progress: true
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_DIR: \${{ github.workspace }}/target/diag-094-p2-layout-census
+      FIXTURE_SHA: bbaefcbdcdd2dbe51a636ed554c14d6f5353c98e795b5f88d26f79542e5d93ba
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: \${{ github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: \${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify exact 094 identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="out/pinned1050/materialized/native/\${FIXTURE_SHA}.pub"
+          test -f "$fixture"
+          echo "\${FIXTURE_SHA}  \${fixture}" | sha256sum --check
+
+      - name: Run source-free page-local text-layout census
+        env:
+          CHAPTERA_094_PUB: \${{ github.workspace }}/out/pinned1050/materialized/native/bbaefcbdcdd2dbe51a636ed554c14d6f5353c98e795b5f88d26f79542e5d93ba.pub
+          CHAPTERA_094_LAYOUT_CENSUS_OUTPUT: \${{ github.workspace }}/target/diag-094-p2-layout-census/094-layout-census.json
+        run: |
+          cargo test -p chaptera-server --test reader_094_layout_probe \
+            exact_094_page_layout_census -- --ignored --nocapture
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diag-094-p2-layout-census
+          path: target/diag-094-p2-layout-census/094-layout-census.json
+          if-no-files-found: error
+          retention-days: 14
