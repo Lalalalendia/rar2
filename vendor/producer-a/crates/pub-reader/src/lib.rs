@@ -85,8 +85,8 @@ pub use family_classifier::{
     PubReaderRoute, classify_pub_family,
 };
 use grouped_projection::{
-    GroupedProjectionContext, coordinate_rect_i128, project_grouped_object_shape,
-    project_rect_trunc,
+    GroupedProjectionContext, GroupedProjectionKind, coordinate_rect_i128,
+    project_grouped_object_with_diagnostic, project_rect_trunc,
 };
 pub use guide_bridge::{
     PubGroundedGuideBuild, PubGuideObservation, PubGuideProjectionDiagnostic,
@@ -686,7 +686,19 @@ pub fn build_mature_0x2c_from_streams(
                 || exact_grouped_image_identity
                 || exact_grouped_primitive_shape_type.is_some())
         {
-            match project_grouped_object_shape(
+            let kind = if raw_type == Some(RAW_TYPE_TABLE) {
+                GroupedProjectionKind::Table
+            } else if exact_story_identity.is_some() {
+                GroupedProjectionKind::Story
+            } else if let Some(shape_type) = exact_grouped_primitive_shape_type {
+                GroupedProjectionKind::Primitive(shape_type)
+            } else {
+                GroupedProjectionKind::Image(
+                    image_slot.expect("grouped image identity requires exact image slot"),
+                )
+            };
+            project_grouped_object_with_diagnostic(
+                seq_num,
                 parent_seq,
                 shape,
                 &GroupedProjectionContext::new(
@@ -696,59 +708,10 @@ pub fn build_mature_0x2c_from_streams(
                     &escher_inventory,
                     &escher_by_contents_seq,
                 ),
+                kind,
                 exact_grouped_image_identity && exact_story_identity.is_none(),
-            ) {
-                Ok(Some(projection)) => {
-                    diagnostics.push(if raw_type == Some(RAW_TYPE_TABLE) {
-                        PubBridgeDiagnostic::GroupedTableProjected {
-                            seq_num,
-                            depth: projection.depth,
-                        }
-                    } else if exact_story_identity.is_some() {
-                        PubBridgeDiagnostic::GroupedStoryProjected {
-                            seq_num,
-                            depth: projection.depth,
-                        }
-                    } else if let Some(shape_type) = exact_grouped_primitive_shape_type {
-                        PubBridgeDiagnostic::GroupedPrimitiveProjected {
-                            seq_num,
-                            shape_type,
-                            depth: projection.depth,
-                        }
-                    } else {
-                        PubBridgeDiagnostic::GroupedImageProjected {
-                            seq_num,
-                            depth: projection.depth,
-                        }
-                    });
-                    Some(projection)
-                }
-                Ok(None) => None,
-                Err(error) => {
-                    diagnostics.push(if raw_type == Some(RAW_TYPE_TABLE) {
-                        PubBridgeDiagnostic::GroupedTableProjectionUnavailable {
-                            seq_num,
-                            reason: error.to_string(),
-                        }
-                    } else if exact_story_identity.is_some() {
-                        PubBridgeDiagnostic::GroupedStoryProjectionUnavailable {
-                            seq_num,
-                            reason: error.to_string(),
-                        }
-                    } else if let Some(shape_type) = exact_grouped_primitive_shape_type {
-                        PubBridgeDiagnostic::GroupedPrimitiveProjectionUnavailable {
-                            seq_num,
-                            shape_type,
-                            reason: error.to_string(),
-                        }
-                    } else {
-                        grouped_context.image_projection_unavailable(
-                            seq_num, parent_seq, image_slot, error.to_string(),
-                        )
-                    });
-                    None
-                }
-            }
+                &mut diagnostics,
+            )
         } else {
             None
         };

@@ -40,23 +40,6 @@ impl<'a> GroupedProjectionContext<'a> {
         }
     }
 
-    pub(super) fn image_projection_unavailable(
-        &self,
-        seq_num: u32,
-        first_group_seq: u32,
-        image_slot: Option<u32>,
-        reason: String,
-    ) -> PubBridgeDiagnostic {
-        let (target_page_id, group_ancestry) =
-            grouped_object_target_page_trace(first_group_seq, self);
-        PubBridgeDiagnostic::GroupedImageProjectionUnavailable {
-            seq_num,
-            target_page_id,
-            image_slot: image_slot.expect("grouped image identity requires exact image slot"),
-            group_ancestry,
-            reason,
-        }
-    }
 }
 
 fn grouped_object_target_page_trace(
@@ -89,6 +72,87 @@ fn grouped_object_target_page_trace(
     }
 
     (None, ancestry)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum GroupedProjectionKind {
+    Table,
+    Story,
+    Primitive(u16),
+    Image(u32),
+}
+
+pub(super) fn project_grouped_object_with_diagnostic(
+    seq_num: u32,
+    first_group_seq: u32,
+    child_shape: &pub_escher::SpContainerObservation,
+    context: &GroupedProjectionContext<'_>,
+    kind: GroupedProjectionKind,
+    admit_translation_only_child_image_rotation: bool,
+    diagnostics: &mut Vec<PubBridgeDiagnostic>,
+) -> Option<GroupedObjectProjection> {
+    match project_grouped_object_shape(
+        first_group_seq,
+        child_shape,
+        context,
+        admit_translation_only_child_image_rotation,
+    ) {
+        Ok(Some(projection)) => {
+            diagnostics.push(match kind {
+                GroupedProjectionKind::Table => PubBridgeDiagnostic::GroupedTableProjected {
+                    seq_num,
+                    depth: projection.depth,
+                },
+                GroupedProjectionKind::Story => PubBridgeDiagnostic::GroupedStoryProjected {
+                    seq_num,
+                    depth: projection.depth,
+                },
+                GroupedProjectionKind::Primitive(shape_type) => {
+                    PubBridgeDiagnostic::GroupedPrimitiveProjected {
+                        seq_num,
+                        shape_type,
+                        depth: projection.depth,
+                    }
+                }
+                GroupedProjectionKind::Image(_) => PubBridgeDiagnostic::GroupedImageProjected {
+                    seq_num,
+                    depth: projection.depth,
+                },
+            });
+            Some(projection)
+        }
+        Ok(None) => None,
+        Err(error) => {
+            let reason = error.to_string();
+            diagnostics.push(match kind {
+                GroupedProjectionKind::Table => {
+                    PubBridgeDiagnostic::GroupedTableProjectionUnavailable { seq_num, reason }
+                }
+                GroupedProjectionKind::Story => {
+                    PubBridgeDiagnostic::GroupedStoryProjectionUnavailable { seq_num, reason }
+                }
+                GroupedProjectionKind::Primitive(shape_type) => {
+                    PubBridgeDiagnostic::GroupedPrimitiveProjectionUnavailable {
+                        seq_num,
+                        shape_type,
+                        reason,
+                    }
+                }
+                GroupedProjectionKind::Image(image_slot) => {
+                    let (target_page_id, group_ancestry) =
+                        grouped_object_target_page_trace(first_group_seq, context);
+                    PubBridgeDiagnostic::GroupedImageProjectionUnavailable {
+                        seq_num,
+                        target_page_id,
+                        image_slot,
+                        group_ancestry,
+                        reason,
+                    }
+                }
+            });
+            None
+        }
+    }
 }
 
 pub(super) fn project_grouped_object_shape(
