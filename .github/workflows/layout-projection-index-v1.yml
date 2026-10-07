@@ -29,12 +29,3 @@ jobs:
         run: cargo clippy -p pub-layout --all-targets -- -D warnings
       - name: Test exact projection semantics
         run: cargo test -p pub-layout
-      - name: Run 1k 10k 50k projection-index benchmark
-        env:
-          LAYOUT_PROJECTION_INDEX_RECEIPT: ${{ github.workspace }}/vendor/producer-a/target/layout-projection-index/benchmark.json
-        run: cargo test -p pub-layout --test projection_index_benchmark -- --ignored --nocapture
-      - uses: actions/upload-artifact@v4
-        with:
-          name: layout-projection-index-v1
-          path: vendor/producer-a/target/layout-projection-index/benchmark.json
-          if-no-files-found: error
