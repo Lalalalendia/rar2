@@ -2,6 +2,7 @@
 //!
 //! This module owns source-neutral image DTOs plus crop/recolor placement and
 //! selected-page admission. Image byte discovery, WMF/OLE rasterization, and
+//! Leaf-routing control: ordinary Viewer image placement edits stay on this owner path.
 //! OfficeArt preview materialization remain outside this module.
 
 use anyhow::Result;
