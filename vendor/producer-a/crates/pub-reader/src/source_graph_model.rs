@@ -6,6 +6,8 @@
 
 use super::*;
 
+// Post-routing measurement only: no Reader semantics changed.
+
 pub type PubSourceGraph = SourceGraph<PubNodePayload, (), (), (), String>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
