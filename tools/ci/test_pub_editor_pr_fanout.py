@@ -541,7 +541,7 @@ pub fn shared_core() {}
         "vendor/producer-a/crates/pub-editor-authoring-core/src/authored_stack_lifecycle_v1.rs",
         "vendor/producer-a/crates/pub-editor-authoring-core/src/authored_stack_runtime_v1.rs",
         "vendor/producer-a/crates/pub-editor-authoring-core/src/create_shape_runtime_v1.rs",
-        "vendor/producer-a/crates/pub-editor/tests/authored_stack_lifecycle_v1.rs",
+        "vendor/producer-a/crates/pub-editor-authoring-core/tests/authored_stack_lifecycle_v1.rs",
         "vendor/producer-a/crates/pub-editor/tests/authored_stack_runtime_v1.rs",
         "vendor/producer-a/crates/pub-editor/tests/create_shape_runtime_v1.rs",
         "vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs",
@@ -583,7 +583,7 @@ pub fn shared_core() {}
     for path in (
         "vendor/producer-a/crates/pub-editor-authoring-core/src/authored_stack_lifecycle_v1.rs",
         "vendor/producer-a/crates/pub-editor-authoring-core/src/create_shape_runtime_v1.rs",
-        "vendor/producer-a/crates/pub-editor/tests/authored_stack_lifecycle_v1.rs",
+        "vendor/producer-a/crates/pub-editor-authoring-core/tests/authored_stack_lifecycle_v1.rs",
         "vendor/producer-a/crates/pub-editor/tests/create_shape_runtime_v1.rs",
         "vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs",
         ".github/workflows/authoring-authored-stack-lifecycle-v1.yml",
