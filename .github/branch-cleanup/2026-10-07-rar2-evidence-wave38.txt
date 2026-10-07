@@ -1,0 +1,6 @@
+# Wave 38 — terminal page-role + grouped-image measurements
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+measure/batch01-page-role-census-01 3bd5b9c119b593fb5479164cf5b6e2e70b00be61
+measure/grouped-image-diagnostics-current-01 e5550d8f1c3b04acdbbb6e71bccd415a14be66b3
+ops/branch-gc-20261007-evidence-wave37 7ebc35593ccf8cbf1cf18c0319a92012d76d2633
