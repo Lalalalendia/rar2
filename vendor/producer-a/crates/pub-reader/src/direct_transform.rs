@@ -256,24 +256,23 @@ pub(super) fn bounded_node_transform_projection(
     };
     let fsp_flags = shape.fsp.as_ref().map(|fsp| fsp.flags).unwrap_or(0);
     let image_candidate = direct_image_candidate || grouped_image_transform.is_some();
-    let image_transform = if grouped_image_transform
-        .is_some_and(|projection| projection.ancestor_horizontal_flip)
-    {
-        if direct_image_candidate
-            || !image_rotation_properties.is_empty()
-            || fsp_flags & (FSP_FLIP_H | FSP_FLIP_V) != 0
-        {
-            BoundedDirectImageTransform::Unsupported
+    let image_transform =
+        if grouped_image_transform.is_some_and(|projection| projection.ancestor_horizontal_flip) {
+            if direct_image_candidate
+                || !image_rotation_properties.is_empty()
+                || fsp_flags & (FSP_FLIP_H | FSP_FLIP_V) != 0
+            {
+                BoundedDirectImageTransform::Unsupported
+            } else {
+                affine_horizontal_flip_about_bounds(bounds)
+                    .map(BoundedDirectImageTransform::Applied)
+                    .unwrap_or(BoundedDirectImageTransform::Unsupported)
+            }
+        } else if image_candidate {
+            bounded_direct_image_transform(&image_rotation_properties, fsp_flags, bounds)
         } else {
-            affine_horizontal_flip_about_bounds(bounds)
-                .map(BoundedDirectImageTransform::Applied)
-                .unwrap_or(BoundedDirectImageTransform::Unsupported)
-        }
-    } else if image_candidate {
-        bounded_direct_image_transform(&image_rotation_properties, fsp_flags, bounds)
-    } else {
-        BoundedDirectImageTransform::Identity
-    };
+            BoundedDirectImageTransform::Identity
+        };
     let story_transform = if direct_story_candidate {
         bounded_direct_story_transform(&direct_rotation_properties, fsp_flags, bounds)
     } else {
@@ -287,8 +286,8 @@ pub(super) fn bounded_node_transform_projection(
     } else {
         None
     };
-    let ancestor_horizontal_flip = grouped_image_transform
-        .is_some_and(|projection| projection.ancestor_horizontal_flip);
+    let ancestor_horizontal_flip =
+        grouped_image_transform.is_some_and(|projection| projection.ancestor_horizontal_flip);
     let (transform, image_rotation_applied) = if let Some(transform) = story_transform {
         (transform, false)
     } else {
@@ -298,7 +297,7 @@ pub(super) fn bounded_node_transform_projection(
             }
             BoundedDirectImageTransform::Applied(transform) => {
                 (transform, !ancestor_horizontal_flip)
-            },
+            }
         }
     };
 
