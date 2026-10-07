@@ -382,7 +382,7 @@ def test_pub_editor_facade_only_diff_skips_unfiltered_lib_test() -> None:
             "cargo",
             "test",
             "--manifest-path",
-            "vendor/producer-a/Cargo.toml",
+            "vendor/producer-a/crates/pub-editor/Cargo.toml",
             "--test",
             "extra",
             "--no-fail-fast",
@@ -473,6 +473,10 @@ def test_pub_editor_facade_only_diff_skips_unfiltered_lib_test() -> None:
         assert mod.PUB_EDITOR_UNFILTERED_LIB_TEST in commands(narrowed)
 
         # Build-metadata changes never inherit the facade-only narrowing.
+        write(
+            lib,
+            "mod owned;\nmod extra;\nmod registered;\npub use owned::Owned;\npub use extra::Extra;\npub use registered::Registered;\npub struct Core;\n",
+        )
         write(
             root / mod.PUB_EDITOR_PACKAGE_MANIFEST_PATH,
             "[package]\nname='pub-editor'\nversion='0.1.1'\nedition='2024'\n",
