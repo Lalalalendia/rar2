@@ -1900,9 +1900,8 @@ fn exact_image_slot(
 
 use anchor_geometry::{
     anchor_has_unique_geometry_fields, page_relative_bounds,
-    page_relative_bounds_from_contents_missing_xe,
-    page_relative_bounds_from_contents_missing_xe_values, record_missing_anchor_fields,
-    signed_field, unique_escher_field,
+    page_relative_bounds_from_contents_missing_xe, record_missing_anchor_fields, signed_field,
+    unique_escher_field,
 };
 
 fn build_story_frame(
@@ -2039,7 +2038,7 @@ mod tests {
             children: Vec::new(),
             extensions: Vec::new(),
         };
-        let bounds = page_relative_bounds_from_contents_missing_xe_values(
+        let bounds = anchor_geometry::page_relative_bounds_from_contents_missing_xe_values(
             &page, -3_429_000, 259_080, 2_899_410, 3_429_000, 2_640_330,
         )
         .expect("Contents extent should recover the measured missing-XE image anchor");
@@ -2059,7 +2058,7 @@ mod tests {
             extensions: Vec::new(),
         };
         assert_eq!(
-            page_relative_bounds_from_contents_missing_xe_values(
+            anchor_geometry::page_relative_bounds_from_contents_missing_xe_values(
                 &page, -3_429_000, 259_080, 2_899_410, 3_429_000, 2_640_329,
             ),
             None
