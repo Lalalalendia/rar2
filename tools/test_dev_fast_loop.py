@@ -322,6 +322,11 @@ def test_pub_editor_facade_only_diff_skips_unfiltered_lib_test() -> None:
       "name": "pub-editor facade/core",
       "paths": ["vendor/producer-a/crates/pub-editor/src/lib.rs"],
       "commands": [["cargo", "test", "--manifest-path", "vendor/producer-a/Cargo.toml", "-p", "pub-editor", "--lib"]]
+    },
+    {
+      "name": "pub-editor registered module",
+      "paths": ["vendor/producer-a/crates/pub-editor/src/registered.rs"],
+      "commands": [["cargo", "test", "--manifest-path", "vendor/producer-a/Cargo.toml", "-p", "pub-editor", "registered_behavior", "--lib"]]
     }
   ]
 }
@@ -332,7 +337,7 @@ def test_pub_editor_facade_only_diff_skips_unfiltered_lib_test() -> None:
             "[workspace]\nmembers=['crates/pub-editor']\nresolver='2'\n",
         )
         write(
-            root / "vendor/producer-a/crates/pub-editor/Cargo.toml",
+            root / mod.PUB_EDITOR_PACKAGE_MANIFEST_PATH,
             "[package]\nname='pub-editor'\nversion='0.1.0'\nedition='2024'\n",
         )
         lib = root / mod.PUB_EDITOR_LIB_PATH
@@ -345,6 +350,7 @@ def test_pub_editor_facade_only_diff_skips_unfiltered_lib_test() -> None:
         git(root, "commit", "-m", "base")
         git(root, "checkout", "-b", "feature")
 
+        # Same-stem integration coverage permits the edit-mode facade fast path.
         write(
             lib,
             "mod owned;\nmod extra;\npub use owned::Owned;\npub use extra::Extra;\npub struct Core;\n",
@@ -376,15 +382,84 @@ def test_pub_editor_facade_only_diff_skips_unfiltered_lib_test() -> None:
             "cargo",
             "test",
             "--manifest-path",
-            "vendor/producer-a/crates/pub-editor/Cargo.toml",
+            "vendor/producer-a/Cargo.toml",
             "--test",
             "extra",
             "--no-fail-fast",
         ) in actual
 
+        # Feature mode remains the full package unit loop even for facade-only diffs.
+        feature_checks = mod.plan_for_paths(root, paths, mode="feature")
+        feature_narrowed = mod.narrow_checks_for_diff(
+            root,
+            paths,
+            feature_checks,
+            base="main",
+            head="HEAD",
+            mode="feature",
+        )
+        assert mod.PUB_EDITOR_UNFILTERED_LIB_TEST in commands(feature_narrowed)
+
+        # Explicit component-registry coverage is also sufficient.
         write(
             lib,
-            "mod owned;\nmod extra;\npub use owned::Owned;\npub use extra::Extra;\npub struct Core;\npub fn core_value() -> u8 { 1 }\n",
+            "mod owned;\nmod extra;\nmod registered;\npub use owned::Owned;\npub use extra::Extra;\npub use registered::Registered;\npub struct Core;\n",
+        )
+        write(
+            root / "vendor/producer-a/crates/pub-editor/src/registered.rs",
+            "pub struct Registered;\n",
+        )
+        git(root, "add", ".")
+        git(root, "commit", "-m", "registered facade")
+
+        paths = mod.discover_changed_paths(root, base="main", head="HEAD")
+        checks = mod.plan_for_paths(root, paths, mode="edit")
+        narrowed = mod.narrow_checks_for_diff(
+            root,
+            paths,
+            checks,
+            base="main",
+            head="HEAD",
+            mode="edit",
+        )
+        actual = commands(narrowed)
+        assert mod.PUB_EDITOR_UNFILTERED_LIB_TEST not in actual
+        assert (
+            "cargo",
+            "test",
+            "--manifest-path",
+            "vendor/producer-a/Cargo.toml",
+            "-p",
+            "pub-editor",
+            "registered_behavior",
+            "--lib",
+        ) in actual
+
+        # A facade-only lib.rs plus an uncovered semantic module must fail closed.
+        write(
+            lib,
+            "mod owned;\nmod extra;\nmod registered;\nmod uncovered;\npub use owned::Owned;\npub use extra::Extra;\npub use registered::Registered;\npub use uncovered::Uncovered;\npub struct Core;\n",
+        )
+        write(
+            root / "vendor/producer-a/crates/pub-editor/src/uncovered.rs",
+            "pub struct Uncovered;\n",
+        )
+        paths = mod.discover_changed_paths(root, base="main", head=None)
+        checks = mod.plan_for_paths(root, paths, mode="edit")
+        narrowed = mod.narrow_checks_for_diff(
+            root,
+            paths,
+            checks,
+            base="main",
+            head=None,
+            mode="edit",
+        )
+        assert mod.PUB_EDITOR_UNFILTERED_LIB_TEST in commands(narrowed)
+
+        # Any substantive core body change retains the full lib test.
+        write(
+            lib,
+            "mod owned;\nmod extra;\nmod registered;\npub use owned::Owned;\npub use extra::Extra;\npub use registered::Registered;\npub struct Core;\npub fn core_value() -> u8 { 1 }\n",
         )
         checks = mod.plan_for_paths(root, [mod.PUB_EDITOR_LIB_PATH], mode="edit")
         narrowed = mod.narrow_checks_for_diff(
@@ -397,6 +472,22 @@ def test_pub_editor_facade_only_diff_skips_unfiltered_lib_test() -> None:
         )
         assert mod.PUB_EDITOR_UNFILTERED_LIB_TEST in commands(narrowed)
 
+        # Build-metadata changes never inherit the facade-only narrowing.
+        write(
+            root / mod.PUB_EDITOR_PACKAGE_MANIFEST_PATH,
+            "[package]\nname='pub-editor'\nversion='0.1.1'\nedition='2024'\n",
+        )
+        metadata_paths = [mod.PUB_EDITOR_LIB_PATH, mod.PUB_EDITOR_PACKAGE_MANIFEST_PATH]
+        checks = mod.plan_for_paths(root, metadata_paths, mode="edit")
+        narrowed = mod.narrow_checks_for_diff(
+            root,
+            metadata_paths,
+            checks,
+            base="main",
+            head=None,
+            mode="edit",
+        )
+        assert mod.PUB_EDITOR_UNFILTERED_LIB_TEST in commands(narrowed)
 
 def test_feature_mode_adds_package_unit_tests_once() -> None:
     with tempfile.TemporaryDirectory() as raw:

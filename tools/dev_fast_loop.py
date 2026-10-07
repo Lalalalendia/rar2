@@ -22,6 +22,13 @@ NODE_SUFFIXES = {".js", ".mjs", ".cjs"}
 WORKFLOW_PREFIX = ".github/workflows/"
 COMPONENT_REGISTRY_PATH = "tools/dev_fast_loop_components.json"
 PUB_EDITOR_LIB_PATH = "vendor/producer-a/crates/pub-editor/src/lib.rs"
+PUB_EDITOR_SRC_PREFIX = "vendor/producer-a/crates/pub-editor/src/"
+PUB_EDITOR_PACKAGE_MANIFEST_PATH = "vendor/producer-a/crates/pub-editor/Cargo.toml"
+PUB_EDITOR_BUILD_METADATA_PATHS = {
+    PUB_EDITOR_PACKAGE_MANIFEST_PATH,
+    "vendor/producer-a/Cargo.toml",
+    "vendor/producer-a/Cargo.lock",
+}
 PUB_EDITOR_UNFILTERED_LIB_TEST = (
     "cargo",
     "test",
@@ -195,6 +202,43 @@ def pub_editor_lib_facade_only_change(
     return strip_pub_editor_facade(base_source) == strip_pub_editor_facade(head_source)
 
 
+def _component_registry_has_owned_micro_test(root: Path, repo_path: str) -> bool:
+    for rule in load_component_registry(root):
+        if not any(fnmatch.fnmatchcase(repo_path, pattern) for pattern in rule.paths):
+            continue
+        if any(command != PUB_EDITOR_UNFILTERED_LIB_TEST for command in rule.commands):
+            return True
+    return False
+
+
+def pub_editor_changed_modules_have_micro_tests(
+    root: Path,
+    paths: Iterable[str],
+) -> bool:
+    normalized = {_normalize_path(path) for path in paths}
+    if normalized & PUB_EDITOR_BUILD_METADATA_PATHS:
+        return False
+
+    module_paths = sorted(
+        path
+        for path in normalized
+        if path.startswith(PUB_EDITOR_SRC_PREFIX)
+        and path.endswith(RUST_SUFFIX)
+        and path != PUB_EDITOR_LIB_PATH
+    )
+    if not module_paths:
+        return True
+
+    manifest = root / PUB_EDITOR_PACKAGE_MANIFEST_PATH
+    for path in module_paths:
+        if _component_registry_has_owned_micro_test(root, path):
+            continue
+        if rust_same_stem_integration_target(root, manifest, path) is not None:
+            continue
+        return False
+    return True
+
+
 def narrow_checks_for_diff(
     root: Path,
     paths: Iterable[str],
@@ -205,16 +249,18 @@ def narrow_checks_for_diff(
     mode: str,
 ) -> list[Check]:
     result = list(checks)
+    normalized = tuple(paths)
     if mode != "edit":
         return result
-    if not pub_editor_lib_facade_only_change(root, paths, base=base, head=head):
+    if not pub_editor_lib_facade_only_change(root, normalized, base=base, head=head):
+        return result
+    if not pub_editor_changed_modules_have_micro_tests(root, normalized):
         return result
     return [
         check
         for check in result
         if check.command != PUB_EDITOR_UNFILTERED_LIB_TEST
     ]
-
 
 def _run_lines(root: Path, args: Sequence[str], *, check: bool = True) -> list[str]:
     result = subprocess.run(
