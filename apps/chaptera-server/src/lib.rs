@@ -19,6 +19,7 @@ pub mod export_publication;
 pub mod filesystem_blob_provider;
 pub mod guest_intake_classifier;
 pub mod guest_reader_http;
+pub mod guest_reader_runtime;
 pub mod guest_reader_worker;
 pub mod install;
 pub mod job_executor_registry;
