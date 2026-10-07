@@ -1559,10 +1559,10 @@ pub fn build_mature_0x2c_from_streams(
             grouped_child_rotation_op,
             direct_image_anchor_recovered_from_contents_extent,
         ) = if let Some(page_id) = direct_page {
-                let Some(anchor) = shape.client_anchor.as_ref() else {
-                    diagnostics.push(PubBridgeDiagnostic::IncompleteEscherAnchor { seq_num });
-                    continue;
-                };
+            let Some(anchor) = shape.client_anchor.as_ref() else {
+                diagnostics.push(PubBridgeDiagnostic::IncompleteEscherAnchor { seq_num });
+                continue;
+            };
                 let page = graph
                     .pages
                     .get(&page_id)
@@ -1813,16 +1813,16 @@ pub fn build_mature_0x2c_from_streams(
         } else {
             None
         };
-        let (node_transform, image_rotation_applied) = if let Some(transform) = direct_story_transform
-        {
-            (transform, false)
-        } else {
-            match image_transform {
-                BoundedDirectImageTransform::Identity
-                | BoundedDirectImageTransform::Unsupported => (Affine2D::identity(), false),
-                BoundedDirectImageTransform::Applied(transform) => (transform, true),
-            }
-        };
+        let (node_transform, image_rotation_applied) =
+            if let Some(transform) = direct_story_transform {
+                (transform, false)
+            } else {
+                match image_transform {
+                    BoundedDirectImageTransform::Identity
+                    | BoundedDirectImageTransform::Unsupported => (Affine2D::identity(), false),
+                    BoundedDirectImageTransform::Applied(transform) => (transform, true),
+                }
+            };
 
         let object_key = contents_object_key(seq_num);
         let mut source_refs = vec![source_ref(
