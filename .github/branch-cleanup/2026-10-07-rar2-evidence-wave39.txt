@@ -1,0 +1,6 @@
+# Wave 39 — completed Virginia p1 rotation localization refs
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+measure/virginia-p1-residual-01 8023a2dd83e35c7553354f3f025fff7d7d71a64a
+measure/virginia-direct-image-rotation-applicability-01 774993a59c6b8703fdaf01c07550489585ab0fa6
+ops/branch-gc-20261007-evidence-wave38 299fee1b0e0652fb8f2f1c2ea50eedfa135c93ea
