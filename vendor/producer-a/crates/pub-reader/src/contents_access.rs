@@ -1,3 +1,4 @@
+// Fanout control: no semantic change; measure steady-state ownership only.
 use super::*;
 
 pub(super) fn build_reference_index(
