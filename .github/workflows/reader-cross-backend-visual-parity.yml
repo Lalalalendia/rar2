@@ -1,0 +1,257 @@
+name: Reader cross-backend visual parity
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  pull_request:
+    paths:
+      - ".github/workflows/reader-cross-backend-visual-parity.yml"
+      - "tools/reader_backend_parity_v1.py"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      CARGO_TARGET_DIR: target/reader-backend-parity-win
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned acquisition dependency
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Build desktop parity Cargo cache key
+        id: desktop-cache-key
+        shell: pwsh
+        env:
+          MANIFEST_HASH: ${{ hashFiles('Cargo.toml', 'apps/chaptera-desktop/Cargo.toml', 'crates/chaptera-viewer-render-plan/Cargo.toml', 'vendor/producer-a/Cargo.toml', 'vendor/producer-a/crates/**/Cargo.toml') }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:MANIFEST_HASH)) {
+            throw "desktop parity Cargo manifest hash is empty"
+          }
+          "key=reader-backend-parity-win-v1-${env:RUNNER_OS}-rust-1.94.1-$env:MANIFEST_HASH" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Restore/save desktop parity Cargo cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/reader-backend-parity-win
+          key: ${{ steps.desktop-cache-key.outputs.key }}
+
+      - name: Acquire exact public Carlton PUB/PDF pair
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $env:RUNNER_TEMP "reader-backend-parity-desktop"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          python tools/acquire_carlton_march_pair.py $root
+          if ($LASTEXITCODE -ne 0) { throw "Carlton acquisition failed" }
+          $pub = Join-Path $root "March-2026.pub"
+          $out = Join-Path $root "desktop"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          "CHAPTERA_GOLDEN_CARLTON_MARCH=$pub" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_GOLDEN_CARLTON_OUT=$out" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Render Carlton through local Reader backend
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo test -p chaptera-desktop --features reader-only golden_carlton_march_clean_pages_use_current_reader_render_backend -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "desktop Reader parity render failed" }
+
+      - name: Upload desktop parity raster
+        uses: actions/upload-artifact@v4
+        with:
+          name: reader-backend-parity-desktop
+          path: ${{ env.CHAPTERA_GOLDEN_CARLTON_OUT }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  cloud:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_TARGET_DIR: target/reader-backend-parity-cloud
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Restore/save pinned Playwright Chromium cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: cloud-reader-playwright-v1-${{ runner.os }}-1.55.0-chromium
+
+      - name: Install pinned browser runtime
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Build cloud parity Cargo cache key
+        id: cloud-cache-key
+        shell: bash
+        env:
+          MANIFEST_HASH: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'apps/chaptera-server/Cargo.toml', 'crates/**/Cargo.toml', 'vendor/producer-a/Cargo.toml', 'vendor/producer-a/Cargo.lock', 'vendor/producer-a/crates/**/Cargo.toml') }}
+        run: |
+          set -euo pipefail
+          test -n "$MANIFEST_HASH"
+          echo "key=reader-backend-parity-cloud-v1-${RUNNER_OS}-rust-1.94.1-${MANIFEST_HASH}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore/save cloud parity Cargo cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/reader-backend-parity-cloud
+          key: ${{ steps.cloud-cache-key.outputs.key }}
+
+      - name: Acquire exact public Carlton PUB/PDF pair
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/reader-backend-parity-cloud"
+          mkdir -p "$root"
+          python tools/acquire_carlton_march_pair.py "$root"
+          echo "CHAPTERA_PARITY_CARLTON_PUB=$root/March-2026.pub" >> "$GITHUB_ENV"
+          echo "CHAPTERA_PARITY_CLOUD_OUT=$root/cloud" >> "$GITHUB_ENV"
+
+      - name: Build exact Carlton Cloud fixture manifest
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          pub = Path(os.environ["CHAPTERA_PARITY_CARLTON_PUB"]).resolve()
+          target = Path(os.environ["RUNNER_TEMP"]) / "reader-backend-parity-carlton.json"
+          target.write_text(json.dumps({
+              "schema": "chaptera.cloud-reader-real-fixtures.v1",
+              "fixtures": [{
+                  "name": "CarltonMarch2026",
+                  "sha256": "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3",
+                  "bytes": 9580032,
+                  "pages": 3,
+                  "require_render": True,
+                  "require_shared_text": False,
+                  "source_path": str(pub),
+              }],
+          }, indent=2, sort_keys=True) + "\n")
+          print(target)
+          PY
+          echo "CHAPTERA_PARITY_MANIFEST=$RUNNER_TEMP/reader-backend-parity-carlton.json" >> "$GITHUB_ENV"
+
+      - name: Build canonical Cloud Reader Scene worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Render Carlton through Cloud Reader browser backend at desktop golden DPI
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/reader-backend-parity-cloud/debug/chaptera
+          READER_REAL_MANIFEST: ${{ env.CHAPTERA_PARITY_MANIFEST }}
+          READER_REAL_OUTPUT: ${{ env.CHAPTERA_PARITY_CLOUD_OUT }}
+          READER_REFERENCE_RASTER_DPI: "144"
+        run: node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Upload Cloud parity raster
+        uses: actions/upload-artifact@v4
+        with:
+          name: reader-backend-parity-cloud
+          path: ${{ env.CHAPTERA_PARITY_CLOUD_OUT }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  compare:
+    needs: [desktop, cloud]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned raster comparator
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "PyMuPDF==1.24.14"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: reader-backend-parity-desktop
+          path: target/reader-backend-parity/desktop
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: reader-backend-parity-cloud
+          path: target/reader-backend-parity/cloud
+
+      - name: Validate comparator syntax
+        run: python -m py_compile tools/reader_backend_parity_v1.py
+
+      - name: Compare local and Cloud Reader rasters
+        run: |
+          set -euo pipefail
+          python tools/reader_backend_parity_v1.py             target/reader-backend-parity/desktop/carlton-march-reader-golden-receipt.json             target/reader-backend-parity/cloud/receipt.json             CarltonMarch2026             target/reader-backend-parity/receipt.json
+
+      - name: Publish parity summary
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          receipt = json.loads(Path("target/reader-backend-parity/receipt.json").read_text())
+          lines = [
+              "## Reader cross-backend visual parity",
+              "",
+              f"- state: `{receipt['state']}`",
+              f"- source: `{receipt['source_pub_sha256']}`",
+              f"- pages: {receipt['page_count']}",
+              f"- exact pages: {receipt['pixel_exact_page_count']}",
+              f"- mean significant fraction: {receipt['mean_significant_fraction']}",
+              f"- max significant fraction: {receipt['max_significant_fraction']}",
+          ]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              fh.write("\n".join(lines) + "\n")
+          PY
+
+      - name: Upload sanitized cross-backend parity receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: reader-cross-backend-visual-parity
+          path: target/reader-backend-parity/receipt.json
+          if-no-files-found: error
+          retention-days: 30
