@@ -1,0 +1,39 @@
+# Wave 21 — exact merged heads; generated 2026-10-07
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+escher/strict-metafile-01 cb31c02f38fd2a6cbca64ee5f2d8647481e38097
+ci/sample-newsletter-resolved-graph-pin-current-01 6f6adf39da3cc445b3e6fe2d581d07f05c072f3b
+viewer/table-text-alignment-transport-01 4c37dce498b02d5a7741f9e15957c8e80f0c4766
+w2-compound-receipt-v1 ca063e5acdf6c7d2d7e463897c6b71c8a3c705e4
+w2-compound-receipt-01 912b62eeeed9976ba56bb4195dca214fa8a02f1d
+recovery/partial-escherdelay-salvage-05-main a86b674d63427e0a61a2f40d9138e36cf030f492
+viewer/table-text-inset-transport-01 60ed3427b21f866fff21a55db7798f84b313ec16
+editor-newsletter-continuity-v2 c92767c4e0236c48ec50aae2263e5e466881e29c
+escher/strict-gif-under-png-03-current-main 3a87ea19f122263e338a010b3e582535c43c1596
+viewer/table-unanimous-text-inset-01 5d502e240d149a47b348c304b7b53ccfd24cda38
+recovery/orphan-carrier-raw-directory-01 97f3422dce5cdffc6937f91208b44dd873b59356
+viewer/table-mcld-relation-lifetime-01 e950a08ee134d5305084f09d9f9bb4b734bc49f5
+recovery/physical-directory-sid-discovery-current 5cde79699f83e813cc11b32bcd154f498b9ace2d
+recovery/verified-image-strict-consume-02-current-main 765b95f028f38988dade0f3704e820cd80e5fe65
+reader/partial-quill-salvage-01 96acf8b2b82ba6e6d4e174dba9e1d76e6b9b7577
+viewer/table-text-range-typography-substrate-01 1d291a573e369656b58a53c54e985f0e99c0c51a
+viewer/asymmetric-text-inset-01 6b85a81ac616038d802db4c0c3d9d3dcf7685cec
+authoring/table-track-resize-history-v020 b0de047f8ae859d2ee4ea1591813fd21220a8231
+viewer/gif-payload-under-png-blip-01 c01bab9599d792ff3acd26aad8d27870351c927d
+recovery/escher-blip-strict-validation-01 e1068200350e7cf553d97d8cc2537c81c519c783
+recovery/partial-stream-sid-01-main 294cc9bb3ad7f2e39f40ef9ff366687c03639642
+viewer/shared-text-local-clip-02 c82c1d29d6a1156e0c5d1073a1344cd36598ed9c
+viewer/direct-image-contents-extent-recovery-01 bbd60121bfde8dc1891692bc73339365edd5bb98
+viewer/direct-story-rotation-01-v5 2c6bae84dac2102766962df997498d8c497bbb6e
+viewer/primitive-line-dashgel-01-v2 4a30326059d1f160d68a0b03767e79819354ac52
+viewer/fixed-pdf-alpha-smask-default-01 4e7c8f041064daec913b623517e1e5145371ae01
+viewer/grouped-ellipse-01 c3d566e9bd596e592f3e51d85005a7fbe903534b
+authoring-picture-frame-v019-current-main 53b81282d24653303a5b4864b96e238a802560a0
+viewer/paragraph-flow-fallback-01 c54afc62626b47cc4f227f8e866b56535fe9834b
+viewer/table-fixed-output-paint-01 9c6bc5c07d18ff30f8842a07f8950fa00602418e
+reader/partial-root-contents-salvage-01 a29fb14e03ca150a8372fea0954f9e2b50b307b2
+viewer/carlton-merged-table-autoformat-consume-01 9c71dbe9b8548f150aea6445c5adf59e3b3d6bb6
+viewer/paragraph-flow-consume-01 c666fd5b9d993fa0ad232e05f0fc275ec4ae3bf3
+authoring/table-track-resize-01 13063d4b984b090422c3f3653227dbd065547cad
+authoring/create-table-01 48e8822895c3c8d55a5f7f68fc9813649b9954f2
+viewer/supported-subset-ordinary-overset-01 f0cf4dfdb2fd7ff3425d62f40b9481d84a600232
