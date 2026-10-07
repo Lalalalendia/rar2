@@ -2,6 +2,10 @@ name: Reader cross-backend visual parity
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/reader-cross-backend-visual-parity.yml"
 
 permissions:
   contents: read
