@@ -12,6 +12,7 @@ use crate::{
     upload_admission::SqliteUploadAdmissionAuthority,
 };
 
+// Routing control: guest Reader runtime is not a Local Portable owner.
 pub async fn build_guest_reader_router(
     config: &ChapteraConfig,
     secrets: &ResolvedSecrets,
