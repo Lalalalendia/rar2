@@ -81,9 +81,7 @@ pub use guide_bridge::{
     PubGroundedGuideBuild, PubGuideObservation, PubGuideProjectionDiagnostic,
     materialize_grounded_guides,
 };
-use group_projection::{
-    coordinate_rect_i128, grouped_object_target_page_trace, project_grouped_object_shape,
-};
+use group_projection::{grouped_object_target_page_trace, project_grouped_object_shape};
 #[cfg(test)]
 use group_projection::project_rect_trunc;
 pub use intake_protocol::{
