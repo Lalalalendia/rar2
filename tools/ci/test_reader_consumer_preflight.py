@@ -125,6 +125,33 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
             ],
         )
 
+    def test_page_projection_adds_master_bridge_compile_inside_tier_a(self) -> None:
+        plan = MODULE.build_plan(
+            ["vendor/producer-a/crates/pub-reader/src/page_projection.rs"],
+            "BASE",
+            "HEAD",
+        )
+        command = next(
+            command
+            for command in plan["commands"]
+            if command["id"] == "pub-reader-master-bridge-check"
+        )
+        self.assertEqual(
+            command["argv"],
+            [
+                "cargo",
+                "check",
+                "--manifest-path",
+                "vendor/producer-a/Cargo.toml",
+                "-p",
+                "pub-reader",
+                "--bin",
+                "master_projection_bridge_receipt",
+                "--features",
+                "master-authority-bridge",
+            ],
+        )
+
     def test_render_plan_uses_clippy_as_compile_gate(self) -> None:
         plan = MODULE.build_plan(
             ["crates/chaptera-viewer-render-plan/src/lib.rs"],
