@@ -25,6 +25,7 @@ READER_STORY_FRAME_ANALYSIS = "vendor/producer-a/crates/pub-reader/src/story_fra
 READER_TYPOGRAPHY_PROJECTION = "vendor/producer-a/crates/pub-reader/src/typography_projection.rs"
 READER_DIRECT_TRANSFORM = "vendor/producer-a/crates/pub-reader/src/direct_transform.rs"
 READER_GROUPED_PROJECTION = "vendor/producer-a/crates/pub-reader/src/grouped_projection.rs"
+READER_SOURCE_GRAPH_MODEL = "vendor/producer-a/crates/pub-reader/src/source_graph_model.rs"
 
 
 TEST_REGION_EVIDENCE_CANDIDATES = {
@@ -627,7 +628,7 @@ def classify(
     virginia_paths = [
         path
         for path in product_paths
-        if path not in {READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_TYPOGRAPHY_PROJECTION, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION}
+        if path not in {READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_TYPOGRAPHY_PROJECTION, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_SOURCE_GRAPH_MODEL}
         and not path.startswith("vendor/producer-a/crates/pub-reader/src/bin/")
         and not path.startswith("vendor/producer-a/crates/pub-viewer/src/bin/")
     ]
