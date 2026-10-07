@@ -1,0 +1,4 @@
+# Wave 43 — completed source_graph_model routing controls
+measure/pub-reader-source-graph-model-routing-01 1117115f2f9fd67eb6e10b412bbc6ec5813ca710
+measure/pub-reader-source-graph-model-routing-02 c9372563c0c2631925d3d7d273976bcf2d7c9e6f
+ops/branch-gc-20261007-evidence-wave42 bd52381288188bbc0d0131b1eca235f2e8fa2aae
