@@ -8,6 +8,7 @@ on:
       - "vendor/producer-a/crates/pub-reader/Cargo.toml"
       - "vendor/producer-a/crates/pub-reader/src/**"
       - "!vendor/producer-a/crates/pub-reader/src/page_projection.rs"
+      - "!vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
       - "vendor/producer-a/crates/pub-idml/**"
       - "vendor/producer-a/crates/pub-odg/**"
       - "tools/verify_editable_source_image_export.py"
