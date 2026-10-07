@@ -307,6 +307,49 @@ def test_run_receipt_records_timings_and_cache_state() -> None:
         assert history_rows[0]["head_sha"] == receipt["head_sha"]
 
 
+def test_workspace_manifest_edit_uses_metadata_not_full_workspace_compile() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        write(
+            root / "Cargo.toml",
+            "[workspace]\nmembers=['crates/foo']\nresolver='2'\n",
+        )
+        write(
+            root / "crates/foo/Cargo.toml",
+            "[package]\nname='foo'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        write(root / "crates/foo/src/lib.rs", "pub fn value() -> u8 { 1 }\n")
+
+        edit = mod.plan_for_paths(root, ["Cargo.toml"], mode="edit")
+        edit_commands = commands(edit)
+        assert (
+            "cargo",
+            "metadata",
+            "--manifest-path",
+            "Cargo.toml",
+            "--no-deps",
+            "--format-version",
+            "1",
+        ) in edit_commands
+        assert not any(
+            command[:2] == ("cargo", "fmt") for command in edit_commands
+        )
+        assert not any(
+            command[:2] == ("cargo", "check") and "--workspace" in command
+            for command in edit_commands
+        )
+
+        feature = mod.plan_for_paths(root, ["Cargo.toml"], mode="feature")
+        feature_commands = commands(feature)
+        assert (
+            "cargo",
+            "check",
+            "--manifest-path",
+            "Cargo.toml",
+            "--workspace",
+        ) in feature_commands
+
+
 def test_feature_mode_adds_package_unit_tests_once() -> None:
     with tempfile.TemporaryDirectory() as raw:
         root = Path(raw)
@@ -330,6 +373,7 @@ def main() -> None:
     test_component_registry_malformed_fails_closed()
     test_rust_cache_auto_off_require_and_git_common_dir()
     test_run_receipt_records_timings_and_cache_state()
+    test_workspace_manifest_edit_uses_metadata_not_full_workspace_compile()
     test_feature_mode_adds_package_unit_tests_once()
     print("dev fast loop tests: ok")
 
