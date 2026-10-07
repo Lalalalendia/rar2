@@ -1,0 +1,11 @@
+[package]
+name = "pub-editor-table-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+pub-model = { path = "../pub-model" }
+serde.workspace = true
