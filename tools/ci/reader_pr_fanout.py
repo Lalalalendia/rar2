@@ -22,6 +22,7 @@ READER_PAINT_PROJECTION = "vendor/producer-a/crates/pub-reader/src/paint_project
 READER_PAGE_PROJECTION = "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
 READER_SOURCE_PAINT_ORDER = "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
 READER_STORY_FRAME_ANALYSIS = "vendor/producer-a/crates/pub-reader/src/story_frame_analysis.rs"
+READER_TYPOGRAPHY_PROJECTION = "vendor/producer-a/crates/pub-reader/src/typography_projection.rs"
 
 
 TEST_REGION_EVIDENCE_CANDIDATES = {
@@ -330,6 +331,7 @@ CLOUD_REFERENCE = (
     "vendor/producer-a/crates/pub-reader/src/lib.rs",
     READER_PAGE_PROJECTION,
     READER_SOURCE_PAINT_ORDER,
+    READER_TYPOGRAPHY_PROJECTION,
     "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs",
     "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs",
     "tools/acquire_carlton_march_pair.py",
@@ -364,6 +366,7 @@ VISUAL_BATCH01 = (
     "vendor/producer-a/crates/pub-reader/src/lib.rs",
     READER_PAGE_PROJECTION,
     READER_SOURCE_PAINT_ORDER,
+    READER_TYPOGRAPHY_PROJECTION,
 )
 
 TYPOGRAPHY_GOLDEN = (
@@ -622,7 +625,7 @@ def classify(
     virginia_paths = [
         path
         for path in product_paths
-        if path not in {READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER}
+        if path not in {READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_TYPOGRAPHY_PROJECTION}
         and not path.startswith("vendor/producer-a/crates/pub-reader/src/bin/")
         and not path.startswith("vendor/producer-a/crates/pub-viewer/src/bin/")
     ]
