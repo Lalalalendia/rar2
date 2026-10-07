@@ -31,6 +31,7 @@ READER_ANCHOR_GEOMETRY = "vendor/producer-a/crates/pub-reader/src/anchor_geometr
 READER_STORY_MATERIALIZATION = "vendor/producer-a/crates/pub-reader/src/story_materialization.rs"
 READER_QUILL_ADMISSION = "vendor/producer-a/crates/pub-reader/src/quill_admission.rs"
 READER_PUBLICATION_DOCUMENT = "vendor/producer-a/crates/pub-reader/src/publication_document.rs"
+READER_CONTENTS_ACCESS = "vendor/producer-a/crates/pub-reader/src/contents_access.rs"
 
 
 TEST_REGION_EVIDENCE_CANDIDATES = {
@@ -343,6 +344,7 @@ CLOUD_REFERENCE = (
     READER_STORY_MATERIALIZATION,
     READER_QUILL_ADMISSION,
     READER_PUBLICATION_DOCUMENT,
+    READER_CONTENTS_ACCESS,
     "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs",
     "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs",
     "tools/acquire_carlton_march_pair.py",
@@ -381,6 +383,7 @@ VISUAL_BATCH01 = (
     READER_STORY_MATERIALIZATION,
     READER_QUILL_ADMISSION,
     READER_PUBLICATION_DOCUMENT,
+    READER_CONTENTS_ACCESS,
 )
 
 TYPOGRAPHY_GOLDEN = (
