@@ -1,0 +1,5 @@
+# Validation Wave 61 — superseded legacy GROUP/TABLE validation snapshots
+validation/legacy22-group-signed-bounds-1050 9e38a5b7caea87f0e12b47bff7a9b4b952786039
+validation/legacy22-table-layout-1050 ffd08687cb653d7c7647fc471ad92eca77731499
+validation/legacy22-table-layout-post-story65-1050 f9265042e3caa6b73d0fd088eb4a9ae9e208b3c8
+ops/branch-gc-20261008-validation-wave60 9352e740881edd01cd1619550896616848b1b161
