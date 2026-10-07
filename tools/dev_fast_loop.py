@@ -21,6 +21,16 @@ RUST_SUFFIX = ".rs"
 NODE_SUFFIXES = {".js", ".mjs", ".cjs"}
 WORKFLOW_PREFIX = ".github/workflows/"
 COMPONENT_REGISTRY_PATH = "tools/dev_fast_loop_components.json"
+PUB_EDITOR_LIB_PATH = "vendor/producer-a/crates/pub-editor/src/lib.rs"
+PUB_EDITOR_UNFILTERED_LIB_TEST = (
+    "cargo",
+    "test",
+    "--manifest-path",
+    "vendor/producer-a/Cargo.toml",
+    "-p",
+    "pub-editor",
+    "--lib",
+)
 
 
 class Check(NamedTuple):
@@ -119,6 +129,91 @@ def component_registry_checks(root: Path, paths: Iterable[str]) -> list[Check]:
                 )
             )
     return checks
+
+
+def _git_show_text(root: Path, revision: str, repo_path: str) -> str | None:
+    result = subprocess.run(
+        ["git", "show", f"{revision}:{repo_path}"],
+        cwd=root,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return result.stdout if result.returncode == 0 else None
+
+
+def strip_pub_editor_facade(source: str) -> str:
+    """Remove only plain module declarations and public re-export blocks."""
+    lines = source.splitlines(keepends=True)
+    output: list[str] = []
+    index = 0
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if stripped.startswith("mod ") and stripped.endswith(";"):
+            index += 1
+            continue
+        if stripped.startswith("pub use ") and "::" in stripped:
+            if stripped.endswith(";"):
+                index += 1
+                continue
+            index += 1
+            while index < len(lines):
+                if lines[index].strip() == "};":
+                    index += 1
+                    break
+                index += 1
+            continue
+        output.append(lines[index])
+        index += 1
+    return "".join(output)
+
+
+def pub_editor_lib_facade_only_change(
+    root: Path,
+    paths: Iterable[str],
+    *,
+    base: str,
+    head: str | None,
+) -> bool:
+    normalized = {_normalize_path(path) for path in paths}
+    if PUB_EDITOR_LIB_PATH not in normalized:
+        return False
+    resolved_base = resolve_base_ref(root, base)
+    if resolved_base is None:
+        return False
+    base_source = _git_show_text(root, resolved_base, PUB_EDITOR_LIB_PATH)
+    if head is None:
+        try:
+            head_source = (root / PUB_EDITOR_LIB_PATH).read_text(encoding="utf-8")
+        except OSError:
+            return False
+    else:
+        head_source = _git_show_text(root, head, PUB_EDITOR_LIB_PATH)
+    if base_source is None or head_source is None:
+        return False
+    return strip_pub_editor_facade(base_source) == strip_pub_editor_facade(head_source)
+
+
+def narrow_checks_for_diff(
+    root: Path,
+    paths: Iterable[str],
+    checks: Iterable[Check],
+    *,
+    base: str,
+    head: str | None,
+    mode: str,
+) -> list[Check]:
+    result = list(checks)
+    if mode != "edit":
+        return result
+    if not pub_editor_lib_facade_only_change(root, paths, base=base, head=head):
+        return result
+    return [
+        check
+        for check in result
+        if check.command != PUB_EDITOR_UNFILTERED_LIB_TEST
+    ]
 
 
 def _run_lines(root: Path, args: Sequence[str], *, check: bool = True) -> list[str]:
@@ -670,6 +765,14 @@ def main() -> int:
         root, base=args.base, head=args.head
     )
     checks = plan_for_paths(root, paths, mode=args.mode)
+    checks = narrow_checks_for_diff(
+        root,
+        paths,
+        checks,
+        base=args.base,
+        head=args.head,
+        mode=args.mode,
+    )
     print_plan(paths, checks, mode=args.mode, as_json=args.json)
     if args.run:
         try:
