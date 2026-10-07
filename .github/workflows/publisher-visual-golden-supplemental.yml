@@ -15,6 +15,7 @@ on:
       - "vendor/producer-a/crates/pub-viewer/src/**"
       - "!vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
       - "vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
   workflow_dispatch:
   push:
