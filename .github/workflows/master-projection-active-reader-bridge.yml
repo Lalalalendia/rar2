@@ -12,6 +12,7 @@ on:
       - "crates/pub-model/**"
       - "vendor/producer-a/crates/pub-viewer/Cargo.toml"
       - "vendor/producer-a/crates/pub-viewer/src/**"
+      - "!vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
       - "crates/chaptera-scene-instance/**"
       - "crates/chaptera-viewer-render-plan/**"
 

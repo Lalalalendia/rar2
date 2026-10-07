@@ -9,6 +9,7 @@ on:
       - "crates/chaptera-desktop-shaped-flow-runtime/src/current_typography.rs"
       - "crates/chaptera-desktop-shaped-flow-runtime/src/fixed_pdf_pages.rs"
       - "crates/chaptera-desktop-shaped-flow-runtime/src/fixed_pdf_resources.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
       - "crates/chaptera-desktop-shaped-flow-runtime/src/bin/current_fixed_pdf_input.rs"
       - ".github/workflows/editor-current-fixed-pdf-resource-input.yml"
   workflow_dispatch:
