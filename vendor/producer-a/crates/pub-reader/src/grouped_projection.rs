@@ -3,6 +3,7 @@
 //! This module owns ChildAnchor/FSPGR/ClientAnchor composition for bounded
 //! group ancestry. Direct page-local geometry and graph orchestration remain
 //! in the crate root.
+// CI ownership control: grouped projection is measured as an independent Reader leaf.
 
 use super::*;
 
