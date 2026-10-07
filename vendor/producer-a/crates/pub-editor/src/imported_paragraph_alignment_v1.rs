@@ -1,3 +1,4 @@
+// CI-PUB-EDITOR-FAST-BENCHMARK-01: measurement-only comment; no semantic effect.
 use crate::{EditorSession, ImportedParagraphProjectionErrorV1};
 use pub_model::{ParagraphId, StoryId, TextRange};
 use pub_reader::{PubParagraphAlignment, PubParagraphAlignmentRun};
