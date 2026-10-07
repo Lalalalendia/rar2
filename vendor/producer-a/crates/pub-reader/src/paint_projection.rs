@@ -84,7 +84,9 @@ pub(super) fn has_shape_local_dash_gel(shape: &pub_escher::SpContainerObservatio
     unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_DASHING) == Some(6)
 }
 
-pub(super) fn has_explicit_officeart_paint_observation(shape: &pub_escher::SpContainerObservation) -> bool {
+pub(super) fn has_explicit_officeart_paint_observation(
+    shape: &pub_escher::SpContainerObservation,
+) -> bool {
     shape
         .fopts
         .iter()
@@ -454,7 +456,9 @@ pub(super) fn paint_scalar_from_records(
     }
 }
 
-pub(super) fn admits_normative_2d_paint_defaults(shape: &pub_escher::SpContainerObservation) -> bool {
+pub(super) fn admits_normative_2d_paint_defaults(
+    shape: &pub_escher::SpContainerObservation,
+) -> bool {
     let Some(fsp) = shape.fsp.as_ref() else {
         return false;
     };
@@ -481,7 +485,9 @@ pub(super) fn effective_paint_has_dgg_authority(paint: &PubEffectiveShapePaintSo
     })
 }
 
-pub(super) fn fopt_records_use_officeart_scheme_color(records: &[pub_escher::FoptObservation]) -> bool {
+pub(super) fn fopt_records_use_officeart_scheme_color(
+    records: &[pub_escher::FoptObservation],
+) -> bool {
     records
         .iter()
         .flat_map(|record| record.properties.iter())
@@ -662,7 +668,10 @@ pub(super) fn direct_officeart_rgb(value: u32) -> Option<[u8; 3]> {
     Some([bytes[0], bytes[1], bytes[2]])
 }
 
-pub(super) fn bounded_officeart_rgb(value: u32, color_scheme: Option<&MatureColorScheme>) -> Option<[u8; 3]> {
+pub(super) fn bounded_officeart_rgb(
+    value: u32,
+    color_scheme: Option<&MatureColorScheme>,
+) -> Option<[u8; 3]> {
     match (value >> 24) as u8 {
         0x00 => direct_officeart_rgb(value),
         0x08 => {
