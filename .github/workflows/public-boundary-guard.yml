@@ -1,6 +1,7 @@
 name: Rar public boundary guard
 
 on:
+  # fanout: global-pr-required
   pull_request:
 
 concurrency:
@@ -25,3 +26,15 @@ jobs:
           PUBLIC_BOUNDARY_BASE: origin/${{ github.base_ref }}
           PUBLIC_BOUNDARY_HEAD: HEAD
         run: python tools/check_public_boundary.py
+
+      - name: Test source fanout budget laws
+        run: python tools/ci/test_source_fanout_budget.py
+
+      - name: Enforce source fanout and monolith ratchets
+        env:
+          SOURCE_FANOUT_BASE: ${{ github.event.pull_request.base.sha }}
+          SOURCE_FANOUT_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python tools/ci/source_fanout_budget.py \
+            --base "$SOURCE_FANOUT_BASE" \
+            --head "$SOURCE_FANOUT_HEAD"
