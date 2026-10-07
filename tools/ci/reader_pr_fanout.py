@@ -18,6 +18,8 @@ EVIDENCE_ONLY_PATHS = {
 VIEWER_AUTHORING_PROJECTION = (
     "vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
 )
+READER_PAINT_PROJECTION = "vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
+
 
 TEST_REGION_EVIDENCE_CANDIDATES = {
     "apps/chaptera-server/src/reader_scene_v1.rs",
@@ -600,13 +602,19 @@ def classify(
         if path != DESKTOP_MAIN or path not in (visual_neutral_paths or set())
     ]
     result["visual_oracle"] = any(matches(path, VISUAL_ORACLE) for path in visual_paths)
-    result["typography_golden"] = any(matches(path, TYPOGRAPHY_GOLDEN) for path in visual_paths)
+    typography_paths = [
+        path for path in visual_paths if path != READER_PAINT_PROJECTION
+    ]
+    result["typography_golden"] = any(
+        matches(path, TYPOGRAPHY_GOLDEN) for path in typography_paths
+    )
     # The historical Virginia gate explicitly excluded probe-only binaries.
     # Preserve that boundary after routing it through the central PR DAG.
     virginia_paths = [
         path
         for path in product_paths
-        if not path.startswith("vendor/producer-a/crates/pub-reader/src/bin/")
+        if path != READER_PAINT_PROJECTION
+        and not path.startswith("vendor/producer-a/crates/pub-reader/src/bin/")
         and not path.startswith("vendor/producer-a/crates/pub-viewer/src/bin/")
     ]
     result["virginia_page_role"] = any(
