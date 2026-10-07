@@ -34,7 +34,7 @@ use chaptera_scene_instance::{
 };
 use pub_layout::{
     BoundedAuthoringSlice, BoundedLayoutProjection, BoundedNodeGeometryInput,
-    BoundedParagraphFlowConstraint, BoundedParagraphFlowRun, BoundedTableInput,
+    BoundedParagraphFlowConstraint, BoundedParagraphFlowRun,
     BoundedTextFlowEnvironment, BoundedTextMetrics, BoundedUniformTableMetrics,
     ProjectedStoryFrame, ProjectionDiagnostic, ResolveDiagnostic, ResolvedPhysicalNode,
     project_bounded, resolve_bounded_geometry, resolve_bounded_text_flow_with_paragraph_flow,
@@ -45,7 +45,7 @@ pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
 use pub_model::CanonicalId;
 use pub_model::{
     Affine2D, AuthorityClass, LengthEmu, Node, NodeId, NodeKind, PageId, ReadConfidence, RectEmu,
-    ResourceId, Sha256Digest, SourceDerivedIdInput, SourceRole, StoryFrame, StoryId,
+    ResourceId, Sha256Digest, SourceDerivedIdInput, SourceRole, StoryId,
     TableCellAddress, TableCellId, derive_source_canonical_id,
 };
 use pub_paint_bridge::{
