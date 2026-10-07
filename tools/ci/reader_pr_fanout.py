@@ -15,6 +15,10 @@ EVIDENCE_ONLY_PATHS = {
     "vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs",
 }
 
+VIEWER_AUTHORING_PROJECTION = (
+    "vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
+)
+
 TEST_REGION_EVIDENCE_CANDIDATES = {
     "apps/chaptera-server/src/reader_scene_v1.rs",
 }
@@ -547,7 +551,10 @@ def classify(
     # against the Reader graph, but do not admit expensive product/render/
     # corpus gates solely because a crate-level ** glob also covers tests/.
     product_paths = [
-        path for path in semantic_paths if not is_rust_integration_test_path(path)
+        path
+        for path in semantic_paths
+        if not is_rust_integration_test_path(path)
+        and path != VIEWER_AUTHORING_PROJECTION
     ]
     mapping = {
         "tier_a": TIER_A,
