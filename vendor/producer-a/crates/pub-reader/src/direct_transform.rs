@@ -1,5 +1,7 @@
 use super::*;
 
+// CI routing control: direct-transform leaf only.
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum BoundedDirectImageTransform {
     Identity,
