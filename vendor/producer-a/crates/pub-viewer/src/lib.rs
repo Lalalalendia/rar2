@@ -32,6 +32,7 @@ use chaptera_scene_instance::{
     SceneInstanceV1, SceneProjectionKindV1, cmo_story_slot_instance_v1,
     inherited_master_instance_v1,
 };
+pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
 use pub_layout::{
     BoundedLayoutProjection, BoundedParagraphFlowConstraint, BoundedParagraphFlowRun,
     BoundedTextFlowEnvironment, BoundedTextMetrics, BoundedUniformTableMetrics,
@@ -39,7 +40,6 @@ use pub_layout::{
     project_bounded, resolve_bounded_geometry, resolve_bounded_text_flow_with_paragraph_flow,
     resolve_bounded_uniform_table_cells,
 };
-pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
 #[cfg(feature = "cmo-slot-compose")]
 use pub_model::CanonicalId;
 use pub_model::{
