@@ -194,8 +194,13 @@ pub use salvage_authority::{
     typed_corruption_authority,
 };
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use source_paint_order::project_rect_trunc;
 pub use source_paint_order::{PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1, PubSourcePagePaintOrderV1};
-use source_paint_order::{index_escher_by_contents_seq, source_page_paint_orders_v1};
+use source_paint_order::{
+    grouped_object_target_page_trace, index_escher_by_contents_seq, project_grouped_object_shape,
+    source_page_paint_orders_v1,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
 pub use story_frame_analysis::{
@@ -588,6 +593,11 @@ pub enum PubBridgeDiagnostic {
     },
     GroupedImageProjectionUnavailable {
         seq_num: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_page_id: Option<PageId>,
+        image_slot: u32,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        group_ancestry: Vec<u32>,
         reason: String,
     },
     GroupedPrimitiveProjected {
@@ -1249,6 +1259,7 @@ pub fn build_mature_0x2c_from_streams(
                 &graph.pages,
                 &escher_inventory,
                 &escher_by_contents_seq,
+                exact_grouped_image_identity && exact_story_identity.is_none(),
             ) {
                 Ok(Some(projection)) => {
                     diagnostics.push(if raw_type == Some(RAW_TYPE_TABLE) {
@@ -1294,8 +1305,17 @@ pub fn build_mature_0x2c_from_streams(
                             reason: error.to_string(),
                         }
                     } else {
+                        let (target_page_id, group_ancestry) = grouped_object_target_page_trace(
+                            parent_seq,
+                            &references,
+                            &page_seq_to_id,
+                        );
                         PubBridgeDiagnostic::GroupedImageProjectionUnavailable {
                             seq_num,
+                            target_page_id,
+                            image_slot: image_slot
+                                .expect("grouped image identity requires exact image slot"),
+                            group_ancestry,
                             reason: error.to_string(),
                         }
                     });
@@ -1306,12 +1326,17 @@ pub fn build_mature_0x2c_from_streams(
             None
         };
 
-        let (page_id, bounds, grouped_sources, direct_image_anchor_recovered_from_contents_extent) =
-            if let Some(page_id) = direct_page {
-                let Some(anchor) = shape.client_anchor.as_ref() else {
-                    diagnostics.push(PubBridgeDiagnostic::IncompleteEscherAnchor { seq_num });
-                    continue;
-                };
+        let (
+            page_id,
+            bounds,
+            grouped_sources,
+            grouped_child_rotation_op,
+            direct_image_anchor_recovered_from_contents_extent,
+        ) = if let Some(page_id) = direct_page {
+            let Some(anchor) = shape.client_anchor.as_ref() else {
+                diagnostics.push(PubBridgeDiagnostic::IncompleteEscherAnchor { seq_num });
+                continue;
+            };
                 let page = graph
                     .pages
                     .get(&page_id)
@@ -1349,12 +1374,19 @@ pub fn build_mature_0x2c_from_streams(
                         };
                         (bounds, true)
                     };
-                (page_id, bounds, Vec::new(), recovered_from_contents_extent)
+                (
+                    page_id,
+                    bounds,
+                    Vec::new(),
+                    None,
+                    recovered_from_contents_extent,
+                )
             } else if let Some(projection) = grouped_projection {
                 (
                     projection.page_id,
                     projection.bounds,
                     projection.group_sources,
+                    projection.child_rotation_op,
                     false,
                 )
             } else {
@@ -1511,6 +1543,10 @@ pub fn build_mature_0x2c_from_streams(
             && exact_story_identity.is_none()
             && image_slot.is_some()
             && grouped_sources.is_empty();
+        let grouped_image_candidate = raw_type == Some(RAW_TYPE_SHAPE)
+            && exact_story_identity.is_none()
+            && image_slot.is_some()
+            && !grouped_sources.is_empty();
         let direct_story_candidate =
             raw_type == Some(RAW_TYPE_SHAPE) && story_frame.is_some() && grouped_sources.is_empty();
         let direct_rotation_properties = shape
@@ -1520,18 +1556,18 @@ pub fn build_mature_0x2c_from_streams(
             .filter(|property| property.property_id() == OFFICE_ART_PROPERTY_ROTATION)
             .map(|property| (property.op, property.f_bid(), property.f_complex()))
             .collect::<Vec<_>>();
-        let direct_image_rotation_properties = if direct_image_candidate {
+        let image_rotation_properties = if direct_image_candidate {
             direct_rotation_properties.clone()
+        } else if grouped_image_candidate {
+            grouped_child_rotation_op
+                .map(|rotation_op| vec![(rotation_op, false, false)])
+                .unwrap_or_default()
         } else {
             Vec::new()
         };
         let direct_fsp_flags = shape.fsp.as_ref().map(|fsp| fsp.flags).unwrap_or(0);
-        let direct_image_transform = if direct_image_candidate {
-            bounded_direct_image_transform(
-                &direct_image_rotation_properties,
-                direct_fsp_flags,
-                bounds,
-            )
+        let image_transform = if direct_image_candidate || grouped_image_candidate {
+            bounded_direct_image_transform(&image_rotation_properties, direct_fsp_flags, bounds)
         } else {
             BoundedDirectImageTransform::Identity
         };
@@ -1540,20 +1576,22 @@ pub fn build_mature_0x2c_from_streams(
         } else {
             None
         };
-        let direct_image_cardinal_rotation_degrees =
-            if direct_image_candidate && explicit_image_crop.is_none() {
-                bounded_direct_image_cardinal_content_rotation_degrees(
-                    &direct_image_rotation_properties,
-                    direct_fsp_flags,
-                )
-            } else {
-                None
-            };
-        let (node_transform, direct_image_rotation_applied) =
+        let image_cardinal_rotation_degrees = if (direct_image_candidate
+            || grouped_image_candidate)
+            && explicit_image_crop.is_none()
+        {
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &image_rotation_properties,
+                direct_fsp_flags,
+            )
+        } else {
+            None
+        };
+        let (node_transform, image_rotation_applied) =
             if let Some(transform) = direct_story_transform {
                 (transform, false)
             } else {
-                match direct_image_transform {
+                match image_transform {
                     BoundedDirectImageTransform::Identity
                     | BoundedDirectImageTransform::Unsupported => (Affine2D::identity(), false),
                     BoundedDirectImageTransform::Applied(transform) => (transform, true),
@@ -1645,7 +1683,7 @@ pub fn build_mature_0x2c_from_streams(
                 ));
             }
         }
-        if direct_image_rotation_applied || direct_image_cardinal_rotation_degrees.is_some() {
+        if image_rotation_applied || image_cardinal_rotation_degrees.is_some() {
             source_refs.push(source_ref(
                 &graph.source,
                 &shape.source,
@@ -1748,8 +1786,7 @@ pub fn build_mature_0x2c_from_streams(
                     image_slot,
                     legacy_ole: None,
                     explicit_image_crop,
-                    explicit_image_cardinal_rotation_degrees:
-                        direct_image_cardinal_rotation_degrees,
+                    explicit_image_cardinal_rotation_degrees: image_cardinal_rotation_degrees,
                     explicit_image_recolor,
                     explicit_paint,
                     effective_paint,
@@ -2072,225 +2109,6 @@ fn exact_image_slot(
             None
         }
     }
-}
-
-#[derive(Debug)]
-struct GroupedObjectProjection {
-    page_id: PageId,
-    bounds: RectEmu,
-    depth: usize,
-    group_sources: Vec<RawSpan>,
-}
-
-fn project_grouped_object_shape(
-    first_group_seq: u32,
-    child_shape: &pub_escher::SpContainerObservation,
-    references: &BTreeMap<u32, Contents0x2cChunkReference>,
-    page_seq_to_id: &BTreeMap<u32, PageId>,
-    pages: &BTreeMap<PageId, Page>,
-    escher_inventory: &SpContainerInventory,
-    escher_by_contents_seq: &BTreeMap<u32, Vec<usize>>,
-) -> Result<Option<GroupedObjectProjection>> {
-    if shape_has_nonzero_rotation(child_shape)
-        || shape_has_fsp_flag(child_shape, OFFICEART_FSP_FLIP_H)
-        || shape_has_fsp_flag(child_shape, OFFICEART_FSP_FLIP_V)
-    {
-        bail!("grouped child has rotation or flip");
-    }
-
-    let child_anchor = child_shape
-        .child_anchor
-        .as_ref()
-        .context("grouped child is missing ChildAnchor")?;
-    let mut rect = coordinate_rect_i128(child_anchor)?;
-    let mut current_shape = child_shape;
-    let mut current_group_seq = first_group_seq;
-    let mut seen = BTreeSet::new();
-    let mut group_sources = Vec::new();
-
-    for depth in 1..=2 {
-        if !seen.insert(current_group_seq) {
-            bail!("group ancestry cycle");
-        }
-        let group_reference = references
-            .get(&current_group_seq)
-            .context("group Contents reference missing")?;
-        if single_raw_type(group_reference) != Some(RAW_TYPE_GROUP) {
-            bail!("group ancestry raw type is not 0x30");
-        }
-
-        let group_matches = escher_by_contents_seq
-            .get(&current_group_seq)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        let group_shape = match group_matches {
-            [index] => &escher_inventory.shapes[*index],
-            [] => bail!("group Escher shape missing"),
-            _ => bail!("group Escher shape ambiguous"),
-        };
-        if current_shape.parent_group_shape_source.as_ref() != Some(&group_shape.source) {
-            bail!("OfficeArt parent-group link does not match Contents ancestry");
-        }
-        if shape_has_nonzero_rotation(group_shape)
-            || shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_H)
-            || shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_V)
-        {
-            bail!("group ancestor has rotation or flip");
-        }
-
-        let fspgr = group_shape
-            .fspgr
-            .as_ref()
-            .context("group is missing FSPGR")?;
-        let group_coords = coordinate_rect_i128(fspgr)?;
-        group_sources.push(group_shape.source.clone());
-
-        let parent_seq =
-            single_parent_seq(group_reference).context("group parent is missing or ambiguous")?;
-        if let Some(&page_id) = page_seq_to_id.get(&parent_seq) {
-            let anchor = group_shape
-                .client_anchor
-                .as_ref()
-                .context("top group is missing ClientAnchor")?;
-            let absolute = publisher_anchor_rect_i128(anchor)?;
-            rect = project_rect_trunc(rect, group_coords, absolute)?;
-            let page = pages
-                .get(&page_id)
-                .context("group page id is missing from graph")?;
-            let bounds = center_origin_rect_to_page_bounds(page, rect)?;
-            return Ok(Some(GroupedObjectProjection {
-                page_id,
-                bounds,
-                depth,
-                group_sources,
-            }));
-        }
-
-        if depth == 2 {
-            bail!("group ancestry exceeds bounded depth 2");
-        }
-        if references.get(&parent_seq).and_then(single_raw_type) != Some(RAW_TYPE_GROUP) {
-            bail!("group parent is neither DOCUMENT page nor group");
-        }
-
-        let placement = group_shape
-            .child_anchor
-            .as_ref()
-            .context("nested group is missing ChildAnchor")?;
-        rect = project_rect_trunc(rect, group_coords, coordinate_rect_i128(placement)?)?;
-        current_shape = group_shape;
-        current_group_seq = parent_seq;
-    }
-
-    Ok(None)
-}
-
-fn coordinate_rect_i128(rect: &pub_escher::OfficeArtCoordinateRect) -> Result<[i128; 4]> {
-    let out = [
-        i128::from(rect.x_left),
-        i128::from(rect.y_top),
-        i128::from(rect.x_right),
-        i128::from(rect.y_bottom),
-    ];
-    if out[2] <= out[0] || out[3] <= out[1] {
-        bail!("coordinate rectangle is non-positive");
-    }
-    Ok(out)
-}
-
-fn publisher_anchor_rect_i128(anchor: &PublisherFieldRecord) -> Result<[i128; 4]> {
-    let xs = signed_field(anchor, PUBLISHER_FIELD_XS).context("group ClientAnchor missing XS")?;
-    let ys = signed_field(anchor, PUBLISHER_FIELD_YS).context("group ClientAnchor missing YS")?;
-    let xe = signed_field(anchor, PUBLISHER_FIELD_XE).context("group ClientAnchor missing XE")?;
-    let ye = signed_field(anchor, PUBLISHER_FIELD_YE).context("group ClientAnchor missing YE")?;
-    let out = [
-        i128::from(xs),
-        i128::from(ys),
-        i128::from(xe),
-        i128::from(ye),
-    ];
-    if out[2] <= out[0] || out[3] <= out[1] {
-        bail!("group ClientAnchor rectangle is non-positive");
-    }
-    Ok(out)
-}
-
-/// Deterministic grouped-geometry projection.
-///
-/// Integer division in Rust truncates toward zero. Raw FSPGR/ChildAnchor
-/// records remain authoritative provenance; these rounded EMU coordinates are
-/// a derived runtime projection only.
-fn project_rect_trunc(
-    rect: [i128; 4],
-    source_space: [i128; 4],
-    target_space: [i128; 4],
-) -> Result<[i128; 4]> {
-    let x0 = project_axis_trunc(
-        rect[0],
-        source_space[0],
-        source_space[2],
-        target_space[0],
-        target_space[2],
-    )?;
-    let y0 = project_axis_trunc(
-        rect[1],
-        source_space[1],
-        source_space[3],
-        target_space[1],
-        target_space[3],
-    )?;
-    let x1 = project_axis_trunc(
-        rect[2],
-        source_space[0],
-        source_space[2],
-        target_space[0],
-        target_space[2],
-    )?;
-    let y1 = project_axis_trunc(
-        rect[3],
-        source_space[1],
-        source_space[3],
-        target_space[1],
-        target_space[3],
-    )?;
-    if x1 <= x0 || y1 <= y0 {
-        bail!("projected grouped rectangle is non-positive");
-    }
-    Ok([x0, y0, x1, y1])
-}
-
-fn project_axis_trunc(
-    value: i128,
-    source_start: i128,
-    source_end: i128,
-    target_start: i128,
-    target_end: i128,
-) -> Result<i128> {
-    let source_len = source_end - source_start;
-    let target_len = target_end - target_start;
-    if source_len <= 0 || target_len <= 0 {
-        bail!("group projection has non-positive coordinate extent");
-    }
-    Ok(target_start + (value - source_start) * target_len / source_len)
-}
-
-fn center_origin_rect_to_page_bounds(page: &Page, rect: [i128; 4]) -> Result<RectEmu> {
-    let half_width = i128::from(page.size.width.get()) / 2;
-    let half_height = i128::from(page.size.height.get()) / 2;
-    let x = half_width + rect[0];
-    let y = half_height + rect[1];
-    let width = rect[2] - rect[0];
-    let height = rect[3] - rect[1];
-
-    let to_i64 = |value: i128, label: &str| {
-        i64::try_from(value).with_context(|| format!("{label} does not fit i64"))
-    };
-    Ok(RectEmu::new(
-        LengthEmu::new(to_i64(x, "grouped x")?),
-        LengthEmu::new(to_i64(y, "grouped y")?),
-        LengthEmu::new(to_i64(width, "grouped width")?),
-        LengthEmu::new(to_i64(height, "grouped height")?),
-    ))
 }
 
 fn page_relative_bounds_from_contents_missing_xe(
