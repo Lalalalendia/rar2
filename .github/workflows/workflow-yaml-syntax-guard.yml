@@ -30,6 +30,7 @@ on:
       - "tools/ci/test_pub_reader_source_graph_model_routing.py"
       - "tools/ci/test_pub_reader_anchor_geometry_routing.py"
       - "tools/ci/test_pub_reader_story_materialization_routing.py"
+      - "tools/ci/test_pub_reader_quill_admission_routing.py"
       - "tools/ci/test_no_publisher_selfhosted_actions.py"
   workflow_dispatch:
 
@@ -91,5 +92,7 @@ jobs:
         run: python tools/ci/test_pub_reader_anchor_geometry_routing.py
       - name: Guard pub-reader Story materialization routing
         run: python tools/ci/test_pub_reader_story_materialization_routing.py
+      - name: Guard pub-reader Quill admission routing
+        run: python tools/ci/test_pub_reader_quill_admission_routing.py
       - name: Guard Publisher native execution boundary
         run: python tools/ci/test_no_publisher_selfhosted_actions.py
