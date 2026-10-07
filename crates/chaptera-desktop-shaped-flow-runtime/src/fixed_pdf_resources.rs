@@ -99,3 +99,5 @@ pub fn build_current_fixed_pdf_resource_input_for_pages_v1(
         },
     })
 }
+
+// CI routing negative control: fixed-PDF resource owner only.
