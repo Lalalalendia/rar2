@@ -23,7 +23,7 @@ impl EditorSession {
         })
     }
 
-    fn has_node_resize_history_v1(&self, node_id: NodeId) -> bool {
+    pub(super) fn has_node_resize_history_v1(&self, node_id: NodeId) -> bool {
         self.undo.iter().any(|operation| match operation {
             EditOperation::ResizeNode {
                 node_id: resized, ..
