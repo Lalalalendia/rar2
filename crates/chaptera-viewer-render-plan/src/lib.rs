@@ -2220,6 +2220,159 @@ where
     Ok(plan)
 }
 
+fn unique_complete_paragraph_alignment_run_v1<'a>(
+    fragment: &'a RenderTextFragmentV1,
+    scalar_range: std::ops::Range<u32>,
+) -> Option<&'a RenderParagraphAlignmentRunV1> {
+    let scalar_start = scalar_range.start;
+    let scalar_end = scalar_range.end;
+    let mut matching = fragment.paragraph_alignments.iter().filter(|run| {
+        run.scalar_start <= scalar_start
+            && run.scalar_end >= scalar_end
+            && scalar_start < scalar_end
+    });
+    let run = matching.next()?;
+    matching.next().is_none().then_some(run)
+}
+
+fn interword_distribution_spans_v1(
+    fragment: &RenderTextFragmentV1,
+    scalar_start: u32,
+    scalar_end: u32,
+    consumed_scalar_end: u32,
+    text: &str,
+    measured_width_emu: i64,
+    content_width_emu: i64,
+    font_resource_id: &str,
+    font_fingerprint_sha256: &str,
+    font_size_emu: i64,
+    shaping_environment: &BoundedShapingDescriptor,
+    units_per_em: u32,
+    glyphs: &[BoundedShapedGlyph],
+) -> Option<Vec<RenderResolvedTextSpanV1>> {
+    let run = unique_complete_paragraph_alignment_run_v1(
+        fragment,
+        scalar_start..scalar_end,
+    )?;
+    if run.alignment != RenderParagraphAlignmentV1::InterWord
+        || run.source_value != 3
+        || consumed_scalar_end >= run.scalar_end
+        || measured_width_emu <= 0
+        || content_width_emu <= 0
+        || font_resource_id.is_empty()
+        || font_fingerprint_sha256.is_empty()
+        || font_size_emu <= 0
+        || units_per_em == 0
+    {
+        return None;
+    }
+
+    let scalar_len = usize::try_from(scalar_end.checked_sub(scalar_start)?).ok()?;
+    let chars = text.chars().collect::<Vec<_>>();
+    if chars.len() != scalar_len
+        || !chars
+            .iter()
+            .all(|ch| ch.is_ascii() && (*ch == ' ' || !ch.is_ascii_whitespace()))
+    {
+        return None;
+    }
+
+    // UAX #14 soft breaks are consumed after the breaking space. Publisher
+    // InterWord expands gaps between visible words, not the trailing break
+    // space itself, so trim only trailing ASCII spaces from the paint span.
+    let visible_scalar_len = chars
+        .iter()
+        .rposition(|ch| *ch != ' ')
+        .and_then(|index| index.checked_add(1))?;
+    let visible_chars = &chars[..visible_scalar_len];
+    let gap_boundaries = (1..visible_chars.len().saturating_sub(1))
+        .filter(|index| {
+            visible_chars[*index] == ' '
+                && visible_chars[*index - 1].is_ascii_graphic()
+                && visible_chars[*index + 1].is_ascii_graphic()
+        })
+        .map(|index| index + 1)
+        .collect::<Vec<_>>();
+    if gap_boundaries.is_empty() {
+        return None;
+    }
+
+    let mut advance_prefix_emu = vec![0_i64; scalar_len.checked_add(1)?];
+    for glyph in glyphs {
+        if glyph.cluster < scalar_start || glyph.cluster >= scalar_end {
+            return None;
+        }
+        let local = usize::try_from(glyph.cluster - scalar_start).ok()?;
+        let slot = local.checked_add(1)?;
+        advance_prefix_emu[slot] =
+            advance_prefix_emu[slot].checked_add(glyph.x_advance.get())?;
+    }
+    for index in 1..advance_prefix_emu.len() {
+        advance_prefix_emu[index] =
+            advance_prefix_emu[index - 1].checked_add(advance_prefix_emu[index])?;
+    }
+    if advance_prefix_emu[scalar_len] != measured_width_emu {
+        return None;
+    }
+
+    let visible_width_emu = advance_prefix_emu[visible_scalar_len];
+    let residual_emu = content_width_emu.checked_sub(visible_width_emu)?;
+    if residual_emu <= 0 {
+        return None;
+    }
+    let gap_count = i128::try_from(gap_boundaries.len()).ok()?;
+    let residual_i128 = i128::from(residual_emu);
+    let mut boundaries = Vec::with_capacity(gap_boundaries.len().checked_add(2)?);
+    boundaries.push(0);
+    boundaries.extend(gap_boundaries);
+    boundaries.push(visible_scalar_len);
+
+    let mut spans = Vec::with_capacity(boundaries.len().saturating_sub(1));
+    for (span_index, pair) in boundaries.windows(2).enumerate() {
+        let local_start = pair[0];
+        let local_end = pair[1];
+        if local_start >= local_end {
+            return None;
+        }
+
+        let distributed_before = i64::try_from(
+            residual_i128
+                .checked_mul(i128::try_from(span_index).ok()?)?
+                / gap_count,
+        )
+        .ok()?;
+        let span_start = scalar_start.checked_add(u32::try_from(local_start).ok()?)?;
+        let span_end = scalar_start.checked_add(u32::try_from(local_end).ok()?)?;
+        let span_width_emu =
+            advance_prefix_emu[local_end].checked_sub(advance_prefix_emu[local_start])?;
+        let x_offset_emu =
+            advance_prefix_emu[local_start].checked_add(distributed_before)?;
+        let span_glyphs = glyphs
+            .iter()
+            .filter(|glyph| glyph.cluster >= span_start && glyph.cluster < span_end)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        spans.push(RenderResolvedTextSpanV1 {
+            scalar_start: span_start,
+            scalar_end: span_end,
+            text: chars[local_start..local_end].iter().collect(),
+            x_offset_emu,
+            measured_width_emu: span_width_emu,
+            font_size_emu,
+            font_resource_id: Some(font_resource_id.to_owned()),
+            font_fingerprint_sha256: Some(font_fingerprint_sha256.to_owned()),
+            shaping: Some(RenderResolvedShapingV1 {
+                environment: shaping_environment.clone(),
+                units_per_em,
+                glyphs: span_glyphs,
+            }),
+        });
+    }
+
+    Some(spans)
+}
+
 fn resolved_line_x_offset_emu_v1(
     fragment: &RenderTextFragmentV1,
     node_id: NodeId,
@@ -2231,17 +2384,11 @@ fn resolved_line_x_offset_emu_v1(
 ) -> i64 {
     let scalar_start = scalar_range.start;
     let scalar_end = scalar_range.end;
-    let mut matching = fragment.paragraph_alignments.iter().filter(|run| {
-        run.scalar_start <= scalar_start
-            && run.scalar_end >= scalar_end
-            && scalar_start < scalar_end
-    });
-    let Some(run) = matching.next() else {
+    let Some(run) =
+        unique_complete_paragraph_alignment_run_v1(fragment, scalar_start..scalar_end)
+    else {
         return 0;
     };
-    if matching.next().is_some() {
-        return 0;
-    }
     let alignment = match run.alignment {
         RenderParagraphAlignmentV1::Center => ParagraphAlignmentV1::Center,
         RenderParagraphAlignmentV1::Right => ParagraphAlignmentV1::Right,
@@ -2877,29 +3024,48 @@ fn resolve_text_layout_v1(
 
     let lines: Vec<RenderResolvedTextLineV1> = source_lines
         .into_iter()
-        .map(|line| RenderResolvedTextLineV1 {
-            line_index: line.frame_line_index,
-            scalar_start: line.scalar_start,
-            scalar_end: line.scalar_end,
-            consumed_scalar_end: line.consumed_scalar_end,
-            text: line.text,
-            measured_width_emu: line.measured_width.get(),
-            line_height_emu,
-            x_offset_emu: resolved_line_x_offset_emu_v1(
+        .map(|line| {
+            let measured_width_emu = line.measured_width.get();
+            let spans = interword_distribution_spans_v1(
                 fragment,
-                node_id,
-                &bounds,
-                line.frame_line_index,
-                line.scalar_start..line.scalar_end,
-                line.measured_width.get(),
+                line.scalar_start,
+                line.scalar_end,
+                line.consumed_scalar_end,
+                &line.text,
+                measured_width_emu,
+                bounds.width.get(),
+                font.resource_id,
                 &fingerprint,
-            ),
-            spans: Vec::new(),
-            shaping: Some(RenderResolvedShapingV1 {
-                environment: shaping_environment.clone(),
-                units_per_em: line.units_per_em,
-                glyphs: line.glyphs,
-            }),
+                font_size_emu,
+                &shaping_environment,
+                line.units_per_em,
+                &line.glyphs,
+            )
+            .unwrap_or_default();
+            RenderResolvedTextLineV1 {
+                line_index: line.frame_line_index,
+                scalar_start: line.scalar_start,
+                scalar_end: line.scalar_end,
+                consumed_scalar_end: line.consumed_scalar_end,
+                text: line.text,
+                measured_width_emu,
+                line_height_emu,
+                x_offset_emu: resolved_line_x_offset_emu_v1(
+                    fragment,
+                    node_id,
+                    &bounds,
+                    line.frame_line_index,
+                    line.scalar_start..line.scalar_end,
+                    measured_width_emu,
+                    &fingerprint,
+                ),
+                spans,
+                shaping: Some(RenderResolvedShapingV1 {
+                    environment: shaping_environment.clone(),
+                    units_per_em: line.units_per_em,
+                    glyphs: line.glyphs,
+                }),
+            }
         })
         .collect();
 
@@ -4386,7 +4552,8 @@ mod tests {
             0
         );
 
-        // Preserved but non-executable Publisher justification values stay leading.
+        // Distributed modes keep a leading whole-line origin. Bounded InterWord
+        // execution is a separate post-line-break span-placement transform.
         for alignment in [
             RenderParagraphAlignmentV1::InterWord,
             RenderParagraphAlignmentV1::Distribute,
@@ -4410,6 +4577,167 @@ mod tests {
                 0
             );
         }
+    }
+
+    #[test]
+    fn interword_distribution_uses_word_gap_span_offsets_only_before_final_line() {
+        let story_id = StoryId::from_canonical(canonical(3));
+        let mut fragment = render_fragment(story_id, "aa bb cc tail", Vec::new());
+        fragment.paragraph_alignments = vec![RenderParagraphAlignmentRunV1 {
+            scalar_start: 0,
+            scalar_end: 13,
+            alignment: RenderParagraphAlignmentV1::InterWord,
+            source_value: 3,
+        }];
+        let environment = BoundedShapingDescriptor {
+            layout: BoundedLayoutEnvironment {
+                engine_revision: SHARED_TEXT_LAYOUT_REVISION_V1.to_owned(),
+                font_set_fingerprint: "font:test".to_owned(),
+                resource_fingerprint: "resource:test".to_owned(),
+            },
+            face_index: 0,
+            font_size_emu: LengthEmu::new(100),
+            shaper_revision: "shaper:test".to_owned(),
+        };
+        let glyphs = (0_u32..9)
+            .map(|cluster| BoundedShapedGlyph {
+                glyph_id: cluster + 1,
+                cluster,
+                x_advance: LengthEmu::new(10),
+                y_advance: LengthEmu::new(0),
+                x_offset: LengthEmu::new(0),
+                y_offset: LengthEmu::new(0),
+                unsafe_to_break: false,
+            })
+            .collect::<Vec<_>>();
+
+        let spans = interword_distribution_spans_v1(
+            &fragment,
+            0,
+            9,
+            9,
+            "aa bb cc ",
+            90,
+            100,
+            "font:test",
+            "sha:test",
+            100,
+            &environment,
+            1000,
+            &glyphs,
+        )
+        .expect("non-final InterWord line must distribute across word gaps");
+
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].scalar_start..spans[0].scalar_end, 0..3);
+        assert_eq!(spans[1].scalar_start..spans[1].scalar_end, 3..6);
+        assert_eq!(spans[2].scalar_start..spans[2].scalar_end, 6..8);
+        assert!(
+            spans.iter().all(|span| span.scalar_end <= 8),
+            "the consumed soft-break space must not become a paint span"
+        );
+        assert_eq!(
+            spans
+                .iter()
+                .map(|span| span.x_offset_emu)
+                .collect::<Vec<_>>(),
+            vec![0, 40, 80]
+        );
+        assert_eq!(spans[2].x_offset_emu + spans[2].measured_width_emu, 100);
+
+        fragment.paragraph_alignments[0].scalar_end = 9;
+        assert!(
+            interword_distribution_spans_v1(
+                &fragment,
+                0,
+                9,
+                9,
+                "aa bb cc ",
+                90,
+                100,
+                "font:test",
+                "sha:test",
+                100,
+                &environment,
+                1000,
+                &glyphs,
+            )
+            .is_none(),
+            "final paragraph line must retain ordinary leading alignment"
+        );
+    }
+
+    #[test]
+    fn interword_distribution_rejects_distribute_and_unsafe_ascii_whitespace() {
+        let story_id = StoryId::from_canonical(canonical(3));
+        let mut fragment = render_fragment(story_id, "aa bb cc tail", Vec::new());
+        fragment.paragraph_alignments = vec![RenderParagraphAlignmentRunV1 {
+            scalar_start: 0,
+            scalar_end: 13,
+            alignment: RenderParagraphAlignmentV1::Distribute,
+            source_value: 4,
+        }];
+        let environment = BoundedShapingDescriptor {
+            layout: BoundedLayoutEnvironment {
+                engine_revision: SHARED_TEXT_LAYOUT_REVISION_V1.to_owned(),
+                font_set_fingerprint: "font:test".to_owned(),
+                resource_fingerprint: "resource:test".to_owned(),
+            },
+            face_index: 0,
+            font_size_emu: LengthEmu::new(100),
+            shaper_revision: "shaper:test".to_owned(),
+        };
+        let glyphs = (0_u32..8)
+            .map(|cluster| BoundedShapedGlyph {
+                glyph_id: cluster + 1,
+                cluster,
+                x_advance: LengthEmu::new(10),
+                y_advance: LengthEmu::new(0),
+                x_offset: LengthEmu::new(0),
+                y_offset: LengthEmu::new(0),
+                unsafe_to_break: false,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            interword_distribution_spans_v1(
+                &fragment,
+                0,
+                8,
+                8,
+                "aa bb cc",
+                80,
+                100,
+                "font:test",
+                "sha:test",
+                100,
+                &environment,
+                1000,
+                &glyphs,
+            )
+            .is_none()
+        );
+
+        fragment.paragraph_alignments[0].alignment = RenderParagraphAlignmentV1::InterWord;
+        fragment.paragraph_alignments[0].source_value = 3;
+        assert!(
+            interword_distribution_spans_v1(
+                &fragment,
+                0,
+                8,
+                8,
+                "aa\tbb cc",
+                80,
+                100,
+                "font:test",
+                "sha:test",
+                100,
+                &environment,
+                1000,
+                &glyphs,
+            )
+            .is_none()
+        );
     }
 
     #[test]
