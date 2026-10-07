@@ -15,6 +15,7 @@ on:
       - "!vendor/producer-a/crates/pub-reader/src/story_frame_analysis.rs"
       - "!vendor/producer-a/crates/pub-reader/src/typography_projection.rs"
       - "!vendor/producer-a/crates/pub-reader/src/grouped_projection.rs"
+      - "!vendor/producer-a/crates/pub-reader/src/story_materialization.rs"
       - "vendor/producer-a/crates/pub-idml/**"
       - "vendor/producer-a/crates/pub-odg/**"
       - "tools/verify_editable_source_image_export.py"
