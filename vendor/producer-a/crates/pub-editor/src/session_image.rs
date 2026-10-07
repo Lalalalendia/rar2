@@ -232,7 +232,6 @@ impl EditorSession {
         self.validate_source_identity()?;
         Ok(operation)
     }
-
 }
 
 pub(super) fn apply_image_forward(
@@ -587,4 +586,3 @@ mod image_crop_authoring_tests {
         ));
     }
 }
-
