@@ -1,6 +1,7 @@
 use pub_model::Sha256Digest;
 use pub_reader::{
-    build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
+    PubBridgeDiagnostic, build_mature_0x2c_asset_export_bundle_from_bytes,
+    build_mature_0x2c_source_graph, derive_pub_node_id,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -21,6 +22,45 @@ fn main() -> Result<(), Box<dyn Error>> {
     let hash = source_hash(&bytes);
     let source = build_mature_0x2c_source_graph(Cursor::new(&bytes), hash)?;
     let bundle = build_mature_0x2c_asset_export_bundle_from_bytes(&bytes, &source.graph)?;
+
+    let page_number_by_id = source
+        .effective_pages
+        .page_ids
+        .iter()
+        .enumerate()
+        .map(|(index, page_id)| (*page_id, index + 1))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut grouped_image_projection_failures = source
+        .diagnostics
+        .iter()
+        .filter_map(|diagnostic| match diagnostic {
+            PubBridgeDiagnostic::GroupedImageProjectionUnavailable {
+                seq_num,
+                target_page_id,
+                image_slot,
+                group_ancestry,
+                reason,
+            } => Some(json!({
+                "node_id": derive_pub_node_id(&hash, *seq_num).ok()?.as_canonical().to_string(),
+                "seq_num": seq_num,
+                "target_page_id": target_page_id.map(|page| page.as_canonical().to_string()),
+                "target_page_number": target_page_id
+                    .as_ref()
+                    .and_then(|page| page_number_by_id.get(page).copied()),
+                "image_slot": image_slot,
+                "group_depth_to_page": group_ancestry.len(),
+                "group_ancestry": group_ancestry,
+                "reason": reason,
+            })),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    grouped_image_projection_failures.sort_by(|left, right| {
+        left["target_page_number"]
+            .as_u64()
+            .cmp(&right["target_page_number"].as_u64())
+            .then_with(|| left["seq_num"].as_u64().cmp(&right["seq_num"].as_u64()))
+    });
 
     let mut resources = bundle
         .manifest
@@ -73,6 +113,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "resource_count": resources.len(),
             "use_count": use_count,
             "resources": resources,
+            "grouped_image_projection_failures": grouped_image_projection_failures,
         }))?
     );
     Ok(())
