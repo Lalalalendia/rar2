@@ -33,7 +33,6 @@ pub(super) fn build_reference_index(
     Ok(references)
 }
 
-#[derive(Debug, Clone)]
 
 pub(super) fn unique_reference_by_raw_type<'a>(
     references: &'a BTreeMap<u32, Contents0x2cChunkReference>,
