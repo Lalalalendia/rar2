@@ -40,9 +40,13 @@ assert PAGE in pr_block("publisher-visual-golden-supplemental.yml")
 for name in (
     "editable-source-image-export-v1.yml",
     "quill-story-fdpp-exact.yml",
-    "migration-1050-corpus-matrix.yml",
 ):
     assert NEG_PAGE in pr_block(name), name
+
+# Corpus/page-membership owners remain fail-closed for this semantic seam.
+assert NEG_PAGE not in pr_block("migration-1050-corpus-matrix.yml")
+assert PAGE in workflow("cloud-reader-reference-pairs.yml")
+assert PAGE in workflow("publisher-visual-golden-batch01.yml")
 
 scope = mod.classify([PAGE])
 expected = {
@@ -51,9 +55,9 @@ expected = {
     "reader_windows": False,
     "editor_windows": False,
     "visual_oracle": True,
-    "cloud_reference": False,
+    "cloud_reference": True,
     "virginia_page_role": True,
-    "visual_batch01": False,
+    "visual_batch01": True,
     "typography_golden": False,
     "android_core": True,
     "android": False,
