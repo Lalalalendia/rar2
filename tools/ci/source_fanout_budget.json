@@ -15,7 +15,7 @@
       "max_lines": 8677
     },
     "vendor/producer-a/crates/pub-viewer/src/lib.rs": {
-      "max_lines": 7003
+      "max_lines": 6711
     },
     "crates/chaptera-viewer-render-plan/src/lib.rs": {
       "max_lines": 6029
