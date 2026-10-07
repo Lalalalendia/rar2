@@ -1,0 +1,3 @@
+# Validation Wave 58 — assimilated post-MFCOMMENT validation ref
+validation/legacy-ole-mfcomment-1050-01 425458c61995eccf0d3e9defa57850d25f1a48cd
+ops/branch-gc-20261008-validation-wave57 fe8f99ebdadd17063dd54e65c088cb734920cd84
