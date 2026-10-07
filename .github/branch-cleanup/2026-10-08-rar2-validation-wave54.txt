@@ -1,0 +1,3 @@
+# Wave 54 — stale validation replay
+validation/legacy22-table0001-visible-1050 4257a789426382cf072778b287057da4525f2286
+ops/branch-gc-20261008-validation-wave53 06f0a516a890fe44577a0f2264da69d27d112830
