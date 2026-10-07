@@ -52,4 +52,3 @@ pub fn validate_explicit_font_resource_v1(
     }
     Ok(actual)
 }
-
