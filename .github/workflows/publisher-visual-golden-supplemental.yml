@@ -22,6 +22,7 @@ on:
       - "vendor/producer-a/crates/pub-reader/src/direct_transform.rs"
       - "vendor/producer-a/crates/pub-reader/src/grouped_projection.rs"
       - "vendor/producer-a/crates/pub-reader/src/anchor_geometry.rs"
+      - "vendor/producer-a/crates/pub-reader/src/story_materialization.rs"
   workflow_dispatch:
   push:
     branches: [main]

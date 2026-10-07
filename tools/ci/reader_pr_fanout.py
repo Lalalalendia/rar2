@@ -27,6 +27,7 @@ READER_DIRECT_TRANSFORM = "vendor/producer-a/crates/pub-reader/src/direct_transf
 READER_GROUPED_PROJECTION = "vendor/producer-a/crates/pub-reader/src/grouped_projection.rs"
 READER_SOURCE_GRAPH_MODEL = "vendor/producer-a/crates/pub-reader/src/source_graph_model.rs"
 READER_ANCHOR_GEOMETRY = "vendor/producer-a/crates/pub-reader/src/anchor_geometry.rs"
+READER_STORY_MATERIALIZATION = "vendor/producer-a/crates/pub-reader/src/story_materialization.rs"
 
 
 TEST_REGION_EVIDENCE_CANDIDATES = {
@@ -336,6 +337,7 @@ CLOUD_REFERENCE = (
     READER_PAGE_PROJECTION,
     READER_SOURCE_PAINT_ORDER,
     READER_TYPOGRAPHY_PROJECTION,
+    READER_STORY_MATERIALIZATION,
     "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs",
     "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs",
     "tools/acquire_carlton_march_pair.py",
@@ -371,6 +373,7 @@ VISUAL_BATCH01 = (
     READER_PAGE_PROJECTION,
     READER_SOURCE_PAINT_ORDER,
     READER_TYPOGRAPHY_PROJECTION,
+    READER_STORY_MATERIALIZATION,
 )
 
 TYPOGRAPHY_GOLDEN = (
@@ -629,7 +632,7 @@ def classify(
     virginia_paths = [
         path
         for path in product_paths
-        if path not in {READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_TYPOGRAPHY_PROJECTION, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_SOURCE_GRAPH_MODEL, READER_ANCHOR_GEOMETRY}
+        if path not in {READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_TYPOGRAPHY_PROJECTION, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_SOURCE_GRAPH_MODEL, READER_ANCHOR_GEOMETRY, READER_STORY_MATERIALIZATION}
         and not path.startswith("vendor/producer-a/crates/pub-reader/src/bin/")
         and not path.startswith("vendor/producer-a/crates/pub-viewer/src/bin/")
     ]
