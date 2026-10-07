@@ -1,0 +1,7 @@
+# Wave 24 — superseded/restacked refs
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+tools/publisher-semantic-dump-01 81b3255dc598011c137cb5d5345694b5bfdfa091
+tools/publisher-semantic-dump-current-01 a603ba8f76e4d3be4462a683827bfd43c4ed6039
+ops/branch-gc-20261007-live-wave23-reconciled 67a933c4a253d86fcbcdb0cceb0038288a2bbd40
+editor-newsletter-continuity-v1-fresh-main 7d1f54a8de040614919b81f0588528020e954d5b
