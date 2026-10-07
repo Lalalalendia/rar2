@@ -79,6 +79,8 @@ jobs:
         run: python tools/ci/test_pub_reader_page_projection_routing.py
       - name: Guard Reader source paint order routing
         run: python tools/ci/test_pub_reader_source_paint_order_routing.py
+      - name: Guard Reader story frame analysis routing
+        run: python tools/ci/test_pub_reader_story_frame_analysis_routing.py
 
       - name: Enforce active-content inertness
         run: |
