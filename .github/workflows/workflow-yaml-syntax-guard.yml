@@ -18,6 +18,7 @@ on:
       - "tools/ci/test_pub_viewer_authoring_projection_routing.py"
       - "tools/ci/test_pub_reader_paint_projection_routing.py"
       - "tools/ci/test_pub_reader_page_projection_routing.py"
+      - "tools/ci/test_no_publisher_selfhosted_actions.py"
   workflow_dispatch:
 
 concurrency:
@@ -54,3 +55,5 @@ jobs:
         run: python tools/ci/test_pub_reader_paint_projection_routing.py
       - name: Guard pub-reader page projection routing
         run: python tools/ci/test_pub_reader_page_projection_routing.py
+      - name: Guard Publisher native execution boundary
+        run: python tools/ci/test_no_publisher_selfhosted_actions.py
