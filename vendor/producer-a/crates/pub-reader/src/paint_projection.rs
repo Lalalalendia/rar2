@@ -2,6 +2,7 @@
 //!
 //! This module owns source-backed shape paint/default authority plus the
 //! bounded picture crop/recolor/color helpers. It deliberately does not own
+//! Leaf-routing control: this module remains the bounded paint semantic owner.
 //! Reader graph construction, page-role projection, typography, or geometry.
 
 use super::{
