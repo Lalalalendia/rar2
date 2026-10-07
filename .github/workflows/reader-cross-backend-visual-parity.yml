@@ -62,6 +62,9 @@ jobs:
       - name: Census Cloud shared-layout fallback causes
         run: cargo test -p chaptera-server real_reference_text_layout_fallback_census_probe -- --ignored --nocapture
 
+      - name: Census Story extent mismatch causes
+        run: cargo test -p chaptera-server --test reader_story_extent_census sample_newsletter_story_extent_mismatch_census -- --ignored --nocapture
+
       - name: Render Cloud Reader pages at 144 DPI
         env:
           READER_REAL_MANIFEST: ${{ runner.temp }}/cross-backend-manifest.json
