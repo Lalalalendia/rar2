@@ -475,13 +475,7 @@ pub(super) fn resolve_mixed_size_text_layout_v1(
         };
 
     if evaluation.cursor != fragment.scalar_end {
-        let has_visible_partial_line = evaluation
-            .lines
-            .iter()
-            .any(|line| line.scalar_end > line.scalar_start && line.measured_width_emu > 0);
-        if !has_visible_partial_line || evaluation.stop_cause != Some("height_capacity_exhausted") {
-            return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
-        }
+        return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
     }
 
     let max_font_size_emu = evaluation
@@ -558,7 +552,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_size_partial_layout_admits_only_after_visible_height_exhaustion() {
+    fn mixed_size_partial_layout_stays_fail_closed_after_visible_height_exhaustion() {
         let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
         let fingerprint = font_fingerprint_sha256(bytes);
         let font = ExplicitRenderTextFontResourceV1 {
@@ -586,13 +580,13 @@ mod tests {
             &fingerprint,
             None,
         );
-        assert!(matches!(
+        assert_eq!(
             partial.disposition,
-            RenderTextLayoutDispositionV1::SharedResolved { .. }
-        ));
-        assert_eq!(partial.lines.len(), 1);
-        assert_eq!(partial.lines[0].text, "aa");
-        assert_eq!(partial.lines[0].consumed_scalar_end, 3);
+            RenderTextLayoutDispositionV1::BackendFallback {
+                reason: RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete,
+            }
+        );
+        assert!(partial.lines.is_empty());
 
         let zero_line_bounds = RectEmu::new(
             LengthEmu::ZERO,
