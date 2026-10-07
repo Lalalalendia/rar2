@@ -83,4 +83,3 @@ pub(super) fn single_parent_seq(reference: &Contents0x2cChunkReference) -> Optio
 pub(super) fn seq_u32(seq_num: usize) -> Result<u32> {
     u32::try_from(seq_num).map_err(|_| anyhow!("Contents seqNum does not fit u32: {seq_num}"))
 }
-
