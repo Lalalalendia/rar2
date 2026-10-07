@@ -1205,7 +1205,7 @@ impl SecretResolver {
 
         match reference {
             SecretRef::Env { name } => self.resolve_environment_secret(name),
-            SecretRef::File { path } => read_secret_file(mode, path),
+            SecretRef::File { path } => read_secret_file(mode, path, true),
             SecretRef::Systemd { name } => {
                 let directory = self.credentials_directory.as_ref().ok_or_else(|| {
                     ConfigError::new(
@@ -1213,7 +1213,10 @@ impl SecretResolver {
                         "systemd secret source requires CREDENTIALS_DIRECTORY",
                     )
                 })?;
-                read_secret_file(mode, &directory.join(name))
+                // LoadCredential= copies data into a read-only per-unit credential
+                // directory that systemd restricts to the unit user and root. The
+                // copied file's DAC mode is therefore not the trust boundary.
+                read_secret_file(mode, &directory.join(name), false)
             }
         }
     }
@@ -1255,7 +1258,11 @@ impl SecretResolver {
     }
 }
 
-fn read_secret_file(mode: EnvironmentMode, path: &Path) -> Result<SecretValue, ConfigError> {
+fn read_secret_file(
+    mode: EnvironmentMode,
+    path: &Path,
+    enforce_private_mode: bool,
+) -> Result<SecretValue, ConfigError> {
     let metadata = fs::metadata(path).map_err(|error| {
         ConfigError::new(
             "secret_file_read_failed",
@@ -1274,7 +1281,7 @@ fn read_secret_file(mode: EnvironmentMode, path: &Path) -> Result<SecretValue, C
     }
 
     #[cfg(unix)]
-    if mode == EnvironmentMode::Prod {
+    if mode == EnvironmentMode::Prod && enforce_private_mode {
         use std::os::unix::fs::PermissionsExt;
 
         if metadata.permissions().mode() & 0o077 != 0 {
@@ -1746,5 +1753,30 @@ secret = { source = "env", name = "GRANT_KEY_OLD" }
 
         assert_eq!(error.code, "secret_file_permissions_too_open");
         let _ = fs::remove_file(file);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn production_systemd_secret_uses_systemd_access_boundary_not_copied_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = temp_path("systemd-open-mode");
+        fs::create_dir_all(&directory).unwrap();
+        let file = directory.join("reader_rate_subject_secret");
+        fs::write(&file, b"systemd-secret\n").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let resolver = SecretResolver::for_test(BTreeMap::new(), Some(directory.clone()));
+        let secret = resolver
+            .resolve(
+                EnvironmentMode::Prod,
+                &SecretRef::Systemd {
+                    name: "reader_rate_subject_secret".to_owned(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(secret.expose(), b"systemd-secret");
+        let _ = fs::remove_dir_all(directory);
     }
 }
