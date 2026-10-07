@@ -91,4 +91,22 @@ fi
 
 echo "Reader process is healthy on 127.0.0.1:8080"
 echo
-echo "Next: issue TLS with certbot for reader.chaptera.online after DNS points here."
+
+# Every deploy refreshes the canonical Nginx HTTP template above. If a
+# certificate already exists, re-install it into the fresh Nginx config;
+# otherwise the persisted certificate files can outlive the TLS vhost that
+# references them and HTTPS may fall through to an unrelated server block.
+if [[ -s /etc/letsencrypt/live/reader.chaptera.online/fullchain.pem ]]; then
+  command -v certbot >/dev/null 2>&1 || {
+    echo "Existing Reader certificate found but certbot is unavailable" >&2
+    exit 1
+  }
+  echo "=== reinstall existing Reader TLS certificate ==="
+  certbot --nginx --non-interactive --redirect --reinstall \
+    --cert-name reader.chaptera.online \
+    -d reader.chaptera.online
+  nginx -t
+  systemctl reload nginx
+else
+  echo "Next: issue TLS with certbot for reader.chaptera.online after DNS points here."
+fi
