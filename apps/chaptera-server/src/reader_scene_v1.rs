@@ -86,6 +86,8 @@ pub struct ReaderNodeV1 {
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_layout: Option<ReaderTextLayoutV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_preview: Option<ReaderTextPreviewV1>,
 }
 
 #[derive(Debug, Serialize)]
@@ -276,6 +278,23 @@ pub struct ReaderTextSpanV1 {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ReaderTextPreviewV1 {
+    pub fallback_font_resource_id: String,
+    pub default_font_size_emu: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_rgb: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<ReaderTextPreviewRunV1>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReaderTextPreviewRunV1 {
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub font_size_emu: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ReaderStoryV1 {
     pub story_id: String,
     pub text: String,
@@ -441,6 +460,45 @@ fn reader_text_layout_from_render_text(
             .collect(),
     };
     (Some(mapped), partial, None)
+}
+
+fn reader_text_preview_from_render_text(text: &RenderTextFragmentV1) -> ReaderTextPreviewV1 {
+    let mut runs = Vec::new();
+    let fragment_scalar_len = text
+        .scalar_end
+        .checked_sub(text.scalar_start)
+        .filter(|scalar_len| {
+            usize::try_from(*scalar_len).ok() == Some(text.text.chars().count())
+        });
+
+    if fragment_scalar_len.is_some() {
+        for run in &text.typography {
+            let start = run.scalar_start.max(text.scalar_start);
+            let end = run.scalar_end.min(text.scalar_end);
+            if start >= end || run.text_size_emu == 0 {
+                continue;
+            }
+            runs.push(ReaderTextPreviewRunV1 {
+                scalar_start: start - text.scalar_start,
+                scalar_end: end - text.scalar_start,
+                font_size_emu: i64::from(run.text_size_emu),
+            });
+        }
+        runs.sort_by_key(|run| (run.scalar_start, run.scalar_end, run.font_size_emu));
+        if runs
+            .windows(2)
+            .any(|pair| pair[1].scalar_start < pair[0].scalar_end)
+        {
+            runs.clear();
+        }
+    }
+
+    ReaderTextPreviewV1 {
+        fallback_font_resource_id: chaptera_desktop_fallback_font_resource::RESOURCE_ID.to_owned(),
+        default_font_size_emu: chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU,
+        color_rgb: uniform_text_color_rgb_v1(text),
+        runs,
+    }
 }
 
 fn projected_node_kind(
@@ -896,6 +954,7 @@ pub fn from_viewer_geometry_with_fonts(
     let mut source_font_family_unresolved = false;
     let mut render_text_by_node = HashMap::<String, String>::new();
     let mut text_layout_by_node = HashMap::new();
+    let mut text_preview_by_node = HashMap::new();
     let mut text_bounds_by_node = HashMap::<String, ReaderRectV1>::new();
     let mut decorative_border_by_node = HashMap::<String, ReaderDecorativeBorderV1>::new();
     let mut projected_nodes_by_target = HashMap::<String, Vec<ReaderNodeV1>>::new();
@@ -977,6 +1036,11 @@ pub fn from_viewer_geometry_with_fonts(
                 None => (None, false, None),
             };
             text_layout_partial |= layout_partial;
+            let mapped_preview = if mapped_layout.is_none() {
+                node.text.as_ref().map(reader_text_preview_from_render_text)
+            } else {
+                None
+            };
             if let Some(reason) = fallback_reason {
                 *text_layout_fallback_counts
                     .entry(reason.to_owned())
@@ -1154,6 +1218,7 @@ pub fn from_viewer_geometry_with_fonts(
                         .transpose()?,
                     text: node.text.as_ref().map(|text| text.text.clone()),
                     text_layout: mapped_layout,
+                    text_preview: mapped_preview,
                 };
                 match instance.projection_kind {
                     SceneProjectionKindV1::CmoStorySlot => {
@@ -1220,12 +1285,20 @@ pub fn from_viewer_geometry_with_fonts(
             {
                 return Err(format!("duplicate text layout binding for node {node_id}"));
             }
+            if let Some(mapped_preview) = mapped_preview
+                && text_preview_by_node
+                    .insert(node_id.clone(), mapped_preview)
+                    .is_some()
+            {
+                return Err(format!("duplicate text preview binding for node {node_id}"));
+            }
         }
     }
     if text_by_node.len() > text_layout_by_node.len() {
         text_layout_partial = true;
     }
     let text_layout_count = text_layout_by_node.len() + projected_text_layout_count;
+    let direct_text_preview_count = text_preview_by_node.len();
 
     let mut nodes = Vec::with_capacity(raw_nodes.len());
     for (node_id, parent_id, bounds, transform) in raw_nodes {
@@ -1250,6 +1323,7 @@ pub fn from_viewer_geometry_with_fonts(
             table: table_by_node.remove(&node_id),
             text: take_direct_render_text(&mut render_text_by_node, &text_by_node, &node_id),
             text_layout: text_layout_by_node.remove(&node_id),
+            text_preview: text_preview_by_node.remove(&node_id),
             node_id: node_id.clone(),
             page_id,
             parent_node_id,
@@ -1293,8 +1367,16 @@ pub fn from_viewer_geometry_with_fonts(
         })
         .collect::<Result<Vec<_>, String>>()?;
 
+    let projected_text_preview_count = projected_nodes_by_target
+        .values()
+        .chain(inherited_master_nodes_by_page.values())
+        .flat_map(|nodes| nodes.iter())
+        .filter(|node| node.text_preview.is_some())
+        .count();
+    let text_preview_count = direct_text_preview_count + projected_text_preview_count;
+
     let mut fonts = Vec::new();
-    if text_layout_count > 0 {
+    if text_layout_count > 0 || text_preview_count > 0 {
         fonts.push(ReaderFontResourceV1 {
             resource_id: chaptera_desktop_fallback_font_resource::RESOURCE_ID.to_owned(),
             family_name: chaptera_desktop_fallback_font_resource::FAMILY_NAME.to_owned(),
