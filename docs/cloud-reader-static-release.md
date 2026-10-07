@@ -1,7 +1,7 @@
 # Embedded Cloud Reader release
 
 The Cloud Reader UI is part of the canonical Rust `chaptera` application
-artifact. The server embeds the five admitted files from `apps/cloud-reader`
+artifact. The server embeds the admitted Reader assets from `apps/cloud-reader`
 and serves them on the same origin as `/v1/reader/*`.
 
 There is no production requirement to build, copy, extract or switch a separate
@@ -21,7 +21,7 @@ The exact source commit remains part of the binary build identity. `GET
 SHA-256 hashes.
 
 `python3 apps/cloud-reader/build_release.py` is retained only as a CI/reference
-oracle for the five committed frontend files. Its deterministic ZIP and manifest
+oracle for the committed frontend assets. Its deterministic ZIP and manifest
 can prove byte identity, but that ZIP is no longer an operator deployment
 artifact.
 
