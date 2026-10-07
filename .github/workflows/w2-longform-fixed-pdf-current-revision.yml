@@ -27,6 +27,7 @@ on:
       - "tools/test_build_w2_compound_receipt.py"
       - "crates/chaptera-desktop-fallback-font-resource/**"
       - "vendor/producer-a/crates/pub-editor/**"
+      - "!vendor/producer-a/crates/pub-editor/src/session_geometry.rs"
       - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
       - "!vendor/producer-a/crates/pub-editor/tests/story_text_session_v1.rs"
       - "vendor/producer-a/crates/pub-editor/src/lib.rs"
