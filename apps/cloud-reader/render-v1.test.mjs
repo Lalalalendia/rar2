@@ -9,6 +9,7 @@ import {
   imageRecolorPaintPlan,
   imageResourcePaintPlan,
   presetShapePaintGeometry,
+  previewTextPaintPlan,
   resolvedTextLinePaintPlan,
   resolvedTextViewportGeometry,
   tableBorderPaintPlan,
@@ -439,6 +440,29 @@ test("shared resolved text viewport keeps clipping in text-local coordinates", (
     resolvedTextViewportGeometry({ x: 0, y: 0, width: 0, height: 1 }),
     null
   );
+});
+
+test("browser preview preserves bounded server-known text size and color", () => {
+  const plan = previewTextPaintPlan({
+    preview_text_style: {
+      font_size_emu: 457_200,
+      color_rgb: [112, 48, 160]
+    }
+  });
+
+  assert.deepEqual(plan, {
+    font_size_emu: 457_200,
+    line_height_emu: 571_500,
+    color: "rgb(112 48 160)"
+  });
+});
+
+test("browser preview remains conservative when bounded style is unavailable", () => {
+  assert.deepEqual(previewTextPaintPlan({}), {
+    font_size_emu: 114_300,
+    line_height_emu: 142_875,
+    color: "#000"
+  });
 });
 
 test("shared resolved text paint plan carries server text color", () => {
