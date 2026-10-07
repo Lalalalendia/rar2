@@ -23,6 +23,7 @@ on:
       - "tools/ci/test_pub_editor_session_table_routing.py"
       - "tools/ci/test_pub_editor_session_image_routing.py"
       - "tools/ci/test_pub_editor_session_text_routing.py"
+      - "tools/ci/test_pub_editor_session_geometry_routing.py"
       - "tools/ci/test_pub_reader_story_frame_analysis_routing.py"
       - "tools/ci/test_pub_reader_typography_projection_routing.py"
       - "tools/ci/test_pub_reader_direct_transform_routing.py"
@@ -79,6 +80,8 @@ jobs:
         run: python tools/ci/test_pub_editor_session_image_routing.py
       - name: Guard pub-editor session-text routing
         run: python tools/ci/test_pub_editor_session_text_routing.py
+      - name: Guard pub-editor session-geometry routing
+        run: python tools/ci/test_pub_editor_session_geometry_routing.py
       - name: Guard pub-reader story frame analysis routing
         run: python tools/ci/test_pub_reader_story_frame_analysis_routing.py
       - name: Guard pub-reader typography projection routing

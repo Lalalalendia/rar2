@@ -9,7 +9,7 @@
   ],
   "shared_roots": {
     "vendor/producer-a/crates/pub-editor/src/lib.rs": {
-      "max_lines": 9264
+      "max_lines": 8824
     },
     "apps/chaptera-desktop/src/main.rs": {
       "max_lines": 8677
