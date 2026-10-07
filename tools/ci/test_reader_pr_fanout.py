@@ -196,6 +196,19 @@ fn main() -> eframe::Result<()> {
         )
     )
     assert_scope(
+        ["apps/chaptera-server/src/guest_reader_runtime.rs"],
+        local_portable=False,
+    )
+    assert_scope(
+        ["apps/chaptera-server/src/serve.rs"],
+        local_portable=True,
+    )
+    assert_scope(
+        ["apps/chaptera-server/src/guest_reader_runtime.rs", "tools/package_local_portable.py"],
+        local_portable=True,
+    )
+
+    assert_scope(
         ["apps/chaptera-server/src/reader_scene_v1.rs"],
         evidence_only_paths={"apps/chaptera-server/src/reader_scene_v1.rs"},
         local_portable=False,
