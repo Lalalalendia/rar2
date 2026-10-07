@@ -36,6 +36,7 @@ on:
       - "vendor/producer-a/crates/pub-viewer/**"
       - "vendor/producer-a/crates/pub-editor/**"
       - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_image.rs"
       - "packages/product/reader-portable/**"
       - "packages/product/editor-live-trial/**"
       - "packages/product/desktop-suite/**"

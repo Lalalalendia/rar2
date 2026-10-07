@@ -10,6 +10,7 @@ on:
       - "crates/chaptera-untrusted-pub-scan/**"
       - "vendor/producer-a/crates/pub-editor/**"
       - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_image.rs"
       - "tools/ci/chaptera_server_ci_audit.py"
       - "tools/ci/chaptera_server_ci_before_v1.json"
       - ".github/workflows/chaptera-server-package-integrity-v1.yml"
