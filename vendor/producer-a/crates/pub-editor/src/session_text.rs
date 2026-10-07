@@ -1,6 +1,7 @@
 //! Plain Story text-session orchestration.
 //!
 //! This owner handles Story session capability and text replacement only.
+//! Leaf-routing control: ordinary Story text edits stay on this owner path.
 //! Formatting, paragraph alignment, frame topology, CreateTextBox, export,
 //! and generic history replay remain outside this module.
 
