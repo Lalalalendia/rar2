@@ -17,8 +17,8 @@ mod direct_transform;
 mod failure_envelope;
 mod failure_intake;
 mod family_classifier;
-mod guide_bridge;
 mod grouped_projection;
+mod guide_bridge;
 mod intake_protocol;
 mod legacy22_graph;
 mod legacy22_noquill_graph;
@@ -78,11 +78,11 @@ pub use family_classifier::{
     PubFamilyClassification, PubFamilyConfidence, PubFamilyProfile, PubFamilyReason,
     PubReaderRoute, classify_pub_family,
 };
+use grouped_projection::{coordinate_rect_i128, project_grouped_object_shape, project_rect_trunc};
 pub use guide_bridge::{
     PubGroundedGuideBuild, PubGuideObservation, PubGuideProjectionDiagnostic,
     materialize_grounded_guides,
 };
-use grouped_projection::{coordinate_rect_i128, project_grouped_object_shape, project_rect_trunc};
 pub use intake_protocol::{
     CHAPTERA_EXACT_FILE_CONSENT_V1, CHAPTERA_INTAKE_PROTOCOL_SCHEMA_V1,
     CHAPTERA_INTAKE_RETENTION_POLICY_V1, IntakeCapabilityRequest, IntakeClusterDisposition,
