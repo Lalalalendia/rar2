@@ -33,6 +33,8 @@ mod reader_product_ui;
 mod reader_salvage;
 mod reader_update_control;
 #[cfg(test)]
+mod reader_cross_backend_parity_tests;
+#[cfg(test)]
 mod reader_visual_golden_tests;
 mod rectangle_creation;
 mod rectangle_creation_shell;
