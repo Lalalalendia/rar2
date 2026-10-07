@@ -1,0 +1,3 @@
+# Validation Wave 60 — assimilated SRCAND validation ref
+validation/legacy22-image-srcand-1050-01 9f2263e05eb2601c5806e8271a3ba8f33d20a620
+ops/branch-gc-20261008-validation-wave59 f8e9848bcb41d6856fbf6c14cd679fdb7d3504e4
