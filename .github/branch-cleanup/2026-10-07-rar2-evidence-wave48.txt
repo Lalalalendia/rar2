@@ -1,0 +1,5 @@
+# Wave 48 — superseded/assimilated exact evidence refs
+measure/cloud-cmo-typography-font-resource-01 a41c9741eaf2a40d4bacc9338b32e7fa44a4fdbc
+measure/brochure-fill-post-ffilled-01 7155d9c5b6711e2e3ff2279b0a958975630aff3d
+measure/page-role-public-witness-01 c7a468679243b5e9d3a6621d42b11234023833a5
+ops/branch-gc-20261007-evidence-wave47 8819134c648bc402acc2fe4bef99f0be24d9e719
