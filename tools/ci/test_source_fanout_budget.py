@@ -204,6 +204,13 @@ def test_monolith_growth() -> None:
     expect_error(evaluate(root, base, head), "MONOLITH GROWTH REGRESSION")
 
 
+def test_monolith_shrink_requires_ceiling_drop() -> None:
+    root, base = init_repo()
+    (root / "src/lib.rs").write_text("", encoding="utf-8")
+    head = commit(root, "head")
+    expect_error(evaluate(root, base, head), "MONOLITH CEILING NOT RATCHETED")
+
+
 def test_fanout_reduction_passes() -> None:
     root, base = init_repo()
     (root / ".github/workflows/a.yml").write_text(
@@ -223,6 +230,7 @@ def main() -> int:
     test_existing_fanout_net_growth_fails()
     test_new_leaf_budget()
     test_monolith_growth()
+    test_monolith_shrink_requires_ceiling_drop()
     test_fanout_reduction_passes()
     print("source fanout budget tests: ok")
     return 0
