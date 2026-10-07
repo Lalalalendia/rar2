@@ -2776,13 +2776,13 @@ mod tests {
             }
             "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e" => {
                 assert_eq!(
-                    shared_frames, 24,
-                    "Virginia Devinettes shared-layout population must remain unchanged"
+                    shared_frames, 25,
+                    "Virginia Devinettes mixed-size qualification expects one newly admitted height-bounded partial frame"
                 );
                 assert_eq!(
                     backend_fallbacks,
-                    BTreeMap::from([("shared_layout_incomplete", 1_usize)]),
-                    "Virginia mixed-size fail-closed control must remain one SharedLayoutIncomplete"
+                    BTreeMap::new(),
+                    "Virginia mixed-size qualification expects the former mixed-size fail-closed residual to be resolved"
                 );
                 assert_eq!(
                     projected_text_nodes, 0,
@@ -2798,8 +2798,8 @@ mod tests {
                 );
                 assert_eq!(
                     sli_probe_cause_counts.values().sum::<usize>(),
-                    1,
-                    "Virginia Devinettes SLI control population drift"
+                    0,
+                    "Virginia Devinettes qualification expects no remaining SharedLayoutIncomplete node"
                 );
             }
             _ => {}
