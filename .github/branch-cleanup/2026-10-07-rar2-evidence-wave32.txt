@@ -1,0 +1,12 @@
+# Wave 32 — closed execution-only CI controls
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+ci/duplicate-core-positive-07 36312a18861be1e7b8a50e82cf6fe67c431008ad
+ci/textbox-mainrs-negative-control-01 09aff9e309fbe01287acc8f3a09aef9aea2aefed
+ci/rectangle-mainrs-negative-control-01 48098ba3a620a78b0916934f2ac72f3e8d973243
+ci/reader-update-mainrs-negative-control-01 3e2d5821fcee40c621c13cf524ec0c23db62c98d
+ci/dll-mainrs-negative-control-01 7fa5c97b49cab05e1f8c0f0b8a45313b807c5458
+ci/vtpe-locale-mainrs-negative-control-01 8321e89c50f31b315911105102950d6054b4d8f0
+ci/mainrs-negative-vtpe-locale-01 f53023a55e1bc35da798be4a6242f815bad90163
+ci/scene-authored-stack-mainrs-negative-control-01 99ce61d42c5d18003e82c48dd103fec3498cab1e
+ops/branch-gc-20261007-evidence-wave31 30601c39a510ecd390c8a72eb6b45518552f849b
