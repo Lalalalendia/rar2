@@ -3,7 +3,8 @@ name: Current Viewer fixed-PDF input
 on:
   pull_request:
     paths:
-      - "crates/chaptera-desktop-shaped-flow-runtime/**"
+      - "crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/bin/current_viewer_fixed_pdf_input.rs"
       - "crates/chaptera-viewer-render-plan/**"
       - "apps/chaptera-desktop/src/acceptance.rs"
       - "tools/acquire_carlton_march_pair.py"

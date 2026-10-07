@@ -345,7 +345,7 @@ pub fn shared_core() {}
     assert run is True and reason == "pub_editor_lib_core_change"
 
     run, reason = classify(
-        ["vendor/producer-a/crates/pub-editor/src/create_shape_runtime_v1.rs"]
+        ["vendor/producer-a/crates/pub-editor-authoring-core/src/create_shape_runtime_v1.rs"]
     )
     assert run is True and reason == "unknown_or_core_pub_editor_path"
 
@@ -382,7 +382,7 @@ pub fn shared_core() {}
     assert run is True and reason == "pub_editor_lib_core_change"
 
     run, reason = classify_textbox(
-        ["vendor/producer-a/crates/pub-editor/src/create_shape_runtime_v1.rs"]
+        ["vendor/producer-a/crates/pub-editor-authoring-core/src/create_shape_runtime_v1.rs"]
     )
     assert run is True and reason == "unknown_or_core_pub_editor_path"
 
@@ -433,7 +433,7 @@ pub fn shared_core() {}
     assert run is True and reason == "pub_editor_lib_core_change"
 
     run, reason = classify_fixed_pdf(
-        ["vendor/producer-a/crates/pub-editor/src/create_shape_runtime_v1.rs"]
+        ["vendor/producer-a/crates/pub-editor-authoring-core/src/create_shape_runtime_v1.rs"]
     )
     assert run is True and reason == "unknown_or_core_pub_editor_path"
 
@@ -538,9 +538,9 @@ pub fn shared_core() {}
     assert run is True and reason == "unknown_or_core_pub_editor_path"
 
     for path in (
-        "vendor/producer-a/crates/pub-editor/src/authored_stack_lifecycle_v1.rs",
-        "vendor/producer-a/crates/pub-editor/src/authored_stack_runtime_v1.rs",
-        "vendor/producer-a/crates/pub-editor/src/create_shape_runtime_v1.rs",
+        "vendor/producer-a/crates/pub-editor-authoring-core/src/authored_stack_lifecycle_v1.rs",
+        "vendor/producer-a/crates/pub-editor-authoring-core/src/authored_stack_runtime_v1.rs",
+        "vendor/producer-a/crates/pub-editor-authoring-core/src/create_shape_runtime_v1.rs",
         "vendor/producer-a/crates/pub-editor/tests/authored_stack_lifecycle_v1.rs",
         "vendor/producer-a/crates/pub-editor/tests/authored_stack_runtime_v1.rs",
         "vendor/producer-a/crates/pub-editor/tests/create_shape_runtime_v1.rs",
@@ -581,8 +581,8 @@ pub fn shared_core() {}
     assert run is True and reason == "pub_editor_lib_core_change"
 
     for path in (
-        "vendor/producer-a/crates/pub-editor/src/authored_stack_lifecycle_v1.rs",
-        "vendor/producer-a/crates/pub-editor/src/create_shape_runtime_v1.rs",
+        "vendor/producer-a/crates/pub-editor-authoring-core/src/authored_stack_lifecycle_v1.rs",
+        "vendor/producer-a/crates/pub-editor-authoring-core/src/create_shape_runtime_v1.rs",
         "vendor/producer-a/crates/pub-editor/tests/authored_stack_lifecycle_v1.rs",
         "vendor/producer-a/crates/pub-editor/tests/create_shape_runtime_v1.rs",
         "vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs",

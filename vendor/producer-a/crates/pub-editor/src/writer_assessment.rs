@@ -132,6 +132,7 @@ impl EditorSession {
                     table_touched.insert(*story_id);
                 }
                 EditOperation::BreakTextFrameForwardLink { .. }
+                | EditOperation::LinkTextFrameTail { .. }
                 | EditOperation::ReplaceImage { .. }
                 | EditOperation::SetImageCrop { .. }
                 | EditOperation::MoveNode { .. }
@@ -241,6 +242,7 @@ impl EditorSession {
                 EditOperation::ReplaceStoryRange { .. }
                 | EditOperation::ReplaceStoryText { .. } => {}
                 EditOperation::BreakTextFrameForwardLink { .. }
+                | EditOperation::LinkTextFrameTail { .. }
                 | EditOperation::ReplaceTableCellText { .. }
                 | EditOperation::ReplaceImage { .. }
                 | EditOperation::SetImageCrop { .. }

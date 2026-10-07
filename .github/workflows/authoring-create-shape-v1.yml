@@ -10,7 +10,7 @@ on:
       - "services/editor-api/revision_store.py"
       - "services/editor-api/test_create_shape.py"
       - "packages/protocol/authoring-create-shape/v1/**"
-      - "vendor/producer-a/crates/pub-editor/src/create_shape_runtime_v1.rs"
+      - "vendor/producer-a/crates/pub-editor-authoring-core/src/create_shape_runtime_v1.rs"
       - "apps/chaptera-desktop/src/agent.rs"
       - ".github/workflows/authoring-create-shape-v1.yml"
   workflow_dispatch:

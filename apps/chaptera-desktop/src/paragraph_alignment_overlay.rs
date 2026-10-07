@@ -17,6 +17,11 @@ fn effective_alignment_v1(
         Some(EffectiveParagraphAlignmentValueV1::Left) => Ok(ParagraphAlignmentV1::Left),
         Some(EffectiveParagraphAlignmentValueV1::Center) => Ok(ParagraphAlignmentV1::Center),
         Some(EffectiveParagraphAlignmentValueV1::Right) => Ok(ParagraphAlignmentV1::Right),
+        Some(EffectiveParagraphAlignmentValueV1::Justify) => Err(format!(
+            "Story {} Paragraph {} has effective Justify alignment; ordinary justification spacing is not owned by the rigid L/C/R overlay",
+            paragraph.story_id.as_canonical(),
+            paragraph.paragraph_id.as_canonical()
+        )),
         Some(EffectiveParagraphAlignmentValueV1::InterWord) => Err(format!(
             "Story {} Paragraph {} has effective InterWord alignment; live authored layout stays read-only",
             paragraph.story_id.as_canonical(),

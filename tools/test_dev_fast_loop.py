@@ -307,6 +307,235 @@ def test_run_receipt_records_timings_and_cache_state() -> None:
         assert history_rows[0]["head_sha"] == receipt["head_sha"]
 
 
+def test_workspace_manifest_edit_uses_metadata_not_full_workspace_compile() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        write(
+            root / "Cargo.toml",
+            "[workspace]\nmembers=['crates/foo']\nresolver='2'\n",
+        )
+        write(
+            root / "crates/foo/Cargo.toml",
+            "[package]\nname='foo'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        write(root / "crates/foo/src/lib.rs", "pub fn value() -> u8 { 1 }\n")
+
+        edit = mod.plan_for_paths(root, ["Cargo.toml"], mode="edit")
+        edit_commands = commands(edit)
+        assert (
+            "cargo",
+            "metadata",
+            "--manifest-path",
+            "Cargo.toml",
+            "--no-deps",
+            "--format-version",
+            "1",
+        ) in edit_commands
+        assert not any(
+            command[:2] == ("cargo", "fmt") for command in edit_commands
+        )
+        assert not any(
+            command[:2] == ("cargo", "check") and "--workspace" in command
+            for command in edit_commands
+        )
+
+        feature = mod.plan_for_paths(root, ["Cargo.toml"], mode="feature")
+        feature_commands = commands(feature)
+        assert (
+            "cargo",
+            "check",
+            "--manifest-path",
+            "Cargo.toml",
+            "--workspace",
+        ) in feature_commands
+
+
+def test_pub_editor_facade_only_diff_skips_unfiltered_lib_test() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        git(root, "init", "-b", "main")
+        git(root, "config", "user.email", "fast-loop@example.invalid")
+        git(root, "config", "user.name", "Fast Loop Test")
+        write(
+            root / mod.COMPONENT_REGISTRY_PATH,
+            """{
+  "schema": "chaptera.dev-fast-components.v1",
+  "rules": [
+    {
+      "name": "pub-editor facade/core",
+      "paths": ["vendor/producer-a/crates/pub-editor/src/lib.rs"],
+      "commands": [["cargo", "test", "--manifest-path", "vendor/producer-a/Cargo.toml", "-p", "pub-editor", "--lib"]]
+    },
+    {
+      "name": "pub-editor registered module",
+      "paths": ["vendor/producer-a/crates/pub-editor/src/registered.rs"],
+      "commands": [["cargo", "test", "--manifest-path", "vendor/producer-a/Cargo.toml", "-p", "pub-editor", "registered_behavior", "--lib"]]
+    }
+  ]
+}
+""",
+        )
+        write(
+            root / "vendor/producer-a/Cargo.toml",
+            "[workspace]\nmembers=['crates/pub-editor']\nresolver='2'\n",
+        )
+        write(
+            root / mod.PUB_EDITOR_PACKAGE_MANIFEST_PATH,
+            "[package]\nname='pub-editor'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        lib = root / mod.PUB_EDITOR_LIB_PATH
+        write(lib, "mod owned;\npub use owned::Owned;\npub struct Core;\n")
+        write(
+            root / "vendor/producer-a/crates/pub-editor/src/owned.rs",
+            "pub struct Owned;\n",
+        )
+        git(root, "add", ".")
+        git(root, "commit", "-m", "base")
+        git(root, "checkout", "-b", "feature")
+
+        # Same-stem integration coverage permits the edit-mode facade fast path.
+        write(
+            lib,
+            "mod owned;\nmod extra;\npub use owned::Owned;\npub use extra::Extra;\npub struct Core;\n",
+        )
+        write(
+            root / "vendor/producer-a/crates/pub-editor/src/extra.rs",
+            "pub struct Extra;\n",
+        )
+        write(
+            root / "vendor/producer-a/crates/pub-editor/tests/extra.rs",
+            "#[test] fn smoke() {}\n",
+        )
+        git(root, "add", ".")
+        git(root, "commit", "-m", "facade")
+
+        paths = mod.discover_changed_paths(root, base="main", head="HEAD")
+        checks = mod.plan_for_paths(root, paths, mode="edit")
+        narrowed = mod.narrow_checks_for_diff(
+            root,
+            paths,
+            checks,
+            base="main",
+            head="HEAD",
+            mode="edit",
+        )
+        actual = commands(narrowed)
+        assert mod.PUB_EDITOR_UNFILTERED_LIB_TEST not in actual
+        assert (
+            "cargo",
+            "test",
+            "--manifest-path",
+            "vendor/producer-a/crates/pub-editor/Cargo.toml",
+            "--test",
+            "extra",
+            "--no-fail-fast",
+        ) in actual
+
+        # Feature mode remains the full package unit loop even for facade-only diffs.
+        feature_checks = mod.plan_for_paths(root, paths, mode="feature")
+        feature_narrowed = mod.narrow_checks_for_diff(
+            root,
+            paths,
+            feature_checks,
+            base="main",
+            head="HEAD",
+            mode="feature",
+        )
+        assert mod.PUB_EDITOR_UNFILTERED_LIB_TEST in commands(feature_narrowed)
+
+        # Explicit component-registry coverage is also sufficient.
+        write(
+            lib,
+            "mod owned;\nmod extra;\nmod registered;\npub use owned::Owned;\npub use extra::Extra;\npub use registered::Registered;\npub struct Core;\n",
+        )
+        write(
+            root / "vendor/producer-a/crates/pub-editor/src/registered.rs",
+            "pub struct Registered;\n",
+        )
+        git(root, "add", ".")
+        git(root, "commit", "-m", "registered facade")
+
+        paths = mod.discover_changed_paths(root, base="main", head="HEAD")
+        checks = mod.plan_for_paths(root, paths, mode="edit")
+        narrowed = mod.narrow_checks_for_diff(
+            root,
+            paths,
+            checks,
+            base="main",
+            head="HEAD",
+            mode="edit",
+        )
+        actual = commands(narrowed)
+        assert mod.PUB_EDITOR_UNFILTERED_LIB_TEST not in actual
+        assert (
+            "cargo",
+            "test",
+            "--manifest-path",
+            "vendor/producer-a/Cargo.toml",
+            "-p",
+            "pub-editor",
+            "registered_behavior",
+            "--lib",
+        ) in actual
+
+        # A facade-only lib.rs plus an uncovered semantic module must fail closed.
+        write(
+            lib,
+            "mod owned;\nmod extra;\nmod registered;\nmod uncovered;\npub use owned::Owned;\npub use extra::Extra;\npub use registered::Registered;\npub use uncovered::Uncovered;\npub struct Core;\n",
+        )
+        write(
+            root / "vendor/producer-a/crates/pub-editor/src/uncovered.rs",
+            "pub struct Uncovered;\n",
+        )
+        paths = mod.discover_changed_paths(root, base="main", head=None)
+        checks = mod.plan_for_paths(root, paths, mode="edit")
+        narrowed = mod.narrow_checks_for_diff(
+            root,
+            paths,
+            checks,
+            base="main",
+            head=None,
+            mode="edit",
+        )
+        assert mod.PUB_EDITOR_UNFILTERED_LIB_TEST in commands(narrowed)
+
+        # Any substantive core body change retains the full lib test.
+        write(
+            lib,
+            "mod owned;\nmod extra;\nmod registered;\npub use owned::Owned;\npub use extra::Extra;\npub use registered::Registered;\npub struct Core;\npub fn core_value() -> u8 { 1 }\n",
+        )
+        checks = mod.plan_for_paths(root, [mod.PUB_EDITOR_LIB_PATH], mode="edit")
+        narrowed = mod.narrow_checks_for_diff(
+            root,
+            [mod.PUB_EDITOR_LIB_PATH],
+            checks,
+            base="main",
+            head=None,
+            mode="edit",
+        )
+        assert mod.PUB_EDITOR_UNFILTERED_LIB_TEST in commands(narrowed)
+
+        # Build-metadata changes never inherit the facade-only narrowing.
+        write(
+            lib,
+            "mod owned;\nmod extra;\nmod registered;\npub use owned::Owned;\npub use extra::Extra;\npub use registered::Registered;\npub struct Core;\n",
+        )
+        write(
+            root / mod.PUB_EDITOR_PACKAGE_MANIFEST_PATH,
+            "[package]\nname='pub-editor'\nversion='0.1.1'\nedition='2024'\n",
+        )
+        metadata_paths = [mod.PUB_EDITOR_LIB_PATH, mod.PUB_EDITOR_PACKAGE_MANIFEST_PATH]
+        checks = mod.plan_for_paths(root, metadata_paths, mode="edit")
+        narrowed = mod.narrow_checks_for_diff(
+            root,
+            metadata_paths,
+            checks,
+            base="main",
+            head=None,
+            mode="edit",
+        )
+        assert mod.PUB_EDITOR_UNFILTERED_LIB_TEST in commands(narrowed)
+
 def test_feature_mode_adds_package_unit_tests_once() -> None:
     with tempfile.TemporaryDirectory() as raw:
         root = Path(raw)
@@ -320,6 +549,50 @@ def test_feature_mode_adds_package_unit_tests_once() -> None:
         )
         unit = [check for check in checks if check.kind == "rust-unit-tests"]
         assert len(unit) == 1
+        assert unit[0].command[-1] == "--lib"
+
+
+def test_feature_mode_discovers_binary_targets_and_respects_disabled_tests() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        manifest = root / "app/Cargo.toml"
+        write(manifest, """[package]
+name='app'
+version='0.1.0'
+edition='2024'
+[[bin]]
+name='editor'
+path='src/main.rs'
+[[bin]]
+name='receipt'
+path='src/bin/receipt.rs'
+test=false
+""")
+        write(root / "app/src/main.rs", "fn main() {}\n")
+        write(root / "app/src/bin/receipt.rs", "fn main() {}\n")
+        write(root / "app/src/bin/probe/main.rs", "fn main() {}\n")
+        checks = mod.plan_for_paths(root, ["app/src/main.rs"], mode="feature")
+        unit = [check for check in checks if check.kind == "rust-unit-tests"]
+        assert [check.command for check in unit] == [(
+            "cargo", "test", "--manifest-path", "app/Cargo.toml",
+            "--bin", "editor", "--bin", "probe",
+        )]
+
+        write(manifest, "[package]\nname='app'\nversion='0.1.0'\nautobins=false\n")
+        assert mod.rust_unit_test_selectors(manifest) == ()
+        write(manifest, "[package]\nname='app'\nversion='0.1.0'\n")
+        assert mod.rust_unit_test_selectors(manifest) == (
+            "--bin", "app", "--bin", "probe", "--bin", "receipt",
+        )
+
+
+def test_explicit_library_keeps_library_routing_without_default_path() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        manifest = Path(raw) / "Cargo.toml"
+        write(manifest, "[package]\nname='app'\nversion='0.1.0'\nautolib=false\n[lib]\npath='core.rs'\n")
+        assert mod.rust_unit_test_selectors(manifest) == ("--lib",)
+        write(manifest, "[package]\nname='app'\nversion='0.1.0'\n[lib]\ntest=false\n")
+        assert mod.rust_unit_test_selectors(manifest) == ()
 
 
 def main() -> None:
@@ -330,7 +603,11 @@ def main() -> None:
     test_component_registry_malformed_fails_closed()
     test_rust_cache_auto_off_require_and_git_common_dir()
     test_run_receipt_records_timings_and_cache_state()
+    test_workspace_manifest_edit_uses_metadata_not_full_workspace_compile()
+    test_pub_editor_facade_only_diff_skips_unfiltered_lib_test()
     test_feature_mode_adds_package_unit_tests_once()
+    test_feature_mode_discovers_binary_targets_and_respects_disabled_tests()
+    test_explicit_library_keeps_library_routing_without_default_path()
     print("dev fast loop tests: ok")
 
 
