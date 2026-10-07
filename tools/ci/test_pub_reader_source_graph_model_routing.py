@@ -32,12 +32,11 @@ def pr_block(name: str) -> str:
     return text[start:end]
 
 
-# The source graph DTO owner is consumed by source-paint ordering, master
-# projection and the rendered Reader surface. These direct owners must follow
-# the leaf rather than relying on the historical lib.rs root.
-assert MODEL in pr_block("grouped-source-stack-order-acceptance.yml")
-assert MODEL in pr_block("master-projection-active-reader-bridge.yml")
-assert MODEL in pr_block("publisher-visual-golden-supplemental.yml")
+# This leaf owns source-model declarations, not grouped/master/render behavior.
+# Those behavioral acceptances stay attached to their implementation owners.
+assert MODEL not in pr_block("grouped-source-stack-order-acceptance.yml")
+assert MODEL not in pr_block("master-projection-active-reader-bridge.yml")
+assert MODEL not in pr_block("publisher-visual-golden-supplemental.yml")
 
 # Editable source image export and Migration intentionally retain broad Reader
 # ownership because asset/export projection consumes PubSourceGraph.
@@ -61,9 +60,9 @@ expected = {
     "reader_windows": False,
     "editor_windows": False,
     "visual_oracle": True,
-    "cloud_reference": True,
+    "cloud_reference": False,
     "virginia_page_role": False,
-    "visual_batch01": True,
+    "visual_batch01": False,
     "typography_golden": True,
     "android_core": True,
     "android": False,
