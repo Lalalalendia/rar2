@@ -37,15 +37,14 @@ def pr_block(name: str) -> str:
 assert GROUPED in pr_block("publisher-visual-golden-supplemental.yml")
 assert GROUPED in pr_block("grouped-source-stack-order-acceptance.yml")
 
-# Editable-output and source-image routes remain fail-closed because grouped
-# geometry can determine whether grouped image/materialized nodes survive.
-for name in (
-    "migration-1050-corpus-matrix.yml",
-    "editable-source-image-export-v1.yml",
-):
-    block = pr_block(name)
-    assert "vendor/producer-a/crates/pub-reader/src/**" in block
-    assert NEG_GROUPED not in block
+# Migration remains fail-closed because grouped materialization/geometry can
+# change editable export. Source Image Export owns payload identity/content
+# transform, while grouped geometry is already covered by migration + grouped
+# stack + supplemental and must not pay a redundant standalone fanout.
+migration = pr_block("migration-1050-corpus-matrix.yml")
+assert "vendor/producer-a/crates/pub-reader/src/**" in migration
+assert NEG_GROUPED not in migration
+assert NEG_GROUPED in pr_block("editable-source-image-export-v1.yml")
 
 # Quill provenance, PAGE-master relation semantics and BorderArt wire census do
 # not own grouped ChildAnchor/FSPGR projection.
