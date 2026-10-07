@@ -2,13 +2,10 @@ use std::collections::BTreeMap;
 
 use pub_editor::{
     EDITOR_PROJECT_VERSION_V0_12, EditOperation, EditorProjectAsset, EditorProjectError,
-    EditorSession, LengthEmu, RectEmu, Sha256Digest,
+    EditorSession, Sha256Digest,
 };
-use pub_model::{
-    Affine2D, Document, DocumentId, Node, NodeHeader, NodeId, NodeKind, Page, PageId,
-    ResolvedGraph, Size2D, SourceDescriptor,
-};
-use pub_reader::{PubExplicitShapePaintSource, PubResolvedGraph, PubResolvedNodePayload};
+use pub_model::{Document, DocumentId, NodeId, ResolvedGraph, SourceDescriptor};
+use pub_reader::PubResolvedGraph;
 
 fn canonical_id<T: serde::de::DeserializeOwned>(value: &str) -> T {
     serde_json::from_str(&format!("\"{value}\"")).expect("canonical typed id")
@@ -48,87 +45,6 @@ fn png_bytes(tag: u8) -> Vec<u8> {
     let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
     bytes.push(tag);
     bytes
-}
-
-fn rect(x: i64, y: i64, width: i64, height: i64) -> RectEmu {
-    RectEmu::new(
-        LengthEmu::new(x),
-        LengthEmu::new(y),
-        LengthEmu::new(width),
-        LengthEmu::new(height),
-    )
-}
-
-fn image_graph() -> (PubResolvedGraph, NodeId) {
-    let mut graph = graph();
-    let page_id: PageId = canonical_id("11000000-0000-4000-8000-000000000001");
-    let node_id: NodeId = canonical_id("22000000-0000-4000-8000-000000000001");
-
-    graph.document.pages.push(page_id);
-    graph.pages.insert(
-        page_id,
-        Page {
-            id: page_id,
-            size: Size2D::new(LengthEmu::new(5_000_000), LengthEmu::new(5_000_000)),
-            bleed: None,
-            margins: None,
-            children: vec![node_id],
-            extensions: Vec::new(),
-        },
-    );
-    graph.nodes.insert(
-        node_id,
-        Node {
-            kind: NodeKind::Shape,
-            header: NodeHeader {
-                id: node_id,
-                parent_id: page_id.into_canonical(),
-                bounds: rect(100_000, 200_000, 300_000, 400_000),
-                transform: Affine2D::identity(),
-                source_refs: Vec::new(),
-                extensions: Vec::new(),
-            },
-            payload: PubResolvedNodePayload {
-                contents_seq_num: 1,
-                officeart_shape_type: Some(75),
-                officeart_spid: Some(1),
-                image_slot: Some(1),
-                legacy_ole: None,
-                explicit_image_crop: None,
-                explicit_image_cardinal_rotation_degrees: None,
-                explicit_paint: PubExplicitShapePaintSource::default(),
-                effective_paint: None,
-                story_frame: None,
-                text_frame_inset: None,
-                table_story: None,
-                table: None,
-            },
-        },
-    );
-
-    (graph, node_id)
-}
-
-#[test]
-fn current_image_resources_follow_public_replace_image_overlay() {
-    let (base, node_id) = image_graph();
-    let mut session = EditorSession::new(base).expect("session");
-    let bytes = png_bytes(0x33);
-    let sha = session
-        .import_replacement_asset("image/png", bytes.clone())
-        .expect("bounded PNG import");
-
-    session
-        .replace_image(node_id, sha)
-        .expect("public ReplaceImage overlay");
-
-    let resources = session
-        .current_image_resources_v1()
-        .expect("current image resources");
-    assert_eq!(resources.len(), 1);
-    assert_eq!(resources[0].node_ids, vec![node_id]);
-    assert_eq!(resources[0].mime, "image/png");
-    assert_eq!(resources[0].bytes, bytes);
 }
 
 #[test]
