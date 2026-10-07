@@ -1,5 +1,7 @@
 use super::*;
 
+// Routing measurement only: standalone comment; no Reader semantics changed.
+
 pub(super) fn build_reference_index(
     contents: &[u8],
     directory: &pub_contents::Contents0x2cDirectory,
