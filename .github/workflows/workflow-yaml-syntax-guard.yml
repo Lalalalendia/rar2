@@ -6,6 +6,7 @@ on:
       - ".github/workflows/**"
       - "tools/ci/check_workflow_yaml_syntax.rb"
       - "tools/ci/test_reader_residual_fanout.py"
+      - "tools/ci/test_shaped_flow_runtime_routing.py"
       - "tools/ci/validate_reader_binary_artifact.py"
       - "tools/ci/test_validate_reader_binary_artifact.py"
       - "tools/ci/test_reader_build_once_wiring.py"
@@ -32,6 +33,8 @@ jobs:
         run: ruby tools/ci/check_workflow_yaml_syntax.rb
       - name: Guard narrowed Reader workflow fanout
         run: python tools/ci/test_reader_residual_fanout.py
+      - name: Guard shaped-flow fixed-PDF routing split
+        run: python tools/ci/test_shaped_flow_runtime_routing.py
       - name: Test Reader binary artifact validator
         run: python tools/ci/test_validate_reader_binary_artifact.py
       - name: Guard Reader build-once wiring

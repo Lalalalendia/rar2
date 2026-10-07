@@ -3,7 +3,8 @@ name: Editor Desktop Shaped Flow Runtime V1
 on:
   pull_request:
     paths:
-      - "crates/chaptera-desktop-shaped-flow-runtime/**"
+      - "crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/lib.rs"
       - "crates/chaptera-caret-layout-feed/**"
       - "crates/chaptera-text-caret-map-adapter/**"
       - "vendor/producer-a/crates/pub-layout/**"
