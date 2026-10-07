@@ -203,8 +203,8 @@
     {
       "name": "pub-editor table track extent/history",
       "paths": [
-        "vendor/producer-a/crates/pub-editor/src/table_track_extent_v1.rs",
-        "vendor/producer-a/crates/pub-editor/src/table_track_history_v1.rs"
+        "vendor/producer-a/crates/pub-editor-table-core/src/table_track_extent_v1.rs",
+        "vendor/producer-a/crates/pub-editor-table-core/src/table_track_history_v1.rs"
       ],
       "commands": [
         [

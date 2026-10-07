@@ -1,4 +1,4 @@
-use pub_editor::{
+use pub_editor_table_core::{
     TABLE_TRACK_EXTENT_HISTORY_V1, TableTrackExtentHistoryErrorV1, TableTrackTargetV1,
     apply_table_track_extent_history_forward_v1, apply_table_track_extent_history_inverse_v1,
     canonical_table_track_extent_history_v1,

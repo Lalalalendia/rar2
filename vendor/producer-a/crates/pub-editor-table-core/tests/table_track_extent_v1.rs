@@ -1,4 +1,4 @@
-use pub_editor::{
+use pub_editor_table_core::{
     SetTableTrackExtentErrorV1, TableTrackTargetV1, plan_table_track_extent_v1,
     set_table_track_extent_v1,
 };

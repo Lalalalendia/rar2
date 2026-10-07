@@ -9,7 +9,7 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 ALLOWED_FULL = "pub-editor-full-regression.yml"
 
 RUN_RE = re.compile(r"^(?P<indent>\s*)run:\s*(?P<body>.*)$")
-PUB_EDITOR_PACKAGE = re.compile(r"(?:-p|--package)\s+pub-editor(?:-authoring-core)?\b")
+PUB_EDITOR_PACKAGE = re.compile(r"(?:-p|--package)\s+pub-editor(?:-authoring-core|-table-core)?\b")
 
 
 def run_blocks(text: str) -> list[str]:
