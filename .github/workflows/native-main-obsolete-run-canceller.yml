@@ -38,10 +38,15 @@ jobs:
             .github/workflows/carlton-heading-alignment-native-once.yml
             .github/workflows/borderart-native-once.yml
             .github/workflows/paragraph-metrics-auth-once.yml
+            .github/workflows/publisher-supplemental-native-surface-once.yml
+            .github/workflows/t828-ignore-master-native-once.yml
+            .github/workflows/supplemental-surface-stage-once.yml
           STALE_PROVIDER_RUN_IDS: |
             36715683731
             36715220690
             36714192669
+            37501126927
+            37497839246
         run: |
           set -euo pipefail
 
@@ -123,5 +128,5 @@ jobs:
             echo "- force-cancelled: $forced"
             echo "- deleted stale records: $deleted"
             echo "- unresolved provider records: $unresolved"
-            echo "- automatic main-push Publisher native execution: disabled; native workflows are manual-dispatch only"
+            echo "- GitHub Publisher-native self-hosted execution: forbidden; native execution is local/manual handoff only"
           } >>"$GITHUB_STEP_SUMMARY"

@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       publisher_environment:
-        description: Self-hosted runner label, e.g. publisher-2019
+        description: Target local Publisher profile, e.g. publisher-2019
         required: true
         type: choice
         options:
@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pub-native-research-${{ inputs.publisher_environment }}
+  group: pub-native-research-handoff-${{ inputs.publisher_environment }}
   cancel-in-progress: false
 
 jobs:
@@ -68,115 +68,19 @@ jobs:
           "requires_publisher=$($doc.requires_publisher.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           "operation_script=$($doc.operation_script)" >> $env:GITHUB_OUTPUT
 
+      - name: Write local Publisher handoff
+        shell: pwsh
+        run: |
+          "## PUB native research handoff" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "- Target local profile: $env:ENVIRONMENT_INPUT" >> $env:GITHUB_STEP_SUMMARY
+          "- Packet: $env:PACKET_INPUT" >> $env:GITHUB_STEP_SUMMARY
+          "- Trusted source SHA: ${{ steps.trust.outputs.trusted_sha }}" >> $env:GITHUB_STEP_SUMMARY
+          "- GitHub stops after hosted validation. Publisher execution is local/manual and returns a source-safe receipt." >> $env:GITHUB_STEP_SUMMARY
+
       - name: Upload packet validation
         uses: actions/upload-artifact@v4
         with:
           name: pub-research-packet-validation-${{ github.run_id }}
           path: packet-validation.json
-          retention-days: 30
-
-  native-experiment:
-    needs: validate-packet
-    if: github.ref == 'refs/heads/main'
-    environment: pub-native-lab
-    runs-on:
-      - self-hosted
-      - Windows
-      - pub-research
-      - ${{ inputs.publisher_environment }}
-    timeout-minutes: 45
-    env:
-      PUB_RESEARCH_PACKET: ${{ inputs.packet }}
-      PUB_RESEARCH_ENVIRONMENT: ${{ inputs.publisher_environment }}
-      PUB_RESEARCH_PACKET_SHA256: ${{ needs.validate-packet.outputs.packet_sha256 }}
-      PUB_RESEARCH_OUTPUT: ${{ github.workspace }}\out\pub-research\${{ github.run_id }}
-      PUB_RESEARCH_PROFILE_ID: ${{ inputs.publisher_environment }}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ needs.validate-packet.outputs.trusted_sha }}
-          clean: true
-          persist-credentials: false
-
-      - name: Verify exact trusted checkout
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $actual = (git rev-parse HEAD).Trim()
-          $expected = "${{ needs.validate-packet.outputs.trusted_sha }}"
-          if ($actual -ne $expected) {
-            throw "Trusted checkout mismatch: expected $expected got $actual"
-          }
-
-      - name: Validate packet again on native runner
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          python tools/research-runner/validate_packet.py `
-            --packet "$env:PUB_RESEARCH_PACKET" `
-            --expected-environment "$env:PUB_RESEARCH_ENVIRONMENT" |
-            Out-File -Encoding utf8 "$env:RUNNER_TEMP\packet-validation-native.json"
-
-      - name: Verify native runner environment and fixture
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force -Path $env:PUB_RESEARCH_OUTPUT | Out-Null
-          pwsh -NoProfile -File tools/research-runner/prepare_native_run.ps1 `
-            -PacketPath "$env:PUB_RESEARCH_PACKET" `
-            -OutputRoot "$env:PUB_RESEARCH_OUTPUT"
-
-      - name: Run bounded experiment
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $packet = Get-Content $env:PUB_RESEARCH_PACKET -Raw | ConvertFrom-Json
-          $script = Join-Path "${{ github.workspace }}" $packet.operation.script
-          $argList = @()
-          foreach ($item in @($packet.operation.args)) {
-            $argList += [string]$item
-          }
-          & pwsh -NoProfile -File $script `
-            -PacketPath "$env:PUB_RESEARCH_PACKET" `
-            -OutputRoot "$env:PUB_RESEARCH_OUTPUT" `
-            @argList
-          if ($LASTEXITCODE -ne 0) {
-            throw "Experiment failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Validate evidence bundle
-        if: always()
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          pwsh -NoProfile -File tools/research-runner/finalize_native_run.ps1 `
-            -PacketPath "$env:PUB_RESEARCH_PACKET" `
-            -OutputRoot "$env:PUB_RESEARCH_OUTPUT"
-
-      - name: Write summary
-        if: always()
-        shell: pwsh
-        run: |
-          "## PUB native research experiment" >> $env:GITHUB_STEP_SUMMARY
-          "" >> $env:GITHUB_STEP_SUMMARY
-          "- Environment: $env:PUB_RESEARCH_ENVIRONMENT" >> $env:GITHUB_STEP_SUMMARY
-          "- Packet: $env:PUB_RESEARCH_PACKET" >> $env:GITHUB_STEP_SUMMARY
-          "- Packet SHA-256: $env:PUB_RESEARCH_PACKET_SHA256" >> $env:GITHUB_STEP_SUMMARY
-          "- Trusted source SHA: ${{ needs.validate-packet.outputs.trusted_sha }}" >> $env:GITHUB_STEP_SUMMARY
-          if (Test-Path "$env:PUB_RESEARCH_OUTPUT\evidence-manifest.json") {
-            "" >> $env:GITHUB_STEP_SUMMARY
-            "Evidence manifest generated successfully." >> $env:GITHUB_STEP_SUMMARY
-          }
-
-      - name: Upload non-proprietary evidence manifest
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pub-research-evidence-${{ needs.validate-packet.outputs.experiment_id }}-${{ github.run_id }}
-          path: |
-            out/pub-research/${{ github.run_id }}/environment.json
-            out/pub-research/${{ github.run_id }}/evidence-manifest.json
-            out/pub-research/${{ github.run_id }}/logs/**
-            out/pub-research/${{ github.run_id }}/analysis/**
-          if-no-files-found: error
           retention-days: 30
