@@ -1,2 +1,38 @@
-# Wave 23 carrier
+# Evidence-heavy branch GC wave 23 - 2026-10-07
+# Exact-SHA only. Current/open/default refs are runtime-protected.
+# 7 refs are already merged into main.
+# 23 refs are closed unmerged measurement/evidence carriers with terminal/supersession receipts.
+# 2 refs are failed execution-only GC carrier branches created during connector recovery.
+
 validation/supplemental-reference-complete-31-02 cf7a64732fc3d160b186f1a3e1fa837529e42199
+validation/supplemental-reference-fingerprint-15-01 76f4b41cb32011eba5998cd7ccbc558b8034f99b
+research/supplemental-surface-stage-083-086-095-01 bea9e03de611cbaebbfaaf9e726c4905ce7e9653
+research/ignore-master-auth-01-v2 129ec4f9a411dc558d8291f4ae49bfc6eaa28e1c
+research/recovery-damage-classifier-01 6a09ddd6630d32c8dabe4ca02014acafa8e29e41
+research/recovery-native-torture-matrix-01 acc4c99190ca008f7cc27affb9fb1fac7a35b7a0
+measure/supported-subset-sli-cause-census-01 c24130f61a031f1b633802f4153dfe0f4371631e
+measure/virginia-current-main-baseline-01 6f1c03c9cd7b491a23d2fdca76a67edefc862a6f
+measure/pub-reader-page-projection-routing-01 9e01eaaca60294f387ce3463cbe92568bc2a5710
+measure/pub-editor-table-core-steady-01 bd611d76739605c76bb234c5a45778e4a12d346e
+measure/pub-viewer-authoring-projection-fanout-01 05787a53a527eb0c90e43af7b373d2d9f00f4203
+measure/shaped-flow-fixed-resources-fanout-02 aa814a915dfa443d15edf6c5afd3ce1d4b1d3304
+measure/shaped-flow-fixed-resources-fanout-01 455aa81a72917b8050208deab76d8b8c878f9fd4
+validation/table-paragraph-vertical-metrics-01 9f0973d8279b7a29efd8b21dc4694d2f99c122ac
+validation/table-text-baseline-ascent-01 cae0cf39f151c0b4ba3ddf7fa34b1072300cab9c
+validation/table-source-font-single-line-fit-03 e7268f8b91de95691838371eef953241fc66a39a
+validation/table-source-font-single-line-fit-02 268c27558afa0b976375e964bb59b3d0f4ce738e
+validation/table-source-font-single-line-fit-01 0d5fa7d91f00407cc01e06bd67b988344013597b
+validation/table-text-natural-height-emission-01 93b53e179443caf9bcdfcbf07b1f0081be01b1e4
+validation/carlton-table-text-source-font-fit-01 617c23eb56be2be560406e61f59407fa3d8850e0
+validation/carlton-table-single-line-admission-breakdown-01 1cc9948e19d91e2f8c06098ce35f521ff691823b
+validation/carlton-table-source-family-style-partition-01 2b20cb7d40c70ae99e0c3dd142dbedb18810b4c8
+validation/carlton-table-text-source-font-profile-01 1864146e16bec0f938e313a3e007823e92a25a4b
+validation/carlton-table-text-single-line-fit-01-v2 fcda3a87f1ea5b28e3f666bf8fa8798d73412d20
+research/carlton-table-mcld-join-01 c1008f8be4b07fb7c933e8f1d9cb6a4214c6bd86
+validation/carlton-post-alpha-residual-area-01 473edbcc5ba7661b509189bc8e3b12db6aca5e26
+research/carlton-table-mcld-inset-profile-01 4c9233c9b7fb6894af03e0091f4834347d46c846
+validation/manual-oracle-image-asset-cause-01 271d37a472bc8064a933aef8ae2ba29debd9cb02
+validation/manual-residual-source-probe-20261006 0cb810390649cdc31a66acffe5ba1aa92af281a9
+validation/current-reader-portable-parity-runner-20261006 7affd2d8983aae99012068af983a7fcc5bee304a
+ops/branch-gc-20261007-evidence-wave23 05210fa640649d2f8a7332cb02d632c354f07937
+ops/branch-gc-20261007-evidence-wave23-r2 248be5797f74c8d6235ca70bda49c659d121304a
