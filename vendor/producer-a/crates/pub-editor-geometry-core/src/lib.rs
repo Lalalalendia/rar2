@@ -1,4 +1,5 @@
 //! Compile-isolated Move/Resize transition laws shared by pub-editor.
+//! CI leaf-control: comment-only steady-state geometry-core proof.
 //!
 //! This crate contains only session-neutral geometry primitives. It must not
 //! depend on pub-editor, EditorSession, or PubResolvedGraph.
