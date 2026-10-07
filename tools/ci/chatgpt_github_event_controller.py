@@ -123,6 +123,11 @@ def compact_files(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
+def clip_text(value: Any, limit: int = MAX_TEXT_CHARS) -> str:
+    text = str(value or "")
+    return text if len(text) <= limit else text[:limit] + "\n…[truncated]"
+
+
 def compact_checks(payload: Any) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         return []
@@ -141,6 +146,70 @@ def compact_checks(payload: Any) -> list[dict[str, Any]]:
     return rows
 
 
+def fetch_workflow_state(repo: str, head_sha: str, token: str) -> list[dict[str, Any]]:
+    query = urllib.parse.urlencode(
+        {
+            "head_sha": head_sha,
+            "event": "pull_request",
+            "per_page": MAX_WORKFLOW_RUNS,
+        }
+    )
+    payload = github_request(
+        "GET",
+        f"repos/{repo}/actions/runs?{query}",
+        token=token,
+    )
+    if not isinstance(payload, dict):
+        return []
+
+    result: list[dict[str, Any]] = []
+    for run in payload.get("workflow_runs", [])[:MAX_WORKFLOW_RUNS]:
+        row: dict[str, Any] = {
+            "id": run.get("id"),
+            "name": run.get("name"),
+            "status": run.get("status"),
+            "conclusion": run.get("conclusion"),
+            "run_number": run.get("run_number"),
+            "html_url": run.get("html_url"),
+        }
+        if run.get("conclusion") in {"failure", "cancelled", "timed_out", "action_required"}:
+            jobs_payload = github_request(
+                "GET",
+                f"repos/{repo}/actions/runs/{run.get('id')}/jobs?filter=latest&per_page=100",
+                token=token,
+            )
+            failed_jobs = []
+            if isinstance(jobs_payload, dict):
+                for job in jobs_payload.get("jobs", []):
+                    if job.get("conclusion") not in {
+                        "failure",
+                        "cancelled",
+                        "timed_out",
+                        "action_required",
+                    }:
+                        continue
+                    failed_jobs.append(
+                        {
+                            "id": job.get("id"),
+                            "name": job.get("name"),
+                            "conclusion": job.get("conclusion"),
+                            "failed_steps": [
+                                {
+                                    "number": step.get("number"),
+                                    "name": step.get("name"),
+                                    "conclusion": step.get("conclusion"),
+                                }
+                                for step in job.get("steps", [])
+                                if step.get("conclusion")
+                                in {"failure", "cancelled", "timed_out"}
+                            ],
+                        }
+                    )
+            row["failed_jobs"] = failed_jobs
+        result.append(row)
+    return result
+
+
 def build_prompt(
     *,
     repo: str,
@@ -150,6 +219,7 @@ def build_prompt(
     files: list[dict[str, Any]],
     checks: list[dict[str, Any]],
     combined_status: dict[str, Any],
+    workflow_state: list[dict[str, Any]],
 ) -> str:
     trusted_contract = {
         "goal": "Reduce manual GitHub dispatch while preserving exact-head CI evidence.",
@@ -185,8 +255,8 @@ def build_prompt(
         "repository": repo,
         "pull_request": pr_number,
         "event_action": event_action,
-        "title": pr.get("title"),
-        "body": pr.get("body"),
+        "title": clip_text(pr.get("title"), 2_000),
+        "body": clip_text(pr.get("body")),
         "state": pr.get("state"),
         "draft": pr.get("draft"),
         "merged": pr.get("merged"),
@@ -198,6 +268,7 @@ def build_prompt(
         "author": (pr.get("user") or {}).get("login"),
         "changed_files": compact_files(files),
         "check_runs": checks,
+        "workflow_runs": workflow_state,
         "combined_status": {
             "state": combined_status.get("state"),
             "statuses": [
@@ -234,7 +305,11 @@ def upsert_comment(
     existing_id = None
     if isinstance(comments, list):
         for comment in comments:
-            if MARKER in str(comment.get("body") or ""):
+            if (
+                MARKER in str(comment.get("body") or "")
+                and str((comment.get("user") or {}).get("login") or "")
+                == "github-actions[bot]"
+            ):
                 existing_id = comment.get("id")
                 break
 
@@ -296,6 +371,7 @@ def main() -> int:
         f"repos/{repo}/commits/{head_sha}/status",
         token=github_token,
     )
+    workflow_state = fetch_workflow_state(repo, head_sha, github_token)
     if not isinstance(combined_status, dict):
         combined_status = {}
 
@@ -325,6 +401,7 @@ def main() -> int:
             files=files,
             checks=checks,
             combined_status=combined_status,
+            workflow_state=workflow_state,
         ),
         max_output_tokens=1600,
     )
