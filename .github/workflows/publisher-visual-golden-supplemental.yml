@@ -104,6 +104,24 @@ jobs:
           mkdir -p "$RUNNER_TEMP/publisher-visual-supplemental"
           python tools/cloud_reader_visual_supplemental_v1.py prepare             tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv             out/pinned1050/materialized/native             "$RUNNER_TEMP/publisher-visual-supplemental/fixtures"             "$RUNNER_TEMP/publisher-visual-supplemental/manifest.json"
 
+      - name: Emit exact 05 grouped-image projection receipt
+        run: |
+          set -euo pipefail
+          mkdir -p target/publisher-visual-supplemental
+          cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader --bin source_image_export_probe -- \
+            "$RUNNER_TEMP/publisher-visual-supplemental/fixtures/05-modern2c-officeart-wmf.pub" \
+            > target/publisher-visual-supplemental/grouped-image-projection-05.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("target/publisher-visual-supplemental/grouped-image-projection-05.json").read_text())
+          rows = data["grouped_image_projection_failures"]
+          print(json.dumps(rows, indent=2, sort_keys=True))
+          assert data["source_sha256"] == "99ffa361aa8d0ba3a851ff86986bede358743945b6a8ea2e6bf19401bb00cd06"
+          assert rows
+          PY
+
       - name: Build canonical Cloud Reader worker
         run: cargo build -p chaptera-server --bin chaptera --jobs 2
 
@@ -209,6 +227,8 @@ jobs:
         if: always()
         with:
           name: publisher-visual-golden-supplemental-receipt
-          path: target/publisher-visual-supplemental/summary.json
+          path: |
+            target/publisher-visual-supplemental/summary.json
+            target/publisher-visual-supplemental/grouped-image-projection-05.json
           if-no-files-found: error
           retention-days: 90

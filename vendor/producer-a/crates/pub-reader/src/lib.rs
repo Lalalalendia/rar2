@@ -80,7 +80,10 @@ pub use family_classifier::{
     PubFamilyClassification, PubFamilyConfidence, PubFamilyProfile, PubFamilyReason,
     PubReaderRoute, classify_pub_family,
 };
-use grouped_projection::{coordinate_rect_i128, project_grouped_object_shape, project_rect_trunc};
+use grouped_projection::{
+    coordinate_rect_i128, grouped_object_target_page_trace, project_grouped_object_shape,
+    project_rect_trunc,
+};
 pub use guide_bridge::{
     PubGroundedGuideBuild, PubGuideObservation, PubGuideProjectionDiagnostic,
     materialize_grounded_guides,
@@ -1117,8 +1120,17 @@ pub fn build_mature_0x2c_from_streams(
                             reason: error.to_string(),
                         }
                     } else {
+                        let (target_page_id, group_ancestry) = grouped_object_target_page_trace(
+                            parent_seq,
+                            &references,
+                            &page_seq_to_id,
+                        );
                         PubBridgeDiagnostic::GroupedImageProjectionUnavailable {
                             seq_num,
+                            target_page_id,
+                            image_slot: image_slot
+                                .expect("grouped image identity requires exact image slot"),
+                            group_ancestry,
                             reason: error.to_string(),
                         }
                     });
