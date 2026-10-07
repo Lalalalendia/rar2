@@ -1,6 +1,7 @@
 name: Rar public boundary guard
 
 on:
+  # fanout: global-pr-required
   pull_request:
 
 concurrency:
