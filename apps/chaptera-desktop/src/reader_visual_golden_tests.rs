@@ -6,6 +6,9 @@
 
 use super::*;
 
+#[path = "reader_cross_backend_parity_tests.rs"]
+mod cross_backend_parity;
+
 struct GoldenPageOnlyApp {
     visual: ViewerGeometryDocument,
     page_index: usize,
