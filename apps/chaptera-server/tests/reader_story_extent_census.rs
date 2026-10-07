@@ -85,9 +85,7 @@ fn sample_newsletter_story_extent_mismatch_census() {
             let cause = if text.scalar_start != 0 {
                 if text.scalar_end > story_len {
                     "nonzero_end_beyond_story"
-                } else if fragment_len
-                    != text.scalar_end.saturating_sub(text.scalar_start)
-                {
+                } else if fragment_len != text.scalar_end.saturating_sub(text.scalar_start) {
                     "nonzero_fragment_len_mismatch"
                 } else {
                     let slice_matches = story
