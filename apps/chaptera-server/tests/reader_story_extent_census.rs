@@ -10,16 +10,16 @@ use sha2::{Digest, Sha256};
 #[test]
 #[ignore = "requires CHAPTERA_READER_SCENE_PROBE_PUB and CHAPTERA_READER_SCENE_PROBE_SHA256"]
 fn sample_newsletter_story_extent_mismatch_census() {
-    let path = env::var("CHAPTERA_READER_SCENE_PROBE_PUB")
-        .expect("CHAPTERA_READER_SCENE_PROBE_PUB");
-    let expected_sha256 = env::var("CHAPTERA_READER_SCENE_PROBE_SHA256")
-        .expect("CHAPTERA_READER_SCENE_PROBE_SHA256");
+    let path =
+        env::var("CHAPTERA_READER_SCENE_PROBE_PUB").expect("CHAPTERA_READER_SCENE_PROBE_PUB");
+    let expected_sha256 =
+        env::var("CHAPTERA_READER_SCENE_PROBE_SHA256").expect("CHAPTERA_READER_SCENE_PROBE_SHA256");
     let bytes = fs::read(path).expect("read probe PUB");
     let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
     assert_eq!(actual_sha256, expected_sha256);
 
-    let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
-        .expect("open probe PUB");
+    let bundle =
+        open_pub_bundle(&bytes, viewer_geometry_environment_v0_1()).expect("open probe PUB");
     let font = ExplicitRenderTextFontResourceV1 {
         resource_id: chaptera_desktop_fallback_font_resource::RESOURCE_ID,
         expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256,
@@ -35,12 +35,8 @@ fn sample_newsletter_story_extent_mismatch_census() {
     let mut scalar_gap_distribution = BTreeMap::<i64, usize>::new();
 
     for page_index in 0..bundle.geometry.document.pages.len() {
-        let plan = build_page_render_plan_with_text_layout_v1(
-            &bundle.geometry,
-            page_index,
-            &font,
-        )
-        .expect("build fallback render plan");
+        let plan = build_page_render_plan_with_text_layout_v1(&bundle.geometry, page_index, &font)
+            .expect("build fallback render plan");
 
         for node in &plan.nodes {
             let Some(text) = node.text.as_ref() else {
@@ -69,17 +65,19 @@ fn sample_newsletter_story_extent_mismatch_census() {
                 continue;
             };
 
-            let story_len = u32::try_from(story.text.chars().count())
-                .expect("bounded story length");
-            let fragment_len = u32::try_from(text.text.chars().count())
-                .expect("bounded fragment length");
+            let story_len =
+                u32::try_from(story.text.chars().count()).expect("bounded story length");
+            let fragment_len =
+                u32::try_from(text.text.chars().count()).expect("bounded fragment length");
             let frame_count = bundle
                 .geometry
                 .story_frames
                 .iter()
                 .filter(|frame| frame.story_id == text.story_id)
                 .count();
-            *story_frame_count_distribution.entry(frame_count).or_default() += 1;
+            *story_frame_count_distribution
+                .entry(frame_count)
+                .or_default() += 1;
             *scalar_gap_distribution
                 .entry(i64::from(story_len) - i64::from(text.scalar_end))
                 .or_default() += 1;
