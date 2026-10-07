@@ -7,6 +7,8 @@ on:
       - "vendor/producer-a/crates/pub-editor/src/**"
       - "vendor/producer-a/crates/pub-editor/tests/**"
       - "vendor/producer-a/crates/pub-editor/Cargo.toml"
+      - "vendor/producer-a/crates/pub-editor-authoring-core/src/**"
+      - "vendor/producer-a/crates/pub-editor-authoring-core/Cargo.toml"
       - "vendor/producer-a/Cargo.toml"
       - "tools/dev_fast_loop.py"
       - "tools/test_dev_fast_loop.py"

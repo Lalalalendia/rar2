@@ -608,15 +608,24 @@ def plan_for_paths(root: Path, paths: Iterable[str], *, mode: str = "edit") -> l
 
     for manifest in sorted(workspace_manifests):
         checks.append(Check(
-            "rustfmt-workspace",
-            ("cargo", "fmt", "--manifest-path", manifest, "--all", "--", "--check"),
-            f"workspace manifest/lock changed: {manifest}",
+            "rust-workspace-metadata",
+            (
+                "cargo",
+                "metadata",
+                "--manifest-path",
+                manifest,
+                "--no-deps",
+                "--format-version",
+                "1",
+            ),
+            f"validate changed workspace manifest/lock cheaply: {manifest}",
         ))
-        checks.append(Check(
-            "rust-check-workspace",
-            ("cargo", "check", "--manifest-path", manifest, "--workspace"),
-            f"workspace manifest/lock changed: {manifest}",
-        ))
+        if mode == "feature":
+            checks.append(Check(
+                "rust-check-workspace",
+                ("cargo", "check", "--manifest-path", manifest, "--workspace"),
+                f"feature-loop compile for changed workspace manifest/lock: {manifest}",
+            ))
 
     for manifest in sorted(package_manifests):
         checks.append(Check(
@@ -648,8 +657,8 @@ def plan_for_paths(root: Path, paths: Iterable[str], *, mode: str = "edit") -> l
         "python-syntax": 10,
         "node-syntax": 10,
         "workflow-yaml": 10,
-        "rustfmt-workspace": 10,
         "rustfmt-package": 10,
+        "rust-workspace-metadata": 20,
         "python-micro-test": 20,
         "node-micro-test": 20,
         "rust-check-workspace": 30,

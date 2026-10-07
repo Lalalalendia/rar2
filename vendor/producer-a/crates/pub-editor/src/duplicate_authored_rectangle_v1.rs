@@ -5,12 +5,12 @@
 //! persistence, Undo/Redo, AuthoredStack membership and replay stay owned by
 //! the existing CreateShape runtime.
 
-use crate::create_shape_runtime_v1::is_editor_created_uuid_v7_node_id;
 use crate::{
     AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1,
     AuthoredShapeTransformV1, EditorError, LengthEmu, NodeId, PageId, RectEmu,
     validate_authored_shape_runtime_v1,
 };
+use pub_editor_authoring_core::is_editor_created_uuid_v7_node_id;
 use std::fmt;
 
 pub const DUPLICATE_PLACEMENT_POLICY_V1: &str = "chaptera.duplicate-placement.10pt-down-right.v1";
