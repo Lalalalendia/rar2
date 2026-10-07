@@ -24,7 +24,7 @@
     }
 
     # Expose only the embedded Reader surface and its API.
-    @reader_surface path / /index.html /reader.css /reader-app.mjs /reader-model.mjs /render-v1.mjs /observability-v1.mjs /v1/reader/*
+    @reader_surface path / /favicon.svg /index.html /reader.css /reader-app.mjs /reader-model.mjs /render-v1.mjs /observability-v1.mjs /v1/reader/*
     handle @reader_surface {
         reverse_proxy {$CHAPTERA_READER_API:127.0.0.1:8080} {
             header_up X-Forwarded-For {remote_host}
