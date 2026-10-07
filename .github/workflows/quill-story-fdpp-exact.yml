@@ -12,6 +12,7 @@ on:
       - "!vendor/producer-a/crates/pub-reader/src/story_frame_analysis.rs"
       - "!vendor/producer-a/crates/pub-reader/src/typography_projection.rs"
       - "!vendor/producer-a/crates/pub-reader/src/direct_transform.rs"
+      - "!vendor/producer-a/crates/pub-reader/src/grouped_projection.rs"
       - "vendor/producer-a/crates/pub-reader/tests/story_provenance.rs"
       - "!vendor/producer-a/crates/pub-reader/src/bin/**"
   workflow_dispatch:
