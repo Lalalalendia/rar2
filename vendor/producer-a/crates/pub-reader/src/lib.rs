@@ -119,15 +119,6 @@ pub use page_projection::{
 #[cfg(test)]
 use page_projection::{build_effective_page_projection, resolve_scenario_page_ids_from_evidence};
 pub use paint_projection::resolve_bounded_effective_officeart_paint;
-pub use typography_projection::{
-    PubParagraphAlignment, PubParagraphAlignmentRun, PubParagraphFlowConstraint,
-    PubParagraphFlowRun, PubParagraphLineSpacing, PubParagraphLineSpacingRun,
-    PubScriptFontEntry, PubScriptFontEntryDisposition, PubScriptFontMap,
-    PubTypographyBooleanV1, PubTypographyRun, PubTypographySizeRun,
-};
-use typography_projection::{PubTypographyProjection, project_typography_catalog};
-#[cfg(test)]
-use typography_projection::project_effective_boolean_v1;
 use paint_projection::{
     FILL_FILLED_BIT, FILL_USE_FILLED_BIT, OFFICE_ART_FILL_BOOLEANS, OFFICE_ART_FILL_COLOR,
     OFFICE_ART_FILL_TYPE, OFFICE_ART_LINE_WIDTH, OFFICEART_SHAPE_TYPE_ELLIPSE,
@@ -215,6 +206,15 @@ pub use table_bridge::{
     PubTableUniformTextInsetSource, RAW_TYPE_TABLE, materialize_bounded_simple_table_cells,
     materialize_bounded_table_cells,
 };
+#[cfg(test)]
+use typography_projection::project_effective_boolean_v1;
+pub use typography_projection::{
+    PubParagraphAlignment, PubParagraphAlignmentRun, PubParagraphFlowConstraint,
+    PubParagraphFlowRun, PubParagraphLineSpacing, PubParagraphLineSpacingRun, PubScriptFontEntry,
+    PubScriptFontEntryDisposition, PubScriptFontMap, PubTypographyBooleanV1, PubTypographyRun,
+    PubTypographySizeRun,
+};
+use typography_projection::{PubTypographyProjection, project_typography_catalog};
 pub use wmf::{BoundedWmfMetafile, WmfMetafileInfo, bounded_wmf_metafile, validate_wmf_metafile};
 pub use wmf_preview::{
     LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, WmfPreviewRgba, rasterize_wmf_preview,
