@@ -45,9 +45,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          fixture="out/pinned1050/materialized/native/\${FIXTURE_SHA}.pub"
+          fixture="out/pinned1050/materialized/native/${FIXTURE_SHA}.pub"
           test -f "$fixture"
-          echo "\${FIXTURE_SHA}  \${fixture}" | sha256sum --check
+          echo "${FIXTURE_SHA}  ${fixture}" | sha256sum --check
 
       - name: Run source-free page-local text-layout census
         env:
