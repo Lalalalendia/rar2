@@ -14,6 +14,7 @@ on:
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
       - "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
       - "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
+      - "vendor/producer-a/crates/pub-reader/src/story_materialization.rs"
       - "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs"
       - "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs"
       - "tools/acquire_carlton_march_pair.py"
