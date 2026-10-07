@@ -3,6 +3,8 @@
 //! Story construction, PAGE roles, OfficeArt paint, geometry, tables and
 //! rendering remain outside this seam.
 
+// Routing measurement only: standalone comment; no Reader semantics changed.
+
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
