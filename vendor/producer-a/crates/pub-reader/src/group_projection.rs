@@ -55,11 +55,14 @@ pub(super) fn project_grouped_object_shape(
     escher_inventory: &SpContainerInventory,
     escher_by_contents_seq: &BTreeMap<u32, Vec<usize>>,
 ) -> Result<Option<GroupedObjectProjection>> {
-    if shape_has_nonzero_rotation(child_shape)
-        || shape_has_fsp_flag(child_shape, OFFICEART_FSP_FLIP_H)
-        || shape_has_fsp_flag(child_shape, OFFICEART_FSP_FLIP_V)
-    {
-        bail!("grouped child has rotation or flip");
+    if shape_has_nonzero_rotation(child_shape) {
+        bail!("grouped child has nonzero rotation");
+    }
+    if shape_has_fsp_flag(child_shape, OFFICEART_FSP_FLIP_H) {
+        bail!("grouped child has horizontal flip");
+    }
+    if shape_has_fsp_flag(child_shape, OFFICEART_FSP_FLIP_V) {
+        bail!("grouped child has vertical flip");
     }
 
     let child_anchor = child_shape
@@ -95,11 +98,14 @@ pub(super) fn project_grouped_object_shape(
         if current_shape.parent_group_shape_source.as_ref() != Some(&group_shape.source) {
             bail!("OfficeArt parent-group link does not match Contents ancestry");
         }
-        if shape_has_nonzero_rotation(group_shape)
-            || shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_H)
-            || shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_V)
-        {
-            bail!("group ancestor has rotation or flip");
+        if shape_has_nonzero_rotation(group_shape) {
+            bail!("group ancestor has nonzero rotation");
+        }
+        if shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_H) {
+            bail!("group ancestor has horizontal flip");
+        }
+        if shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_V) {
+            bail!("group ancestor has vertical flip");
         }
 
         let fspgr = group_shape
