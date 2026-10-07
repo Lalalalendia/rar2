@@ -414,6 +414,4 @@ impl EditorSession {
         self.redo.clear();
         self.validate_source_identity()?;
         Ok(operation)
-    }
-
-}
+    }}
