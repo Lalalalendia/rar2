@@ -365,9 +365,11 @@ fn discover_reader_partial_escherdelay_carrier(
     if inventory.source_sha256 != source_sha256 || inventory.source_byte_len != bytes.len() as u64 {
         return None;
     }
-    if inventory.entries.iter().any(|entry| {
-        matches!(entry.object_type, 1 | 2) && entry.descriptive_name.is_none()
-    }) {
+    if inventory
+        .entries
+        .iter()
+        .any(|entry| matches!(entry.object_type, 1 | 2) && entry.descriptive_name.is_none())
+    {
         return None;
     }
 
