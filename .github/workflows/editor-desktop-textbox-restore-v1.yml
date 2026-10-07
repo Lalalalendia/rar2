@@ -124,7 +124,7 @@ jobs:
       - name: Regress canonical CreateTextBox engine
         run: >-
           cargo test --manifest-path vendor/producer-a/Cargo.toml
-          -p pub-editor create_text_box -- --nocapture
+          -p pub-editor --test create_text_box_v1 -- --nocapture
 
   gui-real-pub:
     needs: classify
