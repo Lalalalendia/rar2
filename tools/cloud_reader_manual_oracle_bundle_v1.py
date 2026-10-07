@@ -534,3 +534,4 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 # CI baseline control: current-main Virginia text-layout census; no semantic change.
+# CI baseline synchronize trigger: still no semantic change.
