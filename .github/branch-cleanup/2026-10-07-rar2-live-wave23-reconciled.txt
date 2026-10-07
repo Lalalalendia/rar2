@@ -1,0 +1,6 @@
+# Wave 23 — reconciled stale/evidence-complete refs
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+research/recovery-damage-signature-v1-current 25a59a7a6008778f9e8ec04137845055d0ac28ba
+research/c2r-symbol-cross-build-rar2 a7b2aeabb0680c0f6b7127b31566005edb5dc40b
+ops/branch-gc-20261007-live-wave22-tail b0ed610a7beccb4f56c8fc6e8f824900ff17c777
