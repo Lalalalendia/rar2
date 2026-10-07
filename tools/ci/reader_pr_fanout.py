@@ -19,6 +19,7 @@ VIEWER_AUTHORING_PROJECTION = (
     "vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
 )
 READER_PAINT_PROJECTION = "vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
+READER_PAGE_PROJECTION = "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
 
 
 TEST_REGION_EVIDENCE_CANDIDATES = {
@@ -325,6 +326,7 @@ CLOUD_REFERENCE = (
     "crates/chaptera-viewer-render-plan/**",
     "vendor/producer-a/crates/pub-viewer/**",
     "vendor/producer-a/crates/pub-reader/src/lib.rs",
+    READER_PAGE_PROJECTION,
     "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs",
     "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs",
     "tools/acquire_carlton_march_pair.py",
@@ -357,6 +359,7 @@ VISUAL_BATCH01 = (
     "crates/chaptera-viewer-render-plan/**",
     "vendor/producer-a/crates/pub-viewer/**",
     "vendor/producer-a/crates/pub-reader/src/lib.rs",
+    READER_PAGE_PROJECTION,
 )
 
 TYPOGRAPHY_GOLDEN = (
@@ -603,7 +606,9 @@ def classify(
     ]
     result["visual_oracle"] = any(matches(path, VISUAL_ORACLE) for path in visual_paths)
     typography_paths = [
-        path for path in visual_paths if path != READER_PAINT_PROJECTION
+        path
+        for path in visual_paths
+        if path not in {READER_PAINT_PROJECTION, READER_PAGE_PROJECTION}
     ]
     result["typography_golden"] = any(
         matches(path, TYPOGRAPHY_GOLDEN) for path in typography_paths
