@@ -8,6 +8,7 @@ on:
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
       - "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
       - "vendor/producer-a/crates/pub-reader/src/publication_document.rs"
+      - "vendor/producer-a/crates/pub-reader/src/contents_access.rs"
       - "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
       - "vendor/producer-a/crates/pub-reader/src/master_bridge.rs"
       - "vendor/producer-a/crates/pub-reader/src/bin/master_projection_bridge_receipt.rs"
