@@ -115,29 +115,19 @@ pub use partial_root::{
     analyze_reader_partial_contents_prefix, build_reader_partial_root_stream_evidence,
 };
 use paint_projection::{
-    FILL_FILLED_BIT,
-    FILL_USE_FILLED_BIT,
-    LINE_LINE_BIT,
-    LINE_USE_LINE_BIT,
-    OFFICEART_SHAPE_TYPE_ELLIPSE,
-    OFFICE_ART_FILL_BOOLEANS,
-    OFFICE_ART_FILL_COLOR,
-    OFFICE_ART_LINE_BOOLEANS,
-    OFFICE_ART_LINE_COLOR,
-    OFFICE_ART_LINE_WIDTH,
-    admits_normative_2d_paint_defaults,
-    bounded_officeart_image_crop,
-    bounded_officeart_image_recolor,
-    bounded_officeart_rgb,
+    FILL_FILLED_BIT, FILL_USE_FILLED_BIT, OFFICEART_SHAPE_TYPE_ELLIPSE,
+    OFFICE_ART_FILL_BOOLEANS, OFFICE_ART_FILL_COLOR, OFFICE_ART_FILL_TYPE,
+    OFFICE_ART_LINE_WIDTH, admits_normative_2d_paint_defaults, bounded_officeart_image_crop,
+    bounded_officeart_image_recolor, bounded_officeart_rgb, effective_paint_has_dgg_authority,
+    explicit_officeart_paint, has_default_ellipse_geometry, has_default_line_geometry,
+    has_default_roundrect_geometry, has_explicit_officeart_paint_observation,
+    has_shape_local_dash_gel, paint_context_uses_officeart_scheme_color,
+    unique_explicit_officeart_scalar,
+};
+#[cfg(test)]
+use paint_projection::{
+    LINE_LINE_BIT, LINE_USE_LINE_BIT, OFFICE_ART_LINE_BOOLEANS, OFFICE_ART_LINE_COLOR,
     direct_officeart_rgb,
-    effective_paint_has_dgg_authority,
-    explicit_officeart_paint,
-    has_default_ellipse_geometry,
-    has_default_line_geometry,
-    has_default_roundrect_geometry,
-    has_explicit_officeart_paint_observation,
-    has_shape_local_dash_gel,
-    paint_context_uses_officeart_scheme_color,
 };
 pub use paint_projection::resolve_bounded_effective_officeart_paint;
 use pub_contents::{
