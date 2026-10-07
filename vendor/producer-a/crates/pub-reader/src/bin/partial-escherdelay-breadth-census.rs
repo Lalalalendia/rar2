@@ -5,8 +5,12 @@ use pub_escher::{
     RejectedDelayedBlipDisposition,
 };
 use pub_reader::{
-    build_reader_partial_escherdelay_evidence, probe_reader_salvage_candidate,
-    ReaderSalvageEligibility,
+    build_reader_partial_escherdelay_evidence, build_reader_partial_source_graph,
+    probe_reader_salvage_candidate,
+    recovered_resource::{
+        ReaderRecoveredResourcePlacementStatus, ReaderRecoveredResourcePreviewStatus,
+    },
+    ReaderPartialSourceFact, ReaderSalvageEligibility,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -18,7 +22,7 @@ use std::{
 };
 
 const INPUT_SCHEMA: &str = "chaptera.partial-escherdelay-cohort.v1";
-const OUTPUT_SCHEMA: &str = "chaptera.partial-escherdelay-breadth-census.v1";
+const OUTPUT_SCHEMA: &str = "chaptera.partial-escherdelay-breadth-census.v2";
 const ESCHER_DELAY_STREAM: &str = "/Escher/EscherDelayStm";
 const EXPECTED_DENOMINATOR: usize = 45;
 const EXPECTED_AUDIT_SHA256: &str =
@@ -65,8 +69,7 @@ struct CohortManifest {
 #[derive(Debug, Deserialize)]
 struct CohortSource {
     source_sha256: String,
-    #[serde(default)]
-    expected_stream_sid: Option<u32>,
+    expected_stream_sid: u32,
     #[serde(default)]
     expected_declared_len: Option<u64>,
     #[serde(default)]
@@ -79,13 +82,20 @@ struct CohortSource {
 #[serde(rename_all = "snake_case")]
 enum CensusOutcome {
     ImageSalvagePositive,
+    MetafileResourceOnlyPositive,
     StrictRasterZero,
-    PhysicalDiscoveryFail,
-    PhysicalPrefixFail,
+    ProductEvidenceUnavailable,
     ParserTerminalBeforeImage,
     UnsupportedOnly,
     IneligibleProductProbe,
     SourceMissing,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CensusDiscoveryMode {
+    LogicalPath,
+    UniqueRawCarrierNames,
 }
 
 #[derive(Debug, Serialize)]
@@ -93,6 +103,10 @@ struct CensusRow {
     source_sha256: String,
     source_copy_count: usize,
     reader_eligibility: Option<ReaderSalvageEligibility>,
+    discovery_mode: Option<CensusDiscoveryMode>,
+    logical_path_proven: Option<bool>,
+    physical_context_gap_count: Option<usize>,
+    raw_directory_rejected_active_entry_count: Option<usize>,
     stream_sid: Option<u32>,
     declared_len: Option<u64>,
     available_prefix_len: Option<u64>,
@@ -105,6 +119,9 @@ struct CensusRow {
     strict_validated_resource_count: usize,
     strict_validated_raster_count: usize,
     strict_validated_metafile_count: usize,
+    product_admitted_metafile_count: usize,
+    previewable_metafile_count: usize,
+    unowned_detached_metafile_count: usize,
     validated_but_product_unadmitted_count: usize,
     validated_kind_counts: BTreeMap<String, usize>,
     rejected_complete_blip_count: usize,
@@ -128,13 +145,23 @@ struct CensusSummary {
     manifest_source_count: usize,
     located_source_count: usize,
     missing_source_count: usize,
+    product_evidence_available_files: usize,
+    logical_path_proven_files: usize,
+    raw_carrier_files: usize,
+    total_physical_context_gaps: usize,
+    total_raw_directory_rejected_active_entries: usize,
     image_salvage_positive_files: usize,
+    product_admitted_metafile_files: usize,
+    metafile_only_product_positive_files: usize,
     total_scanned_records: u64,
     total_typed_blip_records: usize,
     total_reader_admissible_images: usize,
     total_strict_validated_resources: usize,
     total_strict_validated_rasters: usize,
     total_strict_validated_metafiles: usize,
+    total_product_admitted_metafiles: usize,
+    total_previewable_metafiles: usize,
+    total_unowned_detached_metafiles: usize,
     total_validated_but_product_unadmitted: usize,
     validated_kind_counts: BTreeMap<String, usize>,
     rejected_disposition_counts: BTreeMap<String, usize>,
@@ -149,10 +176,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
-}
-
-fn error_signature(error: &impl std::fmt::Display) -> String {
-    sha256_hex(error.to_string().as_bytes())
 }
 
 fn validate_sha256(value: &str) -> Result<String> {
@@ -185,9 +208,9 @@ fn collect_pub_paths(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 fn outcome_name(value: &CensusOutcome) -> &'static str {
     match value {
         CensusOutcome::ImageSalvagePositive => "image_salvage_positive",
+        CensusOutcome::MetafileResourceOnlyPositive => "metafile_resource_only_positive",
         CensusOutcome::StrictRasterZero => "strict_raster_zero",
-        CensusOutcome::PhysicalDiscoveryFail => "physical_discovery_fail",
-        CensusOutcome::PhysicalPrefixFail => "physical_prefix_fail",
+        CensusOutcome::ProductEvidenceUnavailable => "product_evidence_unavailable",
         CensusOutcome::ParserTerminalBeforeImage => "parser_terminal_before_image",
         CensusOutcome::UnsupportedOnly => "unsupported_only",
         CensusOutcome::IneligibleProductProbe => "ineligible_product_probe",
@@ -252,6 +275,10 @@ fn blank_row(source_sha256: String, source_copy_count: usize) -> CensusRow {
         source_sha256,
         source_copy_count,
         reader_eligibility: None,
+        discovery_mode: None,
+        logical_path_proven: None,
+        physical_context_gap_count: None,
+        raw_directory_rejected_active_entry_count: None,
         stream_sid: None,
         declared_len: None,
         available_prefix_len: None,
@@ -264,6 +291,9 @@ fn blank_row(source_sha256: String, source_copy_count: usize) -> CensusRow {
         strict_validated_resource_count: 0,
         strict_validated_raster_count: 0,
         strict_validated_metafile_count: 0,
+        product_admitted_metafile_count: 0,
+        previewable_metafile_count: 0,
+        unowned_detached_metafile_count: 0,
         validated_but_product_unadmitted_count: 0,
         validated_kind_counts: BTreeMap::new(),
         rejected_complete_blip_count: 0,
@@ -348,6 +378,9 @@ fn main() -> Result<()> {
     for mut source in manifest.sources {
         let sha = validate_sha256(&source.source_sha256)?;
         source.source_sha256 = sha.clone();
+        if source.expected_stream_sid == 0 {
+            bail!("manifest expected_stream_sid must be non-zero for {sha}");
+        }
         if let Some(prefix) = source.expected_prefix_sha256.as_deref() {
             source.expected_prefix_sha256 = Some(validate_sha256(prefix)?);
         }
@@ -394,72 +427,96 @@ fn main() -> Result<()> {
             continue;
         }
 
-        let discovered = match pub_cfb::discover_regular_stream_sid_reader(
-            Cursor::new(&bytes),
-            ESCHER_DELAY_STREAM,
-        ) {
-            Ok(value) => value,
-            Err(error) => {
-                row.error_signature_sha256 = Some(error_signature(&error));
-                row.outcome = CensusOutcome::PhysicalDiscoveryFail;
+        let evidence = match build_reader_partial_escherdelay_evidence(&bytes, &probe) {
+            Some(value) => value,
+            None => {
+                row.error_signature_sha256 = Some(sha256_hex(
+                    b"reader_partial_escherdelay_evidence_unavailable",
+                ));
+                row.outcome = CensusOutcome::ProductEvidenceUnavailable;
                 verify_source_unchanged(path, &source_sha256)?;
                 row.source_modified = Some(false);
                 rows.push(row);
                 continue;
             }
         };
-        if discovered.source_sha256 != source_sha256
-            || discovered.logical_path != ESCHER_DELAY_STREAM
-        {
-            bail!("physical discovery identity mismatch for {source_sha256}");
+        if evidence.source_sha256 != source_sha256 || evidence.logical_path != ESCHER_DELAY_STREAM {
+            bail!("Reader product evidence identity mismatch for {source_sha256}");
         }
-        if expected_source
-            .expected_stream_sid
-            .is_some_and(|expected_sid| expected_sid != discovered.stream_sid)
-        {
+        if expected_source.expected_stream_sid != evidence.stream_sid {
             bail!("historical stream SID mismatch for {source_sha256}");
         }
         if expected_source
             .expected_declared_len
-            .is_some_and(|expected_len| expected_len != discovered.declared_len)
+            .is_some_and(|expected_len| expected_len != evidence.declared_len)
         {
             bail!("historical declared length mismatch for {source_sha256}");
         }
-        row.stream_sid = Some(discovered.stream_sid);
-        row.declared_len = Some(discovered.declared_len);
 
-        let recovered = match pub_cfb::recover_regular_stream_prefix_by_sid_reader_with_expected_sha(
-            Cursor::new(&bytes),
-            discovered.stream_sid,
-            &source_sha256,
-        ) {
-            Ok(value) => value,
-            Err(error) => {
-                row.error_signature_sha256 = Some(error_signature(&error));
-                row.outcome = CensusOutcome::PhysicalPrefixFail;
-                verify_source_unchanged(path, &source_sha256)?;
-                row.source_modified = Some(false);
-                rows.push(row);
-                continue;
+        let discovery_mode = if evidence.logical_path_proven {
+            CensusDiscoveryMode::LogicalPath
+        } else {
+            CensusDiscoveryMode::UniqueRawCarrierNames
+        };
+        row.discovery_mode = Some(discovery_mode);
+        row.logical_path_proven = Some(evidence.logical_path_proven);
+        row.physical_context_gap_count = Some(evidence.physical_context_gap_count);
+        row.raw_directory_rejected_active_entry_count =
+            Some(evidence.raw_directory_rejected_active_entry_count);
+        row.stream_sid = Some(evidence.stream_sid);
+        row.declared_len = Some(evidence.declared_len);
+        row.available_prefix_len = Some(evidence.available_prefix_len);
+        row.prefix_sha256 = Some(evidence.prefix_sha256.clone());
+        row.physical_status = Some(evidence.physical_stream_status);
+        row.truncation_reason = evidence.truncation_reason;
+
+        let recovered = match discovery_mode {
+            CensusDiscoveryMode::LogicalPath => {
+                pub_cfb::recover_regular_stream_prefix_by_sid_reader_with_expected_sha(
+                    Cursor::new(&bytes),
+                    evidence.stream_sid,
+                    &source_sha256,
+                )
+                .with_context(|| {
+                    format!(
+                        "re-recover strict product-selected EscherDelay SID for {source_sha256}"
+                    )
+                })?
+            }
+            CensusDiscoveryMode::UniqueRawCarrierNames => {
+                pub_cfb::recover_truncated_regular_stream_prefix_by_sid_reader_with_expected_sha(
+                    Cursor::new(&bytes),
+                    evidence.stream_sid,
+                    &source_sha256,
+                )
+                .with_context(|| {
+                    format!("re-recover raw product-selected EscherDelay SID for {source_sha256}")
+                })?
             }
         };
+        if recovered.source_modified
+            || recovered.stream_sid != evidence.stream_sid
+            || recovered.declared_len != evidence.declared_len
+            || recovered.available_prefix_len != evidence.available_prefix_len
+            || recovered.prefix_sha256 != evidence.prefix_sha256
+            || recovered.status != evidence.physical_stream_status
+            || recovered.truncation_reason != evidence.truncation_reason
+        {
+            bail!("Reader product evidence / census re-recovery mismatch for {source_sha256}");
+        }
         if expected_source
             .expected_available_prefix_len
-            .is_some_and(|expected_len| expected_len != recovered.available_prefix_len)
+            .is_some_and(|expected_len| expected_len != evidence.available_prefix_len)
         {
             bail!("historical available prefix length mismatch for {source_sha256}");
         }
         if expected_source
             .expected_prefix_sha256
             .as_deref()
-            .is_some_and(|expected_sha| expected_sha != recovered.prefix_sha256)
+            .is_some_and(|expected_sha| expected_sha != evidence.prefix_sha256)
         {
             bail!("historical prefix SHA mismatch for {source_sha256}");
         }
-        row.available_prefix_len = Some(recovered.available_prefix_len);
-        row.prefix_sha256 = Some(recovered.prefix_sha256.clone());
-        row.physical_status = Some(recovered.status);
-        row.truncation_reason = recovered.truncation_reason;
 
         let inventory = inspect_validated_delayed_blips_prefix(
             StreamPath(ESCHER_DELAY_STREAM.into()),
@@ -480,9 +537,6 @@ fn main() -> Result<()> {
             .iter()
             .filter(|validated| is_metafile_kind(validated.kind))
             .count();
-        row.validated_but_product_unadmitted_count = row
-            .strict_validated_resource_count
-            .saturating_sub(row.strict_validated_raster_count);
         row.terminal_gap = inventory.terminal_gap.clone();
 
         for validated in &inventory.records {
@@ -502,10 +556,52 @@ fn main() -> Result<()> {
                 .or_default() += 1;
         }
 
-        let evidence = build_reader_partial_escherdelay_evidence(&bytes, &probe);
-        row.reader_admissible_image_count = evidence
+        let graph = build_reader_partial_source_graph(&bytes, &probe).ok();
+        row.reader_admissible_image_count = graph.as_ref().map_or(0, |value| {
+            value
+                .facts
+                .iter()
+                .filter(|fact| matches!(fact, ReaderPartialSourceFact::VerifiedImage { .. }))
+                .count()
+        });
+        if graph.as_ref().is_some_and(|value| {
+            value
+                .recovered_resources
+                .iter()
+                .any(|resource| !is_metafile_kind(resource.kind))
+        }) {
+            bail!(
+                "unexpected non-metafile recovered resource in EscherDelay V1 census for {}",
+                source_sha256
+            );
+        }
+        row.product_admitted_metafile_count = graph
             .as_ref()
-            .map_or(0, |value| value.validated_images.len());
+            .map_or(0, |value| value.recovered_resources.len());
+        row.previewable_metafile_count = graph.as_ref().map_or(0, |value| {
+            value
+                .recovered_resources
+                .iter()
+                .filter(|resource| {
+                    !matches!(
+                        resource.preview_status,
+                        ReaderRecoveredResourcePreviewStatus::NotProven
+                    )
+                })
+                .count()
+        });
+        row.unowned_detached_metafile_count = graph.as_ref().map_or(0, |value| {
+            value
+                .recovered_resources
+                .iter()
+                .filter(|resource| {
+                    matches!(
+                        resource.placement_status,
+                        ReaderRecoveredResourcePlacementStatus::DetachedOwnershipNotProven
+                    )
+                })
+                .count()
+        });
 
         if row.reader_admissible_image_count != row.strict_validated_raster_count {
             bail!(
@@ -515,6 +611,22 @@ fn main() -> Result<()> {
                 row.reader_admissible_image_count
             );
         }
+        if row.product_admitted_metafile_count != row.strict_validated_metafile_count {
+            bail!(
+                "strict metafile parser/product projection disagreement for {}: {} vs {}",
+                source_sha256,
+                row.strict_validated_metafile_count,
+                row.product_admitted_metafile_count
+            );
+        }
+        row.validated_but_product_unadmitted_count = row
+            .strict_validated_resource_count
+            .checked_sub(
+                row.reader_admissible_image_count
+                    .checked_add(row.product_admitted_metafile_count)
+                    .context("product-admitted resource count overflow")?,
+            )
+            .context("product admitted more resources than strict validation produced")?;
 
         let rejected_only_unsupported = row.rejected_disposition_counts.keys().all(|key| {
             matches!(
@@ -527,6 +639,8 @@ fn main() -> Result<()> {
 
         row.outcome = if row.reader_admissible_image_count > 0 {
             CensusOutcome::ImageSalvagePositive
+        } else if row.product_admitted_metafile_count > 0 {
+            CensusOutcome::MetafileResourceOnlyPositive
         } else if has_unsupported_only_evidence && rejected_only_unsupported {
             CensusOutcome::UnsupportedOnly
         } else if row.terminal_gap.is_some() && row.scanned_record_count == 0 {
@@ -554,6 +668,9 @@ fn main() -> Result<()> {
     let mut total_strict_validated_resources = 0usize;
     let mut total_strict_validated_rasters = 0usize;
     let mut total_strict_validated_metafiles = 0usize;
+    let mut total_product_admitted_metafiles = 0usize;
+    let mut total_previewable_metafiles = 0usize;
+    let mut total_unowned_detached_metafiles = 0usize;
     let mut total_validated_but_product_unadmitted = 0usize;
 
     for row in &rows {
@@ -582,6 +699,9 @@ fn main() -> Result<()> {
         total_strict_validated_resources += row.strict_validated_resource_count;
         total_strict_validated_rasters += row.strict_validated_raster_count;
         total_strict_validated_metafiles += row.strict_validated_metafile_count;
+        total_product_admitted_metafiles += row.product_admitted_metafile_count;
+        total_previewable_metafiles += row.previewable_metafile_count;
+        total_unowned_detached_metafiles += row.unowned_detached_metafile_count;
         total_validated_but_product_unadmitted += row.validated_but_product_unadmitted_count;
     }
 
@@ -590,9 +710,42 @@ fn main() -> Result<()> {
         .filter(|row| !matches!(row.outcome, CensusOutcome::SourceMissing))
         .count();
     let missing_source_count = EXPECTED_DENOMINATOR - located_source_count;
+    let product_evidence_available_files = rows
+        .iter()
+        .filter(|row| row.discovery_mode.is_some())
+        .count();
+    let logical_path_proven_files = rows
+        .iter()
+        .filter(|row| row.logical_path_proven == Some(true))
+        .count();
+    let raw_carrier_files = rows
+        .iter()
+        .filter(|row| {
+            matches!(
+                row.discovery_mode,
+                Some(CensusDiscoveryMode::UniqueRawCarrierNames)
+            )
+        })
+        .count();
+    let total_physical_context_gaps = rows
+        .iter()
+        .map(|row| row.physical_context_gap_count.unwrap_or(0))
+        .sum();
+    let total_raw_directory_rejected_active_entries = rows
+        .iter()
+        .map(|row| row.raw_directory_rejected_active_entry_count.unwrap_or(0))
+        .sum();
     let image_salvage_positive_files = rows
         .iter()
         .filter(|row| matches!(row.outcome, CensusOutcome::ImageSalvagePositive))
+        .count();
+    let product_admitted_metafile_files = rows
+        .iter()
+        .filter(|row| row.product_admitted_metafile_count > 0)
+        .count();
+    let metafile_only_product_positive_files = rows
+        .iter()
+        .filter(|row| matches!(row.outcome, CensusOutcome::MetafileResourceOnlyPositive))
         .count();
 
     let summary = CensusSummary {
@@ -609,13 +762,23 @@ fn main() -> Result<()> {
         manifest_source_count: EXPECTED_DENOMINATOR,
         located_source_count,
         missing_source_count,
+        product_evidence_available_files,
+        logical_path_proven_files,
+        raw_carrier_files,
+        total_physical_context_gaps,
+        total_raw_directory_rejected_active_entries,
         image_salvage_positive_files,
+        product_admitted_metafile_files,
+        metafile_only_product_positive_files,
         total_scanned_records,
         total_typed_blip_records,
         total_reader_admissible_images,
         total_strict_validated_resources,
         total_strict_validated_rasters,
         total_strict_validated_metafiles,
+        total_product_admitted_metafiles,
+        total_previewable_metafiles,
+        total_unowned_detached_metafiles,
         total_validated_but_product_unadmitted,
         validated_kind_counts,
         rejected_disposition_counts,
@@ -673,9 +836,12 @@ mod tests {
         assert_eq!(manifest.authority.historical_verified_records, 188);
 
         let mut unique_sources = BTreeSet::new();
+        let mut stream_sid_counts = BTreeMap::<u32, usize>::new();
         for source in manifest.sources {
             let source_sha = validate_sha256(&source.source_sha256).expect("source SHA-256");
             assert!(unique_sources.insert(source_sha));
+            assert!(source.expected_stream_sid > 0);
+            *stream_sid_counts.entry(source.expected_stream_sid).or_default() += 1;
             assert!(source.expected_declared_len.is_some_and(|value| value > 0));
             assert!(source
                 .expected_available_prefix_len
@@ -694,5 +860,6 @@ mod tests {
         }
 
         assert_eq!(unique_sources.len(), EXPECTED_DENOMINATOR);
+        assert_eq!(stream_sid_counts, BTreeMap::from([(11, 39), (13, 6)]));
     }
 }
