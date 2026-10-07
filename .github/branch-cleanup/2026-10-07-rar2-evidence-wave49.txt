@@ -1,0 +1,5 @@
+# Wave 49 — completed grouped-stack measurement chain
+measure/newsletter-group-stack-carrier-02 ab74736b4627dd52a07cde1ce18dcbb7b3232ada
+measure/newsletter-group-child-order-01 ab74736b4627dd52a07cde1ce18dcbb7b3232ada
+measure/grouped-stack-product-acceptance-01 52bd114a83e6d5dfbbcb944dc0c1b52a987a2442
+ops/branch-gc-20261007-evidence-wave48 32d8a8479b1b1d472bc4d0a139e2179c9b433452
