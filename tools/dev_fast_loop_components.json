@@ -116,18 +116,6 @@
           "pub-editor",
           "--test",
           "image_crop_v1"
-        ],
-        [
-          "cargo",
-          "test",
-          "--manifest-path",
-          "vendor/producer-a/Cargo.toml",
-          "-p",
-          "pub-editor",
-          "--lib",
-          "asset_reachability_tests::current_image_resources",
-          "--",
-          "--nocapture"
         ]
       ]
     },
