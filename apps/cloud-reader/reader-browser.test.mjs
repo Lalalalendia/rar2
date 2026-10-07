@@ -266,6 +266,11 @@ try {
     assert.equal(Number(await page.locator("#pages svg").first().getAttribute("height")), 1140);
     assert.equal(await page.locator("#pages svg").first().getAttribute("viewBox"), viewBox);
     await page.locator("#zoom-select").selectOption("fit");
+    assert.equal(
+      Number(await page.locator("#pages svg").first().getAttribute("width")),
+      960,
+      "automatic fit must stay comfortably bounded on a wide desktop"
+    );
     await page.locator("#page-select").selectOption("0");
   });
 
