@@ -39,6 +39,56 @@ impl<'a> GroupedProjectionContext<'a> {
             escher_by_contents_seq,
         }
     }
+
+    pub(super) fn image_projection_unavailable(
+        &self,
+        seq_num: u32,
+        first_group_seq: u32,
+        image_slot: Option<u32>,
+        reason: String,
+    ) -> PubBridgeDiagnostic {
+        let (target_page_id, group_ancestry) =
+            grouped_object_target_page_trace(first_group_seq, self);
+        PubBridgeDiagnostic::GroupedImageProjectionUnavailable {
+            seq_num,
+            target_page_id,
+            image_slot: image_slot.expect("grouped image identity requires exact image slot"),
+            group_ancestry,
+            reason,
+        }
+    }
+}
+
+fn grouped_object_target_page_trace(
+    first_group_seq: u32,
+    context: &GroupedProjectionContext<'_>,
+) -> (Option<PageId>, Vec<u32>) {
+    let mut current_group_seq = first_group_seq;
+    let mut seen = BTreeSet::new();
+    let mut ancestry = Vec::new();
+
+    for _ in 0..64 {
+        if !seen.insert(current_group_seq) {
+            return (None, ancestry);
+        }
+        ancestry.push(current_group_seq);
+
+        let Some(reference) = context.references.get(&current_group_seq) else {
+            return (None, ancestry);
+        };
+        let Some(parent_seq) = single_parent_seq(reference) else {
+            return (None, ancestry);
+        };
+        if let Some(&page_id) = context.page_seq_to_id.get(&parent_seq) {
+            return (Some(page_id), ancestry);
+        }
+        if context.references.get(&parent_seq).and_then(single_raw_type) != Some(RAW_TYPE_GROUP) {
+            return (None, ancestry);
+        }
+        current_group_seq = parent_seq;
+    }
+
+    (None, ancestry)
 }
 
 pub(super) fn project_grouped_object_shape(

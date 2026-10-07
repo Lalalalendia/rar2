@@ -96,6 +96,11 @@ pub enum PubBridgeDiagnostic {
     },
     GroupedImageProjectionUnavailable {
         seq_num: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_page_id: Option<PageId>,
+        image_slot: u32,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        group_ancestry: Vec<u32>,
         reason: String,
     },
     GroupedPrimitiveProjected {

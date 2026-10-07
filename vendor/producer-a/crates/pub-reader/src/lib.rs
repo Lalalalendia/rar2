@@ -742,10 +742,9 @@ pub fn build_mature_0x2c_from_streams(
                             reason: error.to_string(),
                         }
                     } else {
-                        PubBridgeDiagnostic::GroupedImageProjectionUnavailable {
-                            seq_num,
-                            reason: error.to_string(),
-                        }
+                        grouped_context.image_projection_unavailable(
+                            seq_num, parent_seq, image_slot, error.to_string(),
+                        )
                     });
                     None
                 }
