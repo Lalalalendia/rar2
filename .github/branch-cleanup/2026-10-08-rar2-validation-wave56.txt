@@ -1,0 +1,3 @@
+# Validation Wave 56 — absorbed exact-1050 IMAGE acceptance
+validation/legacy22-image0002-1050-01 5fe700c79ddac264d326c62e41055820f98fecb8
+ops/branch-gc-20261008-validation-wave55 15f88d4360ddada433bd72276af30c3a8c5e5e13
