@@ -185,6 +185,7 @@ use pub_quill::{
     QuillTypographyValueSource, bounded_mcld_text_frame_vertical_alignment,
     bounded_mcld_text_insets,
 };
+use publication_document::{PublicationDocumentBootstrap, materialize_publication_document};
 use quill_admission::{QuillAdmission, admit_quill_projection_inputs};
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
@@ -215,7 +216,6 @@ pub use source_graph_model::{
 };
 pub use source_paint_order::{PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1, PubSourcePagePaintOrderV1};
 use source_paint_order::{index_escher_by_contents_seq, source_page_paint_orders_v1};
-use publication_document::{PublicationDocumentBootstrap, materialize_publication_document};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
 pub use story_frame_analysis::{
