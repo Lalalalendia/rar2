@@ -184,8 +184,8 @@ const browserErrors = [];
 const unexpectedRequests = [];
 async function open(page, scenario = {}, name = "private-name.pub", bytes = original) {
   nextScenario = scenario;
+  await page.locator("#pub-file").focus();
   await page.locator("#pub-file").setInputFiles({ name, mimeType: "application/octet-stream", buffer: bytes });
-  await page.locator("#open-file").click();
 }
 async function status(page, pattern) {
   await page.waitForFunction((source) => new RegExp(source).test(document.querySelector("#status").textContent), pattern.source);
@@ -216,11 +216,22 @@ try {
     await open(page);
     await status(page, /Opened with display limitations/);
     assert.equal(await page.locator("#reader").isVisible(), true);
+    assert.equal(await page.locator("#open-file").isVisible(), false);
+    assert.deepEqual(
+      await page.evaluate(() => [
+        getComputedStyle(document.documentElement).overflow,
+        getComputedStyle(document.body).overflow,
+        getComputedStyle(document.querySelector("#viewer")).overflowY
+      ]),
+      ["hidden", "hidden", "auto"]
+    );
+    await page.locator("#open-details").click();
     assert.equal(await page.locator("#compatibility-report").isVisible(), true);
     assert.equal(await page.locator("#compatibility-state").textContent(), "Needs review");
     assert.match(await page.locator("#compatibility-summary").textContent(), new RegExp(sourceSha));
     assert.match(await page.locator("#compatibility-routes").textContent(), /not advertised/);
     assert.match(await page.locator("#compatibility-limitations").textContent(), /exact configured font resource is unavailable/);
+    await page.locator("#close-details").click();
     assert.equal(await page.locator("#pages svg").count(), 2);
     assert.equal(await page.locator("#pages svg").first().getAttribute("data-page-id"), "p1");
     const guest = requests.filter((request) => request.path.startsWith("/v1/reader/guest-sessions"));
@@ -276,6 +287,9 @@ try {
   });
 
   await check("only admitted inline images are downloadable and limitations are readable", async () => {
+    if (!await page.locator("#details-dialog").evaluate((dialog) => dialog.open)) {
+      await page.locator("#open-details").click();
+    }
     await page.locator("#assets-summary").click();
     assert.equal(await page.locator("#assets a").count(), 1);
     const downloadPromise = page.waitForEvent("download");
@@ -290,8 +304,8 @@ try {
     assert.match(await page.locator("#limitations").textContent(), /Synthetic UI fixture/);
     assert.doesNotMatch(await page.locator("#limitations").textContent(), /configured font resource was admitted/);
     await page.locator("#text-panel > summary").click();
-    await page.locator("#reader").scrollIntoViewIfNeeded();
     await page.screenshot({ path: join(output, "desktop.png"), fullPage: true });
+    await page.locator("#close-details").click();
   });
 
   await check("mobile chrome fits and portrait pages keep their aspect ratio", async () => {
@@ -337,13 +351,16 @@ try {
       await open(page, { open: openResponse });
       await status(page, /Choose another|Choose a \.PUB|Keep the original/);
       assert.equal(await page.locator("#reader").isVisible(), false);
-      assert.equal(await page.locator("#compatibility-report").isVisible(), openResponse.classification !== "rejected");
+      assert.equal(
+        await page.locator("#compatibility-report").evaluate((element) => element.hidden),
+        openResponse.classification === "rejected"
+      );
       assert.equal(await page.locator("#pages svg").count(), 0);
     }
     for (const [code, expected] of [[413, /too large/], [429, /busy/], [403, /Access/], [410, /no longer available/], [503, /temporarily unavailable/]]) {
       await open(page, { issueStatus: code });
       await status(page, expected);
-      assert.equal(await page.locator("#open-file").isDisabled(), false);
+      assert.equal(await page.locator("#pub-file").isEnabled(), true);
     }
     const before = requests.length;
     await open(page, {}, "empty.pub", Buffer.alloc(0));
@@ -459,7 +476,7 @@ try {
     assert.equal(await page.locator("#contribution-dialog").evaluate((dialog) => dialog.open), false);
     assert.equal(await page.locator("#contribution-panel").isVisible(), false);
     assert.equal(await page.locator("#contribution-filename").textContent(), "");
-    assert.equal(await page.evaluate(() => document.activeElement.id), "open-file");
+    assert.equal(await page.evaluate(() => document.activeElement.id), "pub-file");
     assert.equal(requests.length, before);
     await page.setViewportSize({ width: 1280, height: 900 });
   });
@@ -575,7 +592,7 @@ try {
     assert.equal(await page.evaluate(() => document.activeElement.id), "cancel-open");
     await page.keyboard.press("Enter");
     await status(page, /cancelled/);
-    assert.equal(await page.evaluate(() => document.activeElement.id), "open-file");
+    assert.equal(await page.evaluate(() => document.activeElement.id), "pub-file");
     await open(page, { open: { scene: fixture("Current document") } });
     await status(page, /Opened with/);
     release();
@@ -610,9 +627,10 @@ try {
 
   await check("saved documents use account credentials and remain read-only", async () => {
     nextScenario = {};
-    await page.locator(".saved > summary").click();
-    await page.locator("#document-id").fill("saved/document");
-    await page.locator("#document-id").press("Enter");
+    await page.evaluate(() => {
+      document.querySelector("#document-id").value = "saved/document";
+      document.querySelector("#open-document").click();
+    });
     await status(page, /Opened saved document/);
     assert.equal(await page.locator("#story-text").inputValue(), "Saved document.");
     const saved = requests.at(-1);
