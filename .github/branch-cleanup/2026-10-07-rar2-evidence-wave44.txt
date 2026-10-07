@@ -1,0 +1,4 @@
+# Wave 44 — terminal Newsletter/Virginia measurement refs
+measure/newsletter-stack-admission-01 861305d64511900bf027476c4100952e3496aef3
+measure/virginia-table-materialized-sibling-01 a024d71107671839ba982688e4ed0aabbae10463
+ops/branch-gc-20261007-evidence-wave43 eddfb2f7f9843d283b64dfafccff1a4f706f71d3
