@@ -504,6 +504,14 @@ def evaluate(
                 f"head: {actual}\n"
                 "new feature logic must move to an owned module/crate"
             )
+        elif actual < ceiling:
+            errors.append(
+                "MONOLITH CEILING NOT RATCHETED\n"
+                f"source: {path}\n"
+                f"recorded ceiling: {ceiling}\n"
+                f"head: {actual}\n"
+                "lower max_lines to the exact current size in the same PR"
+            )
 
     return errors
 
