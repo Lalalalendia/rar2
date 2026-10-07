@@ -28,6 +28,7 @@ UPSTREAM = {"pub-core", "pub-cfb", "pub-contents", "pub-escher", "pub-model", "p
 VENDOR_PACKAGE_SPECS = {
     "pub-model": "pub-model@0.1.0-donor",
 }
+PAGE_PROJECTION_SOURCE = "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
 
 
 def changed_paths(base: str, head: str) -> list[str]:
@@ -212,6 +213,25 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
                     ],
                 }
             )
+
+    if PAGE_PROJECTION_SOURCE in paths:
+        commands.append(
+            {
+                "id": "pub-reader-master-bridge-check",
+                "argv": [
+                    "cargo",
+                    "check",
+                    "--manifest-path",
+                    "vendor/producer-a/Cargo.toml",
+                    "-p",
+                    "pub-reader",
+                    "--bin",
+                    "master_projection_bridge_receipt",
+                    "--features",
+                    "master-authority-bridge",
+                ],
+            }
+        )
 
     if render_plan:
         commands.extend(
