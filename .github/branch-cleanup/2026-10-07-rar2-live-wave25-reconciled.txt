@@ -1,0 +1,7 @@
+# Wave 25 — reconciled research/measurement/ops refs
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+research/quill-story-early-text-boundary-01 546127631f7e077bca7aa5053f32aa3eae387897
+measure/pub-reader-source-paint-order-routing-01 4e34a86aeeae6cc1ba9507519b835efeee5a4005
+ci/reap-provider-zombies-01 81eb1bd7cf9ba5b2d9df80b11598431fa9cef0fb
+ops/branch-gc-20261007-live-wave24-restacked 8a29fb6ab83d1c24e9426a9f9680f0044d0b2e43
