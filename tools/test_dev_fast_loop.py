@@ -320,6 +320,50 @@ def test_feature_mode_adds_package_unit_tests_once() -> None:
         )
         unit = [check for check in checks if check.kind == "rust-unit-tests"]
         assert len(unit) == 1
+        assert unit[0].command[-1] == "--lib"
+
+
+def test_feature_mode_discovers_binary_targets_and_respects_disabled_tests() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        manifest = root / "app/Cargo.toml"
+        write(manifest, """[package]
+name='app'
+version='0.1.0'
+edition='2024'
+[[bin]]
+name='editor'
+path='src/main.rs'
+[[bin]]
+name='receipt'
+path='src/bin/receipt.rs'
+test=false
+""")
+        write(root / "app/src/main.rs", "fn main() {}\n")
+        write(root / "app/src/bin/receipt.rs", "fn main() {}\n")
+        write(root / "app/src/bin/probe/main.rs", "fn main() {}\n")
+        checks = mod.plan_for_paths(root, ["app/src/main.rs"], mode="feature")
+        unit = [check for check in checks if check.kind == "rust-unit-tests"]
+        assert [check.command for check in unit] == [(
+            "cargo", "test", "--manifest-path", "app/Cargo.toml",
+            "--bin", "editor", "--bin", "probe",
+        )]
+
+        write(manifest, "[package]\nname='app'\nversion='0.1.0'\nautobins=false\n")
+        assert mod.rust_unit_test_selectors(manifest) == ()
+        write(manifest, "[package]\nname='app'\nversion='0.1.0'\n")
+        assert mod.rust_unit_test_selectors(manifest) == (
+            "--bin", "app", "--bin", "probe", "--bin", "receipt",
+        )
+
+
+def test_explicit_library_keeps_library_routing_without_default_path() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        manifest = Path(raw) / "Cargo.toml"
+        write(manifest, "[package]\nname='app'\nversion='0.1.0'\nautolib=false\n[lib]\npath='core.rs'\n")
+        assert mod.rust_unit_test_selectors(manifest) == ("--lib",)
+        write(manifest, "[package]\nname='app'\nversion='0.1.0'\n[lib]\ntest=false\n")
+        assert mod.rust_unit_test_selectors(manifest) == ()
 
 
 def main() -> None:
@@ -331,6 +375,8 @@ def main() -> None:
     test_rust_cache_auto_off_require_and_git_common_dir()
     test_run_receipt_records_timings_and_cache_state()
     test_feature_mode_adds_package_unit_tests_once()
+    test_feature_mode_discovers_binary_targets_and_respects_disabled_tests()
+    test_explicit_library_keeps_library_routing_without_default_path()
     print("dev fast loop tests: ok")
 
 

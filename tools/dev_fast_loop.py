@@ -277,6 +277,44 @@ def manifest_kind(manifest: Path) -> str | None:
     return None
 
 
+def rust_unit_test_selectors(manifest: Path) -> tuple[str, ...]:
+    """Keep the existing library loop, or select testable binary targets.
+
+    Cargo packages need not have a library. Discovering targets from the
+    manifest and Cargo's conventional paths keeps planning runtime-independent.
+    """
+    parsed = _manifest_table(manifest)
+    package = parsed.get("package", {})
+    library = parsed.get("lib", {})
+    if library.get("test", True) and (
+        "lib" in parsed
+        or (package.get("autolib", True) and (manifest.parent / "src/lib.rs").is_file())
+    ):
+        return ("--lib",)
+
+    explicit = parsed.get("bin", [])
+    claimed_paths = {item.get("path") for item in explicit if item.get("path")}
+    named = {
+        item["name"]: item.get("test", True)
+        for item in explicit
+        if isinstance(item.get("name"), str)
+    }
+    if package.get("autobins", True):
+        inferred: dict[str, str] = {}
+        name = package.get("name")
+        if isinstance(name, str) and (manifest.parent / "src/main.rs").is_file():
+            inferred[name] = "src/main.rs"
+        binary_dir = manifest.parent / "src/bin"
+        for path in sorted(binary_dir.glob("*.rs")):
+            inferred[path.stem] = path.relative_to(manifest.parent).as_posix()
+        for path in sorted(binary_dir.glob("*/main.rs")):
+            inferred[path.parent.name] = path.relative_to(manifest.parent).as_posix()
+        for name, path in inferred.items():
+            if name not in named and path not in claimed_paths:
+                named[name] = True
+    return tuple(part for name in sorted(named) if named[name] for part in ("--bin", name))
+
+
 def nearest_package_manifest(root: Path, repo_path: str) -> Path | None:
     target = root / repo_path
     cursor = target.parent if target.name != "Cargo.toml" else target.parent
@@ -450,10 +488,11 @@ def plan_for_paths(root: Path, paths: Iterable[str], *, mode: str = "edit") -> l
             ("cargo", "check", "--manifest-path", manifest),
             f"compile affected Rust package: {manifest}",
         ))
-        if mode == "feature":
+        selectors = rust_unit_test_selectors(root / manifest)
+        if mode == "feature" and selectors:
             checks.append(Check(
                 "rust-unit-tests",
-                ("cargo", "test", "--manifest-path", manifest, "--lib"),
+                ("cargo", "test", "--manifest-path", manifest, *selectors),
                 f"feature-loop unit tests for affected Rust package: {manifest}",
             ))
 
