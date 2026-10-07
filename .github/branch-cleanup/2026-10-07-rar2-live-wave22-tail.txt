@@ -1,0 +1,8 @@
+# Wave 22 — merged tail + completed GC owners
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+authoring/picture-rotate-01 470c9e1752b0792c43a69f4392d866fb9f554a18
+authoring/line-current-main-02 76b7a1665775bead44c9dd53067a995cf0d438e1
+ops/branch-gc-20261006-live-wave19-exact-merged 8d45c136c6bbb2228f0ae0d09a8e1e8e9dd72340
+ops/branch-gc-20261007-live-wave20-merged 839e877e427feac33c78980428d31ce9797a850b
+ops/branch-gc-20261007-live-wave21-merged f8a5c7ddff5e3afa1f62394b89aad3f3ca5283db
