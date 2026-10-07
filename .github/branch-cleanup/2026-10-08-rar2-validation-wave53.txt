@@ -1,0 +1,5 @@
+# Wave 53 — reconciled validation controls
+validation/legacy-ole-wmf-objectkind-01 bb153cdb06a2970777345b610fe43c7da2ced84f
+validation/layout-samplenewsletter-current-main-01 e8f5d05a77ee03864328b3841ec7ff2472532bc5
+validation/story65-1050-head 397e058fcd117fa6ab62f69df2fc5d50235fcada
+ops/branch-gc-20261008-validation-wave52 c74739d6fdfe84f19b5ffe99f6c1e7509b8ffadb
