@@ -62,7 +62,33 @@ echo "=== chaptera-reader ==="
 systemctl --no-pager --full status chaptera-reader.service || true
 echo
 echo "=== loopback health ==="
-curl -fsS http://127.0.0.1:8080/live >/dev/null
+health_url="http://127.0.0.1:8080/live"
+health_attempts=30
+health_ready=0
+for attempt in $(seq 1 "${health_attempts}"); do
+  if curl -fsS --max-time 2 "${health_url}" >/dev/null 2>&1; then
+    health_ready=1
+    break
+  fi
+
+  if ! systemctl is-active --quiet chaptera-reader.service; then
+    echo "Reader service stopped before becoming healthy (attempt ${attempt}/${health_attempts})" >&2
+    systemctl --no-pager --full status chaptera-reader.service >&2 || true
+    journalctl -u chaptera-reader.service -n 100 --no-pager >&2 || true
+    exit 1
+  fi
+
+  echo "Reader health is not ready yet (attempt ${attempt}/${health_attempts}); waiting 1s"
+  sleep 1
+done
+
+if [[ "${health_ready}" -ne 1 ]]; then
+  echo "Reader did not become healthy within ${health_attempts}s" >&2
+  systemctl --no-pager --full status chaptera-reader.service >&2 || true
+  journalctl -u chaptera-reader.service -n 100 --no-pager >&2 || true
+  exit 1
+fi
+
 echo "Reader process is healthy on 127.0.0.1:8080"
 echo
 echo "Next: issue TLS with certbot for reader.chaptera.online after DNS points here."

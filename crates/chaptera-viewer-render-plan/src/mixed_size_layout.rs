@@ -305,7 +305,6 @@ struct MixedSizeLayoutEvaluationV1 {
     cursor: u32,
     used_height_emu: i64,
     lines: Vec<RenderResolvedTextLineV1>,
-    stop_cause: Option<&'static str>,
 }
 
 fn evaluate_mixed_size_text_layout_v1(
@@ -359,19 +358,14 @@ fn evaluate_mixed_size_text_layout_v1(
     let mut used_height_emu = 0_i64;
     let mut line_index = 0_u32;
     let mut lines = Vec::new();
-    let mut stop_cause = None;
 
     while cursor < fragment.scalar_end {
         let mut chosen = None;
-        let mut saw_candidate = false;
-        let mut saw_width_fit = false;
-        let mut reached_mandatory = false;
         for candidate in policy
             .candidates
             .iter()
             .filter(|candidate| candidate.scalar_boundary > cursor)
         {
-            saw_candidate = true;
             let evaluated = if cursor_safe_without_reshaping
                 && candidate.safe_without_reshaping
                 && candidate.kind == BoundedBreakKind::Allowed
@@ -398,26 +392,15 @@ fn evaluate_mixed_size_text_layout_v1(
             let fits_height = used_height_emu
                 .checked_add(evaluated.line_height_emu)
                 .is_some_and(|height| height <= bounds.height.get());
-            saw_width_fit |= fits_width;
             if fits_width && fits_height {
                 chosen = Some((evaluated, candidate.safe_without_reshaping));
             }
             if candidate.kind == BoundedBreakKind::Mandatory {
-                reached_mandatory = true;
                 break;
             }
         }
 
         let Some((chosen, chosen_boundary_safe_without_reshaping)) = chosen else {
-            stop_cause = Some(if saw_width_fit {
-                "height_capacity_exhausted"
-            } else if reached_mandatory {
-                "mandatory_boundary_no_fit"
-            } else if saw_candidate {
-                "width_no_legal_break"
-            } else {
-                "other_fail_closed"
-            });
             break;
         };
         used_height_emu = used_height_emu
@@ -456,7 +439,6 @@ fn evaluate_mixed_size_text_layout_v1(
         cursor,
         used_height_emu,
         lines,
-        stop_cause,
     })
 }
 
@@ -475,13 +457,7 @@ pub(super) fn resolve_mixed_size_text_layout_v1(
         };
 
     if evaluation.cursor != fragment.scalar_end {
-        let has_visible_partial_line = evaluation
-            .lines
-            .iter()
-            .any(|line| line.scalar_end > line.scalar_start && line.measured_width_emu > 0);
-        if !has_visible_partial_line || evaluation.stop_cause != Some("height_capacity_exhausted") {
-            return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
-        }
+        return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
     }
 
     let max_font_size_emu = evaluation
@@ -558,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_size_partial_layout_admits_only_after_visible_height_exhaustion() {
+    fn mixed_size_partial_layout_stays_fail_closed_after_visible_height_exhaustion() {
         let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
         let fingerprint = font_fingerprint_sha256(bytes);
         let font = ExplicitRenderTextFontResourceV1 {
@@ -586,13 +562,13 @@ mod tests {
             &fingerprint,
             None,
         );
-        assert!(matches!(
+        assert_eq!(
             partial.disposition,
-            RenderTextLayoutDispositionV1::SharedResolved { .. }
-        ));
-        assert_eq!(partial.lines.len(), 1);
-        assert_eq!(partial.lines[0].text, "aa");
-        assert_eq!(partial.lines[0].consumed_scalar_end, 3);
+            RenderTextLayoutDispositionV1::BackendFallback {
+                reason: RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete,
+            }
+        );
+        assert!(partial.lines.is_empty());
 
         let zero_line_bounds = RectEmu::new(
             LengthEmu::ZERO,
