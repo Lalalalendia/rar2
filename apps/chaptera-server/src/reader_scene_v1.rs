@@ -406,7 +406,8 @@ fn preview_text_style_from_render_text(
     }
 
     let mut cursor = text.scalar_start;
-    let mut font_size_emu = None;
+    let mut first_font_size_emu = None;
+    let mut mixed_font_size = false;
     for run in &text.typography {
         if run.scalar_start != cursor
             || run.scalar_end <= run.scalar_start
@@ -419,10 +420,10 @@ fn preview_text_style_from_render_text(
                 return None;
             }
             let size = i64::from(run.text_size_emu);
-            match font_size_emu {
-                None => font_size_emu = Some(size),
+            match first_font_size_emu {
+                None => first_font_size_emu = Some(size),
                 Some(existing) if existing == size => {}
-                Some(_) => font_size_emu = None,
+                Some(_) => mixed_font_size = true,
             }
         }
         cursor = run.scalar_end;
@@ -431,6 +432,7 @@ fn preview_text_style_from_render_text(
         return None;
     }
 
+    let font_size_emu = (!mixed_font_size).then_some(first_font_size_emu).flatten();
     let color_rgb = uniform_text_color_rgb_v1(text);
     if font_size_emu.is_none() && color_rgb.is_none() {
         None
@@ -1252,6 +1254,13 @@ pub fn from_viewer_geometry_with_fonts(
                 return Err(format!(
                     "duplicate direct render-plan text binding for node {node_id}"
                 ));
+            }
+            if let Some(style) = node
+                .text
+                .as_ref()
+                .and_then(preview_text_style_from_render_text)
+            {
+                preview_text_style_by_node.insert(node_id.clone(), style);
             }
             if let Some(text_bounds) = node.text_bounds.as_ref() {
                 let mapped_bounds = rect_from_serialized(text_bounds)?;
