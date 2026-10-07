@@ -67,8 +67,9 @@ if 'if (file) openFile(file);' not in APP:
 if "const AUTO_MAX_PAGE_WIDTH = 960;" not in APP:
     raise SystemExit("cloud-reader automatic fit must keep the desktop page comfortably bounded")
 
-if "\\n<link rel=\"stylesheet\"" in HTML:
-    raise SystemExit("cloud-reader HTML must not expose a literal \\n before the stylesheet link")
+head = HTML.split("</head>", 1)[0]
+if "\\n" in head:
+    raise SystemExit("cloud-reader HTML head must not contain a literal backslash-n sequence")
 
 for needle in [
     'property="og:url" content="https://reader.chaptera.online/"',
