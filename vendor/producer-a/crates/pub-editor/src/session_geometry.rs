@@ -450,4 +450,3 @@ pub(super) fn validate_resize_nodes_transition(
     }
     Ok(())
 }
-
