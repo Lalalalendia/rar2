@@ -27,11 +27,11 @@ mod mature_wmf;
 mod ole_presentation;
 mod page_projection;
 mod paint_projection;
-mod source_paint_order;
 mod partial_root;
 mod resolve;
 mod salvage;
 mod salvage_authority;
+mod source_paint_order;
 mod story_provenance;
 mod structural_base;
 mod table_bridge;
@@ -133,12 +133,6 @@ use paint_projection::{
 use paint_projection::{
     LINE_LINE_BIT, LINE_USE_LINE_BIT, OFFICE_ART_LINE_BOOLEANS, OFFICE_ART_LINE_COLOR,
 };
-pub use source_paint_order::{
-    PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1, PubSourcePagePaintOrderV1,
-};
-use source_paint_order::{
-    append_grouped_carrier_participants, index_escher_by_contents_seq, source_page_paint_orders_v1,
-};
 pub use partial_root::{
     READER_PARTIAL_CONTENTS_SEMANTIC_EVIDENCE_SCHEMA_V1,
     READER_PARTIAL_ROOT_STREAM_EVIDENCE_SCHEMA_V1, ReaderPartialContentsBoundary,
@@ -197,6 +191,10 @@ pub use salvage_authority::{
     typed_corruption_authority,
 };
 use serde::{Deserialize, Serialize};
+pub use source_paint_order::{PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1, PubSourcePagePaintOrderV1};
+use source_paint_order::{
+    append_grouped_carrier_participants, index_escher_by_contents_seq, source_page_paint_orders_v1,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
 pub use story_provenance::has_exact_mature_quill_story_identity_v1;
