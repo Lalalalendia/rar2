@@ -4,6 +4,8 @@
 //! bounded picture crop/recolor/color helpers. It deliberately does not own
 //! Reader graph construction, page-role projection, typography, or geometry.
 
+// CI ownership control: this leaf is routed independently from unrelated Reader domains.
+
 use super::{
     BTreeSet, MatureColorScheme, OFFICE_ART_PROPERTY_CROP_FROM_BOTTOM,
     OFFICE_ART_PROPERTY_CROP_FROM_LEFT, OFFICE_ART_PROPERTY_CROP_FROM_RIGHT,
