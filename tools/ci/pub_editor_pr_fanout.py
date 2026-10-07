@@ -16,7 +16,11 @@ PUB_EDITOR_LIB = PUB_EDITOR_PREFIX + "src/lib.rs"
 
 
 def is_pub_editor_domain_path(path: str) -> bool:
-    return (\n        path.startswith(PUB_EDITOR_PREFIX)\n        or path.startswith(PUB_EDITOR_AUTHORING_CORE_PREFIX)\n        or path.startswith(PUB_EDITOR_TABLE_CORE_PREFIX)\n    )
+    return (
+        path.startswith(PUB_EDITOR_PREFIX)
+        or path.startswith(PUB_EDITOR_AUTHORING_CORE_PREFIX)
+        or path.startswith(PUB_EDITOR_TABLE_CORE_PREFIX)
+    )
 
 # Deliberately tiny first allowlist. These modules are feature-owned and are
 # not consumed by the Desktop Continuity V2 acceptance transaction.
