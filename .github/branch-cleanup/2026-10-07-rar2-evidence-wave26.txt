@@ -1,0 +1,10 @@
+# Wave 26 — closed measurement refs with durable terminal authority
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+measure/reader-obsolete-cancel-264 d162b23091f62fe2276cf063ce2a2259a347159b
+measure/sparse-textbox-dgg-control-01 69d3065c85f83dabec55bfbac4e097c0bf64f292
+measure/sparse-textbox-dgg-treatment-01 29cdd2e740a65ad83fe28c9b3d8fa4ddd4ce97eb
+measure/local-caladea-source-font-02 7e6b5682b2917c642c3d1f55a68684e4c9be8c92
+measure/picture-recolor-802-same-base-control 96e996090da3b6fb4b732ceef7d594a6f1e8e092
+ops/branch-gc-20261007-evidence-wave24 34220cd982748474484765946d31c0e34a739bec
+ops/branch-gc-20261007-evidence-wave25 64f08dec0a3d091d33ffc64c7e9513a14868af5a
