@@ -95,6 +95,14 @@ def path_matches(path: str, pattern: str) -> bool:
 
 def select_contracts(changed_paths: Iterable[str], contracts: Iterable[Contract]) -> list[Contract]:
     normalized = sorted({path.strip().replace("\\", "/") for path in changed_paths if path.strip()})
+    contracts = list(contracts)
+    infrastructure_paths = {
+        "tools/perf/contracts.json",
+        "tools/perf/rust_perf_contract_router.py",
+    }
+    if any(path in infrastructure_paths for path in normalized):
+        return contracts
+
     selected = []
     for contract in contracts:
         if any(path_matches(path, pattern) for path in normalized for pattern in contract.patterns):
