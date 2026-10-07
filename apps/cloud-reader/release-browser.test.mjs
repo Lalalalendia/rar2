@@ -173,7 +173,6 @@ try {
   });
   await page.goto(origin);
   await page.locator("#pub-file").setInputFiles({ name: "synthetic.pub", mimeType: "application/octet-stream", buffer: fixtureBytes });
-  await page.locator("#open-file").click();
   await page.waitForFunction(() => document.querySelector("#status").textContent.startsWith("Opened with display limitations"));
   assert.equal(await page.locator("#pages svg").count(), 1);
   assert.equal(await page.locator("#story-text").inputValue(), "Released Reader preview.");
