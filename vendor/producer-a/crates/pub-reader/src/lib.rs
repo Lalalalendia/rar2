@@ -194,7 +194,9 @@ pub use salvage_authority::{
 };
 use serde::{Deserialize, Serialize};
 pub use source_paint_order::{PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1, PubSourcePagePaintOrderV1};
-use source_paint_order::{index_escher_by_contents_seq, source_page_paint_orders_v1};
+use source_paint_order::{
+    grouped_object_target_page_trace, index_escher_by_contents_seq, source_page_paint_orders_v1,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
 pub use story_frame_analysis::{
@@ -814,6 +816,11 @@ pub enum PubBridgeDiagnostic {
     },
     GroupedImageProjectionUnavailable {
         seq_num: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_page_id: Option<PageId>,
+        image_slot: u32,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        group_ancestry: Vec<u32>,
         reason: String,
     },
     GroupedPrimitiveProjected {
@@ -1520,8 +1527,17 @@ pub fn build_mature_0x2c_from_streams(
                             reason: error.to_string(),
                         }
                     } else {
+                        let (target_page_id, group_ancestry) = grouped_object_target_page_trace(
+                            parent_seq,
+                            &references,
+                            &page_seq_to_id,
+                        );
                         PubBridgeDiagnostic::GroupedImageProjectionUnavailable {
                             seq_num,
+                            target_page_id,
+                            image_slot: image_slot
+                                .expect("grouped image identity requires exact image slot"),
+                            group_ancestry,
                             reason: error.to_string(),
                         }
                     });
@@ -2317,11 +2333,14 @@ fn project_grouped_object_shape(
     escher_inventory: &SpContainerInventory,
     escher_by_contents_seq: &BTreeMap<u32, Vec<usize>>,
 ) -> Result<Option<GroupedObjectProjection>> {
-    if shape_has_nonzero_rotation(child_shape)
-        || shape_has_fsp_flag(child_shape, OFFICEART_FSP_FLIP_H)
-        || shape_has_fsp_flag(child_shape, OFFICEART_FSP_FLIP_V)
-    {
-        bail!("grouped child has rotation or flip");
+    if shape_has_nonzero_rotation(child_shape) {
+        bail!("grouped child has nonzero rotation");
+    }
+    if shape_has_fsp_flag(child_shape, OFFICEART_FSP_FLIP_H) {
+        bail!("grouped child has horizontal flip");
+    }
+    if shape_has_fsp_flag(child_shape, OFFICEART_FSP_FLIP_V) {
+        bail!("grouped child has vertical flip");
     }
 
     let child_anchor = child_shape
@@ -2357,11 +2376,14 @@ fn project_grouped_object_shape(
         if current_shape.parent_group_shape_source.as_ref() != Some(&group_shape.source) {
             bail!("OfficeArt parent-group link does not match Contents ancestry");
         }
-        if shape_has_nonzero_rotation(group_shape)
-            || shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_H)
-            || shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_V)
-        {
-            bail!("group ancestor has rotation or flip");
+        if shape_has_nonzero_rotation(group_shape) {
+            bail!("group ancestor has nonzero rotation");
+        }
+        if shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_H) {
+            bail!("group ancestor has horizontal flip");
+        }
+        if shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_V) {
+            bail!("group ancestor has vertical flip");
         }
 
         let fspgr = group_shape
