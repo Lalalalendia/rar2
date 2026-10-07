@@ -1,0 +1,8 @@
+# Wave 30 — closed measurement/control refs with durable terminal evidence
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+ci/rust-test-binary-reuse-01 6ccd6e0ddd05c1fe4b9fb7456f2ca0616445281b
+ci/pub-editor-fast-benchmark-01 ccd0bb13836251c46dfe264af1691a5c9226f027
+measure/pub-reader-grouped-projection-fanout-01 719e9eae58fe8f6366df6619910f0e8ead216325
+ci/control-1795-cloud-census 2d60d7d9e0f40287f535785dbecbe1fb39f4069d
+ops/branch-gc-20261007-evidence-wave29 3b820d4fef9e25e879219e3794cd8309d2e78894
