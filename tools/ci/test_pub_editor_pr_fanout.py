@@ -354,6 +354,11 @@ pub fn shared_core() {}
     )
     assert run is True and reason == "unknown_or_core_pub_editor_path"
 
+    run, reason = classify(
+        ["vendor/producer-a/crates/pub-editor-geometry-core/src/batch_transition_v1.rs"]
+    )
+    assert run is True and reason == "unknown_or_core_pub_editor_path"
+
     for path in (
         "apps/chaptera-desktop/src/acceptance_v2.rs",
         "vendor/producer-a/crates/pub-odg/src/lib.rs",

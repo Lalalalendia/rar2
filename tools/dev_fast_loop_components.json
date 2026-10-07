@@ -102,6 +102,31 @@
       ]
     },
     {
+      "name": "pub-editor geometry core unit",
+      "paths": [
+        "vendor/producer-a/crates/pub-editor-geometry-core/src/*.rs"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor-geometry-core",
+          "--lib"
+        ],
+        [
+          "cargo",
+          "check",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor"
+        ]
+      ]
+    },
+    {
       "name": "pub-editor geometry session",
       "paths": [
         "vendor/producer-a/crates/pub-editor/src/session_geometry.rs"

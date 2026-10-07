@@ -65,6 +65,9 @@ pub use imported_paragraph_flow_v1::{
 };
 pub use imported_paragraphs_v1::{ImportedParagraphProjectionErrorV1, ImportedParagraphV1};
 pub use link_text_frame_tail_v1::TextFrameLinkTransitionV1;
+pub use pub_editor_geometry_core::{
+    MAX_MOVE_NODES_V1, MAX_RESIZE_NODES_V1, MoveNodeBatchEntry, ResizeNodeBatchEntry,
+};
 pub use pub_editor_table_core::{
     SetTableTrackExtentErrorV1, SetTableTrackExtentHistoryV1, TABLE_TRACK_EXTENT_HISTORY_V1,
     TableTrackExtentHistoryErrorV1, TableTrackExtentPlanV1, TableTrackTargetV1,
@@ -175,8 +178,6 @@ pub const EDITOR_PROJECT_VERSION_V0_20: &str = "pub-editor-v0.20";
 pub const EDITOR_PROJECT_VERSION_V0_21: &str = "pub-editor-v0.21";
 pub const EDITOR_PROJECT_VERSION_V0_22: &str = "pub-editor-v0.22";
 pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_22;
-pub const MAX_MOVE_NODES_V1: usize = 1024;
-pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
 pub const PUB_MATURE_0X2C_SCHEMA_FENCE: &str = "pub-family-0x2c";
 
@@ -247,20 +248,6 @@ fn replace_scalar_range_text(
     after.push_str(replacement_text);
     after.push_str(&text[end..]);
     Some(after)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MoveNodeBatchEntry {
-    pub node_id: NodeId,
-    pub before: RectEmu,
-    pub after: RectEmu,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResizeNodeBatchEntry {
-    pub node_id: NodeId,
-    pub before: RectEmu,
-    pub after: RectEmu,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

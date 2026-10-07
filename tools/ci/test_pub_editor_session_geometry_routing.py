@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(".github/workflows")
 GEOMETRY = "vendor/producer-a/crates/pub-editor/src/session_geometry.rs"
+GEOMETRY_CORE = "vendor/producer-a/crates/pub-editor-geometry-core/**"
 NEG_GEOMETRY = f"!{GEOMETRY}"
 
 
@@ -29,8 +30,10 @@ for name in (
     "resize-nodes-v1.yml",
 ):
     assert GEOMETRY in pr_block(name), name
+    assert GEOMETRY_CORE not in pr_block(name), name
 
 assert "vendor/producer-a/crates/pub-editor/src/**" in pr_block("pub-editor-fast-pr.yml")
+assert "vendor/producer-a/crates/pub-editor-geometry-core/src/**" in pr_block("pub-editor-fast-pr.yml")
 
 for name in (
     "authoring-authored-stack-lifecycle-v1.yml",
@@ -50,5 +53,6 @@ for name in (
     "w2-project-fork-receipt-v1.yml",
 ):
     assert NEG_GEOMETRY in pr_block(name), name
+    assert GEOMETRY_CORE not in pr_block(name), name
 
 print("pub-editor session geometry routing contract: PASS")
