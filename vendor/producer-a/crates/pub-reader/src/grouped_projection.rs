@@ -1,4 +1,5 @@
 //! Bounded production projection for grouped OfficeArt objects.
+//! Post-child-rotation steady-state measurement control.
 //!
 //! This module owns ChildAnchor/FSPGR/ClientAnchor composition for bounded
 //! group ancestry. Direct page-local geometry and graph orchestration remain
