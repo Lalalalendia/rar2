@@ -41,10 +41,17 @@ jobs:
             pub-editor-full-v1-${{ runner.os }}-rust-1.94.1-${{ hashFiles('vendor/producer-a/Cargo.lock') }}-
 
       - name: Check formatting
-        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
+        run: |
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor-authoring-core -- --check
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
 
-      - name: Lint all pub-editor targets
-        run: cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets -- -D warnings
+      - name: Lint all editor targets
+        run: |
+          cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor-authoring-core --all-targets -- -D warnings
+          cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets -- -D warnings
+
+      - name: Run complete authoring-core regression
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor-authoring-core
 
       - name: Run complete pub-editor regression
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor
