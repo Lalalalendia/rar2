@@ -28,7 +28,8 @@ pub use create_line_runtime_v1::{
 pub use create_shape_runtime_v1::{
     AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1,
     AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
-    CreateShapeRuntimeValidationError, Srgb8V1, validate_authored_shape_runtime_v1,
+    CreateShapeRuntimeValidationError, Srgb8V1, is_editor_created_uuid_v7_node_id,
+    validate_authored_shape_runtime_v1,
 };
 pub use create_table_runtime_v1::{
     AUTHORED_TABLE_SENTINEL_CONTENTS_SEQ_NUM_V1, AUTHORED_TABLE_SENTINEL_TEXT_ID_V1,
