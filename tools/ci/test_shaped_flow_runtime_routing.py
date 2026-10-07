@@ -64,7 +64,22 @@ require_all(
     (LIB, FONT, TYPO, PAGES, RESOURCES, FIXED_BIN),
 )
 
-# One broad fail-closed owner intentionally remains: central runtime conformance.
-require_all("editor-desktop-shaped-flow-runtime-v1.yml", (BROAD,))
+forbid("editor-desktop-shaped-flow-runtime-v1.yml", BROAD)
+require_all(
+    "editor-desktop-shaped-flow-runtime-v1.yml",
+    (CARGO, LIB, FONT, TYPO, PAGES, RESOURCES),
+)
+
+expected_library_sources = {
+    f"{RUNTIME}/src/{path.name}"
+    for path in Path(RUNTIME, "src").glob("*.rs")
+}
+central = text("editor-desktop-shaped-flow-runtime-v1.yml")
+missing_central = sorted(path for path in expected_library_sources if path not in central)
+if missing_central:
+    raise SystemExit(
+        "editor-desktop-shaped-flow-runtime-v1.yml: top-level library source has no central owner: "
+        + ", ".join(missing_central)
+    )
 
 print("shaped-flow runtime routing contract: PASS")
