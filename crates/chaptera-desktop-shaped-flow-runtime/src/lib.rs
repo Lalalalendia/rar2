@@ -5,8 +5,8 @@ use pub_editor::{
     FormatValueV1, ImportedParagraphFlowConstraintV1,
 };
 use pub_layout::{
-    BoundedLayoutEnvironment, BoundedParagraphFlowConstraint,
-    BoundedParagraphFlowRun, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
+    BoundedLayoutEnvironment, BoundedParagraphFlowConstraint, BoundedParagraphFlowRun,
+    BoundedShapedFlowRuntime, BoundedShapedFlowScene,
     BoundedShapingRuntime, font_fingerprint_sha256, project_bounded,
     resolve_bounded_shaped_flow_with_paragraph_flow,
 };
@@ -672,9 +672,7 @@ mod tests {
         // direct source-free assertion on the stable error contract by using a
         // tiny helper rather than requiring a network/native fixture here.
         assert_eq!(
-            current_fixed_pdf::qualified_page_set_error_v1(&[])
-                .unwrap_err()
-                .code,
+            current_fixed_pdf::qualified_page_set_error_v1(&[]).unwrap_err().code,
             "qualified_pages_missing"
         );
     }
