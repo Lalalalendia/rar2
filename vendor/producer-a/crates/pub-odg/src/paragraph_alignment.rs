@@ -324,6 +324,7 @@ pub fn add_paragraph_scoped_alignment_to_odg(
                 ParagraphScopedAlignmentValueV1::Left => "left",
                 ParagraphScopedAlignmentValueV1::Center => "center",
                 ParagraphScopedAlignmentValueV1::Right => "right",
+                ParagraphScopedAlignmentValueV1::Justify => "justify",
             };
             writeln!(
                 style_xml,
@@ -671,6 +672,35 @@ mod tests {
             loss.origin == Some(story_id.into_canonical())
                 && loss.feature == STORY_PARAGRAPH_ALIGNMENT_FEATURE
         }));
+    }
+
+    #[test]
+    fn writes_scoped_justify_as_odf_justify() {
+        let story_id = story(3);
+        let frame_id = frame(4);
+        let export_plan = plan(story_id);
+        let mut package = package_with_paragraphs(&export_plan, frame_id, &["One"]);
+        let placement = OdgParagraphScopedAlignmentPlacement {
+            story_id,
+            paragraphs: vec![scoped(
+                9,
+                story_id,
+                0,
+                3,
+                ParagraphScopedAlignmentValueV1::Justify,
+            )],
+            frame_ids: vec![frame_id],
+        };
+
+        add_paragraph_scoped_alignment_to_odg(
+            &export_plan,
+            &mut package,
+            std::slice::from_ref(&placement),
+        )
+        .expect("paragraph-scoped ODG justify");
+
+        let xml = std::str::from_utf8(&package.parts[0].content).expect("content XML");
+        assert_eq!(xml.matches("fo:text-align=\"justify\"").count(), 1);
     }
 
     #[test]

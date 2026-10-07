@@ -382,14 +382,21 @@ fn effective_line_alignment_v1(
                 format!("current ParagraphId alignment could not be resolved: {error}"),
             )
         })?;
-    Ok(match effective.effective {
+    Ok(rigid_line_alignment_v1(effective.effective))
+}
+
+fn rigid_line_alignment_v1(
+    effective: Option<EffectiveParagraphAlignmentValueV1>,
+) -> Option<ParagraphAlignmentV1> {
+    match effective {
         Some(EffectiveParagraphAlignmentValueV1::Left) => Some(ParagraphAlignmentV1::Left),
         Some(EffectiveParagraphAlignmentValueV1::Center) => Some(ParagraphAlignmentV1::Center),
         Some(EffectiveParagraphAlignmentValueV1::Right) => Some(ParagraphAlignmentV1::Right),
-        Some(EffectiveParagraphAlignmentValueV1::InterWord)
+        Some(EffectiveParagraphAlignmentValueV1::Justify)
+        | Some(EffectiveParagraphAlignmentValueV1::InterWord)
         | Some(EffectiveParagraphAlignmentValueV1::Distribute)
         | None => None,
-    })
+    }
 }
 
 fn current_story_line_offsets_v1(
@@ -934,6 +941,18 @@ mod tests {
             fs::read(path).expect("re-read pinned 51318.pub"),
             original,
             "current typography projection must not mutate source PUB bytes"
+        );
+    }
+
+    #[test]
+    fn ordinary_justify_never_falls_back_to_rigid_lcr_line_offset() {
+        assert_eq!(
+            rigid_line_alignment_v1(Some(EffectiveParagraphAlignmentValueV1::Justify)),
+            None
+        );
+        assert_eq!(
+            rigid_line_alignment_v1(Some(EffectiveParagraphAlignmentValueV1::Left)),
+            Some(ParagraphAlignmentV1::Left)
         );
     }
 
