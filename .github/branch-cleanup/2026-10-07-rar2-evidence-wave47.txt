@@ -1,0 +1,5 @@
+# Wave 47 — reconciled moved-tip evidence refs
+measure/newsletter-group-stack-carrier-01 8f4aaa91fd427267279389b6417d8a92293a2f5e
+measure/virginia-table-layout-01 3a6e491a464a7b9a05338846ddb7e4d6f1bc1695
+measure/virginia-p6-p7-table-remainder-01 2174b5eeffd9dc43cf1c73b275271cc37ed5b56d
+ops/branch-gc-20261007-evidence-wave46 f9e0597466a4913491604683b8742766127f07ec
