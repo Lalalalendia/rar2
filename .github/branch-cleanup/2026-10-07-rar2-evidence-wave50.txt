@@ -1,0 +1,5 @@
+# Wave 50 — completed TABLE-border measurement chain
+measure/virginia-p10-border-topology-01 87cd0e99a94f093250dbaa0b2da4a12c1e1138cd
+measure/virginia-table-border-segments-01 a5954d6ff6c348a7392c1ddd28359af51fec1f90
+measure/virginia-table-border-geometry-01 bf91bb7a20e22c3b0a75bd194dc37fb4e003523b
+ops/branch-gc-20261007-evidence-wave49 4bdec17a2a5927312b7b7acc9d64c20eb5383329
