@@ -139,8 +139,45 @@ impl EditorSession {
         }
 
         entries.sort_by_key(|entry| entry.node_id);
-        validate_move_nodes_transition(&self.graph, page_id, &entries, true)?;
+        for pair in entries.windows(2) {
+            if pair[0].node_id == pair[1].node_id {
+                return Err(EditorError::MoveNodesDuplicate {
+                    node_id: pair[0].node_id,
+                });
+            }
+        }
+
+        let page_parent = page_id.into_canonical();
         for entry in &entries {
+            let node =
+                self.graph
+                    .nodes
+                    .get(&entry.node_id)
+                    .ok_or(EditorError::NodeMoveUnsupported {
+                        node_id: entry.node_id,
+                    })?;
+            if node.header.parent_id != page_parent {
+                return Err(EditorError::MoveNodesPageMismatch {
+                    node_id: entry.node_id,
+                    page_id,
+                });
+            }
+            if node.header.bounds != entry.before {
+                return Err(EditorError::StaleNodeMove {
+                    node_id: entry.node_id,
+                });
+            }
+            if entry.before.width != entry.after.width || entry.before.height != entry.after.height
+            {
+                return Err(EditorError::MoveNodesSizeChanged {
+                    node_id: entry.node_id,
+                });
+            }
+            if entry.before == entry.after {
+                return Err(EditorError::NodeMoveNoChange {
+                    node_id: entry.node_id,
+                });
+            }
             self.can_move_node_to(entry.node_id, entry.after.x, entry.after.y)?;
         }
 
