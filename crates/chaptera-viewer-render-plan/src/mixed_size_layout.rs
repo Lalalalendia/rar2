@@ -299,42 +299,43 @@ pub(super) fn shape_mixed_line_candidate_v1(
     })
 }
 
-pub(super) fn resolve_mixed_size_text_layout_v1(
+#[derive(Debug)]
+struct MixedSizeLayoutEvaluationV1 {
+    runs: Vec<AdmittedTypographyRunV1>,
+    cursor: u32,
+    used_height_emu: i64,
+    lines: Vec<RenderResolvedTextLineV1>,
+    stop_cause: Option<&'static str>,
+}
+
+fn evaluate_mixed_size_text_layout_v1(
     fragment: &RenderTextFragmentV1,
     font: &ExplicitRenderTextFontResourceV1<'_>,
     node_id: NodeId,
     bounds: &RectEmu,
     fingerprint: &str,
-    vertical_alignment: Option<ViewerTextVerticalAlignment>,
-) -> RenderTextLayoutV1 {
-    let runs = match admitted_typography_runs_v1(fragment, font.default_font_size_emu) {
-        Ok(runs) => runs,
-        Err(reason) => return fallback_layout(reason),
-    };
+) -> Result<MixedSizeLayoutEvaluationV1, RenderTextLayoutFallbackReasonV1> {
+    let runs = admitted_typography_runs_v1(fragment, font.default_font_size_emu)?;
     if runs.len() < 2
         || runs
             .iter()
             .all(|run| run.font_size_emu == runs[0].font_size_emu)
     {
-        return fallback_layout(RenderTextLayoutFallbackReasonV1::MixedTypographySize);
+        return Err(RenderTextLayoutFallbackReasonV1::MixedTypographySize);
     }
 
     let scalars: Vec<char> = fragment.text.chars().collect();
-    let scalar_count = match u32::try_from(scalars.len()) {
-        Ok(value) => value,
-        Err(_) => return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed),
-    };
+    let scalar_count = u32::try_from(scalars.len())
+        .map_err(|_| RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
     if fragment.scalar_start != 0 || fragment.scalar_end != scalar_count {
-        return fallback_layout(RenderTextLayoutFallbackReasonV1::StoryExtentMismatch);
+        return Err(RenderTextLayoutFallbackReasonV1::StoryExtentMismatch);
     }
 
     let mut policy_glyphs = Vec::new();
     let mut prepared_runs = Vec::with_capacity(runs.len());
     for run in &runs {
-        let Some(run_text) = scalar_text_range_v1(&scalars, run.scalar_start, run.scalar_end)
-        else {
-            return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed);
-        };
+        let run_text = scalar_text_range_v1(&scalars, run.scalar_start, run.scalar_end)
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
         let runtime = BoundedShapingRuntime {
             layout: BoundedLayoutEnvironment {
                 engine_revision: SHARED_TEXT_LAYOUT_REVISION_V1.to_owned(),
@@ -345,51 +346,45 @@ pub(super) fn resolve_mixed_size_text_layout_v1(
             font_size_emu: LengthEmu::new(run.font_size_emu),
             font_bytes: font.bytes,
         };
-        let shaped = match shape_bounded_ltr_segment(&run_text, run.scalar_start, &runtime) {
-            Ok(shaped) => shaped,
-            Err(_) => return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed),
-        };
-        let prepared = match prepare_typography_run_v1(*run, &shaped) {
-            Ok(prepared) => prepared,
-            Err(reason) => return fallback_layout(reason),
-        };
-        prepared_runs.push(prepared);
+        let shaped = shape_bounded_ltr_segment(&run_text, run.scalar_start, &runtime)
+            .map_err(|_| RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+        prepared_runs.push(prepare_typography_run_v1(*run, &shaped)?);
         policy_glyphs.extend(shaped.glyphs);
     }
-    let policy = match break_policy_for_shaped_text(&fragment.text, &policy_glyphs) {
-        Ok(policy) => policy,
-        Err(_) => return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed),
-    };
+    let policy = break_policy_for_shaped_text(&fragment.text, &policy_glyphs)
+        .map_err(|_| RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
 
     let mut cursor = fragment.scalar_start;
     let mut cursor_safe_without_reshaping = true;
     let mut used_height_emu = 0_i64;
     let mut line_index = 0_u32;
     let mut lines = Vec::new();
+    let mut stop_cause = None;
 
     while cursor < fragment.scalar_end {
         let mut chosen = None;
+        let mut saw_candidate = false;
+        let mut saw_width_fit = false;
+        let mut reached_mandatory = false;
         for candidate in policy
             .candidates
             .iter()
             .filter(|candidate| candidate.scalar_boundary > cursor)
         {
+            saw_candidate = true;
             let evaluated = if cursor_safe_without_reshaping
                 && candidate.safe_without_reshaping
                 && candidate.kind == BoundedBreakKind::Allowed
             {
-                match reuse_mixed_line_candidate_v1(
+                reuse_mixed_line_candidate_v1(
                     &scalars,
                     cursor,
                     candidate.scalar_boundary,
                     &prepared_runs,
                     font,
-                ) {
-                    Ok(evaluated) => evaluated,
-                    Err(reason) => return fallback_layout(reason),
-                }
+                )?
             } else {
-                match shape_mixed_line_candidate_v1(
+                shape_mixed_line_candidate_v1(
                     &scalars,
                     cursor,
                     candidate.scalar_boundary,
@@ -397,30 +392,37 @@ pub(super) fn resolve_mixed_size_text_layout_v1(
                     &runs,
                     font,
                     fingerprint,
-                ) {
-                    Ok(evaluated) => evaluated,
-                    Err(reason) => return fallback_layout(reason),
-                }
+                )?
             };
             let fits_width = evaluated.measured_width_emu <= bounds.width.get();
             let fits_height = used_height_emu
                 .checked_add(evaluated.line_height_emu)
                 .is_some_and(|height| height <= bounds.height.get());
+            saw_width_fit |= fits_width;
             if fits_width && fits_height {
                 chosen = Some((evaluated, candidate.safe_without_reshaping));
             }
             if candidate.kind == BoundedBreakKind::Mandatory {
+                reached_mandatory = true;
                 break;
             }
         }
 
         let Some((chosen, chosen_boundary_safe_without_reshaping)) = chosen else {
+            stop_cause = Some(if saw_width_fit {
+                "height_capacity_exhausted"
+            } else if reached_mandatory {
+                "mandatory_boundary_no_fit"
+            } else if saw_candidate {
+                "width_no_legal_break"
+            } else {
+                "other_fail_closed"
+            });
             break;
         };
-        used_height_emu = match used_height_emu.checked_add(chosen.line_height_emu) {
-            Some(value) => value,
-            None => return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed),
-        };
+        used_height_emu = used_height_emu
+            .checked_add(chosen.line_height_emu)
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
         let x_offset_emu = resolved_line_x_offset_emu_v1(
             fragment,
             node_id,
@@ -444,22 +446,117 @@ pub(super) fn resolve_mixed_size_text_layout_v1(
         });
         cursor = chosen.consumed_scalar_end;
         cursor_safe_without_reshaping = chosen_boundary_safe_without_reshaping;
-        line_index = match line_index.checked_add(1) {
-            Some(value) => value,
-            None => return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed),
+        line_index = line_index
+            .checked_add(1)
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+    }
+
+    Ok(MixedSizeLayoutEvaluationV1 {
+        runs,
+        cursor,
+        used_height_emu,
+        lines,
+        stop_cause,
+    })
+}
+
+pub(super) fn classify_mixed_size_layout_incomplete_v1(
+    fragment: &RenderTextFragmentV1,
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+    node_id: NodeId,
+    bounds: &RectEmu,
+) -> SharedLayoutIncompleteCauseV1 {
+    if bounds.width.get() <= 0 || bounds.height.get() <= 0 {
+        return SharedLayoutIncompleteCauseV1 {
+            path: "mixed_size_path",
+            consumption: "unknown",
+            cause: "frame_geometry_invalid",
+        };
+    }
+    if font.resource_id.is_empty()
+        || font.bytes.is_empty()
+        || font.default_font_size_emu <= 0
+        || font.default_line_height_emu <= 0
+    {
+        return SharedLayoutIncompleteCauseV1 {
+            path: "mixed_size_path",
+            consumption: "unknown",
+            cause: "font_resource_invalid",
+        };
+    }
+    let fingerprint = font_fingerprint_sha256(font.bytes);
+    if font.expected_sha256.is_empty() || fingerprint != font.expected_sha256 {
+        return SharedLayoutIncompleteCauseV1 {
+            path: "mixed_size_path",
+            consumption: "unknown",
+            cause: "font_fingerprint_mismatch",
         };
     }
 
-    if cursor != fragment.scalar_end {
+    let evaluation = match evaluate_mixed_size_text_layout_v1(
+        fragment,
+        font,
+        node_id,
+        bounds,
+        &fingerprint,
+    ) {
+        Ok(value) => value,
+        Err(_) => {
+            return SharedLayoutIncompleteCauseV1 {
+                path: "mixed_size_path",
+                consumption: "unknown",
+                cause: "other_fail_closed",
+            };
+        }
+    };
+    let consumption = if evaluation.lines.is_empty() {
+        "zero_lines"
+    } else {
+        "partial_lines"
+    };
+    let cause = if evaluation.cursor == fragment.scalar_end {
+        "unexpected_complete"
+    } else {
+        evaluation.stop_cause.unwrap_or("other_fail_closed")
+    };
+    SharedLayoutIncompleteCauseV1 {
+        path: "mixed_size_path",
+        consumption,
+        cause,
+    }
+}
+
+pub(super) fn resolve_mixed_size_text_layout_v1(
+    fragment: &RenderTextFragmentV1,
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+    node_id: NodeId,
+    bounds: &RectEmu,
+    fingerprint: &str,
+    vertical_alignment: Option<ViewerTextVerticalAlignment>,
+) -> RenderTextLayoutV1 {
+    let evaluation = match evaluate_mixed_size_text_layout_v1(
+        fragment,
+        font,
+        node_id,
+        bounds,
+        fingerprint,
+    ) {
+        Ok(value) => value,
+        Err(reason) => return fallback_layout(reason),
+    };
+
+    if evaluation.cursor != fragment.scalar_end {
         return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
     }
 
-    let max_font_size_emu = runs
+    let max_font_size_emu = evaluation
+        .runs
         .iter()
         .map(|run| run.font_size_emu)
         .max()
         .unwrap_or(font.default_font_size_emu);
-    let max_line_height_emu = lines
+    let max_line_height_emu = evaluation
+        .lines
         .iter()
         .map(|line| line.line_height_emu)
         .max()
@@ -475,9 +572,8 @@ pub(super) fn resolve_mixed_size_text_layout_v1(
         vertical_offset_emu: resolved_vertical_offset_emu_v1(
             vertical_alignment,
             bounds.height.get(),
-            used_height_emu,
+            evaluation.used_height_emu,
         ),
-        lines,
+        lines: evaluation.lines,
     }
 }
-
