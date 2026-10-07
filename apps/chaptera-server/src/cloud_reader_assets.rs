@@ -11,6 +11,7 @@ use axum::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+const FAVICON: &[u8] = include_bytes!("../../cloud-reader/favicon.svg");
 const INDEX_HTML: &[u8] = include_bytes!("../../cloud-reader/index.html");
 const READER_CSS: &[u8] = include_bytes!("../../cloud-reader/reader.css");
 const READER_APP: &[u8] = include_bytes!("../../cloud-reader/reader-app.mjs");
@@ -27,7 +28,12 @@ struct EmbeddedAsset {
     bytes: &'static [u8],
 }
 
-const ASSETS: [EmbeddedAsset; 6] = [
+const ASSETS: [EmbeddedAsset; 7] = [
+    EmbeddedAsset {
+        name: "favicon.svg",
+        content_type: "image/svg+xml",
+        bytes: FAVICON,
+    },
     EmbeddedAsset {
         name: "index.html",
         content_type: "text/html; charset=utf-8",
@@ -66,6 +72,7 @@ where
 {
     Router::new()
         .route("/", get(index))
+        .route("/favicon.svg", get(favicon))
         .route("/index.html", get(index))
         .route("/reader.css", get(reader_css))
         .route("/reader-app.mjs", get(reader_app))
@@ -93,28 +100,32 @@ pub fn version_manifest() -> Value {
     })
 }
 
-async fn index() -> Response {
+async fn favicon() -> Response {
     asset_response(&ASSETS[0])
 }
 
-async fn reader_css() -> Response {
+async fn index() -> Response {
     asset_response(&ASSETS[1])
 }
 
-async fn reader_app() -> Response {
+async fn reader_css() -> Response {
     asset_response(&ASSETS[2])
 }
 
-async fn reader_model() -> Response {
+async fn reader_app() -> Response {
     asset_response(&ASSETS[3])
 }
 
-async fn render_v1() -> Response {
+async fn reader_model() -> Response {
     asset_response(&ASSETS[4])
 }
 
-async fn observability_v1() -> Response {
+async fn render_v1() -> Response {
     asset_response(&ASSETS[5])
+}
+
+async fn observability_v1() -> Response {
+    asset_response(&ASSETS[6])
 }
 
 fn asset_response(asset: &EmbeddedAsset) -> Response {
@@ -195,9 +206,9 @@ mod tests {
     fn version_manifest_covers_all_embedded_assets() {
         let manifest = version_manifest();
         assert_eq!(manifest["embedded"], true);
-        assert_eq!(manifest["asset_count"], 6);
+        assert_eq!(manifest["asset_count"], 7);
         let files = manifest["files"].as_array().unwrap();
-        assert_eq!(files.len(), 6);
+        assert_eq!(files.len(), 7);
         assert!(files.iter().all(|file| {
             file["sha256"]
                 .as_str()
