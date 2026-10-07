@@ -2,6 +2,7 @@
 //!
 //! This module owns source-neutral image DTOs plus crop/recolor placement and
 //! selected-page admission. Image byte discovery, WMF/OLE rasterization, and
+//! Leaf-control: image placement edits use the exact image micro-target.
 //! OfficeArt preview materialization remain outside this module.
 
 use anyhow::Result;
