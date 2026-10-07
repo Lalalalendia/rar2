@@ -19,6 +19,7 @@ VIEWER_AUTHORING_PROJECTION = (
     "vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
 )
 READER_PAINT_PROJECTION = "vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
+READER_PAGE_PROJECTION = "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
 
 
 TEST_REGION_EVIDENCE_CANDIDATES = {
@@ -603,7 +604,9 @@ def classify(
     ]
     result["visual_oracle"] = any(matches(path, VISUAL_ORACLE) for path in visual_paths)
     typography_paths = [
-        path for path in visual_paths if path != READER_PAINT_PROJECTION
+        path
+        for path in visual_paths
+        if path not in {READER_PAINT_PROJECTION, READER_PAGE_PROJECTION}
     ]
     result["typography_golden"] = any(
         matches(path, TYPOGRAPHY_GOLDEN) for path in typography_paths
