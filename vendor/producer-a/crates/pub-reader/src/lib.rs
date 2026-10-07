@@ -32,8 +32,8 @@ mod resolve;
 mod salvage;
 mod salvage_authority;
 mod source_paint_order;
-mod story_provenance;
 mod story_frame_analysis;
+mod story_provenance;
 mod structural_base;
 mod table_bridge;
 mod typography_projection;
@@ -197,7 +197,6 @@ pub use source_paint_order::{PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1, PubSourcePag
 use source_paint_order::{index_escher_by_contents_seq, source_page_paint_orders_v1};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
-pub use story_provenance::has_exact_mature_quill_story_identity_v1;
 pub use story_frame_analysis::{
     PubGroupedStoryGeometryCorrelation, PubStoryFrameCorrelation,
     analyze_mature_0x2c_grouped_story_geometry,
@@ -205,6 +204,7 @@ pub use story_frame_analysis::{
     analyze_mature_0x2c_story_frame_candidates,
     analyze_mature_0x2c_story_frame_candidates_from_streams,
 };
+pub use story_provenance::has_exact_mature_quill_story_identity_v1;
 pub use structural_base::{
     PUB_STRUCTURAL_BASE_SCHEMA_V1, PubStructuralBaseCandidate, PubStructuralBaseManifest,
     PubStructuralBaseStreamDigest, build_mature_0x2c_structural_base_manifest,
