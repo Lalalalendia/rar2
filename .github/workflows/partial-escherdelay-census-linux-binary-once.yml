@@ -1,0 +1,28 @@
+name: Partial EscherDelay census Linux binary (one-shot)
+
+on:
+  push:
+    branches:
+      - research/partial-escherdelay-census-linux-binary-once
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build exact census binary
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin partial-escherdelay-breadth-census --release
+
+      - name: Upload census binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: partial-escherdelay-breadth-census-linux
+          path: vendor/producer-a/target/release/partial-escherdelay-breadth-census
+          if-no-files-found: error
+          retention-days: 1
