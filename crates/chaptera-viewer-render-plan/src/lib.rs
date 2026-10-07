@@ -34,14 +34,14 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 mod mixed_size_layout;
-use mixed_size_layout::{
-    MixedLineCandidateV1, admitted_font_size_emu, resolve_mixed_size_text_layout_v1,
-    scalar_text_range_v1,
-};
 #[cfg(test)]
 use mixed_size_layout::{
     AdmittedTypographyRunV1, prepare_typography_run_v1, reuse_mixed_line_candidate_v1,
     shape_mixed_line_candidate_v1,
+};
+use mixed_size_layout::{
+    MixedLineCandidateV1, admitted_font_size_emu, resolve_mixed_size_text_layout_v1,
+    scalar_text_range_v1,
 };
 
 pub const PAGE_RENDER_PLAN_SCHEMA_V1: &str = "chaptera.page-render-plan.v1";
