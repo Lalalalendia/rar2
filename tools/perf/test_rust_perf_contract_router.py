@@ -30,6 +30,18 @@ class RustPerfContractRouterTests(unittest.TestCase):
             ["layout-projection-work"],
         )
 
+    def test_registry_change_selects_owned_contracts(self) -> None:
+        self.assertEqual(
+            self.selected_ids(["tools/perf/contracts.json"]),
+            ["layout-projection-work"],
+        )
+
+    def test_router_change_selects_owned_contracts(self) -> None:
+        self.assertEqual(
+            self.selected_ids(["tools/perf/rust_perf_contract_router.py"]),
+            ["layout-projection-work"],
+        )
+
     def test_unrelated_rust_change_does_not_select_layout_contract(self) -> None:
         self.assertEqual(
             self.selected_ids(["apps/chaptera-server/src/main.rs"]),
