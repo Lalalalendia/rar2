@@ -1,4 +1,5 @@
 use super::*;
+use crate::group_projection::coordinate_rect_i128;
 use pub_contents::{
     CONTENTS_RAW_TYPE_CELLS, ContentsCursor, MatureCellCoordinates, parse_confirmed_block,
     parse_confirmed_mature_cells,
