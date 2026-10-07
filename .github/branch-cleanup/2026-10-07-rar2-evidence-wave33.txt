@@ -1,0 +1,7 @@
+# Wave 33 — terminal measurement refs with exact receipts
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+measure/textframe-content-valign-01 b4df1b53786ec004d9d43d9f15e7203215c38089
+measure/virginia-p22-residual-01 f7f22b8390d75042edcdf891a95dbc480d3f2489
+measure/virginia-table-raw-spcontainer-01 d41bcae0575949268fc9c7e75a7b4d29be692179
+ops/branch-gc-20261007-evidence-wave32 18439607a3c9b642b41e1d220dc7ef9ccba44922
