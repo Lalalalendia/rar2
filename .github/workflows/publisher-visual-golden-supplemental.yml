@@ -19,6 +19,7 @@ on:
       - "vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
       - "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
       - "vendor/producer-a/crates/pub-reader/src/typography_projection.rs"
+      - "vendor/producer-a/crates/pub-reader/src/direct_transform.rs"
   workflow_dispatch:
   push:
     branches: [main]
