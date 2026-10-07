@@ -391,6 +391,10 @@ WEB = (
     ".github/workflows/web-acceptance-real-chromium.yml",
 )
 
+LOCAL_PORTABLE_NEUTRAL_PATHS = {
+    "apps/chaptera-server/src/guest_reader_runtime.rs",
+}
+
 LOCAL_PORTABLE = (
     "Start-Chaptera-Local.cmd",
     "tools/run_local_full_stack.py",
@@ -575,6 +579,12 @@ def classify(
         )
         for scope, patterns in mapping.items()
     }
+    local_portable_paths = [
+        path for path in product_paths if path not in LOCAL_PORTABLE_NEUTRAL_PATHS
+    ]
+    result["local_portable"] = any(
+        matches(path, LOCAL_PORTABLE) for path in local_portable_paths
+    )
     # Golden tests still call ViewerApp and paint helpers owned by main.rs.
     # A path alone cannot prove those dependencies unchanged. Only an exact
     # standalone-comment proof may suppress their visual/typography allocation.
