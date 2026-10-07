@@ -70,6 +70,7 @@ jobs:
         run: |
           python tools/test_dev_fast_loop.py
           python tools/ci/test_pub_editor_fast_plan.py
+          python tools/ci/test_pub_editor_bounded_cargo_tests.py
 
       - name: Run impacted pub-editor checks
         shell: bash
