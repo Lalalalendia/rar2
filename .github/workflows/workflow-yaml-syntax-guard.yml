@@ -32,6 +32,7 @@ on:
       - "tools/ci/test_pub_reader_story_materialization_routing.py"
       - "tools/ci/test_pub_reader_quill_admission_routing.py"
       - "tools/ci/test_pub_reader_publication_document_routing.py"
+      - "tools/ci/test_pub_reader_contents_access_routing.py"
       - "tools/ci/test_no_publisher_selfhosted_actions.py"
   workflow_dispatch:
 
@@ -97,5 +98,7 @@ jobs:
         run: python tools/ci/test_pub_reader_quill_admission_routing.py
       - name: Guard pub-reader publication document routing
         run: python tools/ci/test_pub_reader_publication_document_routing.py
+      - name: Guard pub-reader Contents access routing
+        run: python tools/ci/test_pub_reader_contents_access_routing.py
       - name: Guard Publisher native execution boundary
         run: python tools/ci/test_no_publisher_selfhosted_actions.py
