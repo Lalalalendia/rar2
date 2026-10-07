@@ -5,6 +5,8 @@ on:
     paths:
       - "vendor/producer-a/crates/pub-editor/**"
       - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_text.rs"
+      - "!vendor/producer-a/crates/pub-editor/tests/story_text_session_v1.rs"
       - "apps/chaptera-desktop/src/agent.rs"
       - "packages/protocol/authoring-picture-frame/**"
       - "services/editor-api/test_revision_store.py"

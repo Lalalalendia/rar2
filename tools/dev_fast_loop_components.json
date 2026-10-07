@@ -120,6 +120,24 @@
       ]
     },
     {
+      "name": "pub-editor Story text session",
+      "paths": [
+        "vendor/producer-a/crates/pub-editor/src/session_text.rs"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor",
+          "--test",
+          "story_text_session_v1"
+        ]
+      ]
+    },
+    {
       "name": "pub-editor imported paragraph flow",
       "paths": [
         "vendor/producer-a/crates/pub-editor/src/imported_paragraph_flow_v1.rs"

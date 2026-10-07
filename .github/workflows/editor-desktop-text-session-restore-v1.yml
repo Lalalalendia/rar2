@@ -10,6 +10,7 @@ on:
       - "crates/chaptera-desktop-shaped-flow-runtime/src/lib.rs"
       - "crates/chaptera-desktop-shaped-flow-runtime/src/current_typography.rs"
       - "vendor/producer-a/crates/pub-editor/src/lib.rs"
+      - "vendor/producer-a/crates/pub-editor/src/session_text.rs"
       - ".github/workflows/editor-desktop-text-session-restore-v1.yml"
   push:
     branches:

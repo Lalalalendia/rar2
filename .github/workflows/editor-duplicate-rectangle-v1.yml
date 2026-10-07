@@ -6,6 +6,8 @@ on:
       - "vendor/producer-a/crates/pub-editor/**"
       - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
       - "!vendor/producer-a/crates/pub-editor/src/session_image.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_text.rs"
+      - "!vendor/producer-a/crates/pub-editor/tests/story_text_session_v1.rs"
       - "vendor/producer-a/crates/pub-editor/src/duplicate_authored_rectangle_v1.rs"
       - "vendor/producer-a/crates/pub-editor/src/lib.rs"
       - "vendor/producer-a/crates/pub-editor/tests/duplicate_authored_rectangle_v1.rs"
