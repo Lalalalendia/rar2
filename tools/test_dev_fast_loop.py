@@ -536,6 +536,79 @@ def test_pub_editor_facade_only_diff_skips_unfiltered_lib_test() -> None:
         )
         assert mod.PUB_EDITOR_UNFILTERED_LIB_TEST in commands(narrowed)
 
+def test_pub_editor_session_table_uses_owned_micro_tests() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        write(
+            root / mod.COMPONENT_REGISTRY_PATH,
+            """{
+  "schema": "chaptera.dev-fast-components.v1",
+  "rules": [
+    {
+      "name": "pub-editor table session",
+      "paths": ["vendor/producer-a/crates/pub-editor/src/session_table.rs"],
+      "commands": [
+        ["cargo", "test", "--manifest-path", "vendor/producer-a/Cargo.toml", "-p", "pub-editor", "--test", "table_rowcol_project_v1"],
+        ["cargo", "test", "--manifest-path", "vendor/producer-a/Cargo.toml", "-p", "pub-editor", "--test", "table_track_history_project_v1"],
+        ["cargo", "test", "--manifest-path", "vendor/producer-a/Cargo.toml", "-p", "pub-editor", "--test", "table_track_layout_integration_v1"]
+      ]
+    }
+  ]
+}
+""",
+        )
+        write(
+            root / "vendor/producer-a/Cargo.toml",
+            "[workspace]\nmembers=['crates/pub-editor']\nresolver='2'\n",
+        )
+        write(
+            root / mod.PUB_EDITOR_PACKAGE_MANIFEST_PATH,
+            "[package]\nname='pub-editor'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        write(
+            root / "vendor/producer-a/crates/pub-editor/src/session_table.rs",
+            "impl EditorSession {}\n",
+        )
+
+        checks = mod.plan_for_paths(
+            root,
+            ["vendor/producer-a/crates/pub-editor/src/session_table.rs"],
+            mode="edit",
+        )
+        actual = commands(checks)
+        assert mod.PUB_EDITOR_UNFILTERED_LIB_TEST not in actual
+        assert (
+            "cargo",
+            "test",
+            "--manifest-path",
+            "vendor/producer-a/Cargo.toml",
+            "-p",
+            "pub-editor",
+            "--test",
+            "table_rowcol_project_v1",
+        ) in actual
+        assert (
+            "cargo",
+            "test",
+            "--manifest-path",
+            "vendor/producer-a/Cargo.toml",
+            "-p",
+            "pub-editor",
+            "--test",
+            "table_track_history_project_v1",
+        ) in actual
+        assert (
+            "cargo",
+            "test",
+            "--manifest-path",
+            "vendor/producer-a/Cargo.toml",
+            "-p",
+            "pub-editor",
+            "--test",
+            "table_track_layout_integration_v1",
+        ) in actual
+
+
 def test_feature_mode_adds_package_unit_tests_once() -> None:
     with tempfile.TemporaryDirectory() as raw:
         root = Path(raw)
@@ -605,6 +678,7 @@ def main() -> None:
     test_run_receipt_records_timings_and_cache_state()
     test_workspace_manifest_edit_uses_metadata_not_full_workspace_compile()
     test_pub_editor_facade_only_diff_skips_unfiltered_lib_test()
+    test_pub_editor_session_table_uses_owned_micro_tests()
     test_feature_mode_adds_package_unit_tests_once()
     test_feature_mode_discovers_binary_targets_and_respects_disabled_tests()
     test_explicit_library_keeps_library_routing_without_default_path()
