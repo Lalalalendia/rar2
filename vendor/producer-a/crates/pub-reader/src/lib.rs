@@ -216,7 +216,7 @@ pub use source_paint_order::{PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1, PubSourcePag
 use source_paint_order::{index_escher_by_contents_seq, source_page_paint_orders_v1};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
-use story_frame_analysis::{
+pub use story_frame_analysis::{
     PubGroupedStoryGeometryCorrelation, PubStoryFrameCorrelation,
     analyze_mature_0x2c_grouped_story_geometry,
     analyze_mature_0x2c_grouped_story_geometry_from_streams,
