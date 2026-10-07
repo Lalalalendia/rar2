@@ -6,9 +6,8 @@ use pub_editor::{
 };
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedParagraphFlowConstraint, BoundedParagraphFlowRun,
-    BoundedShapedFlowRuntime, BoundedShapedFlowScene,
-    BoundedShapingRuntime, font_fingerprint_sha256, project_bounded,
-    resolve_bounded_shaped_flow_with_paragraph_flow,
+    BoundedShapedFlowRuntime, BoundedShapedFlowScene, BoundedShapingRuntime,
+    font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow_with_paragraph_flow,
 };
 use pub_line_placement::{
     LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
@@ -27,8 +26,7 @@ use current_fixed_pdf::bounded_authoring_slice_for_pages_v1;
 pub use current_fixed_pdf::{
     CURRENT_FIXED_PDF_RESOURCE_INPUT_V1, CurrentFixedPdfFontV1, CurrentFixedPdfNodePaintV1,
     CurrentFixedPdfResourceInputV1, CurrentFixedPdfStrokeV1,
-    build_current_fixed_pdf_resource_input_for_pages_v1,
-    build_current_fixed_pdf_resource_input_v1,
+    build_current_fixed_pdf_resource_input_for_pages_v1, build_current_fixed_pdf_resource_input_v1,
 };
 
 pub const DESKTOP_SHAPED_FLOW_RUNTIME_V1: &str = "chaptera.desktop-shaped-flow-runtime.v1";
@@ -672,7 +670,9 @@ mod tests {
         // direct source-free assertion on the stable error contract by using a
         // tiny helper rather than requiring a network/native fixture here.
         assert_eq!(
-            current_fixed_pdf::qualified_page_set_error_v1(&[]).unwrap_err().code,
+            current_fixed_pdf::qualified_page_set_error_v1(&[])
+                .unwrap_err()
+                .code,
             "qualified_pages_missing"
         );
     }
