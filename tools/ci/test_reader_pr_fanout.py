@@ -369,6 +369,25 @@ fn main() -> eframe::Result<()> {
         visual_batch01=True,
     )
     assert_scope(
+        [mod.READER_TYPOGRAPHY_PROJECTION],
+        tier_a=True,
+        reader_windows_smoke=False,
+        reader_windows=False,
+        editor_windows=False,
+        visual_oracle=True,
+        cloud_reference=False,
+        virginia_page_role=False,
+        visual_batch01=False,
+        typography_golden=True,
+        android_core=True,
+        android=False,
+        web=False,
+        local_portable=False,
+        installer=False,
+        path_identity=False,
+        update_accept=False,
+    )
+    assert_scope(
         ["vendor/producer-a/crates/pub-reader/src/bin/source_image_export_probe.rs"],
         cloud_reference=False,
         virginia_page_role=False,
