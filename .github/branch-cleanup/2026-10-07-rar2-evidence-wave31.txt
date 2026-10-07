@@ -1,0 +1,10 @@
+# Wave 31 — closed CI/routing controls with durable terminal evidence
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+ci/pub-editor-continuity-v2-negative-01 b14d67cdcde250f89e85275b4592bce640e08e84
+ci/pub-editor-continuity-v2-core-positive-01 a28a2f5f66598bcea2260f311274e1e720a09cad
+ci/insert-shape-mainrs-negative-control-01 0d30246bfd573f99feff0804b313301c262eef07
+measure/pub-reader-typography-projection-routing-01 919012e12186c7e86e6ab5191747e6d065cdce88
+ci/reader-paint-projection-leaf-control-01 ab977707ebefd29111a5afa748ba30ecb0e696c0
+ci/reader-paint-projection-leaf-proof-01 cfb884d03679a3de5d92ef9c5daa652f88408e21
+ops/branch-gc-20261007-evidence-wave30 c89c2ba68a246ec105d4d49b349f94d399a081f4
