@@ -1,0 +1,7 @@
+# Wave 41 — assimilated page-role measurement refs
+# Each entry is <branch> <expected-current-sha>.
+# Runtime guard rechecks open PR heads and exact SHA before deletion.
+measure/page-role-mature-corpus-01 b69d456d45cc64573bf9bebf2391feaa6ea9ab5f
+research/mature-page-role-outlier-recurrence-451 c1daa8f7d334adff495a7984cc2b32865be8b96c
+research/mature-multimaster-page-role-029 414d38054ea833b24c61153fee1bd7fcc51deaaf
+ops/branch-gc-20261007-evidence-wave40 6ded4346414e4a5423f82c0a76e749fb2f22259d
