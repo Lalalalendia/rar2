@@ -27,6 +27,7 @@ on:
       - "tools/test_build_w2_compound_receipt.py"
       - "crates/chaptera-desktop-fallback-font-resource/**"
       - "vendor/producer-a/crates/pub-editor/**"
+      - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
       - "vendor/producer-a/crates/pub-editor/src/lib.rs"
       - "vendor/producer-a/crates/pub-layout/src/shaped_flow.rs"
   workflow_dispatch:
