@@ -215,7 +215,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers().get(CONTENT_TYPE).unwrap(), "image/svg+xml");
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "image/svg+xml"
+        );
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(body.as_ref(), FAVICON_SVG);
     }
