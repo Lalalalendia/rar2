@@ -64,6 +64,12 @@ for needle in [
 if 'if (file) openFile(file);' not in APP:
     raise SystemExit("cloud-reader file selection must auto-open the selected PUB")
 
+if "const AUTO_MAX_PAGE_WIDTH = 960;" not in APP:
+    raise SystemExit("cloud-reader automatic fit must keep the desktop page comfortably bounded")
+
+if "\\n<link rel=\"stylesheet\"" in HTML:
+    raise SystemExit("cloud-reader HTML must not expose a literal \\n before the stylesheet link")
+
 print("cloud-reader read-only/ephemeral-consent/simple-viewer contract: ok")
 
 for needle in ["#page-select", "#zoom-select", "#search-query", "#story-text", "#assets", "#limitations"]:

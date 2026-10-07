@@ -18,6 +18,7 @@ const pageSelect = $("#page-select");
 const zoomSelect = $("#zoom-select");
 const storySelect = $("#story-select");
 const storyText = $("#story-text");
+const AUTO_MAX_PAGE_WIDTH = 960;
 let scene = null;
 let pages = [];
 let generation = 0;
@@ -200,10 +201,13 @@ function goToPage(index) {
 function applyZoom() {
   if (!scene) return;
   const availableWidth = Math.max(120, viewer.clientWidth - (innerWidth < 600 ? 24 : 48));
+  const comfortableWidth = Math.min(availableWidth, AUTO_MAX_PAGE_WIDTH);
   for (let index = 0; index < pages.length; index += 1) {
     const page = pages[index];
     const naturalWidth = page.width_emu / EMU_PER_CSS_PX;
-    const scale = zoomSelect.value === "fit" ? Math.min(2, availableWidth / naturalWidth) : Number(zoomSelect.value);
+    const scale = zoomSelect.value === "fit"
+      ? Math.min(2, comfortableWidth / naturalWidth)
+      : Number(zoomSelect.value);
     const svg = pagesHost.children[index];
     svg.setAttribute("width", naturalWidth * scale);
     svg.setAttribute("height", page.height_emu / EMU_PER_CSS_PX * scale);
