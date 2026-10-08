@@ -23,6 +23,15 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def checked_sha256_digest(value: object, source: str) -> str:
+    """Admit only a lowercase digest; never publish its source payload."""
+    if not isinstance(value, str) or len(value) != 64 or any(
+        char not in "0123456789abcdef" for char in value
+    ):
+        raise ValueError(f"invalid source-safe SHA-256 digest for {source}")
+    return value
+
+
 def hosted_rows(pairs_csv: Path) -> list[dict[str, str]]:
     rows = list(csv.DictReader(pairs_csv.open(newline="", encoding="utf-8-sig")))
     hosted = [row for row in rows if row["family"] != EXTERNAL_FAMILY]
@@ -146,7 +155,8 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
         for index in range(candidate_pages):
             shot = screenshots[index]
             png = browser_receipt.parent / shot["filename"]
-            if sha256(png) != shot["sha256"]:
+            candidate_raster_sha256 = sha256(png)
+            if candidate_raster_sha256 != checked_sha256_digest(shot["sha256"], "candidate PNG"):
                 raise ValueError(f"candidate PNG identity drift: {shot['filename']}")
             candidate = image_grid(png)
             reference_bytes = reference_grid(pair["pages"][index])
@@ -163,6 +173,7 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
                 "family": pair["family"],
                 "warning_state": pair.get("warning_state"),
                 "page": index + 1,
+                "candidate_raster_sha256": candidate_raster_sha256,
                 **metrics,
                 "reference_media_extent_delta": {
                     "width_pt": round(width_pt - ref_page["media_width_pt"], 6),
@@ -237,6 +248,10 @@ def summarize(pairs_csv: Path, browser_receipt: Path, reference_path: Path, out:
         if actual.get("source_sha256") != row["pub_sha256"]:
             raise ValueError(f"source SHA drift for {name}")
         rendered = actual.get("rendered") is True
+        worker_receipt_sha256 = (
+            checked_sha256_digest(actual.get("worker_receipt_sha256"), "worker receipt")
+            if rendered else None
+        )
         candidate_pages = actual.get("pages") if rendered else None
         expected_pages = int(row["pdf_pages"])
         page_match = rendered and candidate_pages == expected_pages
@@ -247,6 +262,7 @@ def summarize(pairs_csv: Path, browser_receipt: Path, reference_path: Path, out:
             "warning_state": row["warning_state"],
             "pub_sha256": row["pub_sha256"],
             "reference_pdf_sha256": row["pdf_sha256"],
+            "worker_receipt_sha256": worker_receipt_sha256,
             "reference_pages": expected_pages,
             "rendered": rendered,
             "classification": actual.get("classification"),
@@ -315,6 +331,7 @@ def summarize(pairs_csv: Path, browser_receipt: Path, reference_path: Path, out:
             "raw_pub_bytes_emitted": False,
             "raw_pdf_bytes_emitted": False,
             "raw_story_text_emitted": False,
+            "worker_and_raster_sha256_are_observation_identities_only": True,
         },
         "pairs": results,
         "unsupported_pairs": unsupported,
