@@ -2524,6 +2524,39 @@ mod tests {
                 "shared fallback resource must not be reported as a configured exact font"
             );
 
+            let mut replacement = configured.clone();
+            replacement.layout_authoritative = false;
+            let replacement_scene = from_viewer_geometry_with_fonts(
+                "probe:replacement-font".to_owned(),
+                actual_sha256.clone(),
+                "probe:source".to_owned(),
+                &bundle.geometry,
+                &bundle.source_page_paint_orders,
+                &[replacement],
+            )
+            .expect("paint-only configured replacement must project");
+            let unconfigured_layouts = unconfigured_scene
+                .nodes
+                .iter()
+                .map(|node| serde_json::to_value(&node.text_layout).expect("serialize baseline layout"))
+                .collect::<Vec<_>>();
+            let replacement_layouts = replacement_scene
+                .nodes
+                .iter()
+                .map(|node| serde_json::to_value(&node.text_layout).expect("serialize replacement layout"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                replacement_layouts, unconfigured_layouts,
+                "paint-only replacement must not change shared Reader text layout"
+            );
+            assert!(
+                !replacement_scene
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "source_font_resource_admitted"),
+                "paint-only replacement must never gain exact-font layout authority"
+            );
+
             let configured_scene = from_viewer_geometry_with_fonts(
                 "probe:configured-font".to_owned(),
                 actual_sha256.clone(),
