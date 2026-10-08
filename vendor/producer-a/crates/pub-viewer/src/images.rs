@@ -51,6 +51,10 @@ pub struct ViewerEmbeddedImage {
     /// but must not be promoted into exact-image output authority.
     #[serde(default)]
     pub source_exact: bool,
+    /// True only for previews produced by a bounded source-backed rasterizer
+    /// whose transparent canvas owns the derived alpha semantics.
+    #[serde(default)]
+    pub derived_transparent_canvas: bool,
     pub node_ids: Vec<NodeId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub placements: Vec<ViewerImagePlacementV1>,
@@ -69,6 +73,25 @@ impl ViewerEmbeddedImage {
             resource_id,
             mime: "image/png".to_owned(),
             source_exact: false,
+            derived_transparent_canvas: false,
+            node_ids,
+            placements,
+            bytes,
+        }
+    }
+
+    /// Construct a mature WMF preview whose bounded rasterizer owns transparent-canvas alpha.
+    pub(super) fn wmf_preview_png(
+        resource_id: ResourceId,
+        node_ids: Vec<NodeId>,
+        placements: Vec<ViewerImagePlacementV1>,
+        bytes: Vec<u8>,
+    ) -> Self {
+        Self {
+            resource_id,
+            mime: "image/png".to_owned(),
+            source_exact: false,
+            derived_transparent_canvas: true,
             node_ids,
             placements,
             bytes,
@@ -87,6 +110,7 @@ impl ViewerEmbeddedImage {
             resource_id,
             mime,
             source_exact: true,
+            derived_transparent_canvas: false,
             node_ids,
             placements,
             bytes,
@@ -230,6 +254,7 @@ mod tests {
                 resource_id: first_resource,
                 mime: "image/png".to_owned(),
                 source_exact: true,
+                derived_transparent_canvas: false,
                 node_ids: vec![admitted, excluded],
                 placements: vec![
                     ViewerImagePlacementV1 {
@@ -254,6 +279,7 @@ mod tests {
                 resource_id: second_resource,
                 mime: "image/jpeg".to_owned(),
                 source_exact: true,
+                derived_transparent_canvas: false,
                 node_ids: vec![excluded_only],
                 placements: vec![ViewerImagePlacementV1 {
                     node_id: excluded_only,
@@ -267,6 +293,7 @@ mod tests {
                 resource_id: third_resource,
                 mime: "image/png".to_owned(),
                 source_exact: true,
+                derived_transparent_canvas: false,
                 node_ids: vec![unresolved],
                 placements: vec![ViewerImagePlacementV1 {
                     node_id: unresolved,
