@@ -130,6 +130,7 @@ jobs:
         run: |
           set -euo pipefail
           for item in \
+            "06-modern2c-image-heavy:06-target" \
             "081_8ca766c139a8e011:081-control" \
             "082_2531deb3629797af:082-target" \
             "089_9923f422543b1ed4:089-target" \
