@@ -1,0 +1,4 @@
+# Research Wave 88 — zero-unique refs already fully reachable from main
+research/mail-merge-candidate-census-v2 26ddccfec388063290cdc94727debd7959bbf6e3
+research/paragraph-p0-line-spacing-gate fe1eeae9d3f1a6b3087d00a1f3ac20375f2ead4b
+ops/branch-gc-20261008-research-wave87 7e07919f7a4ad8d426ca423a75abce7c3a8c4782
