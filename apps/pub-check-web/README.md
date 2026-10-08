@@ -23,8 +23,9 @@ The landing must never claim compatibility merely because upload succeeded.
 BLOB_READ_WRITE_TOKEN=...
 CHECKER_ADMIN_TOKEN=<long random shared secret used by checker for source/result endpoints>
 GITHUB_CHECKER_TOKEN=<fine-grained GitHub token with Actions write access to the checker repo>
-GITHUB_CHECKER_REPOSITORY=HeisLuka/rar
+GITHUB_CHECKER_REPOSITORY=Lalalalendia/rar2
 GITHUB_CHECKER_REF=main
+PUB_CHECK_CLOUD_READER_ORIGIN=https://reader.chaptera.online
 CHECKER_WEBHOOK_URL=<optional fallback checker webhook>
 CHECKER_WEBHOOK_TOKEN=<optional auth from landing to fallback checker>
 RESEND_API_KEY=...
@@ -73,24 +74,50 @@ Authorization: Bearer <CHECKER_ADMIN_TOKEN>
 
 to fetch `sourceUrl` and POST `resultUrl`.
 
-## Result schema
+## Result schema (Cloud Reader canonical authority)
 
-```json
-{
-  "compatibility": "compatible | partial | unsupported | invalid | failed",
-  "summary": "Human-readable bounded conclusion",
-  "publisherFamily": "optional family/version label",
-  "pages": 12,
-  "diagnosticsCode": "optional stable sanitized code",
-  "limitations": [
-    "Optional user-visible limitation"
-  ],
-  "checkerVersion": "optional exact checker/build identity"
-}
+The current `.github/workflows/pub-check-worker.yml` (default repository
+`Lalalalendia/rar2`) now calls the existing Chaptera **Cloud Reader guest-session
+API**, not the older Viewer-only `tools/pub-check-cli`. It sends the exact
+private uploaded PUB to the fixed `https://reader.chaptera.online` origin,
+receives `chaptera.reader-compatibility-report.v1`, and returns **only**
+the service-owned compatibility report (no Scene, Story text or source bytes).
+The worker uses no Rust toolchain.
+
+Server-side `/api/internal/result/:id` **re-reads the private Vercel Blob**,
+computes SHA-256 of the exact stored bytes and requires the report
+`source_sha256` to match. It only accepts the known canonical
+state/route/limitation message matrix and strips unknown private fields.
+Public polling remains protected by the existing check token. The email uses
+the same source-safe canonical result.
+
+Canonical states are `opens_normally`, `needs_review`,
+`opens_with_salvage`, and `unsupported`. `content_summary` contains bounded
+numeric counts only; `limitations` are server-owned customer-safe messages;
+`output_routes` and `recommended_next_step` are not guessed by the web app.
+The current deployed server returns both editable routes as `not_verified`.
+A newer Cloud API declaring other editable states must be separately admitted
+and tested before this public bridge can expose that claim.
+
+Failure to contact Cloud Reader or a rejected/unsafe source produces a bounded
+transport `failed` result, never a fabricated document compatibility decision.
+
+For a rolling deployment, previously queued Viewer-style result records remain
+readable as legacy reports. New Cloud responses use the canonical schema only.
+The separate `CHECKER_WEBHOOK_URL` seam can be used for a trusted, bounded
+service adapter which follows the same canonical result contract.
+
+### Source-free tests
+
+```bash
+cd apps/pub-check-web
+npm install
+npm run typecheck
+node --experimental-strip-types --test tests/canonical-report.test.mjs
+
+cd ../..
+python3 -m unittest discover -s tools/pub-check-cloud-bridge -p "test_*.py" -v
 ```
-
-Do not send raw local paths, stack traces, private parser state or source bytes
-in the result.
 
 ## Retention
 

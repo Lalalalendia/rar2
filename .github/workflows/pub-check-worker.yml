@@ -27,10 +27,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.94.1"
-
       - name: Validate bounded job identity
         shell: bash
         run: |
@@ -53,7 +49,7 @@ jobs:
           set -euo pipefail
           ORIGIN="${PUB_CHECK_ORIGIN%/}"
           SOURCE_URL="${ORIGIN}/api/internal/source/${CHECK_ID}"
-          curl --fail --silent --show-error --location \
+          curl --fail --silent --show-error --max-redirs 0 \
             --header "Authorization: Bearer ${CHECKER_ADMIN_TOKEN}" \
             --output "${RUNNER_TEMP}/source.pub" \
             "${SOURCE_URL}"
@@ -65,45 +61,47 @@ jobs:
               sys.exit(f"unexpected admitted source size: {size}")
           PY
 
-      - name: Run the same bounded Viewer authority
-        id: checker
+      - name: Run canonical Cloud Reader guest-session bridge
         shell: bash
+        env:
+          PUB_CHECK_CLOUD_READER_ORIGIN: https://reader.chaptera.online
         run: |
-          set -uo pipefail
-          cargo run --quiet --manifest-path tools/pub-check-cli/Cargo.toml -- \
-            "${RUNNER_TEMP}/source.pub" > "${RUNNER_TEMP}/result.json"
-          checker_exit=$?
-          echo "exit_code=${checker_exit}" >> "$GITHUB_OUTPUT"
-          exit 0
+          set -euo pipefail
+          # A rejected/failed Cloud session produces only a bounded transport
+          # failure receipt. It may never be reclassified as unsupported PUB.
+          python3 tools/pub-check-cloud-bridge/worker.py \
+            "${RUNNER_TEMP}/source.pub" "${RUNNER_TEMP}/result.json" || true
 
-      - name: Validate or replace checker receipt
+      - name: Validate source-safe canonical or transport failure receipt
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import json, os, pathlib
           path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "result.json"
-          allowed = {"compatible", "partial", "unsupported", "invalid", "failed"}
+          failure = {
+              "compatibility": "failed",
+              "summary": "The checker could not complete this request reliably.",
+              "diagnosticsCode": "pub_check.worker_failure",
+          }
           try:
               raw = path.read_bytes()
-              if not raw or len(raw) > 128 * 1024:
-                  raise ValueError("missing or oversized checker receipt")
+              if not raw or len(raw) > 64 * 1024:
+                  raise ValueError("missing or oversized receipt")
               data = json.loads(raw)
-              if data.get("compatibility") not in allowed:
-                  raise ValueError("unsupported compatibility value")
-              if not isinstance(data.get("summary"), str) or not data["summary"].strip():
-                  raise ValueError("missing summary")
-              if len(data["summary"]) > 4000:
-                  raise ValueError("summary too large")
+              if not isinstance(data, dict):
+                  raise ValueError("receipt must be object")
+              if data.get("protocol_version") == "chaptera.reader-compatibility-report.v1":
+                  required = ("source_sha256", "state", "engine_classification",
+                              "output_routes", "limitations", "recommended_next_step")
+                  if not all(field in data for field in required):
+                      raise ValueError("canonical receipt missing required fields")
+              elif not (data.get("compatibility") == "failed"
+                        and data.get("diagnosticsCode") == "pub_check.worker_failure"):
+                  raise ValueError("only canonical report or transport failure allowed")
           except Exception:
-              data = {
-                  "compatibility": "failed",
-                  "summary": "The checker could not complete this request reliably.",
-                  "diagnosticsCode": "pub_check.worker_failure",
-                  "limitations": [],
-                  "checkerVersion": os.environ.get("CHAPTERA_CHECKER_VERSION", "unknown"),
-              }
-              path.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
+              data = failure
+          path.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
           PY
 
       - name: Return bounded result

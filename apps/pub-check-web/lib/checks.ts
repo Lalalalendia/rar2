@@ -1,6 +1,7 @@
 import { del, get, list, put } from '@vercel/blob';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { SupportedCountry, SupportedLocale } from './i18n';
+import type { CanonicalReport } from './canonical-report';
 
 export const CHECK_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const ORPHAN_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -14,7 +15,7 @@ export type Compatibility =
   | 'invalid'
   | 'failed';
 
-export type CheckResult = {
+export type LegacyCheckResult = {
   compatibility: Compatibility;
   summary: string;
   publisherFamily?: string;
@@ -23,6 +24,8 @@ export type CheckResult = {
   limitations?: string[];
   checkerVersion?: string;
 };
+
+export type CheckResult = LegacyCheckResult | { canonical: CanonicalReport };
 
 export type CheckRecord = {
   schema: 'chaptera.pub-check.v1';

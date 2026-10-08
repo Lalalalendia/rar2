@@ -3,12 +3,14 @@
 import { upload } from '@vercel/blob/client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { COPY, COUNTRY_OPTIONS, LOCALE_OPTIONS, type SupportedCountry, type SupportedLocale } from '../lib/i18n';
+import type { CheckResult } from '../lib/checks';
+import type { CanonicalState } from '../lib/canonical-report';
 
 const MAX_BYTES = 64 * 1024 * 1024;
 type PublicStatus = {
   status: 'queued' | 'processing' | 'complete' | 'failed';
   emailStatus: 'pending' | 'sent' | 'failed' | 'not_configured';
-  result?: { compatibility: 'compatible' | 'partial' | 'unsupported' | 'invalid' | 'failed'; summary: string; publisherFamily?: string; };
+  result?: CheckResult;
 };
 const statusLabels: Record<SupportedLocale, Record<PublicStatus['status'], string>> = {
   'en-US': {queued:'Queued',processing:'Processing',complete:'Complete',failed:'Failed'},
@@ -19,7 +21,7 @@ const statusLabels: Record<SupportedLocale, Record<PublicStatus['status'], strin
   'de-DE': {queued:'Warteschlange',processing:'Prüfung läuft',complete:'Fertig',failed:'Fehler'},
   'ru-RU': {queued:'В очереди',processing:'Проверяем',complete:'Готово',failed:'Ошибка'},
 };
-const compatibilityLabels: Record<SupportedLocale, Record<NonNullable<PublicStatus['result']>['compatibility'], string>> = {
+const compatibilityLabels: Record<SupportedLocale, Record<'compatible' | 'partial' | 'unsupported' | 'invalid' | 'failed', string>> = {
   'en-US': {compatible:'Compatible',partial:'Partial',unsupported:'Unsupported',invalid:'Invalid file',failed:'Check failed'},
   'en-GB': {compatible:'Compatible',partial:'Partial',unsupported:'Unsupported',invalid:'Invalid file',failed:'Check failed'},
   'fr-FR': {compatible:'Compatible',partial:'Partiel',unsupported:'Non pris en charge',invalid:'Fichier invalide',failed:'Échec'},
@@ -27,6 +29,40 @@ const compatibilityLabels: Record<SupportedLocale, Record<NonNullable<PublicStat
   'it-IT': {compatible:'Compatibile',partial:'Parziale',unsupported:'Non supportato',invalid:'File non valido',failed:'Errore'},
   'de-DE': {compatible:'Kompatibel',partial:'Teilweise',unsupported:'Nicht unterstützt',invalid:'Ungültige Datei',failed:'Fehler'},
   'ru-RU': {compatible:'Совместим',partial:'Частично',unsupported:'Не поддерживается',invalid:'Некорректный файл',failed:'Ошибка проверки'},
+};
+
+const canonicalLabels: Record<SupportedLocale, Record<CanonicalState, string>> = {
+  'en-US': {opens_normally:'Opens normally',needs_review:'Needs review',opens_with_salvage:'Opens with recovery',unsupported:'Unsupported'},
+  'en-GB': {opens_normally:'Opens normally',needs_review:'Needs review',opens_with_salvage:'Opens with recovery',unsupported:'Unsupported'},
+  'fr-FR': {opens_normally:'S’ouvre normalement',needs_review:'À vérifier',opens_with_salvage:'Ouverture avec récupération',unsupported:'Non pris en charge'},
+  'es-ES': {opens_normally:'Se abre normalmente',needs_review:'Requiere revisión',opens_with_salvage:'Se abre con recuperación',unsupported:'No compatible'},
+  'it-IT': {opens_normally:'Si apre normalmente',needs_review:'Richiede verifica',opens_with_salvage:'Si apre in recupero',unsupported:'Non supportato'},
+  'de-DE': {opens_normally:'Öffnet normal',needs_review:'Überprüfung nötig',opens_with_salvage:'Öffnet mit Wiederherstellung',unsupported:'Nicht unterstützt'},
+  'ru-RU': {opens_normally:'Открывается',needs_review:'Нужна проверка',opens_with_salvage:'Открывается с восстановлением',unsupported:'Не поддерживается'},
+};
+const canonicalCopy: Record<SupportedLocale, { pages:string; limitations:string; idml:string; odg:string; unverified:string; next:string; nextSteps:Record<CanonicalState,string> }> = {
+  'en-US': {pages:'Pages',limitations:'Known limitations',idml:'Editable IDML',odg:'Editable ODG',unverified:'Not verified',next:'Recommended next step',nextSteps:{
+    opens_normally:'Review a migration preview before converting.',needs_review:'Review the preview and limitations before migration.',
+    opens_with_salvage:'Request a recovery review; normal page layout is not proven.',unsupported:'Try manual review or choose a different PUB.'}},
+  'en-GB': {pages:'Pages',limitations:'Known limitations',idml:'Editable IDML',odg:'Editable ODG',unverified:'Not verified',next:'Recommended next step',nextSteps:{
+    opens_normally:'Review a migration preview before converting.',needs_review:'Review the preview and limitations before migration.',
+    opens_with_salvage:'Request a recovery review; normal page layout is not proven.',unsupported:'Try manual review or choose a different PUB.'}},
+  'fr-FR': {pages:'Pages',limitations:'Limites connues',idml:'IDML modifiable',odg:'ODG modifiable',unverified:'Non vérifié',next:'Étape suivante',nextSteps:{
+    opens_normally:'Examinez un aperçu avant la migration.',needs_review:'Vérifiez l’aperçu et ses limites avant de migrer.',
+    opens_with_salvage:'Demandez une vérification des données récupérées.',unsupported:'Demandez un examen manuel ou choisissez un autre PUB.'}},
+  'es-ES': {pages:'Páginas',limitations:'Limitaciones conocidas',idml:'IDML editable',odg:'ODG editable',unverified:'Sin verificar',next:'Siguiente paso',nextSteps:{
+    opens_normally:'Revise una vista previa antes de migrar.',needs_review:'Revise la vista previa y sus limitaciones.',
+    opens_with_salvage:'Solicite una revisión de recuperación.',unsupported:'Solicite revisión manual o elija otro PUB.'}},
+  'it-IT': {pages:'Pagine',limitations:'Limitazioni note',idml:'IDML modificabile',odg:'ODG modificabile',unverified:'Non verificato',next:'Prossimo passo',nextSteps:{
+    opens_normally:'Controlla l’anteprima prima della migrazione.',needs_review:'Controlla anteprima e limitazioni.',
+    opens_with_salvage:'Richiedi una verifica del recupero.',unsupported:'Richiedi una verifica manuale o scegli un altro PUB.'}},
+  'de-DE': {pages:'Seiten',limitations:'Bekannte Einschränkungen',idml:'IDML bearbeitbar',odg:'ODG bearbeitbar',unverified:'Nicht geprüft',next:'Nächster Schritt',nextSteps:{
+    opens_normally:'Vorschau vor der Migration prüfen.',needs_review:'Vorschau und Einschränkungen überprüfen.',
+    opens_with_salvage:'Wiederherstellung prüfen lassen.',unsupported:'Manuelle Prüfung oder andere PUB-Datei versuchen.'}},
+  'ru-RU': {pages:'Страницы',limitations:'Известные ограничения',idml:'Редактируемый IDML',odg:'Редактируемый ODG',unverified:'Не подтверждено',next:'Следующий шаг',nextSteps:{
+    opens_normally:'Проверьте предварительный просмотр перед переносом.',needs_review:'Проверьте внешний вид и ограничения перед переносом.',
+    opens_with_salvage:'Запросите проверку восстановленного содержимого. Геометрия страниц не подтверждена.',
+    unsupported:'Потребуется ручная проверка или другой PUB.'}},
 };
 
 function setCookie(name:string,value:string){document.cookie=`${name}=${encodeURIComponent(value)}; Max-Age=31536000; Path=/; SameSite=Lax`;}
@@ -89,6 +125,8 @@ export default function LandingClient({initialCountry,initialLocale}:{initialCou
   },[check,status?.status]);
 
   const busy=stage!=='idle';const complete=status?.status==='complete';
+  const canonical=complete&&status?.result&&'canonical' in status.result?status.result.canonical:null;
+  const legacy=complete&&status?.result&&!('canonical' in status.result)?status.result:null;
   return <main data-country={country} data-locale={locale}><div className="shell">
     <nav className="nav">
       <div className="brandWrap"><div className="brand">Chaptera</div><div className="regionHint">{copy.detected}: {country}</div></div>
@@ -115,8 +153,23 @@ export default function LandingClient({initialCountry,initialLocale}:{initialCou
           {stage==='uploading'&&<div className="progressWrap"><div className="progressBar"><div style={{width:`${progress}%`}}/></div><div className="progressText"><span>{copy.progress}</span><span>{progress}%</span></div></div>}
           {error&&<div className="error">{error}</div>}
         </>:<div className="status"><div className="statusTop"><div><h3>{complete?copy.ready:status?.status==='failed'?copy.failed:status?.status==='processing'?copy.processing:copy.queued}</h3>
-          <p>{complete?(status?.result?.summary||copy.ready):copy.waiting}</p></div><div className="statusChip">{status?statusLabels[locale][status.status]:statusLabels[locale].queued}</div></div>
-          {complete&&status?.result&&<div className="resultGrid"><div className="metric"><span>{copy.compatibility}</span><b>{compatibilityLabels[locale][status.result.compatibility]}</b></div><div className="metric"><span>{copy.publisherFamily}</span><b>{status.result.publisherFamily||copy.notIdentified}</b></div><div className="metric"><span>{copy.emailMetric}</span><b>{status.emailStatus==='sent'?copy.emailSent:copy.emailPrepared}</b></div></div>}
+          <p>{complete?(canonical?canonicalLabels[locale][canonical.state]:legacy?.summary||copy.ready):copy.waiting}</p></div><div className="statusChip">{status?statusLabels[locale][status.status]:statusLabels[locale].queued}</div></div>
+          {canonical&&<>
+            <div className="resultGrid">
+              <div className="metric"><span>{copy.compatibility}</span><b>{canonicalLabels[locale][canonical.state]}</b></div>
+              {canonical.contentSummary?.page_count!==undefined&&<div className="metric"><span>{canonicalCopy[locale].pages}</span><b>{canonical.contentSummary.page_count}</b></div>}
+              {canonical.contentSummary?.text_frame_count!==undefined&&<div className="metric"><span>{locale==='ru-RU'?'Текстовые блоки':'Text frames'}</span><b>{canonical.contentSummary.text_frame_count}</b></div>}
+              {canonical.contentSummary?.picture_frame_count!==undefined&&<div className="metric"><span>{locale==='ru-RU'?'Изображения':'Picture frames'}</span><b>{canonical.contentSummary.picture_frame_count}</b></div>}
+              {canonical.contentSummary?.table_count!==undefined&&<div className="metric"><span>{locale==='ru-RU'?'Таблицы':'Tables'}</span><b>{canonical.contentSummary.table_count}</b></div>}
+              {canonical.contentSummary?.recovered_image_count!==undefined&&<div className="metric"><span>{locale==='ru-RU'?'Восстановленные изображения':'Recovered images'}</span><b>{canonical.contentSummary.recovered_image_count}</b></div>}
+              <div className="metric"><span>{canonicalCopy[locale].idml}</span><b>{canonicalCopy[locale].unverified}</b></div>
+              <div className="metric"><span>{canonicalCopy[locale].odg}</span><b>{canonicalCopy[locale].unverified}</b></div>
+              <div className="metric"><span>{copy.emailMetric}</span><b>{status?.emailStatus==='sent'?copy.emailSent:copy.emailPrepared}</b></div>
+            </div>
+            {canonical.limitations.length>0&&<div className="resultDetails"><strong>{canonicalCopy[locale].limitations}</strong><ul>{canonical.limitations.map(l=><li key={l.code}>{l.message}</li>)}</ul></div>}
+            <div className="resultDetails"><strong>{canonicalCopy[locale].next}</strong><p>{canonicalCopy[locale].nextSteps[canonical.state]}</p></div>
+          </>}
+          {legacy&&<div className="resultGrid"><div className="metric"><span>{copy.compatibility}</span><b>{compatibilityLabels[locale][legacy.compatibility]}</b></div><div className="metric"><span>{copy.publisherFamily}</span><b>{legacy.publisherFamily||copy.notIdentified}</b></div><div className="metric"><span>{copy.emailMetric}</span><b>{status?.emailStatus==='sent'?copy.emailSent:copy.emailPrepared}</b></div></div>}
           {status?.status==='failed'&&<div className="error">{copy.reliableFailure}</div>}</div>}
       </div>
     </section>
