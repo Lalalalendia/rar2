@@ -1,3 +1,9 @@
+mod officeart;
+pub use officeart::{
+    OFFICEART_ATTRIBUTION_SCHEMA_V1, OfficeArtAttributionReceiptV1,
+    attribute_officeart_manifest_file,
+};
+
 use anyhow::{Context, Result, bail};
 use pub_cfb::{CfbEntry, CfbInventory, EntryKind, inspect_reader, read_stream_reader};
 use serde::{Deserialize, Serialize};
