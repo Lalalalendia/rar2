@@ -213,13 +213,6 @@ pub use salvage_authority::{
     typed_corruption_authority,
 };
 use serde::{Deserialize, Serialize};
-pub use source_identity::{
-    contents_object_key, derive_pub_document_id, derive_pub_node_id, derive_pub_page_id,
-    derive_pub_story_id, quill_story_object_key,
-};
-use source_identity::{
-    ROLE_DOCUMENT, ROLE_NODE, ROLE_PAGE, ROLE_STORY, derive_pub_id, source_ref,
-};
 pub use source_graph_model::{
     PubEffectiveFillSource, PubEffectiveLineSource, PubEffectivePaintAuthority,
     PubEffectivePaintValue, PubEffectiveShapePaintSource, PubExplicitFillSource,
@@ -227,6 +220,11 @@ pub use source_graph_model::{
     PubExplicitShapePaintSource, PubLegacyOleSource, PubNodePayload, PubSourceGraph,
     PubSourceGraphBuild, PubStoryFrameSource, PubTextFrameInsetSource,
     PubTextFrameVerticalAlignment, PubTextFrameVerticalAlignmentSource,
+};
+use source_identity::{ROLE_DOCUMENT, ROLE_NODE, ROLE_PAGE, ROLE_STORY, derive_pub_id, source_ref};
+pub use source_identity::{
+    contents_object_key, derive_pub_document_id, derive_pub_node_id, derive_pub_page_id,
+    derive_pub_story_id, quill_story_object_key,
 };
 pub use source_paint_order::{PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1, PubSourcePagePaintOrderV1};
 use source_paint_order::{index_escher_by_contents_seq, source_page_paint_orders_v1};
@@ -239,10 +237,10 @@ pub use story_frame_analysis::{
     analyze_mature_0x2c_story_frame_candidates,
     analyze_mature_0x2c_story_frame_candidates_from_streams,
 };
-use story_materialization::materialize_story_catalogs;
 use story_frame_projection::{
     add_missing_link_target_diagnostics, build_story_frame, unique_story_id_scalar,
 };
+use story_materialization::materialize_story_catalogs;
 pub use story_provenance::has_exact_mature_quill_story_identity_v1;
 pub use structural_base::{
     PUB_STRUCTURAL_BASE_SCHEMA_V1, PubStructuralBaseCandidate, PubStructuralBaseManifest,
