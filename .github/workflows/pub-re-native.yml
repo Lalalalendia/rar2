@@ -22,12 +22,22 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Prefer Git Bash on the interactive Windows runner
+        shell: powershell
+        run: |
+          $gitBashDir = "C:\Program Files\Git\bin"
+          $gitBash = Join-Path $gitBashDir "bash.exe"
+          if (-not (Test-Path -LiteralPath $gitBash -PathType Leaf)) {
+            throw "Git Bash is required at $gitBash"
+          }
+          $gitBashDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
 
       - name: Resolve local manifest safely
-        shell: pwsh
+        shell: powershell
         env:
           PUB_RE_MANIFEST_NAME: ${{ inputs.manifest_name }}
         run: |
@@ -53,18 +63,18 @@ jobs:
           "PUB_RE_NATIVE_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build standalone PUB RE
-        shell: pwsh
+        shell: powershell
         run: cargo build --release --manifest-path tools/pub-re/Cargo.toml --bin pub-re
 
       - name: Run bounded native Publisher transaction
-        shell: pwsh
+        shell: powershell
         run: |
           & tools/pub-re/windows/Invoke-PubReNativeExperiment.ps1 `
             -ManifestPath $env:PUB_RE_NATIVE_MANIFEST `
             -OutputRoot $env:PUB_RE_NATIVE_OUTPUT
 
       - name: Join native output to CFB and OfficeArt provenance
-        shell: pwsh
+        shell: powershell
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
@@ -90,7 +100,7 @@ jobs:
           }
 
       - name: Enforce source-safe evidence boundary
-        shell: pwsh
+        shell: powershell
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
@@ -125,7 +135,7 @@ jobs:
 
       - name: Remove private native inputs and outputs
         if: always()
-        shell: pwsh
+        shell: powershell
         run: |
           if (-not [string]::IsNullOrWhiteSpace($env:PUB_RE_NATIVE_OUTPUT) -and (Test-Path -LiteralPath $env:PUB_RE_NATIVE_OUTPUT)) {
             Remove-Item -LiteralPath $env:PUB_RE_NATIVE_OUTPUT -Recurse -Force
