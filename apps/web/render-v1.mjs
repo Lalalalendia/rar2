@@ -69,6 +69,143 @@ function inlineImageHref(resource) {
   return /^data:image\/(?:png|jpeg|jpg|gif);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : null;
 }
 
+const Q16_ONE = 65_536;
+
+function emuNumberToCss(value, view) {
+  return (finite(value, "EMU number") / view.emu_per_css_px) * view.zoom;
+}
+
+export function imageContentRotationGeometry(bounds, degrees = null) {
+  const x = finite(bounds.x, "image.rotation.bounds.x");
+  const y = finite(bounds.y, "image.rotation.bounds.y");
+  const width = finite(bounds.width, "image.rotation.bounds.width");
+  const height = finite(bounds.height, "image.rotation.bounds.height");
+  if (width <= 0 || height <= 0) return null;
+  if (degrees === null || degrees === undefined || degrees === 0) {
+    return Object.freeze({ x, y, width, height, transform: null });
+  }
+  if (![90, 180, 270].includes(degrees)) return null;
+  const centerX = x + width / 2;
+  const centerY = y + height / 2;
+  if (degrees === 180) {
+    return Object.freeze({
+      x, y, width, height,
+      transform: "rotate(180 " + centerX + " " + centerY + ")"
+    });
+  }
+  return Object.freeze({
+    x: centerX - height / 2,
+    y: centerY - width / 2,
+    width: height,
+    height: width,
+    transform: "rotate(" + degrees + " " + centerX + " " + centerY + ")"
+  });
+}
+
+export function imagePaintGeometry(bounds, sourceWindow = null) {
+  const x = safeInteger(bounds.x, "bounds.x");
+  const y = safeInteger(bounds.y, "bounds.y");
+  const width = safeInteger(bounds.width, "bounds.width");
+  const height = safeInteger(bounds.height, "bounds.height");
+  if (width <= 0 || height <= 0) return null;
+  if (!sourceWindow) return Object.freeze({ x, y, width, height });
+
+  const left = safeInteger(sourceWindow.left_q16, "source_window.left_q16") / Q16_ONE;
+  const top = safeInteger(sourceWindow.top_q16, "source_window.top_q16") / Q16_ONE;
+  const right = safeInteger(sourceWindow.right_q16, "source_window.right_q16") / Q16_ONE;
+  const bottom = safeInteger(sourceWindow.bottom_q16, "source_window.bottom_q16") / Q16_ONE;
+  if (right <= left || bottom <= top) return null;
+
+  const sourceLeft = Math.max(left, 0);
+  const sourceTop = Math.max(top, 0);
+  const sourceRight = Math.min(right, 1);
+  const sourceBottom = Math.min(bottom, 1);
+  if (sourceRight <= sourceLeft || sourceBottom <= sourceTop) return null;
+
+  const windowWidth = right - left;
+  const windowHeight = bottom - top;
+  return Object.freeze({
+    x: x - (left / windowWidth) * width,
+    y: y - (top / windowHeight) * height,
+    width: width / windowWidth,
+    height: height / windowHeight
+  });
+}
+
+export function imageRecolorPaintPlan(node) {
+  const effect = node?.image_recolor;
+  if (!effect || effect.preserve_grays !== false) return null;
+  const target = effect.target_rgb;
+  if (!Array.isArray(target) || target.length !== 3) return null;
+  const channels = target.map((value) => {
+    const channel = Number(value);
+    if (!Number.isInteger(channel) || channel < 0 || channel > 255) {
+      throw new RangeError("image_recolor.target_rgb must contain byte values");
+    }
+    return channel / 255;
+  });
+  const luminance = [0.2125, 0.7154, 0.0721];
+  const rows = channels.map((targetChannel) => [
+    luminance[0] * (1 - targetChannel),
+    luminance[1] * (1 - targetChannel),
+    luminance[2] * (1 - targetChannel),
+    0,
+    targetChannel
+  ]);
+  rows.push([0, 0, 0, 1, 0]);
+  return Object.freeze({
+    target_rgb: Object.freeze([...target]),
+    values: rows.flat().join(" ")
+  });
+}
+
+export function resolvedEditorImagePlan(node, resource, page, view) {
+  if (node?.visual_authority !== "reader_scene") return null;
+  const href = inlineImageHref(resource);
+  if (!href) return null;
+  const frame = node.bounds;
+  const geometry = imagePaintGeometry(frame, node.image_source_window ?? null);
+  if (!geometry) return null;
+
+  const rotation = node.image_content_rotation_degrees ?? null;
+  if (rotation !== null && node.image_source_window != null) return null;
+  const localGeometry = {
+    x: geometry.x - frame.x,
+    y: geometry.y - frame.y,
+    width: geometry.width,
+    height: geometry.height
+  };
+  const content = imageContentRotationGeometry(localGeometry, rotation);
+  if (!content) return null;
+  const recolor = imageRecolorPaintPlan(node);
+
+  return Object.freeze({
+    authority: "reader-picture-content",
+    href,
+    resource_id: resource.resource_id,
+    viewport: Object.freeze({
+      x: page.x + emuToCss(frame.x, view),
+      y: page.y + emuToCss(frame.y, view),
+      width: emuToCss(frame.width, view),
+      height: emuToCss(frame.height, view)
+    }),
+    geometry: Object.freeze({
+      x: emuNumberToCss(content.x, view),
+      y: emuNumberToCss(content.y, view),
+      width: emuNumberToCss(content.width, view),
+      height: emuNumberToCss(content.height, view)
+    }),
+    content_transform: content.transform == null ? null : (() => {
+      const match = /^rotate\((90|180|270) ([^ ]+) ([^)]+)\)$/.exec(content.transform);
+      if (!match) return null;
+      return "rotate(" + match[1] + " "
+        + emuNumberToCss(Number(match[2]), view) + " "
+        + emuNumberToCss(Number(match[3]), view) + ")";
+    })(),
+    recolor
+  });
+}
+
 function inlineFontHref(resource) {
   const value = resource?.inline_data_url;
   if (resource?.kind !== "font" || typeof value !== "string") return null;
@@ -259,6 +396,9 @@ export function buildRenderPlan(snapshot, rawView = {}) {
       const paint = node.paint_id ? paints.get(node.paint_id) ?? null : null;
       const story = storyByNode.get(node.node_id) ?? null;
       const resource = node.resource_id ? resources.get(node.resource_id) ?? null : null;
+      const resolvedImage = resource
+        ? resolvedEditorImagePlan(node, resource, { x: pageX, y: pageY }, view)
+        : null;
       const resolvedText = story
         ? resolvedEditorTextPlan(node, resources, { x: pageX, y: pageY }, view)
         : null;
@@ -266,6 +406,7 @@ export function buildRenderPlan(snapshot, rawView = {}) {
         node_id: node.node_id,
         page_id: node.page_id,
         kind: node.kind,
+        visual_authority: node.visual_authority ?? null,
         x: pageX + emuToCss(node.bounds.x, view),
         y: pageY + emuToCss(node.bounds.y, view),
         width: emuToCss(node.bounds.width, view),
@@ -291,7 +432,8 @@ export function buildRenderPlan(snapshot, rawView = {}) {
           mime: resource.mime,
           content_hash: resource.content_hash,
           fetch_handle: resource.fetch_handle,
-          inline_data_url: inlineImageHref(resource)
+          inline_data_url: inlineImageHref(resource),
+          resolved_image: resolvedImage
         }) : null,
         diagnostics: Object.freeze([...(diagnosticsByNode.get(node.node_id) ?? [])]),
         canonical_bounds: Object.freeze({ ...node.bounds })
@@ -367,6 +509,49 @@ function svgNode(tag, attrs) {
   const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
   for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
   return node;
+}
+
+function appendResolvedSvgImage(root, defs, resource, imageId) {
+  const plan = resource?.resolved_image;
+  if (!plan) return false;
+  let filterId = null;
+  if (plan.recolor) {
+    filterId = imageId + "-recolor";
+    const filter = svgNode("filter", {
+      id: filterId,
+      "color-interpolation-filters": "sRGB"
+    });
+    filter.appendChild(svgNode("feColorMatrix", {
+      type: "matrix",
+      values: plan.recolor.values
+    }));
+    defs.appendChild(filter);
+  }
+  const viewport = svgNode("svg", {
+    x: plan.viewport.x,
+    y: plan.viewport.y,
+    width: plan.viewport.width,
+    height: plan.viewport.height,
+    viewBox: "0 0 " + plan.viewport.width + " " + plan.viewport.height,
+    overflow: "hidden",
+    "data-picture-viewport": "fixed-frame",
+    "data-picture-authority": plan.authority
+  });
+  const image = svgNode("image", {
+    x: plan.geometry.x,
+    y: plan.geometry.y,
+    width: plan.geometry.width,
+    height: plan.geometry.height,
+    preserveAspectRatio: "none",
+    filter: filterId ? "url(#" + filterId + ")" : null,
+    transform: plan.content_transform,
+    "data-resource-id": plan.resource_id,
+    "data-image-recolor-authority": plan.recolor ? "source-picture-recolor" : null
+  });
+  image.setAttribute("href", plan.href);
+  viewport.appendChild(image);
+  root.appendChild(viewport);
+  return true;
 }
 
 function appendResolvedSvgText(root, story) {
@@ -451,8 +636,11 @@ class SvgRenderer {
     const size = hostSize(this.host);
     this.root = svgNode("svg", { width: size.width, height: size.height, "data-renderer": "svg" });
     this.host.appendChild(this.root);
+    this.defs = svgNode("defs", { "data-layer": "reader-picture-defs" });
+    this.root.appendChild(this.defs);
     this.plan = buildRenderPlan(this.snapshot, this.view);
     appendSvgFontFaces(this.root, this.plan);
+    let imageIndex = 0;
     for (const page of this.plan.pages) {
       this.root.appendChild(svgNode("rect", {
         x: page.x, y: page.y, width: page.width, height: page.height,
@@ -466,7 +654,20 @@ class SvgRenderer {
           "stroke-width": Math.max(0.5, node.paint.stroke_width_css_px || 0.5),
           "data-node-id": node.node_id
         }));
-        if (node.resource?.inline_data_url) {
+        const paintedResolvedImage = node.resource
+          ? appendResolvedSvgImage(
+              this.root,
+              this.defs,
+              node.resource,
+              "chaptera-editor-image-" + imageIndex++
+            )
+          : false;
+        let paintedGenericImage = false;
+        if (
+          !paintedResolvedImage &&
+          node.visual_authority !== "reader_scene" &&
+          node.resource?.inline_data_url
+        ) {
           const image = svgNode("image", {
             x: node.x,
             y: node.y,
@@ -474,10 +675,11 @@ class SvgRenderer {
             height: node.height,
             preserveAspectRatio: "none",
             "data-resource-id": node.resource.resource_id,
-            "data-resource-authority": "reader-scene-inline"
+            "data-resource-authority": "browser-scene-inline"
           });
           image.setAttribute("href", node.resource.inline_data_url);
           this.root.appendChild(image);
+          paintedGenericImage = true;
         }
         if (node.story && !appendResolvedSvgText(this.root, node.story)) {
           const label = svgNode("text", {
@@ -492,8 +694,20 @@ class SvgRenderer {
           });
           label.textContent = node.story.text.slice(0, 120);
           this.root.appendChild(label);
-        } else if (node.resource && !node.resource.inline_data_url && !node.story) {
-          const label = svgNode("text", { x: node.x + 2, y: node.y + 14, "font-size": 10 });
+        } else if (
+          node.resource &&
+          !paintedResolvedImage &&
+          !paintedGenericImage &&
+          !node.story
+        ) {
+          const label = svgNode("text", {
+            x: node.x + 2,
+            y: node.y + 14,
+            "font-size": 10,
+            "data-image-preview-reason": node.resource.inline_data_url
+              ? "reader_picture_plan_unavailable"
+              : "resource_unavailable"
+          });
           label.textContent = "image:" + node.resource.availability;
           this.root.appendChild(label);
         }

@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: web-render-real-scene-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   benchmark-real-scene:
     strategy:
@@ -103,9 +107,10 @@ jobs:
           assert case["representative_corpus"] is True
           assert case["technology_decision_allowed"] is False
           assert case["viewport_focus"]["mode"] == "first_populated_page"
-          assert case["viewport_focus"]["page_order"] == 1
+          assert case["viewport_focus"]["page_order"] == 0
           assert case["viewport_focus"]["page_id"] == "804583a0-a0fe-5dc0-a121-b5232db7e91e"
-          assert case["viewport_focus"]["pan_y_css_px"] < -1000
+          assert case["viewport_focus"]["preceding_css_px"] == 0
+          assert case["viewport_focus"]["pan_y_css_px"] == 0
           assert case["payload_bytes"] > 0
           assert case["pages"] > 0
           assert case["nodes"] > 0
