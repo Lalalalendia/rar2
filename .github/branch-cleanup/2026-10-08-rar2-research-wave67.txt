@@ -1,0 +1,3 @@
+# Research Wave 67 — completed DGG Windows packaging carrier
+research/package-dgg-tool-windows-01 e17495da60f78e5383e933f41a4b208355d87a4c
+ops/branch-gc-20261008-measure-wave66 d0662b0e54d0345fd5215209fd38714168cfbc6d
