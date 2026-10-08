@@ -42,6 +42,10 @@ SAFE_TEXTBOX_RESTORE_MODULES = SAFE_CONTINUITY_V2_MODULES
 SAFE_FIXED_PDF_CURRENT_REVISION_MODULES = {
     "imported_paragraph_alignment_v1": PUB_EDITOR_PREFIX + "src/imported_paragraph_alignment_v1.rs",
 }
+# #2252 proved this integration-test-only leaf does not own fixed-PDF acceptance.
+SAFE_FIXED_PDF_CURRENT_REVISION_TEST_PATHS = {
+    PUB_EDITOR_PREFIX + "tests/delete_node_runtime_v1.rs",
+}
 # Stage 5 starts from the same measured safe paragraph slice.
 SAFE_DUPLICATE_RECTANGLE_MODULES = {
     "imported_paragraph_alignment_v1": PUB_EDITOR_PREFIX + "src/imported_paragraph_alignment_v1.rs",
@@ -90,6 +94,7 @@ DIRECT_TEXTBOX_RESTORE_OWNERS = (
 
 DIRECT_FIXED_PDF_CURRENT_REVISION_OWNERS = (
     ".github/workflows/editor-fixed-pdf-current-revision.yml",
+    ".github/workflows/w2-longform-fixed-pdf-current-revision.yml",
     "tools/ci/pub_editor_pr_fanout.py",
     "tools/ci/test_pub_editor_pr_fanout.py",
     "tools/run_editor_fixed_pdf_current_revision_v2.py",
@@ -307,9 +312,11 @@ def classify_fixed_pdf_current_revision(
     if not pub_editor_paths:
         return False, "no_fixed_pdf_owner_changed"
 
-    allowed_paths = set(SAFE_FIXED_PDF_CURRENT_REVISION_MODULES.values()) | {
-        PUB_EDITOR_LIB
-    }
+    allowed_paths = (
+        set(SAFE_FIXED_PDF_CURRENT_REVISION_MODULES.values())
+        | SAFE_FIXED_PDF_CURRENT_REVISION_TEST_PATHS
+        | {PUB_EDITOR_LIB}
+    )
     unknown = sorted(set(pub_editor_paths) - allowed_paths)
     if unknown:
         return True, "unknown_or_core_pub_editor_path"
