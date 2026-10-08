@@ -92,6 +92,32 @@ function current(revisionId = BASE, x = 1000) {
   };
 }
 
+
+function readerScene(revisionId = BASE, x = 1000) {
+  return {
+    protocol_version: "chaptera.reader-scene.v1",
+    document_id: DOC,
+    source_hash: SOURCE,
+    revision_id: revisionId,
+    scene_authority: "viewer-geometry-current-revision",
+    stacking_fidelity: "exact",
+    fidelity: { state: "supported", reasons: [] },
+    pages: [{ page_id: PAGE, order: 0, width_emu: 10_058_400, height_emu: 7_772_400 }],
+    nodes: [{
+      node_id: NODE,
+      page_id: PAGE,
+      kind: "shape",
+      bounds: { x, y: 2000, width: 3000, height: 4000 },
+      transform: { a: "1", b: "0", c: "0", d: "1", tx: 0, ty: 0 },
+      paint: { fill_rgb: [32, 96, 192] },
+    }],
+    stories: [],
+    resources: [],
+    fonts: [],
+    diagnostics: [],
+  };
+}
+
 function accepted() {
   return {
     protocol_version: "chaptera.commit-accepted.v1",
@@ -147,10 +173,10 @@ function recorder(handler) {
   return { calls, fetchImpl };
 }
 
-test("current Scene uses cookie credentials and canonical current authoring graph", async () => {
+test("current Scene uses cookie credentials and rich current-revision Reader projection", async () => {
   const { calls, fetchImpl } = recorder((url) => {
-    assert.equal(new URL(url).pathname, "/v1/documents/" + DOC + "/current");
-    return json(current());
+    assert.equal(new URL(url).pathname, "/v1/reader/documents/" + DOC + "/scene");
+    return json(readerScene());
   });
   const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
     documentId: DOC,
@@ -161,11 +187,11 @@ test("current Scene uses cookie credentials and canonical current authoring grap
   assert.equal(scene.protocol_version, "chaptera.scene.v1");
   assert.equal(scene.revision_id, BASE);
   assert.equal(scene.nodes[0].bounds.x, 1000);
+  assert.deepEqual(scene.paints[0].fill, { r: 32, g: 96, b: 192, a: 255 });
   assert.equal(calls[0].options.credentials, "include");
   assert.equal(calls[0].options.cache, "no-store");
   assert.ok(!("x-chaptera-principal-id" in calls[0].options.headers));
 });
-
 test("commit obtains server CSRF and uses document-scoped canonical route", async () => {
   const { calls, fetchImpl } = recorder((url) => {
     const path = new URL(url).pathname;
@@ -228,8 +254,8 @@ test("stale commit re-reads canonical current head before shell rejection", asyn
   assert.equal(calls.at(-1).path, "/v1/documents/" + DOC + "/current");
 });
 
-test("exact scene reconciliation refuses a silently advanced current head", async () => {
-  const { fetchImpl } = recorder(() => json(current(CHILD, 9525)));
+test("exact rich scene reconciliation refuses a silently advanced current head", async () => {
+  const { calls, fetchImpl } = recorder(() => json(readerScene(CHILD, 9525)));
   const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
     documentId: DOC,
     fetchImpl,
@@ -242,8 +268,14 @@ test("exact scene reconciliation refuses a silently advanced current head", asyn
   const scene = await service.sceneForRevision(CHILD);
   assert.equal(scene.revision_id, CHILD);
   assert.equal(scene.nodes[0].bounds.x, 9525);
+  assert.deepEqual(
+    calls.map((call) => call.path),
+    [
+      "/v1/reader/documents/" + DOC + "/scene",
+      "/v1/reader/documents/" + DOC + "/scene",
+    ],
+  );
 });
-
 test("csrf_invalid refreshes /v1/session once and retries the same mutation", async () => {
   let sessionCount = 0;
   let commitCount = 0;

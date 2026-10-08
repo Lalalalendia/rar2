@@ -1,5 +1,5 @@
 import { traceHeadersV1 } from "./observability-v1.mjs";
-import { projectCurrentAuthoringGraphToScene } from "./current-authoring-graph-scene-v1.mjs";
+import { adaptReaderSceneToEditorScene } from "./reader-scene-editor-adapter-v1.mjs";
 
 const COMMIT_REQUEST_V1 = "chaptera.commit-request.v1";
 const COMMIT_REJECTED_V1 = "chaptera.commit-rejected.v1";
@@ -130,18 +130,37 @@ export class ChapteraProductEditorServiceV1 {
   }
 
   async currentScene() {
-    return projectCurrentAuthoringGraphToScene(await this.currentDocument());
+    return adaptReaderSceneToEditorScene(await this.#currentReaderScene());
   }
 
   async sceneForRevision(revisionId) {
     ident(revisionId, "revisionId");
-    const current = await this.currentDocument();
-    if (current.revision_id !== revisionId) {
+    const readerScene = await this.#currentReaderScene();
+    if (readerScene.revision_id !== revisionId) {
       throw new Error(
         "canonical current revision advanced before exact Scene reconciliation",
       );
     }
-    return projectCurrentAuthoringGraphToScene(current);
+    return adaptReaderSceneToEditorScene(readerScene);
+  }
+
+  async #currentReaderScene() {
+    const context = this.#context("scene_read");
+    const result = await this.#fetchJson(
+      "/v1/reader/documents/" + encodeURIComponent(this.documentId) + "/scene",
+      { method: "GET" },
+      context,
+    );
+    this.#throwUnlessOk(result, "current Reader scene");
+    const value = ensureProtocol(
+      result.value,
+      "chaptera.reader-scene.v1",
+      "current Reader scene",
+    );
+    if (value.document_id !== this.documentId) {
+      throw new Error("current Reader scene document identity mismatch");
+    }
+    return clone(value);
   }
 
   async commit(request) {
