@@ -167,6 +167,21 @@ fn build_pdf_artifact(
     )
     .context("project effective PUB pages for bounded PDF conversion")?;
     let projection = project_bounded(authoring);
+    let table_missing_exact_geometry_by_node = bundle
+        .resolved_graph
+        .nodes
+        .values()
+        .filter_map(|node| {
+            let source = node.payload.table.as_ref()?;
+            let story_id = source.story_id?;
+            let story = bundle.resolved_graph.stories.get(&story_id)?;
+            let cells = pub_reader::materialize_bounded_table_cells(source, story).ok()?;
+            Some((
+                node.header.id,
+                cells.iter().filter(|cell| cell.bounds.is_none()).count(),
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
     let visual = bundle.geometry;
     let viewer_scene = visual.scene.clone();
 
@@ -469,10 +484,15 @@ fn build_pdf_artifact(
         .flat_map(|table| table.cells.iter())
         .filter(|cell| cell.row_span > 1 || cell.column_span > 1)
         .count();
-    let table_fallback_geometry_cell_count = visual
+    let table_missing_exact_geometry_cell_count = visual
         .tables
         .iter()
-        .map(|table| table.fallback_geometry_cell_count)
+        .map(|table| {
+            table_missing_exact_geometry_by_node
+                .get(&table.node_id)
+                .copied()
+                .unwrap_or(0)
+        })
         .sum::<usize>();
     let table_nonempty_cell_count = visual
         .tables
@@ -696,7 +716,7 @@ fn build_pdf_artifact(
                     "table_max_rows": table_max_rows,
                     "table_max_columns": table_max_columns,
                     "table_spanning_cell_count": table_spanning_cell_count,
-                    "table_fallback_geometry_cell_count": table_fallback_geometry_cell_count,
+                    "table_missing_exact_geometry_cell_count": table_missing_exact_geometry_cell_count,
                     "table_nonempty_cell_count": table_nonempty_cell_count,
                     "table_story_range_cell_count": table_story_range_cell_count,
                     "table_hidden_fill_cell_count": table_hidden_fill_cell_count,
