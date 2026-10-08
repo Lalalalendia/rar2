@@ -1,3 +1,4 @@
+// CI control: verify exact FONT leaf fastpath after routing.
 use super::{
     BlockObservation, GENERAL_CONTAINER, QuillTypographyReadError, VARIABLE_BLOCK_TYPES,
     checked_end, parse_block, read_u16, read_u32, to_usize,
