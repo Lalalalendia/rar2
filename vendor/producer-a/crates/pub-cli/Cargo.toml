@@ -10,6 +10,7 @@ name = "pub"
 path = "src/main.rs"
 
 [dependencies]
+chaptera-viewer-render-plan = { path = "../../../../crates/chaptera-viewer-render-plan" }
 anyhow.workspace = true
 clap.workspace = true
 serde_json.workspace = true
