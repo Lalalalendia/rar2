@@ -1,0 +1,4 @@
+# Research Wave 76 — completed Carlton Year-heading measurements
+research/carlton-heading-frame-geometry-1046 e14a123e77fea470dd6ae4cb733230917aea6e30
+research/carlton-heading-frame-geometry-1046-v2 9dfd0f373722f21de96d9de01a946f5e1d6008c3
+ops/branch-gc-20261008-research-wave75 73a2f2a3690bf29717d74b540e66ca9a43f79240
