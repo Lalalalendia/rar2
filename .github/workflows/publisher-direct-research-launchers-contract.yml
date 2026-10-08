@@ -5,6 +5,10 @@ on:
     paths:
       - "tools/windows/run_master_projection_stack_auth_direct.ps1"
       - "tools/windows/run_paragraph_metrics_auth_direct.ps1"
+      - "tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1"
+      - "tools/research-runner/experiments/paragraph-line-spacing-0p75-native-01.packet.json"
+      - "tools/research-runner/operations/paragraph_line_spacing_0p75_native_01.ps1"
+      - "tools/research-runner/analysis/paragraph_line_spacing_0p75_structural.py"
       - ".github/workflows/publisher-direct-research-launchers-contract.yml"
 
 permissions:
@@ -29,7 +33,8 @@ jobs:
           $ErrorActionPreference = "Stop"
           foreach ($path in @(
             "tools/windows/run_master_projection_stack_auth_direct.ps1",
-            "tools/windows/run_paragraph_metrics_auth_direct.ps1"
+            "tools/windows/run_paragraph_metrics_auth_direct.ps1",
+            "tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1"
           )) {
             $tokens = $null
             $errors = $null
@@ -44,13 +49,19 @@ jobs:
             }
           }
 
+          python -m py_compile tools/research-runner/analysis/paragraph_line_spacing_0p75_structural.py
+          if ($LASTEXITCODE -ne 0) {
+            throw "Python parser rejected focused 0.75 structural analyzer."
+          }
+
       - name: Enforce offline bounded launcher contract
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $paths = @(
             "tools/windows/run_master_projection_stack_auth_direct.ps1",
-            "tools/windows/run_paragraph_metrics_auth_direct.ps1"
+            "tools/windows/run_paragraph_metrics_auth_direct.ps1",
+            "tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1"
           )
           foreach ($path in $paths) {
             $text = Get-Content -LiteralPath $path -Raw
@@ -86,6 +97,19 @@ jobs:
               )) {
                 if (-not $text.Contains($required)) {
                   throw "Missing master-stack receipt marker '$required' in $path"
+                }
+              }
+            }
+            if ($path -eq "tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1") {
+              foreach ($required in @(
+                "paragraph-line-spacing-0p75-native-01.packet.json",
+                "line_geometry_fresh_reopen",
+                "Compress-Archive",
+                "RETURN-TO-CHAT-PARAGRAPH-0P75",
+                "PUB_RESEARCH_PACKET_SHA256"
+              )) {
+                if (-not $text.Contains($required)) {
+                  throw "Missing 0.75-SP direct-return marker '$required' in $path"
                 }
               }
             }
