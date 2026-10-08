@@ -36,6 +36,8 @@ jobs:
       shape_id: ${{ steps.command.outputs.shape_id }}
       delta_degrees: ${{ steps.command.outputs.delta_degrees }}
       research_id: ${{ steps.command.outputs.research_id }}
+      target_run_id: ${{ steps.command.outputs.target_run_id }}
+      native_timeout_minutes: ${{ steps.command.outputs.native_timeout_minutes }}
     steps:
       - name: Resolve trusted native command
         id: command
@@ -59,6 +61,7 @@ jobs:
           shape_id = ""
           delta_degrees = ""
           research_id = ""
+          target_run_id = ""
 
           if event_name == "workflow_dispatch":
               manifest_name = os.environ.get("INPUT_MANIFEST_NAME", "")
@@ -81,6 +84,10 @@ jobs:
               )
               research_match = re.fullmatch(
                   r"/pub-re-native research (paragraph-line-spacing-0p75)",
+                  body,
+              )
+              cancel_match = re.fullmatch(
+                  r"/pub-re-native cancel ([1-9][0-9]{0,18})",
                   body,
               )
               if manifest_match is not None:
@@ -106,11 +113,18 @@ jobs:
               elif research_match is not None:
                   command_mode = "research_0p75"
                   research_id = research_match.group(1)
+              elif cancel_match is not None:
+                  command_mode = "cancel_run"
+                  target_run_id = cancel_match.group(1)
+                  if int(target_run_id) > 9223372036854775807:
+                      raise SystemExit("target run id is outside signed 64-bit bounds")
               else:
                   raise SystemExit("invalid PUB RE native control command")
 
           if command_mode in {"snapshot_alias", "rotation_alias"} and alias_re.fullmatch(fixture_alias) is None:
               raise SystemExit("fixture alias is invalid")
+
+          native_timeout_minutes = "30" if command_mode == "research_0p75" else "5"
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"command_mode={command_mode}\n")
@@ -120,13 +134,85 @@ jobs:
               output.write(f"shape_id={shape_id}\n")
               output.write(f"delta_degrees={delta_degrees}\n")
               output.write(f"research_id={research_id}\n")
+              output.write(f"target_run_id={target_run_id}\n")
+              output.write(f"native_timeout_minutes={native_timeout_minutes}\n")
+          PY
+
+  cancel:
+    needs: gate
+    if: ${{ needs.gate.result == 'success' && needs.gate.outputs.command_mode == 'cancel_run' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Cancel trusted native workflow run
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_RUN_ID: ${{ needs.gate.outputs.target_run_id }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+          GITHUB_REPOSITORY_NAME: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          target = int(os.environ["TARGET_RUN_ID"])
+          current = int(os.environ["CURRENT_RUN_ID"])
+          repository = os.environ["GITHUB_REPOSITORY_NAME"]
+          token = os.environ["GITHUB_TOKEN"]
+
+          if target == current:
+              raise SystemExit("refusing to cancel the control run itself")
+
+          base = f"https://api.github.com/repos/{repository}/actions/runs/{target}"
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "chaptera-pub-re-control",
+          }
+
+          with urllib.request.urlopen(urllib.request.Request(base, headers=headers)) as response:
+              payload = json.load(response)
+
+          if payload.get("path") != ".github/workflows/pub-re-native.yml":
+              raise SystemExit("target run is not PUB RE native workflow")
+          if payload.get("name") != "PUB RE native Publisher experiment":
+              raise SystemExit("target run name does not match PUB RE native workflow")
+
+          status = payload.get("status")
+          if status == "completed":
+              print(f"PUB_RE_CANCEL target={target} already_terminal conclusion={payload.get('conclusion')}")
+              raise SystemExit(0)
+          if status not in {"queued", "in_progress"}:
+              raise SystemExit(f"target run has non-cancellable status: {status}")
+
+          request = urllib.request.Request(
+              base + "/cancel",
+              data=b"",
+              headers=headers,
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(request) as response:
+                  if response.status != 202:
+                      raise SystemExit(f"unexpected cancel status: {response.status}")
+          except urllib.error.HTTPError as error:
+              raise SystemExit(f"cancel request failed: HTTP {error.code}") from error
+
+          print(f"PUB_RE_CANCEL target={target} accepted")
           PY
 
   native:
     needs: gate
-    if: ${{ needs.gate.result == 'success' }}
+    if: ${{ needs.gate.result == 'success' && needs.gate.outputs.command_mode != 'cancel_run' }}
     runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
-    timeout-minutes: 30
+    timeout-minutes: ${{ fromJSON(needs.gate.outputs.native_timeout_minutes) }}
     concurrency:
       group: pub-re-native-publisher-oracle
       cancel-in-progress: false
