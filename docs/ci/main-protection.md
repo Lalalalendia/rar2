@@ -27,3 +27,10 @@ Most owner checks are path-filtered. GitHub leaves required checks from skipped 
 - Strict current-main checks can generate restacks; prefer serialized landing rather than relaxing safety without a replacement.
 
 Status is not DONE until admin branch protection and negative controls are verified.
+
+## Verification record — 2026-10-08
+
+- Repository ruleset `Protect main` is active for exact ref `refs/heads/main`.
+- Required GitHub Actions checks: `required-ci` and `frozen-repo-paths`, with strict up-to-date enforcement.
+- Sacrificial PR #2090 intentionally failed `required-ci`; `frozen-repo-paths` stayed green and GitHub reported `mergeable_state=blocked`. It was closed unmerged.
+- This runbook change is the positive control intended to merge through the protected path and verify normal auto-merge behavior.
