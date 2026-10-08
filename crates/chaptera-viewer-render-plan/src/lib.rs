@@ -2184,36 +2184,52 @@ fn fallback_layout(reason: RenderTextLayoutFallbackReasonV1) -> RenderTextLayout
     }
 }
 
+const PUBLISHER_THREE_QUARTER_POINT_EQUIVALENT_EMU_V1: u32 = 9 * 12_700;
 const PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1: u32 = 12 * 12_700;
 const PUBLISHER_ONE_POINT_FIVE_POINT_EQUIVALENT_EMU_V1: u32 = 18 * 12_700;
+
+fn source_paragraph_line_spacing_for_range_v1(
+    visual: &ViewerGeometryDocument,
+    story_id: StoryId,
+    scalar_start: u32,
+    scalar_end: u32,
+) -> Option<ViewerParagraphLineSpacing> {
+    if scalar_start >= scalar_end {
+        return None;
+    }
+    let story = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == story_id)?;
+
+    let mut intersecting = visual
+        .paragraph_line_spacings
+        .iter()
+        .filter(|run| run.story_id == story_id)
+        .filter(|run| run.applies_to_story_text(&story.text))
+        .filter(|run| run.scalar_end > scalar_start && run.scalar_start < scalar_end);
+
+    let run = intersecting.next()?;
+    if intersecting.next().is_some()
+        || run.scalar_start > scalar_start
+        || run.scalar_end < scalar_end
+    {
+        return None;
+    }
+    Some(run.line_spacing)
+}
 
 fn source_paragraph_line_spacing_v1(
     visual: &ViewerGeometryDocument,
     fragment: &RenderTextFragmentV1,
 ) -> Option<ViewerParagraphLineSpacing> {
-    let story = visual
-        .document
-        .stories
-        .iter()
-        .find(|story| story.id == fragment.story_id)?;
-
-    let mut intersecting = visual
-        .paragraph_line_spacings
-        .iter()
-        .filter(|run| run.story_id == fragment.story_id)
-        .filter(|run| run.applies_to_story_text(&story.text))
-        .filter(|run| {
-            run.scalar_end > fragment.scalar_start && run.scalar_start < fragment.scalar_end
-        });
-
-    let run = intersecting.next()?;
-    if intersecting.next().is_some()
-        || run.scalar_start > fragment.scalar_start
-        || run.scalar_end < fragment.scalar_end
-    {
-        return None;
-    }
-    Some(run.line_spacing)
+    source_paragraph_line_spacing_for_range_v1(
+        visual,
+        fragment.story_id,
+        fragment.scalar_start,
+        fragment.scalar_end,
+    )
 }
 
 fn scale_proportional_line_height_emu_v1(
@@ -2223,7 +2239,8 @@ fn scale_proportional_line_height_emu_v1(
     if natural_line_height_emu <= 0
         || !matches!(
             point_equivalent_emu,
-            PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1
+            PUBLISHER_THREE_QUARTER_POINT_EQUIVALENT_EMU_V1
+                | PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1
                 | PUBLISHER_ONE_POINT_FIVE_POINT_EQUIVALENT_EMU_V1
         )
     {
@@ -2370,8 +2387,10 @@ fn resolve_text_layout_v1(
             if projected_target_frame_node_id.is_none() =>
         {
             return resolve_mixed_size_text_layout_v1(
+                visual,
                 fragment,
                 font,
+                font_is_source_resolved,
                 node_id,
                 &bounds,
                 &fingerprint,
@@ -3437,8 +3456,15 @@ mod tests {
     }
 
     #[test]
-    fn proportional_line_height_scales_only_proven_single_and_one_point_five_modes() {
+    fn proportional_line_height_scales_only_native_proven_modes() {
         let natural = 198_636;
+        assert_eq!(
+            scale_proportional_line_height_emu_v1(
+                natural,
+                PUBLISHER_THREE_QUARTER_POINT_EQUIVALENT_EMU_V1,
+            ),
+            Some(148_977)
+        );
         assert_eq!(
             scale_proportional_line_height_emu_v1(
                 natural,
