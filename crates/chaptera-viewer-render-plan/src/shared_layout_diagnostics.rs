@@ -44,8 +44,14 @@ pub fn classify_mixed_size_layout_capacity_v1(
         return None;
     }
 
-    let evaluation =
-        evaluate_mixed_size_text_layout_v1(fragment, font, node_id, bounds, &fingerprint).ok()?;
+    let evaluation = super::mixed_size_layout::evaluate_mixed_size_text_layout_v1(
+        fragment,
+        font,
+        node_id,
+        bounds,
+        &fingerprint,
+    )
+    .ok()?;
     let next_line_height = evaluation.stop_width_fit_min_line_height_emu;
     let current_next_fits_height = next_line_height.map(|height| {
         evaluation
