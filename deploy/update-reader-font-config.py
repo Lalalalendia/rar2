@@ -54,6 +54,7 @@ def render_managed_block(existing: set[str]) -> str:
             f'expected_sha256 = "{digest}"\n'
             "face_index = 0\n"
             f'mime = "{mime}"\n'
+            "layout_authoritative = false\n"
         )
     if not blocks:
         return ""

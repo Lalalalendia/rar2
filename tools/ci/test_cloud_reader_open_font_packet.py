@@ -32,6 +32,7 @@ assert 'source_family = "Calibri"' in source
 assert 'source_family = "Cambria"' in source
 assert EXPECTED["Carlito-Regular.ttf"] in source
 assert EXPECTED["Caladea-Regular.ttf"] in source
+assert source.count("layout_authoritative = false") == 2
 
 with tempfile.TemporaryDirectory() as td:
     target = Path(td) / "chaptera.toml"
@@ -44,6 +45,7 @@ with tempfile.TemporaryDirectory() as td:
     assert once == twice
     assert twice.count('source_family = "Calibri"') == 1
     assert twice.count('source_family = "Cambria"') == 1
+    assert twice.count("layout_authoritative = false") == 2
 
     begin = twice.index("# BEGIN CHAPTERA MANAGED OPEN FONT REPLACEMENTS V1")
     end = twice.index("# END CHAPTERA MANAGED OPEN FONT REPLACEMENTS V1")

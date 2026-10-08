@@ -215,6 +215,7 @@ jobs:
                       "face_index": 0,
                       "mime": "font/ttf",
                       "file_name": "Carlito-Regular.ttf",
+                      "layout_authoritative": False,
                   },
                   {
                       "source_family": "Cambria",
@@ -222,6 +223,7 @@ jobs:
                       "face_index": 0,
                       "mime": "font/ttf",
                       "file_name": "Caladea-Regular.ttf",
+                      "layout_authoritative": False,
                   },
               ],
           }
