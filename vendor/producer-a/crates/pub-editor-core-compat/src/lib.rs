@@ -144,14 +144,23 @@ pub const APPLY_TABLE_TRACK_EXTENT_HISTORY_FORWARD_V1: ApplyTableTrackExtentHist
 pub const APPLY_TABLE_TRACK_EXTENT_HISTORY_INVERSE_V1: ApplyTableTrackExtentHistoryV1Fn =
     apply_table_track_extent_history_inverse_v1;
 
-fn assert_serde_owned<T: Serialize + DeserializeOwned>() {}
+fn assert_wire_owned<T>()
+where
+    T: std::fmt::Debug + Clone + PartialEq + Eq + Serialize + DeserializeOwned,
+{
+}
+
+fn assert_copy<T: Copy>() {}
 
 pub fn assert_adapter_wire_traits() {
-    assert_serde_owned::<MoveNodeBatchEntry>();
-    assert_serde_owned::<ResizeNodeBatchEntry>();
-    assert_serde_owned::<ImageCropStateV1>();
-    assert_serde_owned::<TableTrackTargetV1>();
-    assert_serde_owned::<SetTableTrackExtentHistoryV1>();
+    assert_wire_owned::<MoveNodeBatchEntry>();
+    assert_wire_owned::<ResizeNodeBatchEntry>();
+    assert_wire_owned::<ImageCropStateV1>();
+    assert_wire_owned::<TableTrackTargetV1>();
+    assert_wire_owned::<SetTableTrackExtentHistoryV1>();
+
+    // session_image.rs dereferences crop values borrowed from EditOperation.
+    assert_copy::<ImageCropStateV1>();
 }
 
 pub fn assert_geometry_adapter_field_shape(
