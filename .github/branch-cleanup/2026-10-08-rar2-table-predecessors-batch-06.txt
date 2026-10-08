@@ -1,0 +1,13 @@
+# 2026-10-08 — table predecessor + completed GC carrier batch 06
+# Never merge. All refs exact live tips; authority retained in merged successors or clean GC receipts.
+# Runtime must recheck open heads/bases and exact SHA lease.
+
+viewer/table-native-autoformat-cell-paint-01 4da568d572708d9ef09e3d82d9cf4780a69739be # PR 730; final product merged #735
+viewer/table-native-autoformat-cell-paint-02 400c91c755bb458a53fdfa1078bfc6a354dd2225 # PR 734; final product merged #735
+viewer/table-text-vertical-align-auth-01 8c3783120b40f602cdf182bb71ee38bf2039322d # PR 1648; clean authority merged #1692
+viewer/table-vertical-align-clean-main-02 340b60f4d1a14ad5ad77edaaa117148d75d75073 # PR 1680; superseded by merged #1692
+viewer/table-single-line-natural-height-01 25312c5a9a8c17f53bb8f4e0906e691ddc425f16 # PR 1681; final one-file law merged #1696
+viewer/table-single-line-natural-height-02 5b39271c0bdc74aac7bf668f10ea18e48754550c # PR 1693; final one-file law merged #1696
+viewer/table-single-line-natural-height-03 b5ad733ef053c97604a9acbc54bd672c68cdf078 # PR 1695; final one-file law merged #1696
+ops/branch-gc-20261008-viewer-restacks-batch-05 92cf7c329027cab0be7f3c86670adaa7d7c8c9fe # completed #2083 receipt 9/9
+ops/branch-gc-20261008-measure-terminal-batch-05 ccd56155b2f1ff42b49db96cbde61f25bda1ad89 # completed #2091 receipt 12/12
