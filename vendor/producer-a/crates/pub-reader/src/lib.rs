@@ -95,7 +95,7 @@ pub use family_classifier::{
 };
 use grouped_projection::{
     GroupedProjectionContext, coordinate_rect_i128, project_grouped_object_shape,
-    project_rect_trunc,
+    project_rect_trunc,, shape_has_nonzero_rotation, shape_has_fsp_flag
 };
 pub use guide_bridge::{
     PubGroundedGuideBuild, PubGuideObservation, PubGuideProjectionDiagnostic,
@@ -243,7 +243,7 @@ pub use story_frame_analysis::{
 use story_frame_projection::{
     add_missing_link_target_diagnostics, build_story_frame, unique_story_id_scalar,
 };
-use story_materialization::materialize_story_catalogs;
+use story_materialization::{decode_utf16le_strict, materialize_story_catalogs};
 pub use story_provenance::has_exact_mature_quill_story_identity_v1;
 pub use structural_base::{
     PUB_STRUCTURAL_BASE_SCHEMA_V1, PubStructuralBaseCandidate, PubStructuralBaseManifest,
