@@ -1,29 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/pub-core",
-  "crates/pub-cfb",
-  "crates/pub-contents",
-  "crates/pub-quill",
-  "crates/pub-escher",
-  "crates/pub-model",
-  "crates/pub-layout",
-  "crates/pub-format-registry",
-  "crates/pub-reader",
-  "crates/pub-viewer",
-  "crates/pub-interaction",
-  "crates/pub-export",
-  "crates/pub-output",
-  "crates/pub-pdf",
-  "crates/pub-idml",
-  "crates/pub-docx",
-  "crates/pub-odg",
-  "crates/pub-writer",
-  "crates/pub-editor-authoring-core",
-  "crates/pub-editor-geometry-core",
-  "crates/pub-editor-table-core",
-  "crates/pub-editor",
-  "crates/pub-cli",
+  "crates/*",
   "producer",
 ]
 
