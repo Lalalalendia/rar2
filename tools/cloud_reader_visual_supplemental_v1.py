@@ -158,6 +158,14 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
             candidate_raster_sha256 = sha256(png)
             if candidate_raster_sha256 != checked_sha256_digest(shot["sha256"], "candidate PNG"):
                 raise ValueError(f"candidate PNG identity drift: {shot['filename']}")
+            # The second capture is a digest-only observation: the original
+            # first screenshot remains the sole Publisher-PDF comparison input.
+            second_capture_raster_sha256 = checked_sha256_digest(
+                shot.get("repeat_sha256"), "same-session second SVG PNG"
+            )
+            same_session_capture_equal = (
+                candidate_raster_sha256 == second_capture_raster_sha256
+            )
             candidate = image_grid(png)
             reference_bytes = reference_grid(pair["pages"][index])
             metrics = compare_grid(candidate, reference_bytes)
@@ -174,6 +182,8 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
                 "warning_state": pair.get("warning_state"),
                 "page": index + 1,
                 "candidate_raster_sha256": candidate_raster_sha256,
+                "second_capture_raster_sha256": second_capture_raster_sha256,
+                "same_session_captures_identical": same_session_capture_equal,
                 **metrics,
                 "reference_media_extent_delta": {
                     "width_pt": round(width_pt - ref_page["media_width_pt"], 6),
@@ -194,6 +204,16 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
     page_rows.sort(key=lambda row: (-row["changed_cell_fraction"], row["fixture"], row["page"]))
     pair_rows.sort(key=lambda row: (-row["mean_changed_cell_fraction"], row["fixture"]))
     fractions = [row["changed_cell_fraction"] for row in page_rows]
+    same_session_mismatches = [
+        {
+            "fixture": row["fixture"],
+            "page": row["page"],
+            "first_capture_sha256": row["candidate_raster_sha256"],
+            "second_capture_sha256": row["second_capture_raster_sha256"],
+        }
+        for row in page_rows
+        if not row["same_session_captures_identical"]
+    ]
 
     return {
         "available_reference_pair_count": int(reference["pair_count"]),
@@ -204,6 +224,9 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
         "external_reference_page_count": sum(int(pair["reference_pages"]) for pair in external_reference_pairs),
         "compared_pair_count": len(pair_rows),
         "compared_page_count": len(page_rows),
+        "same_session_capture_compared_page_count": len(page_rows),
+        "same_session_capture_mismatch_page_count": len(same_session_mismatches),
+        "same_session_capture_mismatches": same_session_mismatches,
         "unavailable_pair_count": len(unavailable),
         "corpus_mean_changed_cell_fraction": (
             sum(fractions) / len(fractions) if fractions else None
@@ -339,6 +362,8 @@ def summarize(pairs_csv: Path, browser_receipt: Path, reference_path: Path, out:
             "worker_and_raster_sha256_are_observation_identities_only": True,
             "worker_receipt_sha256_includes_volatile_timings": True,
             "scene_sha256_excludes_worker_timings": True,
+            "same_session_second_capture_is_digest_only": True,
+            "publisher_raster_comparison_uses_first_capture_only": True,
         },
         "pairs": results,
         "unsupported_pairs": unsupported,
