@@ -1,0 +1,6 @@
+# 2026-10-08 — carrier cleanup batch 16
+# Never merge. Completed execution-only GC carrier refs only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+ops/branch-gc-20261008-main-ancestor-batch-14 6564245a38093eb6ab6d59765bf52a80d785d14a # completed #2185 receipt 17/17
+ops/branch-gc-20261008-terminal-superseded-batch-15 219b3643fb9c2ac825af1a37790133350fb211be # completed #2195 receipt 3/3
