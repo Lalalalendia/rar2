@@ -108,10 +108,16 @@ pub(super) fn source_page_paint_orders_v1(
         if node.header.parent_id != page_id.into_canonical() {
             continue;
         }
-        // #632 proves the first carrier-rank class only for visible grouped
-        // Story and image descendants. Grouped TABLE/other classes remain
-        // outside this slice even when they happen to have exact ancestry.
-        if node.payload.story_frame.is_none() && node.payload.image_slot.is_none() {
+        let bounded_grouped_rectangle = node.payload.story_frame.is_none()
+            && node.payload.image_slot.is_none()
+            && node.payload.officeart_shape_type == Some(OFFICEART_SHAPE_TYPE_RECTANGLE);
+        // Existing #632 authority covers Story/image descendants. #2228 adds
+        // exactly one new persisted class: depth-1 OfficeArt rectangles with
+        // exact shape_type=1. Other grouped primitives/tables remain fail-closed.
+        if node.payload.story_frame.is_none()
+            && node.payload.image_slot.is_none()
+            && !bounded_grouped_rectangle
+        {
             continue;
         }
 
