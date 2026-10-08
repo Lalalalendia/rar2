@@ -75,6 +75,12 @@ jobs:
             --jq '.[] | select(.head.repo.full_name == "'"$GH_REPO"'") | .head.ref' |
             sort -u > target/branch-gc/open-heads.txt
 
+          # An open stacked PR may use a non-default branch as its base.
+          # Protect those refs even when they are not open PR heads.
+          gh api --paginate "repos/$GH_REPO/pulls?state=open&per_page=100" \
+            --jq '.[] | .base.ref' |
+            sort -u > target/branch-gc/open-bases.txt
+
           mapfile -t manifests < target/branch-gc/manifests.txt
           declare -A seen=()
 
@@ -95,8 +101,8 @@ jobs:
                 continue
               fi
 
-              if [[ -n "${expected_sha:-}" ]] && [[ ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
-                echo "invalid expected SHA for $branch: $expected_sha" >&2
+              if [[ -z "${expected_sha:-}" || ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "missing or invalid expected SHA for $branch: ${expected_sha:-<missing>}" >&2
                 printf '%s\n' "$entry" >> target/branch-gc/failed.txt
                 continue
               fi
@@ -118,6 +124,12 @@ jobs:
                 continue
               fi
 
+              if grep -Fxq "$branch" target/branch-gc/open-bases.txt; then
+                echo "SKIP open PR base: $branch"
+                printf '%s\n' "$branch" >> target/branch-gc/skipped-open-pr.txt
+                continue
+              fi
+
               remote_sha="$(git ls-remote --heads origin "refs/heads/$branch" | awk 'NR==1 {print $1}')"
               if [[ -z "$remote_sha" ]]; then
                 echo "ABSENT $branch"
@@ -125,13 +137,14 @@ jobs:
                 continue
               fi
 
-              if [[ -n "${expected_sha:-}" && "$remote_sha" != "$expected_sha" ]]; then
+              if [[ "$remote_sha" != "$expected_sha" ]]; then
                 echo "SKIP sha mismatch: $branch expected=$expected_sha actual=$remote_sha"
                 printf '%s\t%s\t%s\n' "$branch" "$expected_sha" "$remote_sha" >> target/branch-gc/skipped-sha-mismatch.txt
                 continue
               fi
 
-              if git push origin --delete "$branch"; then
+              # Atomic compare-and-delete: a moved ref must survive.
+              if git push --force-with-lease="refs/heads/$branch:$expected_sha" origin ":refs/heads/$branch"; then
                 echo "DELETED $branch"
                 printf '%s\n' "$branch" >> target/branch-gc/deleted.txt
               else
