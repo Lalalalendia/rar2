@@ -75,6 +75,7 @@ pub use link_text_frame_tail_v1::TextFrameLinkTransitionV1;
 pub use pub_editor_geometry_core::{
     MAX_MOVE_NODES_V1, MAX_RESIZE_NODES_V1, MoveNodeBatchEntry, ResizeNodeBatchEntry,
 };
+pub use pub_editor_image_core::ImageCropStateV1;
 pub use pub_editor_table_core::{
     SetTableTrackExtentErrorV1, SetTableTrackExtentHistoryV1, TABLE_TRACK_EXTENT_HISTORY_V1,
     TableTrackExtentHistoryErrorV1, TableTrackExtentPlanV1, TableTrackTargetV1,
@@ -256,14 +257,6 @@ fn replace_scalar_range_text(
     after.push_str(replacement_text);
     after.push_str(&text[end..]);
     Some(after)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ImageCropStateV1 {
-    pub top_raw: Option<u32>,
-    pub bottom_raw: Option<u32>,
-    pub left_raw: Option<u32>,
-    pub right_raw: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
