@@ -235,17 +235,35 @@ try {
         if (node.kind === "picture_frame") {
           return semantic;
         }
-        const lineWidth = Number(node.paint?.line?.width_emu ?? 0);
-        if (Number.isFinite(lineWidth) && lineWidth > 0) {
-          const half = lineWidth / 2;
-          return {
-            x: semantic.x - half,
-            y: semantic.y - half,
-            width: semantic.width + lineWidth,
-            height: semantic.height + lineWidth
-          };
+
+        const boxes = [];
+        if (Array.isArray(node.paint?.fill_rgb)) boxes.push(semantic);
+        if (node.table) boxes.push(semantic);
+
+        const placements = node.decorative_border?.placements ?? [];
+        if (placements.length) {
+          for (const placement of placements) {
+            if (placement?.bounds) boxes.push(placement.bounds);
+          }
+        } else {
+          const lineWidth = Number(node.paint?.line?.width_emu ?? 0);
+          if (Number.isFinite(lineWidth) && lineWidth > 0) {
+            const half = lineWidth / 2;
+            boxes.push({
+              x: semantic.x - half,
+              y: semantic.y - half,
+              width: semantic.width + lineWidth,
+              height: semantic.height + lineWidth
+            });
+          }
         }
-        return semantic;
+
+        if (!boxes.length) return null;
+        const left = Math.min(...boxes.map((box) => Number(box.x)));
+        const top = Math.min(...boxes.map((box) => Number(box.y)));
+        const right = Math.max(...boxes.map((box) => Number(box.x) + Number(box.width)));
+        const bottom = Math.max(...boxes.map((box) => Number(box.y) + Number(box.height)));
+        return { x: left, y: top, width: right - left, height: bottom - top };
       };
       const diagnosticGeometry = {
         schema: "chaptera.visual-paint-bounds-geometry.v1",
