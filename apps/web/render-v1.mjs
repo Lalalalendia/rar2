@@ -406,6 +406,7 @@ export function buildRenderPlan(snapshot, rawView = {}) {
         node_id: node.node_id,
         page_id: node.page_id,
         kind: node.kind,
+        visual_authority: node.visual_authority ?? null,
         x: pageX + emuToCss(node.bounds.x, view),
         y: pageY + emuToCss(node.bounds.y, view),
         width: emuToCss(node.bounds.width, view),
@@ -639,6 +640,7 @@ class SvgRenderer {
     this.root.appendChild(this.defs);
     this.plan = buildRenderPlan(this.snapshot, this.view);
     appendSvgFontFaces(this.root, this.plan);
+    let imageIndex = 0;
     for (const page of this.plan.pages) {
       this.root.appendChild(svgNode("rect", {
         x: page.x, y: page.y, width: page.width, height: page.height,
@@ -657,9 +659,28 @@ class SvgRenderer {
               this.root,
               this.defs,
               node.resource,
-              "chaptera-editor-image-" + node.node_id.replace(/[^A-Za-z0-9_-]/g, "_")
+              "chaptera-editor-image-" + imageIndex++
             )
           : false;
+        let paintedGenericImage = false;
+        if (
+          !paintedResolvedImage &&
+          node.visual_authority !== "reader_scene" &&
+          node.resource?.inline_data_url
+        ) {
+          const image = svgNode("image", {
+            x: node.x,
+            y: node.y,
+            width: node.width,
+            height: node.height,
+            preserveAspectRatio: "none",
+            "data-resource-id": node.resource.resource_id,
+            "data-resource-authority": "browser-scene-inline"
+          });
+          image.setAttribute("href", node.resource.inline_data_url);
+          this.root.appendChild(image);
+          paintedGenericImage = true;
+        }
         if (node.story && !appendResolvedSvgText(this.root, node.story)) {
           const label = svgNode("text", {
             x: node.x + 2,
@@ -673,7 +694,12 @@ class SvgRenderer {
           });
           label.textContent = node.story.text.slice(0, 120);
           this.root.appendChild(label);
-        } else if (node.resource && !paintedResolvedImage && !node.story) {
+        } else if (
+          node.resource &&
+          !paintedResolvedImage &&
+          !paintedGenericImage &&
+          !node.story
+        ) {
           const label = svgNode("text", {
             x: node.x + 2,
             y: node.y + 14,
