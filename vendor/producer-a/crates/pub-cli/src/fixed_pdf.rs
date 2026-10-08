@@ -91,7 +91,6 @@ fn retain_scene_node_ids(
     (kept, filtered_count)
 }
 
-
 #[derive(Default)]
 struct ViewerTextMaterialization {
     text_runs: Vec<FixedTextRun>,
@@ -889,7 +888,6 @@ mod tests {
         assert_eq!(kept, vec![present]);
         assert_eq!(filtered_count, 1);
     }
-
 
     fn color_fragment(colors: [[u8; 3]; 2]) -> RenderTextFragmentV1 {
         RenderTextFragmentV1 {
