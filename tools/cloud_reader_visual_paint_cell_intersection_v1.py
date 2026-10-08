@@ -105,6 +105,8 @@ def main() -> None:
     reclassified = Counter()
     center_membership = Counter()
     area_membership = Counter()
+    remaining_gap_bands = Counter()
+    remaining_nearest_class = Counter()
 
     cell_width = width_emu / GRID_W
     cell_height = height_emu / GRID_H
@@ -147,6 +149,34 @@ def main() -> None:
             center_none_omission += 1
             if not area_names:
                 area_none_omission += 1
+                nearest = None
+                nearest_classes = []
+                for name in sorted(boxes):
+                    for box in boxes[name]:
+                        gap_x = max(box[0] - x1, x0 - box[2], 0.0) / cell_width
+                        gap_y = max(box[1] - y1, y0 - box[3], 0.0) / cell_height
+                        distance = max(gap_x, gap_y)
+                        if nearest is None or distance < nearest - 1e-12:
+                            nearest = distance
+                            nearest_classes = [name]
+                        elif abs(distance - nearest) <= 1e-12 and name not in nearest_classes:
+                            nearest_classes.append(name)
+                if nearest is None:
+                    remaining_gap_bands[">unbounded"] += 1
+                    remaining_nearest_class["none"] += 1
+                else:
+                    if nearest <= 0.5:
+                        band = "<=0.5"
+                    elif nearest <= 1.0:
+                        band = "(0.5,1]"
+                    elif nearest <= 2.0:
+                        band = "(1,2]"
+                    elif nearest <= 4.0:
+                        band = "(2,4]"
+                    else:
+                        band = ">4"
+                    remaining_gap_bands[band] += 1
+                    remaining_nearest_class["+".join(nearest_classes)] += 1
             else:
                 reclassified[area_key] += 1
 
@@ -166,6 +196,12 @@ def main() -> None:
         ),
         "reclassified_by_area_membership": dict(
             sorted(reclassified.items(), key=lambda item: (-item[1], item[0]))
+        ),
+        "remaining_area_none_gap_bands_chebyshev_cells": dict(
+            sorted(remaining_gap_bands.items())
+        ),
+        "remaining_area_none_nearest_paint_class": dict(
+            sorted(remaining_nearest_class.items(), key=lambda item: (-item[1], item[0]))
         ),
         "center_membership_counts": dict(
             sorted(center_membership.items(), key=lambda item: (-item[1], item[0]))
