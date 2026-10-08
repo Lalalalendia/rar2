@@ -352,3 +352,15 @@ mod grouped_rotation_tests {
         );
     }
 }
+
+fn shape_has_nonzero_rotation(shape: &pub_escher::SpContainerObservation) -> bool {
+    shape.fopts.iter().any(|record| {
+        record.properties.iter().any(|property| {
+            property.property_id() == OFFICEART_PROPERTY_ROTATION && property.op != 0
+        })
+    })
+}
+
+fn shape_has_fsp_flag(shape: &pub_escher::SpContainerObservation, flag: u32) -> bool {
+    shape.fsp.as_ref().is_some_and(|fsp| fsp.flags & flag != 0)
+}
