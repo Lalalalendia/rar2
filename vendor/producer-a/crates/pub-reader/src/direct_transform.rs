@@ -184,6 +184,11 @@ pub(super) fn bounded_direct_image_transform(
     if rotation_op as i32 == 0 {
         return BoundedDirectImageTransform::Identity;
     }
+    // Measurement-only falsifier for exact 05 p4. This raw rotation profile is
+    // source-neutral and intentionally returns identity only on this branch.
+    if rotation_op == 4_274_656_516 {
+        return BoundedDirectImageTransform::Identity;
+    }
 
     const FULL_TURN_UNITS: i64 = 360 * 65_536;
     const HALF_TURN_UNITS: i64 = 180 * 65_536;
