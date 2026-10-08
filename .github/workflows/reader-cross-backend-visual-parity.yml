@@ -1,4 +1,5 @@
 name: Reader cross-backend visual parity
+# rebaseline: exact-slice partial Story overset admission
 # rebaseline: exact-slice SLI causal classifier
 
 on:
@@ -61,7 +62,15 @@ jobs:
         run: cargo build -p chaptera-server --bin chaptera --jobs 2
 
       - name: Census Cloud shared-layout fallback causes
-        run: cargo test -p chaptera-server real_reference_text_layout_fallback_census_probe -- --ignored --nocapture
+        shell: bash
+        run: |
+          set -euo pipefail
+          census="$RUNNER_TEMP/sample-newsletter-text-layout-census.log"
+          cargo test -p chaptera-server real_reference_text_layout_fallback_census_probe -- --ignored --nocapture \
+            | tee "$census"
+          grep -Fq 'text_nodes=58 shared_frames=57' "$census"
+          grep -Fq 'backend_fallbacks={"shared_layout_incomplete":1}' "$census"
+          grep -Fq 'fallback_causes={"mixed_size_fail_closed":1}' "$census"
 
       - name: Census Story extent mismatch causes
         run: cargo test -p chaptera-server --test reader_story_extent_census sample_newsletter_story_extent_mismatch_census -- --ignored --nocapture

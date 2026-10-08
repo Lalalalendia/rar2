@@ -403,6 +403,42 @@ mod tests {
     }
 
     #[test]
+    fn exact_later_frame_slice_can_admit_visible_partial_story_overset() {
+        let first_node_id = NodeId::from_canonical(canonical(2));
+        let second_node_id = NodeId::from_canonical(canonical(10));
+        let story_id = StoryId::from_canonical(canonical(3));
+        let visual = slice_visual(first_node_id, story_id);
+        let fragment = fragment(story_id, 6, 11, "world");
+        let scalar_base = exact_direct_story_slice_scalar_base_v1(
+            &visual,
+            visual.document.pages[0].id,
+            second_node_id,
+            None,
+            &fragment,
+            "hello world",
+        );
+        assert_eq!(scalar_base, Some(6));
+
+        let overset = pub_layout::ResolveDiagnostic {
+            code: "story_overset".into(),
+            severity: pub_layout::ResolveSeverity::FidelityWarning,
+            origin: story_id.into_canonical(),
+            message: "bounded exact-slice overset".into(),
+        };
+        assert!(
+            ordinary_incomplete_layout_is_admitted_partial_story_overset(
+                None,
+                std::slice::from_ref(&overset),
+                story_id,
+                true,
+                Some(9),
+                fragment.scalar_end,
+            ),
+            "after exact-slice scalar rebasing, visible partial lines remain source-owned and may be painted"
+        );
+    }
+
+    #[test]
     fn modified_first_frame_prefix_stays_fail_closed() {
         let node_id = NodeId::from_canonical(canonical(2));
         let story_id = StoryId::from_canonical(canonical(3));
