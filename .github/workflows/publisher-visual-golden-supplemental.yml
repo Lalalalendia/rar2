@@ -192,8 +192,10 @@ jobs:
           mkdir -p "$RUNNER_TEMP/publisher-visual-supplemental"
           python tools/cloud_reader_visual_supplemental_v1.py prepare             tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv             out/pinned1050/materialized/native             "$RUNNER_TEMP/publisher-visual-supplemental/fixtures"             "$RUNNER_TEMP/publisher-visual-supplemental/manifest.json"
 
-      - name: Verify measurement-only Rust formatting
-        run: cargo fmt --all -- --check
+      - name: Format diagnostic-only Rust on runner
+        run: |
+          cargo fmt --all
+          git diff --check
 
       - name: Prepare Batch01 discriminator fixtures
         run: |
