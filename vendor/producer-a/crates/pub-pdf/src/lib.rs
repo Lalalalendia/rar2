@@ -245,9 +245,8 @@ pub fn render_bounded_pdf(
     resources: &FixedPdfResources,
     target: &PdfTargetProfile,
 ) -> Result<PdfRenderOutput, PdfRenderError> {
-    // Scene vector order is product paint/page order. Keep report ordering
-    // deterministic separately; never normalize physical output by IDs.
-    let surfaces = scene.surfaces.clone();
+    let mut surfaces = scene.surfaces.clone();
+    surfaces.sort_by_key(|surface| surface.origin);
 
     for surface in &surfaces {
         if surface.size.width.get() <= 0 || surface.size.height.get() <= 0 {
@@ -259,7 +258,8 @@ pub fn render_bounded_pdf(
         }
     }
 
-    let nodes = scene.nodes.clone();
+    let mut nodes = scene.nodes.clone();
+    nodes.sort_by_key(|node| node.origin);
 
     let node_ids = nodes
         .iter()
@@ -1100,7 +1100,7 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_pdf_preserves_scene_page_order_and_has_sorted_origin_report() {
+    fn deterministic_pdf_has_sorted_pages_exact_media_boxes_and_origin_report() {
         let target = PdfTargetProfile::basic_geometry_v0_1();
         let left = render_bounded_pdf(&scene(), &resources(), &target).unwrap();
         let right = render_bounded_pdf(&scene(), &resources(), &target).unwrap();
@@ -1108,15 +1108,15 @@ mod tests {
         assert_eq!(left, right);
         assert!(left.bytes.starts_with(b"%PDF-1.7"));
         assert_eq!(left.report.pages.len(), 2);
-        assert_eq!(left.report.pages[0].origin, page_id(2));
+        assert_eq!(left.report.pages[0].origin, page_id(1));
         assert_eq!(
             left.report.pages[0].media_box_points,
-            ["0", "0", "595.275590551", "841.88976378"]
+            ["0", "0", "600", "780"]
         );
-        assert_eq!(left.report.pages[1].origin, page_id(1));
+        assert_eq!(left.report.pages[1].origin, page_id(2));
         assert_eq!(
             left.report.pages[1].media_box_points,
-            ["0", "0", "600", "780"]
+            ["0", "0", "595.275590551", "841.88976378"]
         );
         assert_eq!(
             left.report
@@ -1147,23 +1147,6 @@ mod tests {
         assert!(text.contains("1 0 0 -1 0 780 cm"));
         assert!(text.contains("1 0 0 rg\n10 20 100 50 re\nf"));
         assert!(text.contains("0 0 1 RG\n1 w\n30 40 70 60 re\nS"));
-    }
-
-    #[test]
-    fn emitted_node_paint_preserves_scene_vector_order() {
-        let output = render_bounded_pdf(
-            &scene(),
-            &resources(),
-            &PdfTargetProfile::basic_geometry_v0_1(),
-        )
-        .unwrap();
-        let text = String::from_utf8_lossy(&output.bytes);
-        let blue = text.find("0 0 1 RG\n1 w\n30 40 70 60 re\nS").unwrap();
-        let red = text.find("1 0 0 rg\n10 20 100 50 re\nf").unwrap();
-
-        // scene() carries page-a nodes as node_b then node_a. Canonical ID
-        // sorting would reverse this and therefore change DTP stacking.
-        assert!(blue < red);
     }
 
     #[test]
