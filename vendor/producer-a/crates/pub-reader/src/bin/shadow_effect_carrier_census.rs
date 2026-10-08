@@ -172,9 +172,10 @@ fn main() -> Result<()> {
     );
     let label = args
         .next()
-        .context("usage: shadow_effect_carrier_census SOURCE.pub LABEL")?
+        .context("usage: shadow_effect_carrier_census SOURCE.pub LABEL [CANDIDATE_MAP.json]")?
         .to_string_lossy()
         .into_owned();
+    let candidate_map_output = args.next().map(PathBuf::from);
     if args.next().is_some() {
         anyhow::bail!("unexpected extra arguments");
     }
@@ -211,6 +212,7 @@ fn main() -> Result<()> {
         ..CandidateCounts::default()
     };
     let mut histograms = CandidateHistograms::default();
+    let mut native_shadow_02bf_node_ids = BTreeSet::<String>::new();
 
     for shape in &shapes.shapes {
         let seqs = shape
@@ -238,6 +240,15 @@ fn main() -> Result<()> {
         let node_kind = format!("{:?}", node.kind);
         for fopt in &shape.fopts {
             for entry in &fopt.properties {
+                if fopt.rec_type == pub_escher::OFFICE_ART_FOPT
+                    && entry.property_id() == NATIVE_SHADOW_CANDIDATE_02BF
+                    && !entry.f_bid()
+                    && !entry.f_complex()
+                    && entry.op == 0x0008_0000
+                {
+                    native_shadow_02bf_node_ids
+                        .insert(node_id.as_canonical().to_string());
+                }
                 if !is_candidate(entry.property_id()) {
                     continue;
                 }
@@ -271,6 +282,16 @@ fn main() -> Result<()> {
                 observe_candidate(&mut histograms, entry, fopt.rec_type, None, true);
             }
         }
+    }
+
+    if let Some(path) = candidate_map_output {
+        let payload = serde_json::json!({
+            "schema": "chaptera.shadow-effect-candidate-node-map.v1",
+            "candidate": "primary_0x02BF_scalar_0x00080000",
+            "candidate_node_ids": native_shadow_02bf_node_ids,
+        });
+        fs::write(&path, serde_json::to_vec_pretty(&payload)?)
+            .with_context(|| format!("write {}", path.display()))?;
     }
 
     let claims = BTreeMap::from([
