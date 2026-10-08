@@ -10,6 +10,7 @@ import {
   imageResourcePaintPlan,
   presetShapePaintGeometry,
   previewTextPaintPlan,
+  previewTextRunPaintPlan,
   previewTextSizeSource,
   resolvedTextLinePaintPlan,
   resolvedTextViewportGeometry,
@@ -469,11 +470,73 @@ test("browser preview remains conservative when bounded style is unavailable", (
 test("browser preview font-size provenance is distinct from source font identity", () => {
   assert.equal(previewTextSizeSource({}), "generic_9pt");
   assert.equal(previewTextSizeSource({ preview_text_style: { font_size_emu: null } }), "generic_9pt");
+  assert.equal(previewTextSizeSource({
+    text: "ABC",
+    preview_text_style: {
+      font_size_emu: null,
+      runs: [{ scalar_start: 0, scalar_end: 3, font_size_emu: 304_800 }]
+    }
+  }), "source_run_preview");
   assert.equal(previewTextSizeSource({ preview_text_style: { font_size_emu: 457_200 } }),
     "source_uniform_preview");
   assert.equal(previewTextSizeSource({}, { font_size_emu: 152_400 }), "shared_resolved_plan");
   assert.equal(previewTextSizeSource({ preview_text_style: { font_size_emu: 457_200 } },
     { font_size_emu: 152_400 }), "shared_resolved_plan");
+});
+
+test("browser preview preserves complete mixed source-size runs without source font identity", () => {
+  assert.deepEqual(
+    previewTextRunPaintPlan({
+      text: "HEAD sub\r",
+      preview_text_style: {
+        color_rgb: [112, 48, 160],
+        runs: [
+          { scalar_start: 0, scalar_end: 4, font_size_emu: 304_800 },
+          { scalar_start: 4, scalar_end: 8, font_size_emu: 177_800 }
+        ]
+      }
+    }),
+    {
+      runs: [
+        {
+          scalar_start: 0,
+          scalar_end: 4,
+          text: "HEAD",
+          font_size_emu: 304_800,
+          line_height_emu: 381_000
+        },
+        {
+          scalar_start: 4,
+          scalar_end: 8,
+          text: " sub",
+          font_size_emu: 177_800,
+          line_height_emu: 222_250
+        }
+      ],
+      tail_text: "\r"
+    }
+  );
+});
+
+test("browser preview mixed-size runs fail closed on gaps or overlap", () => {
+  assert.equal(previewTextRunPaintPlan({
+    text: "ABCD",
+    preview_text_style: {
+      runs: [
+        { scalar_start: 0, scalar_end: 2, font_size_emu: 304_800 },
+        { scalar_start: 3, scalar_end: 4, font_size_emu: 177_800 }
+      ]
+    }
+  }), null);
+  assert.equal(previewTextSizeSource({
+    text: "ABCD",
+    preview_text_style: {
+      runs: [
+        { scalar_start: 0, scalar_end: 3, font_size_emu: 304_800 },
+        { scalar_start: 2, scalar_end: 4, font_size_emu: 177_800 }
+      ]
+    }
+  }), "generic_9pt");
 });
 
 test("shared resolved text paint plan carries server text color", () => {
