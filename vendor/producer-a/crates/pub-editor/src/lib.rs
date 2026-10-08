@@ -76,16 +76,17 @@ pub use pub_editor_geometry_core::{
     MAX_MOVE_NODES_V1, MAX_RESIZE_NODES_V1, MoveNodeBatchEntry, ResizeNodeBatchEntry,
 };
 pub use pub_editor_image_core::ImageCropStateV1;
-pub use pub_editor_text_core::story_state_id_v1;
-use pub_editor_text_core::{
-    apply_story_range_forward_v1, apply_story_range_inverse_v1, replace_scalar_range_text_v1,
-};
 pub use pub_editor_table_core::{
     SetTableTrackExtentErrorV1, SetTableTrackExtentHistoryV1, TABLE_TRACK_EXTENT_HISTORY_V1,
     TableTrackExtentHistoryErrorV1, TableTrackExtentPlanV1, TableTrackTargetV1,
     apply_table_track_extent_history_forward_v1, apply_table_track_extent_history_inverse_v1,
     canonical_table_track_extent_history_v1, plan_table_track_extent_v1, set_table_track_extent_v1,
 };
+pub use pub_editor_text_core::story_state_id_v1;
+use pub_editor_text_core::{
+    apply_story_range_forward_v1, apply_story_range_inverse_v1, replace_scalar_range_text_v1,
+};
+
 pub use table_rowcol_graph_v1::{
     TableRowColGraphErrorV1, apply_table_structure_snapshot_to_graph_v1,
     table_structure_snapshot_from_graph_v1,
