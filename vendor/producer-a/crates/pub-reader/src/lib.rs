@@ -911,11 +911,26 @@ mod tests {
     #[test]
     fn typography_utf16_to_scalar_range_is_surrogate_safe() {
         let text = "A😀B";
-        assert_eq!(typography_projection::utf16_range_to_scalar_range(text, 1, 3), Some((1, 2)));
-        assert_eq!(typography_projection::utf16_range_to_scalar_range(text, 0, 4), Some((0, 3)));
-        assert_eq!(typography_projection::utf16_range_to_scalar_range(text, 1, 2), None);
-        assert_eq!(typography_projection::utf16_range_to_scalar_range(text, 2, 3), None);
-        assert_eq!(typography_projection::utf16_range_to_scalar_range(text, 3, 1), None);
+        assert_eq!(
+            typography_projection::utf16_range_to_scalar_range(text, 1, 3),
+            Some((1, 2))
+        );
+        assert_eq!(
+            typography_projection::utf16_range_to_scalar_range(text, 0, 4),
+            Some((0, 3))
+        );
+        assert_eq!(
+            typography_projection::utf16_range_to_scalar_range(text, 1, 2),
+            None
+        );
+        assert_eq!(
+            typography_projection::utf16_range_to_scalar_range(text, 2, 3),
+            None
+        );
+        assert_eq!(
+            typography_projection::utf16_range_to_scalar_range(text, 3, 1),
+            None
+        );
     }
 
     fn test_page_id(seed: u8) -> PageId {
@@ -1147,9 +1162,11 @@ mod tests {
 
     #[test]
     fn page_extent_consensus_rejects_conflicts() {
-        let error =
-            publication_document::require_consensus_page_extent(&[(7_772_400, 10_058_400), (7_560_000, 10_692_000)])
-                .unwrap_err();
+        let error = publication_document::require_consensus_page_extent(&[
+            (7_772_400, 10_058_400),
+            (7_560_000, 10_692_000),
+        ])
+        .unwrap_err();
 
         assert!(
             error
@@ -1160,7 +1177,8 @@ mod tests {
 
     #[test]
     fn page_extent_consensus_rejects_zero_dimension() {
-        let error = publication_document::require_consensus_page_extent(&[(7_772_400, 0)]).unwrap_err();
+        let error =
+            publication_document::require_consensus_page_extent(&[(7_772_400, 0)]).unwrap_err();
         assert!(error.to_string().contains("must be positive"));
     }
 
@@ -1259,8 +1277,14 @@ mod tests {
             typography_projection::bounded_quill_text_rgb(None, Some(1), Some(&scheme)),
             Some([0x11, 0x22, 0x33])
         );
-        assert_eq!(typography_projection::bounded_quill_text_rgb(None, Some(2), Some(&scheme)), None);
-        assert_eq!(typography_projection::bounded_quill_text_rgb(None, Some(0), None), None);
+        assert_eq!(
+            typography_projection::bounded_quill_text_rgb(None, Some(2), Some(&scheme)),
+            None
+        );
+        assert_eq!(
+            typography_projection::bounded_quill_text_rgb(None, Some(0), None),
+            None
+        );
         assert_eq!(
             typography_projection::bounded_quill_text_rgb(Some([1, 2, 3]), Some(0), Some(&scheme)),
             None
