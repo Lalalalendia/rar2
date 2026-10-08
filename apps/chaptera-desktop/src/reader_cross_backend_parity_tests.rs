@@ -198,29 +198,38 @@ fn sample_newsletter_cross_backend_page_rasters_144dpi() {
     let mut family_styles = BTreeMap::<String, BTreeSet<String>>::new();
     let mut family_resolved_styles = BTreeMap::<String, BTreeSet<String>>::new();
 
-    for run in &visual.typography_runs {
-        let family = run.source_font_name.trim();
-        if family.is_empty() {
-            continue;
-        }
-        *family_runs.entry(family.to_owned()).or_default() += 1;
-        let style = format!(
-            "bold={};italic={}",
-            run.bold
-                .map_or("unknown".to_owned(), |value| value.to_string()),
-            run.italic
-                .map_or("unknown".to_owned(), |value| value.to_string())
-        );
-        family_styles
-            .entry(family.to_owned())
-            .or_default()
-            .insert(style.clone());
-        if census_registry.resource_for_typography_run(run).is_some() {
-            *family_resolved_runs.entry(family.to_owned()).or_default() += 1;
-            family_resolved_styles
+    for page_index in 0..visual.document.pages.len() {
+        let plan = chaptera_viewer_render_plan::build_page_render_plan_v1(&visual, page_index)
+            .expect("cross-backend font census base render plan");
+        for run in plan
+            .nodes
+            .iter()
+            .filter_map(|node| node.text.as_ref())
+            .flat_map(|text| text.typography.iter())
+        {
+            let family = run.source_font_name.trim();
+            if family.is_empty() {
+                continue;
+            }
+            *family_runs.entry(family.to_owned()).or_default() += 1;
+            let style = format!(
+                "bold={};italic={}",
+                run.bold
+                    .map_or("unknown".to_owned(), |value| value.to_string()),
+                run.italic
+                    .map_or("unknown".to_owned(), |value| value.to_string())
+            );
+            family_styles
                 .entry(family.to_owned())
                 .or_default()
-                .insert(style);
+                .insert(style.clone());
+            if census_registry.resource_for_typography_run(run).is_some() {
+                *family_resolved_runs.entry(family.to_owned()).or_default() += 1;
+                family_resolved_styles
+                    .entry(family.to_owned())
+                    .or_default()
+                    .insert(style);
+            }
         }
     }
 
