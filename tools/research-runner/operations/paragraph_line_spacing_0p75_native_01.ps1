@@ -108,18 +108,25 @@ function Get-MixedSizeSnapshot($range, [string]$phase) {
         finally { Release-Com $char }
     }
     $paragraph = $null
+    $largeRange = $null
     try {
         $paragraph = $range.ParagraphFormat
+        $largeRange = $range.Characters(18, 15)
         return [ordered]@{
             phase = $phase
             range_start = [int]$range.Start
             range_end = [int]$range.End
+            large_run_start = [int]$largeRange.Start
+            large_run_end = [int]$largeRange.End
             font_samples = $samples
             paragraph = Get-ParagraphSnapshot $paragraph $phase
             geometry = Get-LineGeometry $range $phase
         }
     }
-    finally { Release-Com $paragraph }
+    finally {
+        Release-Com $largeRange
+        Release-Com $paragraph
+    }
 }
 
 function New-SeedFixture() {
