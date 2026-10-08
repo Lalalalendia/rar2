@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use pub_export::{ConversionProfile, EnvironmentFence, TargetProfile};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedText, BoundedShapingRuntime,
-    font_fingerprint_sha256, resolve_bounded_shaped_flow,
+    font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
 };
 use pub_model::{EMU_PER_POINT, LengthEmu};
 use pub_output::{
@@ -108,11 +108,29 @@ fn build_pdf_artifact(
     fallback_font_bytes: &[u8],
     fallback_label: String,
 ) -> Result<(Vec<u8>, Value, String)> {
-    let (visual, projection) = pub_viewer::open_mature_0x2c_geometry_with_projection(
+    let classification = pub_viewer::classify_pub_family(pub_bytes);
+    if classification.route != pub_viewer::PubReaderRoute::Mature2c {
+        bail!("bounded PDF conversion currently requires mature 0x2C PUB input");
+    }
+    let bundle = pub_viewer::open_pub_bundle(
         pub_bytes,
         pub_viewer::viewer_geometry_environment_v0_1(),
     )
     .context("open mature-0x2C PUB for bounded PDF conversion")?;
+    let effective_page_ids = bundle
+        .geometry
+        .document
+        .pages
+        .iter()
+        .map(|page| page.id)
+        .collect::<Vec<_>>();
+    let authoring = pub_viewer::bounded_authoring_slice_from_resolved_pages(
+        &bundle.resolved_graph,
+        &effective_page_ids,
+    )
+    .context("project effective mature pages for bounded PDF conversion")?;
+    let projection = project_bounded(authoring);
+    let visual = bundle.geometry;
 
     let embedding = read_opentype_embedding_flags(fallback_font_bytes, 0)
         .context("read fallback-font OpenType embedding flags")?;
