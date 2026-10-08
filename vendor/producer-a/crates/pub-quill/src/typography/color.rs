@@ -1,4 +1,5 @@
 //! Bounded Quill text-color authority.
+//! CI routed-leaf control: comment-only final color fastpath proof.
 //!
 //! This owner contains PL color-reference parsing, direct/scheme color
 //! resolution, effective explicit/inherited color selection, and nested color
