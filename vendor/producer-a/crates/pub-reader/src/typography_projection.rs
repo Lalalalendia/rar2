@@ -5,7 +5,11 @@
 
 use super::*;
 
-pub(super) fn utf16_range_to_scalar_range(text: &str, start_utf16: u32, end_utf16: u32) -> Option<(u32, u32)> {
+pub(super) fn utf16_range_to_scalar_range(
+    text: &str,
+    start_utf16: u32,
+    end_utf16: u32,
+) -> Option<(u32, u32)> {
     if start_utf16 > end_utf16 {
         return None;
     }
