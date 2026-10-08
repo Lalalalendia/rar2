@@ -116,8 +116,7 @@ pub(super) fn has_bounded_grouped_solid_rectangle(
         return false;
     }
     scalar(OFFICE_ART_FILL_BOOLEANS).is_some_and(|flags| {
-        flags & (FILL_USE_FILLED_BIT | FILL_FILLED_BIT)
-            == FILL_USE_FILLED_BIT | FILL_FILLED_BIT
+        flags & (FILL_USE_FILLED_BIT | FILL_FILLED_BIT) == FILL_USE_FILLED_BIT | FILL_FILLED_BIT
     })
 }
 
@@ -784,8 +783,7 @@ mod grouped_solid_rectangle_tests {
     fn admits_exact_filled_rectangle_with_direct_local_color() {
         assert!(has_bounded_grouped_solid_rectangle(&source_rectangle()));
         let mut explicit_solid = source_rectangle();
-        explicit_solid
-            .fopts[0]
+        explicit_solid.fopts[0]
             .properties
             .push(property(OFFICE_ART_FILL_TYPE, 0));
         assert!(has_bounded_grouped_solid_rectangle(&explicit_solid));
@@ -803,14 +801,12 @@ mod grouped_solid_rectangle_tests {
         inherited_color.fopts[0].properties[0].op = 0x0800_0001;
         assert!(!has_bounded_grouped_solid_rectangle(&inherited_color));
         let mut gradient = source_rectangle();
-        gradient
-            .fopts[0]
+        gradient.fopts[0]
             .properties
             .push(property(OFFICE_ART_FILL_TYPE, 1));
         assert!(!has_bounded_grouped_solid_rectangle(&gradient));
         let mut conflicting = source_rectangle();
-        conflicting
-            .fopts[0]
+        conflicting.fopts[0]
             .properties
             .push(property(OFFICE_ART_FILL_COLOR, 0x0000_00FF));
         assert!(!has_bounded_grouped_solid_rectangle(&conflicting));
