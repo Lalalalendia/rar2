@@ -129,3 +129,24 @@ test("adapter rejects image/font resource identity collisions", async () => {
     /duplicate image\/font resource identity/,
   );
 });
+
+
+test("adapter preserves Reader picture crop rotation and recolor semantics verbatim", async () => {
+  const payload = readerScene();
+  payload.nodes[0].image_source_window = {
+    left_q16: 16384,
+    top_q16: 0,
+    right_q16: 49152,
+    bottom_q16: 65536,
+  };
+  payload.nodes[0].image_content_rotation_degrees = null;
+  payload.nodes[0].image_recolor = {
+    target_rgb: [51, 102, 153],
+    preserve_grays: false,
+  };
+
+  const scene = await adaptReaderSceneToEditorScene(payload);
+  assert.deepEqual(scene.nodes[0].image_source_window, payload.nodes[0].image_source_window);
+  assert.equal(scene.nodes[0].image_content_rotation_degrees, null);
+  assert.deepEqual(scene.nodes[0].image_recolor, payload.nodes[0].image_recolor);
+});
