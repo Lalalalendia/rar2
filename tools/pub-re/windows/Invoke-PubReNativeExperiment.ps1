@@ -20,6 +20,7 @@ $PbFilePublication = 1
 function Get-OptionalProperty {
     param(
         [Parameter(Mandatory = $true)]
+        [AllowNull()]
         $Object,
         [Parameter(Mandatory = $true)]
         [string]$Name,
