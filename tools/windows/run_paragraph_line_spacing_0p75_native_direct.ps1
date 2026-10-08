@@ -31,7 +31,7 @@ $ExpectedPublisherExeSha256 = "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb
 
 $PinnedFiles = @(
     [pscustomobject]@{ Path = $Packet; Sha = "2f5e641a3c18215db7e2bd4df303cd55ddcf1f46" }
-    [pscustomobject]@{ Path = $Operation; Sha = "b15eaabff83fe31a14a5c83c8d743689ad2e6269" }
+    [pscustomobject]@{ Path = $Operation; Sha = "ce13a9e3a17e999b4f9de3630057a7db0e6f8775" }
     [pscustomobject]@{ Path = $Prepare; Sha = "0848e8e147dff5dab68065c37d2d73f72f09eb45" }
     [pscustomobject]@{ Path = $Finalize; Sha = "2a97d6f2c8be1265010a744c015ce8d288eb7e75" }
     [pscustomobject]@{ Path = $Runtime; Sha = "fed4c890a34d39401d3b5848cc16d1087f862a27" }
@@ -170,6 +170,7 @@ try {
     }
 
     $env:PUB_RESEARCH_FIXTURE_ROOT = $fixture.Root
+    $env:PUB_RESEARCH_FIXTURE = $fixture.Path
     $env:PUB_RESEARCH_PACKET_SHA256 = Get-Sha256 $Packet
     $env:PUB_RESEARCH_PROFILE_ID = "publisher-2019-direct-0p75"
     $gitSha = (& git rev-parse HEAD).Trim()
