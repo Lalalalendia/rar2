@@ -9,6 +9,7 @@ from pathlib import Path
 
 GRID_W = 64
 GRID_H = 64
+# Exact witness band is supplied by workflow arguments; product code is untouched.
 
 
 def transformed_bbox(box: dict, transform: dict | None) -> tuple[float, float, float, float]:
