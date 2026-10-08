@@ -1,0 +1,174 @@
+name: MEASURE exact 04 source-color span A-B
+
+on:
+  push:
+    branches:
+      - "measure/04-text-color-span-01"
+    paths:
+      - ".github/workflows/measure-04-text-color-span.yml"
+      - "crates/chaptera-viewer-render-plan/src/lib.rs"
+      - "apps/chaptera-server/src/reader_scene_v1.rs"
+      - "apps/cloud-reader/render-v1.mjs"
+      - "apps/cloud-reader/real-browser.test.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/publisher-visual-supplemental-rust
+
+jobs:
+  exact-04:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build supplemental Cargo cache key
+        id: cargo-key
+        env:
+          MANIFEST_HASH: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'apps/chaptera-server/Cargo.toml', 'crates/**/Cargo.toml', 'vendor/producer-a/Cargo.toml', 'vendor/producer-a/Cargo.lock', 'vendor/producer-a/crates/**/Cargo.toml') }}
+        run: |
+          set -euo pipefail
+          test -n "$MANIFEST_HASH"
+          echo "key=publisher-visual-supplemental-rust-v1-${RUNNER_OS}-rust-1.94.1-${MANIFEST_HASH}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore existing Cargo build cache only
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: target/publisher-visual-supplemental-rust
+          key: ${{ steps.cargo-key.outputs.key }}
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Prepare exact 04 fixture only
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
+          rm -rf "$RUNNER_TEMP/exact04-color"
+          mkdir -p "$RUNNER_TEMP/exact04-color"
+          python tools/cloud_reader_visual_supplemental_v1.py prepare \
+            tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv \
+            out/pinned1050/materialized/native \
+            "$RUNNER_TEMP/exact04-color/fixtures" \
+            "$RUNNER_TEMP/exact04-color/manifest.json"
+          python - "$RUNNER_TEMP/exact04-color/manifest.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          path = Path(sys.argv[1])
+          data = json.loads(path.read_text())
+          rows = [row for row in data["fixtures"] if row["name"] == "04-modern2c-story-stress"]
+          assert len(rows) == 1, rows
+          data["fixtures"] = rows
+          path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+          print("exact04 fixture", rows[0]["sha256"], rows[0]["bytes"])
+          PY
+
+      - name: Build canonical Cloud Reader worker
+        run: |
+          set -euo pipefail
+          cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Restore pinned Playwright Chromium cache only
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cache/ms-playwright
+          key: publisher-visual-supplemental-${{ runner.os }}-playwright-1.55.0-chromium
+
+      - name: Install pinned browser runtime
+        run: |
+          set -euo pipefail
+          npm install --no-save playwright@1.55.0
+          npx playwright install chromium
+
+      - name: Render exact 04 through source-color candidate
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.sha }}
+          READER_CORPUS_DIAGNOSTIC: "1"
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/publisher-visual-supplemental-rust/debug/chaptera
+          READER_REAL_MANIFEST: ${{ runner.temp }}/exact04-color/manifest.json
+          READER_REAL_OUTPUT: ${{ runner.temp }}/exact04-color/browser
+          READER_REFERENCE_RASTER_DPI: "144"
+          READER_CONTINUE_WORKER_FAILURES: "1"
+          READER_WORKER_TIMEOUT_SECONDS: "120"
+          READER_WORKER_CPU_SECONDS: "90"
+          READER_WORKER_ADDRESS_SPACE_MB: "768"
+        run: node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Compare exact 04 source-color candidate
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/exact04-color/browser" <<'PY'
+          import json, sys
+          from pathlib import Path
+          sys.path.insert(0, "tools")
+          from cloud_reader_visual_fingerprint_v1 import compare_grid, image_grid, reference_grid
+
+          browser = Path(sys.argv[1])
+          receipt = json.loads((browser / "receipt.json").read_text())
+          rows = [row for row in receipt["results"] if row["fixture"] == "04-modern2c-story-stress"]
+          assert len(rows) == 1, rows
+          row = rows[0]
+          assert row["rendered"] is True
+          assert row["pages"] == 5
+          assert row.get("colored_span_count", 0) > 0, row
+
+          reference = json.loads(Path(
+              "tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json"
+          ).read_text())
+          pair = [item for item in reference["pairs"] if item["basename"] == "04-modern2c-story-stress"][0]
+          baseline = [
+              0.392578125,
+              0.181884765625,
+              0.082763671875,
+              0.15283203125,
+              0.22705078125,
+          ]
+          fractions = []
+          for index, shot in enumerate(row["screenshots"]):
+              metrics = compare_grid(
+                  image_grid(browser / shot["filename"]),
+                  reference_grid(pair["pages"][index]),
+              )
+              fraction = metrics["changed_cell_fraction"]
+              fractions.append(fraction)
+              print(
+                  "EXACT04_COLOR_SPAN_AB "
+                  f"page={index + 1} "
+                  f"baseline_changed={baseline[index]:.12f} "
+                  f"candidate_changed={fraction:.12f} "
+                  f"delta={fraction - baseline[index]:+.12f} "
+                  f"mean_abs_channel_delta={metrics['mean_abs_channel_delta']:.12f}"
+              )
+          print(
+              "EXACT04_COLOR_SPAN_EXECUTION "
+              f"colored_span_count={row['colored_span_count']} "
+              f"baseline_mean={sum(baseline)/len(baseline):.12f} "
+              f"candidate_mean={sum(fractions)/len(fractions):.12f} "
+              f"mean_delta={sum(fractions)/len(fractions)-sum(baseline)/len(baseline):+.12f}"
+          )
+          PY
