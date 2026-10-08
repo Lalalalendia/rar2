@@ -165,6 +165,31 @@
       ]
     },
     {
+      "name": "pub-editor image core unit",
+      "paths": [
+        "vendor/producer-a/crates/pub-editor-image-core/src/*.rs"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor-image-core",
+          "--lib"
+        ],
+        [
+          "cargo",
+          "check",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor"
+        ]
+      ]
+    },
+    {
       "name": "pub-editor image session",
       "paths": [
         "vendor/producer-a/crates/pub-editor/src/session_image.rs"
