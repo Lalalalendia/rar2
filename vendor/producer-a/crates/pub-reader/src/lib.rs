@@ -39,6 +39,7 @@ mod resolve;
 mod salvage;
 mod salvage_authority;
 mod source_graph_model;
+mod source_identity;
 mod source_paint_order;
 mod story_frame_analysis;
 mod story_frame_projection;
@@ -179,11 +180,12 @@ use pub_escher::{
     PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS, PublisherField,
     PublisherFieldRecord, SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
 };
+#[cfg(test)]
+use pub_model::CanonicalId;
 use pub_model::{
-    Affine2D, AuthorityClass, ByteRange, CanonicalId, Decimal, Document, DocumentId, LengthEmu,
-    Node, NodeHeader, NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest,
-    Size2D, SourceDerivedIdInput, SourceDescriptor, SourceGraph, SourceRef, SourceRole, Story,
-    StoryId, derive_source_canonical_id,
+    Affine2D, AuthorityClass, ByteRange, Decimal, Document, LengthEmu, Node, NodeHeader, NodeId,
+    NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D, SourceDescriptor,
+    SourceGraph, SourceRef, SourceRole, Story, StoryId,
 };
 use pub_quill::{
     QuillEffectiveBoolean, QuillMcldVerticalAlignment, QuillParagraphAlignment,
@@ -220,6 +222,11 @@ pub use source_graph_model::{
     PubSourceGraphBuild, PubStoryFrameSource, PubTextFrameInsetSource,
     PubTextFrameVerticalAlignment, PubTextFrameVerticalAlignmentSource,
 };
+use source_identity::{ROLE_DOCUMENT, ROLE_NODE, ROLE_PAGE, ROLE_STORY, derive_pub_id, source_ref};
+pub use source_identity::{
+    contents_object_key, derive_pub_document_id, derive_pub_node_id, derive_pub_page_id,
+    derive_pub_story_id, quill_story_object_key,
+};
 pub use source_paint_order::{PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1, PubSourcePagePaintOrderV1};
 use source_paint_order::{index_escher_by_contents_seq, source_page_paint_orders_v1};
 use std::collections::{BTreeMap, BTreeSet};
@@ -231,10 +238,10 @@ pub use story_frame_analysis::{
     analyze_mature_0x2c_story_frame_candidates,
     analyze_mature_0x2c_story_frame_candidates_from_streams,
 };
-use story_materialization::materialize_story_catalogs;
 use story_frame_projection::{
     add_missing_link_target_diagnostics, build_story_frame, unique_story_id_scalar,
 };
+use story_materialization::materialize_story_catalogs;
 pub use story_provenance::has_exact_mature_quill_story_identity_v1;
 pub use structural_base::{
     PUB_STRUCTURAL_BASE_SCHEMA_V1, PubStructuralBaseCandidate, PubStructuralBaseManifest,
@@ -306,11 +313,6 @@ const FIELD_SHAPE_HEIGHT: u16 = 0xAB;
 const FIELD_PREVIOUS_FRAME: u16 = 0x36;
 const FIELD_NEXT_FRAME: u16 = 0x37;
 
-const ROLE_DOCUMENT: &str = "cdm.document";
-const ROLE_PAGE: &str = "cdm.page";
-const ROLE_NODE: &str = "cdm.node";
-const ROLE_STORY: &str = "cdm.story";
-
 fn raw_span_hex(bytes: &[u8], span: &pub_core::RawSpan) -> Result<String> {
     let start = usize::try_from(span.offset).context("raw span offset does not fit usize")?;
     let len = usize::try_from(span.len).context("raw span length does not fit usize")?;
@@ -322,48 +324,6 @@ fn raw_span_hex(bytes: &[u8], span: &pub_core::RawSpan) -> Result<String> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>())
-}
-
-/// Canonical source key for a physical mature-0x2C Contents directory slot.
-pub fn contents_object_key(seq_num: u32) -> String {
-    format!("contents/0x2c/seq/{seq_num}")
-}
-
-/// Canonical source key for a persistent Quill SYID story identity.
-pub fn quill_story_object_key(syid: u32) -> String {
-    format!("quill/syid/{syid}")
-}
-
-pub fn derive_pub_document_id(source_hash: &Sha256Digest, seq_num: u32) -> Result<DocumentId> {
-    Ok(DocumentId::from_canonical(derive_pub_id(
-        source_hash,
-        &contents_object_key(seq_num),
-        ROLE_DOCUMENT,
-    )?))
-}
-
-pub fn derive_pub_page_id(source_hash: &Sha256Digest, seq_num: u32) -> Result<PageId> {
-    Ok(PageId::from_canonical(derive_pub_id(
-        source_hash,
-        &contents_object_key(seq_num),
-        ROLE_PAGE,
-    )?))
-}
-
-pub fn derive_pub_node_id(source_hash: &Sha256Digest, seq_num: u32) -> Result<NodeId> {
-    Ok(NodeId::from_canonical(derive_pub_id(
-        source_hash,
-        &contents_object_key(seq_num),
-        ROLE_NODE,
-    )?))
-}
-
-pub fn derive_pub_story_id(source_hash: &Sha256Digest, syid: u32) -> Result<StoryId> {
-    Ok(StoryId::from_canonical(derive_pub_id(
-        source_hash,
-        &quill_story_object_key(syid),
-        ROLE_STORY,
-    )?))
 }
 
 /// Builds a bounded mature-0x2C SourceGraph from one complete CFB file.
@@ -1210,20 +1170,6 @@ fn require_consensus_page_extent(extents: &[(u32, u32)]) -> Result<(u32, u32)> {
     Ok(first)
 }
 
-fn derive_pub_id(
-    source_hash: &Sha256Digest,
-    object_key: &str,
-    semantic_role: &str,
-) -> Result<CanonicalId> {
-    derive_source_canonical_id(SourceDerivedIdInput {
-        source_hash,
-        adapter_id: PUB_ADAPTER_ID,
-        source_object_key: object_key,
-        semantic_role,
-    })
-    .map_err(|error| anyhow!("source-derived identity error: {error:?}"))
-}
-
 fn decode_utf16le_strict(bytes: &[u8]) -> Result<String> {
     if bytes.len() % 2 != 0 {
         bail!("UTF-16LE byte length is odd: {}", bytes.len());
@@ -1233,29 +1179,6 @@ fn decode_utf16le_strict(bytes: &[u8]) -> Result<String> {
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
         .collect::<Vec<_>>();
     String::from_utf16(&units).map_err(|error| anyhow!("invalid UTF-16LE: {error}"))
-}
-
-fn source_ref(
-    source: &SourceDescriptor,
-    span: &RawSpan,
-    object_key: Option<String>,
-    path: Option<String>,
-    role: SourceRole,
-    authority: AuthorityClass,
-    confidence: ReadConfidence,
-) -> SourceRef {
-    SourceRef {
-        format: source.format.clone(),
-        adapter_version: source.adapter_version.clone(),
-        source_hash: source.source_hash,
-        carrier: span.stream.0.clone(),
-        object_key,
-        path,
-        byte_range: Some(ByteRange::new(span.offset, span.len)),
-        role,
-        authority,
-        confidence: Some(confidence),
-    }
 }
 
 fn bounded_quill_text_rgb(
