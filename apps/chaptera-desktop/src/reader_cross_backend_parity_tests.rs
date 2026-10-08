@@ -4,7 +4,7 @@
 use super::*;
 use egui_kittest::Harness;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{collections::{BTreeMap, BTreeSet}, fs, path::PathBuf};
 
 const CROSS_BACKEND_DPI: f32 = 144.0;
 const EMU_PER_INCH: f32 = 914_400.0;
@@ -12,15 +12,21 @@ const EMU_PER_INCH: f32 = 914_400.0;
 struct CrossBackendPageOnlyApp {
     visual: ViewerGeometryDocument,
     page_index: usize,
+    source_fonts: source_font::DesktopSourceFontRegistry,
     image_textures: BTreeMap<String, CachedImageTexture>,
     texture_upload_enabled: bool,
 }
 
 impl CrossBackendPageOnlyApp {
-    fn new(visual: ViewerGeometryDocument, page_index: usize) -> Self {
+    fn new(
+        visual: ViewerGeometryDocument,
+        page_index: usize,
+        source_fonts: source_font::DesktopSourceFontRegistry,
+    ) -> Self {
         Self {
             visual,
             page_index,
+            source_fonts,
             image_textures: BTreeMap::new(),
             texture_upload_enabled: false,
         }
@@ -105,8 +111,12 @@ impl CrossBackendPageOnlyApp {
 impl eframe::App for CrossBackendPageOnlyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ensure_image_textures(ctx);
-        let render_plan = build_desktop_page_render_plan(&self.visual, self.page_index)
-            .expect("cross-backend desktop render plan");
+        let render_plan = build_desktop_page_render_plan_with_source_fonts(
+            &self.visual,
+            self.page_index,
+            &self.source_fonts,
+        )
+        .expect("cross-backend desktop source-font render plan");
         let scene_scale = CROSS_BACKEND_DPI / EMU_PER_INCH;
 
         egui::CentralPanel::default()
@@ -177,6 +187,58 @@ fn sample_newsletter_cross_backend_page_rasters_144dpi() {
         .expect("SampleNewsletter must open through local Reader product path");
     assert_eq!(visual.document.pages.len(), 4);
 
+    let mut census_registry = source_font::DesktopSourceFontRegistry::new();
+    census_registry.ensure_visual_fonts(&visual);
+    let mut family_runs = BTreeMap::<String, u64>::new();
+    let mut family_resolved_runs = BTreeMap::<String, u64>::new();
+    let mut family_styles = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut family_resolved_styles = BTreeMap::<String, BTreeSet<String>>::new();
+
+    for run in &visual.typography_runs {
+        let family = run.source_font_name.trim();
+        if family.is_empty() {
+            continue;
+        }
+        *family_runs.entry(family.to_owned()).or_default() += 1;
+        let style = format!(
+            "bold={};italic={}",
+            run.bold.map_or("unknown".to_owned(), |value| value.to_string()),
+            run.italic.map_or("unknown".to_owned(), |value| value.to_string())
+        );
+        family_styles
+            .entry(family.to_owned())
+            .or_default()
+            .insert(style.clone());
+        if census_registry.resource_for_typography_run(run).is_some() {
+            *family_resolved_runs.entry(family.to_owned()).or_default() += 1;
+            family_resolved_styles
+                .entry(family.to_owned())
+                .or_default()
+                .insert(style);
+        }
+    }
+
+    let font_census = family_runs
+        .iter()
+        .map(|(family, run_count)| {
+            let styles = family_styles
+                .get(family)
+                .map(|values| values.iter().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            let resolved_styles = family_resolved_styles
+                .get(family)
+                .map(|values| values.iter().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            serde_json::json!({
+                "source_family": family,
+                "run_count": run_count,
+                "resolved_run_count": family_resolved_runs.get(family).copied().unwrap_or(0),
+                "styles": styles,
+                "resolved_styles": resolved_styles,
+            })
+        })
+        .collect::<Vec<_>>();
+
     let mut pages = Vec::new();
     for page_index in 0..visual.document.pages.len() {
         let page = &visual.document.pages[page_index];
@@ -188,15 +250,18 @@ fn sample_newsletter_cross_backend_page_rasters_144dpi() {
             .max(1.0)) as u32;
 
         let visual_for_app = visual.clone();
+        let mut source_fonts = source_font::DesktopSourceFontRegistry::new();
+        source_fonts.ensure_visual_fonts(&visual_for_app);
         let mut harness = Harness::builder()
             .with_size(egui::vec2(width_px as f32, height_px as f32))
             .with_pixels_per_point(1.0)
             .with_max_steps(12)
             .wgpu()
             .build_eframe(move |cc| {
-                fallback_font::install(&cc.egui_ctx)
-                    .expect("pinned shared fallback font must install");
-                CrossBackendPageOnlyApp::new(visual_for_app, page_index)
+                let additional = source_fonts.egui_fonts();
+                fallback_font::install_with_additional(&cc.egui_ctx, &additional)
+                    .expect("local Reader source fonts must install");
+                CrossBackendPageOnlyApp::new(visual_for_app, page_index, source_fonts)
             });
         harness.input_mut().max_texture_side = Some(4096);
         harness.state_mut().enable_texture_upload();
@@ -226,8 +291,9 @@ fn sample_newsletter_cross_backend_page_rasters_144dpi() {
         "source_sha256": source_sha256,
         "fixture": "SampleNewsletter",
         "dpi": CROSS_BACKEND_DPI as u32,
-        "backend": "chaptera-desktop-egui-wgpu",
+        "backend": "chaptera-desktop-egui-wgpu-source-fonts",
         "page_count": pages.len(),
+        "font_census": font_census,
         "pages": pages,
     });
     fs::write(
