@@ -109,3 +109,14 @@ pub(super) fn materialize_story_catalogs(
 
     Ok(story_by_syid)
 }
+
+fn decode_utf16le_strict(bytes: &[u8]) -> Result<String> {
+    if bytes.len() % 2 != 0 {
+        bail!("UTF-16LE byte length is odd: {}", bytes.len());
+    }
+    let units = bytes
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect::<Vec<_>>();
+    String::from_utf16(&units).map_err(|error| anyhow!("invalid UTF-16LE: {error}"))
+}
