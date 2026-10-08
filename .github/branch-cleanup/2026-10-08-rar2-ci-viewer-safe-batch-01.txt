@@ -1,6 +1,6 @@
 # Branch GC 2026-10-08 — manual-only SHA-pinned reviewed archive batch
  # DO NOT MERGE: dispatch workflow only on THIS BRANCH after review.
-# 41 closed-unmerged PR refs; runtime must skip open heads/bases, mismatched SHA, protected refs.
+# 56 closed-unmerged PR refs; runtime must skip open heads/bases, mismatched SHA, protected refs.
 
 # CI: completed sacrificial controls (Playwright adopted via merged #1948)
 ci/batch01-playwright-cache-smoke-01 dcc31d8f20a646d0f634579696ab7d96e43d8223 # closed PR 1944
@@ -48,3 +48,20 @@ ci/fixed-pdf-safe-negative-01 4952c9b80f9d2623c0e66acabfd46e784ba7bc1a # PR 1380
 ci/textbox-selective-core-positive-01 66ece8c782f3fd942dfd167829e192da39f19f2a # PR 1375
 ci/textbox-selective-safe-negative-01 d3559d46cdc17187d70700197bacbc7fb679f960 # PR 1373
 ci/continuity-v2-mainrs-negative-control b876f35a8496851966738de3dad42a0af872b639 # PR 1222
+
+# Explicit sacrificial / dry-run measurements still live after prior GC waves
+measure/actions-cache-ref-inventory-20261008 4db71ee2df0424ecfaa2414d6ba1aeb6dbe89641 # PR 2055 dry-run only
+measure/pub-quill-font-routed-control-01 5533deb7d224aeb26bd4c980e079ac24e5b63619 # PR 2052 sacrificial
+measure/pub-quill-font-leaf-control-01 99df38edc722dbcf345564f2a990dd8d5329f976 # PR 2048 sacrificial
+measure/pub-reader-node-materialization-leaf-prep 4a2134ff734fa506347f8c9dbd142217920d2b3f # PR 1985 sacrificial
+measure/pub-reader-node-materialization-leaf-01 985e687acdefff4c286f5791af78a4622d18e1a5 # PR 1980 superseded sacrificial
+measure/pub-reader-source-identity-post-routing-01 4e3de94f12798cb83ef34ade6dc507129d01a93c # PR 1979 sacrificial
+measure/pub-reader-source-identity-leaf-01 f1b5fb956cc8b010a9dacb4d5a078d84368d0e63 # PR 1973 sacrificial
+ci/pub-editor-geometry-core-leaf-control-01 6a09693952633eab7e193ece62340336e24e17a2 # PR 1953 sacrificial
+ci/pub-editor-session-geometry-leaf-proof-01 af2fdb8edb7015970cdb22f7e658affcf06f763c # PR 1936 sacrificial
+measure/pub-reader-contents-access-fanout-01 e3d8c8834f0fbf6465fb5cbce80162254fece785 # PR 1935 sacrificial
+measure/grouped-projection-post-hflip-01 5e9237d35c32c5e8c4b39595ccb25560cb821363 # PR 1928 sacrificial
+measure/pub-reader-story-materialization-routing-01 85b3757745a89f6478767c19ec9d750b478fee7e # PR 1891 sacrificial
+measure/grouped-projection-post-child-rotation-01 8ae111056a9b44529bc24b8649b98c1719ec5336 # PR 1875 sacrificial
+measure/pub-reader-direct-transform-routing-01 fa9c6767bc1e6c5868b662ee1cdbf70d410ab92c # PR 1841 sacrificial
+ci/control-1795-current-census 81caf8de971b0a08a6a9cc67ece9176d8de28288 # PR 1811 sacrificial exact-base control
