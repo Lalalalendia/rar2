@@ -89,3 +89,90 @@ pub(super) fn add_missing_link_target_diagnostics(
         }
     }
 }
+
+pub(super) fn project_story_frame_layout_metadata(
+    graph: &PubSourceGraph,
+    story_frame: &mut Option<PubStoryFrameSource>,
+    story_layout_keys: &BTreeMap<u32, (u32, RawSpan)>,
+    mcld: Option<&pub_quill::QuillMcldChunk>,
+) -> Option<PubTextFrameInsetSource> {
+    let text_frame_inset = story_frame.as_ref().and_then(|frame| {
+        let (layout_record_id, layout_key_source) = story_layout_keys.get(&frame.text_id)?;
+        let mcld = mcld?;
+        let inset = bounded_mcld_text_insets(mcld, *layout_record_id).ok()?;
+        let object_key = quill_story_object_key(frame.text_id);
+        let mut source_refs = vec![source_ref(
+            &graph.source,
+            layout_key_source,
+            Some(object_key.clone()),
+            Some("Contents/0x65/layoutKey".into()),
+            SourceRole::Relation,
+            AuthorityClass::Authoritative,
+            ReadConfidence::Exact,
+        )];
+        source_refs.extend(inset.sources.iter().map(|source| {
+            source_ref(
+                &graph.source,
+                source,
+                Some(object_key.clone()),
+                Some("MCLD/06..09/text-inset".into()),
+                SourceRole::Semantic,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            )
+        }));
+        Some(PubTextFrameInsetSource {
+            layout_record_id: *layout_record_id,
+            top_emu: inset.top_emu,
+            left_emu: inset.left_emu,
+            bottom_emu: inset.bottom_emu,
+            right_emu: inset.right_emu,
+            source_refs,
+        })
+    });
+
+    let text_frame_vertical_alignment = story_frame.as_ref().and_then(|frame| {
+        let (layout_record_id, layout_key_source) = story_layout_keys.get(&frame.text_id)?;
+        let mcld = mcld?;
+        let vertical =
+            bounded_mcld_text_frame_vertical_alignment(mcld, *layout_record_id).ok()?;
+        let object_key = quill_story_object_key(frame.text_id);
+        Some(PubTextFrameVerticalAlignmentSource {
+            layout_record_id: *layout_record_id,
+            alignment: match vertical.alignment {
+                QuillMcldVerticalAlignment::Top => PubTextFrameVerticalAlignment::Top,
+                QuillMcldVerticalAlignment::Center => PubTextFrameVerticalAlignment::Center,
+                QuillMcldVerticalAlignment::Bottom => PubTextFrameVerticalAlignment::Bottom,
+            },
+            source_refs: vec![
+                source_ref(
+                    &graph.source,
+                    layout_key_source,
+                    Some(object_key.clone()),
+                    Some("Contents/0x65/layoutKey".into()),
+                    SourceRole::Relation,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+                source_ref(
+                    &graph.source,
+                    &vertical.source,
+                    Some(object_key),
+                    Some("MCLD/18/text-vertical-align".into()),
+                    SourceRole::Semantic,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+            ],
+        })
+    });
+
+    if let (Some(frame), Some(vertical_alignment)) =
+        (story_frame.as_mut(), text_frame_vertical_alignment)
+    {
+        frame.vertical_alignment = Some(vertical_alignment);
+    }
+
+    text_frame_inset
+}
+
