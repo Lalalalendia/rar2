@@ -119,3 +119,5 @@ jobs:
         run: python tools/ci/test_cloud_reference_pr_cache_mode.py
       - name: Guard Batch01 PR Cargo restore-only policy
         run: python tools/ci/test_batch01_pr_cargo_cache_mode.py
+      - name: Guard supplemental PR Cargo restore-only policy
+        run: python tools/ci/test_supplemental_pr_cargo_cache_mode.py

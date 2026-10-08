@@ -73,6 +73,7 @@ jobs:
           set -euo pipefail
           test -n "$MANIFEST_HASH"
           echo "key=publisher-visual-supplemental-rust-v1-${RUNNER_OS}-rust-1.94.1-${MANIFEST_HASH}" >> "$GITHUB_OUTPUT"
+          echo "restore_prefix=publisher-visual-supplemental-rust-v1-${RUNNER_OS}-rust-1.94.1-" >> "$GITHUB_OUTPUT"
 
       - name: Census supplemental Cargo cache scope (read only)
         shell: bash
@@ -140,12 +141,15 @@ jobs:
               )
           PY
 
-      - name: Restore/save supplemental Cargo build cache
+      # PRs restore trusted-main Cargo artifacts; no implicit post-job save.
+      - name: Restore supplemental Cargo build cache
         id: supplemental-cargo-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: target/publisher-visual-supplemental-rust
           key: ${{ steps.supplemental-cargo-cache-key.outputs.key }}
+          restore-keys: |
+            ${{ steps.supplemental-cargo-cache-key.outputs.restore_prefix }}
 
       - uses: actions/setup-node@v4
         with:
@@ -308,6 +312,15 @@ jobs:
               "095_1e7f38b3ce1d0d95",
           }, data["visual"]["unavailable_pairs"]
           PY
+
+      # Seed a reusable cache only from a passing trusted-main acceptance run.
+      # PRs have no supplemental Cargo save action; Chromium remains independent.
+      - name: Save trusted main supplemental Cargo cache
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.supplemental-cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: target/publisher-visual-supplemental-rust
+          key: ${{ steps.supplemental-cargo-cache-key.outputs.key }}
 
       - name: Upload source-free supplemental receipt
         uses: actions/upload-artifact@v4
