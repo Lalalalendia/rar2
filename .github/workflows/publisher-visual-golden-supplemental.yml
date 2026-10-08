@@ -74,6 +74,52 @@ jobs:
           test -n "$MANIFEST_HASH"
           echo "key=publisher-visual-supplemental-rust-v1-${RUNNER_OS}-rust-1.94.1-${MANIFEST_HASH}" >> "$GITHUB_OUTPUT"
 
+      - name: Census supplemental Cargo cache scope (read only)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_KEY: ${{ steps.supplemental-cargo-cache-key.outputs.key }}
+        run: |
+          set -euo pipefail
+          [[ "$CACHE_KEY" =~ ^publisher-visual-supplemental-rust-v1-Linux-rust-1\\.94\\.1-[a-f0-9]{64}$ ]] || {
+            echo "unexpected supplemental Cargo cache key shape" >&2
+            exit 1
+          }
+          inventory="$RUNNER_TEMP/supplemental-cargo-cache-inventory.json"
+          if ! gh api "repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100&key=${CACHE_KEY}" > "$inventory"; then
+            echo "supplemental_cargo_cache_inventory=unavailable (read-only API)" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python - "$inventory" "$CACHE_KEY" <<'PY'
+          import json
+          import os
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              payload = json.load(stream)
+          key = sys.argv[2]
+          entries = [
+              cache for cache in payload.get("actions_caches", [])
+              if cache.get("key") == key
+          ]
+          entries.sort(key=lambda cache: cache.get("created_at", ""), reverse=True)
+          main = [cache for cache in entries if cache.get("ref") == "refs/heads/main"]
+          print(f"supplemental_cargo_cache_index_exact_count={len(entries)}")
+          print(f"supplemental_cargo_cache_index_main_count={len(main)}")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              print(f"supplemental_cargo_cache_index_exact_count={len(entries)}", file=summary)
+              print(f"supplemental_cargo_cache_index_main_count={len(main)}", file=summary)
+          for cache in entries[:25]:
+              print(
+                  "supplemental_cargo_cache_entry "
+                  f"ref={cache.get('ref')} "
+                  f"version={cache.get('version')} "
+                  f"bytes={cache.get('size_in_bytes')} "
+                  f"created_at={cache.get('created_at')} "
+                  f"last_accessed_at={cache.get('last_accessed_at')}"
+              )
+          PY
+
       - name: Restore/save supplemental Cargo build cache
         id: supplemental-cargo-cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
