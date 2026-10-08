@@ -390,15 +390,22 @@ fn materialize_viewer_text_runs(
                     output.fallback_nodes.insert(node.node_id);
                     continue;
                 }
-                let fill_rgb =
+                let Some(fill_rgb) =
                     resolved_text_color_for_range(fragment, line.scalar_start, line.scalar_end)
-                        .unwrap_or_else(|| {
-                            *output
-                                .layout_fallback_counts
-                                .entry("color_unresolved_black".to_owned())
-                                .or_default() += 1;
-                            [0, 0, 0]
-                        });
+                else {
+                    *output
+                        .layout_fallback_counts
+                        .entry("color_unresolved_authority_pending".to_owned())
+                        .or_default() += 1;
+                    output.skipped.push(serde_json::json!({
+                        "node_id": node.node_id,
+                        "scalar_start": line.scalar_start,
+                        "scalar_end": line.scalar_end,
+                        "code": "pdf.text.viewer_color_authority_pending",
+                    }));
+                    output.fallback_nodes.insert(node.node_id);
+                    continue;
+                };
                 let baseline_x = base_x
                     .checked_add(line.x_offset_emu)
                     .context("Viewer text line baseline x overflow")?;
