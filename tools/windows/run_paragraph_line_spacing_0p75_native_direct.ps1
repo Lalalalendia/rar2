@@ -61,10 +61,6 @@ function Resolve-CanonicalFixture {
     }
     $rootCandidates += $RepoRoot
     $rootCandidates += (Split-Path -Parent $RepoRoot)
-    if (Test-Path -LiteralPath "C:\chaptera-pub-re" -PathType Container) {
-        $rootCandidates += "C:\chaptera-pub-re"
-    }
-
     $seen = @{}
     foreach ($root in $rootCandidates) {
         if ([string]::IsNullOrWhiteSpace([string]$root)) { continue }
