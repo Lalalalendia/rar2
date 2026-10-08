@@ -416,6 +416,17 @@ pub(super) fn materialize_mature_nodes(
             color_scheme,
             dgg_defaults,
             effective_paint: &effective_paint,
+            shape_has_default_roundrect: has_default_roundrect_geometry(shape),
+            shape_has_default_ellipse: has_default_ellipse_geometry(shape),
+            shape_has_default_line: has_default_line_geometry(shape),
+            shape_has_dash_gel: has_shape_local_dash_gel(shape),
+            uses_officeart_scheme_color: paint_context_uses_officeart_scheme_color(
+                shape,
+                dgg_defaults,
+            ),
+            effective_paint_has_dgg_authority: effective_paint
+                .as_ref()
+                .is_some_and(effective_paint_has_dgg_authority),
         })?;
 
         graph.nodes.insert(
