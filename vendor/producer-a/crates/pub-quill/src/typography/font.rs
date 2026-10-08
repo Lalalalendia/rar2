@@ -1,3 +1,4 @@
+// CI control: measure FONT leaf routing without changing its semantics.
 use super::{
     BlockObservation, GENERAL_CONTAINER, QuillTypographyReadError, VARIABLE_BLOCK_TYPES,
     checked_end, parse_block, read_u16, read_u32, to_usize,
