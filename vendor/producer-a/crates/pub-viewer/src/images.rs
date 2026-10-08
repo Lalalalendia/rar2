@@ -75,7 +75,8 @@ impl ViewerEmbeddedImage {
         }
     }
 
-    pub(super) fn exact(
+    /// Construct an exact admitted embedded image resource.
+    pub fn exact(
         resource_id: ResourceId,
         mime: String,
         node_ids: Vec<NodeId>,
