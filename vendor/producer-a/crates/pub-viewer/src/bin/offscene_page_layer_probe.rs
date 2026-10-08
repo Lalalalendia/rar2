@@ -14,7 +14,11 @@ use serde_json::json;
 #[cfg(feature = "cmo-slot-compose")]
 use sha2::{Digest, Sha256};
 #[cfg(feature = "cmo-slot-compose")]
-use std::{collections::{BTreeMap, BTreeSet}, env, fs, io::Cursor};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    env, fs,
+    io::Cursor,
+};
 
 #[cfg(feature = "cmo-slot-compose")]
 fn source_hash(bytes: &[u8]) -> Sha256Digest {
