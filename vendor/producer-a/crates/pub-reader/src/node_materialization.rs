@@ -1,3 +1,4 @@
+// Fanout control: no semantic change; measure node-materialization steady-state ownership only.
 use super::*;
 
 pub(super) struct MatureNodeMaterializationContext<'a> {
