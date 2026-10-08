@@ -752,6 +752,7 @@ mod authored_page_identity_tests {
 
         PubResolvedGraph {
             cdm_version: "0.1".into(),
+            resolver_version: pub_reader::PUB_RESOLVER_VERSION_V1.into(),
             source: SourceDescriptor {
                 format: "pub".into(),
                 format_version: Some("0x2c".into()),
