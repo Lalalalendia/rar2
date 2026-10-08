@@ -18,6 +18,7 @@ on:
       - "!vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
       - "crates/chaptera-scene-instance/**"
       - "crates/chaptera-viewer-render-plan/**"
+      - "!crates/chaptera-viewer-render-plan/src/shared_layout_diagnostics.rs"
 
 permissions:
   contents: read
