@@ -1,0 +1,28 @@
+name: Partial root Contents source-safe census binary (one-shot)
+
+on:
+  push:
+    branches:
+      - research/partial-root-contents-census-linux-once
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build existing partial root Contents census
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin partial-root-contents-census --release
+
+      - name: Upload source-safe census binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: partial-root-contents-census-linux-once
+          path: vendor/producer-a/target/release/partial-root-contents-census
+          if-no-files-found: error
+          retention-days: 1
