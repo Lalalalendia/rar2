@@ -17,7 +17,7 @@ use std::{
 };
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn collect_pub_paths(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
@@ -60,7 +60,7 @@ fn main() -> Result<()> {
             "logical_path_proven": false,
             "research_only_not_product_admission": true
         });
-        let mut decision = "not_classified";
+        let decision;
         if bytes.len() > 256 * 1024 * 1024 {
             decision = "source_over_limit";
         } else if let Ok(inv) = inspect_truncated_cfb_raw_directory_reader(Cursor::new(&bytes)) {
