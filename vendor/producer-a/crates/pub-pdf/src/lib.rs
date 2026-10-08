@@ -514,9 +514,9 @@ pub fn render_bounded_pdf(
             image_painted,
             text_painted,
         ) {
-            (true, true, true, true) => Some(
-                "pdf.node.painted_explicit_rectangle_table_exact_image_and_resolved_text",
-            ),
+            (true, true, true, true) => {
+                Some("pdf.node.painted_explicit_rectangle_table_exact_image_and_resolved_text")
+            }
             (true, true, true, false) => {
                 Some("pdf.node.painted_explicit_rectangle_table_and_exact_image")
             }
@@ -532,7 +532,9 @@ pub fn render_bounded_pdf(
             (true, true, false, false) => Some("pdf.node.painted_explicit_rectangle_and_table"),
             (false, true, true, false) => Some("pdf.node.painted_table_and_exact_image"),
             (false, true, false, true) => Some("pdf.node.painted_table_and_resolved_text"),
-            (true, false, true, false) => Some("pdf.node.painted_explicit_rectangle_and_exact_image"),
+            (true, false, true, false) => {
+                Some("pdf.node.painted_explicit_rectangle_and_exact_image")
+            }
             (true, false, false, true) => {
                 Some("pdf.node.painted_explicit_rectangle_and_resolved_text")
             }
