@@ -29,13 +29,13 @@ $ProbeMain = Join-Path $RepoRoot "tools/research-runner/paragraph-metrics-probe/
 
 $PinnedFiles = @(
     [pscustomobject]@{ Path = $Packet; Sha = "c8532d9f2ccc4ca11ec7771e749c8a3ab5244ded" }
-    [pscustomobject]@{ Path = $Operation; Sha = "a7a8be3e871acd37a2539f1518e2e9822ac2346b" }
+    [pscustomobject]@{ Path = $Operation; Sha = "6ee22938e5c0aad7de054b3c2243ce54e056450c" }
     [pscustomobject]@{ Path = $Analyzer; Sha = "bb728c54f250f43c9e8c2f096ede89cd94436860" }
     [pscustomobject]@{ Path = $Prepare; Sha = "0848e8e147dff5dab68065c37d2d73f72f09eb45" }
     [pscustomobject]@{ Path = $Finalize; Sha = "2a97d6f2c8be1265010a744c015ce8d288eb7e75" }
     [pscustomobject]@{ Path = $Runtime; Sha = "fed4c890a34d39401d3b5848cc16d1087f862a27" }
     [pscustomobject]@{ Path = $Blast; Sha = "c458539ec7b2f5a5bb35844e9ca3e35df16ff56f" }
-    [pscustomobject]@{ Path = $Structural; Sha = "1d12b34de10ad74ea49a4fa2cabbe01b44198331" }
+    [pscustomobject]@{ Path = $Structural; Sha = "7dee55a3e2c870cbb3981995789329cd74e85a65" }
     [pscustomobject]@{ Path = $ProbeManifest; Sha = "40d209d6e193d477635d72fb34e7bd9f640d7270" }
     [pscustomobject]@{ Path = $ProbeLock; Sha = "c21bbf53e4c64931c6396810589809ed5f51c16d" }
     [pscustomobject]@{ Path = $ProbeMain; Sha = "cf108b7e8cb8d38828b5e91973f26e85918ad86d" }
@@ -185,11 +185,11 @@ try {
     if ($null -eq $native.seed -or [string]::IsNullOrWhiteSpace([string]$native.seed.sha256)) {
         throw "Native receipt did not record the common seed SHA."
     }
-    if (@($native.arms).Count -ne 11) {
-        throw "Expected 11 native arms including matched control, got $(@($native.arms).Count)"
+    if (@($native.arms).Count -ne 12) {
+        throw "Expected 12 native arms including matched control, got $(@($native.arms).Count)"
     }
-    if (@($blastReceipt.arms).Count -ne 10) {
-        throw "Expected 10 mutation blast-radius arms, got $(@($blastReceipt.arms).Count)"
+    if (@($blastReceipt.arms).Count -ne 11) {
+        throw "Expected 11 mutation blast-radius arms, got $(@($blastReceipt.arms).Count)"
     }
 
     $baseline = $blastReceipt.causal_baseline
@@ -214,6 +214,7 @@ try {
     $structuralReceipt = Get-Content -LiteralPath $StructuralPath -Raw | ConvertFrom-Json
     foreach ($name in @(
         "complete_eleven_arm_matrix",
+        "complete_twelve_arm_matrix",
         "exact_artifact_identity_join",
         "common_pre_mutation_snapshots",
         "quill_text_byte_invariance_all_arms",
