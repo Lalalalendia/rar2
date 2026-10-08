@@ -11,9 +11,7 @@ mod authoring_projection;
 mod borderart;
 mod images;
 
-pub use authoring_projection::{
-    bounded_authoring_slice_from_resolved, bounded_authoring_slice_from_resolved_pages,
-};
+pub use authoring_projection::*;
 use authoring_projection::{
     bounded_legacy_noquill_authoring_slice_from_resolved_pages,
     legacy_noquill_structural_point_group_ids,
