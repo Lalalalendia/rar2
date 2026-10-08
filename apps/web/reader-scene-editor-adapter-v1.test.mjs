@@ -19,7 +19,7 @@ function readerScene() {
     source_hash: SOURCE,
     revision_id: REVISION,
     scene_authority: "viewer-geometry-current-revision",
-    stacking_fidelity: "exact",
+    stacking_fidelity: "source_back_to_front",
     fidelity: { state: "partial", reasons: ["source_font_resource_unavailable"] },
     pages: [{ page_id: PAGE, order: 0, width_emu: 1000000, height_emu: 2000000 }],
     nodes: [
@@ -71,9 +71,9 @@ test("rich Reader Scene becomes an Editor Scene without changing revision author
   assert.equal(scene.capabilities.find((item) => item.key === "render.paint").state, "supported");
 });
 
-test("partial Reader stacking stays non-authoritative for Editor hit order", async () => {
+test("unknown Reader stacking stays non-authoritative for Editor hit order", async () => {
   const payload = readerScene();
-  payload.stacking_fidelity = "partial";
+  payload.stacking_fidelity = "unknown";
   const scene = await adaptReaderSceneToEditorScene(payload);
   assert.equal(scene.stacking_fidelity, "partial");
   assert.equal(scene.nodes[0].z_order, null);
