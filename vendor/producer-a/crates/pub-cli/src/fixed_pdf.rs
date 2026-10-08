@@ -336,67 +336,20 @@ fn materialize_viewer_text_runs(
                 }
 
                 if !line.spans.is_empty() {
-                    for span in &line.spans {
-                        let Some(shaping) = span.shaping.as_ref() else {
-                            output.skipped.push(serde_json::json!({
-                                "node_id": node.node_id,
-                                "scalar_start": span.scalar_start,
-                                "scalar_end": span.scalar_end,
-                                "code": "pdf.text.viewer_span_shaping_missing",
-                            }));
-                            output.fallback_nodes.insert(node.node_id);
-                            continue;
-                        };
-                        if shaping.environment.face_index != fallback_font.face_index
-                            || shaping.environment.layout.font_set_fingerprint
-                                != fallback_font.expected_sha256
-                            || shaping.environment.layout.resource_fingerprint
-                                != fallback_font.resource_id
-                        {
-                            output.skipped.push(serde_json::json!({
-                                "node_id": node.node_id,
-                                "scalar_start": span.scalar_start,
-                                "scalar_end": span.scalar_end,
-                                "code": "pdf.text.viewer_span_font_resource_mismatch",
-                            }));
-                            output.fallback_nodes.insert(node.node_id);
-                            continue;
-                        }
-                        let fill_rgb = resolved_text_color_for_range(
-                            fragment,
-                            span.scalar_start,
-                            span.scalar_end,
-                        )
-                        .unwrap_or_else(|| {
-                            *output
-                                .layout_fallback_counts
-                                .entry("color_unresolved_black".to_owned())
-                                .or_default() += 1;
-                            [0, 0, 0]
-                        });
-                        let baseline_x = base_x
-                            .checked_add(line.x_offset_emu)
-                            .and_then(|value| value.checked_add(span.x_offset_emu))
-                            .context("Viewer text span baseline x overflow")?;
-                        let baseline_y = base_y
-                            .checked_add(layout.vertical_offset_emu)
-                            .and_then(|value| value.checked_add(current_line_top))
-                            .and_then(|value| value.checked_add(span.font_size_emu))
-                            .context("Viewer text span baseline y overflow")?;
-                        push_viewer_text_run(
-                            &mut output,
-                            node.node_id,
-                            span.scalar_start,
-                            span.scalar_end,
-                            &span.text,
-                            span.measured_width_emu,
-                            shaping,
-                            baseline_x,
-                            baseline_y,
-                            fill_rgb,
-                            "viewer_shared_resolved_span",
-                        )?;
-                    }
+                    // Mixed-size/span Viewer layout still lacks a complete source-backed
+                    // paragraph-spacing authority (#1139/#2147). Keep the preceding
+                    // bounded PDF flow for the whole node instead of partially
+                    // replacing it with a horizontally-resolved but vertically
+                    // under-authorized layout.
+                    *output
+                        .layout_fallback_counts
+                        .entry("mixed_size_authority_pending".to_owned())
+                        .or_default() += 1;
+                    output.skipped.push(serde_json::json!({
+                        "node_id": node.node_id,
+                        "code": "pdf.text.viewer_mixed_size_authority_pending",
+                    }));
+                    output.fallback_nodes.insert(node.node_id);
                     continue;
                 }
 
