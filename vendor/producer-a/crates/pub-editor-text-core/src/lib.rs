@@ -64,6 +64,7 @@ pub fn replace_scalar_range_text_v1(
     Some(after)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn apply_story_range_forward_v1(
     current_text: &str,
     story_id: StoryId,
@@ -103,10 +104,8 @@ pub fn apply_story_range_inverse_v1(
     if story_state_id_v1(story_id, current_text) != after_story_state_id {
         return Err(StoryRangeTransitionErrorV1::Stale { story_id });
     }
-    let replacement_len =
-        u32::try_from(replacement_text.chars().count()).map_err(|_| {
-            StoryRangeTransitionErrorV1::Overflow { story_id }
-        })?;
+    let replacement_len = u32::try_from(replacement_text.chars().count())
+        .map_err(|_| StoryRangeTransitionErrorV1::Overflow { story_id })?;
     let replacement_end = start_scalar
         .checked_add(replacement_len)
         .ok_or(StoryRangeTransitionErrorV1::Overflow { story_id })?;
