@@ -442,6 +442,7 @@ fn build_pdf_artifact(
                 resource_id: image.resource_id,
                 mime: image.mime.clone(),
                 source_exact: image.source_exact,
+                derived_transparent_canvas: image.derived_transparent_canvas,
                 node_ids,
                 bytes: image.bytes.clone(),
             })
