@@ -5,8 +5,7 @@ use pub_editor::{
     AuthoredStackReorderModeV1, EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_10,
     EDITOR_PROJECT_VERSION_V0_12, EDITOR_PROJECT_VERSION_V0_13, EDITOR_PROJECT_VERSION_V0_17,
     EDITOR_PROJECT_VERSION_V0_22, EDITOR_PROJECT_VERSION_V0_23, EditOperation, EditorError,
-    EditorProjectError, EditorSession,
-    LengthEmu, LineGeometryV1, PointEmuV1, RectEmu, Srgb8V1,
+    EditorProjectError, EditorSession, LengthEmu, LineGeometryV1, PointEmuV1, RectEmu, Srgb8V1,
 };
 use pub_model::{
     Document, DocumentId, NodeId, Page, PageId, ResolvedGraph, Sha256Digest, Size2D,
@@ -348,7 +347,6 @@ fn reorder_is_one_v0_13_history_unit_with_exact_undo_redo_and_replay() {
     );
 }
 
-
 #[test]
 fn page_reorder_is_one_v0_23_history_unit_with_service_slot_preserved_and_exact_replay() {
     let customer_a = page_id();
@@ -397,7 +395,9 @@ fn page_reorder_is_one_v0_23_history_unit_with_service_slot_preserved_and_exact_
     );
 
     let mut reopened = EditorSession::new(page_order_graph()).expect("fresh session");
-    reopened.apply_project(&project).expect("replay page reorder");
+    reopened
+        .apply_project(&project)
+        .expect("replay page reorder");
     assert_eq!(
         reopened.graph().document.pages,
         vec![customer_c, service, customer_a, customer_b]
@@ -433,12 +433,7 @@ fn pre_v0_23_or_stale_page_reorder_project_fails_transactionally() {
     assert!(target.operations().is_empty());
 
     let mut stale_source = page_order_graph();
-    stale_source.document.pages = vec![
-        page_b_id(),
-        service_page_id(),
-        page_id(),
-        page_c_id(),
-    ];
+    stale_source.document.pages = vec![page_b_id(), service_page_id(), page_id(), page_c_id()];
     let mut stale_target = EditorSession::new(stale_source).expect("stale target");
     assert!(matches!(
         stale_target.apply_project(&project),
