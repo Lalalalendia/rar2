@@ -81,7 +81,7 @@ jobs:
           CACHE_KEY: ${{ steps.supplemental-cargo-cache-key.outputs.key }}
         run: |
           set -euo pipefail
-          [[ "$CACHE_KEY" =~ ^publisher-visual-supplemental-rust-v1-Linux-rust-1\\.94\\.1-[a-f0-9]{64}$ ]] || {
+          [[ "$CACHE_KEY" =~ ^publisher-visual-supplemental-rust-v1-Linux-rust-1[.]94[.]1-[a-f0-9]{64}$ ]] || {
             echo "unexpected supplemental Cargo cache key shape" >&2
             exit 1
           }
