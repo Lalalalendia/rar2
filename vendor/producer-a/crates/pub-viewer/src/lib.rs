@@ -1429,14 +1429,12 @@ fn viewer_legacy_ole_preview_image_from_scan(
         }
     };
 
-    Some(ViewerEmbeddedImage {
+    Some(ViewerEmbeddedImage::preview_png(
         resource_id,
-        mime: "image/png".to_owned(),
-        source_exact: false,
-        node_ids: node_ids.to_vec(),
-        placements: Vec::new(),
-        bytes: png,
-    })
+        node_ids.to_vec(),
+        Vec::new(),
+        png,
+    ))
 }
 
 fn legacy_image_preview_resource_id(
@@ -1601,14 +1599,12 @@ fn viewer_legacy_image_preview_images(
                 continue;
             }
         };
-        images.push(ViewerEmbeddedImage {
+        images.push(ViewerEmbeddedImage::preview_png(
             resource_id,
-            mime: "image/png".to_owned(),
-            source_exact: false,
-            node_ids: vec![node.header.id],
-            placements: Vec::new(),
-            bytes: png,
-        });
+            vec![node.header.id],
+            Vec::new(),
+            png,
+        ));
     }
 
     images
@@ -1801,14 +1797,12 @@ fn viewer_mature_officeart_wmf_preview_images(
             }
         }
 
-        images.push(ViewerEmbeddedImage {
+        images.push(ViewerEmbeddedImage::preview_png(
             resource_id,
-            mime: "image/png".to_owned(),
-            source_exact: false,
             node_ids,
             placements,
-            bytes: png,
-        });
+            png,
+        ));
     }
 
     if !images.is_empty() {
@@ -2705,14 +2699,13 @@ fn open_mature_0x2c_bundle(
                     }
                 }
 
-                images.push(ViewerEmbeddedImage {
-                    resource_id: file.resource_id,
-                    mime: entry.mime.clone(),
-                    source_exact: true,
-                    node_ids: entry.uses.iter().map(|usage| usage.node_id).collect(),
+                images.push(ViewerEmbeddedImage::exact(
+                    file.resource_id,
+                    entry.mime.clone(),
+                    entry.uses.iter().map(|usage| usage.node_id).collect(),
                     placements,
-                    bytes: file.bytes,
-                });
+                    file.bytes,
+                ));
             }
             images
         }
