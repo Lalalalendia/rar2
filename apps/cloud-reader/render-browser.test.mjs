@@ -29,7 +29,8 @@ const scene = {
   protocol_version: "chaptera.reader-scene.v1",
   pages: [{ page_id: "p", order: 0, width_emu: emu(600), height_emu: emu(400) }],
   nodes: [
-    { node_id: "text", page_id: "p", kind: "text", bounds: rectangle(30, 30, 240, 60), text: "Visible preview text\nSecond line." },
+    { node_id: "text", page_id: "p", kind: "text", bounds: rectangle(30, 30, 240, 60),
+      text: "Visible preview text\nSecond line.", preview_text_style: { font_resource_id: fontId } },
     { node_id: "table", page_id: "p", kind: "table", bounds: rectangle(30, 130, 500, 80), table: {
       story_id: "story", rows: 1, columns: 2, cells: [
         { cell_id: "a", row: 0, column: 0, bounds: rectangle(30, 130, 240, 80), text: "Visible table cell" },
@@ -83,10 +84,14 @@ try {
     range.selectNodeContents(div);
     const text = range.getBoundingClientRect();
     const frame = element.getBoundingClientRect();
+    const style = getComputedStyle(div);
+    const divBounds = div.getBoundingClientRect();
     return { node_id: element.closest("[data-node-id]").getAttribute("data-node-id"), cell_id: element.getAttribute("data-table-cell-id"),
       authority: element.getAttribute("data-text-authority"), text_height_px: text.height, text_width_px: text.width,
       frame: [frame.x, frame.y, frame.width, frame.height],
-      inside_frame: text.x >= frame.x - 0.1 && text.right <= frame.right + 0.1 && text.y >= frame.y - 0.1 && text.bottom <= frame.bottom + 0.1 };
+      clip_contract: style.overflow === "hidden"
+        && Math.abs(divBounds.width - frame.width) < 0.1
+        && Math.abs(divBounds.height - frame.height) < 0.1 };
   }));
   await page.screenshot({ path: join(output, "preview-text.png") });
   assert.equal(measurements.length, 4);
@@ -98,23 +103,39 @@ try {
   for (const measurement of measurements) {
     assert.ok(measurement.text_height_px >= 8, "preview text must remain readable in screen pixels: " + JSON.stringify(measurement));
     assert.ok(measurement.text_width_px >= 30, "text must not collapse to an EMU-sized speck: " + JSON.stringify(measurement));
-    assert.equal(measurement.inside_frame, true);
+    assert.equal(measurement.clip_contract, true);
     assert.equal(measurement.authority, "browser-preview-only");
   }
   const previewMetadata = await page.locator('[data-text-authority="browser-preview-only"]')
-    .evaluateAll((elements) => elements.map((element) => ({
-      node: element.closest("[data-node-id]")?.getAttribute("data-node-id"),
-      kind: element.getAttribute("data-preview-kind"),
-      reason: element.getAttribute("data-preview-reason"),
-      sizeSource: element.getAttribute("data-preview-size-source")
-    })));
-  assert.deepEqual(previewMetadata, [
-    { node: "text", kind: "other_node_text", reason: "scene_layout_missing", sizeSource: "generic_9pt" },
-    { node: "table", kind: "table_cell", reason: "table_cell_preview", sizeSource: "generic_9pt" },
-    { node: "table", kind: "table_cell", reason: "table_cell_preview", sizeSource: "generic_9pt" },
+    .evaluateAll((elements) => elements.map((element) => {
+      const div = element.firstElementChild;
+      return {
+        node: element.closest("[data-node-id]")?.getAttribute("data-node-id"),
+        kind: element.getAttribute("data-preview-kind"),
+        reason: element.getAttribute("data-preview-reason"),
+        sizeSource: element.getAttribute("data-preview-size-source"),
+        fontSource: element.getAttribute("data-preview-font-source"),
+        fontFamily: div ? getComputedStyle(div).fontFamily : ""
+      };
+    }));
+  assert.deepEqual(previewMetadata.map(({ fontFamily, ...rest }) => rest), [
+    { node: "text", kind: "other_node_text", reason: "scene_layout_missing",
+      sizeSource: "generic_9pt", fontSource: "pinned_scene_font" },
+    { node: "table", kind: "table_cell", reason: "table_cell_preview",
+      sizeSource: "generic_9pt", fontSource: "system_ui" },
+    { node: "table", kind: "table_cell", reason: "table_cell_preview",
+      sizeSource: "generic_9pt", fontSource: "system_ui" },
     { node: "unresolved-font", kind: "other_node_text", reason: "base_font_unavailable",
-      sizeSource: "shared_resolved_plan" }
+      sizeSource: "shared_resolved_plan", fontSource: "system_ui" }
   ]);
+  assert.ok(
+    previewMetadata[0].fontFamily.includes("ChapteraReader_80307b8da7649aa4"),
+    "preview must use the exact already-loaded pinned Scene font"
+  );
+  assert.ok(
+    previewMetadata[3].fontFamily.includes("system-ui"),
+    "missing preview font identity must retain the existing system-ui fallback"
+  );
   const shared = await page.locator('[data-text-authority="server-shared-resolved"]').evaluateAll((lines) => lines.map((line) => {
     const bounds = line.getBoundingClientRect();
     return { text: line.textContent, font_size_px: parseFloat(getComputedStyle(line).fontSize),

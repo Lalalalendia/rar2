@@ -251,7 +251,8 @@ try {
         "invalid_text_viewport", "table_cell_preview"
       ]);
       const sizeSources = new Set(["shared_resolved_plan", "source_uniform_preview", "generic_9pt"]);
-      const byKind = {}, byReason = {}, bySizeSource = {}, byPage = {}, byPageCause = {};
+      const fontSources = new Set(["pinned_scene_font", "system_ui"]);
+      const byKind = {}, byReason = {}, bySizeSource = {}, byFontSource = {}, byPage = {}, byPageCause = {};
       const paintBoundsEmu = [];
       const pages = [...document.querySelectorAll("#pages svg.page")];
       const pagePaintBoundsEmu = (element) => {
@@ -284,26 +285,31 @@ try {
         const kind = element.getAttribute("data-preview-kind");
         const reason = element.getAttribute("data-preview-reason");
         const sizeSource = element.getAttribute("data-preview-size-source");
-        if (!kinds.has(kind) || !reasons.has(reason) || !sizeSources.has(sizeSource)) {
-          throw new Error("browser preview census has an unknown paint decision");
+        const fontSource = element.getAttribute("data-preview-font-source");
+        if (!kinds.has(kind) || !reasons.has(reason) || !sizeSources.has(sizeSource)
+            || !fontSources.has(fontSource)) {
+          throw new Error("browser preview census has an unknown paint decision: "
+            + JSON.stringify({ kind, reason, sizeSource, fontSource }));
         }
         const page = pages.indexOf(element.closest("svg.page")) + 1;
         if (page < 1) throw new Error("browser preview was not painted inside an SVG page");
         for (const [counts, key] of [
-          [byKind, kind], [byReason, reason], [bySizeSource, sizeSource],
-          [byPage, String(page)], [byPageCause, page + "|" + kind + "|" + reason + "|" + sizeSource]
+          [byKind, kind], [byReason, reason], [bySizeSource, sizeSource], [byFontSource, fontSource],
+          [byPage, String(page)],
+          [byPageCause, page + "|" + kind + "|" + reason + "|" + sizeSource + "|" + fontSource]
         ]) counts[key] = (counts[key] ?? 0) + 1;
         paintBoundsEmu.push({
           page,
           kind,
           reason,
           size_source: sizeSource,
+          font_source: fontSource,
           ...pagePaintBoundsEmu(element)
         });
       }
       return { total: elements.length, by_kind: byKind, by_reason: byReason,
-        by_size_source: bySizeSource, by_page: byPage, by_page_cause: byPageCause,
-        paint_bounds_emu: paintBoundsEmu };
+        by_size_source: bySizeSource, by_font_source: byFontSource,
+        by_page: byPage, by_page_cause: byPageCause, paint_bounds_emu: paintBoundsEmu };
     });
     assert.equal(
       Object.values(browserPreviewCensus.by_kind).reduce((sum, count) => sum + count, 0),
@@ -315,6 +321,14 @@ try {
       browserPreviewCensus.total,
       "browser preview census must locate every actually painted preview element"
     );
+    if (fixture.sha256 === "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
+        || fixture.sha256 === "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87") {
+      assert.deepEqual(
+        browserPreviewCensus.by_font_source,
+        { pinned_scene_font: 1 },
+        "default pinned text-frame preview must consume the already-loaded Chaptera fallback"
+      );
+    }
     for (const bounds of browserPreviewCensus.paint_bounds_emu) {
       assert.ok(Number.isSafeInteger(bounds.page) && bounds.page > 0);
       for (const key of ["x_emu", "y_emu", "width_emu", "height_emu"]) {

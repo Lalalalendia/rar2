@@ -55,13 +55,13 @@ export function previewTextSizeSource(node, plan = null) {
   return "generic_9pt";
 }
 
-function previewTextStyle(div, node, plan = null) {
+function previewTextStyle(div, node, plan = null, installedPreviewFont = null) {
   const preview = previewTextPaintPlan(node, plan);
   div.style.width = "100%";
   div.style.height = "100%";
   div.style.overflow = "hidden";
   div.style.whiteSpace = "pre-wrap";
-  div.style.fontFamily = "system-ui, sans-serif";
+  div.style.fontFamily = installedPreviewFont?.family ?? "system-ui, sans-serif";
   div.style.fontSize = (preview.font_size_emu / EMU_PER_CSS_PX) + "px";
   div.style.lineHeight = (preview.line_height_emu / EMU_PER_CSS_PX) + "px";
   div.style.color = preview.color;
@@ -367,17 +367,22 @@ export function resolvedTextViewportGeometry(bounds) {
   });
 }
 
-function appendPreviewText(group, node, plan, reason) {
+function appendPreviewText(group, node, plan, reason, fonts) {
   if (!node.text) return;
   const bounds = node.text_bounds ?? node.bounds;
+  const previewFontResourceId = node?.preview_text_style?.font_resource_id;
+  const installedPreviewFont = typeof previewFontResourceId === "string"
+    ? fonts.get(previewFontResourceId) ?? null
+    : null;
   const foreign = previewForeignObject(bounds, {
     "data-text-authority": "browser-preview-only",
     "data-preview-kind": node.kind === "text_frame" ? "text_frame" : "other_node_text",
     "data-preview-reason": reason,
-    "data-preview-size-source": previewTextSizeSource(node, plan)
+    "data-preview-size-source": previewTextSizeSource(node, plan),
+    "data-preview-font-source": installedPreviewFont ? "pinned_scene_font" : "system_ui"
   });
   const div = document.createElementNS(XHTML_NS, "div");
-  previewTextStyle(div, node, plan);
+  previewTextStyle(div, node, plan, installedPreviewFont);
   div.textContent = node.text;
   foreign.appendChild(div);
   group.appendChild(foreign);
@@ -390,12 +395,12 @@ function appendText(group, defs, node, fonts, index) {
     const reason = node.text_layout == null ? "scene_layout_missing"
       : node.text_layout.disposition === "shared_resolved" ? "shared_plan_invalid"
       : "server_layout_unavailable";
-    appendPreviewText(group, node, null, reason);
+    appendPreviewText(group, node, null, reason, fonts);
     return;
   }
   const installed = fonts.get(plan.font_resource_id) ?? null;
   if (!installed) {
-    appendPreviewText(group, node, plan, "base_font_unavailable");
+    appendPreviewText(group, node, plan, "base_font_unavailable", fonts);
     return;
   }
 
@@ -405,11 +410,11 @@ function appendText(group, defs, node, fonts, index) {
       if (!span.font_resource_id) continue;
       const spanInstalled = fonts.get(span.font_resource_id) ?? null;
       if (!spanInstalled) {
-        appendPreviewText(group, node, plan, "span_font_unavailable");
+        appendPreviewText(group, node, plan, "span_font_unavailable", fonts);
         return;
       }
       if (spanInstalled.resource.expected_sha256 !== span.font_fingerprint_sha256) {
-        appendPreviewText(group, node, plan, "span_font_fingerprint_mismatch");
+        appendPreviewText(group, node, plan, "span_font_fingerprint_mismatch", fonts);
         return;
       }
       spanFonts.set(span.font_resource_id, spanInstalled);
@@ -418,7 +423,7 @@ function appendText(group, defs, node, fonts, index) {
 
   const viewportGeometry = resolvedTextViewportGeometry(plan.bounds);
   if (!viewportGeometry) {
-    appendPreviewText(group, node, plan, "invalid_text_viewport");
+    appendPreviewText(group, node, plan, "invalid_text_viewport", fonts);
     return;
   }
 
@@ -549,7 +554,8 @@ function appendTableText(group, node) {
       "data-text-authority": "browser-preview-only",
       "data-preview-kind": "table_cell",
       "data-preview-reason": "table_cell_preview",
-      "data-preview-size-source": previewTextSizeSource(node)
+      "data-preview-size-source": previewTextSizeSource(node),
+      "data-preview-font-source": "system_ui"
     });
     const div = document.createElementNS(XHTML_NS, "div");
     previewTextStyle(div, node);

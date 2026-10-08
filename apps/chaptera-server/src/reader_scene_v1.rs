@@ -93,6 +93,8 @@ pub struct ReaderNodeV1 {
 #[derive(Debug, Clone, Serialize)]
 pub struct ReaderPreviewTextStyleV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_resource_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size_emu: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color_rgb: Option<[u8; 3]>,
@@ -436,14 +438,11 @@ fn preview_text_style_from_render_text(
 
     let font_size_emu = (!mixed_font_size).then_some(first_font_size_emu).flatten();
     let color_rgb = uniform_text_color_rgb_v1(text);
-    if font_size_emu.is_none() && color_rgb.is_none() {
-        None
-    } else {
-        Some(ReaderPreviewTextStyleV1 {
-            font_size_emu,
-            color_rgb,
-        })
-    }
+    Some(ReaderPreviewTextStyleV1 {
+        font_resource_id: Some(chaptera_desktop_fallback_font_resource::RESOURCE_ID.to_owned()),
+        font_size_emu,
+        color_rgb,
+    })
 }
 
 fn reader_text_layout_from_render_text(
