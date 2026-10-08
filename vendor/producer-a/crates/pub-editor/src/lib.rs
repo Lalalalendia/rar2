@@ -3273,16 +3273,10 @@ impl EditorSession {
             .copied())
     }
 
-    /// Resolves current effective paragraph alignment from one imported
-    /// paragraph projection, one imported-base projection over that snapshot,
-    /// and one authored-override history fold.
-    pub fn effective_paragraph_alignments_v1(
+    fn effective_paragraph_alignments_from_paragraphs_v1(
         &self,
+        paragraphs: Vec<ImportedParagraphV1>,
     ) -> Result<Vec<EffectiveParagraphAlignmentV1>, EditorError> {
-        self.validate_source_identity()?;
-        let paragraphs = self
-            .imported_paragraphs_v1()
-            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?;
         let base_by_id = self
             .imported_paragraph_base_alignments_from_paragraphs_v1(&paragraphs)
             .into_iter()
@@ -3323,14 +3317,39 @@ impl EditorSession {
             .collect())
     }
 
+    /// Resolves all current effective paragraph alignments from one imported
+    /// paragraph projection, one imported-base pass over that snapshot, and one
+    /// authored-override history fold.
+    pub fn effective_paragraph_alignments_v1(
+        &self,
+    ) -> Result<Vec<EffectiveParagraphAlignmentV1>, EditorError> {
+        self.validate_source_identity()?;
+        let paragraphs = self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?;
+        self.effective_paragraph_alignments_from_paragraphs_v1(paragraphs)
+    }
+
     pub fn effective_paragraph_alignment_v1(
         &self,
         paragraph_id: ParagraphId,
     ) -> Result<EffectiveParagraphAlignmentV1, EditorError> {
-        self.effective_paragraph_alignments_v1()?
+        self.validate_source_identity()?;
+        let paragraphs = self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?;
+        if !paragraphs
+            .iter()
+            .any(|paragraph| paragraph.paragraph_id == paragraph_id)
+        {
+            return Err(EditorError::ParagraphAlignmentParagraphUnavailable { paragraph_id });
+        }
+
+        Ok(self
+            .effective_paragraph_alignments_from_paragraphs_v1(paragraphs)?
             .into_iter()
             .find(|paragraph| paragraph.paragraph_id == paragraph_id)
-            .ok_or(EditorError::ParagraphAlignmentParagraphUnavailable { paragraph_id })
+            .expect("validated ParagraphId remains in the same effective snapshot"))
     }
 
     pub fn set_paragraph_alignment_override_v1(
