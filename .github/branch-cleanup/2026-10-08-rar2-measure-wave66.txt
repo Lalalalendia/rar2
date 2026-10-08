@@ -1,0 +1,3 @@
+# Measure Wave 66 — completed Carlton TABLE carrier applicability measurement
+measure/carlton-table-raw-carrier-applicability-01 031e7d250db0ad5f7090033a1a21b0ad263d5bd3
+ops/branch-gc-20261008-measure-wave65 0e557a314a215d766afc12c4fd4fd7566e9e27d4
