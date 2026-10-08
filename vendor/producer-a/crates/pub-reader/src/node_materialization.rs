@@ -101,9 +101,14 @@ pub(super) fn materialize_mature_nodes(
         let exact_grouped_primitive_shape_type = if raw_type == Some(RAW_TYPE_SHAPE)
             && exact_story_identity.is_none()
             && image_slot.is_none()
-            && has_default_ellipse_geometry(shape)
         {
-            Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
+            if has_default_ellipse_geometry(shape) {
+                Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
+            } else if super::paint_projection::has_bounded_grouped_solid_rectangle(shape) {
+                Some(super::paint_projection::OFFICEART_SHAPE_TYPE_RECTANGLE)
+            } else {
+                None
+            }
         } else {
             None
         };

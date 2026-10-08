@@ -34,6 +34,17 @@ pub(super) fn index_escher_by_contents_seq(
     index
 }
 
+/// Group carrier-rank extension is deliberately limited to locally filled
+/// rectangles. Existing grouped ellipses and unproven primitives retain the
+/// original source-order exclusion.
+pub(super) fn admit_grouped_paint_participant(
+    has_story: bool,
+    has_image: bool,
+    bounded_solid_rectangle: bool,
+) -> bool {
+    has_story || has_image || bounded_solid_rectangle
+}
+
 type GroupedCarrierParticipant = (usize, NodeId);
 type GroupedCarrierMap = BTreeMap<u32, (PageId, Vec<GroupedCarrierParticipant>)>;
 
@@ -108,10 +119,18 @@ pub(super) fn source_page_paint_orders_v1(
         if node.header.parent_id != page_id.into_canonical() {
             continue;
         }
-        // #632 proves the first carrier-rank class only for visible grouped
-        // Story and image descendants. Grouped TABLE/other classes remain
-        // outside this slice even when they happen to have exact ancestry.
-        if node.payload.story_frame.is_none() && node.payload.image_slot.is_none() {
+        // Grouped Story/image ordering remains unchanged. The only newly
+        // admitted primitive is a source-backed solid rectangle, with exact
+        // group ancestry and positive local fill/color evidence.
+        let solid_rectangle = node.payload.officeart_shape_type
+            == Some(super::paint_projection::OFFICEART_SHAPE_TYPE_RECTANGLE)
+            && node.payload.explicit_paint.fill.visible == Some(true)
+            && node.payload.explicit_paint.fill.color_rgb.is_some();
+        if !admit_grouped_paint_participant(
+            node.payload.story_frame.is_some(),
+            node.payload.image_slot.is_some(),
+            solid_rectangle,
+        ) {
             continue;
         }
 
@@ -230,4 +249,17 @@ pub(super) fn source_page_paint_orders_v1(
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod grouped_paint_order_tests {
+    use super::*;
+
+    #[test]
+    fn grouped_rectangle_extends_only_the_proven_participant_class() {
+        assert!(admit_grouped_paint_participant(true, false, false));
+        assert!(admit_grouped_paint_participant(false, true, false));
+        assert!(admit_grouped_paint_participant(false, false, true));
+        assert!(!admit_grouped_paint_participant(false, false, false));
+    }
 }
