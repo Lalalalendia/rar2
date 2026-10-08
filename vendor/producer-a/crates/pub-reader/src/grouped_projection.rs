@@ -115,6 +115,13 @@ pub(super) fn project_grouped_object_shape(
             bail!("OfficeArt parent-group link does not match Contents ancestry");
         }
         let ancestor_rotation = shape_has_nonzero_rotation(group_shape);
+        if ancestor_rotation && std::env::var_os("READER_CORPUS_DIAGNOSTIC").is_some() {
+            let parent_seq = single_parent_seq(group_reference);
+            let page_id = parent_seq.and_then(|value| context.page_seq_to_id.get(&value).copied());
+            eprintln!(
+                "GROUP320_PAGE_ATTR first_group_seq={first_group_seq} depth={depth} child_rotation_op={child_rotation_op:?} parent_seq={parent_seq:?} page_id={page_id:?}"
+            );
+        }
         let ancestor_flip_h = shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_H);
         let ancestor_flip_v = shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_V);
         if ancestor_rotation {
