@@ -111,8 +111,7 @@ impl EditorSession {
             .filter(|paragraph| paragraph.story_id == story_id)
             .collect::<Vec<_>>();
         let base_by_id = self
-            .imported_paragraph_base_alignments_v1()
-            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .imported_paragraph_base_alignments_from_paragraphs_v1(&paragraphs)
             .into_iter()
             .filter(|item| item.story_id == story_id)
             .map(|item| (item.paragraph_id, item.alignment))
@@ -126,17 +125,13 @@ impl EditorSession {
         ))
     }
 
-    /// Returns only imported paragraph base alignments that are fully and
-    /// unambiguously covered by current source-authority alignment runs.
-    ///
-    /// Missing source evidence is not interpreted as Left/default. Empty
-    /// paragraphs are not assigned a base value from text-run evidence.
-    pub fn imported_paragraph_base_alignments_v1(
+    fn imported_paragraph_base_alignments_from_paragraphs_v1(
         &self,
-    ) -> Result<Vec<ImportedParagraphBaseAlignmentV1>, ImportedParagraphBaseAlignmentErrorV1> {
+        paragraphs: &[ImportedParagraphV1],
+    ) -> Vec<ImportedParagraphBaseAlignmentV1> {
         let mut result = Vec::new();
 
-        for paragraph in self.imported_paragraphs_v1()? {
+        for paragraph in paragraphs {
             let runs = self
                 .source_paragraph_alignments
                 .iter()
@@ -154,7 +149,19 @@ impl EditorSession {
         }
 
         result.sort_by_key(|item| (item.story_id, item.range.start, item.paragraph_id));
-        Ok(result)
+        result
+    }
+
+    /// Returns only imported paragraph base alignments that are fully and
+    /// unambiguously covered by current source-authority alignment runs.
+    ///
+    /// Missing source evidence is not interpreted as Left/default. Empty
+    /// paragraphs are not assigned a base value from text-run evidence.
+    pub fn imported_paragraph_base_alignments_v1(
+        &self,
+    ) -> Result<Vec<ImportedParagraphBaseAlignmentV1>, ImportedParagraphBaseAlignmentErrorV1> {
+        let paragraphs = self.imported_paragraphs_v1()?;
+        Ok(self.imported_paragraph_base_alignments_from_paragraphs_v1(&paragraphs))
     }
 
     pub fn imported_paragraph_base_alignment_v1(
