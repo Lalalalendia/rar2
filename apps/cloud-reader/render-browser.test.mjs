@@ -29,7 +29,7 @@ const scene = {
   protocol_version: "chaptera.reader-scene.v1",
   pages: [{ page_id: "p", order: 0, width_emu: emu(600), height_emu: emu(400) }],
   nodes: [
-    { node_id: "text", page_id: "p", kind: "text", bounds: rectangle(30, 30, 240, 60), text: "Visible preview text\nSecond line.",
+    { node_id: "text", page_id: "p", kind: "text", bounds: rectangle(30, 30, 240, 60), text: "Preview text\nLine.",
       preview_text_style: { font_resource_id: fontId } },
     { node_id: "table", page_id: "p", kind: "table", bounds: rectangle(30, 130, 500, 80), table: {
       story_id: "story", rows: 1, columns: 2, cells: [
