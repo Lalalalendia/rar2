@@ -186,6 +186,7 @@ function Set-NativeStage {
     param([Parameter(Mandatory = $true)][string]$Stage)
 
     $script:NativeStageSequence = [int]$script:NativeStageSequence + 1
+    $script:NativeCurrentStage = $Stage
     Write-Host ("PUB_RE_NATIVE_STAGE sequence={0} stage={1}" -f $script:NativeStageSequence, $Stage)
 
     if (-not [string]::IsNullOrWhiteSpace([string]$script:NativeStageReceiptPath)) {
@@ -195,6 +196,7 @@ function Set-NativeStage {
             operation = [string]$script:NativeOperationKind
             sequence = [int]$script:NativeStageSequence
             stage = $Stage
+            failure_stage = [string]$script:NativeFailureStage
         }) -Path $script:NativeStageReceiptPath
     }
 }
@@ -584,6 +586,8 @@ $receipt = [ordered]@{
 }
 
 $script:NativeStageSequence = 0
+$script:NativeCurrentStage = ""
+$script:NativeFailureStage = ""
 $script:NativeStageReceiptPath = Join-Path $evidenceDir "native-stage-receipt.json"
 $script:NativeExperimentId = [string]$manifest.experiment_id
 $script:NativeOperationKind = $operationKind
@@ -670,6 +674,12 @@ try {
         $receipt.status = "saved"
     }
 }
+catch {
+    $script:NativeFailureStage = [string]$script:NativeCurrentStage
+    Write-Host ("PUB_RE_NATIVE_FAILURE_STAGE stage={0}" -f $script:NativeFailureStage)
+    Set-NativeStage "primary_exception_observed"
+    throw
+}
 finally {
     if ($null -ne $target) {
         Release-ComObject $target.shape
@@ -737,6 +747,12 @@ if ($operationKind -eq "shape_rotation_delta" -and $receipt.save.state -eq "ok" 
             }
             $receipt.status = "complete"
         }
+    }
+    catch {
+        $script:NativeFailureStage = [string]$script:NativeCurrentStage
+        Write-Host ("PUB_RE_NATIVE_FAILURE_STAGE stage={0}" -f $script:NativeFailureStage)
+        Set-NativeStage "reopen_exception_observed"
+        throw
     }
     finally {
         if ($null -ne $reopenTarget) { Release-ComObject $reopenTarget.shape }
