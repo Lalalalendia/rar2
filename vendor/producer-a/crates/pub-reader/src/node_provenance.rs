@@ -23,6 +23,12 @@ pub(super) struct NodeProvenanceContext<'a> {
         Option<&'a super::publication_document::PubPublicationColorScheme>,
     pub(super) dgg_defaults: Option<&'a pub_escher::DggDefaultOptionsObservation>,
     pub(super) effective_paint: &'a Option<PubEffectiveShapePaintSource>,
+    pub(super) shape_has_default_roundrect: bool,
+    pub(super) shape_has_default_ellipse: bool,
+    pub(super) shape_has_default_line: bool,
+    pub(super) shape_has_dash_gel: bool,
+    pub(super) uses_officeart_scheme_color: bool,
+    pub(super) effective_paint_has_dgg_authority: bool,
 }
 
 pub(super) fn build_node_source_refs(
@@ -43,6 +49,12 @@ pub(super) fn build_node_source_refs(
         color_scheme,
         dgg_defaults,
         effective_paint,
+        shape_has_default_roundrect,
+        shape_has_default_ellipse,
+        shape_has_default_line,
+        shape_has_dash_gel,
+        uses_officeart_scheme_color,
+        effective_paint_has_dgg_authority,
     } = context;
     let object_key = contents_object_key(seq_num);
     let mut source_refs = vec![source_ref(
@@ -85,7 +97,7 @@ pub(super) fn build_node_source_refs(
             }
         }
     }
-    if has_default_roundrect_geometry(shape) {
+    if shape_has_default_roundrect {
         source_refs.push(source_ref(
             &graph.source,
             &shape.source,
@@ -96,7 +108,7 @@ pub(super) fn build_node_source_refs(
             ReadConfidence::Exact,
         ));
     }
-    if has_default_ellipse_geometry(shape) {
+    if shape_has_default_ellipse {
         source_refs.push(source_ref(
             &graph.source,
             &shape.source,
@@ -107,7 +119,7 @@ pub(super) fn build_node_source_refs(
             ReadConfidence::Exact,
         ));
     }
-    if has_default_line_geometry(shape) {
+    if shape_has_default_line {
         source_refs.push(source_ref(
             &graph.source,
             &shape.source,
@@ -117,7 +129,7 @@ pub(super) fn build_node_source_refs(
             AuthorityClass::Authoritative,
             ReadConfidence::Exact,
         ));
-        if has_shape_local_dash_gel(shape) {
+        if shape_has_dash_gel {
             source_refs.push(source_ref(
                 &graph.source,
                 &shape.source,
@@ -155,7 +167,7 @@ pub(super) fn build_node_source_refs(
             ReadConfidence::Exact,
         ));
     }
-    if paint_context_uses_officeart_scheme_color(shape, dgg_defaults) {
+    if uses_officeart_scheme_color {
         if let Some(color_scheme) = color_scheme {
             source_refs.push(source_ref(
                 &graph.source,
@@ -168,10 +180,7 @@ pub(super) fn build_node_source_refs(
             ));
         }
     }
-    if effective_paint
-        .as_ref()
-        .is_some_and(effective_paint_has_dgg_authority)
-    {
+    if effective_paint_has_dgg_authority {
         if let Some(dgg_defaults) = dgg_defaults {
             source_refs.push(source_ref(
                 &graph.source,
