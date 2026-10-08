@@ -47,7 +47,7 @@ fn logical_metafile_bytes(
             let mut decoder = ZlibDecoder::new(Cursor::new(stored));
             let mut logical = Vec::new();
             decoder.read_to_end(&mut logical)?;
-            let expected = usize::try_from(record.logical_payload_len.ok_or("missing logical len")?)?;
+            let expected =\n                usize::try_from(record.logical_payload_len.ok_or("missing logical len")?)?;
             if logical.len() != expected {
                 return Err(format!(
                     "logical EMF length mismatch: expected {expected}, got {}",
