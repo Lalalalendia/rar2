@@ -129,7 +129,7 @@ export async function adaptReaderSceneToEditorScene(readerScene) {
     });
   }
 
-  const resources = [...(readerScene.resources ?? [])].map((resource) => ({
+  const imageResources = [...(readerScene.resources ?? [])].map((resource) => ({
     resource_id: resource.resource_id,
     kind: "image",
     mime: resource.mime,
@@ -139,6 +139,29 @@ export async function adaptReaderSceneToEditorScene(readerScene) {
     fetch_handle: null,
     inline_data_url: resource.inline_data_url ?? null,
   }));
+  const fontResources = [...(readerScene.fonts ?? [])].map((font) => ({
+    resource_id: font.resource_id,
+    kind: "font",
+    mime: font.mime,
+    content_hash: font.expected_sha256 ?? null,
+    byte_len: null,
+    availability: font.availability === "inline_data_url" ? "available" : "unknown",
+    fetch_handle: null,
+    inline_data_url: font.inline_data_url ?? null,
+    expected_sha256: font.expected_sha256 ?? null,
+    family_name: font.family_name ?? null,
+  }));
+  const resources = [...imageResources, ...fontResources];
+  const resourceIds = new Set();
+  for (const resource of resources) {
+    if (typeof resource.resource_id !== "string" || resource.resource_id.length === 0) {
+      throw new TypeError("Reader resource_id is required");
+    }
+    if (resourceIds.has(resource.resource_id)) {
+      throw new Error("Reader scene contains duplicate image/font resource identity");
+    }
+    resourceIds.add(resource.resource_id);
+  }
 
   const diagnostics = [...(readerScene.diagnostics ?? [])].map((diagnostic) => ({
     severity: diagnostic.severity,

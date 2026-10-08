@@ -11,6 +11,9 @@ const RESOURCE = "image:1";
 const SOURCE = "a".repeat(64);
 const REVISION = "sha256:" + "b".repeat(64);
 const PIXEL = "data:image/png;base64,iVBORw0KGgo=";
+const FONT_SHA = "c".repeat(64);
+const FONT_ID = "font:chaptera-fallback";
+const FONT_DATA = "data:font/ttf;base64,AA==";
 
 function readerScene() {
   return {
@@ -32,7 +35,26 @@ function readerScene() {
         paint: { fill_rgb: [1, 2, 3], line: { rgb: [4, 5, 6], width_emu: 12700 } },
         resource_id: RESOURCE,
         text: "Direct text",
-        text_layout: { disposition: "shared_resolved" },
+        text_layout: {
+          disposition: "shared_resolved",
+          font_resource_id: FONT_ID,
+          font_fingerprint_sha256: FONT_SHA,
+          font_size_emu: 114300,
+          line_height_emu: 142875,
+          color_rgb: [7, 8, 9],
+          vertical_offset_emu: 0,
+          lines: [{
+            line_index: 0,
+            scalar_start: 0,
+            scalar_end: 11,
+            consumed_scalar_end: 11,
+            text: "Direct text",
+            x_offset_emu: 0,
+            measured_width_emu: 20,
+            line_height_emu: 142875,
+            spans: [],
+          }],
+        },
         preview_text_style: { font_size_emu: 114300, color_rgb: [7, 8, 9] },
       },
       {
@@ -47,7 +69,14 @@ function readerScene() {
     ],
     stories: [],
     resources: [{ resource_id: RESOURCE, mime: "image/png", availability: "inline_data_url", inline_data_url: PIXEL }],
-    fonts: [],
+    fonts: [{
+      resource_id: FONT_ID,
+      family_name: "Chaptera Fallback",
+      mime: "font/ttf",
+      expected_sha256: FONT_SHA,
+      availability: "inline_data_url",
+      inline_data_url: FONT_DATA,
+    }],
     diagnostics: [],
   };
 }
@@ -66,6 +95,11 @@ test("rich Reader Scene becomes an Editor Scene without changing revision author
   assert.equal(scene.nodes[1].z_order, 1);
   assert.deepEqual(scene.paints[0].fill, { r: 1, g: 2, b: 3, a: 255 });
   assert.equal(scene.resources[0].inline_data_url, PIXEL);
+  const font = scene.resources.find((resource) => resource.kind === "font");
+  assert.equal(font.resource_id, FONT_ID);
+  assert.equal(font.expected_sha256, FONT_SHA);
+  assert.equal(font.content_hash, FONT_SHA);
+  assert.equal(font.inline_data_url, FONT_DATA);
   assert.equal(scene.stories[0].text, "Direct text");
   assert.equal(scene.stories[0].text_fidelity, "supported");
   assert.equal(scene.capabilities.find((item) => item.key === "render.paint").state, "supported");
@@ -84,4 +118,14 @@ test("adapter rejects reader scenes with invalid source identity", async () => {
   const payload = readerScene();
   payload.source_hash = "not-a-sha";
   await assert.rejects(adaptReaderSceneToEditorScene(payload), /source_hash/);
+});
+
+
+test("adapter rejects image/font resource identity collisions", async () => {
+  const payload = readerScene();
+  payload.fonts[0].resource_id = RESOURCE;
+  await assert.rejects(
+    adaptReaderSceneToEditorScene(payload),
+    /duplicate image\/font resource identity/,
+  );
 });
