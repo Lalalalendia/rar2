@@ -4,8 +4,9 @@ use pub_editor::{
     AuthoredEntityProvenanceV1, AuthoredShapePaintV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
     AuthoredStackReorderModeV1, EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_10,
     EDITOR_PROJECT_VERSION_V0_12, EDITOR_PROJECT_VERSION_V0_13, EDITOR_PROJECT_VERSION_V0_17,
-    EDITOR_PROJECT_VERSION_V0_22, EDITOR_PROJECT_VERSION_V0_23, EditOperation, EditorError,
-    EditorProjectError, EditorSession, LengthEmu, LineGeometryV1, PointEmuV1, RectEmu, Srgb8V1,
+    EDITOR_PROJECT_VERSION_V0_22, EDITOR_PROJECT_VERSION_V0_23, EditOperation, EditorEditableTarget,
+    EditorError, EditorProjectError, EditorSession, LengthEmu, LineGeometryV1, PointEmuV1, RectEmu,
+    Srgb8V1,
 };
 use pub_model::{
     Document, DocumentId, NodeId, Page, PageId, ResolvedGraph, Sha256Digest, Size2D,
