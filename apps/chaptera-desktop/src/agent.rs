@@ -1,3 +1,4 @@
+mod page_reorder;
 use chaptera_scene_instance::{
     GeometrySyncPolicyV1, ObjectMutationKindV1, SceneInstanceV1, admit_object_mutation_v1,
     direct_page_local_instance_v1, geometry_sync_policy_v1,
@@ -12,7 +13,6 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
-
 const PROTOCOL_VERSION: &str = "chaptera.agent-control.v1";
 const AGENT_CONTROL_CATALOG_JSON: &str =
     include_str!("../../../packages/protocol/editor-agent-control/v1.catalog.json");
@@ -2318,18 +2318,7 @@ fn operation_summary(operation: &EditOperation) -> Value {
             "before_state_id":transition.before_state_id,
             "after_state_id":transition.after_state_id
         }),
-        EditOperation::ReorderPagesV1 { transition } => json!({
-            "kind":"reorder_pages_v1",
-            "document_id":transition.document_id.as_canonical().to_string(),
-            "before_page_ids":transition.before.iter()
-                .map(|id| id.as_canonical().to_string())
-                .collect::<Vec<_>>(),
-            "after_page_ids":transition.after.iter()
-                .map(|id| id.as_canonical().to_string())
-                .collect::<Vec<_>>(),
-            "before_state_id":transition.before_state_id,
-            "after_state_id":transition.after_state_id
-        }),
+        EditOperation::ReorderPagesV1 { transition } => page_reorder::operation_summary(transition),
         EditOperation::SetTextFormatProperty {
             story_id,
             start_scalar,
