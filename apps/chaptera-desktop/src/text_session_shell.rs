@@ -142,8 +142,26 @@ impl ViewerApp {
         }
     }
 
+    /// Finalize canvas text/text-format changes without paying unrelated
+    /// created-node or object-geometry synchronization.
+    fn finish_text_authoring_change(&mut self, status: &str) {
+        self.canvas_drag = None;
+        self.canvas_resize = None;
+        self.page_frame_cache.clear();
+        let text_projection_refresh = self.sync_visual_stories_from_editor();
+        self.refresh_search();
+        self.export_preview = None;
+        self.project_status = Some("Editor project has unsaved changes.".to_owned());
+        self.edit_status = Some(match text_projection_refresh {
+            Ok(()) => status.to_owned(),
+            Err(text_error) => {
+                format!("{status} Viewer text projection refresh failed closed: {text_error}")
+            }
+        });
+    }
+
     /// One committed canvas text mutation has one finish-owned Viewer refresh.
-    /// In particular, do not refresh Viewer here before finish_authoring_change.
+    /// In particular, do not refresh Viewer here before finish_text_authoring_change.
     fn finish_canvas_text_mutation(
         &mut self,
         before_operations: usize,
@@ -860,6 +878,18 @@ mod tests {
         assert!(!source.contains(&old_helper));
         assert!(!source.contains(&direct_refresh));
         assert_eq!(source.matches(&canonical_finish).count(), 1);
+
+        let start = source
+            .find("fn finish_text_authoring_change")
+            .expect("text-only finisher exists");
+        let end = source[start..]
+            .find("fn finish_canvas_text_mutation")
+            .map(|offset| start + offset)
+            .expect("text-only finisher has a bounded source section");
+        let text_only_finish = &source[start..end];
+        assert!(text_only_finish.contains("sync_visual_stories_from_editor"));
+        assert!(!text_only_finish.contains("sync_visual_created_text_boxes_from_editor"));
+        assert!(!text_only_finish.contains("sync_visual_geometry_from_editor"));
     }
 
     #[test]
