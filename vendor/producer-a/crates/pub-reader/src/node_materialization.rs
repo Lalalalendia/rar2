@@ -101,9 +101,10 @@ pub(super) fn materialize_mature_nodes(
         let exact_grouped_primitive_shape_type = if raw_type == Some(RAW_TYPE_SHAPE)
             && exact_story_identity.is_none()
             && image_slot.is_none()
-            && has_default_ellipse_geometry(shape)
+            && (has_default_ellipse_geometry(shape)
+                || has_bounded_grouped_solid_rectangle(shape))
         {
-            Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
+            shape.fsp.as_ref().map(|fsp| fsp.shape_type)
         } else {
             None
         };

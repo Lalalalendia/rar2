@@ -145,11 +145,11 @@ use page_projection::{build_effective_page_projection, resolve_scenario_page_ids
 pub use paint_projection::resolve_bounded_effective_officeart_paint;
 use paint_projection::{
     FILL_FILLED_BIT, FILL_USE_FILLED_BIT, OFFICE_ART_FILL_BOOLEANS, OFFICE_ART_FILL_COLOR,
-    OFFICE_ART_FILL_TYPE, OFFICE_ART_LINE_WIDTH, OFFICEART_SHAPE_TYPE_ELLIPSE,
+    OFFICE_ART_FILL_TYPE, OFFICE_ART_LINE_WIDTH, OFFICEART_SHAPE_TYPE_RECTANGLE,
     admits_normative_2d_paint_defaults, bounded_officeart_image_crop,
     bounded_officeart_image_recolor, bounded_officeart_rgb, direct_officeart_rgb,
-    effective_paint_has_dgg_authority, explicit_officeart_paint, has_default_ellipse_geometry,
-    has_default_line_geometry, has_default_roundrect_geometry,
+    effective_paint_has_dgg_authority, explicit_officeart_paint, has_bounded_grouped_solid_rectangle,
+    has_default_ellipse_geometry, has_default_line_geometry, has_default_roundrect_geometry,
     has_explicit_officeart_paint_observation, has_shape_local_dash_gel,
     paint_context_uses_officeart_scheme_color, unique_explicit_officeart_scalar,
 };
@@ -1075,6 +1075,67 @@ mod tests {
             child_anchor: None,
             unknown_children: Vec::new(),
         }
+    }
+
+    #[test]
+    fn grouped_solid_rectangle_requires_unique_source_local_rgb_and_visible_fill() {
+        let base = || {
+            let mut shape = crop_test_shape(vec![
+                crop_test_property(OFFICE_ART_FILL_COLOR, 0x0000_C0FF),
+                crop_test_property(
+                    OFFICE_ART_FILL_BOOLEANS,
+                    FILL_USE_FILLED_BIT | FILL_FILLED_BIT,
+                ),
+            ]);
+            shape.fsp = Some(pub_escher::FspRecord {
+                spid: 1,
+                flags: 0x0A02,
+                shape_type: OFFICEART_SHAPE_TYPE_RECTANGLE,
+                source: crop_test_span(0, 16),
+                trailing_source: None,
+            });
+            shape
+        };
+        assert!(has_bounded_grouped_solid_rectangle(&base()));
+        let mut ellipse = base();
+        ellipse.fsp.as_mut().unwrap().shape_type = OFFICEART_SHAPE_TYPE_ELLIPSE;
+        assert!(!has_bounded_grouped_solid_rectangle(&ellipse));
+        let mut hidden = base();
+        hidden.fopts[0].properties[1].op = FILL_USE_FILLED_BIT;
+        assert!(!has_bounded_grouped_solid_rectangle(&hidden));
+        let mut scheme_color = base();
+        scheme_color.fopts[0].properties[0].op = 0x0800_0001;
+        assert!(!has_bounded_grouped_solid_rectangle(&scheme_color));
+        let mut gradient = base();
+        gradient
+            .fopts[0]
+            .properties
+            .push(crop_test_property(OFFICE_ART_FILL_TYPE, 1));
+        assert!(!has_bounded_grouped_solid_rectangle(&gradient));
+        let mut explicit_solid = base();
+        explicit_solid
+            .fopts[0]
+            .properties
+            .push(crop_test_property(OFFICE_ART_FILL_TYPE, 0));
+        assert!(has_bounded_grouped_solid_rectangle(&explicit_solid));
+        let mut conflicting = base();
+        conflicting
+            .fopts[0]
+            .properties
+            .push(crop_test_property(OFFICE_ART_FILL_COLOR, 0x0000_00FF));
+        assert!(!has_bounded_grouped_solid_rectangle(&conflicting));
+        let mut ambiguous = base();
+        ambiguous.fopts[0].properties[0].opid |= 0x4000;
+        assert!(!has_bounded_grouped_solid_rectangle(&ambiguous));
+    }
+
+    #[test]
+    fn grouped_source_paint_order_keeps_unproven_primitives_excluded() {
+        use source_paint_order::admit_grouped_paint_participant;
+        assert!(admit_grouped_paint_participant(true, false, false));
+        assert!(admit_grouped_paint_participant(false, true, false));
+        assert!(admit_grouped_paint_participant(false, false, true));
+        assert!(!admit_grouped_paint_participant(false, false, false));
     }
 
     #[test]

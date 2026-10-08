@@ -38,6 +38,7 @@ pub(super) const LINE_USE_LINE_BIT: u32 = 1 << 19;
 pub(super) const LINE_LINE_BIT: u32 = 1 << 3;
 pub(super) const OFFICEART_FSP_CONNECTOR_BIT: u32 = 1 << 8;
 pub(super) const OFFICEART_SHAPE_TYPE_NOT_PRIMITIVE: u16 = 0x0000;
+pub(super) const OFFICEART_SHAPE_TYPE_RECTANGLE: u16 = 0x0001;
 pub(super) const OFFICEART_SHAPE_TYPE_ELLIPSE: u16 = 0x0003;
 pub(super) const OFFICEART_SHAPE_TYPE_LINE: u16 = 0x0014;
 
@@ -74,6 +75,50 @@ pub(super) fn has_default_roundrect_geometry(shape: &pub_escher::SpContainerObse
 
 pub(super) fn has_default_ellipse_geometry(shape: &pub_escher::SpContainerObservation) -> bool {
     shape.fsp.as_ref().map(|fsp| fsp.shape_type) == Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
+}
+
+/// Only a source-backed, locally filled OfficeArt rectangle is admitted as
+/// a grouped solid primitive. Missing/ambiguous color, visibility or a
+/// non-solid fill mode must never create a new opaque page node.
+pub(super) fn has_bounded_grouped_solid_rectangle(
+    shape: &pub_escher::SpContainerObservation,
+) -> bool {
+    if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(OFFICEART_SHAPE_TYPE_RECTANGLE) {
+        return false;
+    }
+
+    let local = |property_id: u16| {
+        shape
+            .fopts
+            .iter()
+            .flat_map(|record| record.properties.iter())
+            .filter(|property| property.property_id() == property_id)
+            .collect::<Vec<_>>()
+    };
+    let fill_types = local(OFFICE_ART_FILL_TYPE);
+    if !fill_types.is_empty()
+        && !matches!(
+            fill_types.as_slice(),
+            [property] if !property.f_bid() && !property.f_complex() && property.op == 0
+        )
+    {
+        return false;
+    }
+
+    let scalar = |property_id: u16| match local(property_id).as_slice() {
+        [property] if !property.f_bid() && !property.f_complex() => Some(property.op),
+        _ => None,
+    };
+    let Some(fill_color) = scalar(OFFICE_ART_FILL_COLOR) else {
+        return false;
+    };
+    if direct_officeart_rgb(fill_color).is_none() {
+        return false;
+    }
+    scalar(OFFICE_ART_FILL_BOOLEANS).is_some_and(|flags| {
+        flags & (FILL_USE_FILLED_BIT | FILL_FILLED_BIT)
+            == FILL_USE_FILLED_BIT | FILL_FILLED_BIT
+    })
 }
 
 pub(super) fn has_default_line_geometry(shape: &pub_escher::SpContainerObservation) -> bool {
