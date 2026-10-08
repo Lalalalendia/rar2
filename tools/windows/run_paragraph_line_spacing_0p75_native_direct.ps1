@@ -63,6 +63,17 @@ function Resolve-CanonicalFixture {
     if (-not [string]::IsNullOrWhiteSpace([string]$env:USERPROFILE)) {
         $rootCandidates += (Join-Path ([string]$env:USERPROFILE) "rar2\realtest")
     }
+
+    # Historical paragraph-metrics receipts prove the exact pinned fixture existed
+    # under a bounded D-drive Publisher lab root on the qualified Windows host.
+    # Construct that exact root without embedding a machine-specific absolute
+    # path. No drive-wide discovery is allowed, and every candidate still has
+    # to match ExpectedFixtureSha256.
+    $legacyDrive = Get-PSDrive -Name D -PSProvider FileSystem -ErrorAction SilentlyContinue
+    if ($null -ne $legacyDrive) {
+        $rootCandidates += (Join-Path $legacyDrive.Root "Downloads\Downloads\pubtool-0.2.0\realtest")
+    }
+
     $rootCandidates += $RepoRoot
     $rootCandidates += (Split-Path -Parent $RepoRoot)
     $seen = @{}
