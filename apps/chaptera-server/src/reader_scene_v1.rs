@@ -2005,7 +2005,11 @@ mod tests {
 
         format!(
             "{}:{}",
-            if full_single { "full" } else { "partial_or_multiple" },
+            if full_single {
+                "full"
+            } else {
+                "partial_or_multiple"
+            },
             parts.join("+")
         )
     }
@@ -3114,8 +3118,7 @@ mod tests {
 
         println!(
             "CLOUD_READER_MIXED_SIZE_SLI_SEMANTICS source_sha256={} rows={}",
-            actual_sha256,
-            mixed_size_sli_semantics_json,
+            actual_sha256, mixed_size_sli_semantics_json,
         );
 
         println!(
