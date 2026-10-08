@@ -29,7 +29,15 @@ const scene = {
   protocol_version: "chaptera.reader-scene.v1",
   pages: [{ page_id: "p", order: 0, width_emu: emu(600), height_emu: emu(400) }],
   nodes: [
-    { node_id: "text", page_id: "p", kind: "text", bounds: rectangle(30, 30, 240, 60), text: "Visible preview text\nSecond line." },
+    { node_id: "text", page_id: "p", kind: "text", bounds: rectangle(30, 30, 240, 60),
+      text: "Visible preview text\nSecond line.",
+      preview_text_style: {
+        color_rgb: [112, 48, 160],
+        runs: [
+          { scalar_start: 0, scalar_end: 7, font_size_emu: emu(32) },
+          { scalar_start: 7, scalar_end: 33, font_size_emu: emu(12) }
+        ]
+      } },
     { node_id: "table", page_id: "p", kind: "table", bounds: rectangle(30, 130, 500, 80), table: {
       story_id: "story", rows: 1, columns: 2, cells: [
         { cell_id: "a", row: 0, column: 0, bounds: rectangle(30, 130, 240, 80), text: "Visible table cell" },
@@ -109,12 +117,23 @@ try {
       sizeSource: element.getAttribute("data-preview-size-source")
     })));
   assert.deepEqual(previewMetadata, [
-    { node: "text", kind: "other_node_text", reason: "scene_layout_missing", sizeSource: "generic_9pt" },
+    { node: "text", kind: "other_node_text", reason: "scene_layout_missing", sizeSource: "source_run_preview" },
     { node: "table", kind: "table_cell", reason: "table_cell_preview", sizeSource: "generic_9pt" },
     { node: "table", kind: "table_cell", reason: "table_cell_preview", sizeSource: "generic_9pt" },
     { node: "unresolved-font", kind: "other_node_text", reason: "base_font_unavailable",
       sizeSource: "shared_resolved_plan" }
   ]);
+  const previewRunSizes = await page.locator('[data-node-id="text"] [data-preview-run-size-emu]')
+    .evaluateAll((spans) => spans.map((span) => ({
+      size_emu: Number(span.getAttribute("data-preview-run-size-emu")),
+      font_size_px: parseFloat(getComputedStyle(span).fontSize),
+      text: span.textContent
+    })));
+  assert.deepEqual(previewRunSizes, [
+    { size_emu: emu(32), font_size_px: 32, text: "Visible" },
+    { size_emu: emu(12), font_size_px: 12, text: " preview text\nSecond line." }
+  ]);
+
   const shared = await page.locator('[data-text-authority="server-shared-resolved"]').evaluateAll((lines) => lines.map((line) => {
     const bounds = line.getBoundingClientRect();
     return { text: line.textContent, font_size_px: parseFloat(getComputedStyle(line).fontSize),
