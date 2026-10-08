@@ -721,7 +721,7 @@ mod authored_page_identity_tests {
         PubResolvedGraph,
     };
     use pub_model::{
-        Document, DocumentId, LengthEmu, Page, Sha256Digest, Size2D, SourceDescriptor,
+        Document, LengthEmu, Page, Sha256Digest, Size2D, SourceDescriptor,
     };
 
     fn source_hash() -> Sha256Digest {

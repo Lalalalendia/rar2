@@ -177,7 +177,9 @@ pub(super) fn text_format_operation_story_id_v1(operation: &EditOperation) -> Op
     }
 }
 
-pub(super) fn text_format_operation_property_v1(operation: &EditOperation) -> Option<FormatPropertyV1> {
+pub(super) fn text_format_operation_property_v1(
+    operation: &EditOperation,
+) -> Option<FormatPropertyV1> {
     match operation {
         EditOperation::SetTextFormatProperty { property, .. }
         | EditOperation::ClearTextFormatPropertyOverride { property, .. }
