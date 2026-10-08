@@ -181,6 +181,639 @@ function Write-Json {
     $Value | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath $Path -Encoding utf8
 }
 
+function Write-NativeStage {
+    param([Parameter(Mandatory = $true)][string]$Stage)
+
+    if ($Stage -notmatch '^[a-z0-9_]{1,64}function Get-PublisherProcessCount {
+    return @((Get-Process -Name MSPUB -ErrorAction SilentlyContinue)).Count
+}
+
+function Assert-PublisherIdle {
+    if ((Get-PublisherProcessCount) -ne 0) {
+        throw "publisher_busy"
+    }
+}
+
+function Wait-PublisherExit {
+    param([Parameter(Mandatory = $true)][int]$GraceSeconds)
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($GraceSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if ((Get-PublisherProcessCount) -eq 0) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    return ((Get-PublisherProcessCount) -eq 0)
+}
+
+function New-SafePublisherApplication {
+    param([switch]$Visible)
+
+    $application = New-Object -ComObject Publisher.Application
+    $before = Get-SafeValue { [int]$application.AutomationSecurity } "Application.AutomationSecurity"
+    if ($before.state -ne "value") {
+        try { $application.Quit() } catch {}
+        try { [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($application) } catch {}
+        throw "automation_security_unavailable"
+    }
+
+    try {
+        $application.AutomationSecurity = $MsoAutomationSecurityForceDisable
+    }
+    catch {
+        try { $application.Quit() } catch {}
+        try { [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($application) } catch {}
+        throw "automation_security_force_disable_failed"
+    }
+
+    $selected = Get-SafeValue { [int]$application.AutomationSecurity } "Application.AutomationSecurity"
+    if ($selected.state -ne "value" -or [int]$selected.value -ne $MsoAutomationSecurityForceDisable) {
+        try { $application.Quit() } catch {}
+        try { [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($application) } catch {}
+        throw "automation_security_force_disable_unconfirmed"
+    }
+
+    if ($Visible) {
+        try { $application.ActiveWindow.Visible = $true } catch {}
+    }
+
+    return [ordered]@{
+        application = $application
+        automation_security_before = [int]$before.value
+        automation_security_selected = [int]$selected.value
+    }
+}
+
+function Close-SafePublisherApplication {
+    param(
+        $Application,
+        [Parameter(Mandatory = $false)]$AutomationSecurityBefore
+    )
+
+    if ($null -eq $Application) {
+        return [ordered]@{ security_restore = "not_applicable"; quit = "not_applicable" }
+    }
+
+    $restore = "not_attempted"
+    if ($null -ne $AutomationSecurityBefore) {
+        try {
+            $Application.AutomationSecurity = [int]$AutomationSecurityBefore
+            $restore = "ok"
+        }
+        catch {
+            $restore = "error"
+        }
+    }
+
+    $quit = "not_attempted"
+    try {
+        $Application.Quit()
+        $quit = "ok"
+    }
+    catch {
+        $quit = "error"
+    }
+
+    try {
+        [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($Application)
+    }
+    catch {}
+
+    [GC]::Collect()
+    [GC]::WaitForPendingFinalizers()
+
+    return [ordered]@{
+        security_restore = $restore
+        quit = $quit
+    }
+}
+
+function Release-ComObject {
+    param($Object)
+    if ($null -eq $Object) {
+        return
+    }
+    try { [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($Object) } catch {}
+}
+
+function Get-ShapeSnapshot {
+    param(
+        [Parameter(Mandatory = $true)]$Shape,
+        [Parameter(Mandatory = $true)][int]$PageId,
+        [Parameter(Mandatory = $true)][string]$TraversalPath
+    )
+
+    $groupCount = 0
+    try { $groupCount = [int]$Shape.GroupItems.Count } catch {}
+
+    return [ordered]@{
+        page_id = $PageId
+        traversal_path = $TraversalPath
+        shape_id = Get-SafeValue { [int]$Shape.ID } "Shape.ID"
+        shape_type = Get-SafeValue { [int]$Shape.Type } "Shape.Type"
+        left_points = Get-SafeValue { [double]$Shape.Left } "Shape.Left"
+        top_points = Get-SafeValue { [double]$Shape.Top } "Shape.Top"
+        width_points = Get-SafeValue { [double]$Shape.Width } "Shape.Width"
+        height_points = Get-SafeValue { [double]$Shape.Height } "Shape.Height"
+        rotation_degrees = Get-SafeValue { [double]$Shape.Rotation } "Shape.Rotation"
+        has_text_frame = Get-SafeValue { [int]$Shape.HasTextFrame } "Shape.HasTextFrame"
+        group_item_count = $groupCount
+    }
+}
+
+function Add-ShapeInventoryRecursive {
+    param(
+        [Parameter(Mandatory = $true)]$Shape,
+        [Parameter(Mandatory = $true)][int]$PageId,
+        [Parameter(Mandatory = $true)][string]$TraversalPath,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$Output
+    )
+
+    [void]$Output.Add((Get-ShapeSnapshot -Shape $Shape -PageId $PageId -TraversalPath $TraversalPath))
+
+    $count = 0
+    try { $count = [int]$Shape.GroupItems.Count } catch { return }
+    for ($i = 1; $i -le $count; $i++) {
+        $child = $null
+        try {
+            $child = $Shape.GroupItems.Item($i)
+            Add-ShapeInventoryRecursive -Shape $child -PageId $PageId -TraversalPath "$TraversalPath/group[$i]" -Output $Output
+        }
+        finally {
+            Release-ComObject $child
+        }
+    }
+}
+
+function Get-DocumentInventory {
+    param([Parameter(Mandatory = $true)]$Document)
+
+    $pages = @()
+    for ($pageIndex = 1; $pageIndex -le [int]$Document.Pages.Count; $pageIndex++) {
+        $page = $Document.Pages.Item($pageIndex)
+        try {
+            $pageId = [int]$page.PageID
+            $shapes = New-Object System.Collections.ArrayList
+            for ($shapeIndex = 1; $shapeIndex -le [int]$page.Shapes.Count; $shapeIndex++) {
+                $shape = $page.Shapes.Item($shapeIndex)
+                try {
+                    Add-ShapeInventoryRecursive -Shape $shape -PageId $pageId -TraversalPath "shape[$shapeIndex]" -Output $shapes
+                }
+                finally {
+                    Release-ComObject $shape
+                }
+            }
+            $pages += [ordered]@{
+                collection_index = $pageIndex
+                page_id = $pageId
+                shapes = @($shapes)
+            }
+        }
+        finally {
+            Release-ComObject $page
+        }
+    }
+
+    return [ordered]@{
+        page_count = [int]$Document.Pages.Count
+        pages = $pages
+    }
+}
+
+function Add-TargetMatchesRecursive {
+    param(
+        [Parameter(Mandatory = $true)]$Shape,
+        [Parameter(Mandatory = $true)][int]$PageId,
+        [Parameter(Mandatory = $true)][int]$WantedShapeId,
+        [Parameter(Mandatory = $true)][string]$TraversalPath,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$Matches
+    )
+
+    $shapeId = $null
+    try { $shapeId = [int]$Shape.ID } catch {}
+    if ($null -ne $shapeId -and $shapeId -eq $WantedShapeId) {
+        [void]$Matches.Add([ordered]@{
+            page_id = $PageId
+            traversal_path = $TraversalPath
+            shape = $Shape
+        })
+        return
+    }
+
+    $count = 0
+    try { $count = [int]$Shape.GroupItems.Count } catch { return }
+    for ($i = 1; $i -le $count; $i++) {
+        $child = $null
+        try {
+            $child = $Shape.GroupItems.Item($i)
+            Add-TargetMatchesRecursive -Shape $child -PageId $PageId -WantedShapeId $WantedShapeId -TraversalPath "$TraversalPath/group[$i]" -Matches $Matches
+        }
+        finally {
+            if ($null -ne $child) {
+                $isMatch = $false
+                foreach ($match in $Matches) {
+                    if ([object]::ReferenceEquals($match.shape, $child)) {
+                        $isMatch = $true
+                        break
+                    }
+                }
+                if (-not $isMatch) {
+                    Release-ComObject $child
+                }
+            }
+        }
+    }
+}
+
+function Find-TargetShape {
+    param(
+        [Parameter(Mandatory = $true)]$Document,
+        [Parameter(Mandatory = $true)][int]$WantedPageId,
+        [Parameter(Mandatory = $true)][int]$WantedShapeId
+    )
+
+    $page = $null
+    for ($pageIndex = 1; $pageIndex -le [int]$Document.Pages.Count; $pageIndex++) {
+        $candidate = $Document.Pages.Item($pageIndex)
+        if ([int]$candidate.PageID -eq $WantedPageId) {
+            $page = $candidate
+            break
+        }
+        Release-ComObject $candidate
+    }
+    if ($null -eq $page) {
+        return $null
+    }
+
+    try {
+        $matches = New-Object System.Collections.ArrayList
+        for ($shapeIndex = 1; $shapeIndex -le [int]$page.Shapes.Count; $shapeIndex++) {
+            $shape = $page.Shapes.Item($shapeIndex)
+            Add-TargetMatchesRecursive -Shape $shape -PageId $WantedPageId -WantedShapeId $WantedShapeId -TraversalPath "shape[$shapeIndex]" -Matches $matches
+            $isMatch = $false
+            foreach ($match in $matches) {
+                if ([object]::ReferenceEquals($match.shape, $shape)) {
+                    $isMatch = $true
+                    break
+                }
+            }
+            if (-not $isMatch) {
+                Release-ComObject $shape
+            }
+        }
+
+        if ($matches.Count -eq 0) {
+            return $null
+        }
+        if ($matches.Count -ne 1) {
+            foreach ($match in $matches) { Release-ComObject $match.shape }
+            throw "selector_ambiguous"
+        }
+        return $matches[0]
+    }
+    finally {
+        Release-ComObject $page
+    }
+}
+
+$manifestSource = Get-Content -LiteralPath $ManifestPath -Raw
+$manifest = $manifestSource | ConvertFrom-Json
+Assert-NativeManifest $manifest
+
+if ($ValidateManifestOnly) {
+    Write-Host "PUB_RE_NATIVE_MANIFEST_OK"
+    exit 0
+}
+
+if ($env:OS -ne "Windows_NT") {
+    throw "native_oracle_requires_windows"
+}
+
+Write-NativeStage "preflight_idle_start"
+Assert-PublisherIdle
+Write-NativeStage "preflight_idle_done"
+
+New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
+$runRoot = (Resolve-Path -LiteralPath $OutputRoot).Path
+$staleRunDirectoriesRemoved = Remove-StaleNativeRunDirectories -CurrentOutputRoot $runRoot
+$privateDir = Join-Path $runRoot "private"
+$evidenceDir = Join-Path $runRoot "evidence"
+New-Item -ItemType Directory -Force -Path $privateDir | Out-Null
+New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
+
+$sourceConfig = $manifest.source
+$sourcePath = [string]$sourceConfig.path
+if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+    throw "source_missing"
+}
+$sourceFingerprint = Get-FileFingerprint $sourcePath
+$expectedSha = ([string]$sourceConfig.expected_sha256).ToLowerInvariant()
+if ($sourceFingerprint.sha256 -ne $expectedSha) {
+    throw "source_sha256_mismatch"
+}
+
+$inputCopy = Join-Path $privateDir "input.pub"
+Copy-Item -LiteralPath $sourcePath -Destination $inputCopy
+$copyFingerprint = Get-FileFingerprint $inputCopy
+if ($copyFingerprint.sha256 -ne $sourceFingerprint.sha256 -or $copyFingerprint.byte_len -ne $sourceFingerprint.byte_len) {
+    throw "source_copy_binding_failed"
+}
+
+$policy = Get-OptionalProperty $manifest "policy"
+$visible = [bool](Get-OptionalProperty $policy "visible" $false)
+$graceSeconds = [int](Get-OptionalProperty $policy "process_exit_grace_seconds" 60)
+$operation = $manifest.operation
+$operationKind = [string]$operation.kind
+$attribution = Get-OptionalProperty $manifest "attribution"
+$officeArtStream = [string](Get-OptionalProperty $attribution "officeart_stream" "")
+
+$receipt = [ordered]@{
+    schema = $ReceiptSchema
+    experiment_id = [string]$manifest.experiment_id
+    status = "started"
+    publisher = $null
+    source = [ordered]@{
+        sha256 = $sourceFingerprint.sha256
+        byte_len = $sourceFingerprint.byte_len
+    }
+    writer = [ordered]@{
+        name = "current"
+        save_as_format = $PbFilePublication
+    }
+    operation = [ordered]@{
+        kind = $operationKind
+        selector = $null
+        delta_degrees = $null
+    }
+    automation_security = [ordered]@{
+        before = $null
+        selected = $MsoAutomationSecurityForceDisable
+        restore = $null
+    }
+    before = $null
+    mutation = [ordered]@{ state = "not_applicable" }
+    after = $null
+    save = [ordered]@{ state = "not_applicable" }
+    reopen = [ordered]@{ state = "not_applicable" }
+    process_exit = [ordered]@{
+        grace_seconds = $graceSeconds
+        primary = "not_attempted"
+        reopen = "not_applicable"
+    }
+    invariants = [ordered]@{
+        source_copy_hash_equal = $true
+        source_path_emitted = $false
+        raw_document_bytes_emitted = $false
+        raw_text_emitted = $false
+        preflight_required_mspub_zero = $true
+        publisher_process_kill_used = $false
+        stale_run_directories_removed = [int]$staleRunDirectoriesRemoved
+    }
+}
+
+$application = $null
+$document = $null
+$securityBefore = $null
+$target = $null
+$mutatedPath = Join-Path $privateDir "mutated.pub"
+
+try {
+    Write-NativeStage "primary_application_create_start"
+    $appState = New-SafePublisherApplication -Visible:$visible
+    Write-NativeStage "primary_application_create_done"
+    $application = $appState.application
+    $securityBefore = $appState.automation_security_before
+    $receipt.automation_security.before = $securityBefore
+    $receipt.publisher = [ordered]@{
+        version = Get-SafeValue { [string]$application.Version } "Application.Version"
+        build = Get-SafeValue { [string]$application.Build } "Application.Build"
+    }
+
+    if ($operationKind -eq "snapshot_only") {
+        Write-NativeStage "snapshot_open_start"
+        $document = $application.Open($inputCopy, $true, $false)
+        Write-NativeStage "snapshot_open_done"
+        Write-NativeStage "snapshot_inventory_start"
+        $receipt.before = Get-DocumentInventory $document
+        Write-NativeStage "snapshot_inventory_done"
+        $receipt.status = "complete"
+    }
+    else {
+        $selector = $operation.selector
+        $wantedPageId = [int]$selector.page_id
+        $wantedShapeId = [int]$selector.shape_id
+        $delta = [double]$operation.delta_degrees
+        $receipt.operation.selector = [ordered]@{
+            page_id = $wantedPageId
+            shape_id = $wantedShapeId
+        }
+        $receipt.operation.delta_degrees = $delta
+
+        Write-NativeStage "rotation_open_start"
+        $document = $application.Open($inputCopy, $false, $false)
+        Write-NativeStage "rotation_open_done"
+        Write-NativeStage "rotation_selector_start"
+        $target = Find-TargetShape -Document $document -WantedPageId $wantedPageId -WantedShapeId $wantedShapeId
+        Write-NativeStage "rotation_selector_done"
+        if ($null -eq $target) {
+            throw "selector_not_found"
+        }
+
+        $receipt.before = Get-ShapeSnapshot -Shape $target.shape -PageId $wantedPageId -TraversalPath ([string]$target.traversal_path)
+        Write-NativeStage "rotation_mutation_start"
+        $beforeRotation = [double]$target.shape.Rotation
+        $target.shape.Rotation = $beforeRotation + $delta
+        $afterRotation = [double]$target.shape.Rotation
+        Write-NativeStage "rotation_mutation_done"
+        if ([math]::Abs($afterRotation - $beforeRotation) -lt 0.0000001) {
+            throw "mutation_no_effect"
+        }
+        $receipt.mutation = [ordered]@{
+            state = "ok"
+            before_rotation_degrees = $beforeRotation
+            after_rotation_degrees = $afterRotation
+        }
+        $receipt.after = Get-ShapeSnapshot -Shape $target.shape -PageId $wantedPageId -TraversalPath ([string]$target.traversal_path)
+
+        Write-NativeStage "rotation_save_as_start"
+        $document.SaveAs($mutatedPath, $PbFilePublication, $false)
+        Write-NativeStage "rotation_save_as_done"
+        $saved = Get-FileFingerprint $mutatedPath
+        $receipt.save = [ordered]@{
+            state = "ok"
+            sha256 = $saved.sha256
+            byte_len = $saved.byte_len
+        }
+        $receipt.status = "saved"
+    }
+}
+finally {
+    if ($null -ne $target) {
+        Release-ComObject $target.shape
+    }
+    if ($null -ne $document) {
+        Write-NativeStage "primary_document_close_start"
+        try {
+            $document.Close()
+            Write-NativeStage "primary_document_close_done"
+        }
+        catch {
+            Write-NativeStage "primary_document_close_error"
+        }
+        Release-ComObject $document
+    }
+    if ($null -ne $application) {
+        Write-NativeStage "primary_application_close_start"
+        $closed = Close-SafePublisherApplication -Application $application -AutomationSecurityBefore $securityBefore
+        Write-NativeStage "primary_application_close_done"
+        $receipt.automation_security.restore = $closed.security_restore
+    }
+}
+
+Write-NativeStage "primary_process_wait_start"
+$primaryExited = Wait-PublisherExit -GraceSeconds $graceSeconds
+Write-NativeStage "primary_process_wait_done"
+$receipt.process_exit.primary = if ($primaryExited) { "ok" } else { "timeout" }
+if (-not $primaryExited) {
+    $receipt.status = "process_exit_timeout"
+}
+
+if ($operationKind -eq "shape_rotation_delta" -and $receipt.save.state -eq "ok" -and $primaryExited) {
+    Assert-PublisherIdle
+    $reopenApplication = $null
+    $reopenDocument = $null
+    $reopenSecurityBefore = $null
+    $reopenTarget = $null
+
+    try {
+        Write-NativeStage "reopen_application_create_start"
+        $reopenState = New-SafePublisherApplication -Visible:$visible
+        Write-NativeStage "reopen_application_create_done"
+        $reopenApplication = $reopenState.application
+        $reopenSecurityBefore = $reopenState.automation_security_before
+        Write-NativeStage "reopen_open_start"
+        $reopenDocument = $reopenApplication.Open($mutatedPath, $true, $false)
+        Write-NativeStage "reopen_open_done"
+        Write-NativeStage "reopen_selector_start"
+        $reopenTarget = Find-TargetShape -Document $reopenDocument -WantedPageId ([int]$operation.selector.page_id) -WantedShapeId ([int]$operation.selector.shape_id)
+        Write-NativeStage "reopen_selector_done"
+        if ($null -eq $reopenTarget) {
+            $receipt.reopen = [ordered]@{
+                state = "selector_unresolved"
+            }
+            $receipt.status = "semantic_reopen_unresolved"
+        }
+        else {
+            $receipt.reopen = [ordered]@{
+                state = "ok"
+                target = Get-ShapeSnapshot -Shape $reopenTarget.shape -PageId ([int]$operation.selector.page_id) -TraversalPath ([string]$reopenTarget.traversal_path)
+            }
+            $receipt.status = "complete"
+        }
+    }
+    finally {
+        if ($null -ne $reopenTarget) { Release-ComObject $reopenTarget.shape }
+        if ($null -ne $reopenDocument) {
+            Write-NativeStage "reopen_document_close_start"
+            try {
+                $reopenDocument.Close()
+                Write-NativeStage "reopen_document_close_done"
+            }
+            catch {
+                Write-NativeStage "reopen_document_close_error"
+            }
+            Release-ComObject $reopenDocument
+        }
+        if ($null -ne $reopenApplication) {
+            Write-NativeStage "reopen_application_close_start"
+            [void](Close-SafePublisherApplication -Application $reopenApplication -AutomationSecurityBefore $reopenSecurityBefore)
+            Write-NativeStage "reopen_application_close_done"
+        }
+    }
+
+    Write-NativeStage "reopen_process_wait_start"
+    $reopenExited = Wait-PublisherExit -GraceSeconds $graceSeconds
+    Write-NativeStage "reopen_process_wait_done"
+    $receipt.process_exit.reopen = if ($reopenExited) { "ok" } else { "timeout" }
+    if (-not $reopenExited) {
+        $receipt.status = "process_exit_timeout"
+    }
+}
+
+$nativeReceiptPath = Join-Path $evidenceDir "native-receipt.json"
+Write-Json -Value $receipt -Path $nativeReceiptPath
+
+$control = [ordered]@{
+    has_diff = $false
+    officeart_stream = $officeArtStream
+    evidence_dir = "evidence"
+}
+if ($operationKind -eq "shape_rotation_delta" -and $receipt.save.state -eq "ok") {
+    $diffManifest = [ordered]@{
+        schema = $DiffSchema
+        experiment_id = ([string]$manifest.experiment_id) + "--native-diff"
+        question = "Which logical CFB ranges changed after the bounded native Publisher operation?"
+        before = [ordered]@{
+            path = "input.pub"
+            expected_sha256 = $sourceFingerprint.sha256
+        }
+        after = [ordered]@{
+            path = "mutated.pub"
+            expected_sha256 = [string]$receipt.save.sha256
+        }
+        policy = [ordered]@{
+            max_stream_bytes = 67108864
+            max_changed_ranges_per_stream = 256
+        }
+    }
+    Write-Json -Value $diffManifest -Path (Join-Path $privateDir "diff-manifest.json")
+    $control.has_diff = $true
+}
+Write-Json -Value $control -Path (Join-Path $privateDir "control.json")
+
+Write-Host ("PUB_RE_NATIVE status={0} operation={1}" -f $receipt.status, $operationKind)
+) {
+        throw "invalid_native_stage"
+    }
+    Write-Host ("PUB_RE_NATIVE_STAGE {0}" -f $Stage)
+}
+
+function Remove-StaleNativeRunDirectories {
+    param([Parameter(Mandatory = $true)][string]$CurrentOutputRoot)
+
+    if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP) -or -not (Test-Path -LiteralPath $env:RUNNER_TEMP -PathType Container)) {
+        Write-Host "PUB_RE_NATIVE_STALE_CLEANUP skipped=no_runner_temp"
+        return 0
+    }
+
+    $tempRoot = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $env:RUNNER_TEMP).Path)
+    $current = [IO.Path]::GetFullPath($CurrentOutputRoot)
+    $prefix = $tempRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    if (-not $current.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        Write-Host "PUB_RE_NATIVE_STALE_CLEANUP skipped=current_outside_runner_temp"
+        return 0
+    }
+
+    $removed = 0
+    foreach ($directory in @(Get-ChildItem -LiteralPath $tempRoot -Directory -Filter "pub-re-native-*" -ErrorAction Stop)) {
+        $candidate = [IO.Path]::GetFullPath($directory.FullName)
+        if ([string]::Equals($candidate, $current, [StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+        try {
+            Remove-Item -LiteralPath $candidate -Recurse -Force -ErrorAction Stop
+            $removed++
+        }
+        catch {
+            throw "stale_native_cleanup_failed"
+        }
+    }
+
+    Write-Host ("PUB_RE_NATIVE_STALE_CLEANUP removed={0}" -f $removed)
+    return $removed
+}
+
 function Get-PublisherProcessCount {
     return @((Get-Process -Name MSPUB -ErrorAction SilentlyContinue)).Count
 }
