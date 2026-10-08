@@ -407,7 +407,7 @@ export class RichReaderEditorShellV1 {
       height: preview.height,
       fill: "none",
       stroke: "rgb(0 80 220)",
-      "stroke-width": 19050,
+      "stroke-width": 2,
       "vector-effect": "non-scaling-stroke",
       "data-selection-node-id": selected.node_id,
     }));
