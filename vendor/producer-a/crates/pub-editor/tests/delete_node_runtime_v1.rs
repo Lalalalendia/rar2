@@ -1,3 +1,4 @@
+// CI sacrificial registration control for #2235; no behavior change.
 use std::collections::BTreeMap;
 
 use pub_editor::{
