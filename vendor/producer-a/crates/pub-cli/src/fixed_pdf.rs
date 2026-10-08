@@ -469,6 +469,11 @@ fn build_pdf_artifact(
         .flat_map(|table| table.cells.iter())
         .filter(|cell| cell.row_span > 1 || cell.column_span > 1)
         .count();
+    let table_fallback_geometry_cell_count = visual
+        .tables
+        .iter()
+        .map(|table| table.fallback_geometry_cell_count)
+        .sum::<usize>();
     let table_nonempty_cell_count = visual
         .tables
         .iter()
@@ -691,6 +696,7 @@ fn build_pdf_artifact(
                     "table_max_rows": table_max_rows,
                     "table_max_columns": table_max_columns,
                     "table_spanning_cell_count": table_spanning_cell_count,
+                    "table_fallback_geometry_cell_count": table_fallback_geometry_cell_count,
                     "table_nonempty_cell_count": table_nonempty_cell_count,
                     "table_story_range_cell_count": table_story_range_cell_count,
                     "table_hidden_fill_cell_count": table_hidden_fill_cell_count,
