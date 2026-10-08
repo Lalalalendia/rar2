@@ -230,10 +230,12 @@ fn main() -> eframe::Result<()> {
     assert_scope(
         ["apps/chaptera-server/src/serve.rs"],
         local_portable=True,
+        local_portable_assets=False,
     )
     assert_scope(
         ["apps/chaptera-server/src/guest_reader_runtime.rs", "tools/package_local_portable.py"],
         local_portable=True,
+        local_portable_assets=False,
     )
 
     assert_scope(
@@ -511,13 +513,34 @@ fn main() -> eframe::Result<()> {
         ["apps/web/editor-shell-v1.mjs"],
         tier_a=False,
         web=False,
+        local_portable=False,
+        local_portable_assets=True,
+    )
+    assert_scope(
+        ["apps/web/render-v1.mjs"],
+        tier_a=False,
+        web=False,
+        local_portable=False,
+        local_portable_assets=True,
+    )
+    assert_scope(
+        ["apps/web/render-v1.mjs", "apps/chaptera-server/src/serve.rs"],
         local_portable=True,
+        local_portable_assets=False,
     )
     assert_scope(
         ["apps/web/acceptance/receipts/browser-editor-v1.json"],
         tier_a=False,
         web=False,
-        local_portable=True,
+        local_portable=False,
+        local_portable_assets=True,
+    )
+    assert_scope(
+        ["tools/ci/test_local_portable_web_asset_package.py"],
+        tier_a=False,
+        web=False,
+        local_portable=False,
+        local_portable_assets=True,
     )
 
     assert_scope(

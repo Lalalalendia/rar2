@@ -60,6 +60,7 @@ SCOPES = (
     "android_core",
     "android",
     "web",
+    "local_portable_assets",
     "local_portable",
     "installer",
     "path_identity",
@@ -450,6 +451,24 @@ LOCAL_PORTABLE_NEUTRAL_PATHS = {
     "apps/chaptera-server/src/guest_reader_runtime.rs",
 }
 
+# These files are shipped byte-for-byte inside Chaptera Local, but changing
+# them does not alter either Windows PE binary, embedded Python, or package
+# bootstrap. Prove their real ZIP bytes/hashes on Ubuntu instead of rebuilding
+# two Rust release executables on Windows.
+LOCAL_PORTABLE_WEB_ASSETS = (
+    "apps/web/local-editor.html",
+    "apps/web/editor-shell-v1.mjs",
+    "apps/web/editor-service-client-v1.mjs",
+    "apps/web/observability-v1.mjs",
+    "apps/web/render-v1.mjs",
+    "apps/web/interaction-v1.mjs",
+    "apps/web/export-preview-v1.schema.json",
+    "apps/web/acceptance/receipts/**",
+)
+LOCAL_PORTABLE_ASSET_CONTRACT_INPUTS = LOCAL_PORTABLE_WEB_ASSETS + (
+    "tools/ci/test_local_portable_web_asset_package.py",
+)
+
 LOCAL_PORTABLE = (
     "Start-Chaptera-Local.cmd",
     "tools/run_local_full_stack.py",
@@ -671,9 +690,19 @@ def classify(
     local_portable_paths = [
         path for path in product_paths if path not in LOCAL_PORTABLE_NEUTRAL_PATHS
     ]
-    result["local_portable"] = any(
-        matches(path, LOCAL_PORTABLE) for path in local_portable_paths
+    local_portable_asset_paths = [
+        path for path in local_portable_paths
+        if matches(path, LOCAL_PORTABLE_ASSET_CONTRACT_INPUTS)
+    ]
+    local_portable_heavy_paths = [
+        path for path in local_portable_paths
+        if matches(path, LOCAL_PORTABLE)
+        and not matches(path, LOCAL_PORTABLE_WEB_ASSETS)
+    ]
+    result["local_portable_assets"] = bool(local_portable_asset_paths) and not bool(
+        local_portable_heavy_paths
     )
+    result["local_portable"] = bool(local_portable_heavy_paths)
     # Golden tests still call ViewerApp and paint helpers owned by main.rs.
     # A path alone cannot prove those dependencies unchanged. Only an exact
     # standalone-comment proof may suppress their visual/typography allocation.
