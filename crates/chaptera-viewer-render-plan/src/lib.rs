@@ -2699,7 +2699,7 @@ fn resolve_text_layout_v1(
         }
     }
 
-    let ordinary_partial_story_overset = layout_scalar_base == 0
+    let ordinary_partial_story_overset = exact_slice_scalar_base.is_none()
         && ordinary_incomplete_layout_is_admitted_partial_story_overset(
             projected_target_frame_node_id,
             &scene.diagnostics,
