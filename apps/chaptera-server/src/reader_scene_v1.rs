@@ -1018,7 +1018,9 @@ pub fn from_viewer_geometry_with_fonts(
             };
             if let Some(source_family) = effective_source_font_family_v1(geometry, text) {
                 let normalized = source_family.trim().to_lowercase();
-                if !normalized.is_empty() && !configured_layout_fonts_by_family.contains_key(&normalized) {
+                if !normalized.is_empty()
+                    && !configured_layout_fonts_by_family.contains_key(&normalized)
+                {
                     missing_configured_font_families.insert(normalized);
                 }
             } else if text.typography.is_empty() {
@@ -2538,12 +2540,16 @@ mod tests {
             let unconfigured_layouts = unconfigured_scene
                 .nodes
                 .iter()
-                .map(|node| serde_json::to_value(&node.text_layout).expect("serialize baseline layout"))
+                .map(|node| {
+                    serde_json::to_value(&node.text_layout).expect("serialize baseline layout")
+                })
                 .collect::<Vec<_>>();
             let replacement_layouts = replacement_scene
                 .nodes
                 .iter()
-                .map(|node| serde_json::to_value(&node.text_layout).expect("serialize replacement layout"))
+                .map(|node| {
+                    serde_json::to_value(&node.text_layout).expect("serialize replacement layout")
+                })
                 .collect::<Vec<_>>();
             assert_eq!(
                 replacement_layouts, unconfigured_layouts,
