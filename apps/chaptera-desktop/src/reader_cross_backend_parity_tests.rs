@@ -4,7 +4,11 @@
 use super::*;
 use egui_kittest::Harness;
 use sha2::{Digest, Sha256};
-use std::{collections::{BTreeMap, BTreeSet}, fs, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::PathBuf,
+};
 
 const CROSS_BACKEND_DPI: f32 = 144.0;
 const EMU_PER_INCH: f32 = 914_400.0;
@@ -202,8 +206,10 @@ fn sample_newsletter_cross_backend_page_rasters_144dpi() {
         *family_runs.entry(family.to_owned()).or_default() += 1;
         let style = format!(
             "bold={};italic={}",
-            run.bold.map_or("unknown".to_owned(), |value| value.to_string()),
-            run.italic.map_or("unknown".to_owned(), |value| value.to_string())
+            run.bold
+                .map_or("unknown".to_owned(), |value| value.to_string()),
+            run.italic
+                .map_or("unknown".to_owned(), |value| value.to_string())
         );
         family_styles
             .entry(family.to_owned())
