@@ -18,11 +18,13 @@ AUTHORING_CORE_SRC = ROOT / "vendor" / "producer-a" / "crates" / "pub-editor-aut
 TABLE_CORE_SRC = ROOT / "vendor" / "producer-a" / "crates" / "pub-editor-table-core" / "src"
 GEOMETRY_CORE_SRC = ROOT / "vendor" / "producer-a" / "crates" / "pub-editor-geometry-core" / "src"
 IMAGE_CORE_SRC = ROOT / "vendor" / "producer-a" / "crates" / "pub-editor-image-core" / "src"
+TEXT_CORE_SRC = ROOT / "vendor" / "producer-a" / "crates" / "pub-editor-text-core" / "src"
 PREFIX = "vendor/producer-a/crates/pub-editor/src/"
 AUTHORING_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-authoring-core/src/"
 TABLE_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-table-core/src/"
 GEOMETRY_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-geometry-core/src/"
 IMAGE_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-image-core/src/"
+TEXT_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-text-core/src/"
 
 
 def is_pub_editor_test(command: tuple[str, ...]) -> bool:
@@ -36,6 +38,7 @@ def is_pub_editor_test(command: tuple[str, ...]) -> bool:
             "pub-editor-table-core",
             "pub-editor-geometry-core",
             "pub-editor-image-core",
+            "pub-editor-text-core",
         }:
             return True
     if "--manifest-path" in command:
@@ -48,6 +51,7 @@ def is_pub_editor_test(command: tuple[str, ...]) -> bool:
                 or manifest.endswith("/pub-editor-table-core/Cargo.toml")
                 or manifest.endswith("/pub-editor-geometry-core/Cargo.toml")
                 or manifest.endswith("/pub-editor-image-core/Cargo.toml")
+                or manifest.endswith("/pub-editor-text-core/Cargo.toml")
             )
     return False
 
@@ -122,6 +126,18 @@ def main() -> int:
             if not is_bounded_test(command):
                 unbounded.append((rel, command))
 
+    for source in sorted(TEXT_CORE_SRC.glob("*.rs")):
+        rel = TEXT_CORE_PREFIX + source.name
+        checks = mod.plan_for_paths(ROOT, [rel], mode="edit")
+        test_commands = [check.command for check in checks if is_pub_editor_test(check.command)]
+
+        if source.name != "lib.rs" and not test_commands:
+            uncovered.append(rel)
+
+        for command in test_commands:
+            if not is_bounded_test(command):
+                unbounded.append((rel, command))
+
     lib_checks = mod.plan_for_paths(ROOT, [PREFIX + "lib.rs"], mode="edit")
     lib_tests = [check.command for check in lib_checks if is_pub_editor_test(check.command)]
     if not lib_tests or not all("--lib" in command for command in lib_tests):
@@ -142,6 +158,7 @@ def main() -> int:
 
     representative = {
         PREFIX + "session_geometry.rs": "move_nodes_v1",
+        PREFIX + "session_text.rs": "story_text_session_v1",
         PREFIX + "duplicate_authored_rectangle_v1.rs": "duplicate_authored_rectangle_v1",
         AUTHORING_CORE_PREFIX + "create_table_runtime_v1.rs": "create_table_runtime_v1",
         AUTHORING_CORE_PREFIX + "authored_stack_lifecycle_v1.rs": "authored_stack_lifecycle_v1",
@@ -193,9 +210,42 @@ def main() -> int:
     ) in image_core_commands:
         raise SystemExit("image-core edit must not run generic pub-editor --lib")
 
+    text_core_checks = mod.plan_for_paths(
+        ROOT, [TEXT_CORE_PREFIX + "lib.rs"], mode="edit"
+    )
+    text_core_commands = [check.command for check in text_core_checks]
+    expected_text_core_test = (
+        "cargo",
+        "test",
+        "--manifest-path",
+        "vendor/producer-a/Cargo.toml",
+        "-p",
+        "pub-editor-text-core",
+        "--lib",
+    )
+    if expected_text_core_test not in text_core_commands:
+        raise SystemExit("text-core edit must run isolated pub-editor-text-core --lib")
+    if expected_adapter_check not in text_core_commands:
+        raise SystemExit("text-core edit must compile-check the pub-editor adapter")
+    if any(
+        "--test" in command and "story_text_session_v1" in command
+        for command in text_core_commands
+    ):
+        raise SystemExit("text-core edit must not run story_text_session_v1 adapter acceptance")
+    if (
+        "cargo",
+        "test",
+        "--manifest-path",
+        "vendor/producer-a/Cargo.toml",
+        "-p",
+        "pub-editor",
+        "--lib",
+    ) in text_core_commands:
+        raise SystemExit("text-core edit must not run generic pub-editor --lib")
+
     print(
         "pub-editor fast plan contract: ok "
-        f"({len(list(PUB_EDITOR_SRC.glob('*.rs'))) + len(list(AUTHORING_CORE_SRC.glob('*.rs'))) + len(list(TABLE_CORE_SRC.glob('*.rs'))) + len(list(GEOMETRY_CORE_SRC.glob('*.rs'))) + len(list(IMAGE_CORE_SRC.glob('*.rs')))} source modules audited)"
+        f"({len(list(PUB_EDITOR_SRC.glob('*.rs'))) + len(list(AUTHORING_CORE_SRC.glob('*.rs'))) + len(list(TABLE_CORE_SRC.glob('*.rs'))) + len(list(GEOMETRY_CORE_SRC.glob('*.rs'))) + len(list(IMAGE_CORE_SRC.glob('*.rs'))) + len(list(TEXT_CORE_SRC.glob('*.rs')))} source modules audited)"
     )
     return 0
 

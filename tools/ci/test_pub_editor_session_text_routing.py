@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(".github/workflows")
 SESSION = "vendor/producer-a/crates/pub-editor/src/session_text.rs"
+TEXT_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-text-core/"
 NEG_SESSION = f"!{SESSION}"
 TEST = "vendor/producer-a/crates/pub-editor/tests/story_text_session_v1.rs"
 NEG_TEST = f"!{TEST}"
@@ -30,8 +31,10 @@ EXCLUDE = {
     "w2-project-fork-receipt-v1.yml",
 }
 
+
 def workflow(name: str) -> str:
     return (ROOT / name).read_text(encoding="utf-8")
+
 
 def pr_block(name: str) -> str:
     body = workflow(name)
@@ -45,6 +48,7 @@ def pr_block(name: str) -> str:
     end = start + 1 + (min(boundaries) if boundaries else len(tail))
     return body[start:end]
 
+
 for name in KEEP:
     body = pr_block(name)
     assert NEG_SESSION not in body, (name, "unexpected exclusion")
@@ -53,9 +57,13 @@ for name in KEEP:
         or "vendor/producer-a/crates/pub-editor/src/**" in body
         or "vendor/producer-a/crates/pub-editor/**" in body
     ), (name, "text-session owner not admitted")
+    if name != "pub-editor-fast-pr.yml":
+        assert TEXT_CORE_PREFIX not in body, (name, "text core must not own adapter acceptance")
 
 for name in EXCLUDE:
-    assert NEG_SESSION in pr_block(name), (name, "missing text-session exclusion")
+    body = pr_block(name)
+    assert NEG_SESSION in body, (name, "missing text-session exclusion")
+    assert TEXT_CORE_PREFIX not in body, (name, "text core leaked into unrelated owner")
 
 print("pub-editor session text routing contract: PASS")
 
@@ -78,6 +86,8 @@ TEST_EXCLUDE = {
 }
 
 fast = pr_block("pub-editor-fast-pr.yml")
+assert "vendor/producer-a/crates/pub-editor-text-core/src/**" in fast
+assert "vendor/producer-a/crates/pub-editor-text-core/Cargo.toml" in fast
 assert NEG_TEST not in fast
 assert (
     TEST in fast

@@ -14,6 +14,7 @@ PUB_EDITOR_AUTHORING_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-authorin
 PUB_EDITOR_TABLE_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-table-core/"
 PUB_EDITOR_GEOMETRY_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-geometry-core/"
 PUB_EDITOR_IMAGE_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-image-core/"
+PUB_EDITOR_TEXT_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-text-core/"
 PUB_EDITOR_LIB = PUB_EDITOR_PREFIX + "src/lib.rs"
 
 
@@ -24,6 +25,7 @@ def is_pub_editor_domain_path(path: str) -> bool:
         or path.startswith(PUB_EDITOR_TABLE_CORE_PREFIX)
         or path.startswith(PUB_EDITOR_GEOMETRY_CORE_PREFIX)
         or path.startswith(PUB_EDITOR_IMAGE_CORE_PREFIX)
+        or path.startswith(PUB_EDITOR_TEXT_CORE_PREFIX)
     )
 
 # Deliberately tiny first allowlist. These modules are feature-owned and are
