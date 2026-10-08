@@ -9,6 +9,11 @@ import required_merge_gate as gate
 
 
 class RequiredGateTests(unittest.TestCase):
+    def test_merge_authority_does_not_retrigger_on_ready_for_review(self) -> None:
+        workflow = Path(".github/workflows/required-merge-gate.yml").read_text(encoding="utf-8")
+        self.assertIn("types: [opened, synchronize, reopened]", workflow)
+        self.assertNotIn("ready_for_review", workflow.split("types:", 1)[1].split("\n", 1)[0])
+
     def test_unconditional_and_path_filter(self) -> None:
         unconditional = "name: always\non:\n  pull_request:\n"
         selective = """name: selective
