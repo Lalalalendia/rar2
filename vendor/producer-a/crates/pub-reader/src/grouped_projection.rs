@@ -86,6 +86,12 @@ pub(super) fn project_grouped_object_shape(
         direct_transform::BoundedGroupedImageTransform {
             child_rotation_op,
             ancestor_horizontal_flip: false,
+            ancestor_rotation_op: None,
+            group_source_width: None,
+            group_source_height: None,
+            group_target_width: None,
+            group_target_height: None,
+            ancestor_bounds: None,
         },
     );
 
@@ -114,17 +120,43 @@ pub(super) fn project_grouped_object_shape(
         if current_shape.parent_group_shape_source.as_ref() != Some(&group_shape.source) {
             bail!("OfficeArt parent-group link does not match Contents ancestry");
         }
-        let ancestor_rotation = shape_has_nonzero_rotation(group_shape);
+        let ancestor_rotation_op = if shape_has_nonzero_rotation(group_shape) {
+            if !admit_bounded_grouped_image_transform {
+                bail!("group ancestor has nonzero rotation");
+            }
+            let rotations = group_shape
+                .fopts
+                .iter()
+                .flat_map(|record| record.properties.iter())
+                .filter(|property| property.property_id() == OFFICE_ART_PROPERTY_ROTATION)
+                .collect::<Vec<_>>();
+            match rotations.as_slice() {
+                [property]
+                    if !property.f_bid()
+                        && !property.f_complex()
+                        && property.op as i32 != 0 =>
+                {
+                    Some(property.op)
+                }
+                _ => bail!("group ancestor rotation profile is ambiguous"),
+            }
+        } else {
+            None
+        };
         let ancestor_flip_h = shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_H);
         let ancestor_flip_v = shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_V);
-        if ancestor_rotation {
-            bail!("group ancestor has nonzero rotation");
-        }
         if ancestor_flip_v {
             bail!("group ancestor has vertical flip");
         }
         if ancestor_flip_h && !admit_bounded_grouped_image_transform {
             bail!("group ancestor has horizontal flip");
+        }
+        if ancestor_rotation_op.is_some()
+            && (depth != 1 || child_rotation_op.is_none() || ancestor_flip_h)
+        {
+            bail!(
+                "group ancestor rotation requires rotated unflipped depth-1 image"
+            );
         }
 
         let fspgr = group_shape
@@ -143,9 +175,37 @@ pub(super) fn project_grouped_object_shape(
                 .context("top group is missing ClientAnchor")?;
             let absolute = publisher_anchor_rect_i128(anchor)?;
             if child_rotation_op.is_some()
+                && ancestor_rotation_op.is_none()
                 && (depth != 1 || !translation_only_group_map(group_coords, absolute))
             {
                 bail!("grouped child rotation requires translation-only depth-1 parent group");
+            }
+            if ancestor_rotation_op.is_some() {
+                let source_width = group_coords[2] - group_coords[0];
+                let source_height = group_coords[3] - group_coords[1];
+                let target_width = absolute[2] - absolute[0];
+                let target_height = absolute[3] - absolute[1];
+                if source_width <= 0
+                    || source_height <= 0
+                    || target_width <= 0
+                    || target_height <= 0
+                {
+                    bail!("group ancestor rotation requires positive group extents");
+                }
+                let page = context
+                    .pages
+                    .get(&page_id)
+                    .context("group page id is missing from graph")?;
+                let ancestor_bounds = center_origin_rect_to_page_bounds(page, absolute)?;
+                let transform = image_transform
+                    .as_mut()
+                    .expect("ancestor rotation admission is image-only");
+                transform.ancestor_rotation_op = ancestor_rotation_op;
+                transform.group_source_width = Some(source_width);
+                transform.group_source_height = Some(source_height);
+                transform.group_target_width = Some(target_width);
+                transform.group_target_height = Some(target_height);
+                transform.ancestor_bounds = Some(ancestor_bounds);
             }
             if ancestor_flip_h {
                 if depth != 1 || child_rotation_op.is_some() {
@@ -174,6 +234,9 @@ pub(super) fn project_grouped_object_shape(
 
         if ancestor_flip_h {
             bail!("group ancestor horizontal flip requires direct page parent");
+        }
+        if ancestor_rotation_op.is_some() {
+            bail!("group ancestor rotation requires direct page parent");
         }
         if depth == 2 {
             bail!("group ancestry exceeds bounded depth 2");
@@ -341,6 +404,14 @@ mod grouped_rotation_tests {
         assert!(!translation_only_group_map(
             [107_442_022, 108_754_329, 113_987_230, 112_497_502],
             [-3_987_897, -1_596_946, 4_327_889, 2_562_119],
+        ));
+    }
+
+    #[test]
+    fn anisotropic_group_map_is_not_translation_only() {
+        assert!(!translation_only_group_map(
+            [0, 0, 1_000, 1_000],
+            [0, 0, 2_000, 1_000],
         ));
     }
 

@@ -210,6 +210,12 @@ pub(super) fn bounded_direct_image_transform(
 pub(super) struct BoundedGroupedImageTransform {
     pub(super) child_rotation_op: Option<u32>,
     pub(super) ancestor_horizontal_flip: bool,
+    pub(super) ancestor_rotation_op: Option<u32>,
+    pub(super) group_source_width: Option<i128>,
+    pub(super) group_source_height: Option<i128>,
+    pub(super) group_target_width: Option<i128>,
+    pub(super) group_target_height: Option<i128>,
+    pub(super) ancestor_bounds: Option<RectEmu>,
 }
 
 fn affine_horizontal_flip_about_bounds(bounds: RectEmu) -> Option<Affine2D> {
@@ -222,6 +228,148 @@ fn affine_horizontal_flip_about_bounds(bounds: RectEmu) -> Option<Affine2D> {
         tx: LengthEmu::new(i64::try_from(center_x_twice).ok()?),
         ty: LengthEmu::new(0),
     })
+}
+
+fn checked_div_round_nearest_i128(numerator: i128, denominator: i128) -> Option<i128> {
+    if denominator <= 0 {
+        return None;
+    }
+    let half = denominator / 2;
+    if numerator >= 0 {
+        numerator.checked_add(half)?.checked_div(denominator)
+    } else {
+        numerator
+            .checked_neg()?
+            .checked_add(half)?
+            .checked_div(denominator)?
+            .checked_neg()
+    }
+}
+
+fn checked_mul_affine_scaled(left: i128, right: i128) -> Option<i128> {
+    checked_div_round_nearest_i128(left.checked_mul(right)?, AFFINE_DECIMAL_SCALE)
+}
+
+fn affine_scaled_about_bounds(
+    a: i128,
+    b: i128,
+    c: i128,
+    d: i128,
+    bounds: RectEmu,
+) -> Option<[i128; 6]> {
+    let center_x_twice = i128::from(bounds.x.get())
+        .checked_mul(2)?
+        .checked_add(i128::from(bounds.width.get()))?;
+    let center_y_twice = i128::from(bounds.y.get())
+        .checked_mul(2)?
+        .checked_add(i128::from(bounds.height.get()))?;
+    let denominator = AFFINE_DECIMAL_SCALE.checked_mul(2)?;
+    let tx_numerator = AFFINE_DECIMAL_SCALE
+        .checked_mul(center_x_twice)?
+        .checked_sub(a.checked_mul(center_x_twice)?)?
+        .checked_sub(c.checked_mul(center_y_twice)?)?;
+    let ty_numerator = AFFINE_DECIMAL_SCALE
+        .checked_mul(center_y_twice)?
+        .checked_sub(b.checked_mul(center_x_twice)?)?
+        .checked_sub(d.checked_mul(center_y_twice)?)?;
+    Some([
+        a,
+        b,
+        c,
+        d,
+        checked_div_round_nearest_i128(tx_numerator, denominator)?,
+        checked_div_round_nearest_i128(ty_numerator, denominator)?,
+    ])
+}
+
+fn compose_affine_scaled(left: [i128; 6], right: [i128; 6]) -> Option<[i128; 6]> {
+    let a = checked_mul_affine_scaled(left[0], right[0])?
+        .checked_add(checked_mul_affine_scaled(left[2], right[1])?)?;
+    let b = checked_mul_affine_scaled(left[1], right[0])?
+        .checked_add(checked_mul_affine_scaled(left[3], right[1])?)?;
+    let c = checked_mul_affine_scaled(left[0], right[2])?
+        .checked_add(checked_mul_affine_scaled(left[2], right[3])?)?;
+    let d = checked_mul_affine_scaled(left[1], right[2])?
+        .checked_add(checked_mul_affine_scaled(left[3], right[3])?)?;
+    let tx = checked_div_round_nearest_i128(
+        left[0]
+            .checked_mul(right[4])?
+            .checked_add(left[2].checked_mul(right[5])?)?,
+        AFFINE_DECIMAL_SCALE,
+    )?
+    .checked_add(left[4])?;
+    let ty = checked_div_round_nearest_i128(
+        left[1]
+            .checked_mul(right[4])?
+            .checked_add(left[3].checked_mul(right[5])?)?,
+        AFFINE_DECIMAL_SCALE,
+    )?
+    .checked_add(left[5])?;
+    Some([a, b, c, d, tx, ty])
+}
+
+fn affine_from_scaled(values: [i128; 6]) -> Option<Affine2D> {
+    Some(Affine2D {
+        a: decimal_from_affine_scaled(values[0]),
+        b: decimal_from_affine_scaled(values[1]),
+        c: decimal_from_affine_scaled(values[2]),
+        d: decimal_from_affine_scaled(values[3]),
+        tx: LengthEmu::new(i64::try_from(values[4]).ok()?),
+        ty: LengthEmu::new(i64::try_from(values[5]).ok()?),
+    })
+}
+
+fn bounded_grouped_image_rotation_transform(
+    projection: BoundedGroupedImageTransform,
+    child_bounds: RectEmu,
+) -> Option<Affine2D> {
+    let child_rotation_op = projection.child_rotation_op?;
+    let ancestor_rotation_op = projection.ancestor_rotation_op?;
+    let source_width = projection.group_source_width?;
+    let source_height = projection.group_source_height?;
+    let target_width = projection.group_target_width?;
+    let target_height = projection.group_target_height?;
+    let ancestor_bounds = projection.ancestor_bounds?;
+    if projection.ancestor_horizontal_flip
+        || source_width <= 0
+        || source_height <= 0
+        || target_width <= 0
+        || target_height <= 0
+    {
+        return None;
+    }
+
+    let ratio_x_over_y = checked_div_round_nearest_i128(
+        target_width
+            .checked_mul(source_height)?
+            .checked_mul(AFFINE_DECIMAL_SCALE)?,
+        source_width.checked_mul(target_height)?,
+    )?;
+    let ratio_y_over_x = checked_div_round_nearest_i128(
+        target_height
+            .checked_mul(source_width)?
+            .checked_mul(AFFINE_DECIMAL_SCALE)?,
+        source_height.checked_mul(target_width)?,
+    )?;
+    let (child_sine, child_cosine) = officeart_rotation_sin_cos_scaled(child_rotation_op);
+    let child = affine_scaled_about_bounds(
+        child_cosine,
+        checked_mul_affine_scaled(ratio_y_over_x, child_sine)?,
+        checked_mul_affine_scaled(-ratio_x_over_y, child_sine)?,
+        child_cosine,
+        child_bounds,
+    )?;
+
+    let (ancestor_sine, ancestor_cosine) = officeart_rotation_sin_cos_scaled(ancestor_rotation_op);
+    let ancestor = affine_scaled_about_bounds(
+        ancestor_cosine,
+        ancestor_sine,
+        -ancestor_sine,
+        ancestor_cosine,
+        ancestor_bounds,
+    )?;
+
+    affine_from_scaled(compose_affine_scaled(ancestor, child)?)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,23 +404,36 @@ pub(super) fn bounded_node_transform_projection(
     };
     let fsp_flags = shape.fsp.as_ref().map(|fsp| fsp.flags).unwrap_or(0);
     let image_candidate = direct_image_candidate || grouped_image_transform.is_some();
-    let image_transform =
-        if grouped_image_transform.is_some_and(|projection| projection.ancestor_horizontal_flip) {
-            if direct_image_candidate
-                || !image_rotation_properties.is_empty()
-                || fsp_flags & (FSP_FLIP_H | FSP_FLIP_V) != 0
-            {
-                BoundedDirectImageTransform::Unsupported
-            } else {
-                affine_horizontal_flip_about_bounds(bounds)
-                    .map(BoundedDirectImageTransform::Applied)
-                    .unwrap_or(BoundedDirectImageTransform::Unsupported)
-            }
-        } else if image_candidate {
-            bounded_direct_image_transform(&image_rotation_properties, fsp_flags, bounds)
+    let image_transform = if let Some(projection) =
+        grouped_image_transform.filter(|projection| projection.ancestor_rotation_op.is_some())
+    {
+        if direct_image_candidate
+            || fsp_flags & (FSP_FLIP_H | FSP_FLIP_V) != 0
+            || projection.ancestor_horizontal_flip
+        {
+            BoundedDirectImageTransform::Unsupported
         } else {
-            BoundedDirectImageTransform::Identity
-        };
+            bounded_grouped_image_rotation_transform(projection, bounds)
+                .map(BoundedDirectImageTransform::Applied)
+                .unwrap_or(BoundedDirectImageTransform::Unsupported)
+        }
+    } else if grouped_image_transform.is_some_and(|projection| projection.ancestor_horizontal_flip)
+    {
+        if direct_image_candidate
+            || !image_rotation_properties.is_empty()
+            || fsp_flags & (FSP_FLIP_H | FSP_FLIP_V) != 0
+        {
+            BoundedDirectImageTransform::Unsupported
+        } else {
+            affine_horizontal_flip_about_bounds(bounds)
+                .map(BoundedDirectImageTransform::Applied)
+                .unwrap_or(BoundedDirectImageTransform::Unsupported)
+        }
+    } else if image_candidate {
+        bounded_direct_image_transform(&image_rotation_properties, fsp_flags, bounds)
+    } else {
+        BoundedDirectImageTransform::Identity
+    };
     let story_transform = if direct_story_candidate {
         bounded_direct_story_transform(&direct_rotation_properties, fsp_flags, bounds)
     } else {
@@ -288,6 +449,8 @@ pub(super) fn bounded_node_transform_projection(
     };
     let ancestor_horizontal_flip =
         grouped_image_transform.is_some_and(|projection| projection.ancestor_horizontal_flip);
+    let ancestor_rotation_applied =
+        grouped_image_transform.is_some_and(|projection| projection.ancestor_rotation_op.is_some());
     let (transform, image_rotation_applied) = if let Some(transform) = story_transform {
         (transform, false)
     } else {
@@ -295,9 +458,10 @@ pub(super) fn bounded_node_transform_projection(
             BoundedDirectImageTransform::Identity | BoundedDirectImageTransform::Unsupported => {
                 (Affine2D::identity(), false)
             }
-            BoundedDirectImageTransform::Applied(transform) => {
-                (transform, !ancestor_horizontal_flip)
-            }
+            BoundedDirectImageTransform::Applied(transform) => (
+                transform,
+                !ancestor_horizontal_flip || ancestor_rotation_applied,
+            ),
         }
     };
 
@@ -337,6 +501,40 @@ pub(super) fn bounded_direct_story_transform(
 #[cfg(test)]
 mod grouped_flip_tests {
     use super::*;
+
+    #[test]
+    fn anisotropic_group_rotation_conjugates_child_rotation_and_composes_ancestor() {
+        let projection = BoundedGroupedImageTransform {
+            child_rotation_op: Some(45 * 65_536),
+            ancestor_horizontal_flip: false,
+            ancestor_rotation_op: Some(30 * 65_536),
+            group_source_width: Some(1_000),
+            group_source_height: Some(1_000),
+            group_target_width: Some(2_000),
+            group_target_height: Some(1_000),
+            ancestor_bounds: Some(RectEmu::new(
+                LengthEmu::new(0),
+                LengthEmu::new(0),
+                LengthEmu::new(2_000),
+                LengthEmu::new(1_000),
+            )),
+        };
+        let transform = bounded_grouped_image_rotation_transform(
+            projection,
+            RectEmu::new(
+                LengthEmu::new(500),
+                LengthEmu::new(250),
+                LengthEmu::new(400),
+                LengthEmu::new(200),
+            ),
+        )
+        .unwrap();
+
+        assert_ne!(transform, Affine2D::identity());
+        assert_ne!(transform.b.as_str(), "0");
+        assert_ne!(transform.c.as_str(), "0");
+        assert_ne!(transform.b.as_str(), transform.c.as_str());
+    }
 
     #[test]
     fn horizontal_flip_about_bounds_reflects_around_center() {
