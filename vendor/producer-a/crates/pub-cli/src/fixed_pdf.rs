@@ -441,6 +441,7 @@ fn build_pdf_artifact(
             Some(FixedImageResource {
                 resource_id: image.resource_id,
                 mime: image.mime.clone(),
+                source_exact: image.source_exact,
                 node_ids,
                 bytes: image.bytes.clone(),
             })

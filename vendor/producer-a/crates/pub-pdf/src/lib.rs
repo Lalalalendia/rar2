@@ -60,6 +60,10 @@ pub struct FixedNodePaint {
 pub struct FixedImageResource {
     pub resource_id: ResourceId,
     pub mime: String,
+    /// True only for exact admitted embedded image bytes. Derived previews are
+    /// useful Viewer evidence but do not inherit exact-image alpha authority.
+    #[serde(default)]
+    pub source_exact: bool,
     pub node_ids: Vec<NodeId>,
     pub bytes: Vec<u8>,
 }
@@ -561,6 +565,13 @@ fn prepare_image(image: &FixedImageResource) -> Result<PreparedImage, PdfRenderE
         rgb.extend_from_slice(&pixel.0[..3]);
         alpha.push(pixel.0[3]);
         has_alpha |= pixel.0[3] != 255;
+    }
+    if has_alpha && !image.source_exact {
+        return Ok(PreparedImage::Unsupported {
+            code: "pdf.image.preview_alpha_unsupported".into(),
+            message: "alpha-bearing derived preview is outside the exact embedded-image PDF slice"
+                .into(),
+        });
     }
     Ok(PreparedImage::Rgb {
         width,
@@ -1153,6 +1164,7 @@ mod tests {
             images: vec![FixedImageResource {
                 resource_id: resource_id(42),
                 mime: "image/png".into(),
+                source_exact: true,
                 node_ids: vec![node_id(10), node_id(11)],
                 bytes: png,
             }],
@@ -1197,6 +1209,7 @@ mod tests {
             images: vec![FixedImageResource {
                 resource_id: resource_id(43),
                 mime: "image/png".into(),
+                source_exact: true,
                 node_ids: vec![node_id(10)],
                 bytes: encoded.into_inner(),
             }],
@@ -1228,6 +1241,47 @@ mod tests {
                 .diagnostics
                 .iter()
                 .all(|diagnostic| diagnostic.code != "pdf.image.alpha_unsupported")
+        );
+    }
+
+    #[test]
+    fn derived_preview_rgba_png_does_not_inherit_exact_alpha_authority() {
+        use std::io::Cursor;
+
+        let mut rgba = image::RgbaImage::new(1, 1);
+        rgba.put_pixel(0, 0, image::Rgba([10, 20, 30, 128]));
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut encoded, ImageFormat::Png)
+            .unwrap();
+
+        let resources = FixedPdfResources {
+            node_paints: Vec::new(),
+            images: vec![FixedImageResource {
+                resource_id: resource_id(44),
+                mime: "image/png".into(),
+                source_exact: false,
+                node_ids: vec![node_id(10)],
+                bytes: encoded.into_inner(),
+            }],
+            ..FixedPdfResources::default()
+        };
+
+        let output = render_bounded_pdf(
+            &scene(),
+            &resources,
+            &PdfTargetProfile::basic_geometry_v0_1(),
+        )
+        .unwrap();
+
+        let text = String::from_utf8_lossy(&output.bytes);
+        assert!(!text.contains("/SMask "));
+        assert!(
+            output
+                .report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.code == "pdf.image.preview_alpha_unsupported" })
         );
     }
 

@@ -147,15 +147,18 @@ jobs:
               item.get("code") for item in report["pdf"].get("diagnostics", [])
           }
           assert "pdf.image.alpha_unsupported" not in diagnostic_codes
+          assert "pdf.image.preview_alpha_unsupported" in diagnostic_codes
           assert any(
               item.get("code") == "pdf.node.painted_exact_image"
               for item in report["pdf"].get("nodes", [])
           )
 
-          # Canonical exact-alpha baseline from the preceding exact-head diagnostic run.
-          assert canonical["pdf_sha256"] == "05dd841a35e562d285e1595c1d41661f7225dd397d0f6d5b1eb95183b5c16e8c"
-          assert canonical["loss_json_sha256"] == "b0c0e2b407675b8a7919c313803f99d82f24ac02a1e3b96a9425a93e34f39800"
-          assert canonical["loss_text_sha256"] == "1ac7585a0cfad88104ba7a2212b708e2d90ec11efea0d768808e5442205fe449"
+          # Canonical exact-head baseline after preview-alpha provenance fencing.
+          # SampleNewsletter carries alpha through a derived Viewer preview, not
+          # an exact embedded image resource, so it must not inherit /SMask.
+          assert canonical["pdf_sha256"] == "c0afdb480937e9c1ba70742e35c4eb184969c4f3e326f1e11e172a33bd5fa012"
+          assert canonical["loss_json_sha256"] == "461d7bc2ca7e1fa34b7782e4fd3fffa43f88fae20decc7a81178b47e6a61b64b"
+          assert canonical["loss_text_sha256"] == "802b475b0a759b99c0af26498b2a67df46034c5577e0a974ba037b022afcd062"
 
           receipt = {
               "schema": "chaptera.free-pub-pdf-cli-acceptance.v1",
