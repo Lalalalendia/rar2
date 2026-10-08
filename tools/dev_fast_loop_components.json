@@ -208,6 +208,31 @@
       ]
     },
     {
+      "name": "pub-editor text core unit",
+      "paths": [
+        "vendor/producer-a/crates/pub-editor-text-core/src/*.rs"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor-text-core",
+          "--lib"
+        ],
+        [
+          "cargo",
+          "check",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor"
+        ]
+      ]
+    },
+    {
       "name": "pub-editor Story text session",
       "paths": [
         "vendor/producer-a/crates/pub-editor/src/session_text.rs"
