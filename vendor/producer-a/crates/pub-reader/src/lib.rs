@@ -257,10 +257,6 @@ pub use table_bridge::{
     PubTableUniformTextInsetSource, RAW_TYPE_TABLE, materialize_bounded_simple_table_cells,
     materialize_bounded_table_cells,
 };
-#[cfg(test)]
-use typography_projection::{
-    bounded_quill_text_rgb, project_effective_boolean_v1, utf16_range_to_scalar_range,
-};
 pub use typography_projection::{
     PubParagraphAlignment, PubParagraphAlignmentRun, PubParagraphFlowConstraint,
     PubParagraphFlowRun, PubParagraphLineSpacing, PubParagraphLineSpacingRun, PubScriptFontEntry,
@@ -268,6 +264,10 @@ pub use typography_projection::{
     PubTypographySizeRun,
 };
 use typography_projection::{PubTypographyProjection, project_typography_catalog};
+#[cfg(test)]
+use typography_projection::{
+    bounded_quill_text_rgb, project_effective_boolean_v1, utf16_range_to_scalar_range,
+};
 pub use wmf::{BoundedWmfMetafile, WmfMetafileInfo, bounded_wmf_metafile, validate_wmf_metafile};
 pub use wmf_preview::{
     LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, WmfPreviewRgba, rasterize_wmf_preview,
