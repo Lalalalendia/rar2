@@ -12,12 +12,15 @@ mod imported_paragraph_alignment_v1;
 mod imported_paragraph_flow_v1;
 mod imported_paragraphs_v1;
 mod link_text_frame_tail_v1;
-mod page_order_v1;
 mod session_geometry;
 mod session_image;
 mod session_table;
 mod session_text;
-use session_geometry::{validate_move_nodes_transition, validate_resize_nodes_transition};
+use session_geometry::{
+    apply_authored_stack_history_forward_v1, authored_stack_operation_page_id_v1,
+    derive_authored_stacks_from_operations_v1, page_order_error_to_editor_v1,
+    validate_move_nodes_transition, validate_resize_nodes_transition,
+};
 use session_image::{
     apply_crop_forward, apply_crop_inverse, apply_image_forward, apply_image_inverse,
 };
@@ -38,15 +41,19 @@ pub use pub_editor_authoring_core::{
     AuthoredSolidFillV1, AuthoredSolidStrokeV1, AuthoredStackLifecycleErrorV1,
     AuthoredStackLifecycleKindV1, AuthoredStackLifecycleTransitionV1, AuthoredStackReorderErrorV1,
     AuthoredStackReorderModeV1, AuthoredStackReorderTransitionV1, AuthoredStackV1,
+    PAGE_ORDER_PROTOCOL_V1, PageOrderErrorV1, PageOrderTransitionV1,
     AuthoredTableStoryRangesV1, CreateLineRuntimeValidationError,
     CreateShapeRuntimeValidationError, CreateTablePlanV1, CreateTableRuntimeV1,
     CreateTableRuntimeValidationError, LineGeometryV1, PointEmuV1, Srgb8V1,
     apply_authored_stack_reorder_forward_v1, apply_authored_stack_reorder_inverse_v1,
     apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
-    apply_create_table_forward_v1, apply_create_table_inverse_v1, authored_stack_state_id_v1,
+    apply_create_table_forward_v1, apply_create_table_inverse_v1,
+    apply_page_order_transition_forward_v1, apply_page_order_transition_inverse_v1,
+    authored_stack_state_id_v1, page_order_state_id_v1,
     build_create_table_plan_v1, line_bounds_v1, plan_create_line_append_v1,
     plan_create_shape_append_v1, plan_create_table_append_v1, plan_delete_shape_remove_v1,
-    plan_reorder_authored_stack_v1, rebuild_authored_table_story_v1,
+    plan_page_order_transition_v1, plan_reorder_authored_stack_v1, qualified_page_order_v1,
+    rebuild_authored_table_story_v1,
     validate_authored_line_runtime_v1, validate_authored_shape_runtime_v1,
     validate_authored_stack_v1, validate_create_table_runtime_v1,
 };
@@ -66,11 +73,6 @@ pub use imported_paragraph_flow_v1::{
 };
 pub use imported_paragraphs_v1::{ImportedParagraphProjectionErrorV1, ImportedParagraphV1};
 pub use link_text_frame_tail_v1::TextFrameLinkTransitionV1;
-pub use page_order_v1::{
-    PAGE_ORDER_PROTOCOL_V1, PageOrderErrorV1, PageOrderTransitionV1,
-    apply_page_order_transition_forward_v1, apply_page_order_transition_inverse_v1,
-    page_order_state_id_v1, plan_page_order_transition_v1, qualified_page_order_v1,
-};
 pub use pub_editor_geometry_core::{
     MAX_MOVE_NODES_V1, MAX_RESIZE_NODES_V1, MoveNodeBatchEntry, ResizeNodeBatchEntry,
 };
@@ -2231,18 +2233,6 @@ fn is_scoped_text_format_operation_v1(operation: &EditOperation) -> bool {
         EditOperation::SetTextFormatPropertyScopedV1 { .. }
             | EditOperation::ClearTextFormatPropertyOverrideScopedV1 { .. }
     )
-}
-
-fn page_order_error_to_editor_v1(error: PageOrderErrorV1) -> EditorError {
-    match error {
-        PageOrderErrorV1::NoChange => EditorError::PageOrderNoChange,
-        PageOrderErrorV1::CurrentOrderMismatch
-        | PageOrderErrorV1::BeforeStateMismatch
-        | PageOrderErrorV1::AfterStateMismatch => EditorError::StalePageOrder,
-        other => EditorError::PageOrderUnsupported {
-            message: other.to_string(),
-        },
-    }
 }
 
 fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
@@ -5615,21 +5605,6 @@ impl EditorSession {
         Ok(operation)
     }
 
-    fn current_authored_stack_v1(&self, page_id: PageId) -> AuthoredStackV1 {
-        self.authored_stacks
-            .get(&page_id)
-            .cloned()
-            .unwrap_or_else(|| AuthoredStackV1::empty(page_id))
-    }
-
-    fn install_authored_stack_v1(&mut self, stack: AuthoredStackV1) {
-        if stack.members.is_empty() {
-            self.authored_stacks.remove(&stack.page_id);
-        } else {
-            self.authored_stacks.insert(stack.page_id, stack);
-        }
-    }
-
     pub fn create_shape(
         &mut self,
         node_id: NodeId,
@@ -5951,142 +5926,6 @@ impl EditorSession {
 
         self.authored_shapes = candidate_shapes;
         self.install_authored_stack_v1(after_stack);
-        self.undo.push(operation.clone());
-        self.redo.clear();
-        self.validate_source_identity()?;
-        Ok(operation)
-    }
-
-    /// Return current order for one externally-qualified customer-page set.
-    ///
-    /// Membership is owned by an existing page-role authority. Editor owns
-    /// only durable order and refuses to classify raw PAGE records here.
-    pub fn current_qualified_page_order_v1(
-        &self,
-        qualified_page_ids: &[PageId],
-    ) -> Result<Vec<PageId>, EditorError> {
-        self.validate_source_identity()?;
-        for page_id in qualified_page_ids {
-            if !self.graph.pages.contains_key(page_id) {
-                return Err(EditorError::PageOrderUnsupported {
-                    message: format!(
-                        "qualified page {} is absent from the current semantic page map",
-                        page_id.as_canonical()
-                    ),
-                });
-            }
-        }
-        qualified_page_order_v1(&self.graph.document.pages, qualified_page_ids)
-            .map_err(page_order_error_to_editor_v1)
-    }
-
-    pub fn reorder_pages_v1(
-        &mut self,
-        expected_before: Vec<PageId>,
-        requested_after: Vec<PageId>,
-    ) -> Result<EditOperation, EditorError> {
-        self.validate_source_identity()?;
-        if self.project_identity.is_none() {
-            return Err(EditorError::PageOrderUnsupported {
-                message: "durable project identity is required".to_owned(),
-            });
-        }
-        for page_id in &expected_before {
-            if !self.graph.pages.contains_key(page_id) {
-                return Err(EditorError::PageOrderUnsupported {
-                    message: format!(
-                        "qualified page {} is absent from the current semantic page map",
-                        page_id.as_canonical()
-                    ),
-                });
-            }
-        }
-
-        let transition = plan_page_order_transition_v1(
-            self.graph.document.id,
-            &self.graph.document.pages,
-            &expected_before,
-            &requested_after,
-        )
-        .map_err(page_order_error_to_editor_v1)?;
-        let operation = EditOperation::ReorderPagesV1 { transition };
-        apply_forward(&mut self.graph, &operation)?;
-        self.undo.push(operation.clone());
-        self.redo.clear();
-        self.validate_source_identity()?;
-        Ok(operation)
-    }
-
-    pub fn reorder_authored_stack(
-        &mut self,
-        page_id: PageId,
-        node_id: NodeId,
-        mode: AuthoredStackReorderModeV1,
-    ) -> Result<EditOperation, EditorError> {
-        self.validate_source_identity()?;
-        if self.project_identity.is_none() {
-            return Err(EditorError::AuthoredStackReorderUnsupported { node_id });
-        }
-        let shape = self
-            .authored_shapes
-            .get(&node_id)
-            .ok_or(EditorError::AuthoredStackReorderUnsupported { node_id })?;
-        if shape.page_id != page_id
-            || shape.parent_id != page_id
-            || validate_authored_shape_runtime_v1(shape).is_err()
-        {
-            return Err(EditorError::AuthoredStackReorderUnsupported { node_id });
-        }
-
-        let before = self.current_authored_stack_v1(page_id);
-        let transition = plan_reorder_authored_stack_v1(&before, node_id, mode).map_err(
-            |error| match error {
-                AuthoredStackReorderErrorV1::NoChange { .. } => {
-                    EditorError::AuthoredStackReorderNoChange { node_id }
-                }
-                AuthoredStackReorderErrorV1::MissingMember { .. }
-                | AuthoredStackReorderErrorV1::PageMismatch
-                | AuthoredStackReorderErrorV1::InvalidStack => {
-                    EditorError::AuthoredStackReorderUnsupported { node_id }
-                }
-                AuthoredStackReorderErrorV1::BeforeStateMismatch
-                | AuthoredStackReorderErrorV1::AfterStateMismatch
-                | AuthoredStackReorderErrorV1::TransitionMismatch => {
-                    EditorError::StaleAuthoredStack { page_id }
-                }
-            },
-        )?;
-        self.consume_canonical_reorder_authored_stack(EditOperation::ReorderAuthoredStack {
-            transition,
-        })
-    }
-
-    fn consume_canonical_reorder_authored_stack(
-        &mut self,
-        operation: EditOperation,
-    ) -> Result<EditOperation, EditorError> {
-        self.validate_source_identity()?;
-        let EditOperation::ReorderAuthoredStack { transition } = &operation else {
-            unreachable!("consume_canonical_reorder_authored_stack receives ReorderAuthoredStack")
-        };
-        let shape = self.authored_shapes.get(&transition.node_id).ok_or(
-            EditorError::AuthoredStackReorderUnsupported {
-                node_id: transition.node_id,
-            },
-        )?;
-        if shape.page_id != transition.page_id || shape.parent_id != transition.page_id {
-            return Err(EditorError::AuthoredStackReorderUnsupported {
-                node_id: transition.node_id,
-            });
-        }
-        let current = self.current_authored_stack_v1(transition.page_id);
-        let after =
-            apply_authored_stack_reorder_forward_v1(&current, transition).map_err(|_| {
-                EditorError::StaleAuthoredStack {
-                    page_id: transition.page_id,
-                }
-            })?;
-        self.install_authored_stack_v1(after);
         self.undo.push(operation.clone());
         self.redo.clear();
         self.validate_source_identity()?;
@@ -8153,117 +7992,6 @@ fn apply_inverse(
         }
     }
     Ok(())
-}
-
-fn authored_stack_operation_page_id_v1(operation: &EditOperation) -> Option<PageId> {
-    match operation {
-        EditOperation::CreateShape { page_id, .. }
-        | EditOperation::CreateLine { page_id, .. }
-        | EditOperation::DeleteNode { page_id, .. } => Some(*page_id),
-        EditOperation::CreateTable { table } => Some(table.page_id),
-        EditOperation::ReorderAuthoredStack { transition } => Some(transition.page_id),
-        _ => None,
-    }
-}
-
-fn install_authored_stack_in_map_v1(
-    stacks: &mut BTreeMap<PageId, AuthoredStackV1>,
-    stack: AuthoredStackV1,
-) {
-    if stack.members.is_empty() {
-        stacks.remove(&stack.page_id);
-    } else {
-        stacks.insert(stack.page_id, stack);
-    }
-}
-
-fn apply_authored_stack_history_forward_v1(
-    stacks: &mut BTreeMap<PageId, AuthoredStackV1>,
-    operation: &EditOperation,
-) -> Result<(), EditorError> {
-    match operation {
-        EditOperation::CreateShape { page_id, .. } => {
-            let shape = authored_shape_from_operation(operation)
-                .expect("CreateShape reconstructs authored shape");
-            let before = stacks
-                .get(page_id)
-                .cloned()
-                .unwrap_or_else(|| AuthoredStackV1::empty(*page_id));
-            let transition = plan_create_shape_append_v1(&before, &shape)
-                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
-            let after = apply_authored_stack_transition_forward_v1(&before, &transition)
-                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
-            install_authored_stack_in_map_v1(stacks, after);
-        }
-        EditOperation::CreateLine { page_id, .. } => {
-            let line = authored_line_from_operation(operation)
-                .expect("CreateLine reconstructs authored line");
-            let before = stacks
-                .get(page_id)
-                .cloned()
-                .unwrap_or_else(|| AuthoredStackV1::empty(*page_id));
-            let transition = plan_create_line_append_v1(&before, &line)
-                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
-            let after = apply_authored_stack_transition_forward_v1(&before, &transition)
-                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
-            install_authored_stack_in_map_v1(stacks, after);
-        }
-        EditOperation::CreateTable { table } => {
-            let before = stacks
-                .get(&table.page_id)
-                .cloned()
-                .unwrap_or_else(|| AuthoredStackV1::empty(table.page_id));
-            let transition = plan_create_table_append_v1(&before, table.node_id, table.page_id)
-                .map_err(|_| EditorError::StaleAuthoredStack {
-                    page_id: table.page_id,
-                })?;
-            let after =
-                apply_authored_stack_transition_forward_v1(&before, &transition).map_err(|_| {
-                    EditorError::StaleAuthoredStack {
-                        page_id: table.page_id,
-                    }
-                })?;
-            install_authored_stack_in_map_v1(stacks, after);
-        }
-        EditOperation::DeleteNode {
-            page_id, before, ..
-        } => {
-            let stack = stacks
-                .get(page_id)
-                .cloned()
-                .unwrap_or_else(|| AuthoredStackV1::empty(*page_id));
-            let transition = plan_delete_shape_remove_v1(&stack, before)
-                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
-            let after = apply_authored_stack_transition_forward_v1(&stack, &transition)
-                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
-            install_authored_stack_in_map_v1(stacks, after);
-        }
-        EditOperation::ReorderAuthoredStack { transition } => {
-            let current = stacks
-                .get(&transition.page_id)
-                .cloned()
-                .unwrap_or_else(|| AuthoredStackV1::empty(transition.page_id));
-            let after =
-                apply_authored_stack_reorder_forward_v1(&current, transition).map_err(|_| {
-                    EditorError::StaleAuthoredStack {
-                        page_id: transition.page_id,
-                    }
-                })?;
-            install_authored_stack_in_map_v1(stacks, after);
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn derive_authored_stacks_from_operations_v1(
-    operations: &[EditOperation],
-) -> Result<BTreeMap<PageId, AuthoredStackV1>, EditorError> {
-    let mut stacks = BTreeMap::new();
-    for operation in operations {
-        apply_authored_stack_history_forward_v1(&mut stacks, operation)?;
-    }
-    Ok(stacks)
 }
 
 fn authored_shape_from_operation(operation: &EditOperation) -> Option<AuthoredShapeRuntimeV1> {
