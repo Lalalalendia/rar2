@@ -449,6 +449,19 @@ def test_disjoint_roots_have_disjoint_budget_paths() -> None:
     assert a_budget.isdisjoint(b_budget)
 
 
+
+def test_candidate_pub_viewer_tables_fanout_report() -> None:
+    candidate = "vendor/producer-a/crates/pub-viewer/src/tables.rs"
+    workflows = mod.workflows_at(Path("."), "HEAD")
+    matches = sorted(mod.matching_workflows(candidate, workflows))
+    print(
+        "CANDIDATE_PUB_VIEWER_TABLES_FANOUT "
+        + json.dumps({"path": candidate, "count": len(matches), "workflows": matches})
+    )
+    assert matches
+
+
+
 def main() -> int:
     test_patterns()
     test_yaml_paths()
@@ -472,6 +485,7 @@ def main() -> int:
     test_v2_global_leaf_budget_increase_fails()
     test_v2_shrink_requires_own_shard_ratchet()
     test_disjoint_roots_have_disjoint_budget_paths()
+    test_candidate_pub_viewer_tables_fanout_report()
     print("source fanout budget tests: ok")
     return 0
 
