@@ -3,6 +3,7 @@
 
 use super::{SceneHitEntry, ViewerApp, text_session};
 use eframe::egui;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[path = "paragraph_alignment_ui.rs"]
 mod paragraph_alignment_ui;
@@ -31,6 +32,20 @@ enum CanvasTextMutationFinalization {
 
 /// The canonical EditOperation is already in EditorSession by the time
 /// text-session rebind can fail. Never classify that failure as a rejected edit.
+fn invalidate_text_page_frame_cache<T>(
+    cache: &mut BTreeMap<usize, T>,
+    affected_pages: Option<&BTreeSet<usize>>,
+    text_projection_succeeded: bool,
+) {
+    if text_projection_succeeded
+        && let Some(affected_pages) = affected_pages
+    {
+        cache.retain(|page_index, _| !affected_pages.contains(page_index));
+        return;
+    }
+    cache.clear();
+}
+
 fn classify_canvas_text_mutation(
     before_operations: usize,
     after_operations: usize,
@@ -142,13 +157,44 @@ impl ViewerApp {
         }
     }
 
+    fn active_text_story_page_cache_indices(&self) -> Option<BTreeSet<usize>> {
+        let story_id = self.text_mode.as_ref()?.story_id;
+        let visual = self.visual.as_ref()?;
+
+        let mut affected_pages = BTreeSet::new();
+        let mut saw_frame = false;
+        for frame in visual
+            .story_frames
+            .iter()
+            .filter(|frame| frame.story_id == story_id)
+        {
+            saw_frame = true;
+            let scene_node = visual
+                .scene
+                .nodes
+                .iter()
+                .find(|node| node.origin == frame.frame_id)?;
+            let page_index = visual.document.pages.iter().position(|page| {
+                scene_node.parent_origin == page.id.into_canonical()
+            })?;
+            affected_pages.insert(page_index);
+        }
+
+        (saw_frame && !affected_pages.is_empty()).then_some(affected_pages)
+    }
+
     /// Finalize canvas text/text-format changes without paying unrelated
     /// created-node or object-geometry synchronization.
     fn finish_text_authoring_change(&mut self, status: &str) {
         self.canvas_drag = None;
         self.canvas_resize = None;
-        self.page_frame_cache.clear();
+        let affected_pages = self.active_text_story_page_cache_indices();
         let text_projection_refresh = self.sync_visual_stories_from_editor();
+        invalidate_text_page_frame_cache(
+            &mut self.page_frame_cache,
+            affected_pages.as_ref(),
+            text_projection_refresh.is_ok(),
+        );
         self.refresh_search();
         self.export_preview = None;
         self.project_status = Some("Editor project has unsaved changes.".to_owned());
@@ -812,9 +858,28 @@ pub(super) fn strict_document_rect_interior(
 mod tests {
     use super::{
         CanvasTextMutationFinalization, classify_canvas_text_mutation,
-        paragraph_alignment_shortcut_v1, strict_document_rect_interior,
+        invalidate_text_page_frame_cache, paragraph_alignment_shortcut_v1,
+        strict_document_rect_interior,
     };
     use crate::egui;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[test]
+    fn text_page_cache_invalidation_is_scoped_only_when_projection_and_mapping_are_proven() {
+        let mut cache = BTreeMap::from([(0, "zero"), (1, "one"), (2, "two"), (3, "three")]);
+        let affected = BTreeSet::from([1, 3]);
+
+        invalidate_text_page_frame_cache(&mut cache, Some(&affected), true);
+        assert_eq!(cache.keys().copied().collect::<Vec<_>>(), vec![0, 2]);
+
+        let mut unknown_scope = BTreeMap::from([(0, "zero"), (1, "one")]);
+        invalidate_text_page_frame_cache(&mut unknown_scope, None, true);
+        assert!(unknown_scope.is_empty());
+
+        let mut failed_projection = BTreeMap::from([(0, "zero"), (1, "one")]);
+        invalidate_text_page_frame_cache(&mut failed_projection, Some(&affected), false);
+        assert!(failed_projection.is_empty());
+    }
 
     #[test]
     fn accepted_canvas_text_commits_have_one_finish_owned_refresh_route() {
@@ -887,7 +952,10 @@ mod tests {
             .map(|offset| start + offset)
             .expect("text-only finisher has a bounded source section");
         let text_only_finish = &source[start..end];
+        assert!(text_only_finish.contains("active_text_story_page_cache_indices"));
+        assert!(text_only_finish.contains("invalidate_text_page_frame_cache"));
         assert!(text_only_finish.contains("sync_visual_stories_from_editor"));
+        assert!(!text_only_finish.contains("page_frame_cache.clear()"));
         assert!(!text_only_finish.contains("sync_visual_created_text_boxes_from_editor"));
         assert!(!text_only_finish.contains("sync_visual_geometry_from_editor"));
     }
