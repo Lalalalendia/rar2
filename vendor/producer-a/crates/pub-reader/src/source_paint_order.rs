@@ -250,3 +250,16 @@ pub(super) fn source_page_paint_orders_v1(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod grouped_paint_order_tests {
+    use super::*;
+
+    #[test]
+    fn grouped_rectangle_extends_only_the_proven_participant_class() {
+        assert!(admit_grouped_paint_participant(true, false, false));
+        assert!(admit_grouped_paint_participant(false, true, false));
+        assert!(admit_grouped_paint_participant(false, false, true));
+        assert!(!admit_grouped_paint_participant(false, false, false));
+    }
+}

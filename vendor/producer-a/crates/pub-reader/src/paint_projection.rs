@@ -726,3 +726,99 @@ pub(super) fn bounded_officeart_rgb(
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod grouped_solid_rectangle_tests {
+    use super::*;
+
+    fn span() -> pub_core::RawSpan {
+        pub_core::RawSpan {
+            stream: pub_core::StreamPath("Escher/EscherStm".to_owned()),
+            offset: 0,
+            len: 16,
+        }
+    }
+
+    fn property(id: u16, value: u32) -> pub_escher::Fopte {
+        pub_escher::Fopte {
+            opid: id,
+            op: value,
+            source: span(),
+            complex_source: None,
+            complex_data: None,
+        }
+    }
+
+    fn source_rectangle() -> pub_escher::SpContainerObservation {
+        pub_escher::SpContainerObservation {
+            source: span(),
+            parent_group_shape_source: None,
+            fspgr: None,
+            fsp: Some(pub_escher::FspRecord {
+                spid: 1,
+                flags: 0x0A02,
+                shape_type: OFFICEART_SHAPE_TYPE_RECTANGLE,
+                source: span(),
+                trailing_source: None,
+            }),
+            fopts: vec![pub_escher::FoptObservation {
+                rec_type: 0xF00B,
+                source: span(),
+                properties: vec![
+                    property(OFFICE_ART_FILL_COLOR, 0x0000_C0FF),
+                    property(
+                        OFFICE_ART_FILL_BOOLEANS,
+                        FILL_USE_FILLED_BIT | FILL_FILLED_BIT,
+                    ),
+                ],
+            }],
+            client_anchor: None,
+            client_data: None,
+            client_textbox: None,
+            child_anchor: None,
+            unknown_children: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn admits_exact_filled_rectangle_with_direct_local_color() {
+        assert!(has_bounded_grouped_solid_rectangle(&source_rectangle()));
+        let mut explicit_solid = source_rectangle();
+        explicit_solid
+            .fopts[0]
+            .properties
+            .push(property(OFFICE_ART_FILL_TYPE, 0));
+        assert!(has_bounded_grouped_solid_rectangle(&explicit_solid));
+    }
+
+    #[test]
+    fn rejects_unproven_or_ambiguous_grouped_fill() {
+        let mut ellipse = source_rectangle();
+        ellipse.fsp.as_mut().unwrap().shape_type = OFFICEART_SHAPE_TYPE_ELLIPSE;
+        assert!(!has_bounded_grouped_solid_rectangle(&ellipse));
+        let mut hidden = source_rectangle();
+        hidden.fopts[0].properties[1].op = FILL_USE_FILLED_BIT;
+        assert!(!has_bounded_grouped_solid_rectangle(&hidden));
+        let mut inherited_color = source_rectangle();
+        inherited_color.fopts[0].properties[0].op = 0x0800_0001;
+        assert!(!has_bounded_grouped_solid_rectangle(&inherited_color));
+        let mut gradient = source_rectangle();
+        gradient
+            .fopts[0]
+            .properties
+            .push(property(OFFICE_ART_FILL_TYPE, 1));
+        assert!(!has_bounded_grouped_solid_rectangle(&gradient));
+        let mut conflicting = source_rectangle();
+        conflicting
+            .fopts[0]
+            .properties
+            .push(property(OFFICE_ART_FILL_COLOR, 0x0000_00FF));
+        assert!(!has_bounded_grouped_solid_rectangle(&conflicting));
+        let mut complex = source_rectangle();
+        complex.fopts[0].properties[0].opid |= 0x4000;
+        assert!(!has_bounded_grouped_solid_rectangle(&complex));
+        let mut absent = source_rectangle();
+        absent.fopts[0].properties.remove(1);
+        assert!(!has_bounded_grouped_solid_rectangle(&absent));
+    }
+}
