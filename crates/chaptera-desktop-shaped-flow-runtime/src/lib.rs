@@ -318,14 +318,7 @@ pub fn build_current_story_layout_v1(
     layout_revision_id: &str,
     font: &ExplicitDesktopFontResourceV1<'_>,
 ) -> Result<DesktopStoryLayoutV1, DesktopShapedFlowRuntimeError> {
-    build_current_story_layout_core_v1(
-        editor,
-        story_id,
-        layout_revision_id,
-        font,
-        None,
-        true,
-    )
+    build_current_story_layout_core_v1(editor, story_id, layout_revision_id, font, None, true)
 }
 
 /// Fixed-output callers intentionally retain full projected Story shaping.
@@ -338,14 +331,7 @@ fn build_current_story_layout_with_pages_v1(
     font: &ExplicitDesktopFontResourceV1<'_>,
     page_ids: Option<&[PageId]>,
 ) -> Result<DesktopStoryLayoutV1, DesktopShapedFlowRuntimeError> {
-    build_current_story_layout_core_v1(
-        editor,
-        story_id,
-        layout_revision_id,
-        font,
-        page_ids,
-        false,
-    )
+    build_current_story_layout_core_v1(editor, story_id, layout_revision_id, font, page_ids, false)
 }
 
 fn build_current_story_layout_core_v1(
