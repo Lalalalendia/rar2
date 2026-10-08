@@ -18,7 +18,7 @@ KEEP = {
 EXCLUDE = {
     "authoring-authored-stack-lifecycle-v1.yml",
     "authoring-authored-stack-runtime-v1.yml",
-    "authoring-picture-frame-receipt-v1.yml",
+    "authoring-picture-frame-receipt.yml",
     "chaptera-server-package-integrity-v1.yml",
     "editable-source-image-export-v1.yml",
     "editable-typography-export-v1.yml",
@@ -70,7 +70,7 @@ print("pub-editor session text routing contract: PASS")
 TEST_EXCLUDE = {
     "authoring-authored-stack-lifecycle-v1.yml",
     "authoring-authored-stack-runtime-v1.yml",
-    "authoring-picture-frame-receipt-v1.yml",
+    "authoring-picture-frame-receipt.yml",
     "chaptera-server-package-integrity-v1.yml",
     "cloud-export-executor-producer-v1.yml",
     "editable-source-image-export-v1.yml",
