@@ -1,3 +1,4 @@
+use super::node_provenance::{NodeProvenanceContext, build_node_source_refs};
 use super::*;
 
 pub(super) struct MatureNodeMaterializationContext<'a> {
@@ -400,171 +401,22 @@ pub(super) fn materialize_mature_nodes(
             explicit_image_crop.is_some(),
         );
 
-        let object_key = contents_object_key(seq_num);
-        let mut source_refs = vec![source_ref(
-            &graph.source,
-            &chunk.source,
-            Some(object_key.clone()),
-            Some("chunk".into()),
-            SourceRole::Semantic,
-            AuthorityClass::Authoritative,
-            ReadConfidence::Exact,
-        )];
-        source_refs.push(source_ref(
-            &graph.source,
-            &shape.source,
-            Some(format!("escher/client-data-shape-id/{seq_num}")),
-            Some(if grouped_sources.is_empty() {
-                "SpContainer/ClientAnchor".into()
-            } else {
-                "SpContainer/ChildAnchor".into()
-            }),
-            SourceRole::Projection,
-            AuthorityClass::Authoritative,
-            ReadConfidence::Exact,
-        ));
-        if direct_image_anchor_recovered_from_contents_extent {
-            for (field_id, path) in [
-                (FIELD_SHAPE_WIDTH, "Contents/0x01/shape-width"),
-                (FIELD_SHAPE_HEIGHT, "Contents/0x01/shape-height"),
-            ] {
-                if let Some((_, value_source)) = unique_u32_field(&chunk, field_id)? {
-                    source_refs.push(source_ref(
-                        &graph.source,
-                        &value_source,
-                        Some(object_key.clone()),
-                        Some(path.into()),
-                        SourceRole::Projection,
-                        AuthorityClass::Authoritative,
-                        ReadConfidence::Exact,
-                    ));
-                }
-            }
-        }
-        if has_default_roundrect_geometry(shape) {
-            source_refs.push(source_ref(
-                &graph.source,
-                &shape.source,
-                Some(format!("escher/client-data-shape-id/{seq_num}")),
-                Some("SpContainer/FSP/default-roundrect".into()),
-                SourceRole::Projection,
-                AuthorityClass::Authoritative,
-                ReadConfidence::Exact,
-            ));
-        }
-        if has_default_ellipse_geometry(shape) {
-            source_refs.push(source_ref(
-                &graph.source,
-                &shape.source,
-                Some(format!("escher/client-data-shape-id/{seq_num}")),
-                Some("SpContainer/FSP/default-ellipse".into()),
-                SourceRole::Projection,
-                AuthorityClass::Authoritative,
-                ReadConfidence::Exact,
-            ));
-        }
-        if has_default_line_geometry(shape) {
-            source_refs.push(source_ref(
-                &graph.source,
-                &shape.source,
-                Some(format!("escher/client-data-shape-id/{seq_num}")),
-                Some("SpContainer/FSP/default-line".into()),
-                SourceRole::Projection,
-                AuthorityClass::Authoritative,
-                ReadConfidence::Exact,
-            ));
-            if has_shape_local_dash_gel(shape) {
-                source_refs.push(source_ref(
-                    &graph.source,
-                    &shape.source,
-                    Some(format!("escher/client-data-shape-id/{seq_num}")),
-                    Some("SpContainer/FOPT/line-dashing-dash-gel".into()),
-                    SourceRole::Projection,
-                    AuthorityClass::Authoritative,
-                    ReadConfidence::Exact,
-                ));
-            }
-        }
-        if node_transform_projection.image_rotation_applied
-            || node_transform_projection
-                .image_cardinal_rotation_degrees
-                .is_some()
-        {
-            source_refs.push(source_ref(
-                &graph.source,
-                &shape.source,
-                Some(format!("escher/client-data-shape-id/{seq_num}")),
-                Some("SpContainer/FOPT/rotation".into()),
-                SourceRole::Projection,
-                AuthorityClass::Authoritative,
-                ReadConfidence::Exact,
-            ));
-        }
-        if has_explicit_officeart_paint_observation(shape) {
-            source_refs.push(source_ref(
-                &graph.source,
-                &shape.source,
-                Some(format!("escher/client-data-shape-id/{seq_num}")),
-                Some("SpContainer/FOPT".into()),
-                SourceRole::Projection,
-                AuthorityClass::Authoritative,
-                ReadConfidence::Exact,
-            ));
-        }
-        if paint_context_uses_officeart_scheme_color(shape, dgg_defaults) {
-            if let Some(color_scheme) = color_scheme {
-                source_refs.push(source_ref(
-                    &graph.source,
-                    &color_scheme.scheme.source,
-                    Some(contents_object_key(color_scheme.seq_num)),
-                    Some("OplSccm/current-color-scheme".into()),
-                    SourceRole::Projection,
-                    AuthorityClass::Authoritative,
-                    ReadConfidence::Exact,
-                ));
-            }
-        }
-        if effective_paint
-            .as_ref()
-            .is_some_and(effective_paint_has_dgg_authority)
-        {
-            if let Some(dgg_defaults) = dgg_defaults {
-                source_refs.push(source_ref(
-                    &graph.source,
-                    &dgg_defaults.source,
-                    Some("escher/dgg/default-options".into()),
-                    Some("DggContainer/FOPT-defaults".into()),
-                    SourceRole::Projection,
-                    AuthorityClass::Authoritative,
-                    ReadConfidence::Exact,
-                ));
-            }
-        }
-        for (depth, span) in grouped_sources.iter().enumerate() {
-            source_refs.push(source_ref(
-                &graph.source,
-                span,
-                Some(format!("escher/group-ancestor/{seq_num}/{depth}")),
-                Some("SpgrContainer/SpContainer".into()),
-                SourceRole::Projection,
-                AuthorityClass::Authoritative,
-                ReadConfidence::Exact,
-            ));
-        }
-        if let Some(text_frame_inset) = &text_frame_inset {
-            source_refs.extend(text_frame_inset.source_refs.clone());
-        }
-        if let Some(vertical_alignment) = story_frame
-            .as_ref()
-            .and_then(|frame| frame.vertical_alignment.as_ref())
-        {
-            source_refs.extend(vertical_alignment.source_refs.clone());
-        }
-        if let Some(table) = &table {
-            source_refs.extend(table.source_refs.clone());
-        } else if let Some(table_story) = &table_story {
-            source_refs.extend(table_story.source_refs.clone());
-        }
+        let source_refs = build_node_source_refs(NodeProvenanceContext {
+            graph,
+            chunk: &chunk,
+            shape,
+            seq_num,
+            grouped_sources: &grouped_sources,
+            direct_image_anchor_recovered_from_contents_extent,
+            node_transform_projection: &node_transform_projection,
+            text_frame_inset: &text_frame_inset,
+            story_frame: &story_frame,
+            table: &table,
+            table_story: &table_story,
+            color_scheme,
+            dgg_defaults,
+            effective_paint: &effective_paint,
+        })?;
 
         graph.nodes.insert(
             node_id,

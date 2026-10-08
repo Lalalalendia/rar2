@@ -30,6 +30,7 @@ mod legacy22_page_role;
 mod master_bridge;
 mod mature_wmf;
 mod node_materialization;
+mod node_provenance;
 mod ole_presentation;
 mod page_projection;
 mod paint_projection;
