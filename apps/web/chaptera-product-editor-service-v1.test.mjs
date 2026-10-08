@@ -166,6 +166,81 @@ test("current Scene uses cookie credentials and canonical current authoring grap
   assert.ok(!("x-chaptera-principal-id" in calls[0].options.headers));
 });
 
+test("current visual Scene is bound to exact canonical document/source/revision", async () => {
+  const visual = {
+    protocol_version: "chaptera.reader-scene.v1",
+    document_id: DOC,
+    source_hash: SOURCE,
+    revision_id: BASE,
+    scene_authority: "viewer",
+    stacking_fidelity: "exact",
+    fidelity: { state: "partial", reasons: [] },
+    pages: [],
+    nodes: [],
+    stories: [],
+    resources: [],
+    fonts: [],
+    diagnostics: [],
+  };
+  const { calls, fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/documents/" + DOC + "/current") return json(current());
+    if (path === "/v1/reader/documents/" + DOC + "/scene") return json(visual);
+    throw new Error("unexpected path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC,
+    fetchImpl,
+  });
+
+  const result = await service.currentVisualScene();
+  assert.equal(result.current_document.revision_id, BASE);
+  assert.equal(result.visual_scene.protocol_version, "chaptera.reader-scene.v1");
+  assert.equal(result.visual_scene.revision_id, BASE);
+  assert.deepEqual(
+    new Set(calls.map((call) => call.path)),
+    new Set([
+      "/v1/documents/" + DOC + "/current",
+      "/v1/reader/documents/" + DOC + "/scene",
+    ]),
+  );
+  for (const call of calls) {
+    assert.equal(call.options.credentials, "include");
+    assert.equal(call.options.cache, "no-store");
+  }
+});
+
+test("current visual Scene fails closed on a stale rich visual revision", async () => {
+  const { fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/documents/" + DOC + "/current") return json(current(CHILD, 9525));
+    if (path === "/v1/reader/documents/" + DOC + "/scene") {
+      return json({
+        protocol_version: "chaptera.reader-scene.v1",
+        document_id: DOC,
+        source_hash: SOURCE,
+        revision_id: BASE,
+        scene_authority: "viewer",
+        stacking_fidelity: "exact",
+        fidelity: { state: "partial", reasons: [] },
+        pages: [],
+        nodes: [],
+        stories: [],
+      });
+    }
+    throw new Error("unexpected path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC,
+    fetchImpl,
+  });
+
+  await assert.rejects(
+    service.currentVisualScene(),
+    /revision differs from canonical current document/,
+  );
+});
+
 test("commit obtains server CSRF and uses document-scoped canonical route", async () => {
   const { calls, fetchImpl } = recorder((url) => {
     const path = new URL(url).pathname;
