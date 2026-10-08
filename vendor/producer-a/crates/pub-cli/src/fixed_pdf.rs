@@ -312,6 +312,19 @@ fn materialize_viewer_text_runs(
                 continue;
             }
 
+            if layout.lines.len() != 1 {
+                *output
+                    .layout_fallback_counts
+                    .entry("multi_line_authority_pending".to_owned())
+                    .or_default() += 1;
+                output.skipped.push(serde_json::json!({
+                    "node_id": node.node_id,
+                    "code": "pdf.text.viewer_multi_line_authority_pending",
+                }));
+                output.fallback_nodes.insert(node.node_id);
+                continue;
+            }
+
             let text_bounds = node.text_bounds.unwrap_or(node.bounds);
             let base_x = text_bounds
                 .x
