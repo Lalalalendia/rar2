@@ -92,6 +92,36 @@ function current(revisionId = BASE, x = 1000) {
   };
 }
 
+
+function readerScene(revisionId = BASE) {
+  return {
+    protocol_version: "chaptera.reader-scene.v1",
+    document_id: DOC,
+    source_hash: SOURCE,
+    revision_id: revisionId,
+    scene_authority: "server_viewer_projection",
+    stacking_fidelity: "partial",
+    fidelity: { state: "partial", reasons: [] },
+    pages: [{
+      page_id: PAGE,
+      order: 0,
+      width_emu: 10_058_400,
+      height_emu: 7_772_400,
+    }],
+    nodes: [{
+      node_id: NODE,
+      page_id: PAGE,
+      kind: "shape",
+      bounds: { x: 1000, y: 2000, width: 3000, height: 4000 },
+      transform: { a: "1", b: "0", c: "0", d: "1", tx: 0, ty: 0 },
+    }],
+    stories: [],
+    resources: [],
+    fonts: [],
+    diagnostics: [],
+  };
+}
+
 function accepted() {
   return {
     protocol_version: "chaptera.commit-accepted.v1",
@@ -469,4 +499,72 @@ test("migration API binds capability, create, and loss download to exact source"
     assert.equal(call.options.headers["x-csrf-token"], "csrf-token-1");
     assert.equal(call.options.credentials, "include");
   }
+});
+
+
+test("current rich editor state binds visual and interaction to exact canonical revision", async () => {
+  const { calls, fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/documents/" + DOC + "/current") return json(current());
+    if (path === "/v1/reader/documents/" + DOC + "/scene") return json(readerScene());
+    throw new Error("unexpected path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC,
+    fetchImpl,
+  });
+
+  const state = await service.currentRichEditorState();
+  assert.equal(state.reader_scene.protocol_version, "chaptera.reader-scene.v1");
+  assert.equal(
+    state.interaction_scene.protocol_version,
+    "chaptera.editor-interaction-scene.v1",
+  );
+  assert.equal(state.reader_scene.revision_id, BASE);
+  assert.equal(state.interaction_scene.revision_id, BASE);
+  assert.deepEqual(
+    calls.map((call) => call.path),
+    [
+      "/v1/documents/" + DOC + "/current",
+      "/v1/reader/documents/" + DOC + "/scene",
+    ],
+  );
+  for (const call of calls) assert.equal(call.options.credentials, "include");
+});
+
+test("current rich editor state fails closed on a revision race", async () => {
+  const { fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/documents/" + DOC + "/current") return json(current(BASE));
+    if (path === "/v1/reader/documents/" + DOC + "/scene") return json(readerScene(CHILD));
+    throw new Error("unexpected path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC,
+    fetchImpl,
+  });
+
+  await assert.rejects(
+    service.currentRichEditorState(),
+    /differ at revision_id/,
+  );
+});
+
+test("readerSceneForRevision rejects a newer visual head", async () => {
+  const { fetchImpl } = recorder((url) => {
+    assert.equal(
+      new URL(url).pathname,
+      "/v1/reader/documents/" + DOC + "/scene",
+    );
+    return json(readerScene(CHILD));
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC,
+    fetchImpl,
+  });
+
+  await assert.rejects(
+    service.readerSceneForRevision(BASE),
+    /advanced before exact rich Scene reconciliation/,
+  );
 });

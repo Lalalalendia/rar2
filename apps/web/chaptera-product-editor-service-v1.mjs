@@ -1,5 +1,6 @@
 import { traceHeadersV1 } from "./observability-v1.mjs";
 import { projectCurrentAuthoringGraphToScene } from "./current-authoring-graph-scene-v1.mjs";
+import { projectReaderSceneToEditorInteractionScene } from "./reader-scene-editor-interaction-v1.mjs";
 
 const COMMIT_REQUEST_V1 = "chaptera.commit-request.v1";
 const COMMIT_REJECTED_V1 = "chaptera.commit-rejected.v1";
@@ -131,6 +132,63 @@ export class ChapteraProductEditorServiceV1 {
 
   async currentScene() {
     return projectCurrentAuthoringGraphToScene(await this.currentDocument());
+  }
+
+  async readerScene() {
+    const context = this.#context("scene_read");
+    const result = await this.#fetchJson(
+      "/v1/reader/documents/" + encodeURIComponent(this.documentId) + "/scene",
+      { method: "GET" },
+      context,
+    );
+    this.#throwUnlessOk(result, "Reader scene");
+    const value = ensureProtocol(
+      result.value,
+      "chaptera.reader-scene.v1",
+      "Reader scene",
+    );
+    if (value.document_id !== this.documentId) {
+      throw new Error("Reader scene document identity mismatch");
+    }
+    if (
+      typeof value.source_hash !== "string" ||
+      !/^[0-9a-f]{64}$/.test(value.source_hash) ||
+      typeof value.revision_id !== "string" ||
+      !value.revision_id.startsWith("sha256:")
+    ) {
+      throw new Error("Reader scene source/revision identity is invalid");
+    }
+    return clone(value);
+  }
+
+  async readerSceneForRevision(revisionId) {
+    ident(revisionId, "revisionId");
+    const scene = await this.readerScene();
+    if (scene.revision_id !== revisionId) {
+      throw new Error(
+        "canonical current revision advanced before exact rich Scene reconciliation",
+      );
+    }
+    return scene;
+  }
+
+  async currentRichEditorState() {
+    const current = await this.currentDocument();
+    const readerScene = await this.readerScene();
+    for (const field of ["document_id", "source_hash", "revision_id"]) {
+      if (readerScene[field] !== current[field]) {
+        throw new Error(
+          "current document and rich Reader scene differ at " + field,
+        );
+      }
+    }
+    const interactionScene =
+      projectReaderSceneToEditorInteractionScene(readerScene);
+    return {
+      current_document: clone(current),
+      reader_scene: clone(readerScene),
+      interaction_scene: clone(interactionScene),
+    };
   }
 
   async sceneForRevision(revisionId) {
