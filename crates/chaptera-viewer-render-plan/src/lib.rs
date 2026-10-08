@@ -4451,6 +4451,7 @@ mod tests {
             story_id,
             rows: 1,
             columns: 1,
+            fallback_geometry_cell_count: 0,
             cells: vec![ViewerTableCell {
                 id: cell_id,
                 address: TableCellAddress { row: 0, column: 0 },
