@@ -63,6 +63,23 @@ function rgbaCss(color) {
   return "rgba(" + color.r + "," + color.g + "," + color.b + "," + (color.a / 255) + ")";
 }
 
+function inlineImageHref(resource) {
+  const value = resource?.inline_data_url;
+  if (resource?.kind !== "image" || typeof value !== "string") return null;
+  return /^data:image\/(?:png|jpeg|jpg|gif);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : null;
+}
+
+function previewTextCss(style, view) {
+  const size = Number.isSafeInteger(style?.font_size_emu)
+    ? emuToCss(style.font_size_emu, view)
+    : 12;
+  const rgb = Array.isArray(style?.color_rgb) && style.color_rgb.length === 3
+    ? style.color_rgb
+    : null;
+  const fill = rgb ? "rgb(" + rgb.map(Number).join(" ") + ")" : "rgba(0,0,0,0.9)";
+  return Object.freeze({ font_size_css_px: size, fill });
+}
+
 export function buildRenderPlan(snapshot, rawView = {}) {
   assertSceneSourceNeutral(snapshot);
   if (snapshot?.protocol_version !== "chaptera.scene.v1") {
@@ -124,7 +141,10 @@ export function buildRenderPlan(snapshot, rawView = {}) {
         story: story ? Object.freeze({
           text: story.text,
           text_fidelity: story.text_fidelity,
-          authority: "browser_preview_only"
+          authority: node.visual_authority === "reader_scene"
+            ? "reader_scene_preview"
+            : "browser_preview_only",
+          style: previewTextCss(node.preview_text_style, view)
         }) : null,
         resource: resource ? Object.freeze({
           resource_id: resource.resource_id,
@@ -132,7 +152,8 @@ export function buildRenderPlan(snapshot, rawView = {}) {
           availability: resource.availability,
           mime: resource.mime,
           content_hash: resource.content_hash,
-          fetch_handle: resource.fetch_handle
+          fetch_handle: resource.fetch_handle,
+          inline_data_url: inlineImageHref(resource)
         }) : null,
         diagnostics: Object.freeze([...(diagnosticsByNode.get(node.node_id) ?? [])]),
         canonical_bounds: Object.freeze({ ...node.bounds })
@@ -237,14 +258,30 @@ class SvgRenderer {
           "stroke-width": Math.max(0.5, node.paint.stroke_width_css_px || 0.5),
           "data-node-id": node.node_id
         }));
+        if (node.resource?.inline_data_url) {
+          const image = svgNode("image", {
+            x: node.x,
+            y: node.y,
+            width: node.width,
+            height: node.height,
+            preserveAspectRatio: "none",
+            "data-resource-id": node.resource.resource_id,
+            "data-resource-authority": "reader-scene-inline"
+          });
+          image.setAttribute("href", node.resource.inline_data_url);
+          this.root.appendChild(image);
+        }
         if (node.story) {
           const label = svgNode("text", {
-            x: node.x + 2, y: node.y + 14, "font-size": 12,
+            x: node.x + 2,
+            y: node.y + node.story.style.font_size_css_px,
+            "font-size": node.story.style.font_size_css_px,
+            fill: node.story.style.fill,
             "data-text-authority": node.story.authority
           });
           label.textContent = node.story.text.slice(0, 120);
           this.root.appendChild(label);
-        } else if (node.resource) {
+        } else if (node.resource && !node.resource.inline_data_url) {
           const label = svgNode("text", { x: node.x + 2, y: node.y + 14, "font-size": 10 });
           label.textContent = "image:" + node.resource.availability;
           this.root.appendChild(label);

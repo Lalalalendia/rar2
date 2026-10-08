@@ -3084,7 +3084,6 @@ mod tests {
         let story_id = StoryId::from_canonical(canonical(3));
         let resource_id = ResourceId::from_canonical(canonical(4));
         let page_size = Size2D::new(LengthEmu::new(1000), LengthEmu::new(2000));
-
         ViewerGeometryDocument {
             schema_version: "viewer.v1".into(),
             document: ViewerDocument {
@@ -3172,11 +3171,11 @@ mod tests {
             paragraph_flow_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
-            images: vec![ViewerEmbeddedImage {
+            images: vec![ViewerEmbeddedImage::exact(
                 resource_id,
-                mime: "image/png".into(),
-                node_ids: vec![node_id],
-                placements: vec![ViewerImagePlacementV1 {
+                "image/png".into(),
+                vec![node_id],
+                vec![ViewerImagePlacementV1 {
                     node_id,
                     source_window: Some(ViewerImageSourceWindowV1 {
                         left_q16: 8_192,
@@ -3187,8 +3186,8 @@ mod tests {
                     content_rotation_degrees: None,
                     recolor: None,
                 }],
-                bytes: vec![0x89, b'P', b'N', b'G'],
-            }],
+                vec![0x89, b'P', b'N', b'G'],
+            )],
             decorative_borders: Vec::new(),
             decorative_border_resources: Vec::new(),
         }

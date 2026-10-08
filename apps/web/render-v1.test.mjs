@@ -130,3 +130,33 @@ test("renderer rejects raw/private source carrier fields recursively", () => {
   bad.nodes[0].parser_record = { stream_path: "Contents/7" };
   assert.throws(() => buildRenderPlan(bad, VIEW), /forbidden source field/);
 });
+
+
+test("Reader-adapted inline image and preview typography survive the render plan", () => {
+  const imageScene = fixture("exact-image.json");
+  imageScene.resources[0].availability = "inline_data_url";
+  imageScene.resources[0].inline_data_url = "data:image/png;base64,iVBORw0KGgo=";
+  const imagePlan = buildRenderPlan(imageScene, VIEW);
+  assert.equal(
+    imagePlan.pages[0].nodes[0].resource.inline_data_url,
+    "data:image/png;base64,iVBORw0KGgo=",
+  );
+
+  const textScene = fixture("simple-text.json");
+  textScene.nodes[0].preview_text_style = {
+    font_size_emu: 190500,
+    color_rgb: [12, 34, 56],
+  };
+  textScene.nodes[0].visual_authority = "reader_scene";
+  const textPlan = buildRenderPlan(textScene, VIEW);
+  assert.equal(textPlan.pages[0].nodes[0].story.authority, "reader_scene_preview");
+  assert.equal(textPlan.pages[0].nodes[0].story.style.font_size_css_px, 20);
+  assert.equal(textPlan.pages[0].nodes[0].story.style.fill, "rgb(12 34 56)");
+});
+
+test("renderer strips unsafe inline image data URLs instead of handing them to DOM paint", () => {
+  const scene = fixture("exact-image.json");
+  scene.resources[0].inline_data_url = "javascript:alert(1)";
+  const plan = buildRenderPlan(scene, VIEW);
+  assert.equal(plan.pages[0].nodes[0].resource.inline_data_url, null);
+});

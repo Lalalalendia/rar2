@@ -46,11 +46,52 @@ pub struct ViewerImagePlacementV1 {
 pub struct ViewerEmbeddedImage {
     pub resource_id: ResourceId,
     pub mime: String,
+    /// True only when bytes are the exact admitted embedded image resource.
+    /// Derived WMF/OLE preview PNGs remain source-backed visual approximations,
+    /// but must not be promoted into exact-image output authority.
+    #[serde(default)]
+    pub source_exact: bool,
     pub node_ids: Vec<NodeId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub placements: Vec<ViewerImagePlacementV1>,
     #[serde(skip)]
     pub bytes: Vec<u8>,
+}
+
+impl ViewerEmbeddedImage {
+    pub(super) fn preview_png(
+        resource_id: ResourceId,
+        node_ids: Vec<NodeId>,
+        placements: Vec<ViewerImagePlacementV1>,
+        bytes: Vec<u8>,
+    ) -> Self {
+        Self {
+            resource_id,
+            mime: "image/png".to_owned(),
+            source_exact: false,
+            node_ids,
+            placements,
+            bytes,
+        }
+    }
+
+    /// Construct an exact admitted embedded image resource.
+    pub fn exact(
+        resource_id: ResourceId,
+        mime: String,
+        node_ids: Vec<NodeId>,
+        placements: Vec<ViewerImagePlacementV1>,
+        bytes: Vec<u8>,
+    ) -> Self {
+        Self {
+            resource_id,
+            mime,
+            source_exact: true,
+            node_ids,
+            placements,
+            bytes,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -188,6 +229,7 @@ mod tests {
             ViewerEmbeddedImage {
                 resource_id: first_resource,
                 mime: "image/png".to_owned(),
+                source_exact: true,
                 node_ids: vec![admitted, excluded],
                 placements: vec![
                     ViewerImagePlacementV1 {
@@ -211,6 +253,7 @@ mod tests {
             ViewerEmbeddedImage {
                 resource_id: second_resource,
                 mime: "image/jpeg".to_owned(),
+                source_exact: true,
                 node_ids: vec![excluded_only],
                 placements: vec![ViewerImagePlacementV1 {
                     node_id: excluded_only,
@@ -223,6 +266,7 @@ mod tests {
             ViewerEmbeddedImage {
                 resource_id: third_resource,
                 mime: "image/png".to_owned(),
+                source_exact: true,
                 node_ids: vec![unresolved],
                 placements: vec![ViewerImagePlacementV1 {
                     node_id: unresolved,

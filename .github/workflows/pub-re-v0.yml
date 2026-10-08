@@ -1,0 +1,102 @@
+name: PUB RE v0 differential
+
+on:
+  pull_request:
+    paths:
+      - "tools/pub-re/**"
+      - ".github/workflows/pub-re-v0.yml"
+      - ".github/workflows/pub-re-native.yml"
+  workflow_dispatch:
+    inputs:
+      manifest_path:
+        description: "Repository-local experiment manifest to analyze (optional)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Format standalone research tool
+        run: cargo fmt --manifest-path tools/pub-re/Cargo.toml -- --check
+
+      - name: Run PUB RE v0 unit contracts
+        run: cargo test --manifest-path tools/pub-re/Cargo.toml --all-targets
+
+      - name: Compile CLI
+        run: cargo build --manifest-path tools/pub-re/Cargo.toml --bin pub-re
+
+      - name: Validate native Publisher harness contract without COM
+        shell: pwsh
+        run: |
+          $script = "tools/pub-re/windows/Invoke-PubReNativeExperiment.ps1"
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $script).Path,
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+
+          & $script `
+            -ManifestPath "tools/pub-re/tests/native-shape-rotation.example.json" `
+            -OutputRoot (Join-Path $env:RUNNER_TEMP "pub-re-native-validate") `
+            -ValidateManifestOnly
+
+      - name: Analyze repository-local manifest
+        if: github.event_name == 'workflow_dispatch' && inputs.manifest_path != ''
+        shell: bash
+        env:
+          PUB_RE_MANIFEST: ${{ inputs.manifest_path }}
+        run: |
+          set -euo pipefail
+          test -f "$PUB_RE_MANIFEST"
+          mkdir -p "$RUNNER_TEMP/pub-re"
+          tools/pub-re/target/debug/pub-re analyze \
+            --manifest "$PUB_RE_MANIFEST" \
+            --output "$RUNNER_TEMP/pub-re/receipt.json"
+          python - "$RUNNER_TEMP/pub-re/receipt.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          assert receipt["schema"] == "chaptera.pub-re-receipt.v1"
+          assert receipt["invariants"]["raw_document_bytes_emitted"] is False
+          assert receipt["invariants"]["raw_stream_bytes_emitted"] is False
+          assert receipt["invariants"]["absolute_input_paths_emitted"] is False
+          print(
+              "PUB_RE_RECEIPT "
+              f"status={receipt['status']} "
+              f"changed_streams={len(receipt['cfb']['changed_streams'])}"
+          )
+          PY
+
+      - name: Upload source-safe receipt
+        if: github.event_name == 'workflow_dispatch' && inputs.manifest_path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-v0-receipt
+          path: ${{ runner.temp }}/pub-re/receipt.json
+          if-no-files-found: error
+          retention-days: 14

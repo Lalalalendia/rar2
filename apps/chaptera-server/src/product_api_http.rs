@@ -16,6 +16,9 @@ use chaptera_cdm_model::{
     AUTHORING_REVISION_SCHEMA_V1, AuthoringRevisionIdV1, canonical_revision_json_v1,
     derive_authoring_revision_id_v1,
 };
+use chaptera_scene_instance::{
+    GeometrySyncPolicyV1, direct_page_local_instance_v1, geometry_sync_policy_v1,
+};
 use pub_editor::{EditOperation, LengthEmu, NodeId, Sha256Digest, open_mature_0x2c_editor};
 use pub_reader::PubResolvedGraph;
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
@@ -265,20 +268,13 @@ async fn reader_scene(
         .map_err(ProductApiError::Authz)?;
 
     let head = current_head(&state.revisions, &source).await?;
-    if head.revision_id != source.baseline_revision_id {
-        return Err(ProductApiError::conflict(
-            "reader_scene_revision_not_source_only",
-            "read-only Cloud Reader V0 refuses edited revisions until authoritative revision-to-Viewer scene replay is wired",
-        ));
-    }
-
     let materialized = state
         .materializer
         .materialize_state(&source.tenant_id, &document_id, &head.revision_id)
         .await
         .map_err(ProductApiError::Materializer)?;
 
-    let bundle = open_pub_bundle(
+    let mut bundle = open_pub_bundle(
         &materialized.source_bytes,
         viewer_geometry_environment_v0_1(),
     )
@@ -288,6 +284,102 @@ async fn reader_scene(
             format!("source-neutral Viewer could not open durable PUB source: {error}"),
         )
     })?;
+
+    if head.revision_id != source.baseline_revision_id {
+        let source_hash = Sha256Digest::from_str(&source.source_sha256).map_err(|_| {
+            ProductApiError::internal(
+                "source_hash_invalid",
+                "durable source authority contains an invalid SHA-256 identity",
+            )
+        })?;
+        let mut session = open_mature_0x2c_editor(&materialized.source_bytes, source_hash)
+            .map_err(|error| {
+                ProductApiError::internal(
+                    "reader_scene_editor_source_unsupported",
+                    format!(
+                        "canonical editor could not open durable source for scene replay: {error}"
+                    ),
+                )
+            })?;
+        session
+            .apply_project(&materialized.receipt.project)
+            .map_err(|error| {
+                ProductApiError::internal(
+                    "reader_scene_editor_replay_failed",
+                    format!("canonical editor could not replay exact scene revision: {error}"),
+                )
+            })?;
+
+        let mut moved_node_ids = Vec::new();
+        for operation in &materialized.receipt.project.operations {
+            match operation {
+                EditOperation::MoveNode { node_id, .. } => moved_node_ids.push(*node_id),
+                _ => {
+                    return Err(ProductApiError::conflict(
+                        "reader_scene_revision_operation_unsupported",
+                        "rich Reader scene replay is currently admitted only for MoveNode revisions",
+                    ));
+                }
+            }
+        }
+
+        for scene_node in &mut bundle.geometry.scene.nodes {
+            let Some(authored_node) = session.graph().nodes.get(&scene_node.origin) else {
+                continue;
+            };
+            if authored_node.header.parent_id != scene_node.parent_origin {
+                continue;
+            }
+            let Ok(instance) = direct_page_local_instance_v1(
+                &scene_node.origin.as_canonical().to_string(),
+                &scene_node.parent_origin.to_string(),
+            ) else {
+                continue;
+            };
+            if geometry_sync_policy_v1(&instance)
+                != GeometrySyncPolicyV1::ApplyAuthoredOriginGeometry
+            {
+                continue;
+            }
+            let bounds = authored_node.header.bounds;
+            if session
+                .can_move_node_to(scene_node.origin, bounds.x, bounds.y)
+                .is_ok()
+            {
+                scene_node.bounds = bounds;
+            }
+        }
+
+        bundle
+            .geometry
+            .refresh_text_projection_from_resolved(session.graph())
+            .map_err(|error| {
+                ProductApiError::internal(
+                    "reader_scene_text_refresh_failed",
+                    format!("current revision Viewer text refresh failed: {error}"),
+                )
+            })?;
+
+        for moved_node_id in moved_node_ids {
+            let Some(authored_node) = session.graph().nodes.get(&moved_node_id) else {
+                return Err(ProductApiError::internal(
+                    "reader_scene_move_node_missing",
+                    "current canonical graph lost a durable MoveNode target",
+                ));
+            };
+            let represented = bundle.geometry.scene.nodes.iter().any(|scene_node| {
+                scene_node.origin == moved_node_id
+                    && scene_node.parent_origin == authored_node.header.parent_id
+                    && scene_node.bounds == authored_node.header.bounds
+            });
+            if !represented {
+                return Err(ProductApiError::conflict(
+                    "reader_scene_move_projection_unavailable",
+                    "current MoveNode revision cannot be represented by the admitted rich Viewer scene",
+                ));
+            }
+        }
+    }
 
     let scene = from_viewer_geometry(
         document_id,
@@ -1188,6 +1280,13 @@ mod tests {
             .nodes
             .iter()
             .find_map(|(node_id, node)| {
+                let node_id_json = serde_json::to_value(node_id).ok()?;
+                if !reader_nodes
+                    .iter()
+                    .any(|scene_node| scene_node["node_id"] == node_id_json)
+                {
+                    return None;
+                }
                 let before_x = node.header.bounds.x.get();
                 let before_y = node.header.bounds.y.get();
                 let x = before_x.checked_add(9_525)?;
@@ -1197,7 +1296,7 @@ mod tests {
                     .ok()
                     .map(|_| (*node_id, before_x, before_y, x, y))
             })
-            .expect("Sample3 must contain one movable canonical node");
+            .expect("Sample3 must contain one movable canonical node in the rich Reader scene");
         let node_id = serde_json::to_value(node_id)
             .unwrap()
             .as_str()
@@ -1262,11 +1361,44 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(reader_after_edit.status(), StatusCode::CONFLICT);
+        assert_eq!(reader_after_edit.status(), StatusCode::OK);
         let reader_after_edit = json_body(reader_after_edit).await;
+        assert_eq!(reader_after_edit["revision_id"], child_revision);
+        assert_eq!(reader_after_edit["source_hash"], source_sha256);
         assert_eq!(
-            reader_after_edit["error"]["code"],
-            "reader_scene_revision_not_source_only"
+            reader_after_edit["scene_authority"],
+            "server_viewer_projection"
+        );
+        assert!(reader_after_edit.get("project").is_none());
+        assert!(reader_after_edit.get("authoring_graph").is_none());
+
+        let baseline_node = reader_scene["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|scene_node| scene_node["node_id"] == node_id)
+            .expect("baseline Reader scene must contain moved node");
+        let edited_node = reader_after_edit["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|scene_node| scene_node["node_id"] == node_id)
+            .expect("edited Reader scene must contain moved node");
+        assert_eq!(baseline_node["bounds"]["x"], before_x_emu);
+        assert_eq!(baseline_node["bounds"]["y"], before_y_emu);
+        assert_eq!(edited_node["bounds"]["x"], x_emu);
+        assert_eq!(edited_node["bounds"]["y"], y_emu);
+        assert_eq!(
+            edited_node["bounds"]["width"],
+            baseline_node["bounds"]["width"]
+        );
+        assert_eq!(
+            edited_node["bounds"]["height"],
+            baseline_node["bounds"]["height"]
+        );
+        assert_eq!(
+            reader_after_edit["nodes"].as_array().unwrap().len(),
+            reader_scene["nodes"].as_array().unwrap().len()
         );
 
         let retry = app

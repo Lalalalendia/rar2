@@ -448,10 +448,35 @@ fn main() -> eframe::Result<()> {
         web=False,
     )
     assert_scope(
+        ["apps/web/current-authoring-graph-scene-v1.mjs"],
+        tier_a=False,
+        web=False,
+        local_portable=False,
+    )
+    assert_scope(
+        ["apps/web/chaptera-product-editor-service-v1.mjs"],
+        tier_a=False,
+        web=False,
+        local_portable=False,
+    )
+    assert_scope(
+        ["apps/web/editor-shell-v1.mjs"],
+        tier_a=False,
+        web=False,
+        local_portable=True,
+    )
+    assert_scope(
+        ["apps/web/acceptance/receipts/browser-editor-v1.json"],
+        tier_a=False,
+        web=False,
+        local_portable=True,
+    )
+
+    assert_scope(
         ["apps/web/editor-shell-http-harness.html"],
         tier_a=False,
         web=True,
-        local_portable=True,
+        local_portable=False,
         android_core=False,
         android=False,
         reader_windows_smoke=False,
@@ -477,6 +502,46 @@ fn main() -> eframe::Result<()> {
     )
     assert_scope(
         ["apps/chaptera-desktop/src/text_session_shell.rs"],
+        tier_a=True,
+        desktop_rustfmt=True,
+        editor_windows=False,
+        reader_windows_smoke=False,
+        reader_windows=False,
+        android_core=False,
+        android=False,
+    )
+    assert_scope(
+        ["apps/chaptera-desktop/src/text_box_creation_shell.rs"],
+        tier_a=True,
+        desktop_rustfmt=True,
+        editor_windows=False,
+        reader_windows_smoke=False,
+        reader_windows=False,
+        android_core=False,
+        android=False,
+    )
+    assert_scope(
+        ["apps/chaptera-desktop/src/history.rs"],
+        tier_a=True,
+        desktop_rustfmt=True,
+        editor_windows=False,
+        reader_windows_smoke=False,
+        reader_windows=False,
+        android_core=False,
+        android=False,
+    )
+    assert_scope(
+        ["apps/chaptera-desktop/src/duplicate_rectangle.rs"],
+        tier_a=True,
+        desktop_rustfmt=True,
+        editor_windows=False,
+        reader_windows_smoke=False,
+        reader_windows=False,
+        android_core=False,
+        android=False,
+    )
+    assert_scope(
+        ["apps/chaptera-desktop/src/page_navigation.rs"],
         tier_a=True,
         desktop_rustfmt=True,
         editor_windows=False,
