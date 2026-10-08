@@ -1,3 +1,4 @@
+# Topology receipt consumes the already-grounded exact100 off-paint set.
 #!/usr/bin/env python3
 from __future__ import annotations
 
