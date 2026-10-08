@@ -496,6 +496,8 @@ pub(super) fn resolve_mixed_size_text_layout_v1(
 
     let evaluation = if baseline.cursor == fragment.scalar_end {
         baseline
+    } else if baseline.lines.is_empty() {
+        return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
     } else {
         match evaluate_mixed_size_text_layout_v1(fragment, font, node_id, bounds, fingerprint, true)
         {
