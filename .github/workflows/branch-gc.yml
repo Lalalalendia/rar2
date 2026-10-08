@@ -1,8 +1,11 @@
 name: Guarded branch garbage collection
 
 on:
-  # Destructive branch deletion is manual-only: a PR must never trigger a
-  # contents:write + git push workflow.
+  # Destructive branch deletion never runs from pull_request/pull_request_target.
+  # A trusted admin can authorize an exact PR head by commenting:
+  # /branch-gc <40-char-pr-head-sha>
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       manifest:
@@ -11,15 +14,21 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event.issue.number || github.run_id }}
   cancel-in-progress: false
 
 permissions:
   contents: write
   pull-requests: read
+  issues: read
 
 jobs:
   branch-gc:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       startsWith(github.event.comment.body, '/branch-gc '))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -31,16 +40,74 @@ jobs:
         id: manifests
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
           MANUAL_MANIFEST: ${{ inputs.manifest }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          PR_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
           mkdir -p target/branch-gc
-          case "$MANUAL_MANIFEST" in
-            .github/branch-cleanup/*.txt) ;;
-            *) echo "invalid manifest path: $MANUAL_MANIFEST" >&2; exit 1 ;;
-          esac
-          [[ -f "$MANUAL_MANIFEST" ]] || { echo "manifest missing: $MANUAL_MANIFEST" >&2; exit 1; }
-          printf '%s\n' "$MANUAL_MANIFEST" > target/branch-gc/manifests.txt
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            case "$MANUAL_MANIFEST" in
+              .github/branch-cleanup/*.txt) ;;
+              *) echo "invalid manifest path: $MANUAL_MANIFEST" >&2; exit 1 ;;
+            esac
+            [[ -f "$MANUAL_MANIFEST" ]] || { echo "manifest missing: $MANUAL_MANIFEST" >&2; exit 1; }
+            printf '%s\n' "$MANUAL_MANIFEST" > target/branch-gc/manifests.txt
+            printf 'mode=workflow_dispatch\nmanifest=%s\n' "$MANUAL_MANIFEST" > target/branch-gc/approval.txt
+          else
+            command=""
+            approved_sha=""
+            extra=""
+            read -r command approved_sha extra <<< "$COMMENT_BODY"
+            [[ "$command" == "/branch-gc" && -z "${extra:-}" && "$approved_sha" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "invalid branch-gc command; expected: /branch-gc <40-char-pr-head-sha>" >&2
+              exit 1
+            }
+
+            permission="$(gh api "repos/$GH_REPO/collaborators/$COMMENTER/permission" --jq '.permission')"
+            [[ "$permission" == "admin" ]] || {
+              echo "branch-gc command requires repository admin permission; user=$COMMENTER permission=$permission" >&2
+              exit 1
+            }
+
+            pr_state="$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq '.state')"
+            pr_draft="$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq '.draft')"
+            pr_head_repo="$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq '.head.repo.full_name')"
+            pr_head_sha="$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
+            [[ "$pr_state" == "open" && "$pr_draft" == "true" && "$pr_head_repo" == "$GH_REPO" && "$pr_head_sha" == "$approved_sha" ]] || {
+              echo "branch-gc command rejected: require open draft same-repo PR at exact approved head" >&2
+              echo "state=$pr_state draft=$pr_draft head_repo=$pr_head_repo head_sha=$pr_head_sha approved_sha=$approved_sha" >&2
+              exit 1
+            }
+
+            mapfile -t changed < <(
+              gh api --paginate "repos/$GH_REPO/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename'
+            )
+            [[ "${#changed[@]}" -eq 1 ]] || {
+              echo "branch-gc command requires exactly one changed file; observed=${#changed[@]}" >&2
+              printf '%s\n' "${changed[@]}" >&2
+              exit 1
+            }
+
+            manifest="${changed[0]}"
+            case "$manifest" in
+              .github/branch-cleanup/*.txt) ;;
+              *) echo "branch-gc command requires one branch-cleanup manifest, got: $manifest" >&2; exit 1 ;;
+            esac
+
+            approved_manifest="target/branch-gc/approved-manifest.txt"
+            gh api               -H "Accept: application/vnd.github.raw+json"               "repos/$GH_REPO/contents/$manifest?ref=$approved_sha" > "$approved_manifest"
+            [[ -s "$approved_manifest" ]] || { echo "approved manifest is empty" >&2; exit 1; }
+            printf '%s\n' "$approved_manifest" > target/branch-gc/manifests.txt
+            printf 'mode=admin_issue_comment\npr=%s\nadmin=%s\napproved_sha=%s\nmanifest=%s\n'               "$PR_NUMBER" "$COMMENTER" "$approved_sha" "$manifest" > target/branch-gc/approval.txt
+          fi
+
+          cat target/branch-gc/approval.txt
           cat target/branch-gc/manifests.txt
 
       - name: Delete only literal vetted refs

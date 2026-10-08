@@ -100,11 +100,21 @@ on:
         self.assertIn("event=pull_request", calls[0])
 
 
-    def test_branch_gc_is_manual_only(self) -> None:
+    def test_branch_gc_requires_manual_or_admin_exact_head_command(self) -> None:
         workflow = Path(".github/workflows/branch-gc.yml").read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("issue_comment:", workflow)
         self.assertNotIn("  pull_request:", workflow)
+        self.assertNotIn("  pull_request_target:", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
+        self.assertIn('/branch-gc <40-char-pr-head-sha>', workflow)
+        self.assertIn('collaborators/$COMMENTER/permission', workflow)
+        self.assertIn('[[ "$permission" == "admin" ]]', workflow)
+        self.assertIn('"$pr_draft" == "true"', workflow)
+        self.assertIn('"$pr_head_repo" == "$GH_REPO"', workflow)
+        self.assertIn('"$pr_head_sha" == "$approved_sha"', workflow)
+        self.assertIn('[[ "${#changed[@]}" -eq 1 ]]', workflow)
+        self.assertIn('application/vnd.github.raw+json', workflow)
 
     def test_branch_gc_preserves_open_stacked_pr_bases(self) -> None:
         workflow = Path(".github/workflows/branch-gc.yml").read_text(encoding="utf-8")
