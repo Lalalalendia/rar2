@@ -30,6 +30,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut family_counts = BTreeMap::<String, usize>::new();
     let mut text_size_counts = BTreeMap::<u32, usize>::new();
     let mut alignment_counts = BTreeMap::<String, usize>::new();
+    let mut bold_counts = BTreeMap::<String, usize>::new();
+    let mut italic_counts = BTreeMap::<String, usize>::new();
+    let mut fragments_with_bold_true = 0usize;
+    let mut fragments_with_italic_true = 0usize;
+    let mut mixed_size_fragments = 0usize;
+    let mut styled_scalar_count = 0u64;
+    let mut distinct_color_count_by_fragment = BTreeMap::<usize, usize>::new();
     let mut page_fragment_ranges = Vec::<(String, u32, u32)>::new();
 
     for node in plan.nodes {
@@ -59,9 +66,47 @@ fn main() -> Result<(), Box<dyn Error>> {
             backend_font_resource_present += 1;
         }
 
+        let mut fragment_sizes = std::collections::BTreeSet::new();
+        let mut fragment_colors = std::collections::BTreeSet::new();
+        let mut fragment_bold = false;
+        let mut fragment_italic = false;
         for run in &fragment.typography {
             bump(&mut text_size_counts, run.text_size_emu);
+            fragment_sizes.insert(run.text_size_emu);
+            if let Some(color) = run.color_rgb {
+                fragment_colors.insert(color);
+            }
+            let bold_key = match run.bold {
+                Some(true) => {
+                    fragment_bold = true;
+                    styled_scalar_count += u64::from(run.scalar_end.saturating_sub(run.scalar_start));
+                    "true"
+                }
+                Some(false) => "false",
+                None => "none",
+            };
+            let italic_key = match run.italic {
+                Some(true) => {
+                    fragment_italic = true;
+                    styled_scalar_count += u64::from(run.scalar_end.saturating_sub(run.scalar_start));
+                    "true"
+                }
+                Some(false) => "false",
+                None => "none",
+            };
+            bump(&mut bold_counts, bold_key.to_owned());
+            bump(&mut italic_counts, italic_key.to_owned());
         }
+        if fragment_bold {
+            fragments_with_bold_true += 1;
+        }
+        if fragment_italic {
+            fragments_with_italic_true += 1;
+        }
+        if fragment_sizes.len() > 1 {
+            mixed_size_fragments += 1;
+        }
+        bump(&mut distinct_color_count_by_fragment, fragment_colors.len());
 
         for run in &fragment.paragraph_alignments {
             let key = match run.alignment {
@@ -101,7 +146,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     eprintln!(
-        "TEXT_INTERNAL_04_CENSUS page=1 visible_fragments={} family_authoritative={} family_unresolved={} backend_font_resource_present={} family_counts={:?} text_size_counts={:?} alignment_counts={:?} line_spacing_counts={:?} line_spacing_source_values={:?}",
+        "TEXT_INTERNAL_04_CENSUS page=1 visible_fragments={} family_authoritative={} family_unresolved={} backend_font_resource_present={} family_counts={:?} text_size_counts={:?} alignment_counts={:?} line_spacing_counts={:?} line_spacing_source_values={:?} bold_counts={:?} italic_counts={:?} fragments_with_bold_true={} fragments_with_italic_true={} mixed_size_fragments={} styled_scalar_count={} distinct_color_count_by_fragment={:?}",
         visible_fragments,
         family_authoritative,
         family_unresolved,
@@ -111,6 +156,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         alignment_counts,
         line_spacing_counts,
         line_spacing_source_values,
+        bold_counts,
+        italic_counts,
+        fragments_with_bold_true,
+        fragments_with_italic_true,
+        mixed_size_fragments,
+        styled_scalar_count,
+        distinct_color_count_by_fragment,
     );
 
     Ok(())
