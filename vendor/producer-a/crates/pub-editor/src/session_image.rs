@@ -6,9 +6,8 @@
 
 use super::*;
 use pub_editor_image_core::{
-    apply_image_crop_forward_v1, apply_image_crop_inverse_v1,
-    apply_image_replacement_forward_v1, apply_image_replacement_inverse_v1,
-    effective_image_crop_state_v1,
+    apply_image_crop_forward_v1, apply_image_crop_inverse_v1, apply_image_replacement_forward_v1,
+    apply_image_replacement_inverse_v1, effective_image_crop_state_v1,
 };
 
 impl EditorSession {
