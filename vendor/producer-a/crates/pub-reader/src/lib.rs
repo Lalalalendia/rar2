@@ -181,10 +181,9 @@ use pub_escher::{
     PublisherFieldRecord, SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
 };
 use pub_model::{
-    Affine2D, AuthorityClass, ByteRange, CanonicalId, Decimal, Document, DocumentId, LengthEmu,
-    Node, NodeHeader, NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest,
-    Size2D, SourceDerivedIdInput, SourceDescriptor, SourceGraph, SourceRef, SourceRole, Story,
-    StoryId, derive_source_canonical_id,
+    Affine2D, AuthorityClass, ByteRange, Decimal, Document, LengthEmu, Node, NodeHeader, NodeId,
+    NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D, SourceDescriptor,
+    SourceGraph, SourceRef, SourceRole, Story, StoryId,
 };
 use pub_quill::{
     QuillEffectiveBoolean, QuillMcldVerticalAlignment, QuillParagraphAlignment,
