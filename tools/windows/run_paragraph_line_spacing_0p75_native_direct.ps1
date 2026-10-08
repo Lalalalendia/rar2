@@ -1,7 +1,8 @@
 param(
     [string]$FixtureRoot = "",
     [string]$OutputRoot = "",
-    [string]$ReturnZip = ""
+    [string]$ReturnZip = "",
+    [switch]$MixedSize
 )
 
 Set-StrictMode -Version Latest
@@ -31,11 +32,11 @@ $ExpectedPublisherExeSha256 = "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb
 
 $PinnedFiles = @(
     [pscustomobject]@{ Path = $Packet; Sha = "2f5e641a3c18215db7e2bd4df303cd55ddcf1f46" }
-    [pscustomobject]@{ Path = $Operation; Sha = "7271770db9f54757a5900a5cd7e5884933d319a0" }
+    [pscustomobject]@{ Path = $Operation; Sha = "43096538f0705e8bbd5334f68c5a6bf013500392" }
     [pscustomobject]@{ Path = $Prepare; Sha = "0848e8e147dff5dab68065c37d2d73f72f09eb45" }
     [pscustomobject]@{ Path = $Finalize; Sha = "2a97d6f2c8be1265010a744c015ce8d288eb7e75" }
     [pscustomobject]@{ Path = $Runtime; Sha = "fed4c890a34d39401d3b5848cc16d1087f862a27" }
-    [pscustomobject]@{ Path = $Analyzer; Sha = "c3122c9201c79922b797cb4bcaf46de7ce6f5547" }
+    [pscustomobject]@{ Path = $Analyzer; Sha = "f72a9232b72252b3b000c30ae9741e35feb84b12" }
     [pscustomobject]@{ Path = $StructuralBase; Sha = "1d12b34de10ad74ea49a4fa2cabbe01b44198331" }
     [pscustomobject]@{ Path = $ProbeManifest; Sha = "40d209d6e193d477635d72fb34e7bd9f640d7270" }
     [pscustomobject]@{ Path = $ProbeLock; Sha = "828e76d2f85c1238ced8081796a58c309d5fbade" }
@@ -180,7 +181,9 @@ try {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Prepare -PacketPath $Packet -OutputRoot $OutputRoot
     Assert-LastExit "prepare_native_run.ps1"
 
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Operation -PacketPath $Packet -OutputRoot $OutputRoot
+    $operationArgs = @("-PacketPath", $Packet, "-OutputRoot", $OutputRoot)
+    if ($MixedSize) { $operationArgs += "-MixedSize" }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Operation @operationArgs
     Assert-LastExit "paragraph_line_spacing_0p75_native_01.ps1"
 
     $cargo = Get-Command cargo -ErrorAction Stop
@@ -217,6 +220,10 @@ try {
 
     $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
     if (@($result.arms).Count -ne 5) { throw "Expected exactly 5 native arms." }
+    $expectedProfile = $(if ($MixedSize) { "mixed-12-18-12" } else { "uniform-12" })
+    if ([string]$result.composition_profile -ne $expectedProfile) {
+        throw "Native 0.75 composition profile mismatch"
+    }
     foreach ($arm in @($result.arms)) {
         if ($null -eq $arm.line_geometry_fresh_reopen -or [int]$arm.line_geometry_fresh_reopen.line_count -lt 1) {
             throw "Fresh-reopen line geometry missing for arm $($arm.arm)"
@@ -233,6 +240,13 @@ try {
     $structural = Get-Content -LiteralPath $structuralPath -Raw | ConvertFrom-Json
     Write-Host "Return ZIP SHA-256: $zipSha"
     Write-Host "Native 114300 authority candidate: $($structural.native_114300_authority_candidate)"
+    if ($MixedSize) {
+        if ($null -eq $structural.mixed_size_research -or
+            [bool]$structural.mixed_size_research.mixed_size_product_authority_granted) {
+            throw "Mixed-size research sidecar missing or improperly grants product authority"
+        }
+        Write-Host "Mixed 12/18/12 paragraph geometric witness: source-safe only; no product authority."
+    }
     Write-Host "Attach this ZIP directly to the Chaptera/ChatGPT project; do not commit the private PUB outputs."
     Write-Host ""
     Get-Content -LiteralPath $structuralPath -Raw
