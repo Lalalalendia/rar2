@@ -389,6 +389,44 @@ jobs:
             -ManifestPath $env:PUB_RE_NATIVE_MANIFEST `
             -OutputRoot $env:PUB_RE_NATIVE_OUTPUT
 
+      - name: Validate failed native stage receipt
+        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $stage = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence\native-stage-receipt.json"
+          if (-not (Test-Path -LiteralPath $stage -PathType Leaf)) {
+            Write-Host "No native stage receipt was produced before failure."
+            exit 0
+          }
+
+          $text = Get-Content -LiteralPath $stage -Raw
+          if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+            throw "native stage receipt contains an absolute filesystem path"
+          }
+
+          $receipt = $text | ConvertFrom-Json
+          if ([string]$receipt.schema -ne "chaptera.pub-re-native-stage.v1") {
+            throw "unexpected native stage receipt schema"
+          }
+          if ([string]::IsNullOrWhiteSpace([string]$receipt.experiment_id)) {
+            throw "native stage receipt is missing experiment_id"
+          }
+          if ([string]::IsNullOrWhiteSpace([string]$receipt.stage)) {
+            throw "native stage receipt is missing stage"
+          }
+
+      - name: Upload failed native stage receipt
+        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-failure-stage
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\native-stage-receipt.json
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Join native output to CFB and OfficeArt provenance
         if: ${{ needs.gate.outputs.command_mode != 'research_0p75' }}
         shell: powershell
@@ -465,6 +503,48 @@ jobs:
           if (-not $?) {
             throw "bounded 0.75 paragraph research failed"
           }
+
+      - name: Stage partial source-safe 0.75 receipt after failure
+        if: ${{ failure() && needs.gate.outputs.command_mode == 'research_0p75' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+
+          $analysis = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis"
+          $candidates = @(
+            (Join-Path $analysis "paragraph-line-spacing-0p75-native-01.json"),
+            (Join-Path $analysis "paragraph-line-spacing-0p75-structural.json")
+          )
+
+          $copied = 0
+          foreach ($path in $candidates) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              continue
+            }
+
+            $text = Get-Content -LiteralPath $path -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "partial 0.75 receipt contains an absolute filesystem path"
+            }
+            [void]($text | ConvertFrom-Json)
+            Copy-Item -LiteralPath $path -Destination $evidence -Force
+            $copied += 1
+          }
+
+          Write-Host ("PUB_RE_0P75_PARTIAL_EVIDENCE copied={0}" -f $copied)
+
+      - name: Upload partial source-safe 0.75 receipt after failure
+        if: ${{ failure() && needs.gate.outputs.command_mode == 'research_0p75' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-paragraph-line-spacing-0p75-partial-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Stage source-safe 0.75 research receipts
         if: ${{ needs.gate.outputs.command_mode == 'research_0p75' }}
