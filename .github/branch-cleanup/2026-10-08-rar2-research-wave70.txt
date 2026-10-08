@@ -1,0 +1,8 @@
+# Research Wave 70 — assimilated Batch01 diagnostic stages
+research/batch01-worker-phase-progress-01 bd627411f7d4fdc89e311ad3087823dd26f42ea3
+research/batch01-worker-phase-trace-01 8eb65f42b869a7a5e4d2a22d3dc8be5ab83a3de7
+research/batch01-page-role-census-451 a20a1128d7e311d22a7ef75a4d0a6f35aacec355
+research/batch01-033-cross-page-matrix-451 e28b4810e9d6a89db40581b4ccf85c2ba680a54f
+research/mature-033-identity-join-1061 c76db76d55bd8d4cc128cdb1584e8e32142a7727
+research/mature-033-master-applied-overlay-1061 7e158379740b58215b81a6691638edd9e7154b3b
+ops/branch-gc-20261008-research-wave69 da4576d057bb80bfdf2d41f6871b77b25a312b7d
