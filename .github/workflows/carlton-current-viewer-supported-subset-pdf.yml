@@ -13,6 +13,7 @@ on:
       - "crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml"
       - "crates/chaptera-desktop-shaped-flow-runtime/src/bin/current_viewer_fixed_pdf_input.rs"
       - "crates/chaptera-viewer-render-plan/**"
+      - "!crates/chaptera-viewer-render-plan/src/shared_layout_diagnostics.rs"
       - "apps/chaptera-desktop/src/acceptance.rs"
       - "tools/acquire_carlton_march_pair.py"
       - "tools/pdf_reference_diff_v1.py"
