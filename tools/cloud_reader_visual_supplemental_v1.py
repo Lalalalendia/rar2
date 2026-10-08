@@ -32,6 +32,83 @@ def checked_sha256_digest(value: object, source: str) -> str:
     return value
 
 
+def checked_capture_number(value: object, source: str, *, positive: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"invalid numeric screenshot capture provenance for {source}")
+    number = float(value)
+    if not (-1.0e15 < number < 1.0e15):
+        raise ValueError(f"out-of-range screenshot capture provenance for {source}")
+    if positive and number <= 0:
+        raise ValueError(f"non-positive screenshot capture provenance for {source}")
+    return number
+
+
+def checked_capture_state(value: object) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError("missing screenshot capture provenance")
+    expected = {
+        "device_pixel_ratio", "scroll_x", "scroll_y", "inner_width", "inner_height",
+        "visual_viewport", "svg_rect", "view_box", "screen_ctm",
+    }
+    if set(value) != expected:
+        raise ValueError("unexpected screenshot capture provenance fields")
+
+    checked_capture_number(value["device_pixel_ratio"], "device_pixel_ratio", positive=True)
+    checked_capture_number(value["scroll_x"], "scroll_x")
+    checked_capture_number(value["scroll_y"], "scroll_y")
+    checked_capture_number(value["inner_width"], "inner_width", positive=True)
+    checked_capture_number(value["inner_height"], "inner_height", positive=True)
+
+    visual = value["visual_viewport"]
+    if visual is not None:
+        if not isinstance(visual, dict) or set(visual) != {
+            "width", "height", "scale", "offset_left", "offset_top", "page_left", "page_top"
+        }:
+            raise ValueError("invalid visual viewport provenance")
+        checked_capture_number(visual["width"], "visual_viewport.width", positive=True)
+        checked_capture_number(visual["height"], "visual_viewport.height", positive=True)
+        checked_capture_number(visual["scale"], "visual_viewport.scale", positive=True)
+        for key in ("offset_left", "offset_top", "page_left", "page_top"):
+            checked_capture_number(visual[key], f"visual_viewport.{key}")
+
+    rect = value["svg_rect"]
+    if not isinstance(rect, dict) or set(rect) != {
+        "x", "y", "width", "height", "top", "right", "bottom", "left"
+    }:
+        raise ValueError("invalid SVG client rect provenance")
+    for key in ("x", "y", "top", "right", "bottom", "left"):
+        checked_capture_number(rect[key], f"svg_rect.{key}")
+    checked_capture_number(rect["width"], "svg_rect.width", positive=True)
+    checked_capture_number(rect["height"], "svg_rect.height", positive=True)
+
+    view_box = value["view_box"]
+    if view_box is None or not isinstance(view_box, dict) or set(view_box) != {
+        "x", "y", "width", "height"
+    }:
+        raise ValueError("missing SVG viewBox provenance")
+    checked_capture_number(view_box["x"], "view_box.x")
+    checked_capture_number(view_box["y"], "view_box.y")
+    checked_capture_number(view_box["width"], "view_box.width", positive=True)
+    checked_capture_number(view_box["height"], "view_box.height", positive=True)
+
+    ctm = value["screen_ctm"]
+    if ctm is None or not isinstance(ctm, dict) or set(ctm) != {"a", "b", "c", "d", "e", "f"}:
+        raise ValueError("missing SVG screen CTM provenance")
+    for key in ("a", "b", "c", "d", "e", "f"):
+        checked_capture_number(ctm[key], f"screen_ctm.{key}")
+    return value
+
+
+def checked_png_dimensions(value: object) -> dict:
+    if not isinstance(value, dict) or set(value) != {"width", "height"}:
+        raise ValueError("invalid screenshot PNG dimensions")
+    if type(value["width"]) is not int or type(value["height"]) is not int:
+        raise ValueError("screenshot PNG dimensions must be integers")
+    if value["width"] <= 0 or value["height"] <= 0:
+        raise ValueError("screenshot PNG dimensions must be positive")
+    return value
+
+
 def hosted_rows(pairs_csv: Path) -> list[dict[str, str]]:
     rows = list(csv.DictReader(pairs_csv.open(newline="", encoding="utf-8-sig")))
     hosted = [row for row in rows if row["family"] != EXTERNAL_FAMILY]
@@ -158,6 +235,9 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
             candidate_raster_sha256 = sha256(png)
             if candidate_raster_sha256 != checked_sha256_digest(shot["sha256"], "candidate PNG"):
                 raise ValueError(f"candidate PNG identity drift: {shot['filename']}")
+            capture_state_before = checked_capture_state(shot.get("capture_state_before"))
+            capture_state_after = checked_capture_state(shot.get("capture_state_after"))
+            png_dimensions = checked_png_dimensions(shot.get("png_dimensions"))
             candidate = image_grid(png)
             reference_bytes = reference_grid(pair["pages"][index])
             metrics = compare_grid(candidate, reference_bytes)
@@ -174,6 +254,10 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
                 "warning_state": pair.get("warning_state"),
                 "page": index + 1,
                 "candidate_raster_sha256": candidate_raster_sha256,
+                "candidate_png_dimensions": png_dimensions,
+                "capture_state_before": capture_state_before,
+                "capture_state_after": capture_state_after,
+                "capture_state_changed": capture_state_before != capture_state_after,
                 **metrics,
                 "reference_media_extent_delta": {
                     "width_pt": round(width_pt - ref_page["media_width_pt"], 6),
@@ -204,6 +288,21 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
         "external_reference_page_count": sum(int(pair["reference_pages"]) for pair in external_reference_pairs),
         "compared_pair_count": len(pair_rows),
         "compared_page_count": len(page_rows),
+        "capture_state_changed_page_count": sum(
+            row["capture_state_changed"] for row in page_rows
+        ),
+        "capture_state_changed_pages": [
+            {
+                "fixture": row["fixture"],
+                "page": row["page"],
+                "candidate_raster_sha256": row["candidate_raster_sha256"],
+                "candidate_png_dimensions": row["candidate_png_dimensions"],
+                "capture_state_before": row["capture_state_before"],
+                "capture_state_after": row["capture_state_after"],
+            }
+            for row in page_rows
+            if row["capture_state_changed"]
+        ],
         "unavailable_pair_count": len(unavailable),
         "corpus_mean_changed_cell_fraction": (
             sum(fractions) / len(fractions) if fractions else None
@@ -339,6 +438,8 @@ def summarize(pairs_csv: Path, browser_receipt: Path, reference_path: Path, out:
             "worker_and_raster_sha256_are_observation_identities_only": True,
             "worker_receipt_sha256_includes_volatile_timings": True,
             "scene_sha256_excludes_worker_timings": True,
+            "screenshot_capture_provenance_is_numeric_source_safe": True,
+            "screenshot_capture_provenance_does_not_change_rendering": True,
         },
         "pairs": results,
         "unsupported_pairs": unsupported,
