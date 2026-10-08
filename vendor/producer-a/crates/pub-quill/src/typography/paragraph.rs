@@ -4,6 +4,7 @@
 //! their run-building laws. Shared FDPP/STSH framing, paragraph-range
 //! materialization and effective font/size/color inheritance remain in the
 //! parent typography module.
+//! CI leaf-control: comment-only paragraph semantics steady-state proof.
 
 use super::{
     PARAGRAPH_FLOW_NATIVE_ON_VALUE, PARAGRAPH_LINE_SPACING_ID,
