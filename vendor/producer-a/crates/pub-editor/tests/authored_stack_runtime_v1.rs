@@ -413,6 +413,68 @@ fn page_reorder_is_one_v0_23_history_unit_with_service_slot_preserved_and_exact_
 }
 
 #[test]
+fn page_reorder_reaches_physical_idml_and_odg_page_order() {
+    use std::io::{Cursor, Read};
+
+    fn stable_page_token(prefix: &str, page_id: PageId) -> String {
+        let mut out = String::from(prefix);
+        for byte in page_id.as_canonical().into_bytes() {
+            use std::fmt::Write as _;
+            write!(&mut out, "{byte:02x}").expect("hex");
+        }
+        out
+    }
+
+    let customer_a = page_id();
+    let service = service_page_id();
+    let customer_b = page_b_id();
+    let customer_c = page_c_id();
+    let admitted = vec![customer_a, customer_b, customer_c];
+    let reordered = vec![customer_c, customer_a, customer_b];
+
+    let mut session = EditorSession::new(page_order_graph()).expect("session");
+    session
+        .reorder_pages_v1(admitted, reordered)
+        .expect("reorder customer pages");
+
+    let idml = session
+        .export_editable(EditorEditableTarget::Idml, "page-order.idml")
+        .expect("IDML export");
+    let mut idml_zip = zip::ZipArchive::new(Cursor::new(idml.bytes)).expect("IDML zip");
+    let mut designmap = String::new();
+    idml_zip
+        .by_name("designmap.xml")
+        .expect("IDML designmap")
+        .read_to_string(&mut designmap)
+        .expect("read designmap");
+    let idml_tokens = [customer_c, service, customer_a, customer_b]
+        .map(|id| stable_page_token("usp", id));
+    let idml_positions = idml_tokens
+        .iter()
+        .map(|token| designmap.find(token).expect("page token in designmap"))
+        .collect::<Vec<_>>();
+    assert!(idml_positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+    let odg = session
+        .export_editable(EditorEditableTarget::Odg, "page-order.odg")
+        .expect("ODG export");
+    let mut odg_zip = zip::ZipArchive::new(Cursor::new(odg.bytes)).expect("ODG zip");
+    let mut content = String::new();
+    odg_zip
+        .by_name("content.xml")
+        .expect("ODG content")
+        .read_to_string(&mut content)
+        .expect("read ODG content");
+    let odg_tokens = [customer_c, service, customer_a, customer_b]
+        .map(|id| stable_page_token("Page_", id));
+    let odg_positions = odg_tokens
+        .iter()
+        .map(|token| content.find(token).expect("page token in ODG content"))
+        .collect::<Vec<_>>();
+    assert!(odg_positions.windows(2).all(|pair| pair[0] < pair[1]));
+}
+
+#[test]
 fn pre_v0_23_or_stale_page_reorder_project_fails_transactionally() {
     let admitted = vec![page_id(), page_b_id(), page_c_id()];
     let reordered = vec![page_c_id(), page_id(), page_b_id()];
