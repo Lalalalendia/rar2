@@ -1,0 +1,24 @@
+# 2026-10-08 — terminal evidence batch 11
+# Never merge. Exact live tips from closed-unmerged PRs with explicit terminal/superseded/falsified/measurement-only disposition.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+measure/exact06-shared-text-ink-census 82c68df56dac63423c97f7cff0d829a6a089c083 # #2154 terminal measurement; viewport approach closed
+measure/mixed-size-frame-discriminator-02 cbec120ff3d133c0de360ec63aa3ded82d9b81af # #2147 terminal measurement; discriminator falsified
+measure/2141-base-batch01-control-01 eeb67ad273029cd04ed40bf5018e94330d43d071 # #2144 exact-base control complete
+fix/mixed-size-first-physical-baseline-capacity-01 e2030c2b7a382fc5534de03d979fc65e99f34733 # #2141 terminal falsified product law
+tools/pub-re-v01-officeart-attribution ebf6980937059664d0841d2fe7c390e0357a522e # #2139 superseded by clean merged #2140 restack
+measure/06-shared-text-clip-ab-01 33290ad7ae900ba200f3164c6f058d96e6f69078 # #2136 terminal measurement; clipping falsified
+measure/06-underline-carrier-census-01 2c3799e49eb4bd1903a1b6f65802a2db4473c62c # #2133 terminal measurement; underline falsified
+validation/pub-pdf-cli-alpha-census-01 497e7d9ffda57b23b1ec046883f4ae143c7666d6 # #2132 superseded before execution by existing exact census
+measure/cloud-mixed-size-semantic-discriminator-01 d84b45c8c36b5fde02a5a69e624ac778f0949652 # #2131 terminal measurement consumed by successor
+product/cloud-reader-open-font-preview-replacements-02 d117eb2cbd2a652719f3b620e15e024b72b308c6 # #2129 terminal falsified paint-only replacement
+ops/branch-gc-20261008-pub-reader-predecessors-batch-10 837523d8b9b1bbea572c0d6d30349f251bdb6d10 # completed #2128 clean GC receipt
+validation/pub-pdf-alpha-provenance-census-01 7233fbb17df3ee55f7e2a8e1cafd49242bba0e9a # #2123 terminal census assimilated
+measure/group320-page-attribution-01 9953cb237c4fceb1886a7f8f3260fbe44d0fb283 # #2121 terminal page-attribution measurement
+ops/branch-gc-20261008-ci-reconciled-batch-10 43161e5add648694c8900b9b268ffbff1b96b0f2 # completed #2119 clean GC receipt
+measure/06-long-band-source-carrier-01 84a53b99523ec714408351da8eba40eb34bf2149 # #2117 terminal source-carrier measurement
+validation/pub-pdf-cli-publisher-oracle-post-alpha-01 248a960d52b372d919d2158c24755d8cfb9ece4a # #2116 diagnostic census complete
+measure/pub-viewer-tables-fanout-01 8e79cb47364ceae877141ed1e984a2b95c3ede8f # #2115 sacrificial CI-only control complete
+measure/cloud-preview-pinned-face-control-01 3a81bd36fb54527cf1bca8751b4bb667ecced888 # #2113 current-main measurement control assimilated
+validation/pub-pdf-cli-publisher-oracle-followup-01 7074b21809ae2fd93276973a9891d8388dc5c96f # #2112 diagnostic rerun complete
+reader/cloud-preview-pinned-fallback-face-ab-01 f0132af8d26fb31515a92c57abd3e66c0aadd6a4 # #2105 terminal falsified cross-corpus law
