@@ -1,4 +1,5 @@
 //! Bounded Quill text-color authority.
+//! CI leaf-control: comment-only steady-state color-owner proof.
 //!
 //! This owner contains PL color-reference parsing, direct/scheme color
 //! resolution, effective explicit/inherited color selection, and nested color
