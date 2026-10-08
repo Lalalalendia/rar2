@@ -34,7 +34,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 mod mixed_size_layout;
-mod shared_layout_diagnostics;
+pub mod shared_layout_diagnostics;
 mod story_slice_layout;
 #[cfg(test)]
 use mixed_size_layout::{
@@ -42,12 +42,11 @@ use mixed_size_layout::{
     shape_mixed_line_candidate_v1,
 };
 use mixed_size_layout::{
-    MixedLineCandidateV1, admitted_font_size_emu, evaluate_mixed_size_text_layout_v1,
-    resolve_mixed_size_text_layout_v1, scalar_text_range_v1,
+    MixedLineCandidateV1, admitted_font_size_emu, resolve_mixed_size_text_layout_v1,
+    scalar_text_range_v1,
 };
 pub use shared_layout_diagnostics::{
-    MixedSizeLayoutCapacityDiagnosticV1, SharedLayoutIncompleteCauseV1,
-    classify_mixed_size_layout_capacity_v1, classify_shared_layout_incomplete_cause_v1,
+    SharedLayoutIncompleteCauseV1, classify_shared_layout_incomplete_cause_v1,
 };
 use story_slice_layout::{
     admitted_layout_frame_ordinal, exact_direct_story_slice_scalar_base_v1,
