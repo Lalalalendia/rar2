@@ -1,0 +1,4 @@
+# Measure Wave 64 — completed Desktop lint delta controls
+measure/desktop-lint-delta-111 27391113d43eead503442fa1908e6593126d702c
+measure/desktop-lint-delta-111-replay 50eb8c99b8cc15804d0cecbf7dbd19640f3483a9
+ops/branch-gc-20261008-measure-wave63 a7c9c9e67f55fa1d07bd32a5b2cc29352ca31346
