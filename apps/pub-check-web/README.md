@@ -54,6 +54,19 @@ CHECKER_ADMIN_TOKEN=<same high-entropy value configured on the landing>
 The fine-grained token stored on Vercel should have the minimum repository
 permission required to dispatch Actions workflows.
 
+**Production dispatch is pinned to `Lalalalendia/rar2` / `main`.**
+A stale or other `GITHUB_CHECKER_REPOSITORY` / `GITHUB_CHECKER_REF`
+override now fails closed without sending a job. Replace any copied
+`HeisLuka/rar` environment value before deployment; updating a checked-in
+example does **not** update Vercel project settings.
+
+GitHub 4xx/5xx, timeout, network failure or absent dispatch configuration
+must produce an immediate **transport** failure record (not `queued`
+indefinitely and not an `unsupported` PUB verdict).
+The public status token continues to expose that terminal failure.
+The Cloud Reader origin is fixed in the GitHub worker, not read from
+Vercel environment variables.
+
 If `GITHUB_CHECKER_TOKEN` is absent, an optional generic checker can be used.
 When `CHECKER_WEBHOOK_URL` is configured, the landing sends:
 
@@ -113,7 +126,7 @@ service adapter which follows the same canonical result contract.
 cd apps/pub-check-web
 npm install
 npm run typecheck
-node --experimental-strip-types --test tests/canonical-report.test.mjs
+node --experimental-strip-types --test tests/*.test.mjs
 
 cd ../..
 python3 -m unittest discover -s tools/pub-check-cloud-bridge -p "test_*.py" -v
