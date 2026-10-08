@@ -619,6 +619,95 @@ mod tests {
     }
 
     #[test]
+    fn mixed_size_terminal_mandatory_break_completes_without_relayouting_visible_prefix() {
+        let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let fingerprint = font_fingerprint_sha256(bytes);
+        let default_font_size_emu = 12 * 12_700;
+        let default_line_height_emu = 30 * 12_700;
+        let font = ExplicitRenderTextFontResourceV1 {
+            resource_id: "test:noto-serif",
+            expected_sha256: &fingerprint,
+            face_index: 0,
+            default_font_size_emu,
+            default_line_height_emu,
+            bytes,
+        };
+        let fragment = mixed_fragment("aa\r\r");
+        let node_id = NodeId::from_canonical(pub_model::CanonicalId::from_bytes([4; 16]));
+        let first_physical_extent_emu = compatible_natural_line_height_emu_v1(
+            bytes,
+            0,
+            LengthEmu::new(default_font_size_emu),
+        )
+        .map(LengthEmu::get)
+        .expect("test font physical extent")
+        .min(default_line_height_emu);
+        assert!(first_physical_extent_emu < default_line_height_emu);
+
+        let bounds = RectEmu::new(
+            LengthEmu::ZERO,
+            LengthEmu::ZERO,
+            LengthEmu::new(10_000_000),
+            LengthEmu::new(
+                first_physical_extent_emu
+                    .checked_add(default_line_height_emu)
+                    .expect("bounded terminal completion height"),
+            ),
+        );
+
+        let baseline =
+            evaluate_mixed_size_text_layout_v1(&fragment, &font, node_id, &bounds, &fingerprint)
+                .expect("baseline mixed-size evaluation");
+        assert_eq!(baseline.cursor, 3);
+        assert_eq!(baseline.lines.len(), 1);
+        assert_eq!(baseline.lines[0].text, "aa");
+        let terminal = baseline
+            .terminal_mandatory_stop
+            .as_ref()
+            .expect("terminal paragraph break is the only rejected remainder");
+        assert_eq!(terminal.scalar_end, baseline.cursor);
+        assert_eq!(terminal.consumed_scalar_end, fragment.scalar_end);
+        assert!(terminal.text.is_empty());
+        assert!(terminal.spans.is_empty());
+        assert!(
+            baseline
+                .used_height_emu
+                .checked_add(terminal.line_height_emu)
+                .is_some_and(|height| height > bounds.height.get()),
+            "legacy all-baseline accounting must reject the terminal line"
+        );
+        assert!(
+            frozen_mixed_prefix_height_emu_v1(&baseline.lines, &font)
+                .and_then(|height| height.checked_add(terminal.line_height_emu))
+                .is_some_and(|height| height <= bounds.height.get()),
+            "frozen visible prefix plus terminal baseline must fit"
+        );
+
+        let resolved = resolve_mixed_size_text_layout_v1(
+            &fragment,
+            &font,
+            node_id,
+            &bounds,
+            &fingerprint,
+            None,
+        );
+        assert!(matches!(
+            resolved.disposition,
+            RenderTextLayoutDispositionV1::SharedResolved { .. }
+        ));
+        assert_eq!(resolved.lines.len(), 2);
+        assert_eq!(resolved.lines[0].text, "aa");
+        assert_eq!(resolved.lines[0].scalar_start, 0);
+        assert_eq!(resolved.lines[0].scalar_end, 2);
+        assert_eq!(resolved.lines[0].consumed_scalar_end, 3);
+        assert!(resolved.lines[1].text.is_empty());
+        assert!(resolved.lines[1].spans.is_empty());
+        assert_eq!(resolved.lines[1].scalar_start, 3);
+        assert_eq!(resolved.lines[1].scalar_end, 3);
+        assert_eq!(resolved.lines[1].consumed_scalar_end, 4);
+    }
+
+    #[test]
     fn mixed_size_partial_layout_stays_fail_closed_after_visible_height_exhaustion() {
         let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
         let fingerprint = font_fingerprint_sha256(bytes);
