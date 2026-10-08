@@ -229,10 +229,18 @@ try {
       };
       const paintBoundsForNode = (node) => {
         const semantic = node.bounds;
-        if (node.kind === "text_frame") return node.text_bounds ?? semantic;
-        if (node.kind === "picture_frame") return semantic;
-
         const boxes = [];
+
+        // Content paint is only one layer of renderNode(). Text is clipped to
+        // text_bounds, pictures to the fixed frame, but both may also carry the
+        // ordinary shape fill/stroke painted earlier in renderNode().
+        if (node.kind === "text_frame" && node.text) {
+          boxes.push(node.text_bounds ?? semantic);
+        }
+        if (node.kind === "picture_frame" && node.resource_id) {
+          boxes.push(semantic);
+        }
+
         if (Array.isArray(node.paint?.fill_rgb)) boxes.push(semantic);
         if (node.table) boxes.push(semantic);
 
