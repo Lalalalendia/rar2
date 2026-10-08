@@ -324,7 +324,7 @@ function Add-ShapeInventoryRecursive {
         [Parameter(Mandatory = $true)]$Shape,
         [Parameter(Mandatory = $true)][int]$PageId,
         [Parameter(Mandatory = $true)][string]$TraversalPath,
-        [Parameter(Mandatory = $true)][System.Collections.ArrayList]$Output
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$Output
     )
 
     [void]$Output.Add((Get-ShapeSnapshot -Shape $Shape -PageId $PageId -TraversalPath $TraversalPath))
@@ -384,7 +384,7 @@ function Add-TargetMatchesRecursive {
         [Parameter(Mandatory = $true)][int]$PageId,
         [Parameter(Mandatory = $true)][int]$WantedShapeId,
         [Parameter(Mandatory = $true)][string]$TraversalPath,
-        [Parameter(Mandatory = $true)][System.Collections.ArrayList]$Matches
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$Matches
     )
 
     $shapeId = $null
