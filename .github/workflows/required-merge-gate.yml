@@ -1,0 +1,43 @@
+name: PR merge authority
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  required-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 115
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Test fail-closed merge-gate contracts
+        run: python -m unittest tools.ci.test_required_merge_gate
+      - name: Wait for every applicable exact-head PR workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          PR_ACTION: ${{ github.event.action }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python tools/ci/required_merge_gate.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
+            --head-sha "$PR_HEAD_SHA" \
+            --head-branch "$PR_HEAD_BRANCH" \
+            --base-sha "$PR_BASE_SHA" \
+            --base-branch "$PR_BASE_BRANCH" \
+            --action "$PR_ACTION"
