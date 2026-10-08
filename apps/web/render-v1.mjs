@@ -1,3 +1,4 @@
+// CI routing control for merged #2268: web-asset bytes only, unchanged behavior.
 const FORBIDDEN_SOURCE_KEYS = new Set([
   "raw_pub_bytes", "raw_bytes", "source_path", "filesystem_path",
   "cfb_path", "stream_path", "stream_name", "parser_record",
