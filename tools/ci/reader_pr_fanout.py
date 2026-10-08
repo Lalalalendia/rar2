@@ -504,6 +504,9 @@ SHARED_DESKTOP_FILES = {
     # Selection keyboard shell has its own Windows GUI owner and is also
     # covered by TextBox Restore; do not add the broad Editor package gate.
     "apps/chaptera-desktop/src/selection_keyboard_shell.rs",
+    # TextBox creation shell already has dedicated Linux contract + Windows GUI
+    # acceptance; avoid paying the broad Editor package gate for this exact leaf.
+    "apps/chaptera-desktop/src/text_box_creation_shell.rs",
 }
 
 
