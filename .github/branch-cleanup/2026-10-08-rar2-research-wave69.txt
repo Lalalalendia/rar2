@@ -1,0 +1,5 @@
+# Research Wave 69 — terminal legacy evidence refs
+research/legacy-ole-viewer-outcome-1050-01 e899f0e36e90aba970de19a2cbfcd8fc07dd70d7
+research/legacy-ole-wmf-special-object-census-01 4f0213f6a2d0299cc4ec05a46f1b44a95c8724cb
+research/legacy22-geometry-profile-1050-01 256de28b54950ec3fd600a527d0d6cb93005e6c2
+ops/branch-gc-20261008-research-wave68 b3e540ba9816a45d21c1b8418e96335acb688a68
