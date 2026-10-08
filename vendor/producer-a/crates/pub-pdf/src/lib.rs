@@ -1324,6 +1324,85 @@ mod tests {
     }
 
     #[test]
+    fn table_fill_and_border_paint_at_existing_owner_slot() {
+        let mut resources = resources();
+        resources.table_paints.push(FixedTablePaintResource {
+            node_id: node_id(12),
+            fills: vec![FixedTableFill {
+                bounds: RectEmu::new(
+                    LengthEmu::new(254_000),
+                    LengthEmu::new(381_000),
+                    LengthEmu::new(127_000),
+                    LengthEmu::new(127_000),
+                ),
+                rgb: [0, 255, 0],
+            }],
+            borders: vec![FixedTableBorder {
+                x1_emu: 254_000,
+                y1_emu: 635_000,
+                x2_emu: 508_000,
+                y2_emu: 635_000,
+                rgb: [255, 0, 255],
+                width_emu: 12_700,
+            }],
+        });
+
+        let output = render_bounded_pdf(
+            &scene(),
+            &resources,
+            &PdfTargetProfile::basic_geometry_v0_1(),
+        )
+        .unwrap();
+        let text = String::from_utf8_lossy(&output.bytes);
+
+        assert!(text.contains("0 1 0 rg\n20 30 10 10 re\nf"));
+        assert!(text.contains("1 0 1 rg\n20 49.5 20 1 re\nf"));
+        assert!(output.report.nodes.iter().any(|node| {
+            node.origin == node_id(12)
+                && node.disposition == PdfRenderDisposition::Painted
+                && node.code == "pdf.node.painted_table"
+        }));
+        assert!(!output.report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.origin == node_id(12).into_canonical()
+                && diagnostic.code == "pdf.node.resource_missing"
+        }));
+    }
+
+    #[test]
+    fn invalid_table_border_fails_closed_without_painting_owner() {
+        let mut resources = resources();
+        resources.table_paints.push(FixedTablePaintResource {
+            node_id: node_id(12),
+            fills: Vec::new(),
+            borders: vec![FixedTableBorder {
+                x1_emu: 254_000,
+                y1_emu: 635_000,
+                x2_emu: 508_000,
+                y2_emu: 762_000,
+                rgb: [255, 0, 255],
+                width_emu: 12_700,
+            }],
+        });
+
+        let output = render_bounded_pdf(
+            &scene(),
+            &resources,
+            &PdfTargetProfile::basic_geometry_v0_1(),
+        )
+        .unwrap();
+
+        assert!(output.report.nodes.iter().any(|node| {
+            node.origin == node_id(12)
+                && node.disposition == PdfRenderDisposition::Unsupported
+                && node.code == "pdf.node.resource_unsupported"
+        }));
+        assert!(output.report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.origin == node_id(12).into_canonical()
+                && diagnostic.code == "pdf.table.border_geometry_invalid"
+        }));
+    }
+
+    #[test]
     fn exact_png_is_one_reused_xobject_for_two_node_uses() {
         let png = vec![
             0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
