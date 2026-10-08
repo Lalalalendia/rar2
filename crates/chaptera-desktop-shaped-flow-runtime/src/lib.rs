@@ -546,7 +546,11 @@ mod tests {
         let authoring = bounded_authoring_slice_for_pages_v1(&editor, &admitted)
             .expect("fixed-PDF page projection");
         assert_eq!(
-            authoring.pages.iter().map(|page| page.id).collect::<Vec<_>>(),
+            authoring
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
             reordered
         );
     }
