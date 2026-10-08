@@ -96,6 +96,8 @@ pub struct ReaderPreviewTextStyleV1 {
     pub font_size_emu: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color_rgb: Option<[u8; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_resource_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -322,6 +324,7 @@ pub struct ReaderConfiguredFontResourceV1 {
     pub expected_sha256: String,
     pub face_index: u32,
     pub mime: String,
+    pub layout_authoritative: bool,
     pub bytes: Vec<u8>,
 }
 
@@ -395,6 +398,7 @@ fn is_zero_i64(value: &i64) -> bool {
 
 fn preview_text_style_from_render_text(
     text: &RenderTextFragmentV1,
+    font_resource_id: Option<&str>,
 ) -> Option<ReaderPreviewTextStyleV1> {
     let scalar_len = u32::try_from(text.text.chars().count()).ok()?;
     let expected_len = text.scalar_end.checked_sub(text.scalar_start)?;
@@ -436,12 +440,13 @@ fn preview_text_style_from_render_text(
 
     let font_size_emu = (!mixed_font_size).then_some(first_font_size_emu).flatten();
     let color_rgb = uniform_text_color_rgb_v1(text);
-    if font_size_emu.is_none() && color_rgb.is_none() {
+    if font_size_emu.is_none() && color_rgb.is_none() && font_resource_id.is_none() {
         None
     } else {
         Some(ReaderPreviewTextStyleV1 {
             font_size_emu,
             color_rgb,
+            font_resource_id: font_resource_id.map(str::to_owned),
         })
     }
 }
@@ -950,15 +955,23 @@ pub fn from_viewer_geometry_with_fonts(
     chaptera_desktop_fallback_font_resource::validate()
         .map_err(|error| format!("shared fallback font validation failed: {error}"))?;
     let fallback_font = shared_text_font_resource();
-    let configured_fonts_by_family = configured_fonts
+    let configured_layout_fonts_by_family = configured_fonts
         .iter()
+        .filter(|font| font.layout_authoritative)
+        .map(|font| (font.normalized_source_family(), font))
+        .collect::<HashMap<_, _>>();
+    let configured_replacement_fonts_by_family = configured_fonts
+        .iter()
+        .filter(|font| !font.layout_authoritative)
         .map(|font| (font.normalized_source_family(), font))
         .collect::<HashMap<_, _>>();
     let configured_font_ids = configured_fonts
         .iter()
+        .filter(|font| font.layout_authoritative)
         .map(|font| font.resource_id.as_str())
         .collect::<HashSet<_>>();
     let mut used_configured_font_ids = HashSet::<String>::new();
+    let mut used_replacement_font_ids = HashSet::<String>::new();
     let mut missing_configured_font_families = HashSet::<String>::new();
     let mut source_font_family_unresolved = false;
     let mut render_text_by_node = HashMap::<String, String>::new();
@@ -981,13 +994,13 @@ pub fn from_viewer_geometry_with_fonts(
             |fragment| {
                 let source_family = effective_source_font_family_v1(geometry, fragment)?;
                 let normalized = source_family.trim().to_lowercase();
-                configured_fonts_by_family
+                configured_layout_fonts_by_family
                     .get(&normalized)
                     .map(|font| font.explicit_resource())
             },
             |_, run| {
                 let normalized = run.source_font_name.trim().to_lowercase();
-                configured_fonts_by_family
+                configured_layout_fonts_by_family
                     .get(&normalized)
                     .map(|font| font.explicit_resource())
             },
@@ -1005,7 +1018,7 @@ pub fn from_viewer_geometry_with_fonts(
             };
             if let Some(source_family) = effective_source_font_family_v1(geometry, text) {
                 let normalized = source_family.trim().to_lowercase();
-                if !normalized.is_empty() && !configured_fonts_by_family.contains_key(&normalized) {
+                if !normalized.is_empty() && !configured_layout_fonts_by_family.contains_key(&normalized) {
                     missing_configured_font_families.insert(normalized);
                 }
             } else if text.typography.is_empty() {
@@ -1015,7 +1028,7 @@ pub fn from_viewer_geometry_with_fonts(
                     let normalized = run.source_font_name.trim().to_lowercase();
                     if normalized.is_empty() {
                         source_font_family_unresolved = true;
-                    } else if !configured_fonts_by_family.contains_key(&normalized) {
+                    } else if !configured_layout_fonts_by_family.contains_key(&normalized) {
                         missing_configured_font_families.insert(normalized);
                     }
                 }
@@ -1055,6 +1068,21 @@ pub fn from_viewer_geometry_with_fonts(
                 *text_layout_fallback_counts
                     .entry(reason.to_owned())
                     .or_insert(0) += 1;
+            }
+            let preview_replacement_font = if mapped_layout.is_none() {
+                node.text.as_ref().and_then(|text| {
+                    let source_family = effective_source_font_family_v1(geometry, text)?;
+                    configured_replacement_fonts_by_family
+                        .get(&source_family.trim().to_lowercase())
+                        .copied()
+                })
+            } else {
+                None
+            };
+            let preview_font_resource_id =
+                preview_replacement_font.map(|font| font.resource_id.as_str());
+            if let Some(font) = preview_replacement_font {
+                used_replacement_font_ids.insert(font.resource_id.clone());
             }
 
             if let Some(instance) = node.projected_scene_instance.as_ref() {
@@ -1206,10 +1234,9 @@ pub fn from_viewer_geometry_with_fonts(
                 if mapped_layout.is_some() {
                     projected_text_layout_count += 1;
                 }
-                let projected_preview_text_style = node
-                    .text
-                    .as_ref()
-                    .and_then(preview_text_style_from_render_text);
+                let projected_preview_text_style = node.text.as_ref().and_then(|text| {
+                    preview_text_style_from_render_text(text, preview_font_resource_id)
+                });
                 let projected_node = ReaderNodeV1 {
                     node_id: instance.instance_id.clone(),
                     origin_node_id: Some(instance.origin_node_id.clone()),
@@ -1278,11 +1305,9 @@ pub fn from_viewer_geometry_with_fonts(
                     "duplicate direct render-plan text binding for node {node_id}"
                 ));
             }
-            if let Some(style) = node
-                .text
-                .as_ref()
-                .and_then(preview_text_style_from_render_text)
-            {
+            if let Some(style) = node.text.as_ref().and_then(|text| {
+                preview_text_style_from_render_text(text, preview_font_resource_id)
+            }) {
                 preview_text_style_by_node.insert(node_id.clone(), style);
             }
             if let Some(text_bounds) = node.text_bounds.as_ref() {
@@ -1393,23 +1418,25 @@ pub fn from_viewer_geometry_with_fonts(
                 base64_encode(chaptera_desktop_fallback_font_resource::bytes())
             ),
         });
-        for configured in configured_fonts {
-            if !used_configured_font_ids.contains(&configured.resource_id) {
-                continue;
-            }
-            fonts.push(ReaderFontResourceV1 {
-                resource_id: configured.resource_id.clone(),
-                family_name: configured.source_family.clone(),
-                mime: configured.mime.clone(),
-                expected_sha256: configured.expected_sha256.clone(),
-                availability: "inline_data_url",
-                inline_data_url: format!(
-                    "data:{};base64,{}",
-                    configured.mime,
-                    base64_encode(&configured.bytes)
-                ),
-            });
+    }
+    for configured in configured_fonts {
+        if !used_configured_font_ids.contains(&configured.resource_id)
+            && !used_replacement_font_ids.contains(&configured.resource_id)
+        {
+            continue;
         }
+        fonts.push(ReaderFontResourceV1 {
+            resource_id: configured.resource_id.clone(),
+            family_name: configured.source_family.clone(),
+            mime: configured.mime.clone(),
+            expected_sha256: configured.expected_sha256.clone(),
+            availability: "inline_data_url",
+            inline_data_url: format!(
+                "data:{};base64,{}",
+                configured.mime,
+                base64_encode(&configured.bytes)
+            ),
+        });
     }
 
     let mut diagnostics = Vec::new();
@@ -1445,7 +1472,7 @@ pub fn from_viewer_geometry_with_fonts(
             severity: "warning",
             origin_id: None,
             message: format!(
-                "{} resolved source font family/families have no configured physical resource",
+                "{} resolved source font family/families have no configured layout-authoritative physical resource",
                 missing_configured_font_families.len()
             ),
         });
@@ -1458,6 +1485,17 @@ pub fn from_viewer_geometry_with_fonts(
             message: format!(
                 "{} configured exact font resource(s) were admitted into Reader Scene",
                 used_configured_font_ids.len()
+            ),
+        });
+    }
+    if !used_replacement_font_ids.is_empty() {
+        diagnostics.push(ReaderDiagnosticV1 {
+            code: "source_font_replacement_resource_admitted".to_owned(),
+            severity: "info",
+            origin_id: None,
+            message: format!(
+                "{} configured replacement font resource(s) were admitted for browser preview paint only",
+                used_replacement_font_ids.len()
             ),
         });
     }
@@ -2421,6 +2459,7 @@ mod tests {
                     .to_owned(),
                 face_index: 0,
                 mime: SHARED_FALLBACK_FONT_MIME.to_owned(),
+                layout_authoritative: true,
                 bytes: chaptera_desktop_fallback_font_resource::bytes().to_vec(),
             };
             let viewer_direct_yellow_runs = bundle
@@ -2596,6 +2635,7 @@ mod tests {
                     .to_owned(),
                 face_index: 0,
                 mime: SHARED_FALLBACK_FONT_MIME.to_owned(),
+                layout_authoritative: true,
                 bytes: chaptera_desktop_fallback_font_resource::bytes().to_vec(),
             });
 

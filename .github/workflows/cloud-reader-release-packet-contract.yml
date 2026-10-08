@@ -1,0 +1,30 @@
+name: Cloud Reader release packet contract
+
+on:
+  pull_request:
+    paths:
+      - "deploy/fonts/**"
+      - "deploy/config/chaptera.reader.prod.example.toml"
+      - "deploy/install-reader-host.sh"
+      - "deploy/update-reader-font-config.py"
+      - "tools/ci/test_cloud_reader_open_font_packet.py"
+      - ".github/workflows/cloud-reader-linux-release.yml"
+      - ".github/workflows/cloud-reader-release-packet-contract.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check installer shell syntax
+        run: bash -n deploy/install-reader-host.sh
+      - name: Verify bundled resources and managed config migration
+        run: python tools/ci/test_cloud_reader_open_font_packet.py

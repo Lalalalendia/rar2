@@ -15,6 +15,7 @@ const root = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(root, "../..");
 const output = resolve(process.env.READER_REAL_OUTPUT ?? join(repo, "target/cloud-reader-real"));
 const worker = resolve(process.env.READER_WORKER_BINARY ?? join(repo, "target/debug/chaptera"));
+const fontRegistry = process.env.READER_FONT_REGISTRY ? resolve(process.env.READER_FONT_REGISTRY) : null;
 const run = promisify(execFile);
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const defaultFixtures = [
@@ -153,12 +154,16 @@ try {
     const workerOutput = join(temporary, fixture.name + "-worker");
     let isolation;
     try {
+      const workerArgs = [
+        "guest-reader-scene", "--session-id", "guest:" + String(index + 1).padStart(32, "0"),
+        "--expected-sha256", fixture.sha256, "--expected-byte-len", String(fixture.bytes)
+      ];
+      if (fontRegistry) workerArgs.push("--font-registry", fontRegistry);
       const { stdout } = await run("python3", [join(repo, "tools/migration_pdf_worker_isolation.py"), "run",
         "--output-dir", workerOutput, "--input", source, "--timeout", String(workerTimeoutSeconds),
         "--address-space-mb", String(workerAddressSpaceMb),
         "--cpu-seconds", String(workerCpuSeconds), "--open-files", "64", "--output-file-mb", "32", "--clear-environment", "--",
-        worker, "guest-reader-scene", "--session-id", "guest:" + String(index + 1).padStart(32, "0"),
-        "--expected-sha256", fixture.sha256, "--expected-byte-len", String(fixture.bytes)],
+        worker, ...workerArgs],
         { cwd: repo, timeout: (workerTimeoutSeconds + 10) * 1000, maxBuffer: 1024 * 1024 });
       isolation = JSON.parse(stdout);
       assert.equal(isolation.status, "success");

@@ -29,14 +29,25 @@ install -d -m 0700 -o chaptera -g chaptera "${STATE_DIR}/source-scan-tmp"
 install -d -m 0750 -o root -g chaptera "${CONFIG_DIR}"
 install -d -m 0700 -o root -g root "${CREDENTIAL_DIR}"
 install -d -m 0755 "${RELEASE}/tools"
+install -d -m 0755 "${RELEASE}/fonts"
 
 install -m 0755 "${ROOT_DIR}/chaptera" "${RELEASE}/chaptera"
 install -m 0755 "${ROOT_DIR}/tools/migration_pdf_worker_isolation.py"   "${RELEASE}/tools/migration_pdf_worker_isolation.py"
 install -m 0755 "${ROOT_DIR}/run_cloud_reader_guest_host_acceptance.py"   "${RELEASE}/run_cloud_reader_guest_host_acceptance.py"
+install -m 0755 "${ROOT_DIR}/update-reader-font-config.py" "${RELEASE}/update-reader-font-config.py"
+install -m 0644 "${ROOT_DIR}/fonts/Carlito-Regular.ttf" "${RELEASE}/fonts/Carlito-Regular.ttf"
+install -m 0644 "${ROOT_DIR}/fonts/Caladea-Regular.ttf" "${RELEASE}/fonts/Caladea-Regular.ttf"
+install -m 0644 "${ROOT_DIR}/fonts/OFL-Carlito.txt" "${RELEASE}/fonts/OFL-Carlito.txt"
+install -m 0644 "${ROOT_DIR}/fonts/OFL-Caladea.txt" "${RELEASE}/fonts/OFL-Caladea.txt"
+install -m 0644 "${ROOT_DIR}/fonts/README.md" "${RELEASE}/fonts/README.md"
 
 if [[ ! -f "${CONFIG_DIR}/chaptera.toml" ]]; then
   install -m 0640 -o root -g chaptera     "${ROOT_DIR}/chaptera.reader.prod.example.toml"     "${CONFIG_DIR}/chaptera.toml"
 fi
+python3 "${RELEASE}/update-reader-font-config.py" "${CONFIG_DIR}/chaptera.toml"
+chown root:chaptera "${CONFIG_DIR}/chaptera.toml"
+chmod 0640 "${CONFIG_DIR}/chaptera.toml"
+
 
 if [[ ! -s "${CREDENTIAL_DIR}/reader_rate_subject_secret" ]]; then
   umask 077

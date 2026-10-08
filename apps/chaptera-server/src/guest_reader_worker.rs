@@ -77,6 +77,12 @@ struct GuestSceneFontManifestResourceV1 {
     face_index: u32,
     mime: String,
     file_name: String,
+    #[serde(default = "default_font_layout_authoritative")]
+    layout_authoritative: bool,
+}
+
+fn default_font_layout_authoritative() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,6 +184,7 @@ impl IsolatedGuestSceneProducer {
                 face_index: font.face_index,
                 mime: font.mime.clone(),
                 file_name,
+                layout_authoritative: font.layout_authoritative,
             });
         }
 
@@ -625,6 +632,7 @@ fn load_configured_font_resources(
             expected_sha256: config.expected_sha256.clone(),
             face_index: config.face_index,
             mime: config.mime.clone(),
+            layout_authoritative: config.layout_authoritative,
             bytes,
         });
     }
@@ -739,6 +747,7 @@ fn load_worker_font_manifest(
             expected_sha256: entry.expected_sha256,
             face_index: entry.face_index,
             mime: entry.mime,
+            layout_authoritative: entry.layout_authoritative,
             bytes: font_bytes,
         });
     }
@@ -1024,6 +1033,7 @@ mod tests {
             expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256.to_owned(),
             face_index: 0,
             mime: "font/ttf".to_owned(),
+            layout_authoritative: true,
         };
 
         let resources = load_configured_font_resources(std::slice::from_ref(&config))
@@ -1043,6 +1053,7 @@ mod tests {
         );
         assert_eq!(resources[0].face_index, 0);
         assert_eq!(resources[0].mime, "font/ttf");
+        assert!(resources[0].layout_authoritative);
         assert_eq!(resources[0].bytes, bytes);
 
         let mut mismatch = config.clone();

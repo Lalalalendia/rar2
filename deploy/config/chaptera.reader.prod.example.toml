@@ -68,3 +68,23 @@ max_reserved_bytes = 8388608
 [cloud_reader_guest.rate_subject_secret]
 source = "systemd"
 name = "reader_rate_subject_secret"
+
+# BEGIN CHAPTERA MANAGED OPEN FONT REPLACEMENTS V1
+# Deterministic open replacements for common proprietary source families.
+# These are exact release-packet resources; no ambient host-font discovery occurs.
+[[cloud_reader_guest.font_resources]]
+source_family = "Calibri"
+path = "/opt/chaptera/current/fonts/Carlito-Regular.ttf"
+expected_sha256 = "f6418f708baede9789daef5d458c0f53d2a888af9820e8062934e504fedc6595"
+face_index = 0
+mime = "font/ttf"
+layout_authoritative = false
+
+[[cloud_reader_guest.font_resources]]
+source_family = "Cambria"
+path = "/opt/chaptera/current/fonts/Caladea-Regular.ttf"
+expected_sha256 = "f1e899278b7b4491aba5b6a8253c4b04c050cc59b21865be5c37559a775153cd"
+face_index = 0
+mime = "font/ttf"
+layout_authoritative = false
+# END CHAPTERA MANAGED OPEN FONT REPLACEMENTS V1

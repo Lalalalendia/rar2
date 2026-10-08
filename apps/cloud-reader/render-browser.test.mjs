@@ -29,7 +29,8 @@ const scene = {
   protocol_version: "chaptera.reader-scene.v1",
   pages: [{ page_id: "p", order: 0, width_emu: emu(600), height_emu: emu(400) }],
   nodes: [
-    { node_id: "text", page_id: "p", kind: "text", bounds: rectangle(30, 30, 240, 60), text: "Visible preview text\nSecond line." },
+    { node_id: "text", page_id: "p", kind: "text", bounds: rectangle(30, 30, 240, 60), text: "Visible preview text\nSecond line.",
+      preview_text_style: { font_resource_id: fontId } },
     { node_id: "table", page_id: "p", kind: "table", bounds: rectangle(30, 130, 500, 80), table: {
       story_id: "story", rows: 1, columns: 2, cells: [
         { cell_id: "a", row: 0, column: 0, bounds: rectangle(30, 130, 240, 80), text: "Visible table cell" },
@@ -115,6 +116,15 @@ try {
     { node: "unresolved-font", kind: "other_node_text", reason: "base_font_unavailable",
       sizeSource: "shared_resolved_plan" }
   ]);
+  const replacementPreview = await page.locator('[data-node-id="text"] [data-text-authority="browser-preview-only"]').evaluate((element) => ({
+    resource_id: element.getAttribute("data-preview-font-resource-id"),
+    authority: element.getAttribute("data-preview-font-authority"),
+    font_family: getComputedStyle(element.firstElementChild).fontFamily
+  }));
+  assert.equal(replacementPreview.resource_id, fontId);
+  assert.equal(replacementPreview.authority, "configured-replacement");
+  assert.ok(replacementPreview.font_family.includes("ChapteraReader_80307b8da7649aa4"),
+    "paint-only replacement must affect browser preview glyphs without a shared layout");
   const shared = await page.locator('[data-text-authority="server-shared-resolved"]').evaluateAll((lines) => lines.map((line) => {
     const bounds = line.getBoundingClientRect();
     return { text: line.textContent, font_size_px: parseFloat(getComputedStyle(line).fontSize),

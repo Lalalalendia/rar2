@@ -208,10 +208,16 @@ pub struct CloudReaderFontResourceConfig {
     pub face_index: u32,
     #[serde(default = "default_cloud_reader_font_mime")]
     pub mime: String,
+    #[serde(default = "default_cloud_reader_font_layout_authoritative")]
+    pub layout_authoritative: bool,
 }
 
 fn default_cloud_reader_font_mime() -> String {
     "font/ttf".to_owned()
+}
+
+fn default_cloud_reader_font_layout_authoritative() -> bool {
+    true
 }
 
 impl CloudReaderGuestRuntimeConfig {
