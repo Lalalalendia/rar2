@@ -204,7 +204,7 @@ try {
         }
     }
 
-    Compress-Archive -LiteralPath (Join-Path $OutputRoot "*") -DestinationPath $ReturnZip -CompressionLevel Optimal
+    Compress-Archive -Path (Join-Path $OutputRoot "*") -DestinationPath $ReturnZip -CompressionLevel Optimal
     if (-not (Test-Path -LiteralPath $ReturnZip -PathType Leaf)) { throw "Return ZIP was not created." }
     $zipSha = Get-Sha256 $ReturnZip
 
