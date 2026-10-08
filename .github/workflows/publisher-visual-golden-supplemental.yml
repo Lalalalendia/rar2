@@ -208,7 +208,7 @@ jobs:
           set -euo pipefail
           root="$RUNNER_TEMP/exact06-long-band"
           rm -rf "$root"
-          mkdir -p "$root/worker"
+          mkdir -p "$root"
           python tools/migration_pdf_worker_isolation.py run \
             --output-dir "$root/worker" \
             --input "$RUNNER_TEMP/publisher-visual-supplemental/fixtures/06-modern2c-image-heavy.pub" \
