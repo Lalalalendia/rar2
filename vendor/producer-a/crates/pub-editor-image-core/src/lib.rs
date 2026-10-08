@@ -1,4 +1,4 @@
-//! Compile-isolated image replacement/crop overlay transition laws.
+//! Compile-isolated image replacement/crop overlay transition laws (steady-state control).
 //!
 //! This crate is session-neutral by design. It must not depend on pub-editor,
 //! pub-reader, export code, or EditorSession.
