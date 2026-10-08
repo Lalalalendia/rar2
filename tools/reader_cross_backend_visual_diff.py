@@ -81,7 +81,7 @@ def main() -> None:
         "fixture": args.fixture,
         "dpi": args.dpi,
         "page_count": args.pages,
-        "comparison": "local-egui-wgpu-vs-cloud-browser-svg",
+        "comparison": "local-egui-wgpu-source-fonts-vs-cloud-browser-svg",
         "claims": {
             "same_source_fixture": True,
             "same_requested_raster_dpi": True,
