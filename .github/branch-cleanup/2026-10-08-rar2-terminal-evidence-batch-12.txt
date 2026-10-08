@@ -1,0 +1,13 @@
+# 2026-10-08 — terminal evidence batch 12
+# Never merge. Exact live tips from closed-unmerged PRs with explicit falsified/control/terminal/superseded disposition.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+fix/cloud-preview-source-run-sizes-02 7fce738a08b235c7fa782ad0e353eee605087f11 # #2100 duplicate productization of falsified #2094 law
+reader/cloud-preview-size-runs-ab-01 0a183f1b490fad0c605b84ecbe01796895565e92 # #2094 result explicitly FALSIFIED; do not merge
+measure/main-protection-negative-control-01 73bc4337eea01b74b8ab70f9140071875ce7d3eb # #2090 sacrificial negative control; PR says close and delete branch
+measure/06-font-metrics-sensitivity-01 d983dd0910449552bb2fe187fb5b6a2f47f449b2 # #2087 terminal measurement evidence
+measure/paint-bounds-attribution-01 0490e465672152866509d195ba20c27f5e3442e3 # #2065 terminal measurement evidence assimilated
+measure/06-shadow-effect-carrier-census-01 95dc369057e21d7dcb3808ae05ffb34f2ce7f922 # #2059 terminal measurement evidence
+fix/cloud-reader-configured-font-diagnostic 5f2b2e1705fdd6b9a2275cc0c143f809d2a572ee # #2049 explicitly superseded by clean current-main restack
+measure/source-font-family-visible-fragment-census-01 a5c4f1bed917b90cad0f232dec9cd590bb97edd0 # #2043 measurement complete; never merge
+measure/direct-image-rotation-applicability-03 ec3a8254113ad813f8fcf17d5618b5d838220a00 # #2042 closed measurement-only blocked experiment; never merge
