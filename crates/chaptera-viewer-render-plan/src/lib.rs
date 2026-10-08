@@ -3175,6 +3175,7 @@ mod tests {
             images: vec![ViewerEmbeddedImage {
                 resource_id,
                 mime: "image/png".into(),
+                source_exact: true,
                 node_ids: vec![node_id],
                 placements: vec![ViewerImagePlacementV1 {
                     node_id,
