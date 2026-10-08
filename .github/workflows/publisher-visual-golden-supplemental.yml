@@ -192,6 +192,18 @@ jobs:
           mkdir -p "$RUNNER_TEMP/publisher-visual-supplemental"
           python tools/cloud_reader_visual_supplemental_v1.py prepare             tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv             out/pinned1050/materialized/native             "$RUNNER_TEMP/publisher-visual-supplemental/fixtures"             "$RUNNER_TEMP/publisher-visual-supplemental/manifest.json"
 
+      - name: Census exact 06 source carriers near long-band hypothesis
+        env:
+          READER_CORPUS_DIAGNOSTIC: "1"
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/publisher-visual-supplemental/fixtures/06-modern2c-image-heavy.pub"
+          cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader --bin source_image_export_probe -- "$fixture" >/dev/null
+          cargo run --quiet --manifest-path tools/officeart-connector-rule-read/Cargo.toml \
+            -- --pub "$fixture" \
+            | python -c 'import json,sys; d=json.load(sys.stdin); print("EXACT06_CONNECTOR_CENSUS", json.dumps({"solver_containers":len(d["solver_containers"]),"connector_rules":sum(len(x["connector_rules"]) for x in d["solver_containers"]),"connector_shapes":len(d["connector_shapes"]),"connector_shape_flags":[x["raw_flags"] for x in d["connector_shapes"]]}, sort_keys=True))'
+
       - name: Build canonical Cloud Reader worker
         env:
           SUPPLEMENTAL_CARGO_CACHE_HIT: ${{ steps.supplemental-cargo-cache.outputs.cache-hit }}
