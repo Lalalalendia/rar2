@@ -51,4 +51,8 @@ pub use typography::{
 };
 
 #[cfg(feature = "research-inspection")]
-pub use typography::{QuillRawFdppProperty, QuillRawFdppStyle, inspect_raw_fdpp_styles};
+pub use typography::{
+    QuillRawCharacterProperty, QuillRawFdpcStyle, QuillRawFdppProperty, QuillRawFdppStyle,
+    QuillRawStshCharacterDefault, inspect_raw_fdpc_styles, inspect_raw_fdpp_styles,
+    inspect_raw_stsh_character_defaults,
+};
