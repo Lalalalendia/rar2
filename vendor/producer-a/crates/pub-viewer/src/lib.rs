@@ -18,7 +18,6 @@ use authoring_projection::{
     bounded_legacy_noquill_authoring_slice_from_resolved_pages,
     legacy_noquill_structural_point_group_ids,
 };
-
 pub use borderart::{
     ViewerDecorativeBorderResourceV1, ViewerDecorativeBorderSlotRefV1,
     ViewerDecorativeBorderSlotV1, ViewerDecorativeBorderV1,
