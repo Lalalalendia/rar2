@@ -181,6 +181,18 @@ mod tests {
             .expect("editor")
             .operations()
             .len();
+        let (
+            text_projection_syncs_before,
+            created_node_syncs_before,
+            geometry_syncs_before,
+        ) = {
+            let app = harness.state();
+            (
+                app.test_text_projection_syncs,
+                app.test_created_node_syncs,
+                app.test_geometry_syncs,
+            )
+        };
 
         assert_eq!(
             harness
@@ -254,6 +266,19 @@ mod tests {
             assert_ne!(
                 after_fragment.text, before_fragment,
                 "canvas paint projection must reflect the current Story after direct typing"
+            );
+            assert_eq!(
+                app.test_text_projection_syncs,
+                text_projection_syncs_before + 1,
+                "one accepted canvas text mutation must perform exactly one Viewer text sync"
+            );
+            assert_eq!(
+                app.test_created_node_syncs, created_node_syncs_before,
+                "text-only mutation must not rescan created TextBox scene membership"
+            );
+            assert_eq!(
+                app.test_geometry_syncs, geometry_syncs_before,
+                "text-only mutation must not run generic geometry synchronization"
             );
         }
 
