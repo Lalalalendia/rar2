@@ -682,6 +682,12 @@ struct ViewerApp {
     selected_page: usize,
     page_frame_cache: BTreeMap<usize, Rc<CachedPageFrameWork>>,
     page_frame_cache_builds: u64,
+    #[cfg(test)]
+    test_text_projection_syncs: u64,
+    #[cfg(test)]
+    test_created_node_syncs: u64,
+    #[cfg(test)]
+    test_geometry_syncs: u64,
     canvas_selection: SceneSelectionState,
     canvas_drag: Option<MoveTransaction>,
     canvas_resize: Option<ResizeTransaction>,
@@ -748,6 +754,12 @@ impl ViewerApp {
             selected_page: 0,
             page_frame_cache: BTreeMap::new(),
             page_frame_cache_builds: 0,
+            #[cfg(test)]
+            test_text_projection_syncs: 0,
+            #[cfg(test)]
+            test_created_node_syncs: 0,
+            #[cfg(test)]
+            test_geometry_syncs: 0,
             canvas_selection: SceneSelectionState::default(),
             canvas_drag: None,
             canvas_resize: None,
@@ -3092,6 +3104,25 @@ impl ViewerApp {
         }
     }
 
+    /// Finalizes a mutation whose semantic effect is confined to Story text /
+    /// text formatting. Scene topology and authored object geometry are unchanged,
+    /// so do not pay their document-wide synchronization costs here.
+    fn finish_text_authoring_change(&mut self, status: &str) {
+        self.canvas_drag = None;
+        self.canvas_resize = None;
+        self.page_frame_cache.clear();
+        let text_projection_refresh = self.sync_visual_stories_from_editor();
+        self.refresh_search();
+        self.export_preview = None;
+        self.project_status = Some("Editor project has unsaved changes.".to_owned());
+        self.edit_status = Some(match text_projection_refresh {
+            Ok(()) => status.to_owned(),
+            Err(text_error) => {
+                format!("{status} Viewer text projection refresh failed closed: {text_error}")
+            }
+        });
+    }
+
     fn finish_authoring_change(&mut self, status: &str) {
         self.canvas_drag = None;
         self.canvas_resize = None;
@@ -3286,6 +3317,10 @@ impl ViewerApp {
     }
 
     fn sync_visual_stories_from_editor(&mut self) -> Result<(), String> {
+        #[cfg(test)]
+        {
+            self.test_text_projection_syncs += 1;
+        }
         let (Some(editor), Some(visual)) = (&self.editor, &mut self.visual) else {
             return Ok(());
         };
@@ -3319,6 +3354,10 @@ impl ViewerApp {
     }
 
     fn sync_visual_created_text_boxes_from_editor(&mut self) -> Result<(), String> {
+        #[cfg(test)]
+        {
+            self.test_created_node_syncs += 1;
+        }
         let (Some(editor), Some(visual)) = (&self.editor, &mut self.visual) else {
             self.created_text_box_scene_nodes.clear();
             return Ok(());
@@ -3345,6 +3384,10 @@ impl ViewerApp {
     }
 
     fn sync_visual_geometry_from_editor(&mut self) {
+        #[cfg(test)]
+        {
+            self.test_geometry_syncs += 1;
+        }
         let (Some(editor), Some(visual)) = (&self.editor, &mut self.visual) else {
             return;
         };
@@ -6041,6 +6084,12 @@ mod tests {
             selected_page: 0,
             page_frame_cache: BTreeMap::new(),
             page_frame_cache_builds: 0,
+            #[cfg(test)]
+            test_text_projection_syncs: 0,
+            #[cfg(test)]
+            test_created_node_syncs: 0,
+            #[cfg(test)]
+            test_geometry_syncs: 0,
             canvas_selection: SceneSelectionState::default(),
             canvas_drag: None,
             canvas_resize: None,
@@ -6111,6 +6160,12 @@ mod tests {
             selected_page: 0,
             page_frame_cache: BTreeMap::new(),
             page_frame_cache_builds: 0,
+            #[cfg(test)]
+            test_text_projection_syncs: 0,
+            #[cfg(test)]
+            test_created_node_syncs: 0,
+            #[cfg(test)]
+            test_geometry_syncs: 0,
             canvas_selection: SceneSelectionState::default(),
             canvas_drag: None,
             canvas_resize: None,
@@ -6396,6 +6451,12 @@ mod tests {
             selected_page: 0,
             page_frame_cache: BTreeMap::new(),
             page_frame_cache_builds: 0,
+            #[cfg(test)]
+            test_text_projection_syncs: 0,
+            #[cfg(test)]
+            test_created_node_syncs: 0,
+            #[cfg(test)]
+            test_geometry_syncs: 0,
             canvas_selection: SceneSelectionState::default(),
             canvas_drag: None,
             canvas_resize: None,
