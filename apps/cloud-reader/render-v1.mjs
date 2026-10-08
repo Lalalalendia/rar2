@@ -441,6 +441,7 @@ function appendText(group, defs, node, fonts, index) {
           x: (line.x + span.x_offset_emu - plan.bounds.x) / EMU_PER_CSS_PX,
           "font-family": spanInstalled?.family ?? installed.family,
           "font-size": span.font_size_emu / EMU_PER_CSS_PX,
+          fill: rgb(span.color_rgb),
           "data-text-span-start": span.scalar_start,
           "data-text-span-end": span.scalar_end,
           "data-measured-width-emu": span.measured_width_emu,
