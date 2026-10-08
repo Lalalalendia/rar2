@@ -192,6 +192,33 @@ jobs:
           mkdir -p "$RUNNER_TEMP/publisher-visual-supplemental"
           python tools/cloud_reader_visual_supplemental_v1.py prepare             tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv             out/pinned1050/materialized/native             "$RUNNER_TEMP/publisher-visual-supplemental/fixtures"             "$RUNNER_TEMP/publisher-visual-supplemental/manifest.json"
 
+      - name: Prepare Batch01 discriminator fixtures
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/mixed-size-batch01"
+          mkdir -p "$RUNNER_TEMP/mixed-size-batch01"
+          python tools/cloud_reader_visual_fingerprint_v1.py prepare \
+            tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv \
+            out/pinned1050/materialized/native \
+            "$RUNNER_TEMP/no-second-source-root" \
+            "$RUNNER_TEMP/mixed-size-batch01/fixtures" \
+            "$RUNNER_TEMP/mixed-size-batch01/manifest.json"
+
+      - name: Measure mixed-size line spacing authority
+        run: |
+          set -euo pipefail
+          while IFS='|' read -r root fixture sha; do
+            CHAPTERA_READER_SCENE_PROBE_PUB="$root/$fixture.pub" \
+            CHAPTERA_READER_SCENE_PROBE_SHA256="$sha" \
+              cargo test -p chaptera-server real_reference_text_layout_fallback_census_probe -- --ignored --nocapture
+          done <<EOF
+          $RUNNER_TEMP/publisher-visual-supplemental/fixtures|082_2531deb3629797af|2531deb3629797af53d79f740a31cb00886c61ba0b3bfb59e163e006278dd763
+          $RUNNER_TEMP/publisher-visual-supplemental/fixtures|094_bbaefcbdcdd2dbe5|bbaefcbdcdd2dbe51a636ed554c14d6f5353c98e795b5f88d26f79542e5d93ba
+          $RUNNER_TEMP/publisher-visual-supplemental/fixtures|100_b1faaba988e88b41|b1faaba988e88b4134dc8a495cb68c6f7496f3fbaedcba65fa6e02f39b29b621
+          $RUNNER_TEMP/mixed-size-batch01/fixtures|037_427fb797a07fd1a5|427fb797a07fd1a598ce1eadae72d021446eb3ddeea9fc68ec1200dff786ab8c
+          $RUNNER_TEMP/mixed-size-batch01/fixtures|046_f51f0b72965b3204|f51f0b72965b3204ff75daad7b7150b0533887fd7d3c09f71d8879d880c21074
+          EOF
+
       - name: Build canonical Cloud Reader worker
         env:
           SUPPLEMENTAL_CARGO_CACHE_HIT: ${{ steps.supplemental-cargo-cache.outputs.cache-hit }}
