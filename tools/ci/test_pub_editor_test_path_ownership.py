@@ -27,6 +27,7 @@ UNRELATED_HEAVY_WORKFLOWS = (
     ".github/workflows/editable-source-image-export-v1.yml",
     ".github/workflows/migration-1050-corpus-matrix.yml",
     ".github/workflows/authoring-picture-frame-receipt.yml",
+    ".github/workflows/chaptera-server-package-integrity-v1.yml",
 )
 
 
