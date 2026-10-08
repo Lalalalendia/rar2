@@ -83,7 +83,7 @@ export async function adaptReaderSceneToEditorScene(readerScene) {
     width_emu: safeInteger(page.width_emu, "page.width_emu"),
     height_emu: safeInteger(page.height_emu, "page.height_emu"),
   }));
-  const exactStacking = readerScene.stacking_fidelity === "exact";
+  const exactStacking = readerScene.stacking_fidelity === "source_back_to_front";
   const pageOrder = new Map();
   const paints = [];
   const stories = [];
