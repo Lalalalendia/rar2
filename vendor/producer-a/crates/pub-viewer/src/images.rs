@@ -239,6 +239,40 @@ mod tests {
     }
 
     #[test]
+    fn image_alpha_authority_constructors_are_disjoint() {
+        let resource = ResourceId::from_canonical(id(70));
+        let node = NodeId::from_canonical(id(60));
+
+        let generic = ViewerEmbeddedImage::preview_png(
+            resource,
+            vec![node],
+            Vec::new(),
+            vec![1, 2, 3],
+        );
+        assert!(!generic.source_exact);
+        assert!(!generic.derived_transparent_canvas);
+
+        let wmf = ViewerEmbeddedImage::wmf_preview_png(
+            resource,
+            vec![node],
+            Vec::new(),
+            vec![1, 2, 3],
+        );
+        assert!(!wmf.source_exact);
+        assert!(wmf.derived_transparent_canvas);
+
+        let exact = ViewerEmbeddedImage::exact(
+            resource,
+            "image/png".to_owned(),
+            vec![node],
+            Vec::new(),
+            vec![1, 2, 3],
+        );
+        assert!(exact.source_exact);
+        assert!(!exact.derived_transparent_canvas);
+    }
+
+    #[test]
     fn image_uses_compose_only_with_known_page_exclusion() {
         let admitted = NodeId::from_canonical(id(61));
         let excluded = NodeId::from_canonical(id(62));
