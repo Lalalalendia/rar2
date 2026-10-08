@@ -21,10 +21,7 @@ use pub_line_placement::{
     ResolvedLineInputV1, resolve_paragraph_line_placement_v1,
 };
 use pub_model::{PageId, StoryId};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-};
+use std::{collections::BTreeMap, fmt};
 
 pub use current_typography::{
     DesktopCurrentBooleanTypographyRunV1, current_story_boolean_typography_v1,
