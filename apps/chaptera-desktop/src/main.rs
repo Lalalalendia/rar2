@@ -2045,7 +2045,7 @@ impl ViewerApp {
             reader_product_ui::panel_separator(ui);
         } else {
             ui.heading("Pages");
-            ui.separator();
+            self.show_page_reorder_controls(ui);
         }
 
         self.ensure_image_textures(ui.ctx());
@@ -3286,10 +3286,10 @@ impl ViewerApp {
     }
 
     fn sync_visual_stories_from_editor(&mut self) -> Result<(), String> {
+        self.sync_visual_page_order_from_editor();
         let (Some(editor), Some(visual)) = (&self.editor, &mut self.visual) else {
             return Ok(());
         };
-
         if let Err(error) = visual.refresh_text_projection_from_resolved(editor.graph()) {
             // The refresh operation is transactional, so a failure would otherwise
             // leave source-time fragments looking current after an accepted edit.
