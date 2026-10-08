@@ -396,7 +396,7 @@ jobs:
               throw "required source-safe 0.75 receipt missing"
             }
             $text = Get-Content -LiteralPath $path -Raw
-            if ($text -match '(?i)[A-Z]:\\\\' -or $text -match '\\\\\\\\[^"\\s]+\\\\') {
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
               throw "source-safe 0.75 receipt contains an absolute filesystem path"
             }
             [void]($text | ConvertFrom-Json)
