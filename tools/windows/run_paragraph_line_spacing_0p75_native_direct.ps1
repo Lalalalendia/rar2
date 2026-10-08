@@ -186,10 +186,17 @@ try {
     $cargo = Get-Command cargo -ErrorAction Stop
     & $cargo.Source build --offline --locked --release --manifest-path $ProbeManifest
     Assert-LastExit "paragraph-metrics-probe offline build"
-    $ProbeRoot = Split-Path -Parent $ProbeManifest
-    $Probe = Join-Path $ProbeRoot "target/release/paragraph-metrics-probe.exe"
+
+    $metadataText = (& $cargo.Source metadata --offline --locked --no-deps --format-version 1 --manifest-path $ProbeManifest) -join [Environment]::NewLine
+    Assert-LastExit "paragraph-metrics-probe cargo metadata"
+    $metadata = $metadataText | ConvertFrom-Json
+    if ([string]::IsNullOrWhiteSpace([string]$metadata.target_directory)) {
+        throw "Cargo metadata did not report target_directory for paragraph-metrics-probe"
+    }
+
+    $Probe = Join-Path ([string]$metadata.target_directory) "release\paragraph-metrics-probe.exe"
     if (-not (Test-Path -LiteralPath $Probe -PathType Leaf)) {
-        throw "Structural snapshot tool missing after offline build: $Probe"
+        throw "Structural snapshot tool missing from Cargo target_directory"
     }
 
     $python = Get-Command python -ErrorAction Stop
