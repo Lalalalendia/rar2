@@ -30,6 +30,7 @@ UNRELATED_HEAVY_WORKFLOWS = (
     ".github/workflows/chaptera-server-package-integrity-v1.yml",
     ".github/workflows/editor-build-once-pr.yml",
     ".github/workflows/w2-longform-fixed-pdf-current-revision.yml",
+    ".github/workflows/editor-desktop-textbox-restore-v1.yml",
 )
 
 
