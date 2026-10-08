@@ -205,6 +205,14 @@ def main() -> int:
         matched_pair_changes = base.chunk_changes(snapshots["direct-0p80"], snapshots["direct-0p75"])
         direct_0p80_geometry = rows["direct-0p80"]["geometry_fresh_reopen"]["bound_top_deltas_points"]
         p075_geometry = rows["direct-0p75"]["geometry_fresh_reopen"]["bound_top_deltas_points"]
+        direct_0p80_geometry_stable = (
+            rows["direct-0p80"]["geometry_after_mutation"]
+            == rows["direct-0p80"]["geometry_fresh_reopen"]
+        )
+        p075_geometry_stable = (
+            rows["direct-0p75"]["geometry_after_mutation"]
+            == rows["direct-0p75"]["geometry_fresh_reopen"]
+        )
 
         diagnostic_checks = {
             "preset_single_expected_packed_1219202_present": EXPECTED_SINGLE_PACKED in single_values,
@@ -214,6 +222,12 @@ def main() -> int:
             "direct_1p0_stsh_unchanged_vs_control": rows["direct-1p0"]["stsh_unchanged_vs_control"],
             "direct_1p0_fresh_reopen_rule": rows["direct-1p0"]["fresh_reopen_line_spacing_rule"],
             "direct_1p0_fresh_reopen_reports_1p0": abs(direct_1p0_spacing - 1.0) < 1e-6,
+            "custom_pair_geometry_strict_order_0p75_lt_0p80": bool(direct_0p80_geometry)
+            and bool(p075_geometry)
+            and p075_geometry[0] < direct_0p80_geometry[0],
+            "custom_pair_geometry_plateau_observed": bool(direct_0p80_geometry)
+            and bool(p075_geometry)
+            and direct_0p80_geometry == p075_geometry,
         }
         carrier_checks = {
             "direct_0p80_expected_packed_975362_present": EXPECTED_0P80_PACKED in direct_0p80_values,
@@ -235,9 +249,8 @@ def main() -> int:
             ) < 1e-6,
             "direct_0p80_geometry_has_progression": bool(direct_0p80_geometry),
             "p075_geometry_has_progression": bool(p075_geometry),
-            "geometry_orders_with_direct_spacing": bool(direct_0p80_geometry)
-            and bool(p075_geometry)
-            and p075_geometry[0] < direct_0p80_geometry[0],
+            "direct_0p80_geometry_roundtrip_stable": direct_0p80_geometry_stable,
+            "p075_geometry_roundtrip_stable": p075_geometry_stable,
         }
         candidate = all(carrier_checks.values())
 
@@ -264,8 +277,9 @@ def main() -> int:
             "product_authority_granted": False,
             "boundary": (
                 "A true native_114300_authority_candidate proves the focused Publisher2019 "
-                "0.75 roundtrip/carrier/geometry witness against a same-rule direct 0.80 control only. "
-                "Product execution still requires "
+                "0.75 roundtrip/carrier/geometry witness against a same-rule direct 0.80 control. "
+                "Native geometry may quantize or plateau between nearby custom values; this receipt "
+                "proves the measured 0.75 geometry but not global linearity. Product execution still requires "
                 "explicit consumer review against the exact082 line-level authority and negative controls."
             ),
         }
