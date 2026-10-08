@@ -174,7 +174,23 @@ def safe_loss_summary(receipt: dict) -> dict:
         for item in typography.get("skipped", [])
         if isinstance(item, dict)
     )
+    table_projection = receipt.get("table_projection", {})
+    safe_table_projection = {
+        str(key): value
+        for key, value in table_projection.items()
+        if key in {
+            "source_table_count",
+            "table_paint_resource_count",
+            "table_fill_primitive_count",
+            "table_border_primitive_count",
+            "table_paint_incomplete_count",
+            "table_no_visible_paint_count",
+            "table_text_disposition",
+        }
+        and isinstance(value, (int, str))
+    }
     return {
+        "table_projection": dict(sorted(safe_table_projection.items())),
         "materialized_text_run_count": len(typography.get("materialized_runs", [])),
         "skipped_text_run_count": len(typography.get("skipped", [])),
         "visible_line_count": typography.get("shaped_flow", {}).get("visible_line_count"),
