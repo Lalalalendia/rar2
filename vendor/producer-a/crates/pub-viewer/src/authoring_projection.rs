@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result};
 use pub_layout::{BoundedAuthoringSlice, BoundedNodeGeometryInput, BoundedTableInput};
-use pub_model::{Affine2D, Node, NodeId, NodeKind, PageId, StoryFrame};
+use pub_model::{Affine2D, Node, NodeId, NodeKind, PageId, Story, StoryFrame, StoryId};
 use pub_reader::{PubResolvedGraph, PubResolvedNodePayload};
 use std::collections::BTreeSet;
 
@@ -20,6 +20,20 @@ pub fn bounded_authoring_slice_from_resolved(
     graph: &PubResolvedGraph,
 ) -> Result<BoundedAuthoringSlice> {
     bounded_authoring_slice_from_resolved_pages(graph, &graph.document.pages)
+}
+
+/// Interactive text-session bridge: preserve every Story identity for
+/// projection membership diagnostics, but materialize full Story payload only
+/// for the requested Story. Fixed-output consumers keep using the full bridge.
+pub fn bounded_authoring_slice_from_resolved_story_payload(
+    graph: &PubResolvedGraph,
+    story_id: StoryId,
+) -> Result<BoundedAuthoringSlice> {
+    bounded_authoring_slice_from_resolved_pages_with_story_payload_scope(
+        graph,
+        &graph.document.pages,
+        Some(story_id),
+    )
 }
 
 pub(super) fn legacy_noquill_structural_point_group_ids(
@@ -109,6 +123,20 @@ pub fn bounded_authoring_slice_from_resolved_pages(
     graph: &PubResolvedGraph,
     page_ids: &[PageId],
 ) -> Result<BoundedAuthoringSlice> {
+    bounded_authoring_slice_from_resolved_pages_with_story_payload_scope(graph, page_ids, None)
+}
+
+fn bounded_authoring_slice_from_resolved_pages_with_story_payload_scope(
+    graph: &PubResolvedGraph,
+    page_ids: &[PageId],
+    story_payload_scope: Option<StoryId>,
+) -> Result<BoundedAuthoringSlice> {
+    if let Some(story_id) = story_payload_scope {
+        graph
+            .stories
+            .get(&story_id)
+            .with_context(|| format!("layout projection missing requested Story {story_id:?}"))?;
+    }
     let pages = page_ids
         .iter()
         .map(|page_id| {
@@ -137,7 +165,22 @@ pub fn bounded_authoring_slice_from_resolved_pages(
         })
         .collect();
 
-    let stories = graph.stories.values().cloned().collect();
+    let stories = graph
+        .stories
+        .values()
+        .map(|story| match story_payload_scope {
+            Some(story_id) if story.id != story_id => Story {
+                id: story.id,
+                text: String::new(),
+                paragraphs: Vec::new(),
+                runs: Vec::new(),
+                fields: Vec::new(),
+                hyperlinks: Vec::new(),
+                source_refs: Vec::new(),
+            },
+            _ => story.clone(),
+        })
+        .collect();
 
     let story_frames = graph
         .nodes
