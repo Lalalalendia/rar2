@@ -1,0 +1,10 @@
+# 2026-10-08 — terminal refresh batch 17
+# Never merge. Exact live tips from terminal closed-unmerged measurements/validation + completed carrier.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+validation/pub-pdf-wmf-preview-alpha-ab-02 fb1d682be79f53c8a05a28ae43253c9747b5ef89 # #2196 diagnostic complete; falsified #2191
+measure/pub-editor-image-core-steady-state-01 94b05e9bde51f371a7fb4b1a61af931ee008d853 # #2198 sacrificial post-merge control complete
+measure/099-shared-layout-cause-01 9c28be91b659a485314ac52715ca69ff4c19f871 # #2189 terminal measurement complete
+measure/pub-editor-image-core-leaf-control-01 7c9b5455167c59eb79cf89f60eca0e57ecc38784 # #2179 sacrificial post-merge control complete
+measure/mixed-size-line-spacing-authority-01 dffbd76a99ffdcbfb496c0d53a2950278bb8350a # #2158 terminal measurement complete
+ops/branch-gc-20261008-carrier-cleanup-batch-16 4785da4f4354a63258d54338e859bfa40eb73725 # completed #2197 clean 2/2 carrier receipt
