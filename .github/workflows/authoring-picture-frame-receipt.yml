@@ -1,0 +1,77 @@
+name: Authoring picture frame receipt V1
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "!vendor/producer-a/crates/pub-editor/src/session_geometry.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_text.rs"
+      - "!vendor/producer-a/crates/pub-editor/tests/story_text_session_v1.rs"
+      - "apps/chaptera-desktop/src/agent.rs"
+      - "packages/protocol/authoring-picture-frame/**"
+      - "services/editor-api/test_revision_store.py"
+      - "tools/validate_authoring_picture_frame_receipt.py"
+      - "tools/test_authoring_picture_frame_receipt.py"
+      - ".github/workflows/authoring-picture-frame-receipt.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: authoring-picture-frame-receipt-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check crop-core formatting
+        run: |
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
+          cargo fmt -p chaptera-desktop -- --check
+      - name: Run bounded pub-editor crop tests
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test image_crop_v1
+      - name: Run source-safe Desktop crop summary test
+        run: cargo test -p chaptera-desktop image_crop_operation_summary_hashes_state_without_raw_crop_values
+      - name: Install schema validator
+        run: python -m pip install "jsonschema==4.23.0"
+      - name: Run picture frame state-axis contract tests
+        run: python tools/test_authoring_picture_frame_receipt.py -v
+      - name: Run SetImageCrop revision-kernel tests
+        working-directory: services/editor-api
+        run: python -m unittest -v test_revision_store.ImageCropCommitTests
+      - name: Validate public SetImageCrop intent schema
+        run: |
+          python - <<'PY'
+          import json
+          from jsonschema import Draft202012Validator
+
+          schema = json.load(open("packages/protocol/authoring-picture-frame/v1/set-image-crop-intent.schema.json"))
+          Draft202012Validator.check_schema(schema)
+          fixture = {
+              "protocol_version": "chaptera.image-crop-intent.v1",
+              "document_id": "doc:1",
+              "source_hash": "a" * 64,
+              "base_revision_id": "sha256:" + "b" * 64,
+              "client_operation_id": "crop-op-00000001",
+              "command": {
+                  "kind": "set_image_crop",
+                  "node_id": "picture:1",
+                  "expected_before": {"left": 10, "top": 20, "right": 30, "bottom": 40},
+                  "after": {"left": 11, "top": 22, "right": 33, "bottom": 44},
+              },
+          }
+          errors = list(Draft202012Validator(schema).iter_errors(fixture))
+          assert not errors, errors
+          print("SetImageCrop intent schema valid")
+          PY

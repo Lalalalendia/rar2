@@ -1,0 +1,128 @@
+name: Chaptera Windows support matrix V1
+
+on:
+  pull_request:
+    paths:
+      - "packages/product/reader-portable/v1/windows-support-matrix.v1.json"
+      - "packages/product/reader-portable/v1/windows-support-matrix.schema.v1.json"
+      - "packages/product/reader-portable/v1/README.md"
+      - "tools/validate_windows_support_matrix.py"
+      - "tools/test_validate_windows_support_matrix.py"
+      - "Cargo.toml"
+      - "apps/chaptera-desktop/Cargo.toml"
+      - "crates/chaptera-viewer-render-plan/Cargo.toml"
+      - "crates/chaptera-mobile-reader-core/Cargo.toml"
+      - "vendor/producer-a/Cargo.toml"
+      - "vendor/producer-a/crates/*/Cargo.toml"
+      - ".github/workflows/chaptera-win-support-matrix.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+      - "apps/chaptera-desktop/Cargo.toml"
+      - "crates/chaptera-viewer-render-plan/Cargo.toml"
+      - "crates/chaptera-mobile-reader-core/Cargo.toml"
+      - "vendor/producer-a/Cargo.toml"
+      - "vendor/producer-a/crates/*/Cargo.toml"
+      - ".github/workflows/chaptera-win-support-matrix.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: Matrix + public-copy + runner evidence
+    if: github.event_name != 'push'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned schema validator
+        run: python -m pip install "jsonschema==4.23.0"
+
+      - name: Test support-matrix validator
+        run: python -m unittest tools/test_validate_windows_support_matrix.py -v
+
+      - name: Validate matrix and public copy
+        run: >
+          python tools/validate_windows_support_matrix.py matrix
+          packages/product/reader-portable/v1/windows-support-matrix.v1.json
+          packages/product/reader-portable/v1/windows-support-matrix.schema.v1.json
+          packages/product/reader-portable/v1/README.md
+
+      - name: Capture exact GitHub-hosted runner identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $os = Get-CimInstance Win32_OperatingSystem
+          $computer = Get-CimInstance Win32_ComputerSystem
+          New-Item -ItemType Directory -Force -Path "target/support" | Out-Null
+          [ordered]@{
+            schema_version = "chaptera.windows-runner-receipt.v1"
+            runner_label = "windows-latest"
+            runner_arch = "${{ runner.arch }}"
+            image_os = "$env:ImageOS"
+            image_version = "$env:ImageVersion"
+            os_caption = [string]$os.Caption
+            os_version = [string]$os.Version
+            os_build_number = [string]$os.BuildNumber
+            os_architecture = [string]$os.OSArchitecture
+            system_model = [string]$computer.Model
+            consumer_support_claim = $false
+            source_commit = "${{ github.sha }}"
+          } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 "target/support/windows-runner-receipt.json"
+
+      - name: Prove Server runner is CI-only evidence
+        run: >
+          python tools/validate_windows_support_matrix.py runner-receipt
+          target/support/windows-runner-receipt.json
+          packages/product/reader-portable/v1/windows-support-matrix.v1.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chaptera-windows-support-runner-receipt
+          path: target/support/windows-runner-receipt.json
+          if-no-files-found: error
+
+  arm64-compile-preflight:
+    name: ARM64 compile-only preflight
+    runs-on: windows-latest
+    env:
+      CARGO_TARGET_DIR: target/chaptera-win-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          targets: aarch64-pc-windows-msvc
+
+      - id: cache-key
+        name: Derive fail-closed ARM64 Cargo cache key
+        shell: pwsh
+        env:
+          MANIFEST_HASH: ${{ hashFiles('Cargo.toml', 'apps/chaptera-desktop/Cargo.toml', 'crates/chaptera-viewer-render-plan/Cargo.toml', 'crates/chaptera-mobile-reader-core/Cargo.toml', 'vendor/producer-a/Cargo.toml', 'vendor/producer-a/crates/*/Cargo.toml') }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:MANIFEST_HASH)) {
+            throw "ARM64 manifest hash resolved empty"
+          }
+          "manifest_hash=$env:MANIFEST_HASH" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Restore ARM64 Cargo target graph
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/chaptera-win-arm64
+          key: chaptera-win-arm64-v1-${{ runner.os }}-rust-1.94.1-aarch64-pc-windows-msvc-${{ steps.cache-key.outputs.manifest_hash }}
+
+      - name: Compile Reader and test targets for ARM64 without making a support claim
+        run: cargo check -p chaptera-desktop --features reader-only --all-targets --target aarch64-pc-windows-msvc

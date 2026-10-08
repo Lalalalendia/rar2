@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chaptera.dev/schema/project-fork/v1/producer-receipt.schema.json",
+  "title": "Chaptera project fork producer receipt V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["receipt_version","source_hash","parent","fork_initial","fork_after_edit","reopen","editable_output","invariants"],
+  "properties": {
+    "receipt_version": {"const":"chaptera.project-fork-receipt.v1"},
+    "source_hash": {"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "parent": {"$ref":"#/$defs/identityState"},
+    "fork_initial": {
+      "type":"object","additionalProperties":false,
+      "required":["project_id","document_id","history_id","genesis_revision_id","state_id","forked_from"],
+      "properties":{
+        "project_id":{"$ref":"#/$defs/uuid"},
+        "document_id":{"$ref":"#/$defs/uuid"},
+        "history_id":{"$ref":"#/$defs/uuid"},
+        "genesis_revision_id":{"$ref":"#/$defs/uuid"},
+        "state_id":{"$ref":"#/$defs/hashId"},
+        "forked_from":{"$ref":"#/$defs/provenance"}
+      }
+    },
+    "fork_after_edit": {
+      "type":"object","additionalProperties":false,
+      "required":["state_id","operation_count"],
+      "properties":{
+        "state_id":{"$ref":"#/$defs/hashId"},
+        "operation_count":{"type":"integer","minimum":1}
+      }
+    },
+    "reopen": {
+      "type":"object","additionalProperties":false,
+      "required":["parent_exact","fork_exact"],
+      "properties":{"parent_exact":{"const":true},"fork_exact":{"const":true}}
+    },
+    "editable_output": {
+      "type":"object","additionalProperties":false,
+      "required":["parent_nonempty","fork_nonempty"],
+      "properties":{"parent_nonempty":{"const":true},"fork_nonempty":{"const":true}}
+    },
+    "invariants": {
+      "type":"object","additionalProperties":false,
+      "required":["initial_state_preserved","project_id_rekeyed","document_id_rekeyed","history_id_rekeyed","genesis_revision_id_rekeyed","provenance_exact","fork_edit_diverged","parent_unchanged_after_fork_edit","source_hash_equal_after_reopen","source_write_count","raw_document_content_emitted"],
+      "properties":{
+        "initial_state_preserved":{"const":true},
+        "project_id_rekeyed":{"const":true},
+        "document_id_rekeyed":{"const":true},
+        "history_id_rekeyed":{"const":true},
+        "genesis_revision_id_rekeyed":{"const":true},
+        "provenance_exact":{"const":true},
+        "fork_edit_diverged":{"const":true},
+        "parent_unchanged_after_fork_edit":{"const":true},
+        "source_hash_equal_after_reopen":{"const":true},
+        "source_write_count":{"const":0},
+        "raw_document_content_emitted":{"const":false}
+      }
+    }
+  },
+  "$defs": {
+    "uuid":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "hashId":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
+    "identityState":{
+      "type":"object","additionalProperties":false,
+      "required":["project_id","document_id","history_id","genesis_revision_id","state_id"],
+      "properties":{
+        "project_id":{"$ref":"#/$defs/uuid"},
+        "document_id":{"$ref":"#/$defs/uuid"},
+        "history_id":{"$ref":"#/$defs/uuid"},
+        "genesis_revision_id":{"$ref":"#/$defs/uuid"},
+        "state_id":{"$ref":"#/$defs/hashId"}
+      }
+    },
+    "provenance":{
+      "type":"object","additionalProperties":false,
+      "required":["project_id","document_id","history_id","state_id"],
+      "properties":{
+        "project_id":{"$ref":"#/$defs/uuid"},
+        "document_id":{"$ref":"#/$defs/uuid"},
+        "history_id":{"$ref":"#/$defs/uuid"},
+        "state_id":{"$ref":"#/$defs/hashId"}
+      }
+    }
+  }
+}

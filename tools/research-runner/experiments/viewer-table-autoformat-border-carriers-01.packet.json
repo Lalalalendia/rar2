@@ -1,0 +1,23 @@
+{
+  "schema": "pub-research-experiment.v1",
+  "id": "VIEWER-TABLE-AUTOFORMAT-BORDER-CARRIERS-01",
+  "publisher_environment": "publisher-2019",
+  "requires_publisher": true,
+  "publisher": {
+    "version_prefix": "16.0.12527.",
+    "exe_sha256": "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb9f178df834ab20b"
+  },
+  "operation": {
+    "shell": "powershell",
+    "script": "tools/research-runner/operations/publisher_table_border_carrier_map_01.ps1",
+    "args": []
+  },
+  "evidence": {
+    "required": [
+      "environment.json",
+      "analysis/table-border-carrier-map-01.json",
+      "analysis/table-border-weight-map-01.json",
+      "logs/table-border-carrier-map-01.txt"
+    ]
+  }
+}

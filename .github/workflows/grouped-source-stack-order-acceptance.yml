@@ -1,0 +1,67 @@
+name: Grouped source stack order acceptance
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
+      - "vendor/producer-a/crates/pub-reader/src/grouped_projection.rs"
+      - ".github/workflows/grouped-source-stack-order-acceptance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Acquire exact public controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/group-stack-controls"
+          python - <<'PY'
+          import hashlib, os, urllib.request
+          from pathlib import Path
+          expected = {
+              "SampleBrochure": "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87",
+              "SampleNewsletter": "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
+          }
+          base = "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher"
+          root = Path(os.environ["RUNNER_TEMP"]) / "group-stack-controls"
+          for name, digest in expected.items():
+              data = urllib.request.urlopen(f"{base}/{name}.pub", timeout=30).read()
+              assert hashlib.sha256(data).hexdigest() == digest
+              (root / f"{name}.pub").write_bytes(data)
+          PY
+
+      - name: Compile exact source-stack regression
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --lib exact_public_source_stack_order_covers_materialized_grouped_nodes --no-run
+
+      - name: Brochure remains direct-only control
+        env:
+          CHAPTERA_SOURCE_STACK_FIXTURE: ${{ runner.temp }}/group-stack-controls/SampleBrochure.pub
+          CHAPTERA_SOURCE_STACK_SHA256: ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87
+          CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS: "14,16"
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --lib -- --ignored --exact tests::exact_public_source_stack_order_covers_materialized_grouped_nodes --nocapture
+
+      - name: Newsletter admits grouped materialized visuals
+        env:
+          CHAPTERA_SOURCE_STACK_FIXTURE: ${{ runner.temp }}/group-stack-controls/SampleNewsletter.pub
+          CHAPTERA_SOURCE_STACK_SHA256: 6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf
+          CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS: "21,20,20,12"
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --lib -- --ignored --exact tests::exact_public_source_stack_order_covers_materialized_grouped_nodes --nocapture

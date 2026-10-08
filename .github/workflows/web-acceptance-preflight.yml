@@ -1,0 +1,140 @@
+name: WEB-ACCEPTANCE-01 gate
+
+on:
+  pull_request:
+    paths:
+      - "apps/web/acceptance/**"
+      - "tools/validate_web_acceptance_preflight.py"
+      - "tools/validate_browser_acceptance_receipt.py"
+      - "tools/test_browser_acceptance_binding.py"
+      - "tools/validate_viewer_geometry_receipt.py"
+      - "tools/test_viewer_geometry_receipt_schema.py"
+      - "tools/adapt_viewer_scene_v1.py"
+      - "tools/validate_revision_producer_receipt.py"
+      - "tools/test_revision_producer_receipt_schema.py"
+      - "apps/web/export-preview-v1.schema.json"
+      - "tools/validate_export_preview.py"
+      - "tools/test_export_preview_schema.py"
+      - "tools/verify_editable_export_geometry.py"
+      - "tools/test_editable_export_geometry.py"
+      - "tools/build_revision_producer_receipt.py"
+      - "tools/test_build_revision_producer_receipt.py"
+      - "packages/protocol/scene/v1/**"
+      - "packages/protocol/revision/v1/**"
+      - "docs/web-editor-acceptance-preflight-v1.md"
+      - ".github/workflows/web-acceptance-preflight.yml"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Acceptance gate mode"
+        required: true
+        default: "preflight"
+        type: choice
+        options:
+          - preflight
+          - strict
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance-gate:
+    runs-on: ubuntu-latest
+    env:
+      ACCEPTANCE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'preflight' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install "jsonschema==4.23.0"
+      - name: Prove Viewer receipt privacy allowlist fails closed
+        run: python tools/test_viewer_geometry_receipt_schema.py
+      - name: Prove revision producer receipt allowlist fails closed
+        run: python tools/test_revision_producer_receipt_schema.py
+      - name: Prove export preview is source-free and semantically bound
+        run: python tools/test_export_preview_schema.py
+      - name: Prove editable export geometry binds the selected NodeId
+        run: python tools/test_editable_export_geometry.py
+      - name: Prove local revision receipt builder reuses kernel semantics
+        run: python tools/test_build_revision_producer_receipt.py
+      - name: Prove browser acceptance binds canonical revision and Scene chain
+        run: python tools/test_browser_acceptance_binding.py
+      - name: Fetch pinned Apache POI SampleNewsletter.pub Git blob
+        run: |
+          mkdir -p .acceptance-input
+          curl -fsSL "https://api.github.com/repos/apache/poi/git/blobs/94900925af5832c493784f3cb51563f838a64df8" > .acceptance-input/blob.json
+          python - <<'PY'
+          import base64, json, pathlib
+          data = json.loads(pathlib.Path(".acceptance-input/blob.json").read_text())
+          if data.get("encoding") != "base64":
+              raise SystemExit("unexpected Git blob encoding")
+          raw = base64.b64decode(data["content"])
+          pathlib.Path(".acceptance-input/SampleNewsletter.pub").write_bytes(raw)
+          PY
+      - name: Validate real-PUB acceptance gate
+        run: |
+          python tools/validate_web_acceptance_preflight.py \
+            --fixture .acceptance-input/SampleNewsletter.pub \
+            --mode "$ACCEPTANCE_MODE" \
+            --output .acceptance-input/acceptance-gate.json
+      - name: Assert claim matches requested mode
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+          mode = os.environ["ACCEPTANCE_MODE"]
+          result = json.loads(pathlib.Path(".acceptance-input/acceptance-gate.json").read_text())
+          if mode == "strict":
+              assert result["acceptance_ready"] is True
+              assert result["claim"] == "real_pub_browser_acceptance_ready"
+              assert result["blockers"] == []
+              print("strict real-PUB acceptance gate is ready")
+          else:
+              if result["acceptance_ready"]:
+                  assert result["claim"] == "real_pub_browser_acceptance_ready"
+                  print("all real receipts present; strict dispatch may now close the gate")
+              else:
+                  assert result["claim"] == "preflight_only_not_product_acceptance"
+                  assert result["blockers"], "non-ready preflight must name at least one blocker"
+                  missing_by_slot = {
+                      "revision_producer": "missing_real_revision_producer_receipt",
+                      "viewer_geometry": "missing_real_viewer_geometry_receipt",
+                      "browser_acceptance": "missing_real_browser_acceptance_receipt",
+                  }
+                  for slot, blocker in missing_by_slot.items():
+                      if result["validated"][slot]:
+                          assert blocker not in result["blockers"], (
+                              f"{slot} validated but stale missing blocker remained"
+                          )
+                  print(
+                      "preflight correctly remains non-acceptance with current blockers: "
+                      + ", ".join(result["blockers"])
+                  )
+          PY
+      - name: Prove strict mode fails closed while real receipts are missing
+        if: env.ACCEPTANCE_MODE == 'preflight'
+        run: |
+          python - <<'PY'
+          import json, pathlib, subprocess, sys
+          result = json.loads(pathlib.Path(".acceptance-input/acceptance-gate.json").read_text())
+          if result["acceptance_ready"]:
+              print("real receipts already present; negative strict proof not applicable")
+              raise SystemExit(0)
+          command = [
+              sys.executable,
+              "tools/validate_web_acceptance_preflight.py",
+              "--fixture",
+              ".acceptance-input/SampleNewsletter.pub",
+              "--mode",
+              "strict",
+          ]
+          completed = subprocess.run(command, check=False)
+          if completed.returncode == 0:
+              raise SystemExit("strict mode unexpectedly passed without complete real receipts")
+          print("strict mode correctly failed closed")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-acceptance-01-${{ env.ACCEPTANCE_MODE }}
+          path: .acceptance-input/acceptance-gate.json
+          if-no-files-found: error

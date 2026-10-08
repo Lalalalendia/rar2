@@ -1,0 +1,160 @@
+# Corel X4 exact Filters MSI -> IEPUB.flt static fingerprint
+name: PUB Corel X4 Filters archaeology
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/pub-corel-x4-filters.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: pub-corel-x4-filters
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install inert MSI and PE tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y msitools binutils file python3-pefile
+
+      - name: Download exact Corel X4 Filters MSI evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: corel-x4-filters-35986080377
+          path: acquired
+          github-token: ${{ github.token }}
+          run-id: 35986080377
+
+      - name: Verify exact Filters MSI identity and contract
+        shell: bash
+        env:
+          EXPECTED_SHA256: "fe3f3246f4858af2c7d8c4f8f5f02d1a905403dda43a3ef7500dbae4308307b4"
+          FILTERS_PRODUCT_CODE: "{7F05E704-30A6-421A-97A7-8EEB1C7FF017}"
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          msi="$(find acquired -type f -iname 'Filters.msi' -print -quit)"
+          test -n "$msi"
+          actual="$(sha256sum "$msi" | awk '{print $1}')"
+          test "$actual" = "$EXPECTED_SHA256"
+          cp "$msi" out/Filters.msi
+          sha256sum out/Filters.msi > out/filters-msi-sha256.txt
+          sha1sum out/Filters.msi > out/filters-msi-sha1.txt
+          md5sum out/Filters.msi > out/filters-msi-md5.txt
+          stat -c 'size_bytes=%s' out/Filters.msi > out/filters-msi-size.txt
+          file out/Filters.msi > out/filters-msi-file.txt
+          msiinfo export out/Filters.msi Property > out/filters-Property.idt
+          msiinfo export out/Filters.msi File > out/filters-File.idt
+          msiinfo export out/Filters.msi Component > out/filters-Component.idt
+          grep -Fqi "$FILTERS_PRODUCT_CODE" out/filters-Property.idt
+          grep -Ei 'ProductCode|ProductName|ProductVersion|Manufacturer' out/filters-Property.idt > out/filters-property-summary.txt
+          grep -Ei 'iepub\.flt|pub|publisher|cdrpub' out/filters-File.idt > out/filters-pub-hits.txt || true
+          grep -Ei '^iepub\.flt[[:space:]]' out/filters-File.idt > out/iepub-file-table-row.txt
+          test -s out/iepub-file-table-row.txt
+
+      - name: Extract exact IEPUB.flt from Filters MSI
+        run: |
+          set -euo pipefail
+          mkdir -p filters-tree
+          msiextract -C filters-tree out/Filters.msi > out/msiextract.log 2>&1
+          find filters-tree -type f -printf '%P\t%s\n' | sort > out/filters-tree.tsv
+          iepub="$(find filters-tree -type f -iname 'IEPUB.flt' -print -quit)"
+          test -n "$iepub"
+          cp "$iepub" out/IEPUB.flt
+          test "$(stat -c %s out/IEPUB.flt)" = "513312"
+          sha256sum out/IEPUB.flt > out/iepub-sha256.txt
+          sha1sum out/IEPUB.flt > out/iepub-sha1.txt
+          md5sum out/IEPUB.flt > out/iepub-md5.txt
+          stat -c 'size_bytes=%s' out/IEPUB.flt > out/iepub-size.txt
+          file out/IEPUB.flt > out/iepub-file.txt
+          objdump -p out/IEPUB.flt > out/iepub-objdump-p.txt 2>&1 || true
+          objdump -x out/IEPUB.flt > out/iepub-objdump-x.txt 2>&1 || true
+          strings -a -n 4 out/IEPUB.flt > out/iepub-strings-ascii.txt
+          strings -el -n 4 out/IEPUB.flt > out/iepub-strings-utf16.txt
+          grep -iE 'publisher|mspub|\.pub|microsoft|corel|copyright|version|filter'             out/iepub-strings-ascii.txt out/iepub-strings-utf16.txt > out/iepub-interesting-strings.txt || true
+
+      - name: Produce PE/version/import fingerprint
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, pefile
+          from pathlib import Path
+
+          p=Path("out/IEPUB.flt")
+          data=p.read_bytes()
+          pe=pefile.PE(str(p), fast_load=False)
+          imports=[]
+          if hasattr(pe, "DIRECTORY_ENTRY_IMPORT"):
+              for entry in pe.DIRECTORY_ENTRY_IMPORT:
+                  dll=(entry.dll or b"").decode("ascii","replace")
+                  names=[]
+                  for imp in entry.imports:
+                      names.append({
+                          "name": (imp.name or b"").decode("ascii","replace") if imp.name else None,
+                          "ordinal": imp.ordinal,
+                      })
+                  imports.append({"dll":dll,"symbols":names})
+          file_info={}
+          for block in getattr(pe, "FileInfo", []) or []:
+              if not isinstance(block, list):
+                  block=[block]
+              for item in block:
+                  if getattr(item, "Key", b"") == b"StringFileInfo":
+                      for st in item.StringTable:
+                          for k,v in st.entries.items():
+                              file_info[k.decode("utf-8","replace") if isinstance(k,bytes) else str(k)] = (
+                                  v.decode("utf-8","replace") if isinstance(v,bytes) else str(v)
+                              )
+          receipt={
+              "schema":"rar-corel-x4-iepub-static-v1",
+              "source_run_id":35986080377,
+              "source_artifact_id":10802585819,
+              "filters_msi_sha256":"fe3f3246f4858af2c7d8c4f8f5f02d1a905403dda43a3ef7500dbae4308307b4",
+              "filters_product_code":"{7F05E704-30A6-421A-97A7-8EEB1C7FF017}",
+              "filters_product_name":"CorelDRAW Graphics Suite X4 - Filters",
+              "filters_product_version":"14.2",
+              "iepub_filename":"IEPUB.flt",
+              "iepub_expected_file_table_version":"14.0.0.701",
+              "iepub_size":len(data),
+              "iepub_sha256":hashlib.sha256(data).hexdigest(),
+              "machine":hex(pe.FILE_HEADER.Machine),
+              "timestamp":pe.FILE_HEADER.TimeDateStamp,
+              "image_base":hex(pe.OPTIONAL_HEADER.ImageBase),
+              "entry_point_rva":hex(pe.OPTIONAL_HEADER.AddressOfEntryPoint),
+              "file_version_info":file_info,
+              "imports":imports,
+              "boundary":"Static extraction/fingerprint only. Presence in Corel X4 Filters proves shipped PUB import component identity, not semantic fidelity or lineage with Microsoft code."
+          }
+          Path("out/iepub-receipt.json").write_text(json.dumps(receipt,indent=2,ensure_ascii=False),encoding="utf-8")
+          print(json.dumps({
+              "iepub_sha256":receipt["iepub_sha256"],
+              "size":receipt["iepub_size"],
+              "file_version_info":file_info,
+              "import_dlls":[x["dll"] for x in imports],
+          },indent=2,ensure_ascii=False))
+          PY
+
+      - name: Upload bounded static evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: corel-x4-iepub-static-${{ github.run_id }}
+          path: |
+            out/filters-*.txt
+            out/filters-*.idt
+            out/iepub-*.txt
+            out/iepub-receipt.json
+            out/IEPUB.flt
+          if-no-files-found: error
+          retention-days: 30

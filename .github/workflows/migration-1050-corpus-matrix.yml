@@ -1,0 +1,508 @@
+name: Migration 1050 corpus matrix
+# Exact-source migration evidence over the pinned Reader-1050 corpus.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/migration-1050-corpus-matrix.yml"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "!vendor/producer-a/crates/pub-editor/src/session_geometry.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_image.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_text.rs"
+      - "!vendor/producer-a/crates/pub-editor/tests/story_text_session_v1.rs"
+      - "vendor/producer-a/crates/pub-export/**"
+      - "vendor/producer-a/crates/pub-idml/**"
+      - "vendor/producer-a/crates/pub-odg/**"
+      - "vendor/producer-a/crates/pub-reader/Cargo.toml"
+      - "vendor/producer-a/crates/pub-reader/src/**"
+      - "!vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
+      - "!vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
+      - "!vendor/producer-a/crates/pub-reader/src/story_frame_analysis.rs"
+      - "tools/ci/scribus_idml_consumer.py"
+  push:
+    branches:
+      - validation/migration-corpus-1050-01
+    paths:
+      - ".github/workflows/migration-1050-corpus-matrix.yml"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
+      - "vendor/producer-a/crates/pub-export/**"
+      - "vendor/producer-a/crates/pub-idml/**"
+      - "vendor/producer-a/crates/pub-odg/**"
+      - "vendor/producer-a/crates/pub-reader/**"
+  schedule:
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Corpus scope
+        required: true
+        default: full
+        type: choice
+        options:
+          - smoke
+          - full
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: migration-1050-corpus-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/migration-corpus-rust
+  CORPUS_ROOT: ${{ github.workspace }}/input/corpus/materialized/native
+  EVIDENCE_ROOT: ${{ github.workspace }}/target/migration-1050-corpus
+  PINNED_CORPUS_RUN_ID: "36573574820"
+  PINNED_CORPUS_ARTIFACT: "pub-corpus-1000-36573574820"
+  PINNED_CORPUS_COUNT: "1050"
+  PINNED_CORPUS_DIGEST: "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve corpus scope
+        id: scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            mode=smoke
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            mode="${{ inputs.mode }}"
+          else
+            mode=full
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          if [[ "$mode" == "full" ]]; then
+            echo "route_count=1050" >> "$GITHUB_OUTPUT"
+            echo "consumer_cap=96" >> "$GITHUB_OUTPUT"
+          else
+            echo "route_count=96" >> "$GITHUB_OUTPUT"
+            echo "consumer_cap=12" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Assert migration corpus scope contract
+        shell: bash
+        env:
+          MODE: ${{ steps.scope.outputs.mode }}
+          ROUTE_COUNT: ${{ steps.scope.outputs.route_count }}
+          CONSUMER_CAP: ${{ steps.scope.outputs.consumer_cap }}
+        run: |
+          set -euo pipefail
+          if [[ "$MODE" == "smoke" ]]; then
+            test "$ROUTE_COUNT" = "96"
+            test "$CONSUMER_CAP" = "12"
+          else
+            test "$ROUTE_COUNT" = "1050"
+            test "$CONSUMER_CAP" = "96"
+          fi
+
+      - name: Download pinned exact 1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PINNED_CORPUS_ARTIFACT }}
+          path: input/corpus
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: ${{ env.PINNED_CORPUS_RUN_ID }}
+
+      - name: Verify exact corpus identity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["CORPUS_ROOT"])
+          paths = sorted(root.glob("*.pub"))
+          shas = [p.stem.casefold() for p in paths]
+          digest = hashlib.sha256(
+              "".join(sha + "\n" for sha in shas).encode("ascii")
+          ).hexdigest()
+          assert len(paths) == int(os.environ["PINNED_CORPUS_COUNT"]), len(paths)
+          assert len(set(shas)) == len(shas), "duplicate corpus SHA"
+          assert digest == os.environ["PINNED_CORPUS_DIGEST"], (
+              digest,
+              os.environ["PINNED_CORPUS_DIGEST"],
+          )
+          print(f"verified {len(paths)} exact PUB files; sha-list digest={digest}")
+          PY
+
+      - name: Select deterministic route corpus
+        env:
+          ROUTE_COUNT: ${{ steps.scope.outputs.route_count }}
+          MODE: ${{ steps.scope.outputs.mode }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT"
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["CORPUS_ROOT"])
+          evidence = Path(os.environ["EVIDENCE_ROOT"])
+          paths = sorted(root.glob("*.pub"))
+          count = int(os.environ["ROUTE_COUNT"])
+
+          mandatory = {
+              "c96df4b2d4ce3d5bb238b2b31d8021501495b9bd15ff44eb9d918495c342430b",
+              "b29ed1e9227e67256a58d23cbea58b9bcfb38943dd9ed07a4110f4cf8959dbe4",
+              "6cb88d4e02f823876a23d7f7414c7d370ca30996c30f145ec92b62f519b22170",
+              "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e",
+              "d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f",
+          }
+
+          by_sha = {p.stem.casefold(): p for p in paths}
+          if count == len(paths):
+              selected = paths
+          else:
+              missing = sorted(mandatory - set(by_sha))
+              assert not missing, ("mandatory witness missing", missing)
+              selected = [by_sha[sha] for sha in sorted(mandatory)]
+              remaining = [p for p in paths if p.stem.casefold() not in mandatory]
+              remaining.sort(
+                  key=lambda p: hashlib.sha256(
+                      ("chaptera-migration-pr-v1:" + p.stem.casefold()).encode("ascii")
+                  ).hexdigest()
+              )
+              selected.extend(remaining[: count - len(selected)])
+              selected.sort(key=lambda p: p.stem.casefold())
+
+          assert len(selected) == count, (len(selected), count)
+          rows = [
+              {
+                  "source_sha256": p.stem.casefold(),
+                  "source_bytes": p.stat().st_size,
+                  "path": str(p),
+                  "mandatory_witness": p.stem.casefold() in mandatory,
+              }
+              for p in selected
+          ]
+          (evidence / "selection.json").write_text(
+              json.dumps(
+                  {
+                      "schema": "chaptera.migration-corpus-selection.v1",
+                      "mode": os.environ["MODE"],
+                      "selected_count": len(rows),
+                      "pinned_corpus_count": len(paths),
+                      "rows": rows,
+                  },
+                  indent=2,
+                  sort_keys=True,
+              )
+              + "\n"
+          )
+          (evidence / "selected.txt").write_text(
+              "".join(row["path"] + "\n" for row in rows)
+          )
+          print(json.dumps({
+              "mode": os.environ["MODE"],
+              "selected_count": len(rows),
+              "mandatory_witness_count": sum(r["mandatory_witness"] for r in rows),
+          }, indent=2))
+          PY
+
+      - name: Restore migration corpus Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: target/migration-corpus-rust
+          key: migration-corpus-v1-${{ runner.os }}-rust-1.94.1-${{ hashFiles('vendor/producer-a/Cargo.lock', 'vendor/producer-a/Cargo.toml', 'vendor/producer-a/crates/**/Cargo.toml') }}
+
+      - name: Build exact-source migration probe
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
+          cargo build             --manifest-path vendor/producer-a/Cargo.toml             -p pub-editor             --release             --bin editable_route_probe
+
+      - name: Probe every selected PUB without materialization
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT/routes"
+          while IFS= read -r pub; do
+            sha="$(basename "$pub" .pub)"
+            mkdir -p "$EVIDENCE_ROOT/routes/$sha"
+            "$CARGO_TARGET_DIR/release/editable_route_probe"               "$pub"               --label "$sha.pub"               > "$EVIDENCE_ROOT/routes/$sha/route.json"
+          done < "$EVIDENCE_ROOT/selected.txt"
+
+      - name: Build route matrix and select independent-consumer sample
+        env:
+          CONSUMER_CAP: ${{ steps.scope.outputs.consumer_cap }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from collections import Counter
+          from pathlib import Path
+
+          root = Path(os.environ["EVIDENCE_ROOT"])
+          selection = json.loads((root / "selection.json").read_text())
+          selected_by_sha = {row["source_sha256"]: row for row in selection["rows"]}
+          rows = []
+
+          for route_path in sorted((root / "routes").glob("*/route.json")):
+              data = json.loads(route_path.read_text())
+              sha = data["source_sha256"]
+              assert sha in selected_by_sha, sha
+              assert data["source_label"] == sha + ".pub", data["source_label"]
+              rows.append({
+                  "source_sha256": sha,
+                  "source_bytes": data["source_bytes"],
+                  "open_state": data["open_state"],
+                  "reason_code": data.get("reason_code"),
+                  "idml_state": data["targets"]["idml"]["state"],
+                  "idml_reason_code": data["targets"]["idml"].get("reason_code"),
+                  "idml_counts": data["targets"]["idml"].get("counts"),
+                  "odg_state": data["targets"]["odg"]["state"],
+                  "odg_reason_code": data["targets"]["odg"].get("reason_code"),
+                  "odg_counts": data["targets"]["odg"].get("counts"),
+                  "mandatory_witness": selected_by_sha[sha]["mandatory_witness"],
+              })
+
+          assert len(rows) == selection["selected_count"], (
+              len(rows),
+              selection["selected_count"],
+          )
+
+          admitted = [r for r in rows if r["open_state"] == "admitted"]
+          for row in admitted:
+              for target in ("idml", "odg"):
+                  counts = row[f"{target}_counts"]
+                  state = row[f"{target}_state"]
+                  if state == "available_with_declared_losses":
+                      assert counts is not None, row
+                      assert counts["blocking"] == 0, row
+
+          candidate = [
+              row for row in admitted
+              if row["idml_state"] == "available_with_declared_losses"
+              or row["odg_state"] == "available_with_declared_losses"
+          ]
+          candidate.sort(
+              key=lambda row: hashlib.sha256(
+                  ("chaptera-migration-consumer-v1:" + row["source_sha256"]).encode("ascii")
+              ).hexdigest()
+          )
+          consumer = candidate[: int(os.environ["CONSUMER_CAP"])]
+          (root / "consumer-selected.txt").write_text(
+              "".join(
+                  str(Path(os.environ["CORPUS_ROOT"]) / (row["source_sha256"] + ".pub")) + "\n"
+                  for row in consumer
+              )
+          )
+
+          def state_counts(target):
+              return dict(sorted(Counter(r[f"{target}_state"] for r in rows).items()))
+
+          summary = {
+              "schema": "chaptera.migration-1050-corpus-matrix.v1",
+              "mode": selection["mode"],
+              "pinned_corpus_count": selection["pinned_corpus_count"],
+              "route_count": len(rows),
+              "editor_admitted": len(admitted),
+              "editor_not_admitted": len(rows) - len(admitted),
+              "idml_states": state_counts("idml"),
+              "odg_states": state_counts("odg"),
+              "consumer_selected_count": len(consumer),
+              "unexpected_probe_failures": 0,
+              "rows": rows,
+          }
+          (root / "summary.pre-consumer.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps({
+              key: value for key, value in summary.items() if key != "rows"
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Install independent editable-output consumers
+        if: hashFiles('target/migration-1050-corpus/consumer-selected.txt') != ''
+        run: |
+          set -euo pipefail
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus libreoffice-draw xvfb fonts-montserrat
+
+      - name: Materialize independently validated target sample
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT/consumer"
+          while IFS= read -r pub; do
+            test -n "$pub" || continue
+            sha="$(basename "$pub" .pub)"
+            out="$EVIDENCE_ROOT/consumer/$sha"
+            mkdir -p "$out"
+            "$CARGO_TARGET_DIR/release/editable_route_probe"               "$pub"               --label "$sha.pub"               --materialize-dir "$out"               > "$out/route.json"
+          done < "$EVIDENCE_ROOT/consumer-selected.txt"
+
+      - name: Validate materialized IDML through Scribus
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for idml in "$EVIDENCE_ROOT"/consumer/*/output.idml; do
+            dir="$(dirname "$idml")"
+            rm -f "$dir/consumer.sla"
+            rm -rf "$dir/scribus-home"
+            mkdir -p \
+              "$dir/scribus-home/.config" \
+              "$dir/scribus-home/.cache" \
+              "$dir/scribus-home/.local/share" \
+              "$dir/scribus-home/runtime"
+            chmod 700 "$dir/scribus-home/runtime"
+            echo "::notice::Scribus validating $idml"
+            timeout --signal=TERM --kill-after=10s 60s env \
+              HOME="$dir/scribus-home" \
+              XDG_CONFIG_HOME="$dir/scribus-home/.config" \
+              XDG_CACHE_HOME="$dir/scribus-home/.cache" \
+              XDG_DATA_HOME="$dir/scribus-home/.local/share" \
+              XDG_RUNTIME_DIR="$dir/scribus-home/runtime" \
+              CHAPTERA_SCRIBUS_SLA_OUT="$dir/consumer.sla" \
+              xvfb-run -a scribus -g -ns \
+                -py tools/ci/scribus_idml_consumer.py -- "$idml"
+            test -s "$dir/consumer.sla"
+          done
+
+      - name: Validate materialized ODG through LibreOffice Draw
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for odg in "$EVIDENCE_ROOT"/consumer/*/output.odg; do
+            dir="$(dirname "$odg")"
+            mkdir -p "$dir/libreoffice"
+            timeout --signal=TERM --kill-after=10s 60s \
+              libreoffice --headless               --convert-to fodg               --outdir "$dir/libreoffice"               "$odg"
+            test -s "$dir/libreoffice/output.fodg"
+          done
+
+      - name: Finalize migration corpus receipt
+        env:
+          REPO_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["EVIDENCE_ROOT"])
+          summary = json.loads((root / "summary.pre-consumer.json").read_text())
+          consumer_rows = []
+
+          for route_path in sorted((root / "consumer").glob("*/route.json")):
+              data = json.loads(route_path.read_text())
+              sha = data["source_sha256"]
+              directory = route_path.parent
+              idml_materialized = (directory / "output.idml").is_file()
+              odg_materialized = (directory / "output.odg").is_file()
+              row = {
+                  "source_sha256": sha,
+                  "idml_materialized": idml_materialized,
+                  "idml_consumer_opened": (
+                      (directory / "consumer.sla").is_file()
+                      if idml_materialized else None
+                  ),
+                  "odg_materialized": odg_materialized,
+                  "odg_consumer_opened": (
+                      (directory / "libreoffice" / "output.fodg").is_file()
+                      if odg_materialized else None
+                  ),
+              }
+              if idml_materialized:
+                  assert row["idml_consumer_opened"] is True, row
+              if odg_materialized:
+                  assert row["odg_consumer_opened"] is True, row
+              consumer_rows.append(row)
+
+          assert len(consumer_rows) == summary["consumer_selected_count"], (
+              len(consumer_rows),
+              summary["consumer_selected_count"],
+          )
+
+          summary["repository_commit_sha"] = os.environ["REPO_SHA"]
+          summary["consumer_rows"] = consumer_rows
+          summary["idml_materialized_count"] = sum(
+              row["idml_materialized"] for row in consumer_rows
+          )
+          summary["idml_consumer_opened_count"] = sum(
+              row["idml_consumer_opened"] is True for row in consumer_rows
+          )
+          summary["odg_materialized_count"] = sum(
+              row["odg_materialized"] for row in consumer_rows
+          )
+          summary["odg_consumer_opened_count"] = sum(
+              row["odg_consumer_opened"] is True for row in consumer_rows
+          )
+          summary["claims"] = {
+              "universal_pub_editable_export": False,
+              "native_pub_save": False,
+              "exact_source_admission_required": True,
+              "consumer_validation_is_sampled": (
+                  summary["consumer_selected_count"] < summary["route_count"]
+              ),
+          }
+          (root / "summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+
+          compact = {
+              key: value
+              for key, value in summary.items()
+              if key not in {"rows", "consumer_rows"}
+          }
+          print(json.dumps(compact, indent=2, sort_keys=True))
+
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as fh:
+              fh.write("## Migration corpus matrix\n\n")
+              fh.write(f"- mode: **{summary['mode']}**\n")
+              fh.write(f"- routed exact PUBs: **{summary['route_count']}**\n")
+              fh.write(f"- editor admitted: **{summary['editor_admitted']}**\n")
+              fh.write(f"- IDML states: `{summary['idml_states']}`\n")
+              fh.write(f"- ODG states: `{summary['odg_states']}`\n")
+              fh.write(
+                  f"- independent consumer sample: **{summary['consumer_selected_count']}**\n"
+              )
+              fh.write(
+                  f"- IDML consumer survival: **{summary['idml_consumer_opened_count']}/{summary['idml_materialized_count']}**\n"
+              )
+              fh.write(
+                  f"- ODG consumer survival: **{summary['odg_consumer_opened_count']}/{summary['odg_materialized_count']}**\n"
+              )
+          PY
+
+      - name: Upload source-safe migration corpus receipt
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: migration-1050-corpus-${{ steps.scope.outputs.mode }}-${{ github.run_id }}
+          path: |
+            target/migration-1050-corpus/selection.json
+            target/migration-1050-corpus/summary*.json
+            target/migration-1050-corpus/routes/**/route.json
+            target/migration-1050-corpus/consumer/**/route.json
+            target/migration-1050-corpus/consumer/**/*.report.json
+            target/migration-1050-corpus/consumer/**/*.report.txt
+          if-no-files-found: error
+          retention-days: 90

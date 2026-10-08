@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "chaptera.windows-support-matrix.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version","product_id","release_scope","public_copy","ci_evidence","cells"],
+  "properties": {
+    "schema_version":{"const":"chaptera.windows-support-matrix.v1"},
+    "product_id":{"const":"chaptera.reader"},
+    "release_scope":{"const":"public-v0"},
+    "public_copy":{
+      "type":"object","additionalProperties":false,
+      "required":["claim_state","baseline","required_edition_receipts","fixed_display_scales_percent","mixed_dpi_transition_support","arm64_native_support"],
+      "properties":{
+        "claim_state":{"enum":["pre_release_candidate","released"]},
+        "baseline":{"type":"string","minLength":1},
+        "required_edition_receipts":{"type":"array","items":{"type":"string"},"minItems":1,"uniqueItems":true},
+        "fixed_display_scales_percent":{"type":"array","items":{"type":"integer","minimum":50,"maximum":400},"minItems":1,"uniqueItems":true},
+        "mixed_dpi_transition_support":{"type":"boolean"},
+        "arm64_native_support":{"type":"boolean"}
+      }
+    },
+    "ci_evidence":{
+      "type":"object","additionalProperties":false,
+      "required":["github_runner_label","expected_runner_family","consumer_support_claim"],
+      "properties":{
+        "github_runner_label":{"const":"windows-latest"},
+        "expected_runner_family":{"const":"Windows Server 2025"},
+        "consumer_support_claim":{"const":false}
+      }
+    },
+    "cells":{
+      "type":"array","minItems":1,
+      "items":{
+        "type":"object","additionalProperties":false,
+        "required":["os","version","edition","architecture","state","separate_receipt_required"],
+        "properties":{
+          "os":{"type":"string","minLength":1},
+          "version":{"type":"string","minLength":1},
+          "edition":{"type":"string","minLength":1},
+          "architecture":{"enum":["x86_64","arm64"]},
+          "state":{"enum":["candidate","supported","compatibility_only","excluded","evaluation_only","ci_only"]},
+          "separate_receipt_required":{"type":"boolean"},
+          "required_evidence":{"type":"array","items":{"type":"string"},"uniqueItems":true},
+          "receipt_refs":{"type":"array","items":{"type":"string"},"uniqueItems":true},
+          "note":{"type":"string"}
+        }
+      }
+    }
+  }
+}

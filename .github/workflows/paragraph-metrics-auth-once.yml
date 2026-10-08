@@ -1,0 +1,71 @@
+name: Paragraph metrics authority one-shot
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/paragraph-metrics-auth-once.yml"
+      - "tools/windows/run_paragraph_metrics_auth_direct.ps1"
+      - "tools/research-runner/experiments/paragraph-metrics-auth-01.packet.json"
+      - "tools/research-runner/operations/paragraph_metrics_auth_01.ps1"
+      - "tools/research-runner/analysis/paragraph_metrics_auth_01_blast_radius.py"
+      - "tools/research-runner/analysis/paragraph_metrics_auth_01_structural.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'publisher-2019' || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    outputs:
+      trusted_sha: ${{ steps.trust.outputs.trusted_sha }}
+    steps:
+      - name: Bind checkout
+        id: trust
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            "trusted_sha=${{ github.event.pull_request.head.sha }}" >> $env:GITHUB_OUTPUT
+          } else {
+            "trusted_sha=${{ github.sha }}" >> $env:GITHUB_OUTPUT
+          }
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.trust.outputs.trusted_sha }}
+          persist-credentials: false
+
+      - name: Validate packet and direct launcher
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/research-runner/validate_packet.py `
+            --packet tools/research-runner/experiments/paragraph-metrics-auth-01.packet.json `
+            --expected-environment publisher-2019
+          if ($LASTEXITCODE -ne 0) { throw "Paragraph metrics packet validation failed." }
+          $path = "tools/windows/run_paragraph_metrics_auth_direct.ps1"
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path).Path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "PowerShell parser rejected paragraph metrics direct launcher."
+          }
+          $text = Get-Content $path -Raw
+          foreach ($required in @(
+            "ExpectedStructuralMerge",
+            "PUB_RESEARCH_FIXTURE_ROOT",
+            "paragraph_metrics_auth_01_blast_radius.py",
+            "paragraph_metrics_auth_01_structural.py",
+            "paragraph_metric_semantics_granted",
+            "effective_line_origins_and_heights",
+            "evidence-manifest.json"
+          )) {
+            if (-not $text.Contains($required)) { throw "Missing direct launcher marker: $required" }
+          }

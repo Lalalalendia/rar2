@@ -1,0 +1,35 @@
+# Publisher-backed PAGE role acceptance.
+# Ordinary Reader/Viewer PRs execute this contract inside the selective visual runner.
+name: Reader PAGE role observation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  page-role:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Run Publisher-backed PAGE role acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/reader-page-role"
+          python tools/reader_page_role_observation.py --out "$out"
+          echo "CHAPTERA_PAGE_ROLE_OUT=$out" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reader-page-role-observation
+          path: ${{ env.CHAPTERA_PAGE_ROLE_OUT }}
+          if-no-files-found: error
+          retention-days: 30

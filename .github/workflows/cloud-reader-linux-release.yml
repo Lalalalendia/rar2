@@ -1,0 +1,94 @@
+name: Cloud Reader Linux release packet
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/cloud-reader/**"
+      - "apps/chaptera-server/**"
+      - "crates/chaptera-untrusted-pub-scan/**"
+      - "deploy/config/chaptera.reader.prod.example.toml"
+      - "deploy/systemd/chaptera-reader.service"
+      - "deploy/nginx/chaptera-reader.conf.example"
+      - "deploy/install-reader-host.sh"
+      - "tools/migration_pdf_worker_isolation.py"
+      - "tools/run_cloud_reader_guest_host_acceptance.py"
+      - ".github/workflows/cloud-reader-linux-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cloud-reader-linux-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Build canonical release binary
+        run: cargo build --release -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Assemble deployment packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/tools
+          install -m 0755 target/release/chaptera dist/chaptera
+          install -m 0644 deploy/config/chaptera.reader.prod.example.toml dist/chaptera.reader.prod.example.toml
+          install -m 0644 deploy/systemd/chaptera-reader.service dist/chaptera-reader.service
+          install -m 0644 deploy/nginx/chaptera-reader.conf.example dist/chaptera-reader.conf.example
+          install -m 0755 deploy/install-reader-host.sh dist/install-reader-host.sh
+          install -m 0755 tools/migration_pdf_worker_isolation.py dist/tools/migration_pdf_worker_isolation.py
+          install -m 0755 tools/run_cloud_reader_guest_host_acceptance.py dist/run_cloud_reader_guest_host_acceptance.py
+          printf '%s\n' "${GITHUB_SHA}" > dist/COMMIT_SHA
+          (cd dist && sha256sum \
+            chaptera \
+            chaptera.reader.prod.example.toml \
+            chaptera-reader.service \
+            chaptera-reader.conf.example \
+            install-reader-host.sh \
+            tools/migration_pdf_worker_isolation.py \
+            run_cloud_reader_guest_host_acceptance.py \
+            COMMIT_SHA > SHA256SUMS)
+          tar -C dist -czf chaptera-cloud-reader-linux-amd64.tar.gz \
+            chaptera \
+            chaptera.reader.prod.example.toml \
+            chaptera-reader.service \
+            chaptera-reader.conf.example \
+            install-reader-host.sh \
+            tools/migration_pdf_worker_isolation.py \
+            run_cloud_reader_guest_host_acceptance.py \
+            COMMIT_SHA \
+            SHA256SUMS
+          sha256sum chaptera-cloud-reader-linux-amd64.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chaptera-cloud-reader-linux-amd64-${{ github.sha }}
+          path: chaptera-cloud-reader-linux-amd64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish immutable public release asset
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: cloud-reader-${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="chaptera-cloud-reader-linux-amd64.tar.gz"
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${asset}" --clobber --repo "${GITHUB_REPOSITORY}"
+          else
+            gh release create "${TAG}" "${asset}"               --repo "${GITHUB_REPOSITORY}"               --target "${GITHUB_SHA}"               --title "Chaptera Cloud Reader ${GITHUB_SHA}"               --notes "Immutable Linux amd64 deployment packet for Chaptera Cloud Reader."               --prerelease
+          fi

@@ -1,0 +1,37 @@
+name: PUB KSU Publication4 Provenance Probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/provenance/ksu_publication4_probe.py"
+      - ".github/workflows/pub-ksu-publication4-provenance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Query archive metadata only
+        run: |
+          set -euo pipefail
+          python tools/provenance/ksu_publication4_probe.py --out out/ksu-publication4
+      - name: Guard no payload downloads
+        run: |
+          set -euo pipefail
+          bad="$(find out/ksu-publication4 -type f | grep -Eiv '\.(json|txt|md)$' || true)"
+          if [[ -n "$bad" ]]; then echo "$bad" >&2; exit 4; fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pub-ksu-publication4-provenance-${{ github.run_id }}
+          path: out/ksu-publication4/**
+          if-no-files-found: error
+          retention-days: 90

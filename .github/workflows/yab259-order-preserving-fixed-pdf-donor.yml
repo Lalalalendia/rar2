@@ -1,0 +1,83 @@
+name: Yab 259 order-preserving fixed-PDF donor
+
+on:
+  pull_request:
+    paths:
+      - "tools/yab259_order_preserving_donor.py"
+      - "tools/run_yab259_order_preserving_fixed_pdf_packet_renderer.py"
+      - "tools/test_yab259_order_preserving_donor.py"
+      - "tools/yab259_fixed_pdf_packet_renderer.rs"
+      - "tools/run_yab259_fixed_pdf_closure.py"
+      - ".github/workflows/yab259-order-preserving-fixed-pdf-donor.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yab259-order-preserving-fixed-pdf-donor-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Source-level boundary tests
+        run: python tools/test_yab259_order_preserving_donor.py -v
+
+      - name: Materialize exact public Yab donor
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/HeisLuka/yab.git /tmp/yab-source
+          git -C /tmp/yab-source cat-file -e 4f5d8a57abc089d1ed8eb1326cf9bed602281f7e^{commit}
+
+      - name: Apply bounded order repair and compile existing packet renderer
+        run: |
+          python - <<'PY'
+          import pathlib
+          import shutil
+          import subprocess
+          import sys
+
+          root = pathlib.Path.cwd()
+          sys.path.insert(0, str(root / "tools"))
+          from yab259_order_preserving_donor import (
+              bind_yab_repository,
+              prepare_order_preserving_pdf_donor,
+          )
+
+          source = bind_yab_repository(pathlib.Path("/tmp/yab-source"))
+          donor = pathlib.Path("/tmp/yab-ordered-packet-donor")
+          base_digest, ordered_digest = prepare_order_preserving_pdf_donor(source, donor)
+
+          pdf = (donor / "crates" / "pub-pdf" / "src" / "lib.rs").read_text(encoding="utf-8")
+          assert "surfaces.sort_by_key(|surface| surface.origin)" not in pdf
+          assert "nodes.sort_by_key(|node| node.origin)" not in pdf
+          assert "reports.sort_by_key(|node| node.origin)" in pdf
+
+          bin_dir = donor / "crates" / "pub-cli" / "src" / "bin"
+          bin_dir.mkdir(parents=True, exist_ok=True)
+          shutil.copyfile(
+              root / "tools" / "yab259_fixed_pdf_packet_renderer.rs",
+              bin_dir / "fixed-pdf-packet.rs",
+          )
+          subprocess.run(
+              [
+                  "cargo",
+                  "check",
+                  "--manifest-path",
+                  str(donor / "Cargo.toml"),
+                  "-p",
+                  "pub-cli",
+                  "--bin",
+                  "fixed-pdf-packet",
+              ],
+              cwd=donor,
+              check=True,
+          )
+          print(f"base_repair_sha256={base_digest}")
+          print(f"ordered_repair_sha256={ordered_digest}")
+          PY

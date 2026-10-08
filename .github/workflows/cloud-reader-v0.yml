@@ -1,0 +1,136 @@
+name: Cloud Reader V0 contract
+
+on:
+  pull_request:
+    paths:
+      - "apps/cloud-reader/**"
+      - "deploy/caddy/CloudReader.Caddyfile.example"
+      - "docs/cloud-reader-static-release.md"
+      - "apps/chaptera-server/src/product_api_http.rs"
+      - "apps/chaptera-server/src/reader_scene_v1.rs"
+      - "apps/chaptera-server/src/guest_reader_http.rs"
+      - "apps/chaptera-server/src/guest_reader_runtime.rs"
+      - "apps/chaptera-server/src/guest_reader_worker.rs"
+      - "apps/chaptera-server/src/untrusted_pub_worker.rs"
+      - "apps/chaptera-server/src/source_ingress_security.rs"
+      - "apps/chaptera-server/src/cli.rs"
+      - "apps/chaptera-server/src/schema_migration.rs"
+      - "tools/run_cloud_migration_receipt.py"
+      - "apps/chaptera-server/src/public_rate_limit.rs"
+      - "apps/chaptera-server/src/blob_store.rs"
+      - "apps/chaptera-server/src/config.rs"
+      - "apps/chaptera-server/src/main.rs"
+      - "apps/chaptera-server/src/lib.rs"
+      - "apps/chaptera-server/src/cloud_reader_assets.rs"
+      - "apps/chaptera-server/src/serve.rs"
+      - "apps/chaptera-server/migrations/0017_reader_guest_sessions.sql"
+      - "apps/chaptera-server/Cargo.toml"
+      - ".github/workflows/cloud-reader-v0.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/cloud-reader/**"
+      - "deploy/caddy/CloudReader.Caddyfile.example"
+      - "docs/cloud-reader-static-release.md"
+      - "apps/chaptera-server/src/product_api_http.rs"
+      - "apps/chaptera-server/src/reader_scene_v1.rs"
+      - "apps/chaptera-server/src/guest_reader_http.rs"
+      - "apps/chaptera-server/src/guest_reader_runtime.rs"
+      - "apps/chaptera-server/src/guest_reader_worker.rs"
+      - "apps/chaptera-server/src/untrusted_pub_worker.rs"
+      - "apps/chaptera-server/src/source_ingress_security.rs"
+      - "apps/chaptera-server/src/cli.rs"
+      - "apps/chaptera-server/src/schema_migration.rs"
+      - "tools/run_cloud_migration_receipt.py"
+      - "apps/chaptera-server/src/public_rate_limit.rs"
+      - "apps/chaptera-server/src/blob_store.rs"
+      - "apps/chaptera-server/src/config.rs"
+      - "apps/chaptera-server/src/main.rs"
+      - "apps/chaptera-server/src/lib.rs"
+      - "apps/chaptera-server/src/cloud_reader_assets.rs"
+      - "apps/chaptera-server/src/serve.rs"
+      - "apps/chaptera-server/migrations/0017_reader_guest_sessions.sql"
+      - "apps/chaptera-server/Cargo.toml"
+      - ".github/workflows/cloud-reader-v0.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Guard read-only surface and consent boundary
+        run: python3 apps/cloud-reader/check_contract.py
+      - name: Test bounded Cloud Reader SVG renderer
+        run: node --test apps/cloud-reader/render-v1.test.mjs
+      - name: Test canonical reading controls and privacy-safe paths
+        run: node --test apps/cloud-reader/reader-model.test.mjs
+
+  reading-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install the existing pinned browser acceptance runtime
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Exercise desktop, mobile and open lifecycle in Chromium
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node apps/cloud-reader/reader-browser.test.mjs
+      - name: Measure preview and TABLE text scale in real SVG user units
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node apps/cloud-reader/render-browser.test.mjs
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Build the existing canonical guest Scene producer
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+      - name: Measure pinned real PUB scenes in the same browser consumer
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node apps/cloud-reader/real-browser.test.mjs
+      - name: Install the pinned canonical Caddy version
+        run: |
+          curl --fail --location --retry 3 \
+            https://github.com/caddyserver/caddy/releases/download/v2.10.2/caddy_2.10.2_linux_amd64.tar.gz \
+            --output "$RUNNER_TEMP/caddy.tar.gz"
+          echo "5c218bc34c9197369263da7e9317a83acdbd80ef45d94dca5eff76e727c67cdd  $RUNNER_TEMP/caddy.tar.gz" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/reader-caddy"
+          tar --no-same-owner -xzf "$RUNNER_TEMP/caddy.tar.gz" -C "$RUNNER_TEMP/reader-caddy" caddy
+      - name: Verify exact Reader assets and exercise the one-binary edge shape
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          READER_CADDY: ${{ runner.temp }}/reader-caddy/caddy
+        run: node apps/cloud-reader/release-browser.test.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cloud-reader-ui-synthetic
+          path: |
+            target/cloud-reader-ui/
+            target/cloud-reader-render/
+            target/cloud-reader-real/
+            target/cloud-reader-release/edge-receipt.json
+            target/cloud-reader-release/released-reader.png
+            target/cloud-reader-release/build-a/cloud-reader.zip
+            target/cloud-reader-release/build-a/build-receipt.json
+          if-no-files-found: warn
+          retention-days: 14

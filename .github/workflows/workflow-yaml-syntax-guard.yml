@@ -1,0 +1,107 @@
+name: Workflow YAML syntax guard
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "tools/ci/check_workflow_yaml_syntax.rb"
+      - "tools/ci/test_reader_residual_fanout.py"
+      - "tools/ci/validate_reader_binary_artifact.py"
+      - "tools/ci/test_validate_reader_binary_artifact.py"
+      - "tools/ci/test_reader_build_once_wiring.py"
+      - "tools/ci/validate_editor_binary_artifact.py"
+      - "tools/ci/test_validate_editor_binary_artifact.py"
+      - "tools/ci/test_editor_build_once_wiring.py"
+      - "tools/ci/migration-consumer-runtime.Dockerfile"
+      - "tools/ci/test_migration_consumer_runtime_wiring.py"
+      - "tools/ci/test_shaped_flow_runtime_routing.py"
+      - "tools/ci/test_pub_viewer_authoring_projection_routing.py"
+      - "tools/ci/test_pub_viewer_images_routing.py"
+      - "tools/ci/test_pub_reader_paint_projection_routing.py"
+      - "tools/ci/test_pub_reader_page_projection_routing.py"
+      - "tools/ci/test_pub_reader_source_paint_order_routing.py"
+      - "tools/ci/test_pub_editor_session_table_routing.py"
+      - "tools/ci/test_pub_editor_session_image_routing.py"
+      - "tools/ci/test_pub_editor_session_text_routing.py"
+      - "tools/ci/test_pub_editor_session_geometry_routing.py"
+      - "tools/ci/test_pub_reader_story_frame_analysis_routing.py"
+      - "tools/ci/test_pub_reader_typography_projection_routing.py"
+      - "tools/ci/test_pub_reader_direct_transform_routing.py"
+      - "tools/ci/test_pub_reader_grouped_projection_routing.py"
+      - "tools/ci/test_pub_reader_source_graph_model_routing.py"
+      - "tools/ci/test_pub_reader_anchor_geometry_routing.py"
+      - "tools/ci/test_pub_reader_story_materialization_routing.py"
+      - "tools/ci/test_pub_reader_quill_admission_routing.py"
+      - "tools/ci/test_pub_reader_publication_document_routing.py"
+      - "tools/ci/test_pub_reader_contents_access_routing.py"
+      - "tools/ci/test_no_publisher_selfhosted_actions.py"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse every workflow YAML
+        run: ruby tools/ci/check_workflow_yaml_syntax.rb
+      - name: Guard narrowed Reader workflow fanout
+        run: python tools/ci/test_reader_residual_fanout.py
+      - name: Test Reader binary artifact validator
+        run: python tools/ci/test_validate_reader_binary_artifact.py
+      - name: Guard Reader build-once wiring
+        run: python tools/ci/test_reader_build_once_wiring.py
+      - name: Test Editor binary artifact validator
+        run: python tools/ci/test_validate_editor_binary_artifact.py
+      - name: Guard Editor build-once wiring
+        run: python tools/ci/test_editor_build_once_wiring.py
+      - name: Guard migration consumer runtime producer
+        run: python tools/ci/test_migration_consumer_runtime_wiring.py
+      - name: Guard shaped-flow runtime routing
+        run: python tools/ci/test_shaped_flow_runtime_routing.py
+      - name: Guard pub-viewer authoring projection routing
+        run: python tools/ci/test_pub_viewer_authoring_projection_routing.py
+      - name: Guard pub-viewer image routing
+        run: python tools/ci/test_pub_viewer_images_routing.py
+      - name: Guard pub-reader paint projection routing
+        run: python tools/ci/test_pub_reader_paint_projection_routing.py
+      - name: Guard pub-reader page projection routing
+        run: python tools/ci/test_pub_reader_page_projection_routing.py
+      - name: Guard pub-reader source paint order routing
+        run: python tools/ci/test_pub_reader_source_paint_order_routing.py
+      - name: Guard pub-editor session-table routing
+        run: python tools/ci/test_pub_editor_session_table_routing.py
+      - name: Guard pub-editor session-image routing
+        run: python tools/ci/test_pub_editor_session_image_routing.py
+      - name: Guard pub-editor session-text routing
+        run: python tools/ci/test_pub_editor_session_text_routing.py
+      - name: Guard pub-editor session-geometry routing
+        run: python tools/ci/test_pub_editor_session_geometry_routing.py
+      - name: Guard pub-reader story frame analysis routing
+        run: python tools/ci/test_pub_reader_story_frame_analysis_routing.py
+      - name: Guard pub-reader typography projection routing
+        run: python tools/ci/test_pub_reader_typography_projection_routing.py
+      - name: Guard pub-reader direct transform routing
+        run: python tools/ci/test_pub_reader_direct_transform_routing.py
+      - name: Guard pub-reader grouped projection routing
+        run: python tools/ci/test_pub_reader_grouped_projection_routing.py
+      - name: Guard pub-reader source graph model routing
+        run: python tools/ci/test_pub_reader_source_graph_model_routing.py
+      - name: Guard pub-reader anchor geometry routing
+        run: python tools/ci/test_pub_reader_anchor_geometry_routing.py
+      - name: Guard pub-reader Story materialization routing
+        run: python tools/ci/test_pub_reader_story_materialization_routing.py
+      - name: Guard pub-reader Quill admission routing
+        run: python tools/ci/test_pub_reader_quill_admission_routing.py
+      - name: Guard pub-reader publication document routing
+        run: python tools/ci/test_pub_reader_publication_document_routing.py
+      - name: Guard pub-reader Contents access routing
+        run: python tools/ci/test_pub_reader_contents_access_routing.py
+      - name: Guard Publisher native execution boundary
+        run: python tools/ci/test_no_publisher_selfhosted_actions.py

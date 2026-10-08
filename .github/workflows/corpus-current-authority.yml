@@ -1,0 +1,56 @@
+name: PUB current corpus authority
+
+on:
+  pull_request:
+    paths:
+      - 'tools/corpus/receipts/corpus-current-authority-2026-09-24.json'
+      - 'tools/corpus/receipts/corpus-current-authority-2026-09-25-v3.json'
+      - 'tools/corpus/receipts/corpus-current-authority-2026-09-25.json'
+      - 'tools/corpus/receipts/current-rar-1515.sha256.txt'
+      - 'tools/corpus/receipts/current-rar-1521.sha256.txt'
+      - 'tools/corpus/receipts/current-rar-1556.sha256.txt'
+      - 'tools/corpus/receipts/lalamu-materialized-35-input-2026-09-29.json'
+      - 'tools/corpus/receipts/corpus-current-authority-2026-09-29.json'
+      - 'tools/corpus/test_corpus_current_authority_1556.py'
+      - 'tools/corpus/receipts/version-labelled-training-29-input-2026-09-25.json'
+      - 'tools/corpus/receipts/publisher2002-sbs-06-input-2026-09-25.json'
+      - 'tools/corpus/receipts/container-net-new-407-part-*.sha256.txt'
+      - 'tools/corpus/test_corpus_current_authority.py'
+      - '.github/workflows/corpus-current-authority.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/corpus/receipts/corpus-current-authority-2026-09-24.json'
+      - 'tools/corpus/receipts/corpus-current-authority-2026-09-25-v3.json'
+      - 'tools/corpus/receipts/corpus-current-authority-2026-09-25.json'
+      - 'tools/corpus/receipts/current-rar-1515.sha256.txt'
+      - 'tools/corpus/receipts/current-rar-1521.sha256.txt'
+      - 'tools/corpus/receipts/current-rar-1556.sha256.txt'
+      - 'tools/corpus/receipts/lalamu-materialized-35-input-2026-09-29.json'
+      - 'tools/corpus/receipts/corpus-current-authority-2026-09-29.json'
+      - 'tools/corpus/test_corpus_current_authority_1556.py'
+      - 'tools/corpus/receipts/version-labelled-training-29-input-2026-09-25.json'
+      - 'tools/corpus/receipts/publisher2002-sbs-06-input-2026-09-25.json'
+      - 'tools/corpus/receipts/container-net-new-407-part-*.sha256.txt'
+      - 'tools/corpus/test_corpus_current_authority.py'
+      - '.github/workflows/corpus-current-authority.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pub-current-corpus-authority-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          python tools/corpus/test_corpus_current_authority.py
+          python tools/corpus/test_corpus_current_authority_1556.py

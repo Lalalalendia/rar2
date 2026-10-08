@@ -1,0 +1,35 @@
+name: CI-DEV-FAST-LOOP-01 self-test
+
+on:
+  pull_request:
+    paths:
+      - "tools/dev_fast_loop.py"
+      - "tools/test_dev_fast_loop.py"
+      - "tools/dev_fast_loop_components.json"
+      - "docs/dev-fast-loop.md"
+      - ".github/workflows/dev-fast-loop-selftest.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit-test fast-loop routing
+        run: python tools/test_dev_fast_loop.py
+      - name: Prove a bounded self-plan
+        run: |
+          python tools/dev_fast_loop.py \
+            --paths tools/dev_fast_loop.py tools/test_dev_fast_loop.py tools/dev_fast_loop_components.json \
+            --plan

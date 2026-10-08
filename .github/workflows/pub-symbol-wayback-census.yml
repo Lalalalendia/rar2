@@ -1,0 +1,67 @@
+name: PUB Symbol Wayback Census
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/symbols/symbol_wayback_cdx.py"
+      - ".github/workflows/pub-symbol-wayback-census.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pub-symbol-wayback-census-fast-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate script
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/symbols/symbol_wayback_cdx.py
+
+      - name: Run exact-identity CDX census
+        run: |
+          set -euo pipefail
+          python tools/symbols/symbol_wayback_cdx.py \
+            --out out/pub-symbol-wayback \
+            --retry-errors-only \
+            --timeout 25 \
+            --retries 0 \
+            --delay 0.75 \
+            --limit 50
+          cat out/pub-symbol-wayback/summary.json
+
+      - name: Write summary
+        if: always()
+        run: |
+          echo "## Publisher exact-symbol Wayback census" >> "$GITHUB_STEP_SUMMARY"
+          cat out/pub-symbol-wayback/summary.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Guard metadata-only artifact
+        if: always()
+        run: |
+          set -euo pipefail
+          bad="$(find out/pub-symbol-wayback -type f \( -iname '*.pdb' -o -iname '*.pd_' -o -iname '*.exe' -o -iname '*.dll' -o -iname '*.cab' -o -iname '*.zip' -o -iname '*.7z' \) -print || true)"
+          if [[ -n "$bad" ]]; then
+            echo "$bad" >&2
+            exit 4
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pub-symbol-wayback-${{ github.run_id }}
+          path: out/pub-symbol-wayback/**
+          if-no-files-found: error
+          retention-days: 90

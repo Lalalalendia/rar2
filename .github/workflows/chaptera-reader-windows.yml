@@ -1,0 +1,397 @@
+name: Chaptera Reader Windows V0
+
+on:
+  workflow_call:
+    inputs:
+      reader_binary_artifact_name:
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A distinct group avoids colliding with the calling Reader PR DAG.
+concurrency:
+  group: reader-windows-product-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-reader:
+    runs-on: windows-latest
+    env:
+      # Root, vendor and standalone-crate commands reuse the same Cargo outputs.
+      # Keep the existing target/release executable and artifact paths intact.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Restore validated Windows Cargo dependencies
+        id: desktop-cargo-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: chaptera-windows-desktop-deps-v1
+          add-job-id-key: "false"
+          # Include virtual-workspace profile/dependency settings explicitly.
+          key: ${{ hashFiles('Cargo.toml', 'vendor/producer-a/Cargo.toml') }}
+          workspaces: ". -> target"
+          cache-bin: "false"
+          cache-workspace-crates: "false"
+          cache-on-failure: "false"
+          save-if: "false"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download exact-candidate Reader binary
+        if: inputs.reader_binary_artifact_name != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.reader_binary_artifact_name }}
+          path: ${{ runner.temp }}/chaptera-reader-prebuilt
+
+      - name: Validate exact-candidate Reader binary
+        if: inputs.reader_binary_artifact_name != ''
+        run: python tools/ci/validate_reader_binary_artifact.py --artifact-dir "${{ runner.temp }}/chaptera-reader-prebuilt" --expected-candidate-sha "${{ github.sha }}"
+
+      - name: Test Reader portable packager
+        run: python -m unittest tools/test_package_reader_portable.py -v
+
+      - name: Test shared Viewer render-plan contract
+        run: cargo test --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml
+
+      - name: Check compile-time Reader surface
+        run: cargo check -p chaptera-desktop --features reader-only --all-targets
+
+      - name: Test bounded desktop image decode adapter
+        run: cargo test -p chaptera-desktop --features reader-only image_decode_adapter::tests -- --nocapture
+
+      - name: Test Reader first-run contract
+        run: cargo test -p chaptera-desktop --features reader-only reader_first_run -- --nocapture
+
+      - name: Test Reader atomic open-state and source freshness
+        run: |
+          cargo test -p chaptera-desktop --features reader-only open_generation -- --nocapture
+          cargo test -p chaptera-desktop --features reader-only committed_source -- --nocapture
+          cargo test -p chaptera-desktop --features reader-only multi_file_drop -- --nocapture
+          cargo test -p chaptera-desktop --features reader-only failed_replacement_open -- --nocapture
+
+      - name: Build Reader-only desktop source
+        if: inputs.reader_binary_artifact_name == ''
+        run: cargo build -p chaptera-desktop --release --features reader-only
+
+      - name: Stage canonical Reader executable
+        shell: pwsh
+        run: |
+          if ("${{ inputs.reader_binary_artifact_name }}" -ne "") {
+            $built = Join-Path "${{ runner.temp }}/chaptera-reader-prebuilt" "chaptera-reader.exe"
+          } else {
+            $built = "target/release/chaptera-editor.exe"
+          }
+          $reader = "target/release/chaptera-reader.exe"
+          New-Item -ItemType Directory -Force -Path "target/release" | Out-Null
+          if (-not (Test-Path $built)) {
+            throw "Reader-only binary is missing: $built"
+          }
+          Copy-Item $built $reader -Force
+          $hash = (Get-FileHash $reader -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item $reader).Length
+          @{
+            schema_version = "chaptera.reader-desktop-build.v1"
+            product_id = "chaptera.reader"
+            source_package = "chaptera-desktop"
+            compile_feature = "reader-only"
+            target = "x86_64-pc-windows-msvc"
+            executable = "chaptera-reader.exe"
+            sha256 = $hash
+            byte_len = $bytes
+            source_commit = "${{ github.sha }}"
+          } | ConvertTo-Json | Set-Content -Encoding utf8 target/release/chaptera-reader.desktop-build.json
+
+      - name: Exercise Reader copied-U1 control mode on Windows
+        shell: pwsh
+        run: |
+          cargo test -p chaptera-update-handoff --test control_handoff_acceptance -- --nocapture
+          $root = Join-Path $env:RUNNER_TEMP "chaptera-reader-update-control"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $missing = Join-Path $root "missing-request.json"
+          $process = Start-Process -FilePath "target/release/chaptera-reader.exe" -ArgumentList @("--chaptera-update-control", $missing) -Wait -PassThru
+          if ($process.ExitCode -eq 0) {
+            throw "Reader control mode accepted a missing handoff request"
+          }
+
+      - name: Prove activated Reader product smoke is executable
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path "target/release/chaptera-reader.exe").Path
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item $exe).Length
+          $env:CHAPTERA_PRODUCT_SMOKE_BINARY_SHA256 = $hash
+          $env:CHAPTERA_PRODUCT_SMOKE_BINARY_BYTE_LEN = [string]$bytes
+          $process = Start-Process -FilePath $exe -ArgumentList @("--product-smoke-v1") -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Reader candidate health smoke failed with exit code $($process.ExitCode)"
+          }
+
+      - name: Acquire pinned Apache POI Reader activation fixtures
+        shell: pwsh
+        run: |
+          $newsletter = Join-Path $env:RUNNER_TEMP "SampleNewsletter.pub"
+          $newsletterUrl = "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub"
+          Invoke-WebRequest -Uri $newsletterUrl -OutFile $newsletter
+          $newsletterHash = (Get-FileHash $newsletter -Algorithm SHA256).Hash.ToLowerInvariant()
+          $newsletterBytes = (Get-Item $newsletter).Length
+          if ($newsletterHash -ne "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf") {
+            throw "SampleNewsletter SHA-256 mismatch: $newsletterHash"
+          }
+          if ($newsletterBytes -ne 291840) {
+            throw "SampleNewsletter byte length mismatch: $newsletterBytes"
+          }
+
+          $brochure = Join-Path $env:RUNNER_TEMP "SampleBrochure.pub"
+          $brochureUrl = "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleBrochure.pub"
+          Invoke-WebRequest -Uri $brochureUrl -OutFile $brochure
+          $brochureHash = (Get-FileHash $brochure -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($brochureHash -ne "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87") {
+            throw "SampleBrochure SHA-256 mismatch: $brochureHash"
+          }
+
+          "CHAPTERA_SAMPLE_NEWSLETTER=$newsletter" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_SAMPLE_BROCHURE=$brochure" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run real Viewer smoke through Reader executable
+        shell: pwsh
+        run: |
+          $exe = "target/release/chaptera-reader.exe"
+          $before = (Get-FileHash "$env:CHAPTERA_SAMPLE_NEWSLETTER" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $process = Start-Process -FilePath $exe -ArgumentList @("--smoke-check", "$env:CHAPTERA_SAMPLE_NEWSLETTER") -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Reader real-PUB smoke failed with exit code $($process.ExitCode)"
+          }
+          $after = (Get-FileHash "$env:CHAPTERA_SAMPLE_NEWSLETTER" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($before -ne $after) {
+            throw "Reader smoke mutated the source PUB"
+          }
+          @{
+            schema_version = "chaptera.reader-real-pub-smoke.v1"
+            product_id = "chaptera.reader"
+            fixture_sha256 = $before
+            source_unchanged = $true
+            viewer_opened = $true
+          } | ConvertTo-Json | Set-Content -Encoding utf8 target/release/chaptera-reader.real-pub-smoke.json
+
+      - name: Prove independent Reader activation sessions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = (Resolve-Path "target/release/chaptera-reader.exe").Path
+          $out = Join-Path $env:RUNNER_TEMP "chaptera-reader-activation"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+
+          function Wait-Receipt([string]$path, [System.Diagnostics.Process]$process) {
+            for ($i = 0; $i -lt 100; $i++) {
+              if (Test-Path $path) { return }
+              $process.Refresh()
+              if ($process.HasExited) {
+                throw "activation probe exited before receipt: $path code=$($process.ExitCode)"
+              }
+              Start-Sleep -Milliseconds 100
+            }
+            throw "activation probe receipt timeout: $path"
+          }
+
+          $aReceipt = Join-Path $out "a.json"
+          $bReceipt = Join-Path $out "b.json"
+          $a = Start-Process -FilePath $exe -ArgumentList @("--reader-activation-probe-v1", $env:CHAPTERA_SAMPLE_NEWSLETTER, $aReceipt, "8000") -PassThru
+          $b = Start-Process -FilePath $exe -ArgumentList @("--reader-activation-probe-v1", $env:CHAPTERA_SAMPLE_BROCHURE, $bReceipt, "8000") -PassThru
+          Wait-Receipt $aReceipt $a
+          Wait-Receipt $bReceipt $b
+
+          $ar = Get-Content -Raw $aReceipt | ConvertFrom-Json
+          $br = Get-Content -Raw $bReceipt | ConvertFrom-Json
+          if ($ar.pid -ne $a.Id -or $br.pid -ne $b.Id -or $a.Id -eq $b.Id) {
+            throw "Reader activation sessions do not have independent PIDs"
+          }
+          if ($ar.source_sha256 -ne "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf") {
+            throw "activation A source identity mismatch"
+          }
+          if ($br.source_sha256 -ne "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87") {
+            throw "activation B source identity mismatch"
+          }
+          if ([int]$ar.page_count -ne 4 -or [int]$br.page_count -ne 2) {
+            throw "activation probes did not consume exact product page profiles"
+          }
+
+          Stop-Process -Id $a.Id -Force
+          if (-not $a.WaitForExit(10000)) {
+            throw "activation A did not terminate after Stop-Process"
+          }
+          Start-Sleep -Milliseconds 250
+          $b.Refresh()
+          if ($b.HasExited) {
+            throw "closing activation A affected independent activation B"
+          }
+          if (-not $b.WaitForExit(15000)) {
+            Stop-Process -Id $b.Id -Force
+            throw "activation B did not complete its bounded hold"
+          }
+          if ($b.ExitCode -ne 0) { throw "activation B failed: $($b.ExitCode)" }
+          $br = Get-Content -Raw $bReceipt | ConvertFrom-Json
+          if ($br.completed -ne $true -or $br.source_unchanged -ne $true) {
+            throw "activation B did not complete immutable-source proof"
+          }
+
+          $same1Receipt = Join-Path $out "same-1.json"
+          $same2Receipt = Join-Path $out "same-2.json"
+          $same1 = Start-Process -FilePath $exe -ArgumentList @("--reader-activation-probe-v1", $env:CHAPTERA_SAMPLE_NEWSLETTER, $same1Receipt, "2500") -PassThru
+          $same2 = Start-Process -FilePath $exe -ArgumentList @("--reader-activation-probe-v1", $env:CHAPTERA_SAMPLE_NEWSLETTER, $same2Receipt, "2500") -PassThru
+          Wait-Receipt $same1Receipt $same1
+          Wait-Receipt $same2Receipt $same2
+          if ($same1.Id -eq $same2.Id) { throw "same-source activations reused a PID" }
+          if (-not $same1.WaitForExit(10000) -or -not $same2.WaitForExit(10000)) {
+            Stop-Process -Id @($same1.Id, $same2.Id) -Force -ErrorAction SilentlyContinue
+            throw "same-source activation probes did not complete"
+          }
+          if ($same1.ExitCode -ne 0 -or $same2.ExitCode -ne 0) {
+            throw "same-source activation probe failed"
+          }
+
+          $newsletterHash = (Get-FileHash $env:CHAPTERA_SAMPLE_NEWSLETTER -Algorithm SHA256).Hash.ToLowerInvariant()
+          $brochureHash = (Get-FileHash $env:CHAPTERA_SAMPLE_BROCHURE -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($newsletterHash -ne "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf" -or
+              $brochureHash -ne "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87") {
+            throw "activation matrix mutated a source PUB"
+          }
+
+          [ordered]@{
+            schema_version = "chaptera.reader-shell-activation.v1"
+            process_model = "independent_process_per_activation"
+            distinct_source_distinct_pid = $true
+            closing_one_preserves_other = $true
+            same_source_parallel_allowed = $true
+            source_immutable = $true
+            newsletter_pages = 4
+            brochure_pages = 2
+          } | ConvertTo-Json | Set-Content -Encoding utf8 "target/release/chaptera-reader.shell-activation.json"
+
+      - name: Run product identity smoke
+        shell: pwsh
+        run: |
+          $exe = "target/release/chaptera-reader.exe"
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item $exe).Length
+          $env:CHAPTERA_PRODUCT_SMOKE_BINARY_SHA256 = $hash
+          $env:CHAPTERA_PRODUCT_SMOKE_BINARY_BYTE_LEN = [string]$bytes
+          $receipt = "target/release/chaptera-reader.product-smoke.json"
+          $process = Start-Process -FilePath $exe -ArgumentList @("--product-smoke-v1", $receipt) -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Reader product smoke failed with exit code $($process.ExitCode)"
+          }
+          $smoke = Get-Content -Raw $receipt | ConvertFrom-Json
+          if ($smoke.protocol_version -ne "chaptera.desktop-source-free-smoke.v1") { throw "Reader smoke protocol mismatch" }
+          if ($smoke.product -ne "Chaptera PUB Reader") { throw "reader-only build did not identify the Reader product" }
+          if ($smoke.reader_only -ne $true) { throw "Reader binary is not reader-only" }
+          if ($smoke.editor_controls_enabled -ne $false) { throw "Reader binary exposes Editor controls" }
+          if ($smoke.native_save_pub_claimed -ne $false) { throw "Reader widened native Save PUB claims" }
+          foreach ($field in @("checkout_required", "cargo_required", "vendor_path_required", "external_runtime_assets_required")) {
+            if ($smoke.runtime.$field -ne $false) { throw "Reader runtime dependency detected: $field" }
+          }
+          if ($smoke.binary_sha256 -ne $hash) { throw "Reader product smoke executable hash mismatch" }
+          if ([int64]$smoke.binary_byte_len -ne $bytes) { throw "Reader product smoke executable size mismatch" }
+          if (-not $smoke.locale.raw) { throw "Reader product smoke did not resolve a locale source" }
+          if ($smoke.locale.source -notin @("override", "windows_user_locale", "lang")) { throw "Reader product smoke locale source is invalid" }
+          if ($smoke.locale.market_profile -notin @("US", "UK", "Russia", "NeutralEnglish")) { throw "Reader product smoke market profile is invalid" }
+          if ($smoke.locale.network_lookup_used -ne $false -or $smoke.locale.ip_geolocation_used -ne $false -or $smoke.locale.account_state_used -ne $false) { throw "Reader locale contract crossed the privacy boundary" }
+
+      - name: Build portable Chaptera Reader ZIP
+        run: |
+          python tools/package_reader_portable.py --reader-exe target/release/chaptera-reader.exe --output-zip target/release/Chaptera-Reader-Windows-x86_64.zip --manifest target/release/Chaptera-Reader.package.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chaptera-reader-windows-x86_64
+          path: |
+            target/release/chaptera-reader.exe
+            target/release/chaptera-reader.desktop-build.json
+            target/release/chaptera-reader.real-pub-smoke.json
+            target/release/chaptera-reader.shell-activation.json
+            target/release/chaptera-reader.product-smoke.json
+            target/release/Chaptera-Reader-Windows-x86_64.zip
+            target/release/Chaptera-Reader.package.json
+          if-no-files-found: error
+
+  validate-portable-reader:
+    needs: build-reader
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: chaptera-reader-windows-x86_64
+          path: ${{ runner.temp }}/chaptera-reader-artifact
+
+      - name: Validate clean extracted Reader
+        shell: pwsh
+        run: |
+          $artifact = Join-Path $env:RUNNER_TEMP "chaptera-reader-artifact"
+          $zip = Join-Path $artifact "Chaptera-Reader-Windows-x86_64.zip"
+          $manifestPath = Join-Path $artifact "Chaptera-Reader.package.json"
+          if (-not (Test-Path $zip)) { throw "portable Reader ZIP is missing" }
+          if (-not (Test-Path $manifestPath)) { throw "Reader package manifest is missing" }
+
+          $clean = Join-Path $env:RUNNER_TEMP "chaptera-reader-clean"
+          if (Test-Path $clean) { Remove-Item -Recurse -Force $clean }
+          New-Item -ItemType Directory -Force -Path $clean | Out-Null
+          Expand-Archive -Path $zip -DestinationPath $clean
+
+          $exe = Join-Path $clean "Chaptera-Reader.exe"
+          if (-not (Test-Path $exe)) { throw "Reader ZIP did not contain Chaptera-Reader.exe" }
+          if (Test-Path (Join-Path $clean "Cargo.toml")) { throw "Reader ZIP leaked a Cargo checkout" }
+
+          $entries = Get-ChildItem -File $clean | Select-Object -ExpandProperty Name
+          $expected = @("Chaptera-Reader.exe", "README.md")
+          if ((Compare-Object ($entries | Sort-Object) ($expected | Sort-Object)).Count -ne 0) {
+            throw "Reader ZIP contains unexpected entries: $($entries -join ', ')"
+          }
+
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item $exe).Length
+          $env:CHAPTERA_PRODUCT_SMOKE_BINARY_SHA256 = $hash
+          $env:CHAPTERA_PRODUCT_SMOKE_BINARY_BYTE_LEN = [string]$bytes
+          $receipt = Join-Path $artifact "chaptera-reader.clean-smoke.json"
+          $process = Start-Process -FilePath $exe -ArgumentList @("--product-smoke-v1", $receipt) -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "clean Reader product smoke failed: $($process.ExitCode)" }
+
+          $smoke = Get-Content -Raw $receipt | ConvertFrom-Json
+          if ($smoke.product -ne "Chaptera PUB Reader" -or $smoke.reader_only -ne $true -or $smoke.editor_controls_enabled -ne $false) {
+            throw "clean portable binary is not the compile-time Reader product"
+          }
+          if (-not $smoke.locale.raw -or $smoke.locale.market_profile -notin @("US", "UK", "Russia", "NeutralEnglish")) {
+            throw "clean portable Reader did not execute the locale contract"
+          }
+          if ($smoke.locale.network_lookup_used -ne $false -or $smoke.locale.ip_geolocation_used -ne $false -or $smoke.locale.account_state_used -ne $false) {
+            throw "clean portable Reader locale contract crossed the privacy boundary"
+          }
+
+          $manifest = Get-Content -Raw $manifestPath | ConvertFrom-Json
+          if ($manifest.product_id -ne "chaptera.reader") { throw "Reader package product_id mismatch" }
+          if ($manifest.binary_entry -ne "Chaptera-Reader.exe") { throw "Reader package entry mismatch" }
+          if ($manifest.binary_sha256 -ne $hash) { throw "Reader package executable hash mismatch" }
+          if ($manifest.zip_sha256 -ne (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()) {
+            throw "Reader package ZIP hash mismatch"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chaptera-reader-portable-windows-x86_64
+          path: |
+            ${{ runner.temp }}/chaptera-reader-artifact/Chaptera-Reader-Windows-x86_64.zip
+            ${{ runner.temp }}/chaptera-reader-artifact/Chaptera-Reader.package.json
+            ${{ runner.temp }}/chaptera-reader-artifact/chaptera-reader.clean-smoke.json
+          if-no-files-found: error

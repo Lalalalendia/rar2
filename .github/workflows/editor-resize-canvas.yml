@@ -1,0 +1,35 @@
+name: Chaptera canvas resize interaction
+
+on:
+  pull_request:
+    paths:
+      - "packages/protocol/editor-resize/v1/resize-gesture-v1.mjs"
+      - "packages/protocol/editor-resize/v1/resize-gesture-v1.test.mjs"
+      - "docs/chaptera-editor-resize-canvas-v1.md"
+      - "vendor/producer-a/crates/pub-interaction/src/lib.rs"
+      - "vendor/producer-a/crates/pub-interaction/src/snap.rs"
+      - ".github/workflows/editor-resize-canvas.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Test source-neutral resize gesture contract
+        run: node --test packages/protocol/editor-resize/v1/resize-gesture-v1.test.mjs
+      - name: Test Rust resize interaction parity
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-interaction

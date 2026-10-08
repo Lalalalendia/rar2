@@ -1,0 +1,34 @@
+name: Reader Consumer Admission V1 (deprecated)
+
+on:
+  workflow_call:
+    inputs:
+      event_name:
+        required: true
+        type: string
+      head_sha:
+        required: true
+        type: string
+      pr_number:
+        required: false
+        type: string
+        default: ""
+    outputs:
+      admit:
+        description: Compatibility output. New PR workflows use reader-pr-ci.yml.
+        value: ${{ jobs.admission.outputs.admit }}
+
+permissions:
+  contents: read
+
+jobs:
+  admission:
+    runs-on: ubuntu-latest
+    outputs:
+      admit: ${{ steps.gate.outputs.admit }}
+    steps:
+      - id: gate
+        name: Deprecated compatibility admission
+        run: |
+          echo "::warning::reader-consumer-admission.yml is deprecated; use Reader PR selective CI"
+          echo "admit=true" >> "$GITHUB_OUTPUT"

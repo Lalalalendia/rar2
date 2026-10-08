@@ -1,0 +1,213 @@
+name: Reader 1050 trophy Wayback lineage
+
+on:
+  pull_request:
+    paths:
+      - "tools/research-runner/reader1050_trophy_wayback_lineage.py"
+      - "tools/research-runner/tests/test_reader1050_trophy_wayback_lineage.py"
+      - "tools/corpus/wayback_pub_seed.py"
+      - "tools/corpus/harvest_pub.py"
+      - ".github/workflows/reader1050-trophy-wayback-lineage.yml"
+  push:
+    branches: [main]
+    paths:
+      - "tools/research-runner/reader1050_trophy_wayback_lineage.py"
+      - "tools/research-runner/tests/test_reader1050_trophy_wayback_lineage.py"
+      - "tools/corpus/wayback_pub_seed.py"
+      - "tools/corpus/harvest_pub.py"
+      - ".github/workflows/reader1050-trophy-wayback-lineage.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: reader1050-trophy-wayback-lineage-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+  TROPHY_SHA: 32b857475ae5ca8207942a40dc708d63153c9140bb06ee740d7e235944c0a027
+  TROPHY_URL: http://helenhudspith.com/resources/product/amran/TROPHY/trophy_traditional.pub
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate discriminator contract
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            tools/research-runner/reader1050_trophy_wayback_lineage.py \
+            tools/research-runner/tests/test_reader1050_trophy_wayback_lineage.py
+          python tools/research-runner/tests/test_reader1050_trophy_wayback_lineage.py
+
+  lineage:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify exact source identity
+        run: |
+          set -euo pipefail
+          source="out/pinned1050/materialized/native/${TROPHY_SHA}.pub"
+          test -f "$source"
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          sha = os.environ["TROPHY_SHA"]
+          path = Path("out/pinned1050/materialized/native") / f"{sha}.pub"
+          data = path.read_bytes()
+          actual = hashlib.sha256(data).hexdigest()
+          assert actual == sha, (actual, sha)
+          assert len(data) == 81408, len(data)
+          assert data[:8] == bytes.fromhex("d0cf11e0a1b11ae1")
+          print({"sha256": actual, "byte_len": len(data), "cfb": True})
+          PY
+
+      - name: Build source-safe Reader receipt producer
+        run: |
+          set -euo pipefail
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer \
+            --release \
+            --bin corpus-reader-receipt
+
+      - name: Discover exact-URL Wayback lineage
+        run: |
+          set -euo pipefail
+          mkdir -p out/discovery
+          python tools/corpus/wayback_pub_seed.py \
+            --url "$TROPHY_URL" \
+            --max-domains 0 \
+            --exact-limit 50 \
+            --delay 0.5 \
+            --timeout 45 \
+            --retries 2 \
+            --out out/discovery/seed.csv \
+            --summary out/discovery/summary.json
+          cat out/discovery/summary.json
+
+      - name: Harvest only exact-URL archived payloads
+        run: |
+          set -euo pipefail
+          mkdir -p out/harvest
+          rows="$(wc -l < out/discovery/seed.csv || true)"
+          if [ "${rows:-0}" -gt 1 ]; then
+            python tools/corpus/harvest_pub.py \
+              --seed out/discovery/seed.csv \
+              --out out/harvest \
+              --max-files -1 \
+              --timeout 25 \
+              --max-bytes 10485760 \
+              --per-host-delay 0.2
+          else
+            printf '[]\n' > out/harvest/manifest.json
+            printf '' > out/harvest/manifest.csv
+          fi
+
+      - name: Run source-safe same-document lineage discriminator
+        run: |
+          set -euo pipefail
+          python tools/research-runner/reader1050_trophy_wayback_lineage.py \
+            --source "out/pinned1050/materialized/native/${TROPHY_SHA}.pub" \
+            --harvest-root out/harvest \
+            --harvest-manifest out/harvest/manifest.json \
+            --discovery-summary out/discovery/summary.json \
+            --reader-receipt-exe "${CARGO_TARGET_DIR}/release/corpus-reader-receipt" \
+            --out out/lineage \
+            --expected-source-sha256 "$TROPHY_SHA"
+          cat out/lineage/decision.json
+
+      - name: Write job summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f out/lineage/decision.md ]; then
+            cat out/lineage/decision.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Stage metadata-only public receipt
+        if: always()
+        run: |
+          set -euo pipefail
+          rm -rf out/public
+          mkdir -p out/public/discovery out/public/harvest out/public/lineage
+          test -f out/discovery/summary.json && cp out/discovery/summary.json out/public/discovery/
+          test -f out/discovery/seed.csv && cp out/discovery/seed.csv out/public/discovery/
+          test -f out/harvest/manifest.json && cp out/harvest/manifest.json out/public/harvest/
+          test -f out/harvest/manifest.csv && cp out/harvest/manifest.csv out/public/harvest/
+          test -f out/lineage/decision.json && cp out/lineage/decision.json out/public/lineage/
+          test -f out/lineage/decision.md && cp out/lineage/decision.md out/public/lineage/
+
+          if find out/public -type f \( -iname '*.pub' -o -iname '*.ole' -o -iname '*.bin' \) -print | grep -q .; then
+            echo "Recovered/source document bytes entered public artifact staging" >&2
+            exit 4
+          fi
+
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("out/public")
+          files = []
+          for path in sorted(p for p in root.rglob("*") if p.is_file()):
+              data = path.read_bytes()
+              files.append({
+                  "path": str(path.relative_to(root)),
+                  "byte_len": len(data),
+                  "sha256": hashlib.sha256(data).hexdigest(),
+              })
+          (root / "artifact-manifest.json").write_text(
+              json.dumps(
+                  {
+                      "schema": "chaptera.reader1050-trophy-wayback-public-artifact.v1",
+                      "files": files,
+                      "contains_pub_payloads": False,
+                  },
+                  indent=2,
+                  sort_keys=True,
+              ) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reader1050-trophy-wayback-lineage-${{ github.run_id }}
+          path: out/public/**
+          if-no-files-found: error
+          retention-days: 30

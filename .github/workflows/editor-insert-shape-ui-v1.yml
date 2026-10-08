@@ -1,0 +1,55 @@
+name: Editor Insert Shape UI V1
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "apps/chaptera-desktop/Cargo.toml"
+      - "apps/chaptera-desktop/src/rectangle_creation.rs"
+      - "apps/chaptera-desktop/src/rectangle_creation_shell.rs"
+      - "apps/chaptera-desktop/src/selection_keyboard_shell.rs"
+      - ".github/workflows/editor-insert-shape-ui-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Check Desktop Rectangle slice formatting
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+
+      - name: Check Desktop Rectangle integration
+        run: cargo check -p chaptera-desktop --all-targets
+
+      - name: Lint Desktop Rectangle integration
+        run: >-
+          cargo clippy -p chaptera-desktop --all-targets --
+          -D warnings
+          -A dead_code
+          -A unused_variables
+          -A clippy::type_complexity
+          -A clippy::collapsible_if
+          -A clippy::too_many_arguments
+
+      - name: Prove Rectangle interaction adapter
+        run: cargo test -p chaptera-desktop rectangle_creation::tests -- --nocapture
+
+      - name: Re-prove canonical CreateShape Undo Redo replay
+        run: >-
+          cargo test --manifest-path vendor/producer-a/Cargo.toml
+          -p pub-editor --test create_shape_runtime_v1

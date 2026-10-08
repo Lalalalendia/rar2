@@ -1,0 +1,91 @@
+name: PUB research packet contract
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-research-packet-ci.yml"
+      - "tools/research-runner/**"
+      - "tools/pub_operation_algebra_fingerprint.py"
+      - "tools/test_pub_operation_algebra_fingerprint.py"
+      - "tools/t891_evidence_classifier.py"
+      - "tools/test_t891_evidence_classifier.py"
+      - "tools/windows/pub-runtime/**"
+      - "tools/windows/recover_pub_native_runner.ps1"
+      - "tools/windows/run_t891_direct.ps1"
+      - "tools/windows/run_vba_call_bearing_native_estate_direct.ps1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  packet-contract:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Validate every committed experiment packet
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $packets = @(Get-ChildItem tools/research-runner/experiments -Filter "*.packet.json" -File | Sort-Object Name)
+          if ($packets.Count -eq 0) { throw "No experiment packets found." }
+          foreach ($packet in $packets) {
+            $doc = Get-Content -LiteralPath $packet.FullName -Raw | ConvertFrom-Json
+            python tools/research-runner/validate_packet.py `
+              --packet $packet.FullName `
+              --expected-environment ([string]$doc.publisher_environment)
+            if ($LASTEXITCODE -ne 0) { throw "Packet validation failed: $($packet.Name)" }
+          }
+
+      - name: Parse all research PowerShell
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $files = @(
+            Get-ChildItem tools/research-runner -Recurse -File |
+              Where-Object { $_.Extension -in @(".ps1", ".psm1") } |
+              Select-Object -ExpandProperty FullName
+          )
+          $files += (Resolve-Path "tools/windows/pub-runtime/PubRuntime.psm1").Path
+          $files += (Resolve-Path "tools/windows/recover_pub_native_runner.ps1").Path
+          $files += (Resolve-Path "tools/windows/run_t891_direct.ps1").Path
+          $files += (Resolve-Path "tools/windows/run_vba_call_bearing_native_estate_direct.ps1").Path
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $file,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -ne 0) {
+              $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
+              throw "PowerShell parser rejected $file"
+            }
+          }
+
+      - name: Validate operation algebra fingerprint helper
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m unittest -v tools.test_pub_operation_algebra_fingerprint
+
+      - name: Validate T891 evidence classifier
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m unittest -v tools.test_t891_evidence_classifier
+
+      - name: Exercise Structured Storage deletion helper
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          pwsh -NoProfile -File tools/research-runner/tests/test_cfb_structured_storage.ps1

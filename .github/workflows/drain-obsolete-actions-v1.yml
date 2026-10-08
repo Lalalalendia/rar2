@@ -1,0 +1,46 @@
+name: Drain obsolete Actions generations
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/drain-obsolete-actions-v1.yml"
+      - "tools/ci/obsolete_actions_recovery.py"
+      - "tools/ci/test_obsolete_actions_recovery.py"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: drain-obsolete-actions-generations
+  cancel-in-progress: false
+
+jobs:
+  drain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prove force-cancel admission boundary
+        run: python3 tools/ci/test_obsolete_actions_recovery.py
+
+      - name: Drain obsolete pull-request head runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/ci/obsolete_actions_recovery.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --receipt "$RUNNER_TEMP/ci-actions-prequeue-recovery.json"
+
+      - name: Publish recovery receipt in run summary
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/ci-actions-prequeue-recovery.json" ]]; then
+            echo '## CI Actions pre-queue recovery receipt' >> "$GITHUB_STEP_SUMMARY"
+            cat "$RUNNER_TEMP/ci-actions-prequeue-recovery.json" >> "$GITHUB_STEP_SUMMARY"
+          fi

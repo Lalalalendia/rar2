@@ -1,0 +1,177 @@
+name: Desktop PUB Windows containment launcher V1
+
+on:
+  pull_request:
+    paths:
+      - "apps/chaptera-desktop-open-sandbox/**"
+      - "apps/chaptera-desktop-open-worker/**"
+      - "crates/chaptera-desktop-open-protocol/**"
+      - ".github/workflows/desktop-pub-containment-launcher.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-containment:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Resolve Visual Studio dumpbin
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path "${env:ProgramFiles(x86)}" "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found" }
+          $dumpbin = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find "VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          if (-not $dumpbin -or -not (Test-Path $dumpbin)) { throw "dumpbin.exe not found through vswhere" }
+          "CHAPTERA_DUMPBIN=$dumpbin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Using dumpbin: $dumpbin"
+
+      - name: Format containment launcher
+        shell: pwsh
+        run: cargo fmt --manifest-path apps/chaptera-desktop-open-sandbox/Cargo.toml -- --check
+
+      - name: Check containment launcher
+        shell: pwsh
+        run: cargo check --manifest-path apps/chaptera-desktop-open-sandbox/Cargo.toml
+
+      - name: Clippy containment launcher
+        shell: pwsh
+        run: cargo clippy --manifest-path apps/chaptera-desktop-open-sandbox/Cargo.toml --all-targets -- -D warnings
+
+      - name: Build contained worker and launcher probes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $workerTarget = Join-Path $env:RUNNER_TEMP "chaptera-worker-target"
+          $sandboxTarget = Join-Path $env:RUNNER_TEMP "chaptera-sandbox-target"
+
+          # Keep contained release artifacts self-contained. Hosted AppContainer
+          # acceptance proved the dynamic MSVC/UCRT bootstrap is not required.
+          $env:RUSTFLAGS = "-C target-feature=+crt-static"
+
+          $env:CARGO_TARGET_DIR = $workerTarget
+          cargo build --manifest-path apps/chaptera-desktop-open-worker/Cargo.toml --release
+          if ($LASTEXITCODE -ne 0) { throw "worker build failed" }
+
+          $env:CARGO_TARGET_DIR = $sandboxTarget
+          cargo build --manifest-path apps/chaptera-desktop-open-sandbox/Cargo.toml --release
+          if ($LASTEXITCODE -ne 0) { throw "sandbox build failed" }
+
+          Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue
+
+          $stage = Join-Path $env:RUNNER_TEMP "chaptera-contained-stage"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item (Join-Path $workerTarget "release\chaptera-desktop-open-worker.exe") (Join-Path $stage "chaptera-desktop-open-worker.exe")
+          Copy-Item (Join-Path $sandboxTarget "release\chaptera-desktop-sandbox-bootstrap-probe.exe") (Join-Path $stage "chaptera-desktop-sandbox-bootstrap-probe.exe")
+          Copy-Item (Join-Path $sandboxTarget "release\chaptera-desktop-sandbox-negative-probe.exe") (Join-Path $stage "chaptera-desktop-sandbox-negative-probe.exe")
+
+          "CHAPTERA_SANDBOX_STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_SANDBOX_HOST=$sandboxTarget" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Inspect containment executable imports
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($name in @(
+            "chaptera-desktop-sandbox-bootstrap-probe.exe",
+            "chaptera-desktop-sandbox-negative-probe.exe",
+            "chaptera-desktop-open-worker.exe"
+          )) {
+            $exe = Join-Path $env:CHAPTERA_SANDBOX_STAGE $name
+            Write-Host "===== DEPENDENTS $name ====="
+            & $env:CHAPTERA_DUMPBIN /DEPENDENTS $exe
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin failed for $name" }
+          }
+
+      - name: Prove strict containment starts minimal Rust bootstrap
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $hostExe = Join-Path $env:CHAPTERA_SANDBOX_HOST "release\chaptera-desktop-sandbox-bootstrap-host.exe"
+          $probe = Join-Path $env:CHAPTERA_SANDBOX_STAGE "chaptera-desktop-sandbox-bootstrap-probe.exe"
+          & $hostExe $probe
+          if ($LASTEXITCODE -ne 0) { throw "strict bootstrap containment failed: $LASTEXITCODE" }
+
+      - name: Create forbidden parent-only witness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $secretDir = Join-Path $env:RUNNER_TEMP "chaptera-parent-only"
+          New-Item -ItemType Directory -Force -Path $secretDir | Out-Null
+          $secret = Join-Path $secretDir "forbidden.txt"
+          Set-Content -LiteralPath $secret -Encoding ascii -Value "chaptera-parent-only-secret"
+          "CHAPTERA_SANDBOX_FORBIDDEN=$secret" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prove AppContainer LPAC Job and negative capabilities
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $hostExe = Join-Path $env:CHAPTERA_SANDBOX_HOST "release\chaptera-desktop-sandbox-negative-host.exe"
+          $probe = Join-Path $env:CHAPTERA_SANDBOX_STAGE "chaptera-desktop-sandbox-negative-probe.exe"
+          $receipt = "target\desktop-pub-containment-negative.json"
+          New-Item -ItemType Directory -Force -Path "target" | Out-Null
+          & $hostExe $probe $env:CHAPTERA_SANDBOX_FORBIDDEN $receipt
+          if ($LASTEXITCODE -ne 0) { throw "negative containment acceptance failed: $LASTEXITCODE" }
+          $result = Get-Content -Raw $receipt | ConvertFrom-Json
+          if (-not $result.sandbox.app_container -or
+              -not $result.sandbox.zero_capabilities -or
+              -not $result.sandbox.child_process_restricted -or
+              -not $result.sandbox.job_member_at_creation -or
+              [int]$result.sandbox.active_process_limit -ne 1 -or
+              -not $result.sandbox.kill_on_job_close -or
+              -not $result.sandbox.win32k_system_calls_disabled -or
+              -not $result.sandbox.extension_points_disabled -or
+              -not $result.sandbox.strict_handle_checks -or
+              -not $result.filesystem_denied -or
+              -not $result.network_denied -or
+              -not $result.child_process_denied) {
+            throw "containment receipt is incomplete"
+          }
+
+      - name: Acquire exact Apache POI SampleNewsletter
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture = Join-Path $env:RUNNER_TEMP "SampleNewsletter.pub"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub" -OutFile $fixture
+          $hash = (Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item -LiteralPath $fixture).Length
+          if ($hash -ne "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf") {
+            throw "SampleNewsletter SHA-256 mismatch: $hash"
+          }
+          if ($bytes -ne 291840) { throw "SampleNewsletter byte length mismatch: $bytes" }
+          "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prove real PUB opens through contained source-path-free worker
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $hostExe = Join-Path $env:CHAPTERA_SANDBOX_HOST "release\chaptera-desktop-open-sandbox-probe.exe"
+          $worker = Join-Path $env:CHAPTERA_SANDBOX_STAGE "chaptera-desktop-open-worker.exe"
+          $receipt = "target\desktop-pub-containment-real-pub.json"
+          & $hostExe $worker $env:CHAPTERA_SAMPLE_NEWSLETTER $receipt
+          if ($LASTEXITCODE -ne 0) { throw "real PUB containment acceptance failed: $LASTEXITCODE" }
+          $result = Get-Content -Raw $receipt | ConvertFrom-Json
+          if ([int]$result.viewer_page_count -ne 4 -or -not $result.source_unchanged) {
+            throw "contained real-PUB product receipt drifted"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-pub-containment-${{ github.sha }}
+          path: |
+            target/desktop-pub-containment-negative.json
+            target/desktop-pub-containment-real-pub.json
+          if-no-files-found: error

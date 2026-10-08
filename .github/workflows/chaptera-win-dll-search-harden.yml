@@ -1,0 +1,126 @@
+name: CHAPTERA-WIN-DLL-SEARCH-HARDEN-01 runtime probe
+
+on:
+  pull_request:
+    paths:
+      - "apps/chaptera-desktop/src/windows_dll_search.rs"
+      - "apps/chaptera-desktop/src/bin/chaptera-dll-search-probe.rs"
+      - ".github/workflows/chaptera-win-dll-search-harden.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  hostile-search-roots:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Build DLL search probe
+        run: cargo build -p chaptera-desktop --bin chaptera-dll-search-probe
+
+      - name: Exercise portable and installed-like hostile CWD/PATH cases
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $env:RUNNER_TEMP "chaptera-dll-search"
+          Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+
+          $built = (Resolve-Path "target/debug/chaptera-dll-search-probe.exe").Path
+          $systemDll = Join-Path $env:WINDIR "System32/version.dll"
+          if (-not (Test-Path $systemDll)) {
+            throw "missing System32 probe source: $systemDll"
+          }
+
+          function Assert-PathEqual([string]$Actual, [string]$Expected, [string]$Label) {
+            $a = [IO.Path]::GetFullPath($Actual).TrimEnd('\')
+            $e = [IO.Path]::GetFullPath($Expected).TrimEnd('\')
+            if (-not $a.Equals($e, [StringComparison]::OrdinalIgnoreCase)) {
+              throw "$Label loaded '$a', expected '$e'"
+            }
+          }
+
+          function Invoke-ProbeCase([string]$LayoutName) {
+            $layout = Join-Path $root $LayoutName
+            $attacker = Join-Path $root "$LayoutName-attacker-cwd"
+            $recovery = Join-Path $root "$LayoutName-recovery-worker-cwd"
+            $poison = Join-Path $root "$LayoutName-poison-path"
+            foreach ($dir in @($layout, $attacker, $recovery, $poison)) {
+              New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            }
+
+            $exe = Join-Path $layout "chaptera-dll-search-probe.exe"
+            Copy-Item $built $exe
+            $legit = Join-Path $layout "chaptera-probe-native.dll"
+            Copy-Item $systemDll $legit
+
+            foreach ($dir in @($attacker, $recovery, $poison)) {
+              Set-Content -Encoding ascii (Join-Path $dir "chaptera-probe-native.dll") "not a PE image"
+              Set-Content -Encoding ascii (Join-Path $dir "version.dll") "not a PE image"
+            }
+
+            $savedPath = $env:PATH
+            try {
+              $env:PATH = "$poison;$savedPath"
+              foreach ($cwd in @($attacker, $recovery)) {
+                Push-Location $cwd
+                try {
+                  $loadedApp = (& $exe "chaptera-probe-native.dll").Trim()
+                  if ($LASTEXITCODE -ne 0) {
+                    throw "app-dir probe failed in $cwd"
+                  }
+                  Assert-PathEqual $loadedApp $legit "$LayoutName app-dir case"
+
+                  $loadedSystem = (& $exe "version.dll").Trim()
+                  if ($LASTEXITCODE -ne 0) {
+                    throw "System32 probe failed in $cwd"
+                  }
+                  Assert-PathEqual $loadedSystem $systemDll "$LayoutName System32 case"
+                } finally {
+                  Pop-Location
+                }
+              }
+            } finally {
+              $env:PATH = $savedPath
+            }
+
+            [ordered]@{
+              layout = $LayoutName
+              executable = $exe
+              admitted_roots = @($layout, (Join-Path $env:WINDIR "System32"))
+              hostile_cwds = @($attacker, $recovery)
+              hostile_path = $poison
+              app_dir_case = "pass"
+              system32_case = "pass"
+            }
+          }
+
+          $receipt = [ordered]@{
+            schema = "chaptera.windows-dll-search-receipt.v1"
+            source_commit = "${{ github.sha }}"
+            consumer_support_claim = $false
+            cases = @(
+              (Invoke-ProbeCase "portable"),
+              (Invoke-ProbeCase "installed layout")
+            )
+          }
+
+          New-Item -ItemType Directory -Force -Path "target/dll-search" | Out-Null
+          $receipt | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 "target/dll-search/receipt.json"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chaptera-win-dll-search-receipt
+          path: target/dll-search/receipt.json
+          if-no-files-found: error

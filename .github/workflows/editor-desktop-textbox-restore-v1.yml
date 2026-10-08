@@ -1,0 +1,168 @@
+name: Editor Desktop TextBox Restore V1
+
+on:
+  pull_request:
+    paths:
+      - "apps/chaptera-desktop/src/text_box_creation.rs"
+      - "apps/chaptera-desktop/src/text_box_creation_shell.rs"
+      - "apps/chaptera-desktop/src/text_box_creation_gui_tests.rs"
+      - "apps/chaptera-desktop/src/text_session.rs"
+      - "apps/chaptera-desktop/src/text_session_shell.rs"
+      - "apps/chaptera-desktop/src/selection_keyboard_shell.rs"
+      - "apps/chaptera-desktop/Cargo.toml"
+      - "crates/chaptera-canvas-creation-interaction/**"
+      - "crates/chaptera-desktop-fallback-font-resource/**"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "!vendor/producer-a/crates/pub-editor/src/session_geometry.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_image.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_text.rs"
+      - "!vendor/producer-a/crates/pub-editor/tests/story_text_session_v1.rs"
+      - "tools/ci/pub_editor_pr_fanout.py"
+      - ".github/workflows/editor-desktop-textbox-restore-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  classify:
+    name: Classify pub-editor TextBox Restore scope
+    runs-on: ubuntu-latest
+    outputs:
+      textbox_restore: ${{ steps.scope.outputs.textbox_restore }}
+      reason: ${{ steps.scope.outputs.textbox_reason }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Trust only the base-branch classifier. The PR head is diff input
+          # and cannot teach this job to skip its own TextBox proofs.
+          ref: ${{ github.event.pull_request.base.ref || github.sha }}
+          fetch-depth: 0
+
+      - id: base-authority
+        name: Resolve base-branch classifier authority
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch PR head for classification
+        if: ${{ github.event.pull_request.head.sha != '' }}
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags origin "$HEAD_SHA"
+
+      - name: Test base-authority pub-editor classifier
+        run: python tools/ci/test_pub_editor_pr_fanout.py
+
+      - id: scope
+        name: Classify TextBox Restore ownership
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ steps.base-authority.outputs.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/pub-editor-pr-fanout
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "textbox_restore=true" >> "$GITHUB_OUTPUT"
+            echo "textbox_reason=workflow_dispatch_fail_closed" >> "$GITHUB_OUTPUT"
+            printf '%s\n' '{"schema":"chaptera.pub-editor-pr-fanout.v1","textbox_restore":true,"textbox_reason":"workflow_dispatch_fail_closed"}' > target/pub-editor-pr-fanout/receipt.json
+            exit 0
+          fi
+          python tools/ci/pub_editor_pr_fanout.py \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --receipt target/pub-editor-pr-fanout/receipt.json \
+            --github-output "$GITHUB_OUTPUT"
+          if ! grep -q '^textbox_restore=' "$GITHUB_OUTPUT"; then
+            echo "textbox_restore=true" >> "$GITHUB_OUTPUT"
+            echo "textbox_reason=base_classifier_missing_textbox_output" >> "$GITHUB_OUTPUT"
+            python -c 'import json, pathlib; p=pathlib.Path("target/pub-editor-pr-fanout/receipt.json"); d=json.loads(p.read_text()); d["textbox_restore"]=True; d["textbox_reason"]="base_classifier_missing_textbox_output"; p.write_text(json.dumps(d, indent=2, sort_keys=True) + "\n")'
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: pub-editor-textbox-restore-scope-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/pub-editor-pr-fanout/receipt.json
+          if-no-files-found: warn
+
+  contract:
+    needs: classify
+    # Classifier failure is fail-closed: preserve the full TextBox contract.
+    if: ${{ !cancelled() && always() && (needs.classify.result != 'success' || needs.classify.outputs.textbox_restore == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Format TextBox Desktop slice
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+
+      - name: Check TextBox Desktop integration
+        run: cargo check -p chaptera-desktop --all-targets
+
+      - name: Clippy TextBox Desktop integration
+        run: >-
+          cargo clippy -p chaptera-desktop --all-targets --
+          -D warnings
+          -A dead_code
+          -A unused_variables
+          -A clippy::type_complexity
+          -A clippy::collapsible_if
+          -A clippy::too_many_arguments
+
+      - name: Test TextBox creation adapter
+        run: cargo test -p chaptera-desktop text_box_creation::tests -- --nocapture
+
+      - name: Regress canonical CreateTextBox engine
+        run: >-
+          cargo test --manifest-path vendor/producer-a/Cargo.toml
+          -p pub-editor --test create_text_box_v1 -- --nocapture
+
+  gui-real-pub:
+    needs: classify
+    # Classifier failure is fail-closed: preserve the real-PUB GUI proof.
+    if: ${{ !cancelled() && always() && (needs.classify.result != 'success' || needs.classify.outputs.textbox_restore == 'true') }}
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Acquire pinned Apache POI SampleNewsletter
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP "SampleNewsletter.pub"
+          $url = "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub"
+          Invoke-WebRequest -Uri $url -OutFile $fixture
+          $hash = (Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item $fixture).Length
+          if ($hash -ne "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf") {
+            throw "SampleNewsletter SHA-256 mismatch: $hash"
+          }
+          if ($bytes -ne 291840) {
+            throw "SampleNewsletter byte length mismatch: $bytes"
+          }
+          "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prove TextBox draw create focus type Undo Redo reopen
+        run: >-
+          cargo test -p chaptera-desktop
+          gui_textbox_tool_creates_focuses_types_and_replays_one_new_story
+          -- --ignored --nocapture

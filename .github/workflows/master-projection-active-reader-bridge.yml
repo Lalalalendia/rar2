@@ -1,0 +1,156 @@
+name: Master projection active Reader bridge
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/master-projection-active-reader-bridge.yml"
+      - "vendor/producer-a/crates/pub-reader/Cargo.toml"
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
+      - "vendor/producer-a/crates/pub-reader/src/publication_document.rs"
+      - "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
+      - "vendor/producer-a/crates/pub-reader/src/master_bridge.rs"
+      - "vendor/producer-a/crates/pub-reader/src/bin/master_projection_bridge_receipt.rs"
+      - "crates/pub-master-projection/**"
+      - "crates/pub-model/**"
+      - "vendor/producer-a/crates/pub-viewer/Cargo.toml"
+      - "vendor/producer-a/crates/pub-viewer/src/**"
+      - "!vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
+      - "crates/chaptera-scene-instance/**"
+      - "crates/chaptera-viewer-render-plan/**"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: master-projection-active-reader-bridge-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/master-projection-active-reader-bridge
+  FIXTURE_001_SHA: "0ca858ed4806e81da2964d75d54d25a2ac0c6126074e9f82ea33b87701de4ade"
+  FIXTURE_033_SHA: "4029d4a1bf5be89d745c079b9c06ab33e5bdceb997a4761c5e11238110d879c9"
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify exact corpus and witnesses
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path("out/pinned1050/materialized/native")
+          paths = sorted(root.glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          for key in ("FIXTURE_001_SHA", "FIXTURE_033_SHA"):
+              sha = os.environ[key]
+              path = root / f"{sha}.pub"
+              assert path.is_file(), path
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == sha
+          print("pinned witnesses verified")
+          PY
+
+      - name: Build active Reader master bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustfmt --edition 2021 --check vendor/producer-a/crates/pub-reader/src/bin/master_projection_bridge_receipt.rs
+          rustfmt --edition 2024 --check vendor/producer-a/crates/pub-reader/src/master_bridge.rs
+          cargo build --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader --bin master_projection_bridge_receipt             --features master-authority-bridge --jobs 2
+
+      - name: Check active Viewer master consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustfmt --edition 2024 --check vendor/producer-a/crates/pub-viewer/src/lib.rs
+          rustfmt --edition 2024 --check crates/chaptera-viewer-render-plan/src/lib.rs
+          cargo check --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer --features cmo-slot-compose --jobs 2
+          cargo test --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml \
+            --features projected-scene-instances --jobs 2
+
+      - name: Prove root/vendor PAGE identity parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/master-projection-active-reader-bridge
+          for sha in "$FIXTURE_001_SHA" "$FIXTURE_033_SHA"; do
+            "$CARGO_TARGET_DIR/debug/master_projection_bridge_receipt"               "out/pinned1050/materialized/native/$sha.pub"               "target/master-projection-active-reader-bridge/$sha.json"
+          done
+
+      - name: Assert bounded authority contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path("target/master-projection-active-reader-bridge")
+          rows = []
+          for key in ("FIXTURE_001_SHA", "FIXTURE_033_SHA"):
+              sha = os.environ[key]
+              data = json.loads((root / f"{sha}.json").read_text())
+              assert data["schema"] == "chaptera.master-projection-active-reader-bridge.v1"
+              assert data["source_sha256"] == sha
+              assert data["relation_count"] > 0
+              assert data["active_graph_identity_parity"] is True
+              assert data["invariants"] == {
+                  "exact_field_id": 0x0D,
+                  "exact_wire": 0x68,
+                  "target_raw_type": 0x43,
+                  "source_graph_mutated": False,
+                  "semantic_node_clones_created": False,
+              }
+              assert data["claims"]["new_contents_parser_added"] is False
+              assert data["claims"]["root_semantic_gate_reused"] is True
+              assert data["claims"]["raw_page_id_emitted"] is False
+              assert data["claims"]["raw_contents_seq_num_emitted"] is False
+              assert data["claims"]["story_text_emitted"] is False
+              assert data["claims"]["root_vendor_page_identity_parity_checked"] is True
+              rows.append({
+                  "source_sha256": sha,
+                  "relation_count": data["relation_count"],
+                  "relation_identity_digest_sha256": data["relation_identity_digest_sha256"],
+              })
+          print(json.dumps(rows, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-safe bridge receipts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: master-projection-active-reader-bridge
+          path: target/master-projection-active-reader-bridge/*.json
+          if-no-files-found: error
+          retention-days: 30

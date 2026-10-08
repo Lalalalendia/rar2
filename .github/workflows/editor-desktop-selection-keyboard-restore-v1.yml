@@ -1,0 +1,102 @@
+name: Editor Desktop Selection Keyboard Restore V1
+
+on:
+  pull_request:
+    paths:
+      - "apps/chaptera-desktop/src/text_session.rs"
+      - "apps/chaptera-desktop/src/selection_keyboard.rs"
+      - "apps/chaptera-desktop/src/selection_keyboard_shell.rs"
+      - "apps/chaptera-desktop/src/selection_keyboard_gui_tests.rs"
+      - "apps/chaptera-desktop/Cargo.toml"
+      - ".github/workflows/editor-desktop-selection-keyboard-restore-v1.yml"
+  push:
+    branches:
+      - editor-desktop-selection-keyboard-restore-01
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Format Desktop keyboard slice
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+
+  contract:
+    needs: format-preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Check Desktop keyboard integration
+        run: cargo check -p chaptera-desktop --all-targets
+
+      - name: Clippy Desktop keyboard integration
+        run: >-
+          cargo clippy -p chaptera-desktop --all-targets --
+          -D warnings
+          -A dead_code
+          -A unused_variables
+          -A clippy::type_complexity
+          -A clippy::collapsible_if
+          -A clippy::too_many_arguments
+
+      - name: Unit-test keyboard routing
+        run: cargo test -p chaptera-desktop selection_keyboard::tests -- --nocapture
+
+  real-gui:
+    needs: format-preflight
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Acquire pinned Apache POI SampleNewsletter
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP "SampleNewsletter.pub"
+          $url = "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub"
+          Invoke-WebRequest -Uri $url -OutFile $fixture
+          $hash = (Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item $fixture).Length
+          if ($hash -ne "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf") {
+            throw "SampleNewsletter SHA-256 mismatch: $hash"
+          }
+          if ($bytes -ne 291840) {
+            throw "SampleNewsletter byte length mismatch: $bytes"
+          }
+          "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prove canvas keyboard restore on real PUB
+        run: cargo test -p chaptera-desktop gui_canvas_keyboard_nudge_select_all_escape_and_delete_fail_closed_on_real_pub -- --ignored --nocapture
+
+      - name: Prove Escape gesture precedence on real PUB
+        run: cargo test -p chaptera-desktop gui_escape_cancels_active_object_gesture_before_clearing_selection_on_real_pub -- --ignored --nocapture
+
+      - name: Prove Story focus and Alt Arrow on real PUB
+        run: cargo test -p chaptera-desktop gui_story_keyboard_keeps_arrows_text_owned_and_alt_nudges_owner_on_real_pub -- --ignored --nocapture

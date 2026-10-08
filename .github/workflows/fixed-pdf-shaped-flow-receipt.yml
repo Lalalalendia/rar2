@@ -1,0 +1,73 @@
+name: Fixed PDF shaped-flow receipt V1
+
+on:
+  pull_request:
+    paths:
+      - "crates/pub-fixed-flow-adapter/**"
+      - "crates/chaptera-desktop-fallback-font-resource/**"
+      - "packages/protocol/fixed-output/**"
+      - "tools/validate_fixed_pdf_shaped_flow_receipt.py"
+      - "tools/test_fixed_pdf_shaped_flow_receipt.py"
+      - "tools/run_local_fixed_pdf_shaped_flow.py"
+      - "tools/test_run_local_fixed_pdf_shaped_flow.py"
+      - "tools/run_yab259_fixed_pdf_closure.py"
+      - "tools/test_run_yab259_fixed_pdf_closure.py"
+      - ".github/workflows/fixed-pdf-shaped-flow-receipt.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: fixed-pdf-shaped-flow-receipt-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install schema validator
+        run: python -m pip install "jsonschema==4.23.0"
+      - name: Run shaped-flow to fixed-PDF contract tests
+        run: python tools/test_fixed_pdf_shaped_flow_receipt.py -v
+      - name: Run Rar local/native closure-runner tests
+        run: python tools/test_run_local_fixed_pdf_shaped_flow.py -v
+      - name: Run exact Yab #259 engine-boundary tests
+        run: python tools/test_run_yab259_fixed_pdf_closure.py -v
+
+  rust-adapter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install receipt validator dependency
+        run: python -m pip install "jsonschema==4.23.0"
+      - name: Check formatting
+        run: cargo fmt -p pub-fixed-flow-adapter -p chaptera-desktop-fallback-font-resource -- --check
+      - name: Check workspace
+        run: cargo check -p pub-fixed-flow-adapter -p chaptera-desktop-fallback-font-resource --all-targets
+      - name: Lint workspace
+        run: cargo clippy -p pub-fixed-flow-adapter -p chaptera-desktop-fallback-font-resource --all-targets -- -D warnings
+      - name: Test shaped-flow adapter
+        run: cargo test -p pub-fixed-flow-adapter
+      - name: Test pinned fallback font resource
+        run: cargo test -p chaptera-desktop-fallback-font-resource
+      - name: Materialize pinned fallback font
+        run: |
+          cargo run -q -p chaptera-desktop-fallback-font-resource --bin materialize-fallback-font -- /tmp/chaptera-fallback.ttf
+          test "$(wc -c < /tmp/chaptera-fallback.ttf)" -eq 361676
+          echo "80307b8da7649aa4ee4d484b232140e3ce1ec0ca093073d3c53c8f5a5ced7a70  /tmp/chaptera-fallback.ttf" | sha256sum -c -
+      - name: Produce sanitized adapter receipt
+        run: cargo run -q -p pub-fixed-flow-adapter --bin fixed-flow-producer -- packages/protocol/fixed-output/v1/shaped-flow-synthetic-input.json > /tmp/shaped-flow-receipt.json
+      - name: Validate Rust-produced receipt with independent V1 validator
+        run: python tools/validate_fixed_pdf_shaped_flow_receipt.py /tmp/shaped-flow-receipt.json

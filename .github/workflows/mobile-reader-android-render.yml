@@ -1,0 +1,129 @@
+name: Mobile Reader Android render
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-local-open:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo +1.94.1 install cargo-ndk --version 4.1.2 --locked
+
+      - name: Check JNI Reader bridge on host
+        run: cargo +1.94.1 check --manifest-path crates/chaptera-mobile-reader-jni/Cargo.toml
+
+      - name: Build physical-device and emulator JNI Reader bridges
+        run: |
+          rm -rf apps/chaptera-mobile-android/app/src/main/jniLibs
+          cargo +1.94.1 ndk \
+            -t arm64-v8a \
+            -t x86_64 \
+            -o "$GITHUB_WORKSPACE/apps/chaptera-mobile-android/app/src/main/jniLibs" \
+            build \
+            --manifest-path crates/chaptera-mobile-reader-jni/Cargo.toml \
+            --release
+          find apps/chaptera-mobile-android/app/src/main/jniLibs -maxdepth 2 -type f -print
+          test -f apps/chaptera-mobile-android/app/src/main/jniLibs/arm64-v8a/libchaptera_mobile_reader_jni.so
+          test -f apps/chaptera-mobile-android/app/src/main/jniLibs/x86_64/libchaptera_mobile_reader_jni.so
+
+      - name: Acquire pinned real PUB fixtures and probe exact image coverage
+        run: |
+          mkdir -p apps/chaptera-mobile-android/app/src/androidTest/assets
+          ASSETS=apps/chaptera-mobile-android/app/src/androidTest/assets
+          curl --fail --location https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub --output "$ASSETS/SampleNewsletter.pub"
+          echo "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf  $ASSETS/SampleNewsletter.pub" | sha256sum --check
+          curl --fail --location https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleBrochure.pub --output "$ASSETS/SampleBrochure.pub"
+          echo "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87  $ASSETS/SampleBrochure.pub" | sha256sum --check
+          curl --fail --location https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/Simple.pub --output "$ASSETS/Simple.pub"
+          echo "2606f530052a818c7949b88c9bf245dbc0a74ddc6b5a60004f37b387fe4b955d  $ASSETS/Simple.pub" | sha256sum --check
+          PROBE="$RUNNER_TEMP/mobile-reader-image-probe.txt"
+          cargo +1.94.1 run --quiet --manifest-path crates/chaptera-mobile-reader-core/Cargo.toml --bin mobile-reader-image-probe -- "$ASSETS/SampleNewsletter.pub" "$ASSETS/SampleBrochure.pub" "$ASSETS/Simple.pub" | tee "$PROBE"
+          python - "$PROBE" <<'PY'
+          import pathlib
+          import sys
+
+          lines = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+
+          def row_for(name):
+              for line in lines:
+                  if line.startswith("MOBILE_IMAGE_PROBE\t") and f"path=" in line and name in line:
+                      fields = {}
+                      for part in line.split("\t")[1:]:
+                          key, value = part.split("=", 1)
+                          fields[key] = value
+                      return fields
+              raise SystemExit(f"missing mobile probe row for {name}")
+
+          expected_pages = {
+              "SampleNewsletter.pub": 4,
+              "SampleBrochure.pub": 2,
+          }
+          for name, expected in expected_pages.items():
+              row = row_for(name)
+              actual = int(row["pages"])
+              if actual != expected:
+                  raise SystemExit(
+                      f"{name}: mobile Reader must expose {expected} exact Publisher-backed pages, got {actual}"
+                  )
+          PY
+
+      - name: Build Android app and instrumentation APK
+        working-directory: apps/chaptera-mobile-android
+        run: |
+          gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest
+
+      - name: Verify APK contains native Reader bridge and no INTERNET permission declaration
+        run: |
+          unzip -l apps/chaptera-mobile-android/app/build/outputs/apk/debug/app-debug.apk | grep 'lib/arm64-v8a/libchaptera_mobile_reader_jni.so'
+          unzip -l apps/chaptera-mobile-android/app/build/outputs/apk/debug/app-debug.apk | grep 'lib/x86_64/libchaptera_mobile_reader_jni.so'
+          if grep -R --fixed-string 'android.permission.INTERNET' apps/chaptera-mobile-android/app/src/main; then
+            echo "mobile Reader common path must not request INTERNET permission"
+            exit 1
+          fi
+          if grep -R --fixed-string 'BitmapFactory.decodeByteArray' apps/chaptera-mobile-android/app/src/main; then
+            echo "Android production image path must consume bounded admitted pixels, not raw encoded PUB image bytes"
+            exit 1
+          fi
+
+      - name: Run content-URI offline acceptance on Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          profile: pixel_6
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: false
+          script: |
+            adb shell svc wifi disable || true
+            adb shell svc data disable || true
+            gradle -p apps/chaptera-mobile-android --no-daemon :app:connectedDebugAndroidTest
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chaptera-mobile-reader-android-render
+          path: |
+            apps/chaptera-mobile-android/app/build/outputs/apk/debug/app-debug.apk
+            apps/chaptera-mobile-android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          if-no-files-found: error

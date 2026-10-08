@@ -1,0 +1,93 @@
+name: Editor fixed-output current image resources
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-editor/src/lib.rs"
+      - "vendor/producer-a/crates/pub-editor/src/session_image.rs"
+      - "tools/ci/pub_editor_pr_fanout.py"
+      - ".github/workflows/editor-fixed-output-current-image-resources.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: editor-fixed-output-current-image-resources-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    name: Classify pub-editor fixed-output image resources scope
+    runs-on: ubuntu-latest
+    outputs:
+      fixed_output_image_resources: ${{ steps.scope.outputs.fixed_output_image_resources }}
+      reason: ${{ steps.scope.outputs.fixed_output_image_resources_reason }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.ref || github.sha }}
+          fetch-depth: 0
+
+      - id: base-authority
+        name: Resolve base-branch classifier authority
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch PR head for classification
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags origin "$HEAD_SHA"
+
+      - name: Test base-authority pub-editor classifier
+        run: python tools/ci/test_pub_editor_pr_fanout.py
+
+      - id: scope
+        name: Classify fixed-output image resource ownership
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ steps.base-authority.outputs.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/pub-editor-pr-fanout
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "fixed_output_image_resources=true" >> "$GITHUB_OUTPUT"
+            echo "fixed_output_image_resources_reason=non_pr_event_fail_closed" >> "$GITHUB_OUTPUT"
+            printf '%s\n' '{"schema":"chaptera.pub-editor-pr-fanout.v1","fixed_output_image_resources":true,"fixed_output_image_resources_reason":"non_pr_event_fail_closed"}' > target/pub-editor-pr-fanout/receipt.json
+            exit 0
+          fi
+          python tools/ci/pub_editor_pr_fanout.py \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --receipt target/pub-editor-pr-fanout/receipt.json \
+            --github-output "$GITHUB_OUTPUT"
+          if ! grep -q '^fixed_output_image_resources=' "$GITHUB_OUTPUT"; then
+            echo "fixed_output_image_resources=true" >> "$GITHUB_OUTPUT"
+            echo "fixed_output_image_resources_reason=base_classifier_missing_fixed_output_image_resources_output" >> "$GITHUB_OUTPUT"
+            python -c 'import json, pathlib; p=pathlib.Path("target/pub-editor-pr-fanout/receipt.json"); d=json.loads(p.read_text()); d["fixed_output_image_resources"]=True; d["fixed_output_image_resources_reason"]="base_classifier_missing_fixed_output_image_resources_output"; p.write_text(json.dumps(d, indent=2, sort_keys=True) + "\n")'
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: pub-editor-fixed-output-image-resources-scope-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/pub-editor-pr-fanout/receipt.json
+          if-no-files-found: warn
+
+  validate:
+    needs: classify
+    if: ${{ !cancelled() && always() && (needs.classify.result != 'success' || needs.classify.outputs.fixed_output_image_resources == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check pub-editor
+        run: cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor
+      - name: Test current fixed-output image resources
+        run: >-
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --lib
+          asset_reachability_tests::current_image_resources -- --nocapture

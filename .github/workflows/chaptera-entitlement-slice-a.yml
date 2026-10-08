@@ -1,0 +1,44 @@
+name: chaptera-entitlement-slice-a
+
+on:
+  push:
+    branches:
+      - "chaptera-entitlement-slice-a"
+  pull_request:
+    paths:
+      - "crates/chaptera-entitlement/**"
+      - ".github/workflows/chaptera-entitlement-slice-a.yml"
+
+concurrency:
+  group: chaptera-entitlement-slice-a-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.1
+          components: clippy
+      - name: Admit entitlement package
+        id: admit
+        shell: bash
+        run: |
+          if [[ -f crates/chaptera-entitlement/Cargo.toml ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "chaptera-entitlement package is not present on this branch; workflow is dormant."
+          fi
+      - name: Test chaptera-entitlement
+        if: steps.admit.outputs.present == 'true'
+        run: cargo test -p chaptera-entitlement --all-targets
+      - name: Clippy chaptera-entitlement
+        if: steps.admit.outputs.present == 'true'
+        run: cargo clippy -p chaptera-entitlement --all-targets -- -D warnings

@@ -1,0 +1,57 @@
+name: Resize Nodes V1
+
+on:
+  pull_request:
+    paths:
+      - "services/editor-api/resize_nodes_v1.py"
+      - "services/editor-api/test_resize_nodes_v1.py"
+      - "services/editor-api/revision_store.py"
+      - "services/editor-api/create_shape_v1.py"
+      - "apps/chaptera-desktop/src/agent.rs"
+      - "vendor/producer-a/crates/pub-editor/src/session_geometry.rs"
+      - ".github/workflows/resize-nodes-v1.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+      - name: Run atomic ResizeNodes canonical tests
+        working-directory: services/editor-api
+        run: python -m unittest -v test_resize_nodes_v1
+      - name: Re-run multi-resize planner
+        working-directory: services/editor-api
+        run: python -m unittest -v test_multi_resize_plan_v1
+      - name: Re-run revision kernel regression
+        working-directory: services/editor-api
+        run: python -m unittest -v test_revision_store
+      - name: Check pub-editor formatting
+        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
+      - name: Lint pub-editor batch runtime
+        run: cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets -- -D warnings
+      - name: Run atomic ResizeNodes Rust runtime tests
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test resize_nodes_v1
+      - name: Run ResizeNode compatibility regression
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test resize_node_v1
+      - name: Run MoveNodes v0.9 inheritance regression
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test move_nodes_v1
+      - name: Run TableGrid v0.9 inheritance regression
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test effective_table_grid_v1
+      - name: Run BreakLink v0.9 inheritance regression
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test break_text_frame_forward_link_v1

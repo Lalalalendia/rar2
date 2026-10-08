@@ -1,0 +1,253 @@
+name: Publisher HTML Metadata Harvest
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/publisher-html-harvest.yml"
+      - "research/publisher_html_harvest.py"
+      - "research/publisher_html_seed_urls.json"
+      - "research/publisher_html_borderart_join.py"
+      - "research/publisher_borderart_catalog_usage_census.py"
+      - "research/publisher_borderart_static_projection.py"
+      - "research/publisher_borderart_fbid_index_join.py"
+      - "research/publisher_borderart_payload_layout.py"
+      - "research/publisher_borderart_external_slot_join.py"
+  workflow_dispatch:
+
+concurrency:
+  group: publisher-html-harvest-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Ensure PDF text extraction
+        run: |
+          command -v pdftotext || (sudo apt-get update && sudo apt-get install -y poppler-utils)
+
+      - name: Test Publisher hidden-XML inference guards
+        run: |
+          python -m unittest research/test_publisher_html_harvest.py
+
+      - name: Harvest public Publisher hidden XML
+        run: |
+          python research/publisher_html_harvest.py \
+            --seeds research/publisher_html_seed_urls.json \
+            --out out/publisher-html-harvest
+
+      - name: Build legacy OplOdpo frontier receipt
+        run: |
+          python research/publisher_html_legacy_frontier.py \
+            --harvest out/publisher-html-harvest/harvest.json \
+            --out out/publisher-html-harvest/legacy-odpo-frontier.json
+
+      - name: Close Publisher 11 FBID to FancyBorders catalog join
+        run: |
+          python research/publisher_html_borderart_join.py \
+            --properties out/publisher-html-harvest/properties.json \
+            --objects out/publisher-html-harvest/objects.json \
+            --out out/publisher-html-harvest/borderart-fbid-join.json
+
+      - name: Separate document BorderArt catalog from shape usage
+        run: |
+          python research/publisher_borderart_catalog_usage_census.py \
+            --properties out/publisher-html-harvest/properties.json \
+            --objects out/publisher-html-harvest/objects.json \
+            --out out/publisher-html-harvest/borderart-catalog-usage-census.json
+
+      - name: Guard distinct same-shape BorderArt projections
+        run: |
+          python research/publisher_borderart_static_projection.py \
+            --properties out/publisher-html-harvest/properties.json \
+            --objects out/publisher-html-harvest/objects.json \
+            --out out/publisher-html-harvest/borderart-static-projection.json
+
+      - name: Test current Fbid as FancyBorders catalog index
+        run: |
+          python research/publisher_borderart_fbid_index_join.py \
+            --properties out/publisher-html-harvest/properties.json \
+            --objects out/publisher-html-harvest/objects.json \
+            --out out/publisher-html-harvest/borderart-fbid-index-join.json
+
+      - name: Prove BorderArt eight-slot catalog payload layout
+        run: |
+          python research/publisher_borderart_payload_layout.py \
+            --properties out/publisher-html-harvest/properties.json \
+            --objects out/publisher-html-harvest/objects.json \
+            --out out/publisher-html-harvest/borderart-payload-layout.json
+
+      - name: Join Publisher BorderArt slots to pinned external WMFs
+        run: |
+          python research/publisher_borderart_external_slot_join.py \
+            --properties out/publisher-html-harvest/properties.json \
+            --objects out/publisher-html-harvest/objects.json \
+            --out out/publisher-html-harvest/borderart-external-slot-join.json
+
+      - name: Publish summary
+        if: always()
+        run: |
+          if [ -f out/publisher-html-harvest/harvest.json ]; then
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          d = json.loads(Path("out/publisher-html-harvest/harvest.json").read_text(encoding="utf-8"))
+          keys = [
+              "seed_count", "sources_ok", "sources_failed",
+              "sources_with_properties", "deduplicated_payloads",
+              "object_observations", "property_candidates_total",
+              "property_observations", "property_observations_explicit",
+              "property_observations_inferred", "property_observations_unresolved",
+              "ambiguous_inference_key_count",
+              "registry_entries", "unique_opl_classes", "unique_property_names",
+              "publisher_versions"
+          ]
+          with open(Path.home() / "summary.md", "w", encoding="utf-8") as f:
+              f.write("## Publisher HTML harvest\n\n")
+              for key in keys:
+                  f.write(f"- {key}: \`{d.get(key)}\`\n")
+              f.write("\n### OPL classes\n\n")
+              for value in d.get("classes", []):
+                  f.write(f"- \`{value}\`\n")
+          PY
+            cat "$HOME/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f out/publisher-html-harvest/legacy-odpo-frontier.json ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path("out/publisher-html-harvest/legacy-odpo-frontier.json").read_text(encoding="utf-8"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n## Legacy OplOdpo frontier\n\n")
+              f.write(f"- present: `{d['present_count']}/{d['watch_count']}`\n")
+              f.write(f"- missing: `{d['missing_count']}`\n")
+              for row in d["rows"]:
+                  mark = "present" if row["present"] else "missing"
+                  f.write(f"- `{row['property_name']} {row['priv']}`: **{mark}**, sources={row['source_count']}\n")
+          PY
+          fi
+          if [ -f out/publisher-html-harvest/borderart-external-slot-join.json ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path("out/publisher-html-harvest/borderart-external-slot-join.json").read_text(encoding="utf-8"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n## BorderArt exact directional WMF join\n\n")
+              f.write(f"- verdict: `{d['verdict']}`\n")
+              f.write(f"- slot order: `{','.join(d['slot_order'])}`\n")
+              f.write(f"- exact byte matches: `{d['byte_identical_slot_count']}/{d['slot_comparison_count']}`\n")
+              f.write(f"- geometry unit: `{d['emu_per_twip']} EMU/twip`\n")
+              for row in d["rows"]:
+                  f.write(
+                      f"- `{row['source_id']}` / `{row['publisher_name']}`: "
+                      f"external={row['external_definition']['name']}#{row['external_definition']['id']} / "
+                      f"verdict={row['verdict']}\n"
+                  )
+          PY
+          fi
+          if [ -f out/publisher-html-harvest/borderart-payload-layout.json ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path("out/publisher-html-harvest/borderart-payload-layout.json").read_text(encoding="utf-8"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n## BorderArt eight-slot payload layout\n\n")
+              f.write(f"- verdict: `{d['verdict']}`\n")
+              for row in d["rows"]:
+                  f.write(
+                      f"- `{row['source_id']}` / `{row['catalog_name']}`: "
+                      f"offsets={row['metadata_offsets']} / cb={row['payload_blob_sizes']}\n"
+                  )
+              f.write("- invariant: 8 offsets, 8 payload blobs, base=108, exact prefix-sum offsets\n")
+              f.write("- bounded clue: alternating 4+4 payload-size classes; corner/edge semantics remain unproven\n")
+          PY
+          fi
+          if [ -f out/publisher-html-harvest/borderart-fbid-index-join.json ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path("out/publisher-html-harvest/borderart-fbid-index-join.json").read_text(encoding="utf-8"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n## BorderArt current Fbid -> catalog index join\n\n")
+              f.write(f"- verdict: `{d['verdict']}`\n")
+              f.write(f"- current OplPo.Fbid: `{d['current_fbid']['value']}`\n")
+              f.write(f"- OplPlbFb.IfbMax: `{d['catalog']['ifbmax']}`\n")
+              f.write(f"- catalog[Fbid]: `{d['catalog']['resolved_name_at_fbid']}`\n")
+              f.write(f"- LastFmt.FBID: `{d['lastfmt_fbid']['value']}`\n")
+              f.write("- law status: exact index-consistency witness; universal indexing remains open\n")
+          PY
+          fi
+          if [ -f out/publisher-html-harvest/borderart-static-projection.json ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path("out/publisher-html-harvest/borderart-static-projection.json").read_text(encoding="utf-8"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n## BorderArt same-shape projection guard\n\n")
+              f.write(f"- verdict: `{d['verdict']}`\n")
+              f.write("- current OplPo: `Fbid priv=903 value=0`\n")
+              f.write("- LastFmt OplOdpo: `FBID priv=2418 value=Basic...Wide Inline`\n")
+              f.write("- conclusion: distinct property coordinates / value domains\n")
+          PY
+          fi
+          if [ -f out/publisher-html-harvest/borderart-catalog-usage-census.json ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path("out/publisher-html-harvest/borderart-catalog-usage-census.json").read_text(encoding="utf-8"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n## BorderArt catalog vs usage census\n\n")
+              f.write(f"- catalog-only sources: `{d['catalog_only_source_count']}`\n")
+              f.write(f"- catalog+usage sources: `{d['catalog_and_usage_source_count']}`\n")
+              f.write(f"- usage-without-catalog sources: `{d['usage_without_catalog_source_count']}`\n")
+              f.write(f"- catalog presence is not usage evidence: `{d['catalog_presence_is_not_usage_evidence']}`\n")
+              for row in d["rows"]:
+                  if row["state"] != "neither":
+                      f.write(f"- `{row['source_id']}`: {row['state']} / catalog={row['catalog_names']} / FBID={row['usage_fbid_values']}\n")
+          PY
+          fi
+          if [ -f out/publisher-html-harvest/borderart-fbid-join.json ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path("out/publisher-html-harvest/borderart-fbid-join.json").read_text(encoding="utf-8"))
+          t = d["target"]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n## FBID -> FancyBorders same-document join\n\n")
+              f.write(f"- verdict: `{d['verdict']}`\n")
+              f.write(f"- FBID: `{t['fbid_value']}` / priv `{t['fbid_priv']}`\n")
+              f.write(f"- catalog-name match: `{t['catalog_name_match']}`\n")
+              f.write(f"- Publication.OhFancyBorders <-> OplPlbFb handle join: `{','.join(t['handle_join'])}`\n")
+              f.write(f"- four-way join: `{t['four_way_join']}`\n")
+          PY
+          fi
+
+      - name: Upload derived corpus metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publisher-html-harvest
+          path: |
+            out/publisher-html-harvest/harvest.json
+            out/publisher-html-harvest/objects.json
+            out/publisher-html-harvest/properties.json
+            out/publisher-html-harvest/properties.tsv
+            out/publisher-html-harvest/registry.tsv
+            out/publisher-html-harvest/version-diff.json
+            out/publisher-html-harvest/legacy-odpo-frontier.json
+            out/publisher-html-harvest/borderart-fbid-join.json
+            out/publisher-html-harvest/borderart-catalog-usage-census.json
+            out/publisher-html-harvest/borderart-static-projection.json
+            out/publisher-html-harvest/borderart-fbid-index-join.json
+            out/publisher-html-harvest/borderart-payload-layout.json
+            out/publisher-html-harvest/borderart-external-slot-join.json
+          if-no-files-found: error
+          retention-days: 30

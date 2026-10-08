@@ -1,0 +1,62 @@
+name: Publisher supplemental native surface one-shot
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/publisher-supplemental-native-surface-once.yml"
+      - "tools/windows/run_publisher_supplemental_native_surface_probe.ps1"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/publisher-supplemental-native-surface-once.yml"
+      - "tools/windows/run_publisher_supplemental_native_surface_probe.ps1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: publisher-supplemental-native-surface-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: windows-latest
+    outputs:
+      trusted_sha: ${{ steps.trust.outputs.trusted_sha }}
+    steps:
+      - name: Bind exact candidate
+        id: trust
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            "trusted_sha=${{ github.event.pull_request.head.sha }}" >> $env:GITHUB_OUTPUT
+          } else {
+            "trusted_sha=${{ github.sha }}" >> $env:GITHUB_OUTPUT
+          }
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.trust.outputs.trusted_sha }}
+          persist-credentials: false
+
+      - name: Parse read-only surface probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = "tools/windows/run_publisher_supplemental_native_surface_probe.ps1"
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path).Path,[ref]$tokens,[ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "PowerShell parser rejected supplemental native surface probe"
+          }
+          $text = Get-Content -LiteralPath $path -Raw
+          foreach ($forbidden in @(".Save(", ".SaveAs(", ".ExportAsFixedFormat(", ".PrintOut(", ".Run(")) {
+            if ($text.Contains($forbidden)) { throw "Forbidden mutation/output token: $forbidden" }
+          }
+          if ($text -notmatch [regex]::Escape('$app.Open($resolved, $true, $false)')) {
+            throw "Probe must open exact source read-only"
+          }

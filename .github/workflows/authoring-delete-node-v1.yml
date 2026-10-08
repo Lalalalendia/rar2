@@ -1,0 +1,47 @@
+name: Authoring DeleteNode V1
+
+on:
+  pull_request:
+    paths:
+      - "services/editor-api/delete_node_v1.py"
+      - "services/editor-api/create_shape_container_v2.py"
+      - "services/editor-api/authored_stack_v1.py"
+      - "services/editor-api/revision_store.py"
+      - "services/editor-api/test_delete_node.py"
+      - "services/editor-api/test_create_shape_container_v2.py"
+      - "packages/protocol/authoring-delete-node/v1/delete-node-intent.schema.json"
+      - ".github/workflows/authoring-delete-node-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install jsonschema
+      - name: Test current DeleteNode lifecycle
+        working-directory: services/editor-api
+        run: python -m unittest -v test_delete_node
+      - name: Regression current CreateShape V2 container model
+        working-directory: services/editor-api
+        run: python -m unittest -v test_create_shape_container_v2
+      - name: Validate public DeleteNode intent schema
+        run: |
+          python - <<'PY'
+          import json
+          import jsonschema
+          from pathlib import Path
+
+          schema = json.loads(
+              Path(
+                  "packages/protocol/authoring-delete-node/v1/delete-node-intent.schema.json"
+              ).read_text()
+          )
+          jsonschema.Draft202012Validator.check_schema(schema)
+          PY

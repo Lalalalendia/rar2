@@ -1,0 +1,43 @@
+name: Cloud source ingress V1
+
+on:
+  pull_request:
+    paths:
+      - "apps/chaptera-server/src/source_ingress.rs"
+      - "apps/chaptera-server/src/source_ingress_async.rs"
+      - "apps/chaptera-server/src/source_ingress_sqlite.rs"
+      - "apps/chaptera-server/src/source_validation_job.rs"
+      - "apps/chaptera-server/src/workspace_context.rs"
+      - "apps/chaptera-server/src/upload_admission.rs"
+      - "apps/chaptera-server/src/serve.rs"
+      - "apps/chaptera-server/src/main.rs"
+      - "apps/chaptera-server/src/config.rs"
+      - "apps/chaptera-server/src/auth_http.rs"
+      - "apps/chaptera-server/src/source_ingress_http.rs"
+      - "apps/chaptera-server/src/source_authority.rs"
+      - "apps/chaptera-server/src/blob_store.rs"
+      - "apps/chaptera-server/Cargo.toml"
+      - "apps/chaptera-server/migrations/0001_source_ingress.sql"
+      - ".github/workflows/cloud-source-ingress-v1.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+      - name: Run focused SourceIngress HTTP and router-mount tests
+        run: |
+          cargo test -p chaptera-server source_ingress_http::tests::
+          cargo test -p chaptera-server --test runtime_shell product_router_is_merged_under_the_same_edge_boundary

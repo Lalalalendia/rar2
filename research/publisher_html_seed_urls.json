@@ -1,0 +1,67 @@
+[
+  {
+    "id": "publisher10-mongolia-indexorig",
+    "url": "https://raw.githubusercontent.com/mathwizard1232/Mongolia/cf988314fd60a3cf8191d5402f4e8148dd7e1c0c/indexorig.htm",
+    "note": "Pinned Microsoft Publisher 10 export; first repository commit, Generator=Microsoft Publisher 10"
+  },
+  {
+    "id": "publisher10-mongolia-page0001",
+    "url": "https://raw.githubusercontent.com/mathwizard1232/Mongolia/c0788038017c99c3d215f3afcb8de790f8802008/index_files/%23page0001.htm%23",
+    "note": "Pinned Publisher 10 page with OplOdpo.TextCopyFit priv=1E04 witness"
+  },
+  {
+    "id": "publisher11-help-paired",
+    "url": "https://raw.githubusercontent.com/Planet-Source-Code/hartoto-flexible-phoone-book__1-69597/1400f033db5f4a57cca6d5392f551943271b7f72/help.htm",
+    "note": "Paired Publisher 11 help.htm; contains sole known OplOdpo.FBID priv=2418 witness (Basic...Wide Inline)"
+  },
+  {
+    "id": "planet-source-pdesgal",
+    "url": "https://raw.githubusercontent.com/Planet-Source-Code/hartoto-flexible-phoone-book__1-69597/1400f033db5f4a57cca6d5392f551943271b7f72/pdesgal.htm",
+    "note": "Publisher 11 Design Gallery HTML used by the priv Rosetta work"
+  },
+  {
+    "id": "mit-zephyr-16878",
+    "url": "https://diswww.mit.edu/menelaus.mit.edu/zbugs/16878",
+    "note": "2005 archived HTML mail containing Publisher hidden XML"
+  },
+  {
+    "id": "kannadanet-2010-10",
+    "url": "https://kannadanet.blogspot.com/2010/10/",
+    "note": "2010 Blogger archive with Publisher-generated markup"
+  },
+  {
+    "id": "ccm-homepage",
+    "url": "https://it.ccm.net/forum/affich-4795-centrare-la-mia-home-page",
+    "note": "Forum post preserving Publisher-generated page source"
+  },
+  {
+    "id": "supersociedades-27599",
+    "url": "https://www.supersociedades.gov.co/documents/107391/159040/27599.pdf/da73ff26-e80d-e617-9e49-da4acb6338b1?download=true&t=1743209566778",
+    "note": "Legacy Publisher-generated source in Colombian public archive"
+  },
+  {
+    "id": "supersociedades-27539",
+    "url": "https://www.supersociedades.gov.co/documents/107391/159040/27539.pdf/dcfe9b61-29d8-cc19-166c-d639ba281d80?download=true&t=1743209555571",
+    "note": "Legacy Publisher-generated source in Colombian public archive"
+  },
+  {
+    "id": "supersociedades-28150",
+    "url": "https://www.supersociedades.gov.co/documents/107391/159040/28150.pdf/ab941b5a-a359-0863-f559-68284c8647e7?download=true&t=1743209611365",
+    "note": "Legacy Publisher-generated source in Colombian public archive"
+  },
+  {
+    "id": "supersociedades-27894",
+    "url": "https://www.supersociedades.gov.co/documents/107391/2999435/27894.pdf/c7a8559f-8044-149f-e101-ef1fac811322?download=true&t=1743211781911",
+    "note": "Publisher hidden XML with OplMocd/OplPlbot/OplOt/OplLastFmt"
+  },
+  {
+    "id": "publisher11-northpark-white-dashes",
+    "url": "https://raw.githubusercontent.com/Northparkbv/huh/7f0eca9abd3275c1b90fa1f06c70e88e876bde04/index.mht",
+    "note": "Pinned Publisher-generated MHTML with OplPlbFb catalog item Basic...White Dashes and no observed OplOdpo.FBID usage"
+  },
+  {
+    "id": "publisher11-pfoltz-corner-triangles",
+    "url": "https://raw.githubusercontent.com/pfoltz/vstreff_com/3cb4f038eba149744e72f82efff1de593d0b1191/Web%20site%20files/_Sheila/Sketches3a.htm",
+    "note": "Pinned Publisher-generated HTML with OplPlbFb catalog item Corner Triangles and no observed OplOdpo.FBID usage"
+  }
+]

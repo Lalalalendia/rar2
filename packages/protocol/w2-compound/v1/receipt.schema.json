@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chaptera.dev/schema/w2-compound/v1/receipt.schema.json",
+  "title": "Chaptera W2 same-document compound receipt V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["receipt_version", "evidence_mode", "source", "kernel", "fixed_output", "invariants"],
+  "properties": {
+    "receipt_version": {"const": "chaptera.w2-compound-receipt.v1"},
+    "evidence_mode": {"const": "same_document"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "byte_len"],
+      "properties": {
+        "sha256": {"const": "aeac4c03181582008c18655ad77b90a957b00eeddcc0b1c45f6d40ca88c765eb"},
+        "byte_len": {"const": 4286464}
+      }
+    },
+    "kernel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt_sha256", "next_issue_state_id", "layout_state", "validated"],
+      "properties": {
+        "receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "next_issue_state_id": {"$ref": "#/$defs/state_id"},
+        "layout_state": {"enum": ["fits", "overset"]},
+        "validated": {"const": true}
+      }
+    },
+    "fixed_output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt_sha256", "project_state_id", "page_count", "artifact_sha256", "validated"],
+      "properties": {
+        "receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "project_state_id": {"$ref": "#/$defs/state_id"},
+        "page_count": {"const": 10},
+        "artifact_sha256": {"$ref": "#/$defs/sha256"},
+        "validated": {"const": true}
+      }
+    },
+    "invariants": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "same_document_claim",
+        "source_immutable",
+        "fork_initial_state_preserved",
+        "fork_identity_rekeyed",
+        "fork_provenance_exact",
+        "parent_unchanged",
+        "next_issue_recipe_state_equal",
+        "next_issue_fresh_reopen_exact",
+        "editable_output_proven",
+        "layout_state_explicit",
+        "fixed_output_state_matches_next_issue",
+        "fixed_output_page_count_correct",
+        "wrap_preservation_claimed",
+        "source_write_count"
+      ],
+      "properties": {
+        "same_document_claim": {"const": true},
+        "source_immutable": {"const": true},
+        "fork_initial_state_preserved": {"const": true},
+        "fork_identity_rekeyed": {"const": true},
+        "fork_provenance_exact": {"const": true},
+        "parent_unchanged": {"const": true},
+        "next_issue_recipe_state_equal": {"const": true},
+        "next_issue_fresh_reopen_exact": {"const": true},
+        "editable_output_proven": {"const": true},
+        "layout_state_explicit": {"const": true},
+        "fixed_output_state_matches_next_issue": {"const": true},
+        "fixed_output_page_count_correct": {"const": true},
+        "wrap_preservation_claimed": {"const": false},
+        "source_write_count": {"const": 0}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "state_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

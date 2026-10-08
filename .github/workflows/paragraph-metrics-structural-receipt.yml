@@ -1,0 +1,51 @@
+name: Paragraph metrics structural receipt
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/paragraph-metrics-structural-receipt.yml"
+      - "tools/research-runner/paragraph-metrics-probe/**"
+      - "tools/research-runner/analysis/paragraph_metrics_auth_01_structural.py"
+      - "tools/research-runner/tests/test_paragraph_metrics_structural.py"
+      - "tools/research-runner/manual/paragraph-metrics-structural-receipt-01.md"
+      - "vendor/producer-a/crates/pub-quill/src/**"
+      - "vendor/producer-a/crates/pub-quill/Cargo.toml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  structural-receipt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/out/paragraph-metrics-target
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Check task-owned Rust formatting
+        run: |
+          cargo fmt --manifest-path tools/research-runner/paragraph-metrics-probe/Cargo.toml --check
+          cargo fmt --manifest-path vendor/producer-a/crates/pub-quill/Cargo.toml --check
+      - name: Test strict matrix identity and adversarial evidence
+        run: python -m unittest discover -s tools/research-runner/tests -p test_paragraph_metrics_structural.py -v
+      - name: Test real CFB and Quill snapshot producer
+        run: cargo test --locked --manifest-path tools/research-runner/paragraph-metrics-probe/Cargo.toml
+      - name: Check existing Quill semantics with research feature enabled
+        run: cargo test --manifest-path vendor/producer-a/crates/pub-quill/Cargo.toml --features research-inspection --lib
+      - name: Build snapshot tool for offline use
+        run: cargo build --locked --manifest-path tools/research-runner/paragraph-metrics-probe/Cargo.toml --release

@@ -1,0 +1,57 @@
+# Chaptera public Cloud Reader behind the existing host Nginx.
+# The Chaptera process listens only on 127.0.0.1:8080.
+# TLS directives are intentionally left to Certbot on the target host.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name reader.chaptera.online;
+
+    client_max_body_size 8m;
+    server_tokens off;
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src data:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'" always;
+
+    location = / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }
+
+    location ~ ^/(?:index\.html|favicon\.svg|reader\.css|reader-app\.mjs|reader-model\.mjs|render-v1\.mjs|observability-v1\.mjs)$ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }
+
+    location ^~ /v1/reader/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }
+
+    location / {
+        return 404;
+    }
+}

@@ -1,0 +1,325 @@
+name: Cloud Reader reference PUB-PDF pairs
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "apps/cloud-reader/**"
+      - "apps/chaptera-server/src/reader_scene_v1.rs"
+      - "apps/chaptera-server/src/guest_reader_worker.rs"
+      - "crates/chaptera-viewer-render-plan/**"
+      - "vendor/producer-a/crates/pub-viewer/**"
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
+      - "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
+      - "vendor/producer-a/crates/pub-reader/src/story_materialization.rs"
+      - "vendor/producer-a/crates/pub-reader/src/quill_admission.rs"
+      - "vendor/producer-a/crates/pub-reader/src/publication_document.rs"
+      - "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs"
+      - "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs"
+      - "tools/acquire_carlton_march_pair.py"
+      - "tools/acquire_virginia_pub_pdf_pairs.py"
+      - "tools/cloud_reader_reference_pdf_raster_v1.py"
+      - "tools/cloud_reader_manual_oracle_bundle_v1.py"
+      - "tools/test_cloud_reader_manual_oracle_bundle_v1.py"
+      - "tools/pdf_reference_diff_v1.py"
+      - "tools/census_embedded_eot.py"
+      - ".github/workflows/cloud-reader-reference-pairs.yml"
+
+concurrency:
+  group: cloud-reader-reference-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Cloud reference cheap preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Check chaptera-server formatting before expensive reference work
+        run: cargo fmt -p chaptera-server -- --check
+
+  reference-pairs:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_TARGET_DIR: target/cloud-reader-reference-rust
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned pair/oracle dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir             "requests==2.32.5" "PyMuPDF==1.24.14" "olefile==0.47"
+          python -m py_compile             tools/acquire_carlton_march_pair.py             tools/acquire_virginia_pub_pdf_pairs.py             tools/pdf_reference_diff_v1.py             tools/cloud_reader_reference_pdf_raster_v1.py             tools/cloud_reader_manual_oracle_bundle_v1.py             tools/test_cloud_reader_manual_oracle_bundle_v1.py             tools/census_embedded_eot.py
+          python -m unittest tools/test_cloud_reader_manual_oracle_bundle_v1.py
+
+      - name: Reacquire exact Carlton PUB-PDF pair
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/carlton-pair"
+          python tools/acquire_carlton_march_pair.py "$RUNNER_TEMP/carlton-pair"
+
+      - name: Census exact Carlton embedded EOT authority
+        run: |
+          set -euo pipefail
+          mkdir -p target/cloud-reader-reference-pairs
+          python tools/census_embedded_eot.py \
+            --pub "$RUNNER_TEMP/carlton-pair/March-2026.pub" \
+            --expected-pub-sha256 "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" \
+            --receipt target/cloud-reader-reference-pairs/carlton-embedded-eot-census.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Build Cloud reference Cargo cache key
+        id: cloud-reference-cache-key
+        shell: bash
+        env:
+          MANIFEST_HASH: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'apps/chaptera-server/Cargo.toml', 'crates/**/Cargo.toml', 'vendor/producer-a/Cargo.toml', 'vendor/producer-a/Cargo.lock', 'vendor/producer-a/crates/**/Cargo.toml') }}
+        run: |
+          set -euo pipefail
+          test -n "$MANIFEST_HASH"
+          echo "key=cloud-reader-reference-rust-v2-${RUNNER_OS}-rust-1.94.1-${MANIFEST_HASH}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore/save Cloud reference Cargo build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/cloud-reader-reference-rust
+          key: ${{ steps.cloud-reference-cache-key.outputs.key }}
+
+      - name: Census exact Carlton fill state
+        run: |
+          set -euo pipefail
+          mkdir -p target/cloud-reader-reference-pairs
+          cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --             "$RUNNER_TEMP/carlton-pair/March-2026.pub"             target/cloud-reader-reference-pairs/carlton-fill-state.json
+
+      - name: Census exact Carlton TABLE cell paint join
+        env:
+          CHAPTERA_TABLE_CELL_PAINT_FIXTURE: ${{ runner.temp }}/carlton-pair/March-2026.pub
+          CHAPTERA_TABLE_CELL_PAINT_RECEIPT: ${{ github.workspace }}/target/cloud-reader-reference-pairs/carlton-table-cell-paint-join.json
+        run: cargo test --manifest-path vendor/producer-a/crates/pub-reader/Cargo.toml --test table_cell_paint_join_probe -- --nocapture
+
+      - name: Reacquire exact Virginia PUB-PDF pairs
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/virginia-pairs"
+          python tools/acquire_virginia_pub_pdf_pairs.py "$RUNNER_TEMP/virginia-pairs"
+
+      - name: Census exact Virginia fill state
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --             "$RUNNER_TEMP/virginia-pairs/virginia-devinettes.pub"             target/cloud-reader-reference-pairs/virginia-devinettes-fill-state.json
+          if [ -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub" ]; then
+            cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --               "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"               target/cloud-reader-reference-pairs/virginia-remplacante-fill-state.json
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Restore/save pinned Playwright Chromium cache
+        id: playwright-chromium-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: cloud-reader-playwright-v1-${{ runner.os }}-1.55.0-chromium
+
+      - name: Install pinned browser acceptance runtime
+        env:
+          PLAYWRIGHT_CACHE_HIT: ${{ steps.playwright-chromium-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          start="$(date +%s)"
+          npm install --no-save playwright@1.55.0
+          npx playwright install chromium
+          node -e 'const { chromium } = require("playwright"); (async()=>{const b=await chromium.launch({headless:true}); const p=await b.newPage(); await p.setContent("<title>chaptera-playwright-smoke</title>"); if((await p.title())!=="chaptera-playwright-smoke") throw new Error("smoke title mismatch"); await b.close();})().catch(e=>{console.error(e);process.exit(1)})'
+          elapsed="$(($(date +%s) - start))"
+          echo "playwright_cache_hit=${PLAYWRIGHT_CACHE_HIT:-unknown}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "playwright_setup_seconds=$elapsed" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Build canonical guest Scene producer
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Diagnose exact Carlton Scene and projected text-layout boundary
+        env:
+          CHAPTERA_READER_SCENE_PROBE_PUB: ${{ runner.temp }}/carlton-pair/March-2026.pub
+          CHAPTERA_READER_SCENE_PROBE_SHA256: bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3
+        run: |
+          cargo test -p chaptera-server real_reference_scene_projection_probe -- --ignored --nocapture
+          cargo test -p chaptera-server real_reference_text_layout_fallback_census_probe -- --ignored --nocapture
+
+      - name: Diagnose exact Devinettes text-layout fallback reasons
+        env:
+          CHAPTERA_READER_SCENE_PROBE_PUB: ${{ runner.temp }}/virginia-pairs/virginia-devinettes.pub
+          CHAPTERA_READER_SCENE_PROBE_SHA256: 077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e
+        run: cargo test -p chaptera-server real_reference_text_layout_fallback_census_probe -- --ignored --nocapture
+
+      - name: Build exact reference fixture manifest
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          fixtures = [
+              {
+                  "name": "CarltonMarch2026",
+                  "sha256": "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3",
+                  "bytes": 9580032,
+                  "pages": 3,
+                  "require_render": False,
+                  "require_shared_text": False,
+                  "source_path": str(root / "carlton-pair" / "March-2026.pub"),
+              },
+              {
+                  "name": "VirginiaDevinettes2021",
+                  "sha256": "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e",
+                  "bytes": 138240,
+                  "require_render": False,
+                  "require_shared_text": False,
+                  "source_path": str(root / "virginia-pairs" / "virginia-devinettes.pub"),
+              },
+          ]
+          remplacante = root / "virginia-pairs" / "virginia-remplacante-modifiable.pub"
+          if remplacante.exists():
+              fixtures.append({
+                  "name": "VirginiaRemplacanteZoneA2015",
+                  "sha256": "88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506",
+                  "bytes": 8376832,
+                  "require_render": False,
+                  "require_shared_text": False,
+                  "source_path": str(remplacante),
+              })
+          manifest = {
+              "schema": "chaptera.cloud-reader-real-fixtures.v1",
+              "fixtures": fixtures,
+          }
+          target = root / "cloud-reader-reference-fixtures.json"
+          target.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+          print(target)
+          PY
+
+      - name: Render exact PUB pairs through isolated Cloud Reader consumer
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/cloud-reader-reference-rust/debug/chaptera
+          READER_REAL_MANIFEST: ${{ runner.temp }}/cloud-reader-reference-fixtures.json
+          READER_REAL_OUTPUT: ${{ runner.temp }}/cloud-reader-reference-real
+          READER_REFERENCE_RASTER_DPI: "144"
+        run: node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Compare Cloud Reader rasters with author-supplied PDFs
+        run: |
+          set -euo pipefail
+          mkdir -p target/cloud-reader-reference-pairs
+          python tools/cloud_reader_reference_pdf_raster_v1.py             "$RUNNER_TEMP/cloud-reader-reference-real/receipt.json"             CarltonMarch2026             "$RUNNER_TEMP/carlton-pair/March-2026-reference.pdf"             target/cloud-reader-reference-pairs/carlton.json
+          python tools/cloud_reader_reference_pdf_raster_v1.py             "$RUNNER_TEMP/cloud-reader-reference-real/receipt.json"             VirginiaDevinettes2021             "$RUNNER_TEMP/virginia-pairs/virginia-devinettes-reference.pdf"             target/cloud-reader-reference-pairs/virginia-devinettes.json
+          if [ -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-zone-a-reference.pdf" ]; then
+            python tools/cloud_reader_reference_pdf_raster_v1.py             "$RUNNER_TEMP/cloud-reader-reference-real/receipt.json"             VirginiaRemplacanteZoneA2015             "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-zone-a-reference.pdf"             target/cloud-reader-reference-pairs/virginia-remplacante-zone-a.json
+          fi
+
+      - name: Build source-neutral pair summary
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path("target/cloud-reader-reference-pairs")
+          names = [
+              "carlton",
+              "virginia-devinettes",
+              "virginia-remplacante-zone-a",
+          ]
+          rows = []
+          for name in names:
+              path = root / f"{name}.json"
+              if not path.exists():
+                  continue
+              data = json.loads(path.read_text())
+              rows.append({
+                  "fixture": data["fixture"],
+                  "source_pub_sha256": data["source_pub_sha256"],
+                  "reference_sha256": data["reference_sha256"],
+                  "classification": data["classification"],
+                  "terminal_code": data.get("terminal_code"),
+                  "comparison_state": data["comparison_state"],
+                  "candidate_pages": data["page_count"]["candidate"],
+                  "reference_pages": data["page_count"]["reference"],
+                  "page_count_match": data["page_count"]["match"],
+                  "fidelity_reasons": data.get("fidelity_reasons", []),
+                  "diagnostic_codes": data.get("diagnostic_codes", []),
+                  "significant_fractions": [
+                      page["diff"]["significant_fraction"]
+                      for page in data.get("pages", [])
+                  ],
+                  "physical_size_matches": [
+                      page["physical_page_size_matches_reference"]
+                      for page in data.get("pages", [])
+                  ],
+              })
+          receipt = {
+              "schema": "chaptera.cloud-reader-reference-pair-summary.v1",
+              "repository_commit_sha": os.environ.get("GITHUB_SHA"),
+              "pairs": rows,
+              "claims": {
+                  "exact_public_pair_identity_checked": True,
+                  "publisher_visual_parity": False,
+                  "raw_pub_bytes_emitted": False,
+                  "raw_story_text_emitted": False,
+              },
+          }
+          (root / "summary.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(rows, indent=2, sort_keys=True))
+          PY
+
+      - name: Copy sanitized acquisition receipts
+        run: |
+          cp "$RUNNER_TEMP/carlton-pair/acquisition.json"             target/cloud-reader-reference-pairs/carlton-acquisition.json
+          cp "$RUNNER_TEMP/virginia-pairs/acquisition.json"             target/cloud-reader-reference-pairs/virginia-acquisition.json
+          cp "$RUNNER_TEMP/cloud-reader-reference-real/receipt.json"             target/cloud-reader-reference-pairs/cloud-browser-receipt.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cloud-reader-reference-pair-receipts
+          path: target/cloud-reader-reference-pairs/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cloud-reader-reference-pair-visuals-private
+          path: |
+            ${{ runner.temp }}/cloud-reader-reference-real/*.png
+            ${{ runner.temp }}/carlton-pair/March-2026-reference.pdf
+            ${{ runner.temp }}/virginia-pairs/*-reference.pdf
+          if-no-files-found: warn
+          retention-days: 1
+          compression-level: 0

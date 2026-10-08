@@ -1,0 +1,123 @@
+name: Mature 029 native page spread one-shot
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/mature-029-native-page-spread-once.yml"
+      - "tools/research-runner/operations/mature_029_native_page_spread_oracle_01.ps1"
+      - "tools/windows/run_mature_029_native_page_spread_direct.ps1"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mature-029-native-page-spread-${{ github.event.pull_request.number || github.event_name == 'push' && github.ref == 'refs/heads/main' && 'publisher-2019' || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  contract:
+    runs-on: windows-latest
+    outputs:
+      trusted_sha: ${{ steps.trust.outputs.trusted_sha }}
+    steps:
+      - name: Bind checkout
+        id: trust
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            "trusted_sha=${{ github.event.pull_request.head.sha }}" >> $env:GITHUB_OUTPUT
+          } else {
+            "trusted_sha=${{ github.sha }}" >> $env:GITHUB_OUTPUT
+          }
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.trust.outputs.trusted_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Parse read-only probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = "tools/research-runner/operations/mature_029_native_page_spread_oracle_01.ps1"
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $path).Path,
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "PowerShell parser rejected native 029 probe."
+          }
+
+      - name: Parse direct offline fallback
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = "tools/windows/run_mature_029_native_page_spread_direct.ps1"
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $path).Path,
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "PowerShell parser rejected direct 029 fallback."
+          }
+
+      - name: Enforce read-only source contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $text = Get-Content "tools/research-runner/operations/mature_029_native_page_spread_oracle_01.ps1" -Raw
+          foreach ($forbidden in @(
+            ".Save(",
+            ".SaveAs(",
+            ".ExportAsFixedFormat(",
+            ".PrintOut(",
+            ".Run("
+          )) {
+            if ($text.Contains($forbidden)) {
+              throw "Forbidden mutation/output token in read-only native probe: $forbidden"
+            }
+          }
+          if ($text -notmatch [regex]::Escape('$app.Open($resolvedInput, $true, $false)')) {
+            throw "Probe must open exact source read-only and avoid recent-files mutation."
+          }
+          if ($text -notmatch "ExpectedSha256") {
+            throw "Probe must bind the exact 029 SHA."
+          }
+
+      - name: Reject wrong-source mature-029 before Publisher activation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture = Join-Path $env:RUNNER_TEMP ("mature-029 wrong source " + [guid]::NewGuid().ToString() + ".pub")
+          $output = Join-Path $env:RUNNER_TEMP ("mature-029-rejected-output-" + [guid]::NewGuid().ToString())
+          [IO.File]::WriteAllBytes($fixture, [byte[]]@(0, 1, 2, 3))
+          try {
+            $ErrorActionPreference = "Continue"
+            $nativeOutput = & pwsh -NoProfile -File tools/windows/run_mature_029_native_page_spread_direct.ps1 -InputPath $fixture -OutputRoot $output 2>&1
+            $nativeExit = $LASTEXITCODE
+            $ErrorActionPreference = "Stop"
+            $text = ($nativeOutput | ForEach-Object { [string]$_ }) -join "`n"
+            if ($nativeExit -eq 0 -or -not $text.Contains("029 source size mismatch")) {
+              throw "Direct route failed its pre-Publisher wrong-source rejection: $text"
+            }
+            if (Test-Path -LiteralPath $output) {
+              throw "Rejected source created native output before identity admission."
+            }
+          } finally {
+            $ErrorActionPreference = "Stop"
+            Remove-Item -LiteralPath $fixture -Force -ErrorAction SilentlyContinue
+          }
+          Write-Host "Direct route rejected wrong source before Publisher; no native output created."
+          exit 0

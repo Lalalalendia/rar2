@@ -1,0 +1,120 @@
+name: Editable Source Image Export V1
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/editable-source-image-export-v1.yml"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "!vendor/producer-a/crates/pub-editor/src/session_geometry.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_text.rs"
+      - "!vendor/producer-a/crates/pub-editor/tests/story_text_session_v1.rs"
+      - "vendor/producer-a/crates/pub-reader/Cargo.toml"
+      - "vendor/producer-a/crates/pub-reader/src/**"
+      - "!vendor/producer-a/crates/pub-reader/src/page_projection.rs"
+      - "!vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
+      - "!vendor/producer-a/crates/pub-reader/src/story_frame_analysis.rs"
+      - "!vendor/producer-a/crates/pub-reader/src/typography_projection.rs"
+      - "!vendor/producer-a/crates/pub-reader/src/grouped_projection.rs"
+      - "!vendor/producer-a/crates/pub-reader/src/story_materialization.rs"
+      - "!vendor/producer-a/crates/pub-reader/src/quill_admission.rs"
+      - "!vendor/producer-a/crates/pub-reader/src/publication_document.rs"
+      - "vendor/producer-a/crates/pub-idml/**"
+      - "vendor/producer-a/crates/pub-odg/**"
+      - "tools/verify_editable_source_image_export.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-source-images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Rust formatting
+        run: |
+          rustfmt --edition 2024 --check \
+            vendor/producer-a/crates/pub-editor/src/lib.rs \
+            vendor/producer-a/crates/pub-editor/src/bin/editable_route_probe.rs \
+            vendor/producer-a/crates/pub-reader/src/bin/source_image_export_probe.rs
+
+      - name: Acquire pinned Apache POI SampleNewsletter
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/SampleNewsletter.pub"
+          curl --fail --location --silent --show-error \
+            "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub" \
+            --output "$fixture"
+          actual_sha="$(sha256sum "$fixture" | awk '{print $1}')"
+          actual_size="$(wc -c < "$fixture" | tr -d ' ')"
+          test "$actual_sha" = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
+          test "$actual_size" = "291840"
+          echo "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" >> "$GITHUB_ENV"
+
+      - name: Build source image authority receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/source-image-export-v1"
+          mkdir -p "$out/export"
+          cargo run --quiet \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --bin source_image_export_probe \
+            -- "$CHAPTERA_SAMPLE_NEWSLETTER" \
+            > "$out/source-images.json"
+          echo "CHAPTERA_SOURCE_IMAGE_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Materialize current editable targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --quiet \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-editor \
+            --bin editable_route_probe \
+            -- "$CHAPTERA_SAMPLE_NEWSLETTER" \
+            --label SampleNewsletter.pub \
+            --materialize-dir "$CHAPTERA_SOURCE_IMAGE_OUT/export" \
+            > "$CHAPTERA_SOURCE_IMAGE_OUT/route.json"
+
+      - name: Independently verify source image survival
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/verify_editable_source_image_export.py \
+            --reader-probe "$CHAPTERA_SOURCE_IMAGE_OUT/source-images.json" \
+            --route-probe "$CHAPTERA_SOURCE_IMAGE_OUT/route.json" \
+            --idml-report "$CHAPTERA_SOURCE_IMAGE_OUT/export/idml.report.json" \
+            --odg-report "$CHAPTERA_SOURCE_IMAGE_OUT/export/odg.report.json" \
+            --idml "$CHAPTERA_SOURCE_IMAGE_OUT/export/output.idml" \
+            --odg "$CHAPTERA_SOURCE_IMAGE_OUT/export/output.odg" \
+            --output "$CHAPTERA_SOURCE_IMAGE_OUT/acceptance.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: editable-source-image-export-v1
+          path: |
+            ${{ env.CHAPTERA_SOURCE_IMAGE_OUT }}/source-images.json
+            ${{ env.CHAPTERA_SOURCE_IMAGE_OUT }}/route.json
+            ${{ env.CHAPTERA_SOURCE_IMAGE_OUT }}/export/idml.report.json
+            ${{ env.CHAPTERA_SOURCE_IMAGE_OUT }}/export/odg.report.json
+            ${{ env.CHAPTERA_SOURCE_IMAGE_OUT }}/acceptance.json
+          if-no-files-found: error
+          retention-days: 30

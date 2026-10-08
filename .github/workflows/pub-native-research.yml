@@ -1,0 +1,86 @@
+name: PUB native research experiment
+
+on:
+  workflow_dispatch:
+    inputs:
+      packet:
+        description: Repository-relative experiment packet JSON
+        required: true
+        type: string
+      publisher_environment:
+        description: Target local Publisher profile, e.g. publisher-2019
+        required: true
+        type: choice
+        options:
+          - publisher-2000
+          - publisher-2002
+          - publisher-2003
+          - publisher-2010
+          - publisher-2019
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pub-native-research-handoff-${{ inputs.publisher_environment }}
+  cancel-in-progress: false
+
+jobs:
+  validate-packet:
+    runs-on: windows-latest
+    env:
+      PACKET_INPUT: ${{ inputs.packet }}
+      ENVIRONMENT_INPUT: ${{ inputs.publisher_environment }}
+    outputs:
+      packet_sha256: ${{ steps.packet.outputs.packet_sha256 }}
+      experiment_id: ${{ steps.packet.outputs.experiment_id }}
+      requires_publisher: ${{ steps.packet.outputs.requires_publisher }}
+      operation_script: ${{ steps.packet.outputs.operation_script }}
+      trusted_sha: ${{ steps.trust.outputs.trusted_sha }}
+    steps:
+      - name: Reject non-main native dispatch refs
+        id: trust
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ("${{ github.ref }}" -ne "refs/heads/main") {
+            throw "Native research may only be dispatched from refs/heads/main."
+          }
+          "trusted_sha=${{ github.sha }}" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate packet
+        id: packet
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/research-runner/validate_packet.py `
+            --packet "$env:PACKET_INPUT" `
+            --expected-environment "$env:ENVIRONMENT_INPUT" |
+            Tee-Object -FilePath packet-validation.json
+          $doc = Get-Content packet-validation.json -Raw | ConvertFrom-Json
+          "packet_sha256=$($doc.packet_sha256)" >> $env:GITHUB_OUTPUT
+          "experiment_id=$($doc.id)" >> $env:GITHUB_OUTPUT
+          "requires_publisher=$($doc.requires_publisher.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "operation_script=$($doc.operation_script)" >> $env:GITHUB_OUTPUT
+
+      - name: Write local Publisher handoff
+        shell: pwsh
+        run: |
+          "## PUB native research handoff" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "- Target local profile: $env:ENVIRONMENT_INPUT" >> $env:GITHUB_STEP_SUMMARY
+          "- Packet: $env:PACKET_INPUT" >> $env:GITHUB_STEP_SUMMARY
+          "- Trusted source SHA: ${{ steps.trust.outputs.trusted_sha }}" >> $env:GITHUB_STEP_SUMMARY
+          "- GitHub stops after hosted validation. Publisher execution is local/manual and returns a source-safe receipt." >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload packet validation
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-research-packet-validation-${{ github.run_id }}
+          path: packet-validation.json
+          retention-days: 30

@@ -1,0 +1,43 @@
+{
+  "schema": "rar2-materialization-container-first-wave-v1",
+  "date": "2026-09-29",
+  "source_repository": "HeisLuka/rar",
+  "historical_artifact": {
+    "artifact_id": 10805973231,
+    "digest": "sha256:1959aad2c1d1e274a1823c3261f7c04c9c3ffa4be10674fb166d89329705f26d",
+    "artifact_name": "container union used by 2026-09-24 reconciliation"
+  },
+  "first_wave": {
+    "container_root_count": 3,
+    "publisher_unique_sha256": 425,
+    "canonical_sorted_sha_lines_digest": "sha256:b844102681a9f4458aa9e723843d645e5aae6e6b8bd0b70d631e7ae0be9bc8ef",
+    "seed": "tools/corpus/materialization_container_first_wave.csv"
+  },
+  "roots": [
+    {
+      "url": "https://archive.org/download/MSPublisher97-EN/PUB_40_CD.iso",
+      "sha256": "41d4180a7cc8b04db10d5cfc510207f7a9f705915d0090be655a4c27c2cb15ab",
+      "size_bytes": 138315776,
+      "fallback_url": "https://ia800504.us.archive.org/17/items/MSPublisher97-EN/PUB_40_CD.iso"
+    },
+    {
+      "url": "https://archive.org/download/MSPublisher97ThaiEdition/Publisher97Thai.iso",
+      "sha256": "0e30e5f0817cb94ff78780ac34b386c4c87c475ead40227758c387e985560e4c",
+      "size_bytes": 146030592,
+      "fallback_url": "https://ia801408.us.archive.org/14/items/MSPublisher97ThaiEdition/Publisher97Thai.iso"
+    },
+    {
+      "url": "https://archive.org/download/PUB40CD/PUB_40_CD.ISO",
+      "sha256": "cb9ced4d7f0606a81638855a1d77430a5d37352ec6993a95668295b854a69d59",
+      "size_bytes": 138551296,
+      "fallback_url": "https://dn710901.ca.archive.org/0/items/PUB40CD/PUB_40_CD.ISO"
+    }
+  ],
+  "guardrails": [
+    "root bytes are pinned by exact SHA-256 and size before archive inspection",
+    "public direct Archive.org CDN URLs may be used only as transport fallbacks for the same pinned root SHA-256 and size",
+    "only cfb_publisher_hint members are materialized",
+    "materialized members are hash-addressed and deduplicated",
+    "raw ISO bytes are temporary and are not uploaded as artifacts"
+  ]
+}

@@ -1,0 +1,44 @@
+# Caddy 2.10.2; Cloud Reader UI and API come from one Chaptera binary.
+# CHAPTERA_READER_API is the private loopback Chaptera listener.
+# Runtime/BlobStore/scanner/cleanup configuration remains server-owned.
+{
+    admin off
+}
+
+{$CHAPTERA_READER_SITE:cloud.example.invalid} {
+    encode gzip
+    header {
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src data:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        -Server
+    }
+
+    # Current Rust edge treats guest content as ordinary API (8 MiB).
+    # Set cloud_reader_guest.max_file_bytes <= edge.max_api_body_bytes.
+    @reader_api path /v1/reader/*
+    request_body @reader_api {
+        max_size 8MiB
+    }
+
+    # Expose only the embedded Reader surface and its API.
+    @reader_surface path / /index.html /favicon.svg /reader.css /reader-app.mjs /reader-model.mjs /render-v1.mjs /observability-v1.mjs /v1/reader/*
+    handle @reader_surface {
+        reverse_proxy {$CHAPTERA_READER_API:127.0.0.1:8080} {
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+            transport http {
+                dial_timeout 2s
+                response_header_timeout 120s
+            }
+        }
+    }
+
+    # Health/operator/auth/authoring surfaces are not part of the public Reader origin.
+    handle {
+        respond "Not found" 404
+    }
+}

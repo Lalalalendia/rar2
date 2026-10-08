@@ -1,0 +1,184 @@
+name: Chaptera Desktop Fallback Font Resource V1
+
+on:
+  push:
+    branches:
+      - chaptera-desktop-fallback-font-resource-01-v2
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "crates/chaptera-desktop-fallback-font-resource/**"
+      - "apps/chaptera-desktop/Cargo.toml"
+      - "apps/chaptera-desktop/src/font_binding.rs"
+      - "apps/chaptera-desktop/src/fallback_font.rs"
+      - "apps/chaptera-desktop/src/source_font.rs"
+      - "apps/chaptera-desktop/src/render_backend.rs"
+      - "crates/chaptera-viewer-render-plan/**"
+      - "packages/product/editor-live-trial/**"
+      - "tools/package_editor_live_trial.py"
+      - "tools/test_package_editor_live_trial.py"
+      - ".github/workflows/chaptera-desktop-fallback-font-resource-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+      - name: Format shared resource
+        run: cargo fmt --manifest-path crates/chaptera-desktop-fallback-font-resource/Cargo.toml -- --check
+      - name: Format desktop binding
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+      - name: Check desktop integration
+        run: cargo check --manifest-path apps/chaptera-desktop/Cargo.toml --all-targets
+      - name: Clippy shared resource
+        run: cargo clippy --manifest-path crates/chaptera-desktop-fallback-font-resource/Cargo.toml --all-targets -- -D warnings
+      - name: Shared resource tests
+        run: cargo test --manifest-path crates/chaptera-desktop-fallback-font-resource/Cargo.toml
+      - name: Desktop font binding tests
+        run: cargo test --manifest-path apps/chaptera-desktop/Cargo.toml fallback_font::tests -- --nocapture
+      - name: Portable package carries font licence notice
+        run: python -m unittest tools.test_package_editor_live_trial -v
+
+  source-font-windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned Carlton acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+      - name: Acquire pinned SampleNewsletter
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture = Join-Path $env:RUNNER_TEMP "SampleNewsletter.pub"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub" -OutFile $fixture
+          $hash = (Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item $fixture).Length
+          if ($hash -ne "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf") {
+            throw "SampleNewsletter SHA-256 mismatch: $hash"
+          }
+          if ($bytes -ne 291840) {
+            throw "SampleNewsletter byte length mismatch: $bytes"
+          }
+          "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Acquire pinned text-format PUB corpus
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $env:RUNNER_TEMP "chaptera-text-format-fixtures"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $base = "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher"
+          $fixtures = @(
+            @("51318.pub", 88576, "728811c92dff5694520e56b6c020533b29d5295d"),
+            @("60685.pub", 119296, "37d3dce70e1786e948edd5592527f90be1fae2ff"),
+            @("LinkAt0And10.pub", 64512, "c4459fb830ef546d89a8302b4e969c36da412c43"),
+            @("LinkAt10.pub", 64512, "89c4a4427197129d30e085e2cc88ef3fdcb9562f"),
+            @("LinkAt10And20And30.pub", 64512, "5f7f747d5b0bfe2c5faaaadf6eda47244869d703"),
+            @("LinkAt10And20And30And40.pub", 64512, "d19ddc46a34afc5c89f90873283a0bbe501ca39d"),
+            @("LinkAt10Longer.pub", 64512, "8a3dcc277ee3b9393211a1ac151a7fcefc5ed040"),
+            @("LinkAt20.pub", 64512, "091a38c71818bfc6404c82a43681d7fa3a188261"),
+            @("Sample.pub", 72192, "b870168319048c9e8631c2338eb937e6f8f62b5b"),
+            @("Sample2.pub", 72704, "610362c471b81bac36e46166ae98d5f3033a7e5f"),
+            @("Sample2000.pub", 61440, "2c6174e5e89235f08a3e5883c785c4951728d855"),
+            @("Sample2_2010.pub", 73216, "74f4566056a39ee880c847b5dd4b8234762a9489"),
+            @("Sample3.pub", 72192, "4f19bec93d25f3d80501490dd108abef4f09b6cb"),
+            @("Sample3_2010.pub", 72704, "d2982c06bbb6e228951781f23d56ea5928893d2b"),
+            @("Sample4.pub", 72192, "445df85f092970c36d4b3003d375331a707d6b3c"),
+            @("Sample4_2010.pub", 72704, "dd6c25b173680d33678ce1bba7a0be5fef3910f5"),
+            @("Sample98.pub", 61440, "8adffda77aefed96e3afda319e2698d43dd478cb"),
+            @("SampleBrochure.pub", 161792, "00deec14dc6cff6d8a47b120d6d84e7e20c72166"),
+            @("SampleNewsletter.pub", 291840, "94900925af5832c493784f3cb51563f838a64df8"),
+            @("Sample_2010.pub", 72704, "ace1540716820640be5c67d85db6b70f48fbc0d4"),
+            @("Simple.pub", 65536, "2397b9d01cfa159de2f73cf5c990d9698eb69567")
+          )
+          foreach ($row in $fixtures) {
+            $name = $row[0]
+            $expectedBytes = [int64]$row[1]
+            $expectedBlob = $row[2]
+            $fixture = Join-Path $root $name
+            Invoke-WebRequest -Uri "$base/$name" -OutFile $fixture
+            if ((Get-Item $fixture).Length -ne $expectedBytes) {
+              throw "$name byte length mismatch"
+            }
+            $actualBlob = (git hash-object $fixture).Trim()
+            if ($actualBlob -ne $expectedBlob) {
+              throw "$name git blob identity mismatch: $actualBlob"
+            }
+          }
+          $carltonRoot = Join-Path $env:RUNNER_TEMP "chaptera-styled-font-carlton"
+          python tools/acquire_carlton_march_pair.py $carltonRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw "Carlton March public acquisition failed"
+          }
+          $carlton = Join-Path $root "Carlton-March-2026.pub"
+          Copy-Item (Join-Path $carltonRoot "March-2026.pub") $carlton
+          $carltonHash = (Get-FileHash $carlton -Algorithm SHA256).Hash.ToLowerInvariant()
+          $carltonBytes = (Get-Item $carlton).Length
+          if ($carltonHash -ne "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3") {
+            throw "Carlton March PUB SHA-256 mismatch: $carltonHash"
+          }
+          if ($carltonBytes -ne 9580032) {
+            throw "Carlton March PUB byte length mismatch: $carltonBytes"
+          }
+
+          "CHAPTERA_TEXT_FORMAT_FIXTURES_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prove bounded Windows source-font binding
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $environmentReceipt = Join-Path $env:RUNNER_TEMP "desktop-source-font-environment.json"
+          $realPubReceipt = Join-Path $env:RUNNER_TEMP "desktop-source-font-real-pub.json"
+          $styledReceipt = Join-Path $env:RUNNER_TEMP "desktop-styled-font-real-pub.json"
+          $env:CHAPTERA_SOURCE_FONT_RECEIPT = $environmentReceipt
+          $env:CHAPTERA_SOURCE_FONT_REAL_PUB_RECEIPT = $realPubReceipt
+          $env:CHAPTERA_STYLED_FONT_REAL_PUB_RECEIPT = $styledReceipt
+
+          cargo test --manifest-path apps/chaptera-desktop/Cargo.toml source_font::tests::windows_environment_font_binds_identical_layout_and_paint_bytes -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "source-font Windows environment proof failed" }
+
+          cargo test --manifest-path apps/chaptera-desktop/Cargo.toml source_font::tests::windows_environment_font_binds_exact_style_tuple_resources -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "styled source-font Windows environment proof failed" }
+
+          cargo test --manifest-path apps/chaptera-desktop/Cargo.toml --features embedded-fixture-tests windows_source_font_real_pub_receipt_compares_shared_layouts -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "source-font real-PUB layout proof failed" }
+
+          cargo test --manifest-path apps/chaptera-desktop/Cargo.toml font_binding::tests::windows_real_pub_scoped_style_changes_exact_resource_and_roundtrips -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "styled-font scoped real-PUB proof failed" }
+
+          if (-not (Test-Path $environmentReceipt)) { throw "source-font environment receipt missing" }
+          if (-not (Test-Path $realPubReceipt)) { throw "source-font real-PUB receipt missing" }
+          if (-not (Test-Path $styledReceipt)) { throw "styled-font real-PUB receipt missing" }
+          "CHAPTERA_SOURCE_FONT_RECEIPT=$environmentReceipt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_SOURCE_FONT_REAL_PUB_RECEIPT=$realPubReceipt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_STYLED_FONT_REAL_PUB_RECEIPT=$styledReceipt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload source-safe source-font receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-source-font-environment-v1
+          path: |
+            ${{ env.CHAPTERA_SOURCE_FONT_RECEIPT }}
+            ${{ env.CHAPTERA_SOURCE_FONT_REAL_PUB_RECEIPT }}
+            ${{ env.CHAPTERA_STYLED_FONT_REAL_PUB_RECEIPT }}
+          if-no-files-found: error
+          retention-days: 30

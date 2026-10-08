@@ -1,0 +1,104 @@
+name: Current 1050 artifact-family provenance V1
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tools/corpus/artifact_family.py'
+      - 'tools/corpus/artifact_family_provenance_join.py'
+      - 'tools/corpus/artifact_family_label_coverage.py'
+      - 'tools/corpus/public_legacy_seed.csv'
+      - '.github/workflows/current-1050-artifact-family-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/corpus/artifact_family.py'
+      - 'tools/corpus/artifact_family_provenance_join.py'
+      - 'tools/corpus/artifact_family_label_coverage.py'
+      - 'tools/corpus/public_legacy_seed.csv'
+      - '.github/workflows/current-1050-artifact-family-v1.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: current-1050-artifact-family-v1-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Checkout retained corpus provenance
+        uses: actions/checkout@v4
+        with:
+          repository: Lalalalendia/lalamu
+          ref: main
+          path: corpus-src
+          sparse-checkout: |
+            pub-corpus/data
+          sparse-checkout-cone-mode: true
+
+      - name: Verify pinned exact-1050 identity
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          rows=json.loads(Path("out/pinned1050/materialized/manifest.json").read_text())
+          shas=sorted(str(row["sha256"]).casefold() for row in rows)
+          assert len(shas)==1050,len(shas)
+          assert len(set(shas))==1050,len(set(shas))
+          digest=hashlib.sha256("".join(x+"\n" for x in shas).encode("ascii")).hexdigest()
+          expected="21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+          assert digest==expected,(digest,expected)
+          print(json.dumps({"count":len(shas),"sha_list_digest":"sha256:"+digest},indent=2))
+          PY
+
+      - name: Build exact-SHA rich provenance join
+        run: |
+          mkdir -p out/family
+          python tools/corpus/artifact_family_provenance_join.py \
+            --materialized-manifest out/pinned1050/materialized/manifest.json \
+            --lalamu-manifest-jsonl corpus-src/pub-corpus/data/manifest.jsonl \
+            --legacy-seed tools/corpus/public_legacy_seed.csv \
+            --out out/family/rich-provenance.json \
+            --summary-out out/family/provenance-summary.json
+
+      - name: Replay conservative artifact-family labels
+        run: |
+          python tools/corpus/artifact_family_label_coverage.py \
+            --joined out/family/rich-provenance.json \
+            --out out/family/label-coverage.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path("out/family/label-coverage.json").read_text())
+          assert p["sha_denominator"]==1050,p
+          assert p["labeled_sha_count"]+p["unlabeled_sha_count"]==1050,p
+          print(json.dumps(p,indent=2,sort_keys=True))
+          PY
+
+      - name: Upload source-free family provenance receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-1050-artifact-family-${{ github.run_id }}
+          path: out/family/**
+          if-no-files-found: error
+          retention-days: 90

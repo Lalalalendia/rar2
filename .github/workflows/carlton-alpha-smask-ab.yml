@@ -1,0 +1,319 @@
+name: Carlton alpha soft-mask A/B
+
+on:
+  pull_request:
+    paths:
+      - "tools/run_yab259_current_viewer_supported_subset_alpha_pdf.py"
+      - "tools/test_yab259_current_viewer_alpha_ab.py"
+      - "tools/yab259_alpha_smask_donor.py"
+      - "tools/run_yab259_current_viewer_supported_subset_pdf.py"
+      - "tools/yab259_current_viewer_supported_subset_request.rs"
+      - "tools/yab259_fixed_pdf_packet_renderer.rs"
+      - "crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/bin/current_viewer_fixed_pdf_input.rs"
+      - "crates/chaptera-viewer-render-plan/**"
+      - "!crates/chaptera-viewer-render-plan/src/mixed_size_layout.rs"
+      - "!crates/chaptera-viewer-render-plan/src/story_slice_layout.rs"
+      - "apps/chaptera-desktop/src/acceptance.rs"
+      - "tools/acquire_carlton_march_pair.py"
+      - "tools/pdf_reference_diff_v1.py"
+      - "crates/chaptera-desktop-fallback-font-resource/**"
+      - ".github/workflows/carlton-alpha-smask-ab.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: carlton-alpha-smask-ab-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Source-neutral A/B runner boundary
+        run: python tools/test_yab259_current_viewer_alpha_ab.py -v
+
+  carlton-ab:
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact acquisition and raster dependencies
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5" "PyMuPDF==1.26.4"
+
+      - name: Acquire exact public Carlton March pair
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $env:RUNNER_TEMP "carlton-alpha-smask-ab"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          python tools/acquire_carlton_march_pair.py $root
+          if ($LASTEXITCODE -ne 0) { throw "Carlton acquisition failed" }
+          $pub = Join-Path $root "March-2026.pub"
+          $reference = Join-Path $root "March-2026-reference.pdf"
+          if ((Get-FileHash $pub -Algorithm SHA256).Hash.ToLowerInvariant() -ne "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3") { throw "Carlton PUB identity drift" }
+          if ((Get-FileHash $reference -Algorithm SHA256).Hash.ToLowerInvariant() -ne "c1288571ee8da91afa27ca5c49191aacefe82123df294c11f58ca047d0ced769") { throw "Carlton reference PDF identity drift" }
+          "CHAPTERA_CARLTON_AB_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_CARLTON_PUB=$pub" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_CARLTON_REFERENCE=$reference" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build current Editor and Viewer packet producer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo build -p chaptera-desktop --release --bin chaptera-editor
+          cargo build --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml --release --bin current_viewer_fixed_pdf_input --target-dir target
+
+      - name: Reproduce exact customer-visible Story plus Move project
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $project = Join-Path $env:CHAPTERA_CARLTON_AB_ROOT "carlton-march.project.json"
+          $export = Join-Path $env:CHAPTERA_CARLTON_AB_ROOT "carlton-march.edited.odg"
+          $observation = Join-Path $env:CHAPTERA_CARLTON_AB_ROOT "carlton-march-editor-observation.json"
+          $before = (Get-FileHash $env:CHAPTERA_CARLTON_PUB -Algorithm SHA256).Hash.ToLowerInvariant()
+          $env:CHAPTERA_DESKTOP_ACCEPTANCE_V1 = "1"
+          $env:CHAPTERA_DESKTOP_ACCEPTANCE_VISIBLE_STORY = "1"
+          $env:CHAPTERA_RAR_COMMIT = "${{ github.sha }}"
+          $env:CHAPTERA_SOURCE_HASH = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+          $env:CHAPTERA_CARLTON_OBSERVATION = $observation
+          @'
+          import os, pathlib, subprocess, sys
+          command = [
+              "target/release/chaptera-editor.exe",
+              "--desktop-acceptance-v1",
+              os.environ["CHAPTERA_CARLTON_PUB"],
+              os.path.join(os.environ["CHAPTERA_CARLTON_AB_ROOT"], "carlton-march.project.json"),
+              os.path.join(os.environ["CHAPTERA_CARLTON_AB_ROOT"], "carlton-march.edited.odg"),
+          ]
+          completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", check=False)
+          if completed.stdout:
+              pathlib.Path(os.environ["CHAPTERA_CARLTON_OBSERVATION"]).write_text(completed.stdout, encoding="utf-8")
+          if completed.returncode != 0:
+              sys.stderr.write(completed.stderr or completed.stdout or "Carlton Editor acceptance failed without diagnostic\n")
+              raise SystemExit(completed.returncode)
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw "Carlton Story+Move Editor acceptance failed" }
+          $after = (Get-FileHash $env:CHAPTERA_CARLTON_PUB -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($after -ne $before) { throw "Carlton source PUB changed during Editor acceptance" }
+          "CHAPTERA_CARLTON_PROJECT=$project" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Materialize pinned font and one shared current Viewer packet
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $font = Join-Path $env:CHAPTERA_CARLTON_AB_ROOT "chaptera-fixed-output-font.ttf"
+          cargo run --quiet -p chaptera-desktop-fallback-font-resource --bin materialize-fallback-font -- "$font"
+          if (-not (Test-Path $font)) { throw "pinned fixed-output font was not materialized" }
+          $packet = Join-Path $env:CHAPTERA_CARLTON_AB_ROOT "current-viewer-fixed-pdf-input.private.json"
+          target/release/current_viewer_fixed_pdf_input.exe "$env:CHAPTERA_CARLTON_PUB" "$env:CHAPTERA_CARLTON_PROJECT" "$font" "$packet"
+          if (-not (Test-Path $packet)) { throw "current Viewer packet was not written" }
+          "CHAPTERA_CURRENT_VIEWER_PACKET=$packet" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Acquire exact public Yab 259 donor
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $source = Join-Path $env:RUNNER_TEMP "source259-carlton-alpha-ab"
+          git clone --quiet https://github.com/HeisLuka/yab "$source"
+          git -C "$source" cat-file -e "4f5d8a57abc089d1ed8eb1326cf9bed602281f7e^{commit}"
+          "CHAPTERA_SOURCE259_CHECKOUT=$source" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Render baseline and alpha from the exact same private packet
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $root = $env:CHAPTERA_CARLTON_AB_ROOT
+          $baselineRequest = Join-Path $root "baseline-request.private.json"
+          $baselineMapping = Join-Path $root "baseline-mapping.json"
+          $baselineRenderer = Join-Path $root "baseline-renderer.json"
+          $baselinePdf = Join-Path $root "baseline.pdf"
+          python tools/run_yab259_current_viewer_supported_subset_pdf.py --image-alpha reject --yab-checkout "$env:CHAPTERA_SOURCE259_CHECKOUT" --input "$env:CHAPTERA_CURRENT_VIEWER_PACKET" --request-output "$baselineRequest" --mapping-output "$baselineMapping" --pdf-output "$baselinePdf" --renderer-result-output "$baselineRenderer"
+          if ($LASTEXITCODE -ne 0) { throw "baseline render failed" }
+          $alphaRequest = Join-Path $root "alpha-request.private.json"
+          $alphaMapping = Join-Path $root "alpha-mapping.json"
+          $alphaRenderer = Join-Path $root "alpha-renderer.json"
+          $alphaPdf = Join-Path $root "alpha.pdf"
+          python tools/run_yab259_current_viewer_supported_subset_alpha_pdf.py --yab-checkout "$env:CHAPTERA_SOURCE259_CHECKOUT" --input "$env:CHAPTERA_CURRENT_VIEWER_PACKET" --request-output "$alphaRequest" --mapping-output "$alphaMapping" --pdf-output "$alphaPdf" --renderer-result-output "$alphaRenderer"
+          if ($LASTEXITCODE -ne 0) { throw "alpha render failed" }
+          "CHAPTERA_BASELINE_REQUEST=$baselineRequest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_BASELINE_MAPPING=$baselineMapping" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_BASELINE_RENDERER=$baselineRenderer" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_BASELINE_PDF=$baselinePdf" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_ALPHA_REQUEST=$alphaRequest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_ALPHA_MAPPING=$alphaMapping" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_ALPHA_RENDERER=$alphaRenderer" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_ALPHA_PDF=$alphaPdf" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prove exact alpha-only node transitions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          @'
+          import json, os
+          from pathlib import Path
+          baseline_request = Path(os.environ["CHAPTERA_BASELINE_REQUEST"]).read_bytes()
+          alpha_request = Path(os.environ["CHAPTERA_ALPHA_REQUEST"]).read_bytes()
+          if baseline_request != alpha_request:
+              raise SystemExit("baseline and alpha low-level requests differ")
+          baseline_mapping = json.loads(Path(os.environ["CHAPTERA_BASELINE_MAPPING"]).read_text(encoding="utf-8"))
+          alpha_mapping = json.loads(Path(os.environ["CHAPTERA_ALPHA_MAPPING"]).read_text(encoding="utf-8"))
+          if baseline_mapping["mapping"] != alpha_mapping["mapping"]:
+              raise SystemExit("baseline and alpha mapping summaries differ")
+          baseline = json.loads(Path(os.environ["CHAPTERA_BASELINE_RENDERER"]).read_text(encoding="utf-8"))["renderer_result"]
+          alpha = json.loads(Path(os.environ["CHAPTERA_ALPHA_RENDERER"]).read_text(encoding="utf-8"))["renderer_result"]
+          for label, summary in (("baseline", baseline["summary"]), ("alpha", alpha["summary"])):
+              if summary.get("page_count") != 3:
+                  raise SystemExit(f"{label} page-count drift: {summary!r}")
+              if summary.get("node_partial") != 0:
+                  raise SystemExit(f"{label} partial-node drift: {summary!r}")
+          # This gate owns only the SMask delta. Other Reader improvements may
+          # lawfully move the common baseline/alpha painted census together.
+          painted_delta = alpha["summary"].get("node_painted", -1) - baseline["summary"].get("node_painted", -1)
+          unsupported_delta = alpha["summary"].get("node_unsupported", -1) - baseline["summary"].get("node_unsupported", -1)
+          if painted_delta != 33 or unsupported_delta != -33:
+              raise SystemExit(
+                  "alpha-only aggregate transition drift: "
+                  f"painted_delta={painted_delta}, unsupported_delta={unsupported_delta}, "
+                  f"baseline={baseline['summary']!r}, alpha={alpha['summary']!r}"
+              )
+          if "pdf.image.alpha_unsupported" not in baseline["summary"].get("diagnostic_codes", []):
+              raise SystemExit("baseline alpha diagnostic missing")
+          if "pdf.image.alpha_unsupported" in alpha["summary"].get("diagnostic_codes", []):
+              raise SystemExit("alpha diagnostic survived SMask renderer")
+          b = {item["origin_node_id"]: (item["disposition"], item["code"]) for item in baseline["node_reports"]}
+          a = {item["origin_node_id"]: (item["disposition"], item["code"]) for item in alpha["node_reports"]}
+          mapping = baseline_mapping["mapping"]
+          if mapping.get("input_node_count") != 108 or mapping.get("semantic_duplicate_node_id_count") != 2:
+              raise SystemExit(f"current inherited-master Carlton census drift: {mapping!r}")
+          if b.keys() != a.keys():
+              raise SystemExit("baseline/alpha node report identity set drift")
+          expected_report_count = (
+              mapping["input_node_count"]
+              + mapping.get("derived_table_paint_node_count", 0)
+          )
+          if len(b) != expected_report_count:
+              raise SystemExit(
+                  "baseline/alpha node report cardinality drift: "
+                  f"reports={len(b)!r}, expected={expected_report_count!r}, mapping={mapping!r}"
+              )
+          changed = [(node_id, b[node_id], a[node_id]) for node_id in b if b[node_id] != a[node_id]]
+          if len(changed) != 33:
+              raise SystemExit(f"expected 33 alpha-only node transitions, got {len(changed)}")
+          for node_id, before, after in changed:
+              if before != ("unsupported", "pdf.node.resource_unsupported"):
+                  raise SystemExit(f"unexpected baseline transition source for {node_id}: {before!r}")
+              if after != ("painted", "pdf.node.painted_exact_image"):
+                  raise SystemExit(f"unexpected alpha transition target for {node_id}: {after!r}")
+          print(json.dumps({"alpha_transition_count": len(changed), "baseline_summary": baseline["summary"], "alpha_summary": alpha["summary"]}, sort_keys=True))
+          '@ | python -
+
+      - name: Raster both outputs against the same published pre-edit reference
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $baselineDiff = Join-Path $env:CHAPTERA_CARLTON_AB_ROOT "baseline-diff.json"
+          $alphaDiff = Join-Path $env:CHAPTERA_CARLTON_AB_ROOT "alpha-diff.json"
+          $env:CHAPTERA_BASELINE_DIFF = $baselineDiff
+          $env:CHAPTERA_ALPHA_DIFF = $alphaDiff
+          "CHAPTERA_BASELINE_DIFF=$baselineDiff" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_ALPHA_DIFF=$alphaDiff" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          @'
+          import json, os, pathlib, sys
+          root = pathlib.Path.cwd()
+          sys.path.insert(0, str(root / "tools"))
+          from pdf_reference_diff_v1 import compare_pdfs
+          for pdf_key, out_key in (("CHAPTERA_BASELINE_PDF", "CHAPTERA_BASELINE_DIFF"), ("CHAPTERA_ALPHA_PDF", "CHAPTERA_ALPHA_DIFF")):
+              result = compare_pdfs(os.environ[pdf_key], os.environ["CHAPTERA_CARLTON_REFERENCE"])
+              pathlib.Path(os.environ[out_key]).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+              if result["page_count"]["match"] is not True:
+                  raise SystemExit(f"{pdf_key} page count differs from reference")
+          baseline = json.loads(pathlib.Path(os.environ["CHAPTERA_BASELINE_DIFF"]).read_text())
+          alpha = json.loads(pathlib.Path(os.environ["CHAPTERA_ALPHA_DIFF"]).read_text())
+          b = [page["diff"]["significant_fraction"] for page in baseline["pages"]]
+          a = [page["diff"]["significant_fraction"] for page in alpha["pages"]]
+          print("baseline_significant_fractions=" + json.dumps(b))
+          print("alpha_significant_fractions=" + json.dumps(a))
+          print("alpha_minus_baseline=" + json.dumps([x-y for x,y in zip(a,b)]))
+          '@ | python -
+
+      - name: Build source-safe A/B receipt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $receipt = Join-Path $env:CHAPTERA_CARLTON_AB_ROOT "carlton-alpha-smask-ab.receipt.json"
+          $env:CHAPTERA_ALPHA_AB_RECEIPT = $receipt
+          @'
+          import hashlib, json, os
+          from pathlib import Path
+          def sha(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+          baseline = json.loads(Path(os.environ["CHAPTERA_BASELINE_RENDERER"]).read_text(encoding="utf-8"))["renderer_result"]
+          alpha_wrap = json.loads(Path(os.environ["CHAPTERA_ALPHA_RENDERER"]).read_text(encoding="utf-8"))
+          alpha = alpha_wrap["renderer_result"]
+          baseline_diff = json.loads(Path(os.environ["CHAPTERA_BASELINE_DIFF"]).read_text(encoding="utf-8"))
+          alpha_diff = json.loads(Path(os.environ["CHAPTERA_ALPHA_DIFF"]).read_text(encoding="utf-8"))
+          b = {item["origin_node_id"]: (item["disposition"], item["code"]) for item in baseline["node_reports"]}
+          a = {item["origin_node_id"]: (item["disposition"], item["code"]) for item in alpha["node_reports"]}
+          changed = [node_id for node_id in b if b[node_id] != a[node_id]]
+          receipt = {
+              "schema": "chaptera.carlton-alpha-smask-ab.v1",
+              "source_pub_sha256": "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3",
+              "reference_pdf_sha256": "c1288571ee8da91afa27ca5c49191aacefe82123df294c11f58ca047d0ced769",
+              "project_sha256": sha(os.environ["CHAPTERA_CARLTON_PROJECT"]),
+              "packet_sha256": sha(os.environ["CHAPTERA_CURRENT_VIEWER_PACKET"]),
+              "baseline_pdf_sha256": sha(os.environ["CHAPTERA_BASELINE_PDF"]),
+              "alpha_pdf_sha256": sha(os.environ["CHAPTERA_ALPHA_PDF"]),
+              "alpha_pdf_bytes": Path(os.environ["CHAPTERA_ALPHA_PDF"]).stat().st_size,
+              "alpha_repair_sha256": alpha_wrap["alpha_repair_sha256"],
+              "baseline_summary": baseline["summary"],
+              "alpha_summary": alpha["summary"],
+              "alpha_transition_count": len(changed),
+              "baseline_page_significant_fractions": [p["diff"]["significant_fraction"] for p in baseline_diff["pages"]],
+              "alpha_page_significant_fractions": [p["diff"]["significant_fraction"] for p in alpha_diff["pages"]],
+              "reference_is_pre_edit_published_pdf": True,
+              "reference_diff_includes_intentional_story_move_delta": True,
+              "same_private_packet_used_for_ab": True,
+              "private_packet_retained": False,
+              "private_requests_retained": False,
+              "native_pub_write_used": False,
+          }
+          Path(os.environ["CHAPTERA_ALPHA_AB_RECEIPT"]).write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(json.dumps(receipt, sort_keys=True))
+          '@ | python -
+          "CHAPTERA_ALPHA_AB_RECEIPT=$receipt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Stage retained A/B artifacts
+        shell: pwsh
+        run: |
+          $out = "target/carlton-alpha-smask-ab"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item "$env:CHAPTERA_ALPHA_PDF" "$out/carlton-current-edited-alpha-smask.pdf"
+          Copy-Item "$env:CHAPTERA_BASELINE_RENDERER" "$out/baseline-renderer.json"
+          Copy-Item "$env:CHAPTERA_ALPHA_RENDERER" "$out/alpha-renderer.json"
+          Copy-Item "$env:CHAPTERA_ALPHA_MAPPING" "$out/alpha-mapping.json"
+          Copy-Item "$env:CHAPTERA_BASELINE_DIFF" "$out/baseline-reference-diff.json"
+          Copy-Item "$env:CHAPTERA_ALPHA_DIFF" "$out/alpha-reference-diff.json"
+          Copy-Item "$env:CHAPTERA_ALPHA_AB_RECEIPT" "$out/carlton-alpha-smask-ab.receipt.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: carlton-alpha-smask-ab
+          path: target/carlton-alpha-smask-ab
+          if-no-files-found: error

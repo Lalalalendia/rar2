@@ -1,0 +1,356 @@
+name: CLOUD-LINK-BENCH-01 first-bind baseline
+
+on:
+  push:
+    branches:
+      - cloud-link-bench-01
+  pull_request:
+    paths:
+      - "apps/chaptera-server/tests/cloud_link_bench.rs"
+      - ".github/workflows/cloud-link-bench-01.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  first-bind-receipt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.94.1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: One-shot rustfmt benchmark harness
+        if: github.event_name == 'push'
+        run: rustfmt --edition 2024 apps/chaptera-server/tests/cloud_link_bench.rs
+
+      - name: Commit rustfmt-only benchmark delta
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- apps/chaptera-server/tests/cloud_link_bench.rs; then
+            echo "already formatted"
+          else
+            git config user.name "chaptera-ci"
+            git config user.email "actions@users.noreply.github.com"
+            git add apps/chaptera-server/tests/cloud_link_bench.rs
+            git commit -m "CLOUD-LINK-BENCH-01: rustfmt"
+            git push origin HEAD:cloud-link-bench-01
+          fi
+
+      - name: Acquire immutable public PUB fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/cloud-link-fixtures"
+          mkdir -p "$root" out
+          base="https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher"
+          for name in Simple.pub SampleNewsletter.pub SampleBrochure.pub; do
+            curl -fsSL "$base/$name" -o "$root/$name"
+          done
+          test "$(sha256sum "$root/Simple.pub" | awk '{print $1}')" = "2606f530052a818c7949b88c9bf245dbc0a74ddc6b5a60004f37b387fe4b955d"
+          test "$(wc -c < "$root/Simple.pub" | tr -d ' ')" = "65536"
+          test "$(sha256sum "$root/SampleNewsletter.pub" | awk '{print $1}')" = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
+          test "$(wc -c < "$root/SampleNewsletter.pub" | tr -d ' ')" = "291840"
+          test "$(sha256sum "$root/SampleBrochure.pub" | awk '{print $1}')" = "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87"
+          test "$(wc -c < "$root/SampleBrochure.pub" | tr -d ' ')" = "161792"
+          FIXTURE_ROOT="$root" python - <<'PY'
+          import hashlib, json, os, pathlib
+          root = pathlib.Path(os.environ["FIXTURE_ROOT"])
+          rows = []
+          for name in ("Simple.pub", "SampleNewsletter.pub", "SampleBrochure.pub"):
+              data = root.joinpath(name).read_bytes()
+              rows.append({
+                  "name": name,
+                  "bytes": len(data),
+                  "sha256": hashlib.sha256(data).hexdigest(),
+              })
+          pathlib.Path("out/cloud-link-fixtures.json").write_text(
+              json.dumps({
+                  "source_repository": "apache/poi",
+                  "source_commit": "942d95d85b15d0dfdb3bc9ba1b4f273f277757c8",
+                  "fixtures": rows,
+              }, indent=2),
+              encoding="utf-8",
+          )
+          print(json.dumps(rows, indent=2))
+          PY
+          echo "CHAPTERA_CLOUD_LINK_BENCH_FIXTURES=$root" >> "$GITHUB_ENV"
+          echo "CHAPTERA_CLOUD_LINK_BENCH_RECEIPT=$GITHUB_WORKSPACE/out/cloud-link-bench-01.json" >> "$GITHUB_ENV"
+          echo "CHAPTERA_CLOUD_LINK_BENCH_SHARED_DB_RECEIPT=$GITHUB_WORKSPACE/out/cloud-link-bench-01b.json" >> "$GITHUB_ENV"
+
+      - name: Run measurement-only first-bind harness
+        env:
+          RUST_BACKTRACE: "1"
+          PYTHON: python
+        run: cargo test -p chaptera-server --test cloud_link_bench cloud_link_first_bind_measurement_receipt -- --nocapture
+
+      - name: Run shared-SQLite marginal harness
+        env:
+          RUST_BACKTRACE: "1"
+          PYTHON: python
+        run: cargo test -p chaptera-server --test cloud_link_bench cloud_link_shared_db_marginal_receipt -- --nocapture
+
+      - name: Run cold/warm latency order probes
+        env:
+          RUST_BACKTRACE: "1"
+          PYTHON: python
+        shell: bash
+        run: |
+          set -euo pipefail
+          for order in simple-first newsletter-first brochure-first; do
+            CHAPTERA_CLOUD_LINK_LATENCY_ORDER="$order" \
+            CHAPTERA_CLOUD_LINK_LATENCY_RECEIPT="$GITHUB_WORKSPACE/out/cloud-link-bench-01c-$order.json" \
+            cargo test -p chaptera-server --test cloud_link_bench cloud_link_cold_warm_latency_receipt -- --nocapture
+          done
+
+      - name: Validate receipt shape and publish summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, pathlib
+          path = pathlib.Path("out/cloud-link-bench-01.json")
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          assert payload["protocol_version"] == "chaptera.cloud-link-first-bind-bench.v0"
+          assert payload["fixture_source_commit"] == "942d95d85b15d0dfdb3bc9ba1b4f273f277757c8"
+          assert len(payload["runs"]) == 3
+          lines = ["## CLOUD-LINK-BENCH-01 — hosted authority baseline", ""]
+          lines.append("HTTP/AuthN framing and external S3/ClamD are intentionally not measured in this hosted receipt.")
+          lines.append("")
+          lines.append("| fixture | bytes | wall ms | provider write bytes | provider read bytes | persisted bytes |")
+          lines.append("|---|---:|---:|---:|---:|---:|")
+          for run in payload["runs"]:
+              p = run["provider"]
+              lines.append(
+                  f"| {run['fixture_id']} | {run['fixture_bytes']} | {run['total_wall_ms']} | "
+                  f"{p['object_bytes_written']} | {p['object_bytes_read']} | {p['persisted_object_bytes']} |"
+              )
+
+              phases = run["provider_phase_deltas"]
+              for key in (
+                  "object_puts",
+                  "object_gets",
+                  "object_heads",
+                  "object_deletes",
+                  "object_bytes_written",
+                  "object_bytes_read",
+              ):
+                  assert sum(delta[key] for delta in phases.values()) == p[key], (
+                      run["fixture_id"], key, phases, p
+                  )
+
+          lines.append("")
+          lines.append("| fixture | phase | PUT | GET | HEAD | DEL | write bytes | read bytes |")
+          lines.append("|---|---|---:|---:|---:|---:|---:|---:|")
+          for run in payload["runs"]:
+              for phase, delta in run["provider_phase_deltas"].items():
+                  lines.append(
+                      f"| {run['fixture_id']} | {phase} | "
+                      f"{delta['object_puts']} | {delta['object_gets']} | "
+                      f"{delta['object_heads']} | {delta['object_deletes']} | "
+                      f"{delta['object_bytes_written']} | {delta['object_bytes_read']} |"
+                  )
+          summary = "\n".join(lines) + "\n"
+          print(summary)
+          pathlib.Path("out/cloud-link-bench-summary.md").write_text(summary, encoding="utf-8")
+          with open(pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"]), "a", encoding="utf-8") as fh:
+              fh.write(summary)
+          PY
+
+      - name: Validate shared-SQLite receipt and publish summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, pathlib
+
+          path = pathlib.Path("out/cloud-link-bench-01b.json")
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          assert payload["protocol_version"] == "chaptera.cloud-link-shared-sqlite-bench.v0"
+          assert payload["fixture_source_commit"] == "942d95d85b15d0dfdb3bc9ba1b4f273f277757c8"
+          assert payload["fixture_file"] == "Simple.pub"
+          assert payload["fixture_sha256"] == "2606f530052a818c7949b88c9bf245dbc0a74ddc6b5a60004f37b387fe4b955d"
+
+          checkpoints = {row["after_projects"]: row for row in payload["checkpoints"]}
+          assert set(checkpoints) == {0, 1, 10, 100}
+          base = checkpoints[0]
+
+          lines = ["## CLOUD-LINK-BENCH-01B — shared SQLite marginal metadata", ""]
+          lines.append("100 principals are pre-seeded before the baseline snapshot; identity/account creation is not charged to project metadata.")
+          lines.append("")
+          lines.append("| projects | main B | WAL B | SHM B | total B | delta from baseline B | durable rows delta |")
+          lines.append("|---:|---:|---:|---:|---:|---:|---:|")
+
+          base_rows = base["durable_row_counts"]
+          for count in (0, 1, 10, 100):
+              row = checkpoints[count]
+              row_delta = sum(
+                  row["durable_row_counts"].get(key, 0) - base_rows.get(key, 0)
+                  for key in set(base_rows) | set(row["durable_row_counts"])
+              )
+              total_delta = row["sqlite_total_bytes"] - base["sqlite_total_bytes"]
+              lines.append(
+                  f"| {count} | {row['sqlite_main_bytes']} | {row['sqlite_wal_bytes']} | "
+                  f"{row['sqlite_shm_bytes']} | {row['sqlite_total_bytes']} | {total_delta} | {row_delta} |"
+              )
+
+          lines.append("")
+          lines.append("| interval | total-file delta B | B/project | durable-row delta | rows/project |")
+          lines.append("|---|---:|---:|---:|---:|")
+          for left, right in ((0, 1), (1, 10), (10, 100)):
+              a, b = checkpoints[left], checkpoints[right]
+              width = right - left
+              bytes_delta = b["sqlite_total_bytes"] - a["sqlite_total_bytes"]
+              rows_delta = sum(
+                  b["durable_row_counts"].get(key, 0) - a["durable_row_counts"].get(key, 0)
+                  for key in set(a["durable_row_counts"]) | set(b["durable_row_counts"])
+              )
+              lines.append(
+                  f"| {left}->{right} | {bytes_delta} | {bytes_delta / width:.1f} | "
+                  f"{rows_delta} | {rows_delta / width:.2f} |"
+              )
+
+          summary = "\n".join(lines) + "\n"
+          print(summary)
+          pathlib.Path("out/cloud-link-bench-01b-summary.md").write_text(summary, encoding="utf-8")
+          with open(pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"]), "a", encoding="utf-8") as fh:
+              fh.write("\n" + summary)
+          PY
+
+      - name: Aggregate cold/warm latency receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, math, os, pathlib, statistics
+
+          expected_orders = {"simple-first", "newsletter-first", "brochure-first"}
+          paths = sorted(pathlib.Path("out").glob("cloud-link-bench-01c-*-first.json"))
+          assert len(paths) == 3, paths
+
+          receipts = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+          assert {r["order_id"] for r in receipts} == expected_orders
+          for receipt in receipts:
+              assert receipt["protocol_version"] == "chaptera.cloud-link-first-bind-latency.v0"
+              assert receipt["fixture_source_commit"] == "942d95d85b15d0dfdb3bc9ba1b4f273f277757c8"
+              assert receipt["warm_repetitions_per_fixture"] == 20
+              assert len(receipt["samples"]) == 63
+
+          all_samples = [sample for receipt in receipts for sample in receipt["samples"]]
+          probes = [sample for sample in all_samples if sample["sample_kind"] == "order_probe"]
+          warm = [sample for sample in all_samples if sample["sample_kind"] == "warm_repeat"]
+          cold = [sample for sample in probes if sample["process_cold"]]
+          assert len(probes) == 9
+          assert len(cold) == 3
+          assert {sample["logical_fixture_id"] for sample in cold} == {
+              "f0-simple", "f1-newsletter", "f2-brochure"
+          }
+
+          fixture_ids = ("f0-simple", "f1-newsletter", "f2-brochure")
+          for fixture_id in fixture_ids:
+              assert sum(sample["logical_fixture_id"] == fixture_id for sample in warm) == 60
+
+          def nearest_rank(values, fraction):
+              values = sorted(values)
+              assert values
+              index = max(0, min(len(values) - 1, math.ceil(fraction * len(values)) - 1))
+              return values[index]
+
+          metric_defs = (
+              ("total_wall_ms", None),
+              ("streamed_upload", "streamed_upload"),
+              ("validation_and_promotion", "validation_and_promotion"),
+              ("baseline_materialization", "baseline_materialization"),
+              ("project_genesis_commit", "project_genesis_commit"),
+          )
+
+          warm_stats = []
+          for fixture_id in fixture_ids:
+              fixture_samples = [s for s in warm if s["logical_fixture_id"] == fixture_id]
+              for metric_name, phase_name in metric_defs:
+                  if phase_name is None:
+                      values = [s["total_wall_ms"] for s in fixture_samples]
+                  else:
+                      values = [s["phase_wall_ms"][phase_name] for s in fixture_samples]
+                  warm_stats.append({
+                      "fixture_id": fixture_id,
+                      "metric": metric_name,
+                      "count": len(values),
+                      "p50_ms": statistics.median(values),
+                      "p95_ms": nearest_rank(values, 0.95),
+                      "min_ms": min(values),
+                      "max_ms": max(values),
+                  })
+
+          aggregate = {
+              "protocol_version": "chaptera.cloud-link-first-bind-latency-aggregate.v0",
+              "build_sha": os.environ.get("GITHUB_SHA", "local"),
+              "fixture_source_commit": "942d95d85b15d0dfdb3bc9ba1b4f273f277757c8",
+              "source_receipts": [path.name for path in paths],
+              "process_cold_probes": cold,
+              "all_order_probes": probes,
+              "warm_stats": warm_stats,
+          }
+          pathlib.Path("out/cloud-link-bench-01c-aggregate.json").write_text(
+              json.dumps(aggregate, indent=2), encoding="utf-8"
+          )
+
+          lines = ["## CLOUD-LINK-BENCH-01C — cold/warm latency", ""]
+          lines.append("Process-cold means first first-bind in a fresh Rust test process; OS page cache is not claimed cold.")
+          lines.append("")
+          lines.append("| order | position | fixture | process-cold | total ms | baseline ms |")
+          lines.append("|---|---:|---|---|---:|---:|")
+          for receipt in receipts:
+              for sample in receipt["samples"]:
+                  if sample["sample_kind"] != "order_probe":
+                      continue
+                  lines.append(
+                      f"| {receipt['order_id']} | {sample['process_position']} | "
+                      f"{sample['logical_fixture_id']} | {str(sample['process_cold']).lower()} | "
+                      f"{sample['total_wall_ms']} | "
+                      f"{sample['phase_wall_ms']['baseline_materialization']} |"
+                  )
+
+          lines.append("")
+          lines.append("| fixture | metric | n | p50 ms | p95 ms | min | max |")
+          lines.append("|---|---|---:|---:|---:|---:|---:|")
+          for stat in warm_stats:
+              lines.append(
+                  f"| {stat['fixture_id']} | {stat['metric']} | {stat['count']} | "
+                  f"{stat['p50_ms']} | {stat['p95_ms']} | {stat['min_ms']} | {stat['max_ms']} |"
+              )
+
+          summary = "\n".join(lines) + "\n"
+          print(summary)
+          pathlib.Path("out/cloud-link-bench-01c-summary.md").write_text(summary, encoding="utf-8")
+          with open(pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"]), "a", encoding="utf-8") as fh:
+              fh.write("\n" + summary)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cloud-link-bench-01-${{ github.sha }}
+          path: |
+            out/cloud-link-fixtures.json
+            out/cloud-link-bench-01.json
+            out/cloud-link-bench-summary.md
+            out/cloud-link-bench-01b.json
+            out/cloud-link-bench-01b-summary.md
+            out/cloud-link-bench-01c-simple-first.json
+            out/cloud-link-bench-01c-newsletter-first.json
+            out/cloud-link-bench-01c-brochure-first.json
+            out/cloud-link-bench-01c-aggregate.json
+            out/cloud-link-bench-01c-summary.md
+          if-no-files-found: error
