@@ -64,6 +64,10 @@ pub struct FixedImageResource {
     /// useful Viewer evidence but do not inherit exact-image alpha authority.
     #[serde(default)]
     pub source_exact: bool,
+    /// True only for source-backed derived previews whose bounded rasterizer
+    /// explicitly owns transparent-canvas alpha semantics.
+    #[serde(default)]
+    pub derived_transparent_canvas: bool,
     pub node_ids: Vec<NodeId>,
     pub bytes: Vec<u8>,
 }
@@ -566,7 +570,7 @@ fn prepare_image(image: &FixedImageResource) -> Result<PreparedImage, PdfRenderE
         alpha.push(pixel.0[3]);
         has_alpha |= pixel.0[3] != 255;
     }
-    if has_alpha && !image.source_exact {
+    if has_alpha && !(image.source_exact || image.derived_transparent_canvas) {
         return Ok(PreparedImage::Unsupported {
             code: "pdf.image.preview_alpha_unsupported".into(),
             message: "alpha-bearing derived preview is outside the exact embedded-image PDF slice"
@@ -1165,6 +1169,7 @@ mod tests {
                 resource_id: resource_id(42),
                 mime: "image/png".into(),
                 source_exact: true,
+                derived_transparent_canvas: false,
                 node_ids: vec![node_id(10), node_id(11)],
                 bytes: png,
             }],
@@ -1210,6 +1215,7 @@ mod tests {
                 resource_id: resource_id(43),
                 mime: "image/png".into(),
                 source_exact: true,
+                derived_transparent_canvas: false,
                 node_ids: vec![node_id(10)],
                 bytes: encoded.into_inner(),
             }],
@@ -1261,6 +1267,7 @@ mod tests {
                 resource_id: resource_id(44),
                 mime: "image/png".into(),
                 source_exact: false,
+                derived_transparent_canvas: false,
                 node_ids: vec![node_id(10)],
                 bytes: encoded.into_inner(),
             }],
@@ -1282,6 +1289,48 @@ mod tests {
                 .diagnostics
                 .iter()
                 .any(|diagnostic| { diagnostic.code == "pdf.image.preview_alpha_unsupported" })
+        );
+    }
+
+    #[test]
+    fn derived_transparent_canvas_rgba_png_gets_smask_without_source_exact() {
+        use std::io::Cursor;
+
+        let mut rgba = image::RgbaImage::new(1, 1);
+        rgba.put_pixel(0, 0, image::Rgba([10, 20, 30, 128]));
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut encoded, ImageFormat::Png)
+            .unwrap();
+
+        let resources = FixedPdfResources {
+            node_paints: Vec::new(),
+            images: vec![FixedImageResource {
+                resource_id: resource_id(45),
+                mime: "image/png".into(),
+                source_exact: false,
+                derived_transparent_canvas: true,
+                node_ids: vec![node_id(10)],
+                bytes: encoded.into_inner(),
+            }],
+            ..FixedPdfResources::default()
+        };
+
+        let output = render_bounded_pdf(
+            &scene(),
+            &resources,
+            &PdfTargetProfile::basic_geometry_v0_1(),
+        )
+        .unwrap();
+
+        let text = String::from_utf8_lossy(&output.bytes);
+        assert!(text.contains("/SMask "));
+        assert!(
+            !output
+                .report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "pdf.image.preview_alpha_unsupported")
         );
     }
 
