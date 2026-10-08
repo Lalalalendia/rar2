@@ -75,6 +75,7 @@ function Apply-Arm($paragraph, [string]$kind, [double]$value) {
         "control" { return }
         "line-single" { $paragraph.SetLineSpacing($PbLineSpacingSingle, 12); return }
         "line-1p5" { $paragraph.SetLineSpacing($PbLineSpacing1pt5, 12); return }
+        "line-proportional" { $paragraph.LineSpacing = $value; return }
         "line-exact" { $paragraph.SetLineSpacing($PbLineSpacingExactly, $value); return }
         "left-indent" { $paragraph.LeftIndent = $value; return }
         "right-indent" { $paragraph.RightIndent = $value; return }
@@ -279,6 +280,7 @@ $seed = New-SeedFixture
 $specs = @(
     [ordered]@{ name = "control"; kind = "control"; value = 0.0 },
     [ordered]@{ name = "line-single"; kind = "line-single"; value = 1.0 },
+    [ordered]@{ name = "line-0p75"; kind = "line-proportional"; value = 0.75 },
     [ordered]@{ name = "line-1p5"; kind = "line-1p5"; value = 1.5 },
     [ordered]@{ name = "line-exact-18pt"; kind = "line-exact"; value = 18.0 },
     [ordered]@{ name = "line-exact-24pt"; kind = "line-exact"; value = 24.0 },
@@ -310,6 +312,6 @@ Write-PubJson -Value $result -Path (Join-Path $analysisDir "paragraph-metrics-au
     "experiment=$ExpectedExperiment",
     "arms=$($specs.Count)",
     "common_seed_sha256=$($seed.sha256)",
-    "line_spacing_rules=single:0,one_point_five:1,exactly:4",
+    "line_spacing_rules=single:0,one_point_five:1,exactly:4;direct_proportional_probe=0.75",
     "verdict=$($result.verdict)"
 ) | Set-Content -LiteralPath (Join-Path $logDir "paragraph-metrics-auth-01.txt") -Encoding ASCII
