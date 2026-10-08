@@ -32,8 +32,8 @@ use images::{
     viewer_image_recolor_v1, viewer_image_source_window_v1,
 };
 
-pub use tables::{ViewerTable, ViewerTableBorderSegment, ViewerTableCell};
 use tables::viewer_tables_from_resolved;
+pub use tables::{ViewerTable, ViewerTableBorderSegment, ViewerTableCell};
 #[cfg(test)]
 use tables::{unique_table_column_boundary, unique_table_row_boundary};
 
@@ -51,19 +51,20 @@ use chaptera_scene_instance::{
 use pub_layout::{BoundedAuthoringSlice, BoundedNodeGeometryInput};
 pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
 use pub_layout::{
-    BoundedParagraphFlowConstraint, BoundedParagraphFlowRun,
-    BoundedTextFlowEnvironment, BoundedTextMetrics, ProjectedStoryFrame, ProjectionDiagnostic,
-    ResolveDiagnostic, ResolvedPhysicalNode, project_bounded, resolve_bounded_geometry,
+    BoundedParagraphFlowConstraint, BoundedParagraphFlowRun, BoundedTextFlowEnvironment,
+    BoundedTextMetrics, ProjectedStoryFrame, ProjectionDiagnostic, ResolveDiagnostic,
+    ResolvedPhysicalNode, project_bounded, resolve_bounded_geometry,
     resolve_bounded_text_flow_with_paragraph_flow,
 };
 #[cfg(feature = "cmo-slot-compose")]
 use pub_model::CanonicalId;
-#[cfg(test)]
-use pub_model::{StoryFrame, TableCellAddress, TableCellId};
 use pub_model::{
     Affine2D, AuthorityClass, LengthEmu, Node, NodeId, NodeKind, PageId, ReadConfidence, RectEmu,
-    ResourceId, Sha256Digest, SourceDerivedIdInput, SourceRole, StoryId, derive_source_canonical_id,
+    ResourceId, Sha256Digest, SourceDerivedIdInput, SourceRole, StoryId,
+    derive_source_canonical_id,
 };
+#[cfg(test)]
+use pub_model::{StoryFrame, TableCellAddress, TableCellId};
 use pub_paint_bridge::{
     PubEffectiveFillSourceV1, PubEffectiveLineSourceV1, PubEffectivePaintAuthorityV1,
     PubEffectivePaintSourceSpanV1, PubEffectivePaintValueV1, PubEffectiveShapePaintSourceV1,
@@ -113,9 +114,8 @@ use pub_reader::{
     analyze_legacy_0x22_page_roles, analyze_mature_0x2c_page_roles, build_failure_envelope,
     build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
-    build_mature_0x2c_wmf_preview_bundle_from_bytes, derive_pub_page_id,
-    rasterize_wmf_preview, read_legacy_0x22_image_wmfs,
-    resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
+    build_mature_0x2c_wmf_preview_bundle_from_bytes, derive_pub_page_id, rasterize_wmf_preview,
+    read_legacy_0x22_image_wmfs, resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
     select_unambiguous_legacy_ole_cached_presentation,
 };
 #[cfg(feature = "cmo-slot-compose")]
