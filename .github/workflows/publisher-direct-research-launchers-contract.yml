@@ -8,6 +8,7 @@ on:
       - "tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1"
       - "tools/research-runner/experiments/paragraph-line-spacing-0p75-native-01.packet.json"
       - "tools/research-runner/operations/paragraph_line_spacing_0p75_native_01.ps1"
+      - "tools/research-runner/analysis/paragraph_line_spacing_0p75_structural.py"
       - ".github/workflows/publisher-direct-research-launchers-contract.yml"
 
 permissions:
@@ -46,6 +47,11 @@ jobs:
               $errors | ForEach-Object { Write-Error "${path}: $($_.Message)" }
               throw "PowerShell parser rejected $path"
             }
+          }
+
+          python -m py_compile tools/research-runner/analysis/paragraph_line_spacing_0p75_structural.py
+          if ($LASTEXITCODE -ne 0) {
+            throw "Python parser rejected focused 0.75 structural analyzer."
           }
 
       - name: Enforce offline bounded launcher contract
