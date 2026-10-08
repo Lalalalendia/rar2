@@ -351,18 +351,6 @@ pub fn build_mature_0x2c_source_graph<R: Read + Seek>(
     build_mature_0x2c_from_streams(source_hash, &contents, &quill, &escher)
 }
 
-fn shape_has_nonzero_rotation(shape: &pub_escher::SpContainerObservation) -> bool {
-    shape.fopts.iter().any(|record| {
-        record.properties.iter().any(|property| {
-            property.property_id() == OFFICEART_PROPERTY_ROTATION && property.op != 0
-        })
-    })
-}
-
-fn shape_has_fsp_flag(shape: &pub_escher::SpContainerObservation, flag: u32) -> bool {
-    shape.fsp.as_ref().is_some_and(|fsp| fsp.flags & flag != 0)
-}
-
 pub fn build_mature_0x2c_from_streams(
     source_hash: Sha256Digest,
     contents: &[u8],
@@ -515,141 +503,6 @@ pub fn build_mature_0x2c_from_streams(
         paragraph_flow_runs,
         script_font_maps,
     })
-}
-
-fn utf16_range_to_scalar_range(text: &str, start_utf16: u32, end_utf16: u32) -> Option<(u32, u32)> {
-    if start_utf16 > end_utf16 {
-        return None;
-    }
-
-    fn boundary(text: &str, target_utf16: u32) -> Option<u32> {
-        if target_utf16 == 0 {
-            return Some(0);
-        }
-
-        let mut utf16_cursor = 0_u32;
-        let mut scalar_cursor = 0_u32;
-        for scalar in text.chars() {
-            utf16_cursor = utf16_cursor.checked_add(scalar.len_utf16() as u32)?;
-            scalar_cursor = scalar_cursor.checked_add(1)?;
-            if utf16_cursor == target_utf16 {
-                return Some(scalar_cursor);
-            }
-            if utf16_cursor > target_utf16 {
-                return None;
-            }
-        }
-        (utf16_cursor == target_utf16).then_some(scalar_cursor)
-    }
-
-    Some((boundary(text, start_utf16)?, boundary(text, end_utf16)?))
-}
-
-fn consensus_publication_page_extent(
-    stream: StreamPath,
-    contents: &[u8],
-    references: &BTreeMap<u32, Contents0x2cChunkReference>,
-) -> Result<(u32, u32, usize)> {
-    let margins = references
-        .values()
-        .filter(|reference| single_raw_type(reference) == Some(RAW_TYPE_MARGINS))
-        .collect::<Vec<_>>();
-
-    if margins.is_empty() {
-        bail!("missing Margins/OplMg raw type 0x{RAW_TYPE_MARGINS:02X}");
-    }
-
-    let mut dimensions = Vec::with_capacity(margins.len());
-    for reference in margins {
-        let chunk = chunk_for_reference(stream.clone(), contents, reference)?;
-        let extent = parse_confirmed_margins_page_extent(contents, &chunk).with_context(|| {
-            format!("parse Margins/OplMg page extent seq {}", reference.seq_num)
-        })?;
-        dimensions.push((extent.width_emu, extent.height_emu));
-    }
-
-    let (width_emu, height_emu) = require_consensus_page_extent(&dimensions)?;
-    Ok((width_emu, height_emu, dimensions.len()))
-}
-
-fn require_consensus_page_extent(extents: &[(u32, u32)]) -> Result<(u32, u32)> {
-    let first = extents
-        .first()
-        .copied()
-        .context("publication has no confirmed Margins/OplMg page extent")?;
-    if first.0 == 0 || first.1 == 0 {
-        bail!("publication page extent must be positive");
-    }
-
-    for &(width_emu, height_emu) in &extents[1..] {
-        if width_emu == 0 || height_emu == 0 {
-            bail!("publication page extent must be positive");
-        }
-        if (width_emu, height_emu) != first {
-            bail!(
-                "conflicting Margins/OplMg page extents: expected {}x{} EMU, found {}x{} EMU",
-                first.0,
-                first.1,
-                width_emu,
-                height_emu
-            );
-        }
-    }
-
-    Ok(first)
-}
-
-fn decode_utf16le_strict(bytes: &[u8]) -> Result<String> {
-    if bytes.len() % 2 != 0 {
-        bail!("UTF-16LE byte length is odd: {}", bytes.len());
-    }
-    let units = bytes
-        .chunks_exact(2)
-        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-        .collect::<Vec<_>>();
-    String::from_utf16(&units).map_err(|error| anyhow!("invalid UTF-16LE: {error}"))
-}
-
-fn bounded_quill_text_rgb(
-    direct_rgb: Option<[u8; 3]>,
-    scheme_slot: Option<u8>,
-    color_scheme: Option<&MatureColorScheme>,
-) -> Option<[u8; 3]> {
-    match (direct_rgb, scheme_slot) {
-        (Some(rgb), None) => Some(rgb),
-        (None, Some(slot)) => color_scheme?.slots.get(usize::from(slot))?.rgb,
-        // Both carriers at once are not a grounded Quill state; neither is
-        // absence of both. Keep those cases fail-closed.
-        _ => None,
-    }
-}
-
-fn exact_image_slot(
-    shape: &pub_escher::SpContainerObservation,
-    seq_num: u32,
-    diagnostics: &mut Vec<PubBridgeDiagnostic>,
-) -> Option<u32> {
-    let mut slots = shape
-        .fopts
-        .iter()
-        .flat_map(|record| record.properties.iter())
-        .filter(|property| {
-            property.property_id() == OFFICE_ART_PROPERTY_PIB && property.op_is_blip_id()
-        })
-        .map(|property| property.op)
-        .collect::<BTreeSet<_>>();
-
-    match slots.len() {
-        0 => None,
-        1 => slots.pop_first(),
-        _ => {
-            diagnostics.push(PubBridgeDiagnostic::AmbiguousImageSlot {
-                seq_num,
-                slots: slots.into_iter().collect(),
-            });
-            None
-        }
-    }
 }
 
 use anchor_geometry::{
@@ -1058,11 +911,11 @@ mod tests {
     #[test]
     fn typography_utf16_to_scalar_range_is_surrogate_safe() {
         let text = "A😀B";
-        assert_eq!(utf16_range_to_scalar_range(text, 1, 3), Some((1, 2)));
-        assert_eq!(utf16_range_to_scalar_range(text, 0, 4), Some((0, 3)));
-        assert_eq!(utf16_range_to_scalar_range(text, 1, 2), None);
-        assert_eq!(utf16_range_to_scalar_range(text, 2, 3), None);
-        assert_eq!(utf16_range_to_scalar_range(text, 3, 1), None);
+        assert_eq!(typography_projection::utf16_range_to_scalar_range(text, 1, 3), Some((1, 2)));
+        assert_eq!(typography_projection::utf16_range_to_scalar_range(text, 0, 4), Some((0, 3)));
+        assert_eq!(typography_projection::utf16_range_to_scalar_range(text, 1, 2), None);
+        assert_eq!(typography_projection::utf16_range_to_scalar_range(text, 2, 3), None);
+        assert_eq!(typography_projection::utf16_range_to_scalar_range(text, 3, 1), None);
     }
 
     fn test_page_id(seed: u8) -> PageId {
@@ -1274,7 +1127,7 @@ mod tests {
     #[test]
     fn page_extent_consensus_accepts_one_extent() {
         assert_eq!(
-            require_consensus_page_extent(&[(7_560_000, 10_692_000)]).unwrap(),
+            publication_document::require_consensus_page_extent(&[(7_560_000, 10_692_000)]).unwrap(),
             (7_560_000, 10_692_000)
         );
     }
@@ -1282,7 +1135,7 @@ mod tests {
     #[test]
     fn page_extent_consensus_accepts_equivalent_duplicates() {
         assert_eq!(
-            require_consensus_page_extent(&[
+            publication_document::require_consensus_page_extent(&[
                 (7_772_400, 10_058_400),
                 (7_772_400, 10_058_400),
                 (7_772_400, 10_058_400),
@@ -1295,7 +1148,7 @@ mod tests {
     #[test]
     fn page_extent_consensus_rejects_conflicts() {
         let error =
-            require_consensus_page_extent(&[(7_772_400, 10_058_400), (7_560_000, 10_692_000)])
+            publication_document::require_consensus_page_extent(&[(7_772_400, 10_058_400), (7_560_000, 10_692_000)])
                 .unwrap_err();
 
         assert!(
@@ -1307,7 +1160,7 @@ mod tests {
 
     #[test]
     fn page_extent_consensus_rejects_zero_dimension() {
-        let error = require_consensus_page_extent(&[(7_772_400, 0)]).unwrap_err();
+        let error = publication_document::require_consensus_page_extent(&[(7_772_400, 0)]).unwrap_err();
         assert!(error.to_string().contains("must be positive"));
     }
 
@@ -1395,21 +1248,21 @@ mod tests {
         };
 
         assert_eq!(
-            bounded_quill_text_rgb(Some([0xAA, 0xBB, 0xCC]), None, None),
+            typography_projection::bounded_quill_text_rgb(Some([0xAA, 0xBB, 0xCC]), None, None),
             Some([0xAA, 0xBB, 0xCC])
         );
         assert_eq!(
-            bounded_quill_text_rgb(None, Some(0), Some(&scheme)),
+            typography_projection::bounded_quill_text_rgb(None, Some(0), Some(&scheme)),
             Some([0, 0, 0])
         );
         assert_eq!(
-            bounded_quill_text_rgb(None, Some(1), Some(&scheme)),
+            typography_projection::bounded_quill_text_rgb(None, Some(1), Some(&scheme)),
             Some([0x11, 0x22, 0x33])
         );
-        assert_eq!(bounded_quill_text_rgb(None, Some(2), Some(&scheme)), None);
-        assert_eq!(bounded_quill_text_rgb(None, Some(0), None), None);
+        assert_eq!(typography_projection::bounded_quill_text_rgb(None, Some(2), Some(&scheme)), None);
+        assert_eq!(typography_projection::bounded_quill_text_rgb(None, Some(0), None), None);
         assert_eq!(
-            bounded_quill_text_rgb(Some([1, 2, 3]), Some(0), Some(&scheme)),
+            typography_projection::bounded_quill_text_rgb(Some([1, 2, 3]), Some(0), Some(&scheme)),
             None
         );
     }
