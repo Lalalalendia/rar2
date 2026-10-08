@@ -144,7 +144,9 @@ def validate_budget_shape(budget: dict) -> None:
     for path, config in shared.items():
         if not isinstance(path, str) or not path.endswith(".rs"):
             raise BudgetError(f"shared root must be an .rs path: {path!r}")
-        if not any(path.startswith(prefix) for prefix in roots):
+        if schema == BUDGET_SCHEMA_V2 and not any(
+            path.startswith(prefix) for prefix in roots
+        ):
             raise BudgetError(f"shared root is outside tracked_roots: {path}")
         if not isinstance(config, dict):
             raise BudgetError(f"shared root config must be an object: {path}")
