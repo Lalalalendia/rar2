@@ -116,7 +116,7 @@ impl EditorSession {
             .text
             .clone();
 
-        let after = replace_scalar_range_text(
+        let after = replace_scalar_range_text_v1(
             &before,
             start_scalar,
             end_scalar,
