@@ -37,6 +37,7 @@ on:
       - "tools/ci/test_pub_reader_publication_document_routing.py"
       - "tools/ci/test_pub_reader_contents_access_routing.py"
       - "tools/ci/test_no_publisher_selfhosted_actions.py"
+      - "tools/ci/test_closed_pr_cache_gc_dry_run.py"
   workflow_dispatch:
 
 concurrency:
@@ -111,3 +112,5 @@ jobs:
         run: python tools/ci/test_pub_reader_contents_access_routing.py
       - name: Guard Publisher native execution boundary
         run: python tools/ci/test_no_publisher_selfhosted_actions.py
+      - name: Guard read-only closed PR cache audit
+        run: python tools/ci/test_closed_pr_cache_gc_dry_run.py
