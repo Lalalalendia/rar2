@@ -39,6 +39,8 @@ on:
       - "tools/ci/test_no_publisher_selfhosted_actions.py"
       - "tools/ci/test_closed_pr_cache_gc_dry_run.py"
       - "tools/ci/test_cloud_reference_pr_cache_mode.py"
+      - "tools/export_cloud_reader_windows_fonts.py"
+      - "tools/ci/test_export_cloud_reader_windows_fonts.py"
   workflow_dispatch:
 
 concurrency:
@@ -117,5 +119,7 @@ jobs:
         run: python tools/ci/test_closed_pr_cache_gc_dry_run.py
       - name: Guard Cloud reference PR shared-cache read-only policy
         run: python tools/ci/test_cloud_reference_pr_cache_mode.py
+      - name: Test private Cloud Reader exact-font packet exporter
+        run: python tools/ci/test_export_cloud_reader_windows_fonts.py
       - name: Guard Batch01 PR Cargo restore-only policy
         run: python tools/ci/test_batch01_pr_cargo_cache_mode.py

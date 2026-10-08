@@ -51,8 +51,20 @@ def assert_narrow_product_admission(relative_path: str, crate_path: str) -> None
     assert f'"{crate_path}/src/**"' in block, (relative_path, block)
 
 
-def assert_scope(paths, *, evidence_only_paths=None, visual_neutral_paths=None, **expected):
-    actual = mod.classify(paths, evidence_only_paths, visual_neutral_paths=visual_neutral_paths)
+def assert_scope(
+    paths,
+    *,
+    evidence_only_paths=None,
+    visual_neutral_paths=None,
+    product_neutral_paths=None,
+    **expected,
+):
+    actual = mod.classify(
+        paths,
+        evidence_only_paths,
+        visual_neutral_paths=visual_neutral_paths,
+        product_neutral_paths=product_neutral_paths,
+    )
     for key, value in expected.items():
         assert actual[key] is value, (paths, key, actual)
 
@@ -94,6 +106,22 @@ def main():
     chars_and_lifetimes = "fn f<'a>(x: &'a str) { let slash = '/'; let quote = '\\''; }\n"
     assert mod.desktop_main_visual_change_is_neutral(chars_and_lifetimes, '// neutral\n' + chars_and_lifetimes)
     assert not mod.desktop_main_visual_change_is_neutral(chars_and_lifetimes, chars_and_lifetimes.replace("'/'", "'*'"))
+
+    neutral_facade_diff = """@@ -13,0 +14 @@
++pub use authoring_projection::bounded_authoring_slice_from_resolved_story_payload;
+"""
+    assert mod.viewer_authoring_facade_diff_is_product_neutral(neutral_facade_diff)
+    assert not mod.viewer_authoring_facade_diff_is_product_neutral(
+        """@@ -13,0 +14 @@
++pub use images::new_reader_paint_surface;
+"""
+    )
+    assert not mod.viewer_authoring_facade_diff_is_product_neutral(
+        """@@ -13,0 +14 @@
++pub mod authoring_projection;
+"""
+    )
+    assert not mod.viewer_authoring_facade_diff_is_product_neutral("")
 
     base_source = """fn production() {}
 
@@ -310,6 +338,26 @@ fn main() -> eframe::Result<()> {
         android=False,
         web=False,
         local_portable=False,
+    )
+    assert_scope(
+        [mod.VIEWER_FACADE, mod.VIEWER_AUTHORING_PROJECTION],
+        product_neutral_paths={mod.VIEWER_FACADE},
+        tier_a=True,
+        reader_windows_smoke=False,
+        reader_windows=False,
+        editor_windows=False,
+        visual_oracle=False,
+        cloud_reference=False,
+        virginia_page_role=False,
+        visual_batch01=False,
+        typography_golden=False,
+        android_core=False,
+        android=False,
+        web=False,
+        local_portable=False,
+        installer=False,
+        path_identity=False,
+        update_accept=False,
     )
     assert_scope(
         [mod.VIEWER_AUTHORING_PROJECTION],

@@ -32,6 +32,24 @@ When a configured file is present but its bytes do not match `expected_sha256`, 
 
 A missing configured source font makes fidelity partial; the renderer may use the deterministic Reader fallback/preview path, but must not silently claim source-font parity.
 
+## Private Windows export helper
+
+For a private deployment where the operator already has lawful source-font bytes installed on a Windows workstation, Chaptera can build a local-only configured-font packet without committing the font files:
+
+```powershell
+python tools\export_cloud_reader_windows_fonts.py --family Calibri --family Cambria --output-dir C:\chaptera-cloud-fonts
+```
+
+The helper scans the selected Windows font directory (default: `%WINDIR%\Fonts`), parses TTF/OTF/TTC/OTC name tables, requires exactly one Regular face for each requested family, copies the exact source container bytes into the private packet, records SHA-256 + face index, and emits:
+
+- `fonts/` — private exact font containers;
+- `manifest.json` — source-safe packet metadata without the local source path;
+- `cloud-reader-font-resources.toml` — ready-to-append `cloud_reader_guest.font_resources` entries;
+- `README.txt` — private deployment instructions and licensing fence.
+
+This helper does not grant redistribution or server-use rights. Its output must not be committed or uploaded to public CI.
+
+The current Cloud browser transport does not independently select a nonzero face from a font collection. Therefore the helper fails closed when a requested family resolves to `face_index > 0` in TTC/OTC bytes. A collection face at index 0 is allowed and is recorded as `first_face_only`; keep this fence until browser-side collection-face selection has its own acceptance proof.
 ## Acceptance
 
 The source-free server regression writes the redistribution-safe Chaptera fallback font to a temporary operator-style path and proves the real loader:
