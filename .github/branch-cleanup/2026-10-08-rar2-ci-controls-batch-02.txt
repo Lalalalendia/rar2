@@ -1,0 +1,17 @@
+# Branch GC 2026-10-08 — CI controls batch 02
+# NEVER MERGE. Reviewed exact-SHA cleanup carrier only.
+# 13 terminal closed-unmerged refs. Runtime rechecks open heads/bases and moved tips.
+
+ci/desktop-mainrs-suite-handoff-negative-control 1c87fb0a1cb242789197a408ea14c73f27b35f89 # PR 1206 measurement-only negative control
+ci/fallback-mainrs-negative-control-01 561468d364eca6a0057549bb73a0960cc3e03acd # PR 1280 measurement-only main.rs pressure
+ci/mainrs-negative-scene-authored-stack-01 22d69e129f8da4070b8cb64658f2eecafac329aa # PR 1261 negative control
+ci/mainrs-negative-scene-authored-stack-02 56fa219f57a28d40be1023b251a5c9b4b4f9f475 # PR 1263 fresh negative control
+ci/post-1314-mainrs-latency-measurement 492c4bbb4414a2fec7045bafbc280533904e7761 # PR 1331 do-not-merge measurement
+ci/post-1333-mainrs-latency-measurement 8b00ed4d100882ed203abb5c4647fbbb6e60f7bc # PR 1335 do-not-merge measurement
+ci/post-1333-mainrs-latency-measurement-v2 7ddd674004c36b4fc1989803bd4fd7107387dda6 # PR 1337 canonical do-not-merge measurement
+ci/post-carlton-parallel-mainrs-measurement-01 cd96a9367fb8952e67c8ac8d18286ef0a5808c3e # PR 1336 post-merge control
+ci/manual-reader-build-2026-10-01 2249f81ed47984074c0bd3b7390576ed38106eeb # PR 543 artifact retained; intentionally closed unmerged
+ci/manual-reader-page-role-2026-10-01 a5caaf2ba482c8206ec6f1cec1cf4f67099a77f1 # PR 551 comment-only artifact build
+ci/manual-reader-grand-opening-2026-10-01 48689bfff19bcfe52791b5070f79b9338316ce1a # PR 568 comment-only do-not-merge artifact build
+ci/paragraph-metrics-manual-dispatch-1201 9758df4a0cf9cc9198c76196409830a45cda6c67 # PR 1228 obsolete; subsumed by merged 1224
+ops/branch-gc-20261008-ci-viewer-safe-batch-01 9c76e1055dff6eacb5272455a88ea30567775df3 # PR 2069 completed owner; run 37773910219 deleted 56
