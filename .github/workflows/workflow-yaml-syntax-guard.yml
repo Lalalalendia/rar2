@@ -45,12 +45,87 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
+  pull-requests: read
 
 jobs:
   syntax:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: MEASURE - inventory Actions cache refs and closed PR bytes (read only)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/action-cache-inventory.json"
+          gh api -X GET "repos/$GH_REPO/actions/caches?per_page=100" > "$output"
+          python - "$output" <<'PY'
+          import collections
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as source:
+              body = json.load(source)
+          caches = body.get("actions_caches", [])
+          total = body.get("total_count", -1)
+          if total != len(caches):
+              raise SystemExit(f"FAIL_CLOSED: incomplete cache inventory: {len(caches)}/{total}")
+          seen = {}
+          groups = collections.defaultdict(lambda: [0, 0])
+          rows = []
+          for cache in caches:
+              ref = cache.get("ref", "")
+              owner = "other"
+              matched = re.fullmatch(r"refs/pull/([1-9][0-9]*)/merge", ref)
+              if ref == "refs/heads/main":
+                  owner = "main"
+              elif matched:
+                  number = int(matched.group(1))
+                  if number not in seen:
+                      request = subprocess.run(
+                          ["gh", "api", "-X", "GET",
+                           f"repos/{os.environ['GH_REPO']}/pulls/{number}"],
+                          capture_output=True, text=True, timeout=20,
+                      )
+                      if request.returncode != 0:
+                          seen[number] = "unknown"
+                          print(f"PR_LOOKUP_FAILED pr={number} exit={request.returncode}")
+                      else:
+                          pr = json.loads(request.stdout)
+                          seen[number] = pr.get("state", "unknown")
+                  owner = f"{seen[number]}-pr"
+              elif ref.startswith("refs/pull/"):
+                  owner = "other-pr-ref"
+              size = int(cache.get("size_in_bytes", 0))
+              groups[owner][0] += 1
+              groups[owner][1] += size
+              rows.append((size, int(cache.get("id", 0)), owner, ref,
+                           cache.get("key", ""), cache.get("version", "")))
+          print(f"CACHE_COUNT={total}")
+          print(f"CACHE_TOTAL_BYTES={sum(row[0] for row in rows)}")
+          for owner in sorted(groups):
+              count, size = groups[owner]
+              print(f"CACHE_SCOPE category={owner} count={count} bytes={size}")
+          for size, ident, owner, ref, key, version in sorted(rows, reverse=True):
+              print(
+                  f"CACHE_ENTRY id={ident} scope={owner} ref={ref} "
+                  f"bytes={size} key={key} version={version}"
+              )
+          closed = sorted(ident for size, ident, owner, *_ in rows if owner == "closed-pr")
+          print("CLOSED_PR_CACHE_IDS_DRY_RUN=" + ",".join(map(str, closed)))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              print(f"Cache inventory entries: {total}", file=summary)
+              for owner in sorted(groups):
+                  count, size = groups[owner]
+                  print(f"Cache scope {owner}: count={count} bytes={size}", file=summary)
+              print(f"Closed PR cache IDs (DRY RUN only): {closed}", file=summary)
+          PY
       - name: Parse every workflow YAML
         run: ruby tools/ci/check_workflow_yaml_syntax.rb
       - name: Guard narrowed Reader workflow fanout
