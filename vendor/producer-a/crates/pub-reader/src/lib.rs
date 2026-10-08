@@ -258,7 +258,7 @@ pub use table_bridge::{
     materialize_bounded_table_cells,
 };
 #[cfg(test)]
-use typography_projection::project_effective_boolean_v1;
+use typography_projection::{bounded_quill_text_rgb, project_effective_boolean_v1, utf16_range_to_scalar_range};
 pub use typography_projection::{
     PubParagraphAlignment, PubParagraphAlignmentRun, PubParagraphFlowConstraint,
     PubParagraphFlowRun, PubParagraphLineSpacing, PubParagraphLineSpacingRun, PubScriptFontEntry,
@@ -517,20 +517,7 @@ pub fn build_mature_0x2c_from_streams(
     })
 }
 
-fn utf16_range_to_scalar_range(text: &str, start_utf16: u32, end_utf16: u32) -> Option<(u32, u32)> {
-    if start_utf16 > end_utf16 {
-        return None;
-    }
-
-    fn boundary(text: &str, target_utf16: u32) -> Option<u32> {
-        if target_utf16 == 0 {
-            return Some(0);
-        }
-
-        let mut utf16_cursor = 0_u32;
-        let mut scalar_cursor = 0_u32;
-        for scalar in text.chars() {
-            utf16_cursor = utf16_cursor.checked_add(scalar.len_utf16() as u32)?;
+    utf16_cursor = utf16_cursor.checked_add(scalar.len_utf16() as u32)?;
             scalar_cursor = scalar_cursor.checked_add(1)?;
             if utf16_cursor == target_utf16 {
                 return Some(scalar_cursor);
@@ -608,20 +595,6 @@ fn decode_utf16le_strict(bytes: &[u8]) -> Result<String> {
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
         .collect::<Vec<_>>();
     String::from_utf16(&units).map_err(|error| anyhow!("invalid UTF-16LE: {error}"))
-}
-
-fn bounded_quill_text_rgb(
-    direct_rgb: Option<[u8; 3]>,
-    scheme_slot: Option<u8>,
-    color_scheme: Option<&MatureColorScheme>,
-) -> Option<[u8; 3]> {
-    match (direct_rgb, scheme_slot) {
-        (Some(rgb), None) => Some(rgb),
-        (None, Some(slot)) => color_scheme?.slots.get(usize::from(slot))?.rgb,
-        // Both carriers at once are not a grounded Quill state; neither is
-        // absence of both. Keep those cases fail-closed.
-        _ => None,
-    }
 }
 
 fn exact_image_slot(
