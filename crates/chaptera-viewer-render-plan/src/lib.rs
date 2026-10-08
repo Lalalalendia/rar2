@@ -5528,6 +5528,54 @@ mod tests {
     }
 
     #[test]
+    fn sli_classifier_replays_exact_slice_topology_before_cause_partition() {
+        let mut visual = exact_multiframe_slice_visual("world");
+        let page_id = visual.document.pages[0].id;
+        visual.scene.nodes[0].bounds = RectEmu::new(
+            LengthEmu::ZERO,
+            LengthEmu::ZERO,
+            LengthEmu::new(5_000_000),
+            LengthEmu::new(1),
+        );
+        visual.scene.nodes[0].parent_origin = page_id.into_canonical();
+
+        let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let fingerprint = font_fingerprint_sha256(bytes);
+        let fallback = ExplicitRenderTextFontResourceV1 {
+            resource_id: "test:noto-serif",
+            expected_sha256: &fingerprint,
+            face_index: 0,
+            default_font_size_emu: 12 * 12_700,
+            default_line_height_emu: 14 * 12_700,
+            bytes,
+        };
+
+        let plan =
+            build_page_render_plan_with_text_layout_v1(&visual, 0, &fallback).expect("render plan");
+        let node = &plan.nodes[0];
+        let fragment = node.text.as_ref().expect("render text");
+        assert_eq!(
+            fragment.layout.as_ref().map(|layout| &layout.disposition),
+            Some(&RenderTextLayoutDispositionV1::BackendFallback {
+                reason: RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete,
+            }),
+            "bounded exact slice must reach the SLI classifier rather than StoryExtentMismatch"
+        );
+
+        let cause = classify_shared_layout_incomplete_cause_v1(
+            &visual,
+            &plan,
+            node,
+            fragment,
+            &fallback,
+            false,
+        );
+        assert_eq!(cause.path, "exact_slice_uniform_path");
+        assert_eq!(cause.consumption, "zero_lines");
+        assert_eq!(cause.cause, "first_line_height_rejection");
+    }
+
+    #[test]
     fn modified_nonzero_multiframe_story_slice_stays_story_extent_fail_closed() {
         let visual = exact_multiframe_slice_visual("wurld");
         let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
