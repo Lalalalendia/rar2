@@ -4,9 +4,9 @@ use pub_editor::{
     AuthoredEntityProvenanceV1, AuthoredShapePaintV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
     AuthoredStackReorderModeV1, EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_10,
     EDITOR_PROJECT_VERSION_V0_12, EDITOR_PROJECT_VERSION_V0_13, EDITOR_PROJECT_VERSION_V0_17,
-    EDITOR_PROJECT_VERSION_V0_22, EDITOR_PROJECT_VERSION_V0_23, EditOperation, EditorEditableTarget,
-    EditorError, EditorProjectError, EditorSession, LengthEmu, LineGeometryV1, PointEmuV1, RectEmu,
-    Srgb8V1,
+    EDITOR_PROJECT_VERSION_V0_22, EDITOR_PROJECT_VERSION_V0_23, EditOperation,
+    EditorEditableTarget, EditorError, EditorProjectError, EditorSession, LengthEmu,
+    LineGeometryV1, PointEmuV1, RectEmu, Srgb8V1,
 };
 use pub_model::{
     Document, DocumentId, NodeId, Page, PageId, ResolvedGraph, Sha256Digest, Size2D,
@@ -448,8 +448,8 @@ fn page_reorder_reaches_physical_idml_and_odg_page_order() {
         .expect("IDML designmap")
         .read_to_string(&mut designmap)
         .expect("read designmap");
-    let idml_tokens = [customer_c, service, customer_a, customer_b]
-        .map(|id| stable_page_token("usp", id));
+    let idml_tokens =
+        [customer_c, service, customer_a, customer_b].map(|id| stable_page_token("usp", id));
     let idml_positions = idml_tokens
         .iter()
         .map(|token| designmap.find(token).expect("page token in designmap"))
@@ -466,8 +466,8 @@ fn page_reorder_reaches_physical_idml_and_odg_page_order() {
         .expect("ODG content")
         .read_to_string(&mut content)
         .expect("read ODG content");
-    let odg_tokens = [customer_c, service, customer_a, customer_b]
-        .map(|id| stable_page_token("Page_", id));
+    let odg_tokens =
+        [customer_c, service, customer_a, customer_b].map(|id| stable_page_token("Page_", id));
     let odg_positions = odg_tokens
         .iter()
         .map(|token| content.find(token).expect("page token in ODG content"))
