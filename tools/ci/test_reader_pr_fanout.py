@@ -476,7 +476,7 @@ fn main() -> eframe::Result<()> {
         ["apps/web/editor-shell-http-harness.html"],
         tier_a=False,
         web=True,
-        local_portable=True,
+        local_portable=False,
         android_core=False,
         android=False,
         reader_windows_smoke=False,
