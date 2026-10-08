@@ -459,7 +459,10 @@ try {
           svg.style.zIndex = "2147483647";
         });
       }
+      // Keep the first capture as the Publisher-oracle candidate. The second
+      // capture observes same-Scene paint stability without replacing it.
       const png = await pageSvg.screenshot({ path: join(output, filename) });
+      const repeatPng = await pageSvg.screenshot();
       if (referenceRasterDpi > 0) {
         await pageSvg.evaluate((svg) => {
           svg.style.removeProperty("position");
@@ -468,7 +471,8 @@ try {
           svg.style.removeProperty("z-index");
         });
       }
-      screenshots.push({ page: i + 1, filename, sha256: sha256(png) });
+      screenshots.push({ page: i + 1, filename, sha256: sha256(png),
+        repeat_sha256: sha256(repeatPng) });
     }
     const nonempty = painted.filter((line) => line.text.trim());
     const fidelityReasons = [...(scene.fidelity?.reasons ?? [])].sort();
