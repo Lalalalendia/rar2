@@ -116,9 +116,7 @@ pub(super) fn project_grouped_object_shape(
             bail!("OfficeArt parent-group link does not match Contents ancestry");
         }
         let ancestor_rotation = shape_has_nonzero_rotation(group_shape);
-        if ancestor_rotation
-            && std::env::var_os("READER_CORPUS_DIAGNOSTIC").is_some()
-        {
+        if ancestor_rotation && std::env::var_os("READER_CORPUS_DIAGNOSTIC").is_some() {
             let ancestor_rotation_ops = group_shape
                 .fopts
                 .iter()
