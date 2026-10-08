@@ -125,6 +125,7 @@ export async function adaptReaderSceneToEditorScene(readerScene) {
       preview_text_style: node.preview_text_style ?? null,
       text_bounds: node.text_bounds ?? null,
       text_layout: node.text_layout ?? null,
+      visual_authority: "reader_scene",
     });
   }
 
