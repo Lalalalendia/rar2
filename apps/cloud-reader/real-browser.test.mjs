@@ -217,6 +217,7 @@ try {
       continue;
     }
     const scene = receipt.scene;
+    const sceneSha256 = sha256(Buffer.from(JSON.stringify(scene), "utf8"));
     assert.equal(scene.protocol_version, "chaptera.reader-scene.v1");
     if (fixture.pages != null) assert.equal(scene.pages.length, fixture.pages);
     const fixturePages = scene.pages.length;
@@ -510,7 +511,7 @@ try {
       shared_line_height_px: nonempty.length > 0
         ? { min: Math.min(...nonempty.map((line) => line.height)), max: Math.max(...nonempty.map((line) => line.height)) }
         : null,
-      worker_receipt_sha256: sha256(receiptBytes), filesystem_confinement: true, network_policy: isolation.network_policy, screenshots });
+      worker_receipt_sha256: sha256(receiptBytes), scene_sha256: sceneSha256, filesystem_confinement: true, network_policy: isolation.network_policy, screenshots });
     console.log(JSON.stringify({ fixture: fixture.name, classification: receipt.classification, pages: fixturePages, readable_shared_lines: nonempty.length }));
   }
   assert.deepEqual(errors, []);
