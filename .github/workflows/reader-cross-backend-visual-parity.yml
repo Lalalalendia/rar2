@@ -1,5 +1,5 @@
 name: Reader cross-backend visual parity
-# rebaseline: cloud preview typography size/color
+# rebaseline: cloud preview typography size/color + Story slice #1982
 
 on:
   workflow_dispatch:
