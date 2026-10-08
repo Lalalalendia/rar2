@@ -141,7 +141,9 @@ export function buildRenderPlan(snapshot, rawView = {}) {
         story: story ? Object.freeze({
           text: story.text,
           text_fidelity: story.text_fidelity,
-          authority: "reader_scene_preview",
+          authority: node.visual_authority === "reader_scene"
+            ? "reader_scene_preview"
+            : "browser_preview_only",
           style: previewTextCss(node.preview_text_style, view)
         }) : null,
         resource: resource ? Object.freeze({
