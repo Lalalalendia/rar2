@@ -111,7 +111,8 @@
           153
         ],
         "preserve_grays": false
-      }
+      },
+      "table": null
     },
     {
       "node_id": "scene-instance:projected",
@@ -144,7 +145,80 @@
       "text_layout": null,
       "image_source_window": null,
       "image_content_rotation_degrees": null,
-      "image_recolor": null
+      "image_recolor": null,
+      "table": null
+    },
+    {
+      "node_id": "25555555-5555-4555-8555-555555555555",
+      "page_id": "20000000-0000-4000-8000-000000000001",
+      "parent_node_id": null,
+      "kind": "table",
+      "bounds": {
+        "x": 95250,
+        "y": 190500,
+        "width": 952500,
+        "height": 476250
+      },
+      "z_order": 2,
+      "paint_order": 2,
+      "paint_id": null,
+      "resource_id": null,
+      "transform": {
+        "a": "1",
+        "b": "0",
+        "c": "0",
+        "d": "1",
+        "tx": 0,
+        "ty": 0
+      },
+      "editable": true,
+      "origin_node_id": null,
+      "visual_authority": "reader_scene",
+      "preview_text_style": null,
+      "text_bounds": null,
+      "text_layout": null,
+      "image_source_window": null,
+      "image_content_rotation_degrees": null,
+      "image_recolor": null,
+      "table": {
+        "story_id": "story:table",
+        "rows": 1,
+        "columns": 1,
+        "cells": [
+          {
+            "cell_id": "cell:0:0",
+            "row": 0,
+            "column": 0,
+            "text": "Cell",
+            "bounds": {
+              "x": 95250,
+              "y": 190500,
+              "width": 952500,
+              "height": 476250
+            },
+            "fill_rgb": [
+              12,
+              34,
+              56
+            ],
+            "fill_visible": true
+          }
+        ],
+        "borders": [
+          {
+            "x1_emu": 95250,
+            "y1_emu": 190500,
+            "x2_emu": 1047750,
+            "y2_emu": 190500,
+            "rgb": [
+              1,
+              2,
+              3
+            ],
+            "width_emu": 12700
+          }
+        ]
+      }
     }
   ],
   "stories": [
@@ -242,6 +316,11 @@
       "key": "render.text",
       "state": "supported",
       "note": "Editor visual text authority is inherited from the current Reader Scene."
+    },
+    {
+      "key": "render.table",
+      "state": "supported",
+      "note": null
     }
   ],
   "fidelity": {

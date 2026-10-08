@@ -14,7 +14,11 @@ import {
   imageContentRotationGeometry,
   imagePaintGeometry,
   imageRecolorPaintPlan,
-  resolvedEditorImagePlan
+  resolvedEditorImagePlan,
+  resolvedEditorTablePlan,
+  tableBorderPaintPlan,
+  tableCellFillPaintPlan,
+  tableCellPaintGeometry
 } from "./render-v1.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -359,4 +363,86 @@ test("Reader picture invalid or non-overlapping source windows fail closed", () 
     ),
     null
   );
+});
+
+test("Reader table uses only server-resolved cell geometry for fills", () => {
+  const cell = {
+    cell_id: "cell:0:0",
+    row: 0,
+    column: 0,
+    row_span: 1,
+    column_span: 2,
+    text: "Header",
+    bounds: { x: 95250, y: 190500, width: 952500, height: 476250 },
+    fill_rgb: [12, 34, 56],
+    fill_visible: true,
+  };
+  assert.deepEqual(tableCellPaintGeometry(cell), cell.bounds);
+  assert.deepEqual(tableCellFillPaintPlan(cell), {
+    geometry: cell.bounds,
+    fill: "rgb(12 34 56)",
+  });
+  assert.equal(tableCellPaintGeometry({ ...cell, bounds: null }), null);
+  assert.equal(tableCellFillPaintPlan({ ...cell, fill_visible: false }), null);
+});
+
+test("Reader table borders require exact non-degenerate server segments", () => {
+  const border = {
+    x1_emu: 95250,
+    y1_emu: 190500,
+    x2_emu: 1047750,
+    y2_emu: 190500,
+    rgb: [1, 2, 3],
+    width_emu: 12700,
+  };
+  assert.deepEqual(tableBorderPaintPlan(border), {
+    x1: 95250,
+    y1: 190500,
+    x2: 1047750,
+    y2: 190500,
+    stroke: "rgb(1 2 3)",
+    width: 12700,
+  });
+  assert.equal(tableBorderPaintPlan({ ...border, width_emu: 0 }), null);
+  assert.equal(tableBorderPaintPlan({ ...border, x2_emu: border.x1_emu, y2_emu: border.y1_emu }), null);
+});
+
+test("Reader table plan maps server cell/border geometry to page CSS and keeps text preview-only", () => {
+  const node = {
+    visual_authority: "reader_scene",
+    table: {
+      story_id: "story:table",
+      rows: 2,
+      columns: 2,
+      cells: [{
+        cell_id: "cell:0:0",
+        row: 0,
+        column: 0,
+        row_span: 1,
+        column_span: 2,
+        text: "Header",
+        bounds: { x: 95250, y: 190500, width: 952500, height: 476250 },
+        fill_rgb: [12, 34, 56],
+        fill_visible: true,
+      }],
+      borders: [{
+        x1_emu: 95250,
+        y1_emu: 190500,
+        x2_emu: 1047750,
+        y2_emu: 190500,
+        rgb: [1, 2, 3],
+        width_emu: 12700,
+      }],
+    },
+  };
+  const table = resolvedEditorTablePlan(node, { x: 24, y: 30 }, VIEW);
+  assert.equal(table.authority, "reader-table-resolved");
+  assert.equal(table.cells[0].x, 34);
+  assert.equal(table.cells[0].y, 50);
+  assert.equal(table.cells[0].width, 100);
+  assert.equal(table.cells[0].fill, "rgb(12 34 56)");
+  assert.equal(table.cells[0].text_authority, "browser-preview-only");
+  assert.equal(table.borders[0].x1, 34);
+  assert.equal(table.borders[0].width_css_px, 12700 / 9525);
+  assert.equal(resolvedEditorTablePlan({ ...node, visual_authority: null }, { x: 0, y: 0 }, VIEW), null);
 });

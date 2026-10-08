@@ -122,6 +122,7 @@ export async function adaptReaderSceneToEditorScene(readerScene) {
       image_source_window: node.image_source_window ?? null,
       image_content_rotation_degrees: node.image_content_rotation_degrees ?? null,
       image_recolor: node.image_recolor ?? null,
+      table: node.table ?? null,
       transform: node.transform ?? { a: "1", b: "0", c: "0", d: "1", tx: 0, ty: 0 },
       editable: node.origin_node_id == null,
       origin_node_id: node.origin_node_id ?? null,
