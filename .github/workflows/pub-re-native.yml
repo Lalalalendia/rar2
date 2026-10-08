@@ -504,6 +504,48 @@ jobs:
             throw "bounded 0.75 paragraph research failed"
           }
 
+      - name: Stage partial source-safe 0.75 receipt after failure
+        if: ${{ failure() && needs.gate.outputs.command_mode == 'research_0p75' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+
+          $analysis = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis"
+          $candidates = @(
+            (Join-Path $analysis "paragraph-line-spacing-0p75-native-01.json"),
+            (Join-Path $analysis "paragraph-line-spacing-0p75-structural.json")
+          )
+
+          $copied = 0
+          foreach ($path in $candidates) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              continue
+            }
+
+            $text = Get-Content -LiteralPath $path -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "partial 0.75 receipt contains an absolute filesystem path"
+            }
+            [void]($text | ConvertFrom-Json)
+            Copy-Item -LiteralPath $path -Destination $evidence -Force
+            $copied += 1
+          }
+
+          Write-Host ("PUB_RE_0P75_PARTIAL_EVIDENCE copied={0}" -f $copied)
+
+      - name: Upload partial source-safe 0.75 receipt after failure
+        if: ${{ failure() && needs.gate.outputs.command_mode == 'research_0p75' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-paragraph-line-spacing-0p75-partial-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Stage source-safe 0.75 research receipts
         if: ${{ needs.gate.outputs.command_mode == 'research_0p75' }}
         shell: powershell
