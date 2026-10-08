@@ -171,6 +171,15 @@ jobs:
           READER_WORKER_ADDRESS_SPACE_MB: "768"
         run: node apps/cloud-reader/real-browser.test.mjs
 
+      - name: Attribute exact 06 off-scene omission distance
+        run: |
+          set -euo pipefail
+          python tools/cloud_reader_visual_spatial_attribution_v1.py \
+            "$RUNNER_TEMP/publisher-visual-supplemental/browser/06-modern2c-image-heavy-page-1.png" \
+            tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json \
+            "$RUNNER_TEMP/publisher-visual-supplemental/browser/06-modern2c-image-heavy-page-1-spatial-geometry.json" \
+            06-modern2c-image-heavy 1
+
       - name: Build current-Reader supplemental execution receipt
         run: |
           set -euo pipefail
