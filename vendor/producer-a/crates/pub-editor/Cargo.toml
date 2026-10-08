@@ -10,6 +10,7 @@ pub-editor-authoring-core = { path = "../pub-editor-authoring-core" }
 pub-editor-geometry-core = { path = "../pub-editor-geometry-core" }
 pub-editor-image-core = { path = "../pub-editor-image-core" }
 pub-editor-table-core = { path = "../pub-editor-table-core" }
+pub-editor-text-core = { path = "../pub-editor-text-core" }
 chaptera-text-format-overlay = { path = "../../../../crates/chaptera-text-format-overlay" }
 pub-export = { path = "../pub-export" }
 pub-idml = { path = "../pub-idml" }
