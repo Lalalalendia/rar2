@@ -132,8 +132,44 @@ jobs:
           python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
           rm -rf "$RUNNER_TEMP/virginia-rotation-pairs"
           mkdir -p "$RUNNER_TEMP/virginia-rotation-pairs"
-          python tools/acquire_virginia_pub_pdf_pairs.py "$RUNNER_TEMP/virginia-rotation-pairs"
-          test -f "$RUNNER_TEMP/virginia-rotation-pairs/virginia-remplacante-modifiable.pub"
+          python - "$RUNNER_TEMP/virginia-rotation-pairs" <<'PY'
+          import hashlib
+          import sys
+          from pathlib import Path
+
+          import requests
+
+          out = Path(sys.argv[1])
+          target = out / "virginia-remplacante-modifiable.pub"
+          expected_size = 8_376_832
+          expected_sha = "88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506"
+          drive_id = "0B6lkYRCQasWaVVhWVzVUUU5fZVE"
+          urls = [
+              f"https://drive.usercontent.google.com/download?id={drive_id}&export=download&confirm=t",
+              f"https://drive.google.com/uc?export=download&id={drive_id}",
+          ]
+          session = requests.Session()
+          session.headers.update({"User-Agent": "Mozilla/5.0 (compatible; Chaptera-Paired-Oracle/1.0)"})
+          last = None
+          for url in urls:
+              try:
+                  response = session.get(url, timeout=(15, 120), allow_redirects=True)
+                  last = response.status_code
+                  if response.status_code != 200:
+                      continue
+                  body = response.content
+                  if len(body) != expected_size:
+                      continue
+                  if hashlib.sha256(body).hexdigest() != expected_sha:
+                      raise SystemExit("Virginia PUB SHA drift")
+                  target.write_bytes(body)
+                  break
+              except requests.RequestException:
+                  continue
+          else:
+              raise SystemExit(f"pinned Virginia PUB unavailable; last_status={last}")
+          print("pinned Virginia PUB verified", expected_sha)
+          PY
           cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml \
             -p pub-reader --bin direct_image_rotation_carrier_probe -- \
             "$RUNNER_TEMP/publisher-visual-supplemental/fixtures/05-modern2c-officeart-wmf.pub" exact05
