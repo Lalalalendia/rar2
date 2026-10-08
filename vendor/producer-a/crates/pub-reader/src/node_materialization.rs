@@ -34,6 +34,15 @@ pub(super) fn materialize_mature_nodes(
     } = context;
     let contents_stream = contents_stream.to_owned();
 
+    if std::env::var_os("READER_CORPUS_DIAGNOSTIC").is_some() {
+        for (index, page_id) in graph.document.pages.iter().enumerate() {
+            eprintln!(
+                "EFFECTIVE_PAGE_ORDER ordinal={} page_id={page_id:?}",
+                index + 1
+            );
+        }
+    }
+
     let escher_inventory = inspect_sp_containers(StreamPath(ESCHER_STREAM_PATH.into()), escher)
         .context("parse OfficeArt SpContainers")?;
     let escher_by_contents_seq = index_escher_by_contents_seq(&escher_inventory);
