@@ -440,8 +440,8 @@ mod tests {
     use pub_editor::{FormatPropertyV1, FormatValueV1, Sha256Digest, open_mature_0x2c_editor};
     use pub_layout::font_fingerprint_sha256;
     use pub_model::{
-        Affine2D, CanonicalId, EMU_PER_POINT, LengthEmu, NodeId, Page, RectEmu, Size2D, Story,
-        StoryFrame,
+        Affine2D, CanonicalId, Document, DocumentId, EMU_PER_POINT, LengthEmu, NodeId, Page,
+        RectEmu, ResolvedGraph, Size2D, SourceDescriptor, Story, StoryFrame,
     };
     use sha2::{Digest, Sha256};
     use std::{env, fs};
