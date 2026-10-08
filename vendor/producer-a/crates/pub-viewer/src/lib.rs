@@ -607,6 +607,10 @@ pub struct ViewerTable {
     pub story_id: StoryId,
     pub rows: u32,
     pub columns: u32,
+    /// Number of cells whose physical bounds were supplied by the bounded
+    /// uniform-layout fallback rather than exact cell geometry.
+    #[serde(default)]
+    pub fallback_geometry_cell_count: usize,
     pub cells: Vec<ViewerTableCell>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uniform_cell_text_inset_emu: Option<i64>,
@@ -3608,6 +3612,8 @@ fn viewer_tables_from_resolved(
             });
         }
 
+        let fallback_geometry_cell_count =
+            materialized.iter().filter(|cell| cell.bounds.is_none()).count();
         let cells: Vec<ViewerTableCell> = materialized
             .into_iter()
             .map(|cell| ViewerTableCell {
@@ -3638,6 +3644,7 @@ fn viewer_tables_from_resolved(
             story_id,
             rows: source.rows,
             columns: source.columns,
+            fallback_geometry_cell_count,
             cells,
             uniform_cell_text_inset_emu: source
                 .uniform_cell_text_inset
