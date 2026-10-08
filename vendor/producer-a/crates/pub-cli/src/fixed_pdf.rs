@@ -136,12 +136,20 @@ fn build_pdf_artifact(
     fallback_label: String,
 ) -> Result<(Vec<u8>, Value, String)> {
     let classification = pub_viewer::classify_pub_family(pub_bytes);
-    if classification.route != pub_viewer::PubReaderRoute::Mature2c {
-        bail!("bounded PDF conversion currently requires mature 0x2C PUB input");
-    }
+    let source_profile_id = match classification.route {
+        pub_viewer::PubReaderRoute::Mature2c => "pub-mature-0x2c-v0.1",
+        pub_viewer::PubReaderRoute::Legacy22LowText => "pub-legacy-0x22-low-text-v0.1",
+        _ => {
+            bail!(
+                "bounded PDF conversion currently requires mature 0x2C or legacy 0x22 low-text PUB input"
+            )
+        }
+    };
+    let route_uses_viewer_scene =
+        classification.route == pub_viewer::PubReaderRoute::Legacy22LowText;
     let bundle =
         pub_viewer::open_pub_bundle(pub_bytes, pub_viewer::viewer_geometry_environment_v0_1())
-            .context("open mature-0x2C PUB for bounded PDF conversion")?;
+            .context("open supported PUB for bounded PDF conversion")?;
     let effective_page_ids = bundle
         .geometry
         .document
@@ -153,9 +161,10 @@ fn build_pdf_artifact(
         &bundle.resolved_graph,
         &effective_page_ids,
     )
-    .context("project effective mature pages for bounded PDF conversion")?;
+    .context("project effective PUB pages for bounded PDF conversion")?;
     let projection = project_bounded(authoring);
     let visual = bundle.geometry;
+    let viewer_scene = visual.scene.clone();
 
     let embedding = read_opentype_embedding_flags(fallback_font_bytes, 0)
         .context("read fallback-font OpenType embedding flags")?;
@@ -165,7 +174,7 @@ fn build_pdf_artifact(
         face_index: 0,
     };
     let mut conversion_profile = ConversionProfile::from_registry(
-        "pub-mature-0x2c-v0.1",
+        source_profile_id,
         "pdf-basic-fixed-v0.1",
         "viewer-geometry-v0.1",
         visual.document.source.source_hash.to_string(),
@@ -232,7 +241,16 @@ fn build_pdf_artifact(
         },
     )
     .context("resolve bounded shaped text flow for fixed PDF")?;
-    let pdf_scene = shaped_flow.geometry_scene();
+    // Legacy no-Quill Viewer owns additional source-backed geometry laws
+    // (structural point-group suppression and bounded grouped-image placement).
+    // Reuse that already-resolved scene rather than duplicating its private
+    // projector in the CLI. Mature 0x2C retains the established shaped-flow
+    // geometry path byte-for-byte.
+    let pdf_scene = if route_uses_viewer_scene {
+        viewer_scene
+    } else {
+        shaped_flow.geometry_scene()
+    };
     let scene_node_ids = pdf_scene
         .nodes
         .iter()
