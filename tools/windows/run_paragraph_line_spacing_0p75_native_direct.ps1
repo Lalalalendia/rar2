@@ -63,6 +63,13 @@ function Resolve-CanonicalFixture {
     if (-not [string]::IsNullOrWhiteSpace([string]$env:USERPROFILE)) {
         $rootCandidates += (Join-Path ([string]$env:USERPROFILE) "rar2\realtest")
     }
+
+    # Historical paragraph-metrics receipts prove the exact pinned fixture existed
+    # under this bounded Publisher lab root on the qualified Windows host. Keep
+    # this as an exact root candidate only: no drive-wide discovery is allowed,
+    # and every candidate still has to match ExpectedFixtureSha256.
+    $rootCandidates += "D:\Downloads\Downloads\pubtool-0.2.0\realtest"
+
     $rootCandidates += $RepoRoot
     $rootCandidates += (Split-Path -Parent $RepoRoot)
     $seen = @{}
