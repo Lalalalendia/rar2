@@ -1797,7 +1797,7 @@ fn viewer_mature_officeart_wmf_preview_images(
             }
         }
 
-        images.push(ViewerEmbeddedImage::preview_png(
+        images.push(ViewerEmbeddedImage::wmf_preview_png(
             resource_id,
             node_ids,
             placements,
