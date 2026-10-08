@@ -109,6 +109,18 @@ pub(super) fn has_explicit_officeart_paint_observation(
         })
 }
 
+pub(super) fn has_explicit_visible_solid_fill(
+    shape: &pub_escher::SpContainerObservation,
+    color_scheme: Option<&MatureColorScheme>,
+) -> bool {
+    let fill_type = unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_TYPE);
+    if fill_type.is_some_and(|value| value != 0) {
+        return false;
+    }
+    let paint = explicit_officeart_paint(shape, color_scheme);
+    paint.fill.visible == Some(true) && paint.fill.color_rgb.is_some()
+}
+
 pub(super) fn explicit_officeart_paint(
     shape: &pub_escher::SpContainerObservation,
     color_scheme: Option<&MatureColorScheme>,
