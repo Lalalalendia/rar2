@@ -2851,6 +2851,22 @@ mod tests {
                     "exact Carlton product-font residual must be only the two zero-line first-line rejects"
                 );
             }
+            "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf" => {
+                assert_eq!(
+                    shared_frames, 57,
+                    "SampleNewsletter exact-slice partial overset admission must leave only one mixed-size fallback"
+                );
+                assert_eq!(
+                    backend_fallbacks,
+                    BTreeMap::from([("shared_layout_incomplete", 1_usize)]),
+                    "SampleNewsletter must retain only the mixed-size fail-closed control"
+                );
+                assert_eq!(
+                    fallback_sli_probe_cause_counts,
+                    BTreeMap::from([("mixed_size_fail_closed", 1_usize)]),
+                    "SampleNewsletter fallback cause must collapse to the mixed-size control"
+                );
+            }
             "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e" => {
                 assert_eq!(
                     shared_frames, 24,
