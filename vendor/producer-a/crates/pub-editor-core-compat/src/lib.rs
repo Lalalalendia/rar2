@@ -301,4 +301,3 @@ pub fn table_track_target_variant_shape(target: TableTrackTargetV1) -> &'static 
         TableTrackTargetV1::Column(_) => "column",
     }
 }
-
