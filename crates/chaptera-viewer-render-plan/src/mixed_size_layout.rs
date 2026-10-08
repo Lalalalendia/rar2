@@ -307,6 +307,29 @@ struct MixedSizeLayoutEvaluationV1 {
     lines: Vec<RenderResolvedTextLineV1>,
 }
 
+fn mixed_candidate_physical_extent_emu_v1(
+    candidate: &MixedLineCandidateV1,
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+) -> Result<i64, RenderTextLayoutFallbackReasonV1> {
+    let extent = candidate
+        .spans
+        .iter()
+        .map(|span| {
+            compatible_natural_line_height_emu_v1(
+                font.bytes,
+                font.face_index,
+                LengthEmu::new(span.font_size_emu),
+            )
+            .map(LengthEmu::get)
+        })
+        .collect::<Option<Vec<_>>>()
+        .and_then(|extents| extents.into_iter().max())
+        .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+    (extent > 0)
+        .then_some(extent)
+        .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)
+}
+
 fn evaluate_mixed_size_text_layout_v1(
     fragment: &RenderTextFragmentV1,
     font: &ExplicitRenderTextFontResourceV1<'_>,
@@ -389,23 +412,35 @@ fn evaluate_mixed_size_text_layout_v1(
                 )?
             };
             let fits_width = evaluated.measured_width_emu <= bounds.width.get();
-            let fits_height = used_height_emu
-                .checked_add(evaluated.line_height_emu)
-                .is_some_and(|height| height <= bounds.height.get());
+            let candidate_used_height_emu = if line_index == 0 {
+                mixed_candidate_physical_extent_emu_v1(&evaluated, font)?
+            } else {
+                used_height_emu
+                    .checked_add(evaluated.line_height_emu)
+                    .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?
+            };
+            let fits_height = candidate_used_height_emu <= bounds.height.get();
             if fits_width && fits_height {
-                chosen = Some((evaluated, candidate.safe_without_reshaping));
+                chosen = Some((
+                    evaluated,
+                    candidate.safe_without_reshaping,
+                    candidate_used_height_emu,
+                ));
             }
             if candidate.kind == BoundedBreakKind::Mandatory {
                 break;
             }
         }
 
-        let Some((chosen, chosen_boundary_safe_without_reshaping)) = chosen else {
+        let Some((
+            chosen,
+            chosen_boundary_safe_without_reshaping,
+            chosen_used_height_emu,
+        )) = chosen
+        else {
             break;
         };
-        used_height_emu = used_height_emu
-            .checked_add(chosen.line_height_emu)
-            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+        used_height_emu = chosen_used_height_emu;
         let x_offset_emu = resolved_line_x_offset_emu_v1(
             fragment,
             node_id,
@@ -531,6 +566,62 @@ mod tests {
             backend_font_resource_id: None,
             layout: None,
         }
+    }
+
+    #[test]
+    fn mixed_size_complete_layout_uses_first_physical_extent_then_baseline_advance() {
+        let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let fingerprint = font_fingerprint_sha256(bytes);
+        let default_font_size_emu = 12 * 12_700;
+        let default_line_height_emu = 30 * 12_700;
+        let font = ExplicitRenderTextFontResourceV1 {
+            resource_id: "test:noto-serif",
+            expected_sha256: &fingerprint,
+            face_index: 0,
+            default_font_size_emu,
+            default_line_height_emu,
+            bytes,
+        };
+        let fragment = mixed_fragment("aa\rbb");
+        let node_id = NodeId::from_canonical(pub_model::CanonicalId::from_bytes([4; 16]));
+        let first_physical_extent_emu = compatible_natural_line_height_emu_v1(
+            bytes,
+            0,
+            LengthEmu::new(default_font_size_emu),
+        )
+        .map(LengthEmu::get)
+        .expect("test font physical extent");
+        let second_baseline_advance_emu = scaled_line_height_emu(
+            18 * 12_700,
+            default_font_size_emu,
+            default_line_height_emu,
+        )
+        .expect("scaled second-line baseline");
+        assert!(first_physical_extent_emu < default_line_height_emu);
+
+        let bounds = RectEmu::new(
+            LengthEmu::ZERO,
+            LengthEmu::ZERO,
+            LengthEmu::new(10_000_000),
+            LengthEmu::new(
+                first_physical_extent_emu
+                    .checked_add(second_baseline_advance_emu)
+                    .expect("bounded test height"),
+            ),
+        );
+        let resolved = resolve_mixed_size_text_layout_v1(
+            &fragment,
+            &font,
+            node_id,
+            &bounds,
+            &fingerprint,
+            None,
+        );
+        assert!(matches!(
+            resolved.disposition,
+            RenderTextLayoutDispositionV1::SharedResolved { .. }
+        ));
+        assert_eq!(resolved.lines.len(), 2);
     }
 
     #[test]
