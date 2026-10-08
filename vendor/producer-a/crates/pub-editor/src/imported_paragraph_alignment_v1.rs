@@ -1,7 +1,6 @@
 use crate::{
-    EditorError, EditorSession, EffectiveParagraphAlignmentV1,
-    EffectiveParagraphAlignmentValueV1, ImportedParagraphProjectionErrorV1, ImportedParagraphV1,
-    ParagraphAlignmentAuthorityV1,
+    EditorError, EditorSession, EffectiveParagraphAlignmentV1, EffectiveParagraphAlignmentValueV1,
+    ImportedParagraphProjectionErrorV1, ImportedParagraphV1, ParagraphAlignmentAuthorityV1,
 };
 use pub_model::{ParagraphId, StoryId, TextRange};
 use pub_reader::{PubParagraphAlignment, PubParagraphAlignmentRun};
