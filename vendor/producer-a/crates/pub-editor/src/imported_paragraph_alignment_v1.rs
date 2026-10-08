@@ -251,6 +251,102 @@ mod tests {
         }
     }
 
+    fn paragraph_id(suffix: u8) -> ParagraphId {
+        serde_json::from_str(&format!(
+            "\"20000000-0000-4000-8000-0000000000{suffix:02x}\""
+        ))
+        .expect("canonical ParagraphId")
+    }
+
+    #[test]
+    fn effective_batch_preserves_base_override_and_empty_authority() {
+        let base_paragraph = ImportedParagraphV1 {
+            paragraph_id: paragraph_id(1),
+            story_id: story_id(),
+            range: TextRange::new(0, 4).unwrap(),
+        };
+        let override_paragraph = ImportedParagraphV1 {
+            paragraph_id: paragraph_id(2),
+            story_id: story_id(),
+            range: TextRange::new(4, 8).unwrap(),
+        };
+        let empty_paragraph = ImportedParagraphV1 {
+            paragraph_id: paragraph_id(3),
+            story_id: story_id(),
+            range: TextRange::new(8, 8).unwrap(),
+        };
+        let base_by_id = BTreeMap::from([
+            (
+                base_paragraph.paragraph_id,
+                ImportedParagraphAlignmentValueV1::Center,
+            ),
+            (
+                override_paragraph.paragraph_id,
+                ImportedParagraphAlignmentValueV1::InterWord,
+            ),
+        ]);
+        let overrides = BTreeMap::from([(
+            override_paragraph.paragraph_id,
+            AuthoredParagraphAlignmentValueV1::Right,
+        )]);
+
+        let rows = effective_paragraph_alignment_rows_v1(
+            [
+                empty_paragraph.clone(),
+                override_paragraph.clone(),
+                base_paragraph.clone(),
+            ],
+            &base_by_id,
+            &overrides,
+        );
+
+        assert_eq!(
+            rows.iter().map(|row| row.paragraph_id).collect::<Vec<_>>(),
+            vec![
+                base_paragraph.paragraph_id,
+                override_paragraph.paragraph_id,
+                empty_paragraph.paragraph_id,
+            ]
+        );
+        assert_eq!(
+            (
+                rows[0].imported_base,
+                rows[0].authored_override,
+                rows[0].effective,
+                rows[0].authority,
+            ),
+            (
+                Some(ImportedParagraphAlignmentValueV1::Center),
+                None,
+                Some(EffectiveParagraphAlignmentValueV1::Center),
+                Some(ParagraphAlignmentAuthorityV1::ImportedBase),
+            )
+        );
+        assert_eq!(
+            (
+                rows[1].imported_base,
+                rows[1].authored_override,
+                rows[1].effective,
+                rows[1].authority,
+            ),
+            (
+                Some(ImportedParagraphAlignmentValueV1::InterWord),
+                Some(AuthoredParagraphAlignmentValueV1::Right),
+                Some(EffectiveParagraphAlignmentValueV1::Right),
+                Some(ParagraphAlignmentAuthorityV1::ChapteraOverride),
+            )
+        );
+        assert_eq!(
+            (
+                rows[2].imported_base,
+                rows[2].authored_override,
+                rows[2].effective,
+                rows[2].authority,
+            ),
+            (None, None, None, None)
+        );
+    }
+
     #[test]
     #[ignore = "requires the pinned public Carlton March PUB path"]
     fn real_carlton_imported_paragraph_base_alignment_uses_current_paragraph_ids() {
