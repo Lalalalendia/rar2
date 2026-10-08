@@ -6,6 +6,7 @@ on:
       - "measure/04-narrow-font-metrics-sensitivity-01"
     paths:
       - ".github/workflows/measure-04-narrow-font-metrics-sensitivity.yml"
+      - "apps/cloud-reader/real-browser.test.mjs"
   workflow_dispatch:
 
 permissions:
