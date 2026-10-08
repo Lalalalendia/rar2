@@ -19,13 +19,15 @@ export async function GET(
       status: record.status,
       emailStatus: record.emailStatus,
       result: record.result
-        ? {
-            compatibility: record.result.compatibility,
-            summary: record.result.summary,
-            publisherFamily: record.result.publisherFamily,
-            pages: record.result.pages,
-            diagnosticsCode: record.result.diagnosticsCode,
-          }
+        ? 'canonical' in record.result
+          ? { canonical: record.result.canonical }
+          : {
+              compatibility: record.result.compatibility,
+              summary: record.result.summary,
+              publisherFamily: record.result.publisherFamily,
+              pages: record.result.pages,
+              diagnosticsCode: record.result.diagnosticsCode,
+            }
         : undefined,
     },
     {
