@@ -36,7 +36,7 @@ $PinnedFiles = @(
     [pscustomobject]@{ Path = $Prepare; Sha = "0848e8e147dff5dab68065c37d2d73f72f09eb45" }
     [pscustomobject]@{ Path = $Finalize; Sha = "2a97d6f2c8be1265010a744c015ce8d288eb7e75" }
     [pscustomobject]@{ Path = $Runtime; Sha = "fed4c890a34d39401d3b5848cc16d1087f862a27" }
-    [pscustomobject]@{ Path = $Analyzer; Sha = "f72a9232b72252b3b000c30ae9741e35feb84b12" }
+    [pscustomobject]@{ Path = $Analyzer; Sha = "969e13c81687a6a40ef19ac20191b418476f8bd7" }
     [pscustomobject]@{ Path = $StructuralBase; Sha = "1d12b34de10ad74ea49a4fa2cabbe01b44198331" }
     [pscustomobject]@{ Path = $ProbeManifest; Sha = "40d209d6e193d477635d72fb34e7bd9f640d7270" }
     [pscustomobject]@{ Path = $ProbeLock; Sha = "828e76d2f85c1238ced8081796a58c309d5fbade" }
