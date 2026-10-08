@@ -1,0 +1,14 @@
+# Branch GC 2026-10-08 — main.rs + queue/cache batch 04
+# NEVER MERGE. Exact-SHA predecessor cleanup only.
+# Successor authority retained; runtime rechecks open heads/bases and moved tips.
+
+ci/reader-obsolete-cancel-01 29f67a4e229330642fb9f8dd38f6b44c4fe3ec1c # PR 265 -> merged current-main replay 339
+ci/cancel-obsolete-fixed-layout-runs 5311347dbb9b6cb85c45797c0f5d6160ccc1b4e7 # PR 1180 -> later same-delta successor 1512 retained
+ci/force-cancel-obsolete-runs ef025f549bb69d9db53e11ecdfee4ff894680eda # PR 913 -> merged 1084
+ci/cloud-reader-reference-cache-01 d374cce12744a41602bd26643545f6e1276625f8 # PR 507 superseded -> live replay 524 retained
+ci/desktop-mainrs-history-shortcuts-01 acd4e06a862b55d252129e51a7176c5d2a926705 # PR 1249 superseded -> merged 1252
+ci/desktop-mainrs-text-session-shell 9bc20c01a62095bf82d9f674a4bf43a27e3be17b # PR 1225 superseded -> merged 1243
+ci/desktop-mainrs-rectangle-shell-v2 34cc35a476c7839b37eb514123652a0a6fc74a62 # PR 1257 -> 1278 -> merged 1284
+ci/desktop-mainrs-rectangle-shell-v3 c9e1ef8d6dcb9ba482d1c1aa30d20da1cb9e64d2 # PR 1278 -> merged 1284
+ci/desktop-mainrs-textbox-shell-01 c485513d31371e60f0cc8c3a4ecab01ba6bd507b # PR 1286 -> merged 1294
+ops/branch-gc-20261008-superseded-ci-batch-03 22038f2eb91bfefe5585aae6f8531da6daa1c948 # PR 2079 completed GC owner
