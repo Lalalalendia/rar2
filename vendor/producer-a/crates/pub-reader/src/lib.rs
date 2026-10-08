@@ -95,7 +95,7 @@ pub use family_classifier::{
 };
 use grouped_projection::{
     GroupedProjectionContext, coordinate_rect_i128, project_grouped_object_shape,
-    project_rect_trunc,
+    project_rect_trunc, shape_has_fsp_flag, shape_has_nonzero_rotation,
 };
 pub use guide_bridge::{
     PubGroundedGuideBuild, PubGuideObservation, PubGuideProjectionDiagnostic,
@@ -243,7 +243,7 @@ pub use story_frame_analysis::{
 use story_frame_projection::{
     add_missing_link_target_diagnostics, build_story_frame, unique_story_id_scalar,
 };
-use story_materialization::materialize_story_catalogs;
+use story_materialization::{decode_utf16le_strict, materialize_story_catalogs};
 pub use story_provenance::has_exact_mature_quill_story_identity_v1;
 pub use structural_base::{
     PUB_STRUCTURAL_BASE_SCHEMA_V1, PubStructuralBaseCandidate, PubStructuralBaseManifest,
@@ -351,18 +351,6 @@ pub fn build_mature_0x2c_source_graph<R: Read + Seek>(
         .with_context(|| format!("read {ESCHER_STREAM_PATH}"))?;
 
     build_mature_0x2c_from_streams(source_hash, &contents, &quill, &escher)
-}
-
-fn shape_has_nonzero_rotation(shape: &pub_escher::SpContainerObservation) -> bool {
-    shape.fopts.iter().any(|record| {
-        record.properties.iter().any(|property| {
-            property.property_id() == OFFICEART_PROPERTY_ROTATION && property.op != 0
-        })
-    })
-}
-
-fn shape_has_fsp_flag(shape: &pub_escher::SpContainerObservation, flag: u32) -> bool {
-    shape.fsp.as_ref().is_some_and(|fsp| fsp.flags & flag != 0)
 }
 
 pub fn build_mature_0x2c_from_streams(
@@ -517,99 +505,6 @@ pub fn build_mature_0x2c_from_streams(
         paragraph_flow_runs,
         script_font_maps,
     })
-}
-
-fn consensus_publication_page_extent(
-    stream: StreamPath,
-    contents: &[u8],
-    references: &BTreeMap<u32, Contents0x2cChunkReference>,
-) -> Result<(u32, u32, usize)> {
-    let margins = references
-        .values()
-        .filter(|reference| single_raw_type(reference) == Some(RAW_TYPE_MARGINS))
-        .collect::<Vec<_>>();
-
-    if margins.is_empty() {
-        bail!("missing Margins/OplMg raw type 0x{RAW_TYPE_MARGINS:02X}");
-    }
-
-    let mut dimensions = Vec::with_capacity(margins.len());
-    for reference in margins {
-        let chunk = chunk_for_reference(stream.clone(), contents, reference)?;
-        let extent = parse_confirmed_margins_page_extent(contents, &chunk).with_context(|| {
-            format!("parse Margins/OplMg page extent seq {}", reference.seq_num)
-        })?;
-        dimensions.push((extent.width_emu, extent.height_emu));
-    }
-
-    let (width_emu, height_emu) = require_consensus_page_extent(&dimensions)?;
-    Ok((width_emu, height_emu, dimensions.len()))
-}
-
-fn require_consensus_page_extent(extents: &[(u32, u32)]) -> Result<(u32, u32)> {
-    let first = extents
-        .first()
-        .copied()
-        .context("publication has no confirmed Margins/OplMg page extent")?;
-    if first.0 == 0 || first.1 == 0 {
-        bail!("publication page extent must be positive");
-    }
-
-    for &(width_emu, height_emu) in &extents[1..] {
-        if width_emu == 0 || height_emu == 0 {
-            bail!("publication page extent must be positive");
-        }
-        if (width_emu, height_emu) != first {
-            bail!(
-                "conflicting Margins/OplMg page extents: expected {}x{} EMU, found {}x{} EMU",
-                first.0,
-                first.1,
-                width_emu,
-                height_emu
-            );
-        }
-    }
-
-    Ok(first)
-}
-
-fn decode_utf16le_strict(bytes: &[u8]) -> Result<String> {
-    if bytes.len() % 2 != 0 {
-        bail!("UTF-16LE byte length is odd: {}", bytes.len());
-    }
-    let units = bytes
-        .chunks_exact(2)
-        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-        .collect::<Vec<_>>();
-    String::from_utf16(&units).map_err(|error| anyhow!("invalid UTF-16LE: {error}"))
-}
-
-fn exact_image_slot(
-    shape: &pub_escher::SpContainerObservation,
-    seq_num: u32,
-    diagnostics: &mut Vec<PubBridgeDiagnostic>,
-) -> Option<u32> {
-    let mut slots = shape
-        .fopts
-        .iter()
-        .flat_map(|record| record.properties.iter())
-        .filter(|property| {
-            property.property_id() == OFFICE_ART_PROPERTY_PIB && property.op_is_blip_id()
-        })
-        .map(|property| property.op)
-        .collect::<BTreeSet<_>>();
-
-    match slots.len() {
-        0 => None,
-        1 => slots.pop_first(),
-        _ => {
-            diagnostics.push(PubBridgeDiagnostic::AmbiguousImageSlot {
-                seq_num,
-                slots: slots.into_iter().collect(),
-            });
-            None
-        }
-    }
 }
 
 use anchor_geometry::{
@@ -1234,7 +1129,7 @@ mod tests {
     #[test]
     fn page_extent_consensus_accepts_one_extent() {
         assert_eq!(
-            require_consensus_page_extent(&[(7_560_000, 10_692_000)]).unwrap(),
+            publication_document::require_consensus_page_extent(&[(7_560_000, 10_692_000)]).unwrap(),
             (7_560_000, 10_692_000)
         );
     }
@@ -1242,7 +1137,7 @@ mod tests {
     #[test]
     fn page_extent_consensus_accepts_equivalent_duplicates() {
         assert_eq!(
-            require_consensus_page_extent(&[
+            publication_document::require_consensus_page_extent(&[
                 (7_772_400, 10_058_400),
                 (7_772_400, 10_058_400),
                 (7_772_400, 10_058_400),
@@ -1255,7 +1150,7 @@ mod tests {
     #[test]
     fn page_extent_consensus_rejects_conflicts() {
         let error =
-            require_consensus_page_extent(&[(7_772_400, 10_058_400), (7_560_000, 10_692_000)])
+            publication_document::require_consensus_page_extent(&[(7_772_400, 10_058_400), (7_560_000, 10_692_000)])
                 .unwrap_err();
 
         assert!(
@@ -1267,7 +1162,7 @@ mod tests {
 
     #[test]
     fn page_extent_consensus_rejects_zero_dimension() {
-        let error = require_consensus_page_extent(&[(7_772_400, 0)]).unwrap_err();
+        let error = publication_document::require_consensus_page_extent(&[(7_772_400, 0)]).unwrap_err();
         assert!(error.to_string().contains("must be positive"));
     }
 
