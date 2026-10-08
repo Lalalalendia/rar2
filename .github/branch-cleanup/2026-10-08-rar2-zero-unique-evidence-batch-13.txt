@@ -6,6 +6,8 @@ diag/mixed-size-cross-corpus-01 05210fa640649d2f8a7332cb02d632c354f07937 # ahead
 diag/reader-parity-fallback-census 56321240558d44135d39c1eb21379d8436c8cc20 # ahead_by=0 vs current main; no unique files
 diag/093-font-resource-frontier-01 f7488f1c985e84e4eeaa1f714beb9bba9c002d4e # ahead_by=0 vs current main; no unique files
 test/reader-cross-backend-cause-census e8000b12529eea219a2b0cf070295be52dd99f0a # ahead_by=0 vs current main; no unique files
+test/reader-parity-fallback-census d6a7c1a1d7b40fa2fcdeedd6639082fd9ce3f100 # exact ancestor of current main; ahead_by=0; no unique files
+test/reader-parity-text-fallback-census ffb1e1feaa936736a40fb74ba73272dc967e6ffb # exact ancestor of current main; ahead_by=0; no unique files
 measure/direct-image-rotation-applicability-02 aeab6c8c012b2907c984a7e2fd9ca516d82b714b # #2030 closed; explicit successor #2042 completed and records reopen condition
 test/reader-linked-story-slice-proof-v2 d7b1374cc856f4a0ad8773662fc1542d5c48bf66 # #1959 evidence consumed by merged #1982; parity rebaseline merged #1991
 ops/branch-gc-20261008-terminal-evidence-batch-11 ae84105946b30e6e888a567e7ae955959da5d92d # completed #2155 clean receipt: 20/20 deleted
