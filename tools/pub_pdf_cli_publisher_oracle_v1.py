@@ -174,10 +174,26 @@ def safe_loss_summary(receipt: dict) -> dict:
         for item in typography.get("skipped", [])
         if isinstance(item, dict)
     )
+    materialized_runs = typography.get("materialized_runs", [])
+    materialized_source_kinds = Counter(
+        str(item.get("source_kind", "unspecified"))
+        for item in materialized_runs
+        if isinstance(item, dict)
+    )
+    viewer_layout_fallback_counts = {
+        str(code): int(count)
+        for code, count in typography.get("viewer_layout_fallback_counts", {}).items()
+        if isinstance(code, str) and isinstance(count, int) and count >= 0
+    }
     return {
-        "materialized_text_run_count": len(typography.get("materialized_runs", [])),
+        "materialized_text_run_count": len(materialized_runs),
+        "materialized_text_source_kind_counts": dict(sorted(materialized_source_kinds.items())),
         "skipped_text_run_count": len(typography.get("skipped", [])),
         "visible_line_count": typography.get("shaped_flow", {}).get("visible_line_count"),
+        "layout_authority": typography.get("layout_authority"),
+        "viewer_replacement_node_count": typography.get("viewer_replacement_node_count"),
+        "viewer_fallback_node_count": typography.get("viewer_fallback_node_count"),
+        "viewer_layout_fallback_counts": dict(sorted(viewer_layout_fallback_counts.items())),
         "node_disposition_counts": dict(sorted(node_dispositions.items())),
         "node_code_counts": dict(sorted(node_codes.items())),
         "pdf_diagnostic_code_counts": dict(sorted(pdf_diagnostics.items())),
