@@ -124,6 +124,9 @@ Assert-Same "unpacked manifest SHA" (Get-Sha256 (Join-Path $unpacked "manifest.j
 # Test data stays outside the shipping tree and outside uploaded artifacts.
 $sourceSha = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
 $fontSha = "80307b8da7649aa4ee4d484b232140e3ce1ec0ca093073d3c53c8f5a5ced7a70"
+$expectedPdfSha = "c0afdb480937e9c1ba70742e35c4eb184969c4f3e326f1e11e172a33bd5fa012"
+$expectedLossJsonSha = "a748e8f5dfa0217c3d7420b6eb85196be7ace7bcd5a7d2c152da6fcb685c2a32"
+$expectedLossTextSha = "802b475b0a759b99c0af26498b2a67df46034c5577e0a974ba037b022afcd062"
 $fixture = Join-Path $work "SampleNewsletter.pub"
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub" -OutFile $fixture
 Assert-Same "fixture SHA256" (Get-Sha256 $fixture) $sourceSha
@@ -159,6 +162,9 @@ foreach ($suffix in @("", ".loss.json", ".loss.txt")) {
 $pdfBytes = [System.IO.File]::ReadAllBytes($pdfA)
 if ($pdfBytes.Length -lt 8) { throw "PDF too small" }
 Assert-Same "PDF header" ([System.Text.Encoding]::ASCII.GetString($pdfBytes, 0, 8)) "%PDF-1.7"
+Assert-Same "cross-OS PDF SHA256" (Get-Sha256 $pdfA) $expectedPdfSha
+Assert-Same "cross-OS loss JSON SHA256" (Get-Sha256 "$pdfA.loss.json") $expectedLossJsonSha
+Assert-Same "cross-OS loss text SHA256" (Get-Sha256 "$pdfA.loss.txt") $expectedLossTextSha
 $report = Get-Content -Raw -LiteralPath "$pdfA.loss.json" | ConvertFrom-Json -Depth 100
 $cliReport = Get-Content -Raw -LiteralPath $jsonA | ConvertFrom-Json -Depth 100
 Assert-Same "loss report schema" $report.schema_version "free-pub-pdf-v0.1"
