@@ -271,3 +271,7 @@ pub(super) fn ordinary_incomplete_layout_is_admitted_partial_story_overset(
         && last_consumed_scalar_end.is_some_and(|end| end < story_scalar_len)
         && incomplete_layout_is_explicit_story_overset(diagnostics, story_id)
 }
+
+#[cfg(test)]
+#[path = "story_slice_layout_tests.rs"]
+mod tests;
