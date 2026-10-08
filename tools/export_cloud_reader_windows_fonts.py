@@ -320,7 +320,7 @@ def build_packet(
 def default_windows_font_dir() -> Path:
     windir = os.environ.get("WINDIR")
     if not windir:
-        raise FontPacketError(n"WINDIR is not set; pass --font-dir explicitly")
+        raise FontPacketError("WINDIR is not set; pass --font-dir explicitly")
     return Path(windir) / "Fonts"
 
 
