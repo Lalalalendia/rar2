@@ -390,10 +390,7 @@ fn discover_reader_partial_escherdelay_carrier(
                 .is_some_and(|name| name.eq_ignore_ascii_case("EscherDelayStm"))
     });
     let delay_stream = delay_streams.next()?;
-    if escher_storage_count != 1
-        || delay_streams.next().is_some()
-        || delay_stream.declared_len > READER_SALVAGE_MAX_STREAM_BYTES
-    {
+    if escher_storage_count != 1 || delay_streams.next().is_some() {
         return None;
     }
 
@@ -1341,6 +1338,27 @@ mod tests {
         bytes
     }
 
+    fn overstate_delay_declared_len(mut bytes: Vec<u8>, declared_len: u64) -> Vec<u8> {
+        assert!(declared_len <= u64::from(u32::MAX));
+        let marker = "EscherDelayStm\0"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        let offset = bytes
+            .windows(marker.len())
+            .position(|window| window == marker.as_slice())
+            .expect("EscherDelayStm directory entry");
+        assert_eq!(
+            offset % 128,
+            0,
+            "EscherDelayStm marker must begin a directory entry"
+        );
+        bytes[offset + 120..offset + 124]
+            .copy_from_slice(&(declared_len as u32).to_le_bytes());
+        bytes[offset + 124..offset + 128].copy_from_slice(&0u32.to_le_bytes());
+        bytes
+    }
+
     fn synthetic_pub_cfb_with_duplicate_delay_names() -> Vec<u8> {
         let mut compound =
             cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("duplicate carrier fixture");
@@ -1389,6 +1407,45 @@ mod tests {
         assert!(!carrier.logical_path_proven);
         assert_eq!(carrier.logical_path, ESCHER_DELAY_STREAM);
         assert!(carrier.physical_context_gap_count > 0);
+    }
+
+    #[test]
+    fn truncated_cfb_raw_carrier_bounds_recovered_prefix_not_declared_len() {
+        let declared_len = READER_SALVAGE_MAX_STREAM_BYTES + 1;
+        let mut bytes =
+            overstate_delay_declared_len(synthetic_pub_cfb_with_delay_png(), declared_len);
+        bytes.extend_from_slice(&[0xaa; 37]);
+        let source_sha = source_sha256(&bytes);
+
+        assert!(
+            pub_cfb::discover_regular_stream_sid_reader(Cursor::new(&bytes), ESCHER_DELAY_STREAM,)
+                .is_err(),
+            "strict logical-path discovery must reject the truncated container first"
+        );
+
+        let carrier = discover_reader_partial_escherdelay_carrier(&bytes, &source_sha, true)
+            .expect("bounded raw carrier with overstated declaration");
+        assert_eq!(
+            carrier.discovery_mode,
+            ReaderPartialEscherDelayDiscoveryMode::UniqueRawCarrierNames
+        );
+        assert_eq!(carrier.declared_len, declared_len);
+
+        let probe = probe_reader_salvage_candidate(&bytes);
+        assert_eq!(
+            probe.eligibility,
+            ReaderSalvageEligibility::EligibleDamagedPublisher
+        );
+        assert_eq!(
+            probe.subsystems.escher_delay,
+            ReaderSalvageStreamState::ContainerUnavailable
+        );
+
+        let evidence =
+            build_reader_partial_escherdelay_evidence(&bytes, &probe).expect("bounded evidence");
+        assert_eq!(evidence.declared_len, declared_len);
+        assert!(evidence.available_prefix_len <= READER_SALVAGE_MAX_STREAM_BYTES);
+        assert_eq!(evidence.validated_images.len(), 1);
     }
 
     #[test]
