@@ -388,10 +388,8 @@ where
         .map(LengthEmu::get)?;
         let advance_emu =
             scale_proportional_line_height_emu_v1(natural_line_height_emu, point_equivalent_emu)?;
-        max_advance_emu = Some(
-            max_advance_emu
-                .map_or(advance_emu, |current: i64| current.max(advance_emu)),
-        );
+        max_advance_emu =
+            Some(max_advance_emu.map_or(advance_emu, |current: i64| current.max(advance_emu)));
         coverage_cursor = span.scalar_end;
     }
 
@@ -594,7 +592,8 @@ where
         };
 
         if let Some(terminal) = evaluation.terminal_mandatory_stop.take() {
-            let Some(completed_height_emu) = prefix_height_emu.checked_add(terminal.line_height_emu)
+            let Some(completed_height_emu) =
+                prefix_height_emu.checked_add(terminal.line_height_emu)
             else {
                 return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
             };
@@ -864,13 +863,10 @@ mod tests {
                 .map(LengthEmu::get)
                 .expect("first line physical extent")
                 .min(default_line_height_emu);
-        let terminal_natural_line_height_emu = compatible_natural_line_height_emu_v1(
-            bytes,
-            0,
-            LengthEmu::new(18 * 12_700),
-        )
-        .map(LengthEmu::get)
-        .expect("terminal source font metric");
+        let terminal_natural_line_height_emu =
+            compatible_natural_line_height_emu_v1(bytes, 0, LengthEmu::new(18 * 12_700))
+                .map(LengthEmu::get)
+                .expect("terminal source font metric");
         let terminal_authoritative_advance_emu = scale_proportional_line_height_emu_v1(
             terminal_natural_line_height_emu,
             PUBLISHER_THREE_QUARTER_POINT_EQUIVALENT_EMU_V1,
@@ -879,12 +875,9 @@ mod tests {
         let frame_height_emu = first_physical_extent_emu
             .checked_add(terminal_authoritative_advance_emu)
             .expect("bounded authoritative frame height");
-        let legacy_terminal_height_emu = scaled_line_height_emu(
-            18 * 12_700,
-            default_font_size_emu,
-            default_line_height_emu,
-        )
-        .expect("legacy terminal height");
+        let legacy_terminal_height_emu =
+            scaled_line_height_emu(18 * 12_700, default_font_size_emu, default_line_height_emu)
+                .expect("legacy terminal height");
         assert!(
             default_line_height_emu
                 .checked_add(legacy_terminal_height_emu)
