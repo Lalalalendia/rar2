@@ -3273,49 +3273,64 @@ impl EditorSession {
             .copied())
     }
 
+    /// Resolves current effective paragraph alignment from one imported
+    /// paragraph projection, one imported-base projection over that snapshot,
+    /// and one authored-override history fold.
+    pub fn effective_paragraph_alignments_v1(
+        &self,
+    ) -> Result<Vec<EffectiveParagraphAlignmentV1>, EditorError> {
+        self.validate_source_identity()?;
+        let paragraphs = self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?;
+        let base_by_id = self
+            .imported_paragraph_base_alignments_from_paragraphs_v1(&paragraphs)
+            .into_iter()
+            .map(|item| (item.paragraph_id, item.alignment))
+            .collect::<BTreeMap<_, _>>();
+        let overrides = self.current_paragraph_alignment_overrides_v1()?;
+
+        Ok(paragraphs
+            .into_iter()
+            .map(|paragraph| {
+                let paragraph_id = paragraph.paragraph_id;
+                let imported_base = base_by_id.get(&paragraph_id).copied();
+                let authored_override = overrides.get(&paragraph_id).copied();
+                let (effective, authority) = if let Some(value) = authored_override {
+                    (
+                        Some(EffectiveParagraphAlignmentValueV1::from(value)),
+                        Some(ParagraphAlignmentAuthorityV1::ChapteraOverride),
+                    )
+                } else if let Some(value) = imported_base {
+                    (
+                        Some(EffectiveParagraphAlignmentValueV1::from(value)),
+                        Some(ParagraphAlignmentAuthorityV1::ImportedBase),
+                    )
+                } else {
+                    (None, None)
+                };
+
+                EffectiveParagraphAlignmentV1 {
+                    paragraph_id,
+                    story_id: paragraph.story_id,
+                    range: paragraph.range,
+                    imported_base,
+                    authored_override,
+                    effective,
+                    authority,
+                }
+            })
+            .collect())
+    }
+
     pub fn effective_paragraph_alignment_v1(
         &self,
         paragraph_id: ParagraphId,
     ) -> Result<EffectiveParagraphAlignmentV1, EditorError> {
-        self.validate_source_identity()?;
-        let paragraph = self
-            .imported_paragraphs_v1()
-            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+        self.effective_paragraph_alignments_v1()?
             .into_iter()
             .find(|paragraph| paragraph.paragraph_id == paragraph_id)
-            .ok_or(EditorError::ParagraphAlignmentParagraphUnavailable { paragraph_id })?;
-        let imported_base = self
-            .imported_paragraph_base_alignment_v1(paragraph_id)
-            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
-            .map(|item| item.alignment);
-        let authored_override = self
-            .current_paragraph_alignment_overrides_v1()?
-            .get(&paragraph_id)
-            .copied();
-
-        let (effective, authority) = if let Some(value) = authored_override {
-            (
-                Some(EffectiveParagraphAlignmentValueV1::from(value)),
-                Some(ParagraphAlignmentAuthorityV1::ChapteraOverride),
-            )
-        } else if let Some(value) = imported_base {
-            (
-                Some(EffectiveParagraphAlignmentValueV1::from(value)),
-                Some(ParagraphAlignmentAuthorityV1::ImportedBase),
-            )
-        } else {
-            (None, None)
-        };
-
-        Ok(EffectiveParagraphAlignmentV1 {
-            paragraph_id,
-            story_id: paragraph.story_id,
-            range: paragraph.range,
-            imported_base,
-            authored_override,
-            effective,
-            authority,
-        })
+            .ok_or(EditorError::ParagraphAlignmentParagraphUnavailable { paragraph_id })
     }
 
     pub fn set_paragraph_alignment_override_v1(
