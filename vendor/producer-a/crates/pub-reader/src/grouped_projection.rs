@@ -324,6 +324,18 @@ fn center_origin_rect_to_page_bounds(page: &Page, rect: [i128; 4]) -> Result<Rec
     ))
 }
 
+pub(super) fn shape_has_nonzero_rotation(shape: &pub_escher::SpContainerObservation) -> bool {
+    shape.fopts.iter().any(|record| {
+        record.properties.iter().any(|property| {
+            property.property_id() == OFFICEART_PROPERTY_ROTATION && property.op != 0
+        })
+    })
+}
+
+pub(super) fn shape_has_fsp_flag(shape: &pub_escher::SpContainerObservation, flag: u32) -> bool {
+    shape.fsp.as_ref().is_some_and(|fsp| fsp.flags & flag != 0)
+}
+
 #[cfg(test)]
 mod grouped_rotation_tests {
     use super::{mirror_rect_horizontally, translation_only_group_map};
@@ -351,16 +363,4 @@ mod grouped_rotation_tests {
             [70, 20, 90, 40]
         );
     }
-}
-
-pub(super) fn shape_has_nonzero_rotation(shape: &pub_escher::SpContainerObservation) -> bool {
-    shape.fopts.iter().any(|record| {
-        record.properties.iter().any(|property| {
-            property.property_id() == OFFICEART_PROPERTY_ROTATION && property.op != 0
-        })
-    })
-}
-
-pub(super) fn shape_has_fsp_flag(shape: &pub_escher::SpContainerObservation, flag: u32) -> bool {
-    shape.fsp.as_ref().is_some_and(|fsp| fsp.flags & flag != 0)
 }
