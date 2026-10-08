@@ -2486,8 +2486,12 @@ mod tests {
                 configured_scene
                     .diagnostics
                     .iter()
-                    .any(|diagnostic| diagnostic.code == "source_font_resource_admitted"
-                        && diagnostic.message.starts_with("1 configured exact font resource")),
+                    .any(
+                        |diagnostic| diagnostic.code == "source_font_resource_admitted"
+                            && diagnostic
+                                .message
+                                .starts_with("1 configured exact font resource"),
+                    ),
                 "actual configured exact font resource must retain admission telemetry"
             );
 
