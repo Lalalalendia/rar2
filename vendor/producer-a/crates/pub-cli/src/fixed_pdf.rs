@@ -33,7 +33,14 @@ pub struct PdfConversionResult {
 
 fn sha256_json_id(value: &Value) -> Result<String> {
     let bytes = serde_json::to_vec(value).context("serialize fixed-flow hash payload")?;
-    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+    let digest = Sha256::digest(bytes);
+    Ok(format!(
+        "sha256:{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
 }
 
 fn shaped_glyph_sequence_hash(glyphs: &[pub_layout::BoundedShapedGlyph]) -> Result<String> {
