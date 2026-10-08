@@ -1007,6 +1007,71 @@ fn render_text_is_story_equivalent_for_layout_v1(
     }
 }
 
+fn exact_direct_story_slice_scalar_base_v1(
+    visual: &ViewerGeometryDocument,
+    page_id: PageId,
+    node_id: NodeId,
+    projected_target_frame_node_id: Option<NodeId>,
+    fragment: &RenderTextFragmentV1,
+    story_text: &str,
+) -> Option<u32> {
+    if projected_target_frame_node_id.is_some()
+        || fragment.scalar_start == 0
+        || fragment.scalar_start >= fragment.scalar_end
+    {
+        return None;
+    }
+
+    #[cfg(feature = "projected-scene-instances")]
+    {
+        let target_page_id = page_id.as_canonical().to_string();
+        if visual.projected_instances.iter().any(|projected| {
+            projected.target_frame_node_id == Some(node_id)
+                && projected.scene_instance.target_page_id == target_page_id
+        }) {
+            return None;
+        }
+    }
+
+    let story_scalars = story_text.chars().collect::<Vec<_>>();
+    let start = usize::try_from(fragment.scalar_start).ok()?;
+    let end = usize::try_from(fragment.scalar_end).ok()?;
+    if start >= end || end > story_scalars.len() {
+        return None;
+    }
+    let fragment_scalar_len = usize::try_from(
+        fragment.scalar_end.checked_sub(fragment.scalar_start)?,
+    )
+    .ok()?;
+    if fragment.text.chars().count() != fragment_scalar_len
+        || story_scalars[start..end].iter().collect::<String>() != fragment.text
+    {
+        return None;
+    }
+
+    let mut matching_frame = None;
+    let mut story_frame_count = 0_usize;
+    for frame in visual
+        .story_frames
+        .iter()
+        .filter(|frame| frame.story_id == fragment.story_id)
+    {
+        story_frame_count += 1;
+        if frame.frame_id == node_id {
+            if matching_frame.is_some() {
+                return None;
+            }
+            matching_frame = Some(frame);
+        }
+    }
+    let frame = matching_frame?;
+    if story_frame_count < 2 || frame.ordinal == 0 {
+        return None;
+    }
+
+    Some(fragment.scalar_start)
+}
+
 #[cfg(feature = "projected-scene-instances")]
 fn clip_render_text_at_story_scalar_end(fragment: &mut RenderTextFragmentV1, scalar_end: u32) {
     let clipped_end = fragment.scalar_end.min(scalar_end);
