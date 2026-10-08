@@ -1,0 +1,3 @@
+# Research Wave 83 — terminal OleData static discriminator
+research/legacy22-oledata-cfb-join-01 20e9c92fd255f72cc6745e8cc68833f600bdaf5e
+ops/branch-gc-20261008-research-wave82 4cf1497178a8580919123f9f75ad216b85f34783
