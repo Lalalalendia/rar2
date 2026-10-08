@@ -30,6 +30,7 @@ VENDOR_PACKAGE_SPECS = {
 }
 
 PUB_VIEWER_IMAGES = "vendor/producer-a/crates/pub-viewer/src/images.rs"
+PUB_QUILL_PARAGRAPH = "vendor/producer-a/crates/pub-quill/src/typography/paragraph.rs"
 
 
 def changed_paths(base: str, head: str) -> list[str]:
@@ -161,6 +162,7 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
             for item in ("-p", VENDOR_PACKAGE_SPECS.get(package, package))
         ]
         pub_viewer_images_only = set(paths) == {PUB_VIEWER_IMAGES}
+        pub_quill_paragraph_only = set(paths) == {PUB_QUILL_PARAGRAPH}
         source_free_command = (
             {
                 "id": "pub-viewer-images-tests",
@@ -176,6 +178,20 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
                 ],
             }
             if pub_viewer_images_only
+            else {
+                "id": "pub-quill-paragraph-tests",
+                "argv": [
+                    "cargo",
+                    "test",
+                    "--manifest-path",
+                    "vendor/producer-a/Cargo.toml",
+                    "-p",
+                    "pub-quill",
+                    "--lib",
+                    "paragraph",
+                ],
+            }
+            if pub_quill_paragraph_only
             else {
                 "id": "vendor-source-free-tests",
                 "argv": [
