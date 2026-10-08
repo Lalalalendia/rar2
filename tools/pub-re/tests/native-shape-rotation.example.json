@@ -2,7 +2,7 @@
   "schema": "chaptera.pub-re-native-experiment.v1",
   "experiment_id": "example-shape-rotation-delta",
   "source": {
-    "path": "C:\\chaptera-pub-re\\fixtures\\example.pub",
+    "path": "fixtures/example.pub",
     "expected_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
   },
   "operation": {
@@ -11,7 +11,7 @@
       "page_id": 123456,
       "shape_id": 42
     },
-    "delta_degrees": 1.0
+    "delta_degrees": 1
   },
   "policy": {
     "writer": "current",
