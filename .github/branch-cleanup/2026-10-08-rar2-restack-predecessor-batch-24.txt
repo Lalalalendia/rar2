@@ -1,0 +1,7 @@
+# 2026-10-08 — restack predecessor batch 24
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+research/reader-feature-prevalence-v2 808d6fe3624bf77890c9317892ee740226143c1f # #1233 superseded by byte-identical current-main successor #2259, merged as bbe1711264b06aa4918a337abd233d43fda02a17
+research/recovery-damage-signature-predictor-current-v2 cfbd50843456656531372b54bff04aae403ee73f # #2242 fully semantic/product/visual GREEN; superseded by exact-blob current-main successor #2257
+ops/branch-gc-20261008-damage-predictor-predecessor-batch-23 23c0f149f2d6b3fdc50602bfa63ccc455647c46f # completed #2245 clean receipt: 3/3 deleted
