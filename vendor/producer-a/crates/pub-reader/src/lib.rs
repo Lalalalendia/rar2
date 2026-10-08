@@ -180,13 +180,13 @@ use pub_escher::{
     PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS, PublisherField,
     PublisherFieldRecord, SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
 };
+#[cfg(test)]
+use pub_model::CanonicalId;
 use pub_model::{
     Affine2D, AuthorityClass, ByteRange, Decimal, Document, LengthEmu, Node, NodeHeader, NodeId,
     NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D, SourceDescriptor,
     SourceGraph, SourceRef, SourceRole, Story, StoryId,
 };
-#[cfg(test)]
-use pub_model::CanonicalId;
 use pub_quill::{
     QuillEffectiveBoolean, QuillMcldVerticalAlignment, QuillParagraphAlignment,
     QuillParagraphFlowConstraint, QuillParagraphLineSpacing, QuillScriptFontEntryDisposition,
