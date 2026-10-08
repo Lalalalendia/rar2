@@ -100,5 +100,25 @@ on:
         self.assertIn("event=pull_request", calls[0])
 
 
+    def test_branch_gc_is_manual_only(self) -> None:
+        workflow = Path(".github/workflows/branch-gc.yml").read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("  pull_request:", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+
+    def test_branch_gc_preserves_open_stacked_pr_bases(self) -> None:
+        workflow = Path(".github/workflows/branch-gc.yml").read_text(encoding="utf-8")
+        self.assertIn("open-bases.txt", workflow)
+        self.assertIn('--jq \'.[] | .base.ref\'', workflow)
+        self.assertIn('grep -Fxq "$branch" target/branch-gc/open-bases.txt', workflow)
+        self.assertIn('echo "SKIP open PR base: $branch"', workflow)
+
+    def test_branch_gc_requires_pinned_atomic_branch_delete(self) -> None:
+        workflow = Path(".github/workflows/branch-gc.yml").read_text(encoding="utf-8")
+        self.assertIn('[[ -z "${expected_sha:-}" || ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]', workflow)
+        self.assertIn('[[ "$remote_sha" != "$expected_sha" ]]', workflow)
+        self.assertIn('git push --force-with-lease="refs/heads/$branch:$expected_sha" origin ":refs/heads/$branch"', workflow)
+        self.assertNotIn('git push origin --delete "$branch"', workflow)
+
 if __name__ == "__main__":
     unittest.main()
