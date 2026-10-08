@@ -1891,13 +1891,13 @@ mod tests {
     };
 
     use chaptera_scene_instance::SceneProjectionKindV1;
+    use chaptera_viewer_render_plan::shared_layout_diagnostics::classify_mixed_size_layout_capacity_v1;
     use chaptera_viewer_render_plan::{
         RenderTextFragmentV1, RenderTextLayoutDispositionV1,
         build_page_render_plan_with_text_layout_resolver_v1,
         build_page_render_plan_with_text_layout_resolvers_v1,
-        build_page_render_plan_with_text_layout_v1, classify_mixed_size_layout_capacity_v1,
-        classify_shared_layout_incomplete_cause_v1, effective_source_font_family_v1,
-        uniform_text_color_rgb_v1,
+        build_page_render_plan_with_text_layout_v1, classify_shared_layout_incomplete_cause_v1,
+        effective_source_font_family_v1, uniform_text_color_rgb_v1,
     };
     use pub_viewer::{
         ViewerGeometryDocument, ViewerParagraphLineSpacing, open_pub_bundle,
