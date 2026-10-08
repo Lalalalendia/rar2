@@ -243,15 +243,19 @@ def main() -> int:
                     "after": mixed_size_snapshot(witness.get("after_mutation"), f"{name}: mixed after"),
                     "fresh": mixed_size_snapshot(witness.get("fresh_reopen"), f"{name}: mixed fresh"),
                 }
-                require(
-                    normalized[name]["before"] == seed_mixed,
-                    f"{name}: mixed-size pre-mutation evidence differs from seed",
-                )
+                # Save/reopen can normalize STSH and physical line placement.
+                # Require every independently opened arm to share its baseline;
+                # record (rather than reject) a seed-before-save difference.
                 require(
                     normalized[name]["after"]["range_start"] == seed_mixed["range_start"]
                     and normalized[name]["fresh"]["range_end"] == seed_mixed["range_end"],
                     f"{name}: mixed-size Story range moved",
                 )
+            pre_mutation_baseline = normalized["control"]["before"]
+            require(
+                all(normalized[name]["before"] == pre_mutation_baseline for name in EXPECTED_ARMS),
+                "mixed-size arm baselines differ before mutation",
+            )
             pair = {name: normalized[name] for name in ("direct-0p75", "direct-0p80")}
             for name, expected in (("direct-0p75", 0.75), ("direct-0p80", 0.80)):
                 require(
@@ -267,6 +271,7 @@ def main() -> int:
                 "selected_source_range": [seed_mixed["range_start"], seed_mixed["range_end"]],
                 "source_family": seed_mixed["font_family"],
                 "point_size_samples": seed_mixed["point_samples"],
+                "seed_vs_reopened_baseline_identical": seed_mixed == pre_mutation_baseline,
                 "arms": {
                     name: {
                         "fresh_reopen_line_spacing": normalized[name]["fresh"]["line_spacing"],
