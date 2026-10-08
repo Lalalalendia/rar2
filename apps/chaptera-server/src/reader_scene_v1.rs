@@ -462,6 +462,7 @@ fn preview_text_style_from_render_text(
         })
     }
 }
+
 fn reader_text_layout_from_render_text(
     text: &RenderTextFragmentV1,
 ) -> (Option<ReaderTextLayoutV1>, bool, Option<&'static str>) {
