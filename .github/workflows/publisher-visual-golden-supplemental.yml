@@ -90,13 +90,20 @@ jobs:
             echo "supplemental_cargo_cache_inventory=unavailable (read-only API)" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          python - "$inventory" "$CACHE_KEY" <<'PY'
+          usage="$RUNNER_TEMP/supplemental-cache-usage.json"
+          if ! gh api "repos/${GITHUB_REPOSITORY}/actions/cache/usage" > "$usage"; then
+            echo "supplemental_cargo_cache_repo_usage=unavailable" | tee -a "$GITHUB_STEP_SUMMARY"
+            printf '{}' > "$usage"
+          fi
+          python - "$inventory" "$CACHE_KEY" "$usage" <<'PY'
           import json
           import os
           import sys
 
           with open(sys.argv[1], encoding="utf-8") as stream:
               payload = json.load(stream)
+          with open(sys.argv[3], encoding="utf-8") as stream:
+              usage = json.load(stream)
           key = sys.argv[2]
           entries = [
               cache for cache in payload.get("actions_caches", [])
@@ -106,6 +113,8 @@ jobs:
           main = [cache for cache in entries if cache.get("ref") == "refs/heads/main"]
           print(f"supplemental_cargo_cache_index_exact_count={len(entries)}")
           print(f"supplemental_cargo_cache_index_main_count={len(main)}")
+          print(f"repo_cache_total_bytes={usage.get('active_caches_size_in_bytes', 'unavailable')}")
+          print(f"repo_cache_total_entries={usage.get('active_caches_count', 'unavailable')}")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               print(f"supplemental_cargo_cache_index_exact_count={len(entries)}", file=summary)
               print(f"supplemental_cargo_cache_index_main_count={len(main)}", file=summary)
