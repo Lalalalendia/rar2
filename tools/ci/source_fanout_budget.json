@@ -24,7 +24,7 @@
       "max_lines": 1697
     },
     "vendor/producer-a/crates/pub-quill/src/typography.rs": {
-      "max_lines": 4125
+      "max_lines": 3826
     },
     "apps/chaptera-desktop/src/agent.rs": {
       "max_lines": 3061
