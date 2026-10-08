@@ -32,6 +32,68 @@ def checked_sha256_digest(value: object, source: str) -> str:
     return value
 
 
+def checked_same_session_pixel_diff(value: object) -> dict:
+    """Accept numeric Canvas2D RGBA deltas only; never raw PNG/pixel payloads."""
+    if not isinstance(value, dict):
+        raise ValueError("missing post-image-decode pixel discriminator")
+    fields = {"first_width", "first_height", "second_width", "second_height",
+              "changed_pixel_count", "max_channel_delta", "changed_bounds"}
+    if set(value) != fields:
+        raise ValueError("unexpected post-image-decode pixel discriminator fields")
+    for field in ("first_width", "first_height", "second_width", "second_height"):
+        if type(value[field]) is not int or value[field] <= 0:
+            raise ValueError(f"invalid post-image-decode PNG dimension: {field}")
+    same_dimensions = (
+        value["first_width"] == value["second_width"]
+        and value["first_height"] == value["second_height"]
+    )
+    count = value["changed_pixel_count"]
+    delta = value["max_channel_delta"]
+    bounds = value["changed_bounds"]
+    if not same_dimensions:
+        if count is not None or delta is not None or bounds is not None:
+            raise ValueError("dimension mismatch must not assert decoded pixel delta")
+        return value
+    if type(count) is not int or not 0 <= count <= value["first_width"] * value["first_height"]:
+        raise ValueError("invalid post-image-decode changed pixel count")
+    if type(delta) is not int or not 0 <= delta <= 255:
+        raise ValueError("invalid post-image-decode RGBA channel delta")
+    if (count == 0) != (delta == 0):
+        raise ValueError("pixel and channel difference disagree")
+    if count == 0:
+        if bounds is not None:
+            raise ValueError("identical decoded pixels must not have changed bounds")
+    else:
+        if not isinstance(bounds, dict) or set(bounds) != {"x", "y", "width", "height"}:
+            raise ValueError("changed decoded pixels require a numeric bounding box")
+        for field in ("x", "y", "width", "height"):
+            if type(bounds[field]) is not int:
+                raise ValueError(f"invalid changed pixel bounds: {field}")
+        if (bounds["x"] < 0 or bounds["y"] < 0 or bounds["width"] <= 0
+                or bounds["height"] <= 0
+                or bounds["x"] + bounds["width"] > value["first_width"]
+                or bounds["y"] + bounds["height"] > value["first_height"]):
+            raise ValueError("changed pixel bounds exceed decoded screenshot")
+    return value
+
+
+def checked_image_decode_probe(value: object) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError("missing SVG image decode probe")
+    fields = {"svg_image_count", "data_image_count", "decoded_count",
+              "decode_failed_count", "non_data_image_count"}
+    if set(value) != fields:
+        raise ValueError("unexpected SVG image decode probe fields")
+    for field in fields:
+        if type(value[field]) is not int or value[field] < 0:
+            raise ValueError(f"invalid SVG image decode probe count: {field}")
+    if value["data_image_count"] + value["non_data_image_count"] != value["svg_image_count"]:
+        raise ValueError("SVG image decode probe inventory does not balance")
+    if value["decoded_count"] + value["decode_failed_count"] != value["data_image_count"]:
+        raise ValueError("SVG image decode probe result does not balance")
+    return value
+
+
 def hosted_rows(pairs_csv: Path) -> list[dict[str, str]]:
     rows = list(csv.DictReader(pairs_csv.open(newline="", encoding="utf-8-sig")))
     hosted = [row for row in rows if row["family"] != EXTERNAL_FAMILY]
@@ -158,6 +220,26 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
             candidate_raster_sha256 = sha256(png)
             if candidate_raster_sha256 != checked_sha256_digest(shot["sha256"], "candidate PNG"):
                 raise ValueError(f"candidate PNG identity drift: {shot['filename']}")
+            image_decode_probe = checked_image_decode_probe(shot.get("image_decode_probe"))
+            post_decode_raster_sha256 = checked_sha256_digest(
+                shot.get("post_image_decode_sha256"), "post-image-decode SVG PNG"
+            )
+            post_decode_equal = candidate_raster_sha256 == post_decode_raster_sha256
+            post_decode_pixel_report = shot.get("post_image_decode_decoded_pixel_diff")
+            if post_decode_equal:
+                if post_decode_pixel_report is not None:
+                    raise ValueError("identical post-image-decode PNG must skip decoded pixel discriminator")
+                post_decode_pixel_outcome = "identical_png"
+                post_decode_pixel_diff = None
+            else:
+                post_decode_pixel_diff = checked_same_session_pixel_diff(post_decode_pixel_report)
+                if (post_decode_pixel_diff["first_width"] != post_decode_pixel_diff["second_width"]
+                        or post_decode_pixel_diff["first_height"] != post_decode_pixel_diff["second_height"]):
+                    post_decode_pixel_outcome = "dimensions_changed"
+                elif post_decode_pixel_diff["changed_pixel_count"] == 0:
+                    post_decode_pixel_outcome = "encoding_only"
+                else:
+                    post_decode_pixel_outcome = "rgba_changed"
             candidate = image_grid(png)
             reference_bytes = reference_grid(pair["pages"][index])
             metrics = compare_grid(candidate, reference_bytes)
@@ -174,6 +256,11 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
                 "warning_state": pair.get("warning_state"),
                 "page": index + 1,
                 "candidate_raster_sha256": candidate_raster_sha256,
+                "image_decode_probe": image_decode_probe,
+                "post_image_decode_raster_sha256": post_decode_raster_sha256,
+                "post_image_decode_identical": post_decode_equal,
+                "post_image_decode_pixel_outcome": post_decode_pixel_outcome,
+                "post_image_decode_pixel_diff": post_decode_pixel_diff,
                 **metrics,
                 "reference_media_extent_delta": {
                     "width_pt": round(width_pt - ref_page["media_width_pt"], 6),
@@ -194,6 +281,19 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
     page_rows.sort(key=lambda row: (-row["changed_cell_fraction"], row["fixture"], row["page"]))
     pair_rows.sort(key=lambda row: (-row["mean_changed_cell_fraction"], row["fixture"]))
     fractions = [row["changed_cell_fraction"] for row in page_rows]
+    post_decode_mismatches = [
+        {
+            "fixture": row["fixture"],
+            "page": row["page"],
+            "image_decode_probe": row["image_decode_probe"],
+            "first_capture_sha256": row["candidate_raster_sha256"],
+            "post_image_decode_sha256": row["post_image_decode_raster_sha256"],
+            "decoded_pixel_outcome": row["post_image_decode_pixel_outcome"],
+            "decoded_pixel_diff": row["post_image_decode_pixel_diff"],
+        }
+        for row in page_rows
+        if not row["post_image_decode_identical"]
+    ]
 
     return {
         "available_reference_pair_count": int(reference["pair_count"]),
@@ -204,6 +304,27 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
         "external_reference_page_count": sum(int(pair["reference_pages"]) for pair in external_reference_pairs),
         "compared_pair_count": len(pair_rows),
         "compared_page_count": len(page_rows),
+        "image_decode_probe_page_count": len(page_rows),
+        "image_decode_probe_svg_image_count": sum(
+            row["image_decode_probe"]["svg_image_count"] for row in page_rows
+        ),
+        "image_decode_probe_decoded_count": sum(
+            row["image_decode_probe"]["decoded_count"] for row in page_rows
+        ),
+        "image_decode_probe_failed_count": sum(
+            row["image_decode_probe"]["decode_failed_count"] for row in page_rows
+        ),
+        "post_image_decode_mismatch_page_count": len(post_decode_mismatches),
+        "post_image_decode_rgba_changed_page_count": sum(
+            row["decoded_pixel_outcome"] == "rgba_changed" for row in post_decode_mismatches
+        ),
+        "post_image_decode_encoding_only_page_count": sum(
+            row["decoded_pixel_outcome"] == "encoding_only" for row in post_decode_mismatches
+        ),
+        "post_image_decode_dimensions_changed_page_count": sum(
+            row["decoded_pixel_outcome"] == "dimensions_changed" for row in post_decode_mismatches
+        ),
+        "post_image_decode_mismatches": post_decode_mismatches,
         "unavailable_pair_count": len(unavailable),
         "corpus_mean_changed_cell_fraction": (
             sum(fractions) / len(fractions) if fractions else None
@@ -339,6 +460,10 @@ def summarize(pairs_csv: Path, browser_receipt: Path, reference_path: Path, out:
             "worker_and_raster_sha256_are_observation_identities_only": True,
             "worker_receipt_sha256_includes_volatile_timings": True,
             "scene_sha256_excludes_worker_timings": True,
+            "canonical_publisher_raster_uses_pre_decode_probe_capture": True,
+            "post_image_decode_capture_is_digest_only": True,
+            "post_image_decode_rgba_diff_numeric_aggregate_only": True,
+            "image_decode_probe_uses_same_inline_svg_image_href": True,
         },
         "pairs": results,
         "unsupported_pairs": unsupported,
