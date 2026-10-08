@@ -19,6 +19,7 @@ VIEWER_AUTHORING_PROJECTION = (
     "vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
 )
 VIEWER_IMAGES = "vendor/producer-a/crates/pub-viewer/src/images.rs"
+VIEWER_TABLES = "vendor/producer-a/crates/pub-viewer/src/tables.rs"
 READER_PAINT_PROJECTION = "vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
 READER_PAGE_PROJECTION = "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
 READER_SOURCE_PAINT_ORDER = "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
@@ -640,7 +641,7 @@ def classify(
     typography_paths = [
         path
         for path in visual_paths
-        if path not in {VIEWER_IMAGES, READER_PAINT_PROJECTION, READER_PAGE_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_ANCHOR_GEOMETRY, READER_CONTENTS_ACCESS, READER_SOURCE_IDENTITY}
+        if path not in {VIEWER_IMAGES, VIEWER_TABLES, READER_PAINT_PROJECTION, READER_PAGE_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_ANCHOR_GEOMETRY, READER_CONTENTS_ACCESS, READER_SOURCE_IDENTITY}
     ]
     result["typography_golden"] = any(
         matches(path, TYPOGRAPHY_GOLDEN) for path in typography_paths
@@ -650,7 +651,7 @@ def classify(
     virginia_paths = [
         path
         for path in product_paths
-        if path not in {VIEWER_IMAGES, READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_TYPOGRAPHY_PROJECTION, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_SOURCE_GRAPH_MODEL, READER_ANCHOR_GEOMETRY, READER_STORY_MATERIALIZATION, READER_QUILL_ADMISSION, READER_CONTENTS_ACCESS, READER_SOURCE_IDENTITY, READER_NODE_MATERIALIZATION}
+        if path not in {VIEWER_IMAGES, VIEWER_TABLES, READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_TYPOGRAPHY_PROJECTION, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_SOURCE_GRAPH_MODEL, READER_ANCHOR_GEOMETRY, READER_STORY_MATERIALIZATION, READER_QUILL_ADMISSION, READER_CONTENTS_ACCESS, READER_SOURCE_IDENTITY, READER_NODE_MATERIALIZATION}
         and not path.startswith("vendor/producer-a/crates/pub-reader/src/bin/")
         and not path.startswith("vendor/producer-a/crates/pub-viewer/src/bin/")
     ]
