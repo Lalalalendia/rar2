@@ -1,0 +1,5 @@
+# Research Wave 77 — superseded predecessors + completed GC owners
+research/false-omission-native-01 07d0336341c5edcbf95fc19b7e2fa80335d9bb91
+research/legacy22-raw0022-companion-01 e0d1fec89c4a22e7d873dd0d66bf70ff5987612b
+ops/branch-gc-20261008-research-wave69 fba48dc935d4436f6289dafeb44aa632aab49430
+ops/branch-gc-20261008-research-wave76 ce9ecfbc23bf25f8c250737285d786e09c8875b4
