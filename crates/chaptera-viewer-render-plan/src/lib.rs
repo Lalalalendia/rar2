@@ -2387,7 +2387,6 @@ fn resolve_text_layout_v1(
             if projected_target_frame_node_id.is_none() =>
         {
             return resolve_mixed_size_text_layout_v1(
-                visual,
                 fragment,
                 font,
                 font_is_source_resolved,
@@ -2395,6 +2394,14 @@ fn resolve_text_layout_v1(
                 &bounds,
                 &fingerprint,
                 vertical_alignment,
+                |scalar_start, scalar_end| {
+                    source_paragraph_line_spacing_for_range_v1(
+                        visual,
+                        fragment.story_id,
+                        scalar_start,
+                        scalar_end,
+                    )
+                },
             );
         }
         Err(reason) => return fallback_layout(reason),
