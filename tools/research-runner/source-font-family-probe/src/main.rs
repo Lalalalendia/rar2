@@ -241,14 +241,25 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let Some(family) = family.as_ref() {
                 *family_counts.entry(family.clone()).or_default() += 1;
             }
+            let layout = fragment
+                .layout
+                .as_ref()
+                .map(|layout| format!("{:?}", layout.disposition))
+                .unwrap_or_else(|| "none".to_owned());
+            let resolved_line_count = fragment
+                .layout
+                .as_ref()
+                .map_or(0, |layout| layout.lines.len());
             eprintln!(
-                "SOURCE_FONT_FRAGMENT label={label:?} page={} scalar_start={} scalar_end={} authority={} reason={} typography_run_count={}",
+                "SOURCE_FONT_FRAGMENT label={label:?} page={} scalar_start={} scalar_end={} authority={} reason={} typography_run_count={} layout={} resolved_line_count={}",
                 page_index + 1,
                 fragment.scalar_start,
                 fragment.scalar_end,
                 authority,
                 reason,
                 fragment.typography.len(),
+                layout,
+                resolved_line_count,
             );
         }
     }
