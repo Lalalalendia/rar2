@@ -54,6 +54,7 @@ on:
       - "tools/ci/test_reader_consumer_preflight.py"
       - "tools/ci/reader_pr_fanout.py"
       - "tools/ci/test_reader_pr_fanout.py"
+      - "tools/ci/test_local_portable_web_asset_package.py"
       - "tools/reader_active_content_guard.py"
       - "tools/reader_page_role_observation.py"
       - "tools/package_reader_portable.py"
@@ -142,6 +143,7 @@ jobs:
       android_core: ${{ steps.scope.outputs.android_core }}
       android: ${{ steps.scope.outputs.android }}
       web: ${{ steps.scope.outputs.web }}
+      local_portable_assets: ${{ steps.scope.outputs.local_portable_assets }}
       local_portable: ${{ steps.scope.outputs.local_portable }}
       installer: ${{ steps.scope.outputs.installer }}
       path_identity: ${{ steps.scope.outputs.path_identity }}
@@ -395,6 +397,19 @@ jobs:
     needs: [classify, tier-a]
     if: ${{ !cancelled() && always() && needs.classify.outputs.web == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/web-acceptance-real-chromium.yml
+
+  local-portable-assets:
+    name: Local portable web asset package contract
+    needs: [classify]
+    if: ${{ !cancelled() && always() && needs.classify.outputs.local_portable_assets == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Prove deterministic real ZIP embeds exact web asset bytes
+        run: python tools/ci/test_local_portable_web_asset_package.py
 
   local-portable:
     name: Local portable Windows
