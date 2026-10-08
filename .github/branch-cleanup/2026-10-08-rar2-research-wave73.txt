@@ -1,0 +1,6 @@
+# Research Wave 73 — assimilated WMF/font lifecycle evidence
+research/legacy-image-font-lifecycle-01 1dd45228cfa925d519af5869be354dcfe481f277
+research/olepres-wmf-record-census-01 85cbe487fc5b97a8de46e64d4ddcca98b3c3ade3
+research/legacy-ole-wmf-region-lifecycle-332 5b671f04a45940bcfc0e6ac5af2195a5f8e1b25f
+research/legacy-ole-wmf-region-tail-332 09fae19dfcbc42fbf321344395423a2bf0f3f4f4
+ops/branch-gc-20261008-research-wave72 5fbc06b47922d79f075fb17957ec7bec94ce7f15
