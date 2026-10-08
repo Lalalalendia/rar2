@@ -171,6 +171,7 @@ function Invoke-Arm([string]$name, [string]$kind) {
         switch ($kind) {
             "control" { }
             "single" { $paragraph.SetLineSpacing($PbLineSpacingSingle, 12) }
+            "direct-1p0" { $paragraph.LineSpacing = 1.0 }
             "direct-0p75" { $paragraph.LineSpacing = 0.75 }
             default { throw "Unknown arm kind: $kind" }
         }
@@ -242,6 +243,7 @@ $seed = New-SeedFixture
 $arms = @(
     Invoke-Arm "control" "control"
     Invoke-Arm "single" "single"
+    Invoke-Arm "direct-1p0" "direct-1p0"
     Invoke-Arm "direct-0p75" "direct-0p75"
 )
 
@@ -257,7 +259,8 @@ $result = [ordered]@{
 Write-PubJson -Value $result -Path (Join-Path $analysisDir "paragraph-line-spacing-0p75-native-01.json")
 @(
     "experiment=$ExpectedExperiment",
-    "arms=3",
+    "arms=4",
+    "matched_control=direct_line_spacing_1.0",
     "target=direct_line_spacing_0.75",
     "line_geometry=paragraph_range_lines_boundtop_boundheight",
     "verdict=$($result.verdict)"
