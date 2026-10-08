@@ -448,6 +448,31 @@ fn main() -> eframe::Result<()> {
         web=False,
     )
     assert_scope(
+        ["apps/web/current-authoring-graph-scene-v1.mjs"],
+        tier_a=False,
+        web=False,
+        local_portable=False,
+    )
+    assert_scope(
+        ["apps/web/chaptera-product-editor-service-v1.mjs"],
+        tier_a=False,
+        web=False,
+        local_portable=False,
+    )
+    assert_scope(
+        ["apps/web/editor-shell-v1.mjs"],
+        tier_a=False,
+        web=False,
+        local_portable=True,
+    )
+    assert_scope(
+        ["apps/web/acceptance/receipts/browser-editor-v1.json"],
+        tier_a=False,
+        web=False,
+        local_portable=True,
+    )
+
+    assert_scope(
         ["apps/web/editor-shell-http-harness.html"],
         tier_a=False,
         web=True,

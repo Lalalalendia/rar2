@@ -443,7 +443,17 @@ LOCAL_PORTABLE = (
     "tools/validate_export_preview.py",
     "tools/verify_editable_export_geometry.py",
     "services/editor-api/**",
-    "apps/web/**",
+    # Only the web files actually embedded into Chaptera Local should pay the
+    # Windows portable package gate. Other Cloud/Web product modules have their
+    # own browser/HTTP owners and are not present in the portable ZIP.
+    "apps/web/local-editor.html",
+    "apps/web/editor-shell-v1.mjs",
+    "apps/web/editor-service-client-v1.mjs",
+    "apps/web/observability-v1.mjs",
+    "apps/web/render-v1.mjs",
+    "apps/web/interaction-v1.mjs",
+    "apps/web/export-preview-v1.schema.json",
+    "apps/web/acceptance/receipts/**",
     "apps/chaptera-server/**",
     "packages/protocol/revision/v1/**",
     "packages/product/local-portable/**",
