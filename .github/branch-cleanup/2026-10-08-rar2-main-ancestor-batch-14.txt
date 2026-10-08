@@ -1,0 +1,21 @@
+# 2026-10-08 — exact-main ancestor batch 14
+# Never merge. Every non-carrier ref is an exact commit already reachable from current main.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+authoring/line-01-v2 df9cc236a7e4bd2518a71d97fbaf30fbb0c0542c # exact main ancestor; no unique commits
+authoring-imported-paragraph-base-05 f13f1b7468c6ca93f58f0bdb54b2a831d5e5626a # exact main ancestor; no unique commits
+cloud/cloud-reader-observability-01-current-main dd956d336df099fa8a73c027e1600e7a43fc90ba # exact main ancestor; no unique commits
+measure/pub-reader-story-frame-analysis-routing-03 81c62792474e9dd252df80a8e00a3a2906d08219 # exact main ancestor; no unique commits
+measure/100-cell-area-offpaint-01 db04fdc5d9ce0d6afa60b71868dd7e26e0c5141f # exact main ancestor; no unique commits
+paragraph-v24-parser-smoke fe1eeae9d3f1a6b3087d00a1f3ac20375f2ead4b # exact main ancestor; no unique commits
+reader/cloud-text-fallback-reason-census b6d55ff0076a35cf20e2d8de0ae52a73f5e037a5 # exact main ancestor; no unique commits
+refactor/shared-source-font-registry-01 90b68cc0d2a381a7c6760545590d1734a997ce22 # exact main ancestor; no unique commits
+tooling/ephemeral-chaptera-linux-export 204958bc4727a337520ed852e5611049ec7a2296 # exact main ancestor; no unique commits
+viewer/fill-color-ext-consume-01 9245726f5489f89060ebce52296a19688a0d92da # exact main ancestor; no unique commits
+reader/source-stack-order-01 5b926233fbeb2aba3e3ab80cba439c325885ca61 # exact main ancestor; no unique commits
+reader/wmf-font-compat-current-main-01 1ae8116ef9684ab306aabc700b1b233cc021f61d # exact main ancestor; no unique commits
+sync/cmo7-style0-size-consume-02 1cdb2821b2bbda215eab8706079a97339709a05e # exact main ancestor; no unique commits
+task/desktop-pub-sandbox-win-01b aff11ff70c81040cee9fb8b60b68af830899024f # exact main ancestor; no unique commits
+viewer/legacy22-ole-cached-preview-01 91e6970620c14d217a17caff2a2ec4f253e8ec5f # exact main ancestor; no unique commits
+viewer/roundrect-geometry-current-main-02 4996611fc71e0d3a579e959d4c6aaff12749310d # exact main ancestor; no unique commits
+ops/branch-gc-20261008-zero-unique-evidence-batch-13 af145e4d171e195443fb5de401d62ec5b1d8f718 # completed #2178 clean receipt: 11/11 deleted
