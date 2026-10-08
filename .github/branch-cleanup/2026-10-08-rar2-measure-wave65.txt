@@ -1,0 +1,4 @@
+# Measure Wave 65 — assimilated first-line and Cloud SLI measurement refs
+measure/carlton-fixed-pdf-first-line-cohort-1392 fe14045cfdf9bb9c3caa1209ad21048f5ce27f51
+measure/cloud-sli-fallback-discriminator-01 7a949ec98cc0ba01d766e844c02a39b5ad9cfca1
+ops/branch-gc-20261008-measure-wave64 ee3f1f7dcdd3475ca80bfb7bf6ad8689eb93fb45
