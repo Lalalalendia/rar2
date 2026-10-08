@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -52,6 +54,147 @@ on:
         self.assertFalse(gate.workflow_selected(yaml, ["docs/readme.md"], "opened", "main"))
         self.assertTrue(gate.workflow_selected(yaml, ["docs/readme.md", "src/lib.rs"], "opened", "main"))
         self.assertFalse(gate.workflow_selected(yaml, ["src/lib.rs"], "opened", "release"))
+
+    def _drift_repo(self) -> tuple[Path, str]:
+        root = Path(tempfile.mkdtemp(prefix="merge-drift-"))
+        subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.email", "ci@example.invalid"], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.name", "CI"], check=True)
+        (root / ".github/workflows").mkdir(parents=True)
+        (root / "tools").mkdir()
+        (root / "src").mkdir()
+        (root / "docs").mkdir()
+        (root / "tools/check.py").write_text("print('ok')\n", encoding="utf-8")
+        (root / "src/task.rs").write_text("fn task() {}\n", encoding="utf-8")
+        (root / "src/other.rs").write_text("fn other() {}\n", encoding="utf-8")
+        (root / "docs/note.md").write_text("base\n", encoding="utf-8")
+        (root / ".github/workflows/reader.yml").write_text(
+            'name: reader\non:\n  pull_request:\n    paths:\n      - "src/task.rs"\n'
+            'jobs:\n  test:\n    runs-on: ubuntu-latest\n'
+            '    steps:\n      - run: python tools/check.py\n',
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "-qm", "base"], check=True)
+        base = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        return root, base
+
+    def _commit(self, root: Path, message: str) -> str:
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "-qm", message], check=True)
+        return subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+
+    def test_workflow_acceptance_dependencies(self) -> None:
+        text = (
+            "python tools/ci/check.py --config deploy/config/app.toml\n"
+            "uses: ./.github/workflows/shared.yml\n"
+            "cargo test --manifest-path Cargo.toml\n"
+        )
+        self.assertEqual(
+            gate.workflow_acceptance_dependencies(text),
+            {
+                "tools/ci/check.py",
+                "deploy/config/app.toml",
+                ".github/workflows/shared.yml",
+                "Cargo.toml",
+            },
+        )
+
+    def test_docs_only_base_drift_is_accepted(self) -> None:
+        root, base = self._drift_repo()
+        (root / "docs/note.md").write_text("changed\n", encoding="utf-8")
+        current = self._commit(root, "docs")
+        errors, drift = gate.audit_base_drift(
+            root,
+            validated_base=base,
+            current_base=current,
+            pr_paths=["src/task.rs"],
+            expected_validated={".github/workflows/reader.yml"},
+            expected_current={".github/workflows/reader.yml"},
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(drift, {"docs/note.md"})
+
+    def test_unrelated_product_drift_is_accepted(self) -> None:
+        root, base = self._drift_repo()
+        (root / "src/other.rs").write_text("fn other() { let _ = 1; }\n", encoding="utf-8")
+        current = self._commit(root, "other")
+        errors, _ = gate.audit_base_drift(
+            root,
+            validated_base=base,
+            current_base=current,
+            pr_paths=["src/task.rs"],
+            expected_validated={".github/workflows/reader.yml"},
+            expected_current={".github/workflows/reader.yml"},
+        )
+        self.assertEqual(errors, [])
+
+    def test_pr_owned_base_drift_requires_revalidation(self) -> None:
+        root, base = self._drift_repo()
+        (root / "src/task.rs").write_text("fn task() { let _ = 1; }\n", encoding="utf-8")
+        current = self._commit(root, "task overlap")
+        errors, _ = gate.audit_base_drift(
+            root,
+            validated_base=base,
+            current_base=current,
+            pr_paths=["src/task.rs"],
+            expected_validated={".github/workflows/reader.yml"},
+            expected_current={".github/workflows/reader.yml"},
+        )
+        self.assertTrue(any("overlaps PR-owned paths" in e for e in errors))
+
+    def test_expected_workflow_change_requires_revalidation(self) -> None:
+        root, base = self._drift_repo()
+        (root / ".github/workflows/extra.yml").write_text(
+            'name: extra\non:\n  pull_request:\n    paths:\n      - "src/task.rs"\n',
+            encoding="utf-8",
+        )
+        current = self._commit(root, "new owner")
+        errors, _ = gate.audit_base_drift(
+            root,
+            validated_base=base,
+            current_base=current,
+            pr_paths=["src/task.rs"],
+            expected_validated={".github/workflows/reader.yml"},
+            expected_current={
+                ".github/workflows/reader.yml",
+                ".github/workflows/extra.yml",
+            },
+        )
+        self.assertTrue(any("changed applicable PR workflow authority" in e for e in errors))
+
+    def test_expected_helper_change_requires_revalidation(self) -> None:
+        root, base = self._drift_repo()
+        (root / "tools/check.py").write_text("print('changed')\n", encoding="utf-8")
+        current = self._commit(root, "helper")
+        errors, _ = gate.audit_base_drift(
+            root,
+            validated_base=base,
+            current_base=current,
+            pr_paths=["src/task.rs"],
+            expected_validated={".github/workflows/reader.yml"},
+            expected_current={".github/workflows/reader.yml"},
+        )
+        self.assertTrue(any("acceptance dependencies" in e for e in errors))
+
+    def test_expected_workflow_file_change_requires_revalidation(self) -> None:
+        root, base = self._drift_repo()
+        workflow = root / ".github/workflows/reader.yml"
+        workflow.write_text(workflow.read_text(encoding="utf-8") + "# semantic edit\n", encoding="utf-8")
+        current = self._commit(root, "workflow")
+        errors, _ = gate.audit_base_drift(
+            root,
+            validated_base=base,
+            current_base=current,
+            pr_paths=["src/task.rs"],
+            expected_validated={".github/workflows/reader.yml"},
+            expected_current={".github/workflows/reader.yml"},
+        )
+        self.assertTrue(any("acceptance dependencies" in e for e in errors))
 
     def test_exact_head_never_passes_missing_or_pending_runs(self) -> None:
         expected = {".github/workflows/reader.yml", ".github/workflows/global.yml"}
