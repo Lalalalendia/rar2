@@ -102,7 +102,7 @@ pub(super) fn materialize_mature_nodes(
             && exact_story_identity.is_none()
             && image_slot.is_none()
             && (has_default_ellipse_geometry(shape)
-                || has_bounded_grouped_solid_rectangle(shape))
+                || super::paint_projection::has_bounded_grouped_solid_rectangle(shape))
         {
             shape.fsp.as_ref().map(|fsp| fsp.shape_type)
         } else {

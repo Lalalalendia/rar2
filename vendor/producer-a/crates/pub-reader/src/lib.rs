@@ -145,11 +145,11 @@ use page_projection::{build_effective_page_projection, resolve_scenario_page_ids
 pub use paint_projection::resolve_bounded_effective_officeart_paint;
 use paint_projection::{
     FILL_FILLED_BIT, FILL_USE_FILLED_BIT, OFFICE_ART_FILL_BOOLEANS, OFFICE_ART_FILL_COLOR,
-    OFFICE_ART_FILL_TYPE, OFFICE_ART_LINE_WIDTH, OFFICEART_SHAPE_TYPE_RECTANGLE,
+    OFFICE_ART_FILL_TYPE, OFFICE_ART_LINE_WIDTH, OFFICEART_SHAPE_TYPE_ELLIPSE,
     admits_normative_2d_paint_defaults, bounded_officeart_image_crop,
     bounded_officeart_image_recolor, bounded_officeart_rgb, direct_officeart_rgb,
-    effective_paint_has_dgg_authority, explicit_officeart_paint, has_bounded_grouped_solid_rectangle,
-    has_default_ellipse_geometry, has_default_line_geometry, has_default_roundrect_geometry,
+    effective_paint_has_dgg_authority, explicit_officeart_paint, has_default_ellipse_geometry,
+    has_default_line_geometry, has_default_roundrect_geometry,
     has_explicit_officeart_paint_observation, has_shape_local_dash_gel,
     paint_context_uses_officeart_scheme_color, unique_explicit_officeart_scalar,
 };

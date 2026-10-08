@@ -123,7 +123,7 @@ pub(super) fn source_page_paint_orders_v1(
         // admitted primitive is a source-backed solid rectangle, with exact
         // group ancestry and positive local fill/color evidence.
         let solid_rectangle = node.payload.officeart_shape_type
-            == Some(OFFICEART_SHAPE_TYPE_RECTANGLE)
+            == Some(super::paint_projection::OFFICEART_SHAPE_TYPE_RECTANGLE)
             && node.payload.explicit_paint.fill.visible == Some(true)
             && node.payload.explicit_paint.fill.color_rgb.is_some();
         if !admit_grouped_paint_participant(
