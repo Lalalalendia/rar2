@@ -7,7 +7,7 @@ use chaptera_caret_layout_feed::build_caret_map_from_shaped_flow_v1;
 use chaptera_text_caret_map_adapter::ResolvedTextCaretMapV1;
 use fixed_pdf_pages::bounded_authoring_slice_for_pages_v1;
 #[cfg(test)]
-use fixed_pdf_pages::qualified_page_set_error_v1;
+use fixed_pdf_pages::{bounded_authoring_slice_for_pages_v1, qualified_page_set_error_v1};
 use pub_editor::{
     EditorSession, EffectiveParagraphAlignmentValueV1, ImportedParagraphFlowConstraintV1,
 };
@@ -405,7 +405,11 @@ mod tests {
     use super::*;
     use pub_editor::{FormatPropertyV1, FormatValueV1, Sha256Digest, open_mature_0x2c_editor};
     use pub_layout::font_fingerprint_sha256;
-    use pub_model::{EMU_PER_POINT, LengthEmu};
+    use pub_model::{
+        Document, DocumentId, EMU_PER_POINT, LengthEmu, Page, ResolvedGraph, Sha256Digest, Size2D,
+        SourceDescriptor,
+    };
+    use pub_reader::PubResolvedGraph;
     use sha2::{Digest, Sha256};
     use std::{env, fs};
 
@@ -471,6 +475,80 @@ mod tests {
         assert!(!text.contains("source_refs"));
         assert!(!text.contains("Quill"));
         assert!(!text.contains("Escher"));
+    }
+
+    fn canonical_id<T: serde::de::DeserializeOwned>(value: &str) -> T {
+        serde_json::from_str(&format!("\"{value}\"")).expect("canonical typed id")
+    }
+
+    fn page_order_editor_fixture() -> (EditorSession, Vec<PageId>, Vec<PageId>) {
+        let customer_a: PageId = canonical_id("11000000-0000-4000-8000-000000000001");
+        let service: PageId = canonical_id("11000000-0000-4000-8000-000000000002");
+        let customer_b: PageId = canonical_id("11000000-0000-4000-8000-000000000003");
+        let customer_c: PageId = canonical_id("11000000-0000-4000-8000-000000000004");
+        let source_hash = Sha256Digest::from_bytes([0x55; 32]);
+        let mut pages = BTreeMap::new();
+        for page_id in [customer_a, service, customer_b, customer_c] {
+            pages.insert(
+                page_id,
+                Page {
+                    id: page_id,
+                    size: Size2D::new(LengthEmu::new(8_000_000), LengthEmu::new(10_000_000)),
+                    bleed: None,
+                    margins: None,
+                    children: Vec::new(),
+                    extensions: Vec::new(),
+                },
+            );
+        }
+
+        let graph: PubResolvedGraph = ResolvedGraph {
+            cdm_version: "0.1".into(),
+            resolver_version: "fixed-pdf-page-order-test".into(),
+            source: SourceDescriptor {
+                format: "pub".into(),
+                format_version: Some("0x2c".into()),
+                adapter_version: "pub-rs/test".into(),
+                source_hash,
+            },
+            document: Document {
+                id: canonical_id::<DocumentId>("33000000-0000-4000-8000-000000000001"),
+                format_origin: "pub".into(),
+                source_hash,
+                pages: vec![customer_a, service, customer_b, customer_c],
+                resources: Vec::new(),
+                styles: Vec::new(),
+            },
+            pages,
+            nodes: BTreeMap::new(),
+            stories: BTreeMap::new(),
+            paragraphs: BTreeMap::new(),
+            text_runs: BTreeMap::new(),
+            resources: BTreeMap::new(),
+            styles: BTreeMap::new(),
+            extensions: BTreeMap::new(),
+        };
+
+        (
+            EditorSession::new(graph).expect("page-order EditorSession"),
+            vec![customer_a, customer_b, customer_c],
+            vec![customer_c, customer_a, customer_b],
+        )
+    }
+
+    #[test]
+    fn fixed_pdf_page_projection_consumes_current_editor_page_order() {
+        let (mut editor, admitted, reordered) = page_order_editor_fixture();
+        editor
+            .reorder_pages_v1(admitted.clone(), reordered.clone())
+            .expect("reorder qualified customer pages");
+
+        let authoring = bounded_authoring_slice_for_pages_v1(&editor, &admitted)
+            .expect("fixed-PDF page projection");
+        assert_eq!(
+            authoring.pages.iter().map(|page| page.id).collect::<Vec<_>>(),
+            reordered
+        );
     }
 
     #[test]
