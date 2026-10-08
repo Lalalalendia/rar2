@@ -9,6 +9,7 @@ on:
       - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
       - "!vendor/producer-a/crates/pub-editor/src/session_text.rs"
       - "!vendor/producer-a/crates/pub-editor/tests/story_text_session_v1.rs"
+      - "!vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs"
       - "vendor/producer-a/crates/pub-reader/Cargo.toml"
       - "vendor/producer-a/crates/pub-reader/src/**"
       - "!vendor/producer-a/crates/pub-reader/src/page_projection.rs"
