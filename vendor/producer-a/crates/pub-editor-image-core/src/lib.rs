@@ -134,31 +134,16 @@ mod tests {
         let after = sha(0x22);
         let mut replacements = BTreeMap::from([(node_id, before)]);
 
-        apply_image_replacement_forward_v1(
-            &mut replacements,
-            node_id,
-            Some(before),
-            after,
-        )
-        .expect("forward");
+        apply_image_replacement_forward_v1(&mut replacements, node_id, Some(before), after)
+            .expect("forward");
         assert_eq!(replacements.get(&node_id), Some(&after));
         assert_eq!(
-            apply_image_replacement_forward_v1(
-                &mut replacements,
-                node_id,
-                Some(before),
-                after,
-            ),
+            apply_image_replacement_forward_v1(&mut replacements, node_id, Some(before), after,),
             Err(ImageReplacementTransitionErrorV1::Stale { node_id })
         );
 
-        apply_image_replacement_inverse_v1(
-            &mut replacements,
-            node_id,
-            Some(before),
-            after,
-        )
-        .expect("inverse");
+        apply_image_replacement_inverse_v1(&mut replacements, node_id, Some(before), after)
+            .expect("inverse");
         assert_eq!(replacements.get(&node_id), Some(&before));
     }
 
@@ -222,13 +207,7 @@ mod tests {
         let mut overrides = BTreeMap::new();
 
         assert_eq!(
-            apply_image_crop_forward_v1(
-                Some(source),
-                &mut overrides,
-                node_id,
-                stale,
-                after,
-            ),
+            apply_image_crop_forward_v1(Some(source), &mut overrides, node_id, stale, after,),
             Err(ImageCropTransitionErrorV1::Stale { node_id })
         );
     }
