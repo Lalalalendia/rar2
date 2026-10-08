@@ -31,6 +31,7 @@ const META_SETBKCOLOR: u16 = 0x0201;
 const META_SETTEXTCOLOR: u16 = 0x0209;
 const META_SETWINDOWORG: u16 = 0x020b;
 const META_SETWINDOWEXT: u16 = 0x020c;
+const META_MOVETO: u16 = 0x0214;
 const META_SELECTPALETTE: u16 = 0x0234;
 const META_CREATEPENINDIRECT: u16 = 0x02fa;
 const META_CREATEFONTINDIRECT: u16 = 0x02fb;
@@ -171,6 +172,8 @@ struct PlaybackState {
     window_org_y: i32,
     window_ext_x: i32,
     window_ext_y: i32,
+    current_x: i32,
+    current_y: i32,
     clip: RectPx,
     polygon_fill_mode: u16,
     pen: Pen,
@@ -185,6 +188,8 @@ impl PlaybackState {
             window_org_y: 0,
             window_ext_x: i32::try_from(width).unwrap_or(1).max(1),
             window_ext_y: i32::try_from(height).unwrap_or(1).max(1),
+            current_x: 0,
+            current_y: 0,
             clip: RectPx::full(width, height),
             polygon_fill_mode: ALTERNATE,
             pen: Pen {
@@ -1545,6 +1550,17 @@ pub fn rasterize_wmf_preview(
                     bail!("WMF SETWINDOWEXT contains a zero extent");
                 }
             }
+            META_MOVETO => {
+                if params.len() != 4 {
+                    bail!("WMF MOVETO parameter length is not 4 bytes");
+                }
+                state.current_y = i32::from(
+                    read_i16(params, 0).ok_or_else(|| anyhow!("WMF MOVETO y is truncated"))?,
+                );
+                state.current_x = i32::from(
+                    read_i16(params, 2).ok_or_else(|| anyhow!("WMF MOVETO x is truncated"))?,
+                );
+            }
             META_INTERSECTCLIPRECT => {
                 let bottom = read_i16(params, 0)
                     .ok_or_else(|| anyhow!("WMF INTERSECTCLIPRECT bottom is truncated"))?;
@@ -2179,6 +2195,26 @@ mod tests {
             .expect("bounded SRCAND over painted destination");
         let center = ((58 * 163 + 81) * 4) as usize;
         assert_eq!(&image.rgba[center..center + 4], &[0x00, 0xc0, 0xaa, 255]);
+    }
+
+    #[test]
+    fn accepts_moveto_as_bounded_current_position_state() {
+        let mut bytes = synthetic_polygon();
+        let mut params = Vec::new();
+        params.extend_from_slice(&37_i16.to_le_bytes());
+        params.extend_from_slice(&23_i16.to_le_bytes());
+        insert_record_before_eof(&mut bytes, record(META_MOVETO, &params));
+
+        let image = rasterize_wmf_preview(&bytes, 100, 100).expect("bounded MOVETO");
+        assert_eq!(image.width, 100);
+        assert_eq!(image.height, 100);
+    }
+
+    #[test]
+    fn rejects_malformed_moveto_parameter_length() {
+        let mut bytes = synthetic_polygon();
+        insert_record_before_eof(&mut bytes, record(META_MOVETO, &37_i16.to_le_bytes()));
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
     }
 
     #[test]
