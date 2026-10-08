@@ -87,10 +87,6 @@ pub(super) fn project_grouped_object_shape(
             child_rotation_op,
             ancestor_horizontal_flip: false,
             ancestor_rotation_op: None,
-            group_source_width: None,
-            group_source_height: None,
-            group_target_width: None,
-            group_target_height: None,
             ancestor_bounds: None,
         },
     );
@@ -197,10 +193,6 @@ pub(super) fn project_grouped_object_shape(
                     .as_mut()
                     .expect("ancestor rotation admission is image-only");
                 transform.ancestor_rotation_op = ancestor_rotation_op;
-                transform.group_source_width = Some(source_width);
-                transform.group_source_height = Some(source_height);
-                transform.group_target_width = Some(target_width);
-                transform.group_target_height = Some(target_height);
                 transform.ancestor_bounds = Some(ancestor_bounds);
             }
             if ancestor_flip_h {
