@@ -130,5 +130,9 @@ on:
         self.assertIn('git push --force-with-lease="refs/heads/$branch:$expected_sha" origin ":refs/heads/$branch"', workflow)
         self.assertNotIn('git push origin --delete "$branch"', workflow)
 
+    def test_negative_control_required_ci_must_block_merge(self) -> None:
+        self.fail("INTENTIONAL main-protection negative control; NEVER MERGE")
+
+
 if __name__ == "__main__":
     unittest.main()
