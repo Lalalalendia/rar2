@@ -6,6 +6,15 @@ const FORBIDDEN_SOURCE_KEYS = new Set([
 
 export const RENDERER_KINDS = Object.freeze(["svg", "canvas2d", "webgl2-hybrid"]);
 
+export const RENDER_SCENE_PROTOCOLS = Object.freeze([
+  "chaptera.scene.v1",
+  "chaptera.editor-render-scene.v1",
+]);
+
+export function isRenderableSceneProtocol(value) {
+  return RENDER_SCENE_PROTOCOLS.includes(value);
+}
+
 function finite(value, label) {
   if (!Number.isFinite(value)) throw new TypeError(label + " must be finite");
   return value;
@@ -353,8 +362,8 @@ function previewTextCss(style, view) {
 
 export function buildRenderPlan(snapshot, rawView = {}) {
   assertSceneSourceNeutral(snapshot);
-  if (snapshot?.protocol_version !== "chaptera.scene.v1") {
-    throw new Error("renderer requires BrowserSceneSnapshotV1");
+  if (!isRenderableSceneProtocol(snapshot?.protocol_version)) {
+    throw new Error("renderer requires BrowserSceneSnapshotV1 or EditorRenderSceneV1");
   }
   const view = normalizeView(rawView);
   const pages = [...snapshot.pages].sort((a, b) => a.order - b.order);

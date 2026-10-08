@@ -184,7 +184,7 @@ test("current Scene uses cookie credentials and rich current-revision Reader pro
   });
 
   const scene = await service.currentScene();
-  assert.equal(scene.protocol_version, "chaptera.scene.v1");
+  assert.equal(scene.protocol_version, "chaptera.editor-render-scene.v1");
   assert.equal(scene.revision_id, BASE);
   assert.equal(scene.nodes[0].bounds.x, 1000);
   assert.deepEqual(scene.paints[0].fill, { r: 32, g: 96, b: 192, a: 255 });

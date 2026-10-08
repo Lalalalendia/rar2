@@ -83,7 +83,7 @@ function readerScene() {
 
 test("rich Reader Scene becomes an Editor Scene without changing revision authority", async () => {
   const scene = await adaptReaderSceneToEditorScene(readerScene());
-  assert.equal(scene.protocol_version, "chaptera.scene.v1");
+  assert.equal(scene.protocol_version, "chaptera.editor-render-scene.v1");
   assert.equal(scene.document_id, DOC);
   assert.equal(scene.revision_id, REVISION);
   assert.equal(scene.stacking_fidelity, "exact");
@@ -95,6 +95,8 @@ test("rich Reader Scene becomes an Editor Scene without changing revision author
   assert.equal(scene.nodes[1].z_order, 1);
   assert.deepEqual(scene.paints[0].fill, { r: 1, g: 2, b: 3, a: 255 });
   assert.equal(scene.resources[0].inline_data_url, PIXEL);
+  assert.equal(scene.resources[0].expected_sha256, null);
+  assert.equal(scene.resources[0].family_name, null);
   const font = scene.resources.find((resource) => resource.kind === "font");
   assert.equal(font.resource_id, FONT_ID);
   assert.equal(font.expected_sha256, FONT_SHA);
