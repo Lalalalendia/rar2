@@ -1,0 +1,5 @@
+# Research Wave 71 — assimilated Carlton/consumer evidence
+research/carlton-line-only-outline-01 7b03ccc19ef695b999a1af74d18848e9428df252
+research/carlton-quill-text-color-discriminator-01 fca69ce427fbcaa901dc0084031586dd7829336f
+research/editable-paragraph-alignment-consumer-edit-01 9ac94266e17f1479332b583d3b0735d9dbcb5a00
+ops/branch-gc-20261008-research-wave70 a9b9ceda620d5048491685d5912406ceea7e7b55
