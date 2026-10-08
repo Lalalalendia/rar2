@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use pub_viewer::{
-    ReaderPartialSourceFact, ReaderPartialSourceGraphError, ReaderSalvageCorruptionEvidence,
-    ReaderSalvageEligibility, ReaderSalvageProbe, ReaderSalvageSubsystemProbe,
-    ReaderSalvageTrigger, ViewerProductOpenOutcome, build_reader_partial_source_graph,
-    classify_pub_family, open_pub_or_salvage, probe_reader_salvage_candidate,
-    probe_reader_salvage_candidate_with_trigger, viewer_geometry_environment_v0_1,
+    build_reader_partial_source_graph, classify_pub_family, open_pub_or_salvage,
+    probe_reader_salvage_candidate, probe_reader_salvage_candidate_with_trigger,
+    viewer_geometry_environment_v0_1, ReaderPartialSourceFact, ReaderPartialSourceGraphError,
+    ReaderSalvageCorruptionEvidence, ReaderSalvageEligibility, ReaderSalvageProbe,
+    ReaderSalvageSubsystemProbe, ReaderSalvageTrigger, ViewerProductOpenOutcome,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -242,10 +242,7 @@ fn classify(bytes: &[u8]) -> AcceptanceRow {
                 pub_profile: family.profile.as_str().to_owned(),
                 salvage_eligibility: Some(eligibility_name(probe.eligibility)),
                 corruption_evidence: probe.corruption_evidence.map(corruption_name),
-                authority_owner: probe
-                    .authority
-                    .as_ref()
-                    .map(|authority| authority.owner.clone()),
+                authority_owner: probe.authority.as_ref().map(|authority| authority.owner.clone()),
                 authority_task_id: probe
                     .authority
                     .as_ref()
@@ -286,10 +283,7 @@ fn classify(bytes: &[u8]) -> AcceptanceRow {
                 pub_profile: family.profile.as_str().to_owned(),
                 salvage_eligibility: Some(eligibility_name(probe.eligibility)),
                 corruption_evidence: probe.corruption_evidence.map(corruption_name),
-                authority_owner: probe
-                    .authority
-                    .as_ref()
-                    .map(|authority| authority.owner.clone()),
+                authority_owner: probe.authority.as_ref().map(|authority| authority.owner.clone()),
                 authority_task_id: probe
                     .authority
                     .as_ref()
