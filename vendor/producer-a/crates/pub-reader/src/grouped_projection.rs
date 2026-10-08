@@ -78,6 +78,7 @@ pub(super) fn project_grouped_object_shape(
         .as_ref()
         .context("grouped child is missing ChildAnchor")?;
     let mut rect = coordinate_rect_i128(child_anchor)?;
+    let child_rect_initial = rect;
     let mut current_shape = child_shape;
     let mut current_group_seq = first_group_seq;
     let mut seen = BTreeSet::new();
@@ -115,6 +116,28 @@ pub(super) fn project_grouped_object_shape(
             bail!("OfficeArt parent-group link does not match Contents ancestry");
         }
         let ancestor_rotation = shape_has_nonzero_rotation(group_shape);
+        if ancestor_rotation
+            && std::env::var_os("READER_CORPUS_DIAGNOSTIC").is_some()
+        {
+            let ancestor_rotation_ops = group_shape
+                .fopts
+                .iter()
+                .flat_map(|record| record.properties.iter())
+                .filter(|property| property.property_id() == OFFICE_ART_PROPERTY_ROTATION)
+                .map(|property| property.op)
+                .collect::<Vec<_>>();
+            let group_coords = group_shape
+                .fspgr
+                .as_ref()
+                .and_then(|value| coordinate_rect_i128(value).ok());
+            let client_anchor = group_shape
+                .client_anchor
+                .as_ref()
+                .and_then(|value| publisher_anchor_rect_i128(value).ok());
+            eprintln!(
+                "GROUPED_ROTATION_PROFILE first_group_seq={first_group_seq} depth={depth} child_rotation_op={child_rotation_op:?} child_rect_initial={child_rect_initial:?} child_rect_current={rect:?} ancestor_rotation_ops={ancestor_rotation_ops:?} group_coords={group_coords:?} client_anchor={client_anchor:?}"
+            );
+        }
         let ancestor_flip_h = shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_H);
         let ancestor_flip_v = shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_V);
         if ancestor_rotation {
