@@ -37,9 +37,7 @@ fn invalidate_text_page_frame_cache<T>(
     affected_pages: Option<&BTreeSet<usize>>,
     text_projection_succeeded: bool,
 ) {
-    if text_projection_succeeded
-        && let Some(affected_pages) = affected_pages
-    {
+    if text_projection_succeeded && let Some(affected_pages) = affected_pages {
         cache.retain(|page_index, _| !affected_pages.contains(page_index));
         return;
     }
@@ -174,9 +172,11 @@ impl ViewerApp {
                 .nodes
                 .iter()
                 .find(|node| node.origin == frame.frame_id)?;
-            let page_index = visual.document.pages.iter().position(|page| {
-                scene_node.parent_origin == page.id.into_canonical()
-            })?;
+            let page_index = visual
+                .document
+                .pages
+                .iter()
+                .position(|page| scene_node.parent_origin == page.id.into_canonical())?;
             affected_pages.insert(page_index);
         }
 
