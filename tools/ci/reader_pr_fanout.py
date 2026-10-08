@@ -33,6 +33,7 @@ READER_QUILL_ADMISSION = "vendor/producer-a/crates/pub-reader/src/quill_admissio
 READER_PUBLICATION_DOCUMENT = "vendor/producer-a/crates/pub-reader/src/publication_document.rs"
 READER_CONTENTS_ACCESS = "vendor/producer-a/crates/pub-reader/src/contents_access.rs"
 READER_SOURCE_IDENTITY = "vendor/producer-a/crates/pub-reader/src/source_identity.rs"
+READER_NODE_MATERIALIZATION = "vendor/producer-a/crates/pub-reader/src/node_materialization.rs"
 
 
 TEST_REGION_EVIDENCE_CANDIDATES = {
@@ -345,6 +346,7 @@ CLOUD_REFERENCE = (
     READER_STORY_MATERIALIZATION,
     READER_QUILL_ADMISSION,
     READER_PUBLICATION_DOCUMENT,
+    READER_NODE_MATERIALIZATION,
     "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs",
     "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs",
     "tools/acquire_carlton_march_pair.py",
@@ -383,6 +385,7 @@ VISUAL_BATCH01 = (
     READER_STORY_MATERIALIZATION,
     READER_QUILL_ADMISSION,
     READER_PUBLICATION_DOCUMENT,
+    READER_NODE_MATERIALIZATION,
 )
 
 TYPOGRAPHY_GOLDEN = (
@@ -641,7 +644,7 @@ def classify(
     virginia_paths = [
         path
         for path in product_paths
-        if path not in {VIEWER_IMAGES, READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_TYPOGRAPHY_PROJECTION, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_SOURCE_GRAPH_MODEL, READER_ANCHOR_GEOMETRY, READER_STORY_MATERIALIZATION, READER_QUILL_ADMISSION, READER_CONTENTS_ACCESS, READER_SOURCE_IDENTITY}
+        if path not in {VIEWER_IMAGES, READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_TYPOGRAPHY_PROJECTION, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_SOURCE_GRAPH_MODEL, READER_ANCHOR_GEOMETRY, READER_STORY_MATERIALIZATION, READER_QUILL_ADMISSION, READER_CONTENTS_ACCESS, READER_SOURCE_IDENTITY, READER_NODE_MATERIALIZATION}
         and not path.startswith("vendor/producer-a/crates/pub-reader/src/bin/")
         and not path.startswith("vendor/producer-a/crates/pub-viewer/src/bin/")
     ]
