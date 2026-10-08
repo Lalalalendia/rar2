@@ -10,9 +10,7 @@ use pub_editor::{
 use pub_viewer::{ViewerFidelityStatus, ViewerGeometryDocument};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use std::fs;
-use std::io::{self, BufRead, Write};
-use std::path::{Path, PathBuf};
+use std::{fs, io::{self, BufRead, Write}, path::{Path, PathBuf}};
 const PROTOCOL_VERSION: &str = "chaptera.agent-control.v1";
 const AGENT_CONTROL_CATALOG_JSON: &str =
     include_str!("../../../packages/protocol/editor-agent-control/v1.catalog.json");
