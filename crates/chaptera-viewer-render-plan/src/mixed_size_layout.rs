@@ -305,6 +305,7 @@ struct MixedSizeLayoutEvaluationV1 {
     cursor: u32,
     used_height_emu: i64,
     lines: Vec<RenderResolvedTextLineV1>,
+    stop_cause: Option<&'static str>,
 }
 
 fn evaluate_mixed_size_text_layout_v1(
@@ -358,14 +359,19 @@ fn evaluate_mixed_size_text_layout_v1(
     let mut used_height_emu = 0_i64;
     let mut line_index = 0_u32;
     let mut lines = Vec::new();
+    let mut stop_cause = None;
 
     while cursor < fragment.scalar_end {
         let mut chosen = None;
+        let mut saw_candidate = false;
+        let mut saw_width_fit = false;
+        let mut reached_mandatory = false;
         for candidate in policy
             .candidates
             .iter()
             .filter(|candidate| candidate.scalar_boundary > cursor)
         {
+            saw_candidate = true;
             let evaluated = if cursor_safe_without_reshaping
                 && candidate.safe_without_reshaping
                 && candidate.kind == BoundedBreakKind::Allowed
@@ -392,15 +398,26 @@ fn evaluate_mixed_size_text_layout_v1(
             let fits_height = used_height_emu
                 .checked_add(evaluated.line_height_emu)
                 .is_some_and(|height| height <= bounds.height.get());
+            saw_width_fit |= fits_width;
             if fits_width && fits_height {
                 chosen = Some((evaluated, candidate.safe_without_reshaping));
             }
             if candidate.kind == BoundedBreakKind::Mandatory {
+                reached_mandatory = true;
                 break;
             }
         }
 
         let Some((chosen, chosen_boundary_safe_without_reshaping)) = chosen else {
+            stop_cause = Some(if saw_width_fit {
+                "height_capacity_exhausted"
+            } else if reached_mandatory {
+                "mandatory_boundary_no_fit"
+            } else if saw_candidate {
+                "width_no_legal_break"
+            } else {
+                "other_fail_closed"
+            });
             break;
         };
         used_height_emu = used_height_emu
@@ -439,7 +456,69 @@ fn evaluate_mixed_size_text_layout_v1(
         cursor,
         used_height_emu,
         lines,
+        stop_cause,
     })
+}
+
+pub(super) fn classify_mixed_size_layout_incomplete_v1(
+    fragment: &RenderTextFragmentV1,
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+    node_id: NodeId,
+    bounds: &RectEmu,
+) -> SharedLayoutIncompleteCauseV1 {
+    if bounds.width.get() <= 0 || bounds.height.get() <= 0 {
+        return SharedLayoutIncompleteCauseV1 {
+            path: "mixed_size_path",
+            consumption: "unknown",
+            cause: "frame_geometry_invalid",
+        };
+    }
+    if font.resource_id.is_empty()
+        || font.bytes.is_empty()
+        || font.default_font_size_emu <= 0
+        || font.default_line_height_emu <= 0
+    {
+        return SharedLayoutIncompleteCauseV1 {
+            path: "mixed_size_path",
+            consumption: "unknown",
+            cause: "font_resource_invalid",
+        };
+    }
+    let fingerprint = font_fingerprint_sha256(font.bytes);
+    if font.expected_sha256.is_empty() || fingerprint != font.expected_sha256 {
+        return SharedLayoutIncompleteCauseV1 {
+            path: "mixed_size_path",
+            consumption: "unknown",
+            cause: "font_fingerprint_mismatch",
+        };
+    }
+
+    let evaluation =
+        match evaluate_mixed_size_text_layout_v1(fragment, font, node_id, bounds, &fingerprint) {
+            Ok(value) => value,
+            Err(_) => {
+                return SharedLayoutIncompleteCauseV1 {
+                    path: "mixed_size_path",
+                    consumption: "unknown",
+                    cause: "other_fail_closed",
+                };
+            }
+        };
+    let consumption = if evaluation.lines.is_empty() {
+        "zero_lines"
+    } else {
+        "partial_lines"
+    };
+    let cause = if evaluation.cursor == fragment.scalar_end {
+        "unexpected_complete"
+    } else {
+        evaluation.stop_cause.unwrap_or("other_fail_closed")
+    };
+    SharedLayoutIncompleteCauseV1 {
+        path: "mixed_size_path",
+        consumption,
+        cause,
+    }
 }
 
 pub(super) fn resolve_mixed_size_text_layout_v1(

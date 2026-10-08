@@ -192,6 +192,19 @@ jobs:
           mkdir -p "$RUNNER_TEMP/publisher-visual-supplemental"
           python tools/cloud_reader_visual_supplemental_v1.py prepare             tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv             out/pinned1050/materialized/native             "$RUNNER_TEMP/publisher-visual-supplemental/fixtures"             "$RUNNER_TEMP/publisher-visual-supplemental/manifest.json"
 
+      - name: Measure shared-layout incomplete causes for 082 and 100
+        run: |
+          set -euo pipefail
+          for spec in \
+            "082_2531deb3629797af:2531deb3629797af53d79f740a31cb00886c61ba0b3bfb59e163e006278dd763" \
+            "100_b1faaba988e88b41:b1faaba988e88b4134dc8a495cb68c6f7496f3fbaedcba65fa6e02f39b29b621"; do
+            fixture="${spec%%:*}"
+            sha="${spec#*:}"
+            CHAPTERA_READER_SCENE_PROBE_PUB="$RUNNER_TEMP/publisher-visual-supplemental/fixtures/$fixture.pub" \
+            CHAPTERA_READER_SCENE_PROBE_SHA256="$sha" \
+              cargo test -p chaptera-server real_reference_text_layout_fallback_census_probe -- --ignored --nocapture
+          done
+
       - name: Build canonical Cloud Reader worker
         env:
           SUPPLEMENTAL_CARGO_CACHE_HIT: ${{ steps.supplemental-cargo-cache.outputs.cache-hit }}
