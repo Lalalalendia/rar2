@@ -1,5 +1,5 @@
 name: Reader cross-backend visual parity
-# rebaseline: Story slice #1982 + exact first-frame prefixes
+# rebaseline: exact-slice SLI causal classifier
 
 on:
   workflow_dispatch:
