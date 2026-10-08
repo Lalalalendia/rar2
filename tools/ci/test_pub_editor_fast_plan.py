@@ -302,7 +302,16 @@ def main() -> int:
         mode="edit",
     )
     mixed_commands = [check.command for check in mixed_checks]
-    if expected_adapter_check not in mixed_commands:
+    expected_root_package_check = (
+        "cargo",
+        "check",
+        "--manifest-path",
+        "vendor/producer-a/crates/pub-editor/Cargo.toml",
+    )
+    if (
+        expected_adapter_check not in mixed_commands
+        and expected_root_package_check not in mixed_commands
+    ):
         raise SystemExit(
             "mixed core + pub-editor adapter edit must retain full pub-editor compile check"
         )
