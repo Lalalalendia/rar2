@@ -246,8 +246,7 @@ fn main() -> Result<()> {
                     && !entry.f_complex()
                     && entry.op == 0x0008_0000
                 {
-                    native_shadow_02bf_node_ids
-                        .insert(node_id.as_canonical().to_string());
+                    native_shadow_02bf_node_ids.insert(node_id.as_canonical().to_string());
                 }
                 if !is_candidate(entry.property_id()) {
                     continue;
