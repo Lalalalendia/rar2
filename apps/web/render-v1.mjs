@@ -69,6 +69,140 @@ function inlineImageHref(resource) {
   return /^data:image\/(?:png|jpeg|jpg|gif);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : null;
 }
 
+function inlineFontHref(resource) {
+  const value = resource?.inline_data_url;
+  if (resource?.kind !== "font" || typeof value !== "string") return null;
+  return /^data:font\/(?:ttf|otf);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : null;
+}
+
+function fontFingerprint(resource) {
+  const value = resource?.expected_sha256 ?? resource?.content_hash ?? null;
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value) ? value : null;
+}
+
+function fontFamily(resource) {
+  const fingerprint = fontFingerprint(resource);
+  return fingerprint ? "ChapteraEditor_" + fingerprint.slice(0, 16) : null;
+}
+
+function textColorCss(value) {
+  return Array.isArray(value) && value.length === 3
+    ? "rgb(" + value.map(Number).join(" ") + ")"
+    : "rgba(0,0,0,0.9)";
+}
+
+export function resolvedEditorTextPlan(node, resources, page, view) {
+  const layout = node?.text_layout;
+  if (node?.visual_authority !== "reader_scene" || layout?.disposition !== "shared_resolved") {
+    return null;
+  }
+  const bounds = node.text_bounds ?? node.bounds;
+  if (!bounds) return null;
+  const x = safeInteger(bounds.x, "text.bounds.x");
+  const y = safeInteger(bounds.y, "text.bounds.y");
+  const width = safeInteger(bounds.width, "text.bounds.width");
+  const height = safeInteger(bounds.height, "text.bounds.height");
+  const fontSize = safeInteger(layout.font_size_emu, "text.font_size_emu");
+  const lineHeight = safeInteger(layout.line_height_emu, "text.line_height_emu");
+  const verticalOffset = safeInteger(layout.vertical_offset_emu ?? 0, "text.vertical_offset_emu");
+  if (width <= 0 || height <= 0 || fontSize <= 0 || lineHeight <= 0) return null;
+  if (verticalOffset < 0 || verticalOffset > height) return null;
+
+  const baseResource = resources.get(layout.font_resource_id) ?? null;
+  const baseHref = inlineFontHref(baseResource);
+  const baseFingerprint = fontFingerprint(baseResource);
+  const baseFamily = fontFamily(baseResource);
+  if (!baseHref || !baseFingerprint || !baseFamily) return null;
+  if (baseFingerprint !== layout.font_fingerprint_sha256) return null;
+
+  const faces = new Map();
+  faces.set(baseResource.resource_id, Object.freeze({
+    resource_id: baseResource.resource_id,
+    family: baseFamily,
+    mime: baseResource.mime,
+    href: baseHref,
+    fingerprint_sha256: baseFingerprint,
+  }));
+
+  const lines = [];
+  let cursorY = y + verticalOffset;
+  for (const line of [...(layout.lines ?? [])].sort((left, right) => left.line_index - right.line_index)) {
+    const lineIndex = safeInteger(line.line_index, "text.line_index");
+    const currentLineHeight = safeInteger(line.line_height_emu, "text.line_height_emu");
+    const measuredWidth = safeInteger(line.measured_width_emu, "text.measured_width_emu");
+    const lineOffset = safeInteger(line.x_offset_emu ?? 0, "text.x_offset_emu");
+    if (currentLineHeight <= 0 || measuredWidth < 0 || lineOffset < 0 || lineOffset + measuredWidth > width) return null;
+    const lineTop = cursorY - y;
+    if (lineTop < 0 || lineTop >= height) return null;
+
+    const spans = [];
+    for (const span of line.spans ?? []) {
+      const scalarStart = safeInteger(span.scalar_start, "text.span.scalar_start");
+      const scalarEnd = safeInteger(span.scalar_end, "text.span.scalar_end");
+      const xOffset = safeInteger(span.x_offset_emu, "text.span.x_offset_emu");
+      const spanWidth = safeInteger(span.measured_width_emu, "text.span.measured_width_emu");
+      const spanFontSize = safeInteger(span.font_size_emu, "text.span.font_size_emu");
+      if (scalarEnd <= scalarStart || xOffset < 0 || spanWidth < 0 || spanFontSize <= 0) return null;
+      let family = baseFamily;
+      if (span.font_resource_id != null || span.font_fingerprint_sha256 != null) {
+        if (typeof span.font_resource_id !== "string" || typeof span.font_fingerprint_sha256 !== "string") return null;
+        const spanResource = resources.get(span.font_resource_id) ?? null;
+        const spanHref = inlineFontHref(spanResource);
+        const spanFingerprint = fontFingerprint(spanResource);
+        const spanFamily = fontFamily(spanResource);
+        if (!spanHref || !spanFingerprint || !spanFamily) return null;
+        if (spanFingerprint !== span.font_fingerprint_sha256) return null;
+        family = spanFamily;
+        faces.set(spanResource.resource_id, Object.freeze({
+          resource_id: spanResource.resource_id,
+          family: spanFamily,
+          mime: spanResource.mime,
+          href: spanHref,
+          fingerprint_sha256: spanFingerprint,
+        }));
+      }
+      spans.push(Object.freeze({
+        scalar_start: scalarStart,
+        scalar_end: scalarEnd,
+        text: String(span.text ?? ""),
+        x: page.x + emuToCss(x + lineOffset + xOffset, view),
+        measured_width_css_px: emuToCss(spanWidth, view),
+        font_size_css_px: emuToCss(spanFontSize, view),
+        font_family: family,
+        font_resource_id: span.font_resource_id ?? null,
+      }));
+    }
+
+    lines.push(Object.freeze({
+      line_index: lineIndex,
+      text: String(line.text ?? ""),
+      x: page.x + emuToCss(x + lineOffset, view),
+      y: page.y + emuToCss(cursorY, view),
+      measured_width_css_px: emuToCss(measuredWidth, view),
+      line_height_css_px: emuToCss(currentLineHeight, view),
+      spans: Object.freeze(spans),
+    }));
+    cursorY += currentLineHeight;
+  }
+
+  return Object.freeze({
+    authority: "server-shared-resolved",
+    viewport: Object.freeze({
+      x: page.x + emuToCss(x, view),
+      y: page.y + emuToCss(y, view),
+      width: emuToCss(width, view),
+      height: emuToCss(height, view),
+    }),
+    font_resource_id: baseResource.resource_id,
+    font_family: baseFamily,
+    font_size_css_px: emuToCss(fontSize, view),
+    line_height_css_px: emuToCss(lineHeight, view),
+    fill: textColorCss(layout.color_rgb),
+    lines: Object.freeze(lines),
+    font_faces: Object.freeze([...faces.values()]),
+  });
+}
+
 function previewTextCss(style, view) {
   const size = Number.isSafeInteger(style?.font_size_emu)
     ? emuToCss(style.font_size_emu, view)
@@ -125,6 +259,9 @@ export function buildRenderPlan(snapshot, rawView = {}) {
       const paint = node.paint_id ? paints.get(node.paint_id) ?? null : null;
       const story = storyByNode.get(node.node_id) ?? null;
       const resource = node.resource_id ? resources.get(node.resource_id) ?? null : null;
+      const resolvedText = story
+        ? resolvedEditorTextPlan(node, resources, { x: pageX, y: pageY }, view)
+        : null;
       const plan = Object.freeze({
         node_id: node.node_id,
         page_id: node.page_id,
@@ -144,7 +281,8 @@ export function buildRenderPlan(snapshot, rawView = {}) {
           authority: node.visual_authority === "reader_scene"
             ? "reader_scene_preview"
             : "browser_preview_only",
-          style: previewTextCss(node.preview_text_style, view)
+          style: previewTextCss(node.preview_text_style, view),
+          resolved_text: resolvedText
         }) : null,
         resource: resource ? Object.freeze({
           resource_id: resource.resource_id,
@@ -231,6 +369,75 @@ function svgNode(tag, attrs) {
   return node;
 }
 
+function appendResolvedSvgText(root, story) {
+  const plan = story?.resolved_text;
+  if (!plan) return false;
+  const local = svgNode("svg", {
+    x: plan.viewport.x,
+    y: plan.viewport.y,
+    width: plan.viewport.width,
+    height: plan.viewport.height,
+    viewBox: "0 0 " + plan.viewport.width + " " + plan.viewport.height,
+    overflow: "hidden",
+    "data-text-viewport": "fixed-frame",
+  });
+  for (const line of plan.lines) {
+    const text = svgNode("text", {
+      x: line.x - plan.viewport.x,
+      y: line.y - plan.viewport.y,
+      "font-family": plan.font_family,
+      "font-size": plan.font_size_css_px,
+      fill: plan.fill,
+      "text-rendering": "geometricPrecision",
+      "dominant-baseline": "text-before-edge",
+      "data-text-authority": plan.authority,
+      "data-text-line-index": line.line_index,
+      "data-measured-width-css-px": line.measured_width_css_px,
+    });
+    text.setAttribute("xml:space", "preserve");
+    if (line.spans.length) {
+      for (const span of line.spans) {
+        const tspan = svgNode("tspan", {
+          x: span.x - plan.viewport.x,
+          "font-family": span.font_family,
+          "font-size": span.font_size_css_px,
+          "data-text-span-start": span.scalar_start,
+          "data-text-span-end": span.scalar_end,
+          "data-measured-width-css-px": span.measured_width_css_px,
+          "data-font-resource-id": span.font_resource_id,
+        });
+        tspan.setAttribute("xml:space", "preserve");
+        tspan.textContent = span.text;
+        text.appendChild(tspan);
+      }
+    } else {
+      text.textContent = line.text;
+    }
+    local.appendChild(text);
+  }
+  root.appendChild(local);
+  return true;
+}
+
+function appendSvgFontFaces(root, plan) {
+  const faces = new Map();
+  for (const page of plan.pages) {
+    for (const node of page.nodes) {
+      for (const face of node.story?.resolved_text?.font_faces ?? []) {
+        faces.set(face.resource_id, face);
+      }
+    }
+  }
+  if (!faces.size) return;
+  const style = svgNode("style", { "data-reader-font-resources": faces.size });
+  style.textContent = [...faces.values()].map((face) => {
+    const format = face.mime === "font/otf" ? "opentype" : "truetype";
+    return '@font-face{font-family:"' + face.family + '";src:url("' + face.href
+      + '") format("' + format + '");font-style:normal;font-weight:normal;}';
+  }).join("\n");
+  root.appendChild(style);
+}
+
 class SvgRenderer {
   constructor(host, snapshot, view) {
     this.host = host;
@@ -245,6 +452,7 @@ class SvgRenderer {
     this.root = svgNode("svg", { width: size.width, height: size.height, "data-renderer": "svg" });
     this.host.appendChild(this.root);
     this.plan = buildRenderPlan(this.snapshot, this.view);
+    appendSvgFontFaces(this.root, this.plan);
     for (const page of this.plan.pages) {
       this.root.appendChild(svgNode("rect", {
         x: page.x, y: page.y, width: page.width, height: page.height,
@@ -271,17 +479,20 @@ class SvgRenderer {
           image.setAttribute("href", node.resource.inline_data_url);
           this.root.appendChild(image);
         }
-        if (node.story) {
+        if (node.story && !appendResolvedSvgText(this.root, node.story)) {
           const label = svgNode("text", {
             x: node.x + 2,
             y: node.y + node.story.style.font_size_css_px,
             "font-size": node.story.style.font_size_css_px,
             fill: node.story.style.fill,
-            "data-text-authority": node.story.authority
+            "data-text-authority": node.story.authority,
+            "data-preview-reason": node.visual_authority === "reader_scene"
+              ? "shared_plan_or_font_unavailable"
+              : "browser_scene_preview"
           });
           label.textContent = node.story.text.slice(0, 120);
           this.root.appendChild(label);
-        } else if (node.resource && !node.resource.inline_data_url) {
+        } else if (node.resource && !node.resource.inline_data_url && !node.story) {
           const label = svgNode("text", { x: node.x + 2, y: node.y + 14, "font-size": 10 });
           label.textContent = "image:" + node.resource.availability;
           this.root.appendChild(label);
