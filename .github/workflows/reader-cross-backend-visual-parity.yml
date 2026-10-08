@@ -1,4 +1,5 @@
 name: Reader cross-backend visual parity
+# rebaseline: exact-slice partial Story overset admission
 # rebaseline: exact-slice SLI causal classifier
 
 on:
