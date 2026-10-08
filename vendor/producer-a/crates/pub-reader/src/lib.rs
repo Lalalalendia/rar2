@@ -39,6 +39,7 @@ mod resolve;
 mod salvage;
 mod salvage_authority;
 mod source_graph_model;
+mod source_identity;
 mod source_paint_order;
 mod story_frame_analysis;
 mod story_frame_projection;
@@ -212,6 +213,13 @@ pub use salvage_authority::{
     typed_corruption_authority,
 };
 use serde::{Deserialize, Serialize};
+pub use source_identity::{
+    contents_object_key, derive_pub_document_id, derive_pub_node_id, derive_pub_page_id,
+    derive_pub_story_id, quill_story_object_key,
+};
+use source_identity::{
+    ROLE_DOCUMENT, ROLE_NODE, ROLE_PAGE, ROLE_STORY, derive_pub_id, source_ref,
+};
 pub use source_graph_model::{
     PubEffectiveFillSource, PubEffectiveLineSource, PubEffectivePaintAuthority,
     PubEffectivePaintValue, PubEffectiveShapePaintSource, PubExplicitFillSource,
@@ -306,11 +314,6 @@ const FIELD_SHAPE_HEIGHT: u16 = 0xAB;
 const FIELD_PREVIOUS_FRAME: u16 = 0x36;
 const FIELD_NEXT_FRAME: u16 = 0x37;
 
-const ROLE_DOCUMENT: &str = "cdm.document";
-const ROLE_PAGE: &str = "cdm.page";
-const ROLE_NODE: &str = "cdm.node";
-const ROLE_STORY: &str = "cdm.story";
-
 fn raw_span_hex(bytes: &[u8], span: &pub_core::RawSpan) -> Result<String> {
     let start = usize::try_from(span.offset).context("raw span offset does not fit usize")?;
     let len = usize::try_from(span.len).context("raw span length does not fit usize")?;
@@ -322,48 +325,6 @@ fn raw_span_hex(bytes: &[u8], span: &pub_core::RawSpan) -> Result<String> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>())
-}
-
-/// Canonical source key for a physical mature-0x2C Contents directory slot.
-pub fn contents_object_key(seq_num: u32) -> String {
-    format!("contents/0x2c/seq/{seq_num}")
-}
-
-/// Canonical source key for a persistent Quill SYID story identity.
-pub fn quill_story_object_key(syid: u32) -> String {
-    format!("quill/syid/{syid}")
-}
-
-pub fn derive_pub_document_id(source_hash: &Sha256Digest, seq_num: u32) -> Result<DocumentId> {
-    Ok(DocumentId::from_canonical(derive_pub_id(
-        source_hash,
-        &contents_object_key(seq_num),
-        ROLE_DOCUMENT,
-    )?))
-}
-
-pub fn derive_pub_page_id(source_hash: &Sha256Digest, seq_num: u32) -> Result<PageId> {
-    Ok(PageId::from_canonical(derive_pub_id(
-        source_hash,
-        &contents_object_key(seq_num),
-        ROLE_PAGE,
-    )?))
-}
-
-pub fn derive_pub_node_id(source_hash: &Sha256Digest, seq_num: u32) -> Result<NodeId> {
-    Ok(NodeId::from_canonical(derive_pub_id(
-        source_hash,
-        &contents_object_key(seq_num),
-        ROLE_NODE,
-    )?))
-}
-
-pub fn derive_pub_story_id(source_hash: &Sha256Digest, syid: u32) -> Result<StoryId> {
-    Ok(StoryId::from_canonical(derive_pub_id(
-        source_hash,
-        &quill_story_object_key(syid),
-        ROLE_STORY,
-    )?))
 }
 
 /// Builds a bounded mature-0x2C SourceGraph from one complete CFB file.
@@ -1210,20 +1171,6 @@ fn require_consensus_page_extent(extents: &[(u32, u32)]) -> Result<(u32, u32)> {
     Ok(first)
 }
 
-fn derive_pub_id(
-    source_hash: &Sha256Digest,
-    object_key: &str,
-    semantic_role: &str,
-) -> Result<CanonicalId> {
-    derive_source_canonical_id(SourceDerivedIdInput {
-        source_hash,
-        adapter_id: PUB_ADAPTER_ID,
-        source_object_key: object_key,
-        semantic_role,
-    })
-    .map_err(|error| anyhow!("source-derived identity error: {error:?}"))
-}
-
 fn decode_utf16le_strict(bytes: &[u8]) -> Result<String> {
     if bytes.len() % 2 != 0 {
         bail!("UTF-16LE byte length is odd: {}", bytes.len());
@@ -1233,29 +1180,6 @@ fn decode_utf16le_strict(bytes: &[u8]) -> Result<String> {
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
         .collect::<Vec<_>>();
     String::from_utf16(&units).map_err(|error| anyhow!("invalid UTF-16LE: {error}"))
-}
-
-fn source_ref(
-    source: &SourceDescriptor,
-    span: &RawSpan,
-    object_key: Option<String>,
-    path: Option<String>,
-    role: SourceRole,
-    authority: AuthorityClass,
-    confidence: ReadConfidence,
-) -> SourceRef {
-    SourceRef {
-        format: source.format.clone(),
-        adapter_version: source.adapter_version.clone(),
-        source_hash: source.source_hash,
-        carrier: span.stream.0.clone(),
-        object_key,
-        path,
-        byte_range: Some(ByteRange::new(span.offset, span.len)),
-        role,
-        authority,
-        confidence: Some(confidence),
-    }
 }
 
 fn bounded_quill_text_rgb(
