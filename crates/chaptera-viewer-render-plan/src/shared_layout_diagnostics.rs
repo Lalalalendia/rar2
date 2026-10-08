@@ -4,12 +4,225 @@
 //! render admission, Story content, paint, or backend execution.
 
 use super::*;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SharedLayoutIncompleteCauseV1 {
     pub path: &'static str,
     pub consumption: &'static str,
     pub cause: &'static str,
+}
+
+/// Source-safe, diagnostic-only line-scope paragraph spacing provenance.
+/// This is not admission authority and exposes no Story text or source offsets.
+fn source_line_spacing_signature_v1(
+    visual: &ViewerGeometryDocument,
+    fragment: &RenderTextFragmentV1,
+    scalar_start: u32,
+    scalar_end: u32,
+    font_is_source_resolved: bool,
+) -> String {
+    if scalar_start >= scalar_end
+        || scalar_start < fragment.scalar_start
+        || scalar_end > fragment.scalar_end
+    {
+        return "invalid_or_empty_line".to_owned();
+    }
+    let Some(story) = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == fragment.story_id)
+    else {
+        return "story_missing".to_owned();
+    };
+    let mut segments = visual
+        .paragraph_line_spacings
+        .iter()
+        .filter(|run| run.story_id == fragment.story_id)
+        .filter(|run| run.applies_to_story_text(&story.text))
+        .filter(|run| run.scalar_end > scalar_start && run.scalar_start < scalar_end)
+        .collect::<Vec<_>>();
+    segments.sort_by_key(|run| (run.scalar_start, run.scalar_end));
+    if segments.is_empty() {
+        return "no_fresh_run".to_owned();
+    }
+    let segment_count = segments.len();
+    let mut cursor = scalar_start;
+    let mut has_gap = false;
+    let mut has_overlap = false;
+    let mut has_inherited = false;
+    let mut modes = BTreeSet::<String>::new();
+    let mut authority_classes = BTreeSet::<&'static str>::new();
+    for run in segments {
+        has_gap |= run.scalar_start > cursor;
+        has_overlap |= cursor > scalar_start && run.scalar_start < cursor;
+        cursor = cursor.max(run.scalar_end.min(scalar_end));
+        has_inherited |= run.source_value.is_none();
+        match run.line_spacing {
+            ViewerParagraphLineSpacing::Absolute { spacing_emu } => {
+                modes.insert(format!("absolute-{spacing_emu}"));
+                authority_classes.insert(if spacing_emu > 0 {
+                    "absolute_source"
+                } else {
+                    "invalid_absolute"
+                });
+            }
+            ViewerParagraphLineSpacing::Proportional {
+                point_equivalent_emu,
+            } => {
+                modes.insert(format!("proportional-{point_equivalent_emu}"));
+                let proven_mode = matches!(
+                    point_equivalent_emu,
+                    PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1
+                        | PUBLISHER_ONE_POINT_FIVE_POINT_EQUIVALENT_EMU_V1
+                );
+                authority_classes.insert(if !proven_mode {
+                    "mode_unproven"
+                } else if !font_is_source_resolved {
+                    "source_font_not_bound"
+                } else {
+                    "font_metrics_still_require_validation"
+                });
+            }
+        }
+    }
+    has_gap |= cursor < scalar_end;
+    let coverage = if has_overlap {
+        "overlap"
+    } else if has_gap {
+        "gap"
+    } else if segment_count == 1 {
+        "single"
+    } else {
+        "segmented"
+    };
+    let provenance = if has_inherited {
+        "inherited_or_mixed"
+    } else {
+        "explicit"
+    };
+    format!(
+        "{coverage}:{provenance}:{}:{}",
+        authority_classes.into_iter().collect::<Vec<_>>().join("+"),
+        modes.into_iter().collect::<Vec<_>>().join("+"),
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MixedSizeLayoutCapacityDiagnosticV1 {
+    pub accepted_lines: usize,
+    pub frame_height_emu: i64,
+    pub used_height_emu: i64,
+    pub physical_first_then_baseline_height_emu: Option<i64>,
+    pub next_width_fit_line_height_emu: Option<i64>,
+    pub next_width_fit_physical_extent_emu: Option<i64>,
+    pub current_next_fits_height: Option<bool>,
+    pub physical_first_then_baseline_next_fits_height: Option<bool>,
+    pub accepted_line_spacing_counts: BTreeMap<String, usize>,
+    pub first_accepted_line_spacing: Option<String>,
+    pub last_accepted_line_spacing: Option<String>,
+    pub next_width_fit_line_spacing: Option<String>,
+    pub first_line_height_emu: Option<i64>,
+    pub last_line_height_emu: Option<i64>,
+}
+
+pub fn classify_mixed_size_layout_capacity_v1(
+    visual: &ViewerGeometryDocument,
+    fragment: &RenderTextFragmentV1,
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+    node_id: NodeId,
+    bounds: &RectEmu,
+    font_is_source_resolved: bool,
+) -> Option<MixedSizeLayoutCapacityDiagnosticV1> {
+    if bounds.width.get() <= 0
+        || bounds.height.get() <= 0
+        || font.resource_id.is_empty()
+        || font.bytes.is_empty()
+        || font.default_font_size_emu <= 0
+        || font.default_line_height_emu <= 0
+    {
+        return None;
+    }
+    let fingerprint = font_fingerprint_sha256(font.bytes);
+    if font.expected_sha256.is_empty() || fingerprint != font.expected_sha256 {
+        return None;
+    }
+
+    let evaluation = super::mixed_size_layout::evaluate_mixed_size_text_layout_v1(
+        fragment,
+        font,
+        node_id,
+        bounds,
+        &fingerprint,
+    )
+    .ok()?;
+    let next_line_height = evaluation.stop_width_fit_min_line_height_emu;
+    let current_next_fits_height = next_line_height.map(|height| {
+        evaluation
+            .used_height_emu
+            .checked_add(height)
+            .is_some_and(|total| total <= bounds.height.get())
+    });
+    let physical_first_then_baseline_next_fits_height = match (
+        evaluation.physical_first_then_baseline_height_emu,
+        next_line_height,
+    ) {
+        (Some(used), Some(height)) if !evaluation.lines.is_empty() => used
+            .checked_add(height)
+            .map(|total| total <= bounds.height.get()),
+        (Some(_), Some(_)) => evaluation
+            .stop_width_fit_min_physical_extent_emu
+            .map(|extent| extent <= bounds.height.get()),
+        _ => None,
+    };
+
+    let accepted_line_spacings = evaluation
+        .lines
+        .iter()
+        .map(|line| {
+            source_line_spacing_signature_v1(
+                visual,
+                fragment,
+                line.scalar_start,
+                line.consumed_scalar_end,
+                font_is_source_resolved,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut accepted_line_spacing_counts = BTreeMap::<String, usize>::new();
+    for signature in &accepted_line_spacings {
+        *accepted_line_spacing_counts
+            .entry(signature.clone())
+            .or_default() += 1;
+    }
+    let next_width_fit_line_spacing = evaluation
+        .stop_width_fit_candidate_consumed_scalar_end
+        .map(|end| {
+            source_line_spacing_signature_v1(
+                visual,
+                fragment,
+                evaluation.cursor,
+                end,
+                font_is_source_resolved,
+            )
+        });
+    Some(MixedSizeLayoutCapacityDiagnosticV1 {
+        accepted_lines: evaluation.lines.len(),
+        frame_height_emu: bounds.height.get(),
+        used_height_emu: evaluation.used_height_emu,
+        physical_first_then_baseline_height_emu: evaluation.physical_first_then_baseline_height_emu,
+        next_width_fit_line_height_emu: next_line_height,
+        next_width_fit_physical_extent_emu: evaluation.stop_width_fit_min_physical_extent_emu,
+        current_next_fits_height,
+        physical_first_then_baseline_next_fits_height,
+        accepted_line_spacing_counts,
+        first_accepted_line_spacing: accepted_line_spacings.first().cloned(),
+        last_accepted_line_spacing: accepted_line_spacings.last().cloned(),
+        next_width_fit_line_spacing,
+        first_line_height_emu: evaluation.lines.first().map(|line| line.line_height_emu),
+        last_line_height_emu: evaluation.lines.last().map(|line| line.line_height_emu),
+    })
 }
 
 /// Replays one already-classified SharedLayoutIncomplete fragment through the
