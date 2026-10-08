@@ -566,10 +566,15 @@ fn evaluate_mixed_size_text_layout_v1(
     })
 }
 
+pub(super) struct MixedSizeSourceAuthorityV1<F> {
+    pub(super) font_is_source_resolved: bool,
+    pub(super) source_line_spacing_for_range: F,
+}
+
 pub(super) fn resolve_mixed_size_text_layout_v1<F>(
     fragment: &RenderTextFragmentV1,
     font: &ExplicitRenderTextFontResourceV1<'_>,
-    font_is_source_resolved: bool,
+    authority: MixedSizeSourceAuthorityV1<F>,
     node_id: NodeId,
     bounds: &RectEmu,
     fingerprint: &str,
@@ -627,8 +632,8 @@ where
                     evaluation.cursor,
                     &terminal,
                     font,
-                    font_is_source_resolved,
-                    &source_line_spacing_for_range,
+                    authority.font_is_source_resolved,
+                    &authority.source_line_spacing_for_range,
                 )
             else {
                 return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
