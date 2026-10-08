@@ -400,6 +400,12 @@ pub(super) fn materialize_mature_nodes(
             explicit_image_crop.is_some(),
         );
         if image_slot.is_some() && std::env::var_os("READER_CORPUS_DIAGNOSTIC").is_some() {
+            let document_page_ordinal = graph
+                .document
+                .pages
+                .iter()
+                .position(|candidate| *candidate == page_id)
+                .map(|index| index + 1);
             let rotation_ops = shape
                 .fopts
                 .iter()
@@ -408,7 +414,7 @@ pub(super) fn materialize_mature_nodes(
                 .map(|property| (property.op, property.f_bid(), property.f_complex()))
                 .collect::<Vec<_>>();
             eprintln!(
-                "IMAGE_PLACEMENT_PROFILE seq_num={seq_num} page_id={page_id:?} image_slot={image_slot:?} direct_image_candidate={direct_image_candidate} grouped={:?} bounds={bounds:?} rotation_ops={rotation_ops:?} fsp_flags={:?} crop={explicit_image_crop:?} recolor={explicit_image_recolor:?} transform={:?}",
+                "IMAGE_PLACEMENT_PROFILE seq_num={seq_num} page_id={page_id:?} document_page_ordinal={document_page_ordinal:?} image_slot={image_slot:?} direct_image_candidate={direct_image_candidate} grouped={:?} bounds={bounds:?} rotation_ops={rotation_ops:?} fsp_flags={:?} crop={explicit_image_crop:?} recolor={explicit_image_recolor:?} transform={:?}",
                 !grouped_sources.is_empty(),
                 shape.fsp.as_ref().map(|fsp| fsp.flags),
                 node_transform_projection
