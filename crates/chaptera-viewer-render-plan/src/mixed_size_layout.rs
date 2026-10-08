@@ -819,10 +819,12 @@ mod tests {
         let resolved = resolve_mixed_size_text_layout_v1(
             &fragment,
             &font,
+            false,
             node_id,
             &bounds,
             &fingerprint,
             None,
+            |_, _| None,
         );
         assert!(matches!(
             resolved.disposition,
@@ -838,6 +840,163 @@ mod tests {
         assert_eq!(resolved.lines[1].scalar_start, 3);
         assert_eq!(resolved.lines[1].scalar_end, 3);
         assert_eq!(resolved.lines[1].consumed_scalar_end, 4);
+    }
+
+    #[test]
+    fn mixed_size_terminal_visible_line_requires_exact_114300_source_authority() {
+        let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let fingerprint = font_fingerprint_sha256(bytes);
+        let default_font_size_emu = 12 * 12_700;
+        let default_line_height_emu = 14 * 12_700;
+        let font = ExplicitRenderTextFontResourceV1 {
+            resource_id: "test:noto-serif",
+            expected_sha256: &fingerprint,
+            face_index: 0,
+            default_font_size_emu,
+            default_line_height_emu,
+            bytes,
+        };
+        let fragment = mixed_fragment("aa\rbb");
+        let node_id = NodeId::from_canonical(pub_model::CanonicalId::from_bytes([4; 16]));
+
+        let first_physical_extent_emu =
+            compatible_natural_line_height_emu_v1(bytes, 0, LengthEmu::new(default_font_size_emu))
+                .map(LengthEmu::get)
+                .expect("first line physical extent")
+                .min(default_line_height_emu);
+        let terminal_natural_line_height_emu = compatible_natural_line_height_emu_v1(
+            bytes,
+            0,
+            LengthEmu::new(18 * 12_700),
+        )
+        .map(LengthEmu::get)
+        .expect("terminal source font metric");
+        let terminal_authoritative_advance_emu = scale_proportional_line_height_emu_v1(
+            terminal_natural_line_height_emu,
+            PUBLISHER_THREE_QUARTER_POINT_EQUIVALENT_EMU_V1,
+        )
+        .expect("native-proven 0.75 advance");
+        let frame_height_emu = first_physical_extent_emu
+            .checked_add(terminal_authoritative_advance_emu)
+            .expect("bounded authoritative frame height");
+        let legacy_terminal_height_emu = scaled_line_height_emu(
+            18 * 12_700,
+            default_font_size_emu,
+            default_line_height_emu,
+        )
+        .expect("legacy terminal height");
+        assert!(
+            default_line_height_emu
+                .checked_add(legacy_terminal_height_emu)
+                .is_some_and(|height| height > frame_height_emu),
+            "legacy baseline accounting must reject the visible terminal line"
+        );
+
+        let bounds = RectEmu::new(
+            LengthEmu::ZERO,
+            LengthEmu::ZERO,
+            LengthEmu::new(10_000_000),
+            LengthEmu::new(frame_height_emu),
+        );
+        let baseline =
+            evaluate_mixed_size_text_layout_v1(&fragment, &font, node_id, &bounds, &fingerprint)
+                .expect("baseline mixed-size evaluation");
+        assert_eq!(baseline.cursor, 3);
+        let terminal = baseline
+            .terminal_visible_stop
+            .as_ref()
+            .expect("one non-empty terminal line must be retained as retry witness");
+        assert_eq!(terminal.scalar_end, fragment.scalar_end);
+        assert_eq!(terminal.consumed_scalar_end, fragment.scalar_end);
+        assert_eq!(terminal.text, "bb");
+        assert!(!terminal.spans.is_empty());
+
+        let without_source_authority = resolve_mixed_size_text_layout_v1(
+            &fragment,
+            &font,
+            true,
+            node_id,
+            &bounds,
+            &fingerprint,
+            None,
+            |_, _| None,
+        );
+        assert_eq!(
+            without_source_authority.disposition,
+            RenderTextLayoutDispositionV1::BackendFallback {
+                reason: RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete,
+            }
+        );
+
+        let with_wrong_proportional_mode = resolve_mixed_size_text_layout_v1(
+            &fragment,
+            &font,
+            true,
+            node_id,
+            &bounds,
+            &fingerprint,
+            None,
+            |_, _| {
+                Some(ViewerParagraphLineSpacing::Proportional {
+                    point_equivalent_emu: PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1,
+                })
+            },
+        );
+        assert_eq!(
+            with_wrong_proportional_mode.disposition,
+            RenderTextLayoutDispositionV1::BackendFallback {
+                reason: RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete,
+            }
+        );
+
+        let with_fallback_font = resolve_mixed_size_text_layout_v1(
+            &fragment,
+            &font,
+            false,
+            node_id,
+            &bounds,
+            &fingerprint,
+            None,
+            |_, _| {
+                Some(ViewerParagraphLineSpacing::Proportional {
+                    point_equivalent_emu: PUBLISHER_THREE_QUARTER_POINT_EQUIVALENT_EMU_V1,
+                })
+            },
+        );
+        assert_eq!(
+            with_fallback_font.disposition,
+            RenderTextLayoutDispositionV1::BackendFallback {
+                reason: RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete,
+            }
+        );
+
+        let resolved = resolve_mixed_size_text_layout_v1(
+            &fragment,
+            &font,
+            true,
+            node_id,
+            &bounds,
+            &fingerprint,
+            None,
+            |start, end| {
+                (start == 3 && end == 5).then_some(ViewerParagraphLineSpacing::Proportional {
+                    point_equivalent_emu: PUBLISHER_THREE_QUARTER_POINT_EQUIVALENT_EMU_V1,
+                })
+            },
+        );
+        assert!(matches!(
+            resolved.disposition,
+            RenderTextLayoutDispositionV1::SharedResolved { .. }
+        ));
+        assert_eq!(resolved.lines.len(), 2);
+        assert_eq!(resolved.lines[0].text, "aa");
+        assert_eq!(resolved.lines[1].text, "bb");
+        assert_eq!(resolved.lines[1].scalar_start, 3);
+        assert_eq!(resolved.lines[1].scalar_end, 5);
+        assert_eq!(
+            resolved.lines[1].line_height_emu,
+            terminal_authoritative_advance_emu
+        );
     }
 
     #[test]
@@ -864,10 +1023,12 @@ mod tests {
         let partial = resolve_mixed_size_text_layout_v1(
             &fragment,
             &font,
+            false,
             node_id,
             &one_line_bounds,
             &fingerprint,
             None,
+            |_, _| None,
         );
         assert_eq!(
             partial.disposition,
@@ -886,10 +1047,12 @@ mod tests {
         let zero_line = resolve_mixed_size_text_layout_v1(
             &fragment,
             &font,
+            false,
             node_id,
             &zero_line_bounds,
             &fingerprint,
             None,
+            |_, _| None,
         );
         assert_eq!(
             zero_line.disposition,
