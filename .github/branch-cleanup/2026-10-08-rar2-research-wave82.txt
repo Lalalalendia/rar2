@@ -1,0 +1,4 @@
+# Research Wave 82
+research/legacy22-group-geometry-1050-01 9d31941295059b808213e36fbcde3b84c2769c88
+research/quill-story-sentinel-ffffffff-01 cd058d1a095e5e48d051a6d0334dd9603a64c83a
+ops/branch-gc-20261008-research-wave81 0bc44d38e9faff1809ffeda1d3b90a913732a5d7
