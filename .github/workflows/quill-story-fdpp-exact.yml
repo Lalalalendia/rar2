@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/quill-story-fdpp-exact.yml"
       - "vendor/producer-a/crates/pub-quill/src/**"
+      - "!vendor/producer-a/crates/pub-quill/src/typography/color.rs"
       - "vendor/producer-a/crates/pub-reader/src/**"
       - "!vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
       - "!vendor/producer-a/crates/pub-reader/src/page_projection.rs"

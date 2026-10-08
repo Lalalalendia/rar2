@@ -157,6 +157,47 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         self.assertNotIn("pub-quill-paragraph-tests", root_ids)
         self.assertIn("pub-viewer-cmo-slot-compose", root_ids)
 
+    def test_pub_quill_color_leaf_uses_exact_lib_filter(self) -> None:
+        color_plan = MODULE.build_plan(
+            ["vendor/producer-a/crates/pub-quill/src/typography/color.rs"],
+            "BASE",
+            "HEAD",
+        )
+        color_ids = {command["id"] for command in color_plan["commands"]}
+        self.assertIn("pub-quill-color-tests", color_ids)
+        self.assertNotIn("vendor-source-free-tests", color_ids)
+        self.assertIn("vendor-clippy", color_ids)
+        self.assertIn("pub-viewer-cmo-slot-compose", color_ids)
+
+        color_tests = next(
+            command
+            for command in color_plan["commands"]
+            if command["id"] == "pub-quill-color-tests"
+        )
+        self.assertEqual(
+            color_tests["argv"],
+            [
+                "cargo",
+                "test",
+                "--manifest-path",
+                "vendor/producer-a/Cargo.toml",
+                "-p",
+                "pub-quill",
+                "--lib",
+                "typography::color",
+            ],
+        )
+
+        root_plan = MODULE.build_plan(
+            ["vendor/producer-a/crates/pub-quill/src/typography.rs"],
+            "BASE",
+            "HEAD",
+        )
+        root_ids = {command["id"] for command in root_plan["commands"]}
+        self.assertIn("vendor-source-free-tests", root_ids)
+        self.assertNotIn("pub-quill-color-tests", root_ids)
+        self.assertIn("pub-viewer-cmo-slot-compose", root_ids)
+
     def test_vendor_workspace_change_qualifies_donor_pub_model(self) -> None:
         plan = MODULE.build_plan(
             ["vendor/producer-a/Cargo.toml"],
