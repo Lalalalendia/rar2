@@ -21,6 +21,7 @@ members = [
   "crates/pub-writer",
   "crates/pub-editor-authoring-core",
   "crates/pub-editor-geometry-core",
+  "crates/pub-editor-image-core",
   "crates/pub-editor-table-core",
   "crates/pub-editor",
   "crates/pub-cli",
