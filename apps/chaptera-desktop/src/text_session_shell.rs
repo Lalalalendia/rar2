@@ -26,10 +26,7 @@ fn paragraph_alignment_shortcut_v1(
 enum CanvasTextMutationFinalization {
     NoChange,
     Rejected(String),
-    Committed {
-        status: String,
-        rebind_failed: bool,
-    },
+    Committed { status: String, rebind_failed: bool },
 }
 
 /// The canonical EditOperation is already in EditorSession by the time
@@ -803,13 +800,8 @@ mod tests {
 
     #[test]
     fn accepted_canvas_text_commits_have_one_finish_owned_refresh_route() {
-        let result = classify_canvas_text_mutation(
-            7,
-            8,
-            Ok(()),
-            "Text committed.",
-            "Text rejected",
-        );
+        let result =
+            classify_canvas_text_mutation(7, 8, Ok(()), "Text committed.", "Text rejected");
         assert_eq!(
             result,
             CanvasTextMutationFinalization::Committed {
@@ -854,9 +846,7 @@ mod tests {
                 "Text committed.",
                 "Text rejected"
             ),
-            CanvasTextMutationFinalization::Rejected(
-                "Text rejected: stale selection".to_owned()
-            )
+            CanvasTextMutationFinalization::Rejected("Text rejected: stale selection".to_owned())
         );
     }
 
