@@ -3084,7 +3084,6 @@ mod tests {
         let story_id = StoryId::from_canonical(canonical(3));
         let resource_id = ResourceId::from_canonical(canonical(4));
         let page_size = Size2D::new(LengthEmu::new(1000), LengthEmu::new(2000));
-
         ViewerGeometryDocument {
             schema_version: "viewer.v1".into(),
             document: ViewerDocument {
