@@ -452,6 +452,73 @@ fn build_pdf_artifact(
     let mut table_border_primitive_count = 0usize;
     let mut table_paint_incomplete_count = 0usize;
     let mut table_no_visible_paint_count = 0usize;
+
+    // Diagnostic-only source-safe TABLE semantic census. These counters expose no
+    // cell text or node identities and do not participate in PDF selection.
+    let table_row_total = visual.tables.iter().map(|table| table.rows as usize).sum::<usize>();
+    let table_column_total = visual
+        .tables
+        .iter()
+        .map(|table| table.columns as usize)
+        .sum::<usize>();
+    let table_max_rows = visual.tables.iter().map(|table| table.rows).max().unwrap_or(0);
+    let table_max_columns = visual.tables.iter().map(|table| table.columns).max().unwrap_or(0);
+    let table_spanning_cell_count = visual
+        .tables
+        .iter()
+        .flat_map(|table| table.cells.iter())
+        .filter(|cell| cell.row_span > 1 || cell.column_span > 1)
+        .count();
+    let table_nonempty_cell_count = visual
+        .tables
+        .iter()
+        .flat_map(|table| table.cells.iter())
+        .filter(|cell| !cell.text.is_empty())
+        .count();
+    let table_story_range_cell_count = visual
+        .tables
+        .iter()
+        .flat_map(|table| table.cells.iter())
+        .filter(|cell| cell.story_scalar_start.is_some() && cell.story_scalar_end.is_some())
+        .count();
+    let table_hidden_fill_cell_count = visual
+        .tables
+        .iter()
+        .flat_map(|table| table.cells.iter())
+        .filter(|cell| cell.fill_visible == Some(false))
+        .count();
+    let table_uniform_text_inset_count = visual
+        .tables
+        .iter()
+        .filter(|table| table.uniform_cell_text_inset_emu.is_some())
+        .count();
+    let table_uniform_vertical_alignment_count = visual
+        .tables
+        .iter()
+        .filter(|table| table.uniform_cell_vertical_alignment.is_some())
+        .count();
+    let table_unique_fill_rgb_count = visual
+        .tables
+        .iter()
+        .flat_map(|table| table.cells.iter())
+        .filter_map(|cell| cell.fill_rgb)
+        .collect::<BTreeSet<_>>()
+        .len();
+    let table_unique_border_rgb_count = visual
+        .tables
+        .iter()
+        .flat_map(|table| table.borders.iter())
+        .map(|border| border.rgb)
+        .collect::<BTreeSet<_>>()
+        .len();
+    let table_unique_border_width_count = visual
+        .tables
+        .iter()
+        .flat_map(|table| table.borders.iter())
+        .map(|border| border.width_emu)
+        .collect::<BTreeSet<_>>()
+        .len();
+
     let table_paints = visual
         .tables
         .iter()
@@ -619,6 +686,19 @@ fn build_pdf_artifact(
                     "table_border_primitive_count": table_border_primitive_count,
                     "table_paint_incomplete_count": table_paint_incomplete_count,
                     "table_no_visible_paint_count": table_no_visible_paint_count,
+                    "table_row_total": table_row_total,
+                    "table_column_total": table_column_total,
+                    "table_max_rows": table_max_rows,
+                    "table_max_columns": table_max_columns,
+                    "table_spanning_cell_count": table_spanning_cell_count,
+                    "table_nonempty_cell_count": table_nonempty_cell_count,
+                    "table_story_range_cell_count": table_story_range_cell_count,
+                    "table_hidden_fill_cell_count": table_hidden_fill_cell_count,
+                    "table_uniform_text_inset_count": table_uniform_text_inset_count,
+                    "table_uniform_vertical_alignment_count": table_uniform_vertical_alignment_count,
+                    "table_unique_fill_rgb_count": table_unique_fill_rgb_count,
+                    "table_unique_border_rgb_count": table_unique_border_rgb_count,
+                    "table_unique_border_width_count": table_unique_border_width_count,
                     "table_text_disposition": "explicit_residual",
                 }),
             );
