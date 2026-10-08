@@ -1,0 +1,7 @@
+# 2026-10-08 — Cloud Editor predecessor batch 20
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+editor/cloud-reader-shared-text-01 dcbb9524a81aa01e18cf5557f0a32c035a4ac6f1 # #2157 superseded by clean restack #2174, then merged successor #2181
+editor/cloud-reader-shared-text-01-restack 28d6d92a39162e6fb173d193bf270db7c5b1361f # #2174 replaced by merged current-main restack #2181
+editor/cloud-reader-image-01 3fda3534cc5713f338fe59484c84f905b01eb776 # #2202 superseded by current-main restack #2210
