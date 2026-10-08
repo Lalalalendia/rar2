@@ -140,15 +140,24 @@ jobs:
           node-version: "22"
 
       - name: Restore/save pinned Playwright Chromium cache
+        id: playwright-chromium-cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/ms-playwright
           key: cloud-reader-playwright-v1-${{ runner.os }}-1.55.0-chromium
 
       - name: Install pinned browser acceptance runtime
+        env:
+          PLAYWRIGHT_CACHE_HIT: ${{ steps.playwright-chromium-cache.outputs.cache-hit }}
         run: |
+          set -euo pipefail
+          start="$(date +%s)"
           npm install --no-save playwright@1.55.0
-          npx playwright install --with-deps chromium
+          npx playwright install chromium
+          node -e 'const { chromium } = require("playwright"); (async()=>{const b=await chromium.launch({headless:true}); const p=await b.newPage(); await p.setContent("<title>chaptera-playwright-smoke</title>"); if((await p.title())!=="chaptera-playwright-smoke") throw new Error("smoke title mismatch"); await b.close();})().catch(e=>{console.error(e);process.exit(1)})'
+          elapsed="$(($(date +%s) - start))"
+          echo "playwright_cache_hit=${PLAYWRIGHT_CACHE_HIT:-unknown}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "playwright_setup_seconds=$elapsed" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Build canonical guest Scene producer
         run: cargo build -p chaptera-server --bin chaptera --jobs 2
