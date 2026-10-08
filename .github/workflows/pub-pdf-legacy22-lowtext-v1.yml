@@ -1,0 +1,94 @@
+name: PUB PDF Legacy22LowText Publisher acceptance
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-pdf-legacy22-lowtext-v1.yml"
+      - "tools/pub_pdf_legacy22_lowtext_census_v1.py"
+      - "vendor/producer-a/crates/pub-cli/**"
+      - "vendor/producer-a/crates/pub-format-registry/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: pub-pdf-legacy22-lowtext-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Install pinned Publisher comparator
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir "PyMuPDF==1.26.7" "Pillow==12.3.0"
+          python -m py_compile tools/pub_pdf_cli_publisher_oracle_v1.py
+          python -m py_compile tools/pub_pdf_legacy22_lowtext_census_v1.py
+
+      - name: Acquire pinned exact-1050 source corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify exact source bundle
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(s + "\n" for s in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          PY
+
+      - name: Test format registry and build public CLI
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-format-registry
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-cli --bin pub
+
+      - name: Materialize existing pinned fallback font
+        run: |
+          set -euo pipefail
+          cargo run -q -p chaptera-desktop-fallback-font-resource --bin materialize-fallback-font -- "$RUNNER_TEMP/chaptera-fallback.ttf"
+          test -s "$RUNNER_TEMP/chaptera-fallback.ttf"
+
+      - name: Convert ten low-text witnesses and compare Publisher fingerprints
+        run: |
+          set -euo pipefail
+          mkdir -p target/pub-pdf-legacy22-lowtext-v1
+          python tools/pub_pdf_legacy22_lowtext_census_v1.py \
+            --batch01 tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json \
+            --supplemental tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json \
+            --source-root out/pinned1050/materialized/native \
+            --cli vendor/producer-a/target/debug/pub \
+            --fallback-font "$RUNNER_TEMP/chaptera-fallback.ttf" \
+            --timeout 120 \
+            --out target/pub-pdf-legacy22-lowtext-v1/receipt.json
+
+      - name: Upload source-safe acceptance receipt only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-pdf-legacy22-lowtext-v1
+          path: target/pub-pdf-legacy22-lowtext-v1/receipt.json
+          if-no-files-found: warn
+          retention-days: 30
