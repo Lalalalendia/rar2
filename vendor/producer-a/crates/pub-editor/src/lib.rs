@@ -1894,6 +1894,8 @@ impl EditorError {
             Self::PageOrderUnsupported { .. } => "page_order_unsupported",
             Self::PageOrderNoChange => "page_order_no_change",
             Self::StalePageOrder => "stale_page_order",
+            Self::AuthoredPageIdentityInvalid { .. } => "authored_page_identity_invalid",
+            Self::AuthoredPageIdentityConflict { .. } => "authored_page_identity_conflict",
             Self::NodeMoveUnsupported { .. } => "node_move_unsupported",
             Self::NodeMoveNoChange { .. } => "node_move_no_change",
             Self::NodeMoveOverflow { .. } => "node_move_overflow",
