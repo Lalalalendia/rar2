@@ -1,0 +1,299 @@
+name: MEASURE exact 04 Arial Narrow metrics sensitivity
+
+on:
+  push:
+    branches:
+      - "measure/04-narrow-font-metrics-sensitivity-01"
+    paths:
+      - ".github/workflows/measure-04-narrow-font-metrics-sensitivity.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/publisher-visual-supplemental-rust
+
+jobs:
+  exact-04:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build supplemental Cargo cache key
+        id: cargo-key
+        env:
+          MANIFEST_HASH: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'apps/chaptera-server/Cargo.toml', 'crates/**/Cargo.toml', 'vendor/producer-a/Cargo.toml', 'vendor/producer-a/Cargo.lock', 'vendor/producer-a/crates/**/Cargo.toml') }}
+        run: |
+          set -euo pipefail
+          test -n "$MANIFEST_HASH"
+          echo "key=publisher-visual-supplemental-rust-v1-${RUNNER_OS}-rust-1.94.1-${MANIFEST_HASH}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore existing Cargo build cache only
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: target/publisher-visual-supplemental-rust
+          key: ${{ steps.cargo-key.outputs.key }}
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Prepare exact 04 fixture only
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
+          rm -rf "$RUNNER_TEMP/exact04-narrow"
+          mkdir -p "$RUNNER_TEMP/exact04-narrow"
+          python tools/cloud_reader_visual_supplemental_v1.py prepare \
+            tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv \
+            out/pinned1050/materialized/native \
+            "$RUNNER_TEMP/exact04-narrow/fixtures" \
+            "$RUNNER_TEMP/exact04-narrow/manifest.json"
+          python - "$RUNNER_TEMP/exact04-narrow/manifest.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          path = Path(sys.argv[1])
+          data = json.loads(path.read_text())
+          rows = [row for row in data["fixtures"] if row["name"] == "04-modern2c-story-stress"]
+          assert len(rows) == 1, rows
+          data["fixtures"] = rows
+          path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+          PY
+
+      - name: Build canonical Cloud Reader worker
+        run: |
+          set -euo pipefail
+          cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Restore pinned Playwright Chromium cache only
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cache/ms-playwright
+          key: publisher-visual-supplemental-${{ runner.os }}-playwright-1.55.0-chromium
+
+      - name: Install pinned browser runtime
+        run: |
+          set -euo pipefail
+          npm install --no-save playwright@1.55.0
+          npx playwright install chromium
+
+      - name: Install metric-compatible Arial Narrow sensitivity font
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends fonts-liberation fonts-liberation-sans-narrow
+          fc-cache -f
+          fc-match 'Liberation Sans Narrow:style=Regular'
+          fc-match 'Liberation Sans:style=Regular'
+
+      - name: Build explicit metric-sensitivity font registries
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/exact04-narrow"
+          mkdir -p "$root/registry-arial" "$root/registry-both"
+
+          arial_line="$(fc-match -f '%{file}|%{family}\n' 'Liberation Sans:style=Regular' | head -n 1)"
+          arial_file="${arial_line%%|*}"
+          arial_family="${arial_line#*|}"
+          echo "FONT_SENSITIVITY_CANDIDATE role=Arial actual_family=$arial_family file=$arial_file"
+          test -f "$arial_file"
+          case "$arial_family" in
+            *"Liberation Sans"*) ;;
+            *) echo "Liberation Sans candidate unavailable" >&2; exit 1 ;;
+          esac
+
+          narrow_line="$(fc-match -f '%{file}|%{family}\n' 'Liberation Sans Narrow:style=Regular' | head -n 1)"
+          narrow_file="${narrow_line%%|*}"
+          narrow_family="${narrow_line#*|}"
+          echo "FONT_SENSITIVITY_CANDIDATE role=ArialNarrow actual_family=$narrow_family file=$narrow_file"
+          test -f "$narrow_file"
+          case "$narrow_family" in
+            *"Liberation Sans Narrow"*) ;;
+            *) echo "Liberation Sans Narrow candidate unavailable" >&2; exit 1 ;;
+          esac
+
+          cp "$arial_file" "$root/registry-arial/arial.ttf"
+          cp "$arial_file" "$root/registry-both/arial.ttf"
+          cp "$narrow_file" "$root/registry-both/arial-narrow.ttf"
+          arial_sha="$(sha256sum "$arial_file" | awk '{print $1}')"
+          narrow_sha="$(sha256sum "$narrow_file" | awk '{print $1}')"
+
+          python - "$root" "$arial_sha" "$narrow_sha" <<'PY'
+          import json, sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          arial_sha, narrow_sha = sys.argv[2:4]
+          protocol = "chaptera.reader-configured-font-manifest.v1"
+          arial = {
+              "protocol_version": protocol,
+              "resources": [{
+                  "source_family": "Arial",
+                  "expected_sha256": arial_sha,
+                  "face_index": 0,
+                  "mime": "font/ttf",
+                  "file_name": "arial.ttf",
+              }],
+          }
+          both = {
+              "protocol_version": protocol,
+              "resources": [
+                  *arial["resources"],
+                  {
+                      "source_family": "Arial Narrow",
+                      "expected_sha256": narrow_sha,
+                      "face_index": 0,
+                      "mime": "font/ttf",
+                      "file_name": "arial-narrow.ttf",
+                  },
+              ],
+          }
+          (root / "registry-arial" / "manifest.json").write_text(
+              json.dumps(arial, indent=2, sort_keys=True) + "\n"
+          )
+          (root / "registry-both" / "manifest.json").write_text(
+              json.dumps(both, indent=2, sort_keys=True) + "\n"
+          )
+          print("NARROW_FONT_SENSITIVITY_REGISTRY " + json.dumps({
+              "arial_sha256": arial_sha,
+              "arial_narrow_sha256": narrow_sha,
+          }, sort_keys=True))
+          PY
+
+      - name: Render exact 04 baseline
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.sha }}
+          READER_CORPUS_DIAGNOSTIC: "1"
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/publisher-visual-supplemental-rust/debug/chaptera
+          READER_REAL_MANIFEST: ${{ runner.temp }}/exact04-narrow/manifest.json
+          READER_REAL_OUTPUT: ${{ runner.temp }}/exact04-narrow/browser-baseline
+          READER_REFERENCE_RASTER_DPI: "144"
+          READER_CONTINUE_WORKER_FAILURES: "1"
+          READER_WORKER_TIMEOUT_SECONDS: "120"
+          READER_WORKER_CPU_SECONDS: "90"
+          READER_WORKER_ADDRESS_SPACE_MB: "768"
+        run: node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Render exact 04 Arial-only arm
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.sha }}
+          READER_CORPUS_DIAGNOSTIC: "1"
+          READER_FONT_REGISTRY: ${{ runner.temp }}/exact04-narrow/registry-arial/manifest.json
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/publisher-visual-supplemental-rust/debug/chaptera
+          READER_REAL_MANIFEST: ${{ runner.temp }}/exact04-narrow/manifest.json
+          READER_REAL_OUTPUT: ${{ runner.temp }}/exact04-narrow/browser-arial
+          READER_REFERENCE_RASTER_DPI: "144"
+          READER_CONTINUE_WORKER_FAILURES: "1"
+          READER_WORKER_TIMEOUT_SECONDS: "120"
+          READER_WORKER_CPU_SECONDS: "90"
+          READER_WORKER_ADDRESS_SPACE_MB: "768"
+        run: node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Render exact 04 Arial plus Narrow arm
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.sha }}
+          READER_CORPUS_DIAGNOSTIC: "1"
+          READER_FONT_REGISTRY: ${{ runner.temp }}/exact04-narrow/registry-both/manifest.json
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/publisher-visual-supplemental-rust/debug/chaptera
+          READER_REAL_MANIFEST: ${{ runner.temp }}/exact04-narrow/manifest.json
+          READER_REAL_OUTPUT: ${{ runner.temp }}/exact04-narrow/browser-both
+          READER_REFERENCE_RASTER_DPI: "144"
+          READER_CONTINUE_WORKER_FAILURES: "1"
+          READER_WORKER_TIMEOUT_SECONDS: "120"
+          READER_WORKER_CPU_SECONDS: "90"
+          READER_WORKER_ADDRESS_SPACE_MB: "768"
+        run: node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Compare exact 04 three-arm sensitivity
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/exact04-narrow" <<'PY'
+          import json, sys
+          from pathlib import Path
+          sys.path.insert(0, "tools")
+          from cloud_reader_visual_fingerprint_v1 import compare_grid, image_grid, reference_grid
+
+          root = Path(sys.argv[1])
+          ref = json.loads(Path(
+              "tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json"
+          ).read_text())
+          pair = [x for x in ref["pairs"] if x["basename"] == "04-modern2c-story-stress"][0]
+
+          metrics_by_arm = {}
+          for arm in ["baseline", "arial", "both"]:
+              browser = root / f"browser-{arm}"
+              receipt = json.loads((browser / "receipt.json").read_text())
+              result = [x for x in receipt["results"] if x["fixture"] == "04-modern2c-story-stress"][0]
+              assert result["rendered"] is True
+              if arm != "baseline":
+                  assert any(
+                      code == "source_font_resource_admitted"
+                      or code.endswith(":source_font_resource_admitted")
+                      for code in result["diagnostic_codes"]
+                  ), result["diagnostic_codes"]
+              rows = []
+              for index, shot in enumerate(result["screenshots"]):
+                  metrics = compare_grid(
+                      image_grid(browser / shot["filename"]),
+                      reference_grid(pair["pages"][index]),
+                  )
+                  rows.append(metrics["changed_cell_fraction"])
+                  print(
+                      "EXACT04_NARROW_SENSITIVITY "
+                      f"arm={arm} page={index + 1} "
+                      f"changed={metrics['changed_cell_fraction']:.12f} "
+                      f"mean_abs_channel_delta={metrics['mean_abs_channel_delta']:.12f}"
+                  )
+              metrics_by_arm[arm] = rows
+              print(
+                  "EXACT04_NARROW_SENSITIVITY_SUMMARY "
+                  f"arm={arm} mean={sum(rows)/len(rows):.12f}"
+              )
+
+          for page in range(5):
+              base = metrics_by_arm["baseline"][page]
+              arial = metrics_by_arm["arial"][page]
+              both = metrics_by_arm["both"][page]
+              print(
+                  "EXACT04_NARROW_INCREMENT "
+                  f"page={page + 1} "
+                  f"baseline_to_arial={arial-base:+.12f} "
+                  f"arial_to_both={both-arial:+.12f} "
+                  f"baseline_to_both={both-base:+.12f}"
+              )
+          base_mean = sum(metrics_by_arm["baseline"]) / 5
+          arial_mean = sum(metrics_by_arm["arial"]) / 5
+          both_mean = sum(metrics_by_arm["both"]) / 5
+          print(
+              "EXACT04_NARROW_INCREMENT_SUMMARY "
+              f"baseline_mean={base_mean:.12f} "
+              f"arial_mean={arial_mean:.12f} "
+              f"both_mean={both_mean:.12f} "
+              f"baseline_to_arial={arial_mean-base_mean:+.12f} "
+              f"arial_to_both={both_mean-arial_mean:+.12f} "
+              f"baseline_to_both={both_mean-base_mean:+.12f}"
+          )
+          PY
