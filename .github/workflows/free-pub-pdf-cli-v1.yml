@@ -137,12 +137,9 @@ jobs:
           def digest(name):
               return hashlib.sha256((out / name).read_bytes()).hexdigest()
 
-          current_digests = {
-              "pdf": digest("a.pdf"),
-              "loss_json": digest("a.pdf.loss.json"),
-              "loss_text": digest("a.pdf.loss.txt"),
-          }
-          print("CURRENT_FIXED_PDF_DIGESTS", json.dumps(current_digests, sort_keys=True))
+          assert digest("a.pdf") == "7c68d61729428415ea0f9506e27a03336d8c90d9fb1b929d1d19bb020ea620ca"
+          assert digest("a.pdf.loss.json") == "9bf5f97e38e8fb4b18e264c34d75c681b17aee94e0bf944354c1dcac1893970b"
+          assert digest("a.pdf.loss.txt") == "c8a69677cafbb521d2d2f9ee71f4a010d36891742a3d03b88ec761e05fa0e4ba"
           assert report["typography"]["layout_authority"] == "viewer_shared_resolved"
           assert report["typography"]["shaped_flow"]["layout_authority"] == "viewer_shared_resolved"
 
@@ -176,9 +173,117 @@ jobs:
           print(json.dumps(receipt, indent=2, sort_keys=True))
           PY
 
+      - name: Measure Publisher-reference causal witnesses without new CI fanout
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir "PyMuPDF==1.26.7" "Pillow==12.3.0"
+          out="$RUNNER_TEMP/free-pub-pdf-causal"
+          mkdir -p "$out"
+          donor="https://raw.githubusercontent.com/Lalalalendia/lalamu/f78cc6f455f4dc222868f9cc035511a6ca7a91ea/pub-corpus/corpus/native/unclassified"
+
+          while IFS='|' read -r name sha bytes; do
+            curl --fail --location --silent --show-error "$donor/$sha.pub" --output "$out/$name.pub"
+            test "$(sha256sum "$out/$name.pub" | awk '{print $1}')" = "$sha"
+            test "$(wc -c < "$out/$name.pub" | tr -d ' ')" = "$bytes"
+            vendor/producer-a/target/debug/pub convert "$out/$name.pub"               --to pdf               --output "$out/$name.pdf"               --fallback-font "$CHAPTERA_FIXED_OUTPUT_FONT"
+          done <<'EOF'
+          027_ffa9e40e03bb37df|ffa9e40e03bb37df27fae0e1766b95db36f64fc8bda84758ad6cc6147e269bb0|3851264
+          099_00092479c94bf5ac|00092479c94bf5ac1bb107173d60fb788b91e2c148453468456f98d0bb300597|603136
+          096_712e1db9cefd0af6|712e1db9cefd0af613b12fb776720ac5d67ebe772468f2e47cb26a1f2e6ce28a|97280
+          087_990cf478aed51a6e|990cf478aed51a6e7fdd63556bf7402699d6a3eb1fdabaf8b18a621353878a46|95744
+          EOF
+
+          CHAPTERA_CAUSAL_OUT="$out" python - <<'PY'
+          from collections import Counter
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          import fitz
+          from PIL import Image
+
+          sys.path.insert(0, "tools")
+          from cloud_reader_visual_fingerprint_v1 import GRID_H, GRID_W, compare_grid, reference_grid
+
+          root = Path(os.environ["CHAPTERA_CAUSAL_OUT"])
+          refs = []
+          for path in (
+              Path("tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json"),
+              Path("tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json"),
+          ):
+              refs.extend(json.loads(path.read_text())["pairs"])
+          by_name = {row["basename"]: row for row in refs}
+
+          old_cli = {
+              "027_ffa9e40e03bb37df": 0.307958984375,
+              "099_00092479c94bf5ac": 0.25390625,
+              "096_712e1db9cefd0af6": 0.001953125,
+              "087_990cf478aed51a6e": 0.098388671875,
+          }
+
+          results = []
+          for name, baseline in old_cli.items():
+              pair = by_name[name]
+              pdf = fitz.open(root / f"{name}.pdf")
+              assert pdf.page_count == pair["reference_pages"], (name, pdf.page_count, pair["reference_pages"])
+              pages = []
+              for index, reference_page in enumerate(pair["pages"]):
+                  pix = pdf[index].get_pixmap(dpi=144, colorspace=fitz.csRGB, alpha=False)
+                  image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+                  grid = image.resize((GRID_W, GRID_H), Image.Resampling.BOX).tobytes()
+                  pages.append({"page": index + 1, **compare_grid(grid, reference_grid(reference_page))})
+              mean = sum(row["changed_cell_fraction"] for row in pages) / len(pages)
+
+              loss = json.loads((root / f"{name}.pdf.loss.json").read_text())
+              runs = loss["typography"]["fixed_flow_receipt"]["runs"]
+              materialized = loss["typography"]["materialized_runs"]
+              skipped = loss["typography"]["skipped"]
+              safe = {
+                  "materialized_run_count": len(materialized),
+                  "skipped_run_count": len(skipped),
+                  "skipped_code_counts": dict(sorted(Counter(str(x.get("code", "unknown")) for x in skipped).items())),
+                  "layout_fallback_counts": loss["typography"]["shaped_flow"].get("layout_fallback_counts", {}),
+                  "nonzero_baseline_x_count": sum(int(x.get("baseline_x", 0) != 0) for x in runs),
+                  "nonblack_fill_count": sum(int(x.get("fill_rgb") not in (None, [0, 0, 0])) for x in materialized),
+                  "source_kind_counts": dict(sorted(Counter(str(x.get("source_kind", "unknown")) for x in materialized).items())),
+              }
+              results.append({
+                  "fixture": name,
+                  "reference_pages": pair["reference_pages"],
+                  "old_cli_mean_changed_cell_fraction": baseline,
+                  "current_mean_changed_cell_fraction": mean,
+                  "delta_from_old_cli": mean - baseline,
+                  "safe_text_receipt": safe,
+                  "pages": pages,
+              })
+
+          receipt = {
+              "schema": "chaptera.pub-pdf-cli-viewer-text-causal-set.v1",
+              "fixtures": results,
+              "claims": {
+                  "same_registered_publisher_references": True,
+                  "raw_pub_pdf_font_or_text_emitted": False,
+                  "screening_grid_not_full_pixel_parity": True,
+              },
+          }
+          target = Path("target/free-pub-pdf-cli-v1/causal.json")
+          target.parent.mkdir(parents=True, exist_ok=True)
+          target.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+
+          current = {row["fixture"]: row["current_mean_changed_cell_fraction"] for row in results}
+          assert current["027_ffa9e40e03bb37df"] < old_cli["027_ffa9e40e03bb37df"]
+          assert current["096_712e1db9cefd0af6"] <= 0.01
+          assert current["087_990cf478aed51a6e"] <= 0.11
+          PY
+
       - uses: actions/upload-artifact@v4
         with:
           name: free-pub-pdf-cli-v1
-          path: ${{ env.CHAPTERA_CLI_OUT }}/acceptance.json
+          path: |
+            ${{ env.CHAPTERA_CLI_OUT }}/acceptance.json
+            target/free-pub-pdf-cli-v1/causal.json
           if-no-files-found: error
           retention-days: 30
