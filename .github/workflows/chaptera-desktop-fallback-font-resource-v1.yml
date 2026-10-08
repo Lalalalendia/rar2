@@ -14,6 +14,7 @@ on:
       - "apps/chaptera-desktop/src/source_font.rs"
       - "apps/chaptera-desktop/src/render_backend.rs"
       - "crates/chaptera-viewer-render-plan/**"
+      - "!crates/chaptera-viewer-render-plan/src/shared_layout_diagnostics.rs"
       - "packages/product/editor-live-trial/**"
       - "tools/package_editor_live_trial.py"
       - "tools/test_package_editor_live_trial.py"
