@@ -22,6 +22,10 @@ $privateDir = Join-Path $OutputRoot "private\paragraph-line-spacing-0p75-native-
 $seedPub = Join-Path $privateDir "seed.pub"
 New-Item -ItemType Directory -Force -Path $analysisDir,$logDir,$privateDir | Out-Null
 
+function Write-ResearchStage([string]$Stage) {
+    Write-Host ("PUB_RESEARCH_STAGE stage={0}" -f $Stage)
+}
+
 function Release-Com($value) {
     if ($null -ne $value -and [Runtime.InteropServices.Marshal]::IsComObject($value)) {
         try { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($value) } catch {}
@@ -85,13 +89,26 @@ function Get-LineGeometry($textRange, [string]$phase) {
 }
 
 function New-SeedFixture() {
+    Write-ResearchStage "seed_copy_begin"
     Copy-Item -LiteralPath $env:PUB_RESEARCH_FIXTURE -Destination $seedPub -Force
+    Write-ResearchStage "seed_copy_complete"
+
     $app = $null; $doc = $null; $shape = $null; $range = $null; $paragraphRange = $null; $paragraph = $null
     try {
+        Write-ResearchStage "seed_application_create_begin"
         $app = New-PubPublisherApplication
+        Write-ResearchStage "seed_application_create_complete"
+
+        Write-ResearchStage "seed_open_begin"
         $doc = $app.Open($seedPub, $false, $false)
+        Write-ResearchStage "seed_open_complete"
+
         if ([int]$doc.Pages.Item(1).Shapes.Count -ne 0) { throw "Expected blank seed fixture" }
+
+        Write-ResearchStage "seed_textbox_create_begin"
         $shape = $doc.Pages.Item(1).Shapes.AddTextbox($MsoTextOrientationHorizontal, 72, 72, 360, 180)
+        Write-ResearchStage "seed_textbox_create_complete"
+
         $range = $shape.TextFrame.TextRange
         $cr = [char]13
         $range.Text = "Chaptera spacing alpha with enough words to wrap naturally." + $cr +
@@ -104,11 +121,19 @@ function New-SeedFixture() {
         $paragraph = $paragraphRange.ParagraphFormat
         $before = Get-ParagraphSnapshot $paragraph "seed_before_save"
         $seedGeometry = Get-LineGeometry $paragraphRange "seed_before_save"
+
+        Write-ResearchStage "seed_save_begin"
         $doc.Save()
+        Write-ResearchStage "seed_save_complete"
     }
     finally {
         Release-Com $paragraph; Release-Com $paragraphRange; Release-Com $range; Release-Com $shape
-        Close-Document $doc; Close-PubPublisherApplication $app
+        if ($null -ne $doc) { Write-ResearchStage "seed_document_close_begin" }
+        Close-Document $doc
+        if ($null -ne $doc) { Write-ResearchStage "seed_document_close_complete" }
+        if ($null -ne $app) { Write-ResearchStage "seed_application_quit_begin" }
+        Close-PubPublisherApplication $app
+        if ($null -ne $app) { Write-ResearchStage "seed_application_quit_complete" }
     }
     $file = Get-Item -LiteralPath $seedPub
     return [ordered]@{
@@ -127,33 +152,57 @@ function Invoke-Arm([string]$name, [string]$kind) {
 
     $app = $null; $doc = $null; $shape = $null; $range = $null; $paragraphRange = $null; $paragraph = $null
     try {
+        Write-ResearchStage ("arm_{0}_application_create_begin" -f $name)
         $app = New-PubPublisherApplication
+        Write-ResearchStage ("arm_{0}_application_create_complete" -f $name)
+
+        Write-ResearchStage ("arm_{0}_open_begin" -f $name)
         $doc = $app.Open($output, $false, $false)
+        Write-ResearchStage ("arm_{0}_open_complete" -f $name)
+
         $shape = $doc.Pages.Item(1).Shapes.Item(1)
         $range = $shape.TextFrame.TextRange
         $paragraphRange = $range.Paragraphs(2)
         $paragraph = $paragraphRange.ParagraphFormat
         $before = Get-ParagraphSnapshot $paragraph "before_mutation"
         $geometryBefore = Get-LineGeometry $paragraphRange "before_mutation"
+
+        Write-ResearchStage ("arm_{0}_mutation_begin" -f $name)
         switch ($kind) {
             "control" { }
             "single" { $paragraph.SetLineSpacing($PbLineSpacingSingle, 12) }
             "direct-0p75" { $paragraph.LineSpacing = 0.75 }
             default { throw "Unknown arm kind: $kind" }
         }
+        Write-ResearchStage ("arm_{0}_mutation_complete" -f $name)
+
         $after = Get-ParagraphSnapshot $paragraph "after_mutation"
         $geometryAfter = Get-LineGeometry $paragraphRange "after_mutation"
+
+        Write-ResearchStage ("arm_{0}_save_begin" -f $name)
         $doc.Save()
+        Write-ResearchStage ("arm_{0}_save_complete" -f $name)
     }
     finally {
         Release-Com $paragraph; Release-Com $paragraphRange; Release-Com $range; Release-Com $shape
-        Close-Document $doc; Close-PubPublisherApplication $app
+        if ($null -ne $doc) { Write-ResearchStage ("arm_{0}_document_close_begin" -f $name) }
+        Close-Document $doc
+        if ($null -ne $doc) { Write-ResearchStage ("arm_{0}_document_close_complete" -f $name) }
+        if ($null -ne $app) { Write-ResearchStage ("arm_{0}_application_quit_begin" -f $name) }
+        Close-PubPublisherApplication $app
+        if ($null -ne $app) { Write-ResearchStage ("arm_{0}_application_quit_complete" -f $name) }
     }
 
     $app2 = $null; $doc2 = $null; $shape2 = $null; $range2 = $null; $paragraphRange2 = $null; $paragraph2 = $null
     try {
+        Write-ResearchStage ("arm_{0}_reopen_application_create_begin" -f $name)
         $app2 = New-PubPublisherApplication
+        Write-ResearchStage ("arm_{0}_reopen_application_create_complete" -f $name)
+
+        Write-ResearchStage ("arm_{0}_reopen_open_begin" -f $name)
         $doc2 = $app2.Open($output, $true, $false)
+        Write-ResearchStage ("arm_{0}_reopen_open_complete" -f $name)
+
         $shape2 = $doc2.Pages.Item(1).Shapes.Item(1)
         $range2 = $shape2.TextFrame.TextRange
         $paragraphRange2 = $range2.Paragraphs(2)
@@ -163,7 +212,12 @@ function Invoke-Arm([string]$name, [string]$kind) {
     }
     finally {
         Release-Com $paragraph2; Release-Com $paragraphRange2; Release-Com $range2; Release-Com $shape2
-        Close-Document $doc2; Close-PubPublisherApplication $app2
+        if ($null -ne $doc2) { Write-ResearchStage ("arm_{0}_reopen_document_close_begin" -f $name) }
+        Close-Document $doc2
+        if ($null -ne $doc2) { Write-ResearchStage ("arm_{0}_reopen_document_close_complete" -f $name) }
+        if ($null -ne $app2) { Write-ResearchStage ("arm_{0}_reopen_application_quit_begin" -f $name) }
+        Close-PubPublisherApplication $app2
+        if ($null -ne $app2) { Write-ResearchStage ("arm_{0}_reopen_application_quit_complete" -f $name) }
     }
 
     $file = Get-Item -LiteralPath $output
