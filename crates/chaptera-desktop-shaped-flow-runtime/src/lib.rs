@@ -445,6 +445,40 @@ mod tests {
     }
 
     #[test]
+    fn paragraph_line_offsets_use_one_effective_alignment_snapshot_per_layout() {
+        let source = include_str!("lib.rs");
+        let offsets_start = source
+            .find("fn current_story_line_offsets_v1")
+            .expect("line-offset resolver exists");
+        let offsets_end = source[offsets_start..]
+            .find("fn apply_line_offsets_to_caret_map_v1")
+            .map(|offset| offsets_start + offset)
+            .expect("line-offset resolver has a bounded source section");
+        let offsets = &source[offsets_start..offsets_end];
+        assert_eq!(
+            offsets.matches("effective_paragraph_alignments_v1()").count(),
+            1,
+            "one layout rebuild must project effective paragraph alignment once"
+        );
+        assert!(
+            !offsets.contains("effective_paragraph_alignment_v1("),
+            "line loop must not call the scalar paragraph alignment API"
+        );
+
+        let lookup_start = source
+            .find("fn effective_line_alignment_v1")
+            .expect("local line-alignment lookup exists");
+        let lookup_end = source[lookup_start..]
+            .find("fn rigid_line_alignment_v1")
+            .map(|offset| lookup_start + offset)
+            .expect("local line-alignment lookup has a bounded source section");
+        let lookup = &source[lookup_start..lookup_end];
+        assert!(!lookup.contains("EditorSession"));
+        assert!(!lookup.contains("imported_paragraphs_v1"));
+        assert!(!lookup.contains("effective_paragraph_alignment_v1("));
+    }
+
+    #[test]
     fn story_shaping_scope_removes_unrelated_text_but_preserves_geometry_projection() {
         let target_story = StoryId::from_canonical(test_canonical_id(1));
         let other_story = StoryId::from_canonical(test_canonical_id(2));
