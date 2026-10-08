@@ -334,6 +334,17 @@ try {
       const pageScreenScale = pageBounds && viewBox && viewBox.width > 0 && viewBox.height > 0
         ? Math.min(pageBounds.width / viewBox.width, pageBounds.height / viewBox.height)
         : null;
+      const pageIndex = svg
+        ? [...document.querySelectorAll("#pages svg.page")].indexOf(svg) + 1
+        : null;
+      const canonicalBoundsEmu = pageBounds && viewBox && pageBounds.width > 0 && pageBounds.height > 0
+        ? {
+            x_emu: Math.round(viewBox.x + (bounds.left - pageBounds.left) / pageBounds.width * viewBox.width),
+            y_emu: Math.round(viewBox.y + (bounds.top - pageBounds.top) / pageBounds.height * viewBox.height),
+            width_emu: Math.round(bounds.width / pageBounds.width * viewBox.width),
+            height_emu: Math.round(bounds.height / pageBounds.height * viewBox.height)
+          }
+        : null;
       const normalizedWidthPx96 = pageScreenScale && pageScreenScale > 0
         ? bounds.width / pageScreenScale / 9525
         : bounds.width;
@@ -352,6 +363,8 @@ try {
         normalized_width_px_96: normalizedWidthPx96,
         normalized_height_px_96: normalizedHeightPx96,
         page_screen_scale_px_per_emu: pageScreenScale,
+        page_index: pageIndex,
+        canonical_bounds_emu: canonicalBoundsEmu,
         node_transform: node.getAttribute("transform"),
         ctm: ctm ? { a: ctm.a, b: ctm.b, c: ctm.c, d: ctm.d, e: ctm.e, f: ctm.f } : null,
         screen_ctm: screenCtm ? { a: screenCtm.a, b: screenCtm.b, c: screenCtm.c, d: screenCtm.d, e: screenCtm.e, f: screenCtm.f } : null,
@@ -398,6 +411,56 @@ try {
         if (corpusDiagnosticMode) visualDegeneracies.push(degeneracy);
         else assert.fail("shared text must not collapse to tiny specks");
       }
+    }
+    let wideSharedTextLineGeometryEmu = null;
+    if (fixture.sha256 === "059dde4bcb408374f14273275febd8158dc8d02960966488dd4324cfd4dcc238") {
+      const pageOne = painted.filter((line) => line.page_index === 1 && line.canonical_bounds_emu);
+      const nodeIds = [...new Set(pageOne.map((line) => line.node_id))];
+      const candidates = nodeIds.map((nodeId) => {
+        const node = scene.nodes.find((candidate) => candidate.node_id === nodeId);
+        const bounds = node?.text_bounds ?? node?.bounds ?? null;
+        return bounds ? { node_id: nodeId, bounds } : null;
+      }).filter(Boolean).sort((left, right) => right.bounds.width - left.bounds.width);
+      assert.ok(candidates.length > 0, "exact06 must expose at least one painted p1 SharedResolved frame");
+      const selected = candidates[0];
+      const selectedLines = pageOne
+        .filter((line) => line.node_id === selected.node_id)
+        .sort((left, right) => left.index - right.index);
+      assert.ok(selectedLines.length > 0, "exact06 widest p1 SharedResolved frame must paint lines");
+      const lineBounds = selectedLines.map((line) => line.canonical_bounds_emu);
+      const minX = Math.min(...lineBounds.map((bounds) => bounds.x_emu));
+      const minY = Math.min(...lineBounds.map((bounds) => bounds.y_emu));
+      const maxX = Math.max(...lineBounds.map((bounds) => bounds.x_emu + bounds.width_emu));
+      const maxY = Math.max(...lineBounds.map((bounds) => bounds.y_emu + bounds.height_emu));
+      const lastLine = selectedLines[selectedLines.length - 1].canonical_bounds_emu;
+      const frameBottomEmu = selected.bounds.y + selected.bounds.height;
+      const bandStartEmu = 945000;
+      wideSharedTextLineGeometryEmu = {
+        page: 1,
+        selection: "widest_shared_resolved_text_bounds",
+        frame_bounds_emu: {
+          x_emu: selected.bounds.x,
+          y_emu: selected.bounds.y,
+          width_emu: selected.bounds.width,
+          height_emu: selected.bounds.height
+        },
+        line_count: selectedLines.length,
+        line_union_bounds_emu: {
+          x_emu: minX,
+          y_emu: minY,
+          width_emu: maxX - minX,
+          height_emu: maxY - minY
+        },
+        last_line_bottom_emu: lastLine.y_emu + lastLine.height_emu,
+        frame_bottom_emu: frameBottomEmu,
+        band_start_emu: bandStartEmu,
+        gap_line_union_bottom_to_frame_bottom_emu: frameBottomEmu - maxY,
+        gap_line_union_bottom_to_band_start_emu: bandStartEmu - maxY,
+        gap_frame_bottom_to_band_start_emu: bandStartEmu - frameBottomEmu
+      };
+    }
+    if (wideSharedTextLineGeometryEmu) {
+      console.log("EXACT06_WIDE_SHARED_LINE_GEOMETRY_EMU " + JSON.stringify(wideSharedTextLineGeometryEmu));
     }
     await page.locator("#pages").scrollIntoViewIfNeeded();
     await page.screenshot({ path: join(output, fixture.name + "-ui.png") });
@@ -504,6 +567,7 @@ try {
       node_kind_counts: nodeKindCounts, text_layout_disposition_counts: textLayoutDispositionCounts,
       text_layout_fallback_counts: scene.text_layout_fallback_counts ?? {},
       browser_preview_census: browserPreviewCensus,
+      wide_shared_text_line_geometry_emu: wideSharedTextLineGeometryEmu,
       descriptor_only_resource_count: descriptorOnlyResourceCount, browser_preserved_scene_node_order: true,
       reference_raster_dpi: referenceRasterDpi || null, page_geometry: orderedPageGeometry,
       stories: scene.stories.length, shared_lines: painted.length, nonempty_shared_lines: nonempty.length,
