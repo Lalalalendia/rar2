@@ -4,6 +4,7 @@ use serde::Serialize;
 use std::error::Error;
 use std::fmt;
 use std::fs;
+use std::io::Cursor;
 use std::path::PathBuf;
 
 const OFFICE_ART_SOLVER_CONTAINER: u16 = 0xF005;
@@ -261,19 +262,42 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args_os().skip(1);
-    let input = PathBuf::from(
-        args.next()
-            .ok_or("usage: officeart-connector-rule-read FILE [LOGICAL_STREAM]")?,
-    );
-    let logical_stream = args
+    let first = args
         .next()
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "/Escher/EscherStm".to_owned());
-    if args.next().is_some() {
-        return Err("usage: officeart-connector-rule-read FILE [LOGICAL_STREAM]".into());
-    }
+        .ok_or("usage: officeart-connector-rule-read [--pub] FILE [LOGICAL_STREAM]")?;
+    let pub_mode = first == "--pub";
+    let input = if pub_mode {
+        PathBuf::from(
+            args.next()
+                .ok_or("usage: officeart-connector-rule-read --pub FILE")?,
+        )
+    } else {
+        PathBuf::from(first)
+    };
+    let logical_stream = if pub_mode {
+        if args.next().is_some() {
+            return Err("usage: officeart-connector-rule-read --pub FILE".into());
+        }
+        "/Escher/EscherStm".to_owned()
+    } else {
+        let stream = args
+            .next()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "/Escher/EscherStm".to_owned());
+        if args.next().is_some() {
+            return Err(
+                "usage: officeart-connector-rule-read FILE [LOGICAL_STREAM]".into(),
+            );
+        }
+        stream
+    };
 
-    let bytes = fs::read(input)?;
+    let input_bytes = fs::read(input)?;
+    let bytes = if pub_mode {
+        pub_cfb::read_stream_reader(Cursor::new(input_bytes.as_slice()), &logical_stream)?
+    } else {
+        input_bytes
+    };
     let inventory = inspect(StreamPath(logical_stream), &bytes)?;
     println!("{}", serde_json::to_string_pretty(&inventory)?);
     Ok(())
