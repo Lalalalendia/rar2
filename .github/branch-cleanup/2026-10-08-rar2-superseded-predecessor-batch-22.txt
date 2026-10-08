@@ -1,0 +1,7 @@
+# 2026-10-08 — superseded predecessor batch 22
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+test/reader-cross-backend-font-census 0ac9cb02e133d09455377e97175066233cf8280d # #2033 superseded by clean restack, merged successor #2041
+product/free-pub-pdf-cli-current-03 c9f1a1194c8983d5254e201178ae3dea804facb4 # #2018 superseded by fresh-main successor, merged #2036
+ops/branch-gc-20261008-carrier-cleanup-batch-21 c35d5b49746af8452cafedd16e98327d3d6b6f45 # completed #2229 clean receipt: 2/2 deleted
