@@ -110,7 +110,7 @@ pub(super) fn materialize_story_catalogs(
     Ok(story_by_syid)
 }
 
-fn decode_utf16le_strict(bytes: &[u8]) -> Result<String> {
+pub(super) fn decode_utf16le_strict(bytes: &[u8]) -> Result<String> {
     if bytes.len() % 2 != 0 {
         bail!("UTF-16LE byte length is odd: {}", bytes.len());
     }
