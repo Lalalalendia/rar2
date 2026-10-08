@@ -617,3 +617,31 @@ pub(super) fn materialize_mature_nodes(
     );
     Ok(source_page_paint_orders)
 }
+
+fn exact_image_slot(
+    shape: &pub_escher::SpContainerObservation,
+    seq_num: u32,
+    diagnostics: &mut Vec<PubBridgeDiagnostic>,
+) -> Option<u32> {
+    let mut slots = shape
+        .fopts
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| {
+            property.property_id() == OFFICE_ART_PROPERTY_PIB && property.op_is_blip_id()
+        })
+        .map(|property| property.op)
+        .collect::<BTreeSet<_>>();
+
+    match slots.len() {
+        0 => None,
+        1 => slots.pop_first(),
+        _ => {
+            diagnostics.push(PubBridgeDiagnostic::AmbiguousImageSlot {
+                seq_num,
+                slots: slots.into_iter().collect(),
+            });
+            None
+        }
+    }
+}
