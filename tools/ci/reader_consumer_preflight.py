@@ -32,6 +32,7 @@ VENDOR_PACKAGE_SPECS = {
 PUB_VIEWER_IMAGES = "vendor/producer-a/crates/pub-viewer/src/images.rs"
 PUB_QUILL_PARAGRAPH = "vendor/producer-a/crates/pub-quill/src/typography/paragraph.rs"
 PUB_QUILL_COLOR = "vendor/producer-a/crates/pub-quill/src/typography/color.rs"
+PUB_QUILL_FONT = "vendor/producer-a/crates/pub-quill/src/typography/font.rs"
 
 
 def changed_paths(base: str, head: str) -> list[str]:
@@ -165,6 +166,7 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
         pub_viewer_images_only = set(paths) == {PUB_VIEWER_IMAGES}
         pub_quill_paragraph_only = set(paths) == {PUB_QUILL_PARAGRAPH}
         pub_quill_color_only = set(paths) == {PUB_QUILL_COLOR}
+        pub_quill_font_only = set(paths) == {PUB_QUILL_FONT}
         source_free_command = (
             {
                 "id": "pub-viewer-images-tests",
@@ -208,6 +210,20 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
                 ],
             }
             if pub_quill_color_only
+            else {
+                "id": "pub-quill-font-tests",
+                "argv": [
+                    "cargo",
+                    "test",
+                    "--manifest-path",
+                    "vendor/producer-a/Cargo.toml",
+                    "-p",
+                    "pub-quill",
+                    "--lib",
+                    "typography::font",
+                ],
+            }
+            if pub_quill_font_only
             else {
                 "id": "vendor-source-free-tests",
                 "argv": [

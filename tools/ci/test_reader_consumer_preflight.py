@@ -198,6 +198,48 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         self.assertNotIn("pub-quill-color-tests", root_ids)
         self.assertIn("pub-viewer-cmo-slot-compose", root_ids)
 
+    def test_pub_quill_font_leaf_uses_exact_lib_filter(self) -> None:
+        font_plan = MODULE.build_plan(
+            [MODULE.PUB_QUILL_FONT],
+            "BASE",
+            "HEAD",
+        )
+        font_ids = {command["id"] for command in font_plan["commands"]}
+        self.assertIn("pub-quill-font-tests", font_ids)
+        self.assertNotIn("vendor-source-free-tests", font_ids)
+        self.assertIn("vendor-clippy", font_ids)
+        self.assertIn("pub-viewer-cmo-slot-compose", font_ids)
+        self.assertIn("desktop-reader-check", font_ids)
+
+        font_tests = next(
+            command
+            for command in font_plan["commands"]
+            if command["id"] == "pub-quill-font-tests"
+        )
+        self.assertEqual(
+            font_tests["argv"],
+            [
+                "cargo",
+                "test",
+                "--manifest-path",
+                "vendor/producer-a/Cargo.toml",
+                "-p",
+                "pub-quill",
+                "--lib",
+                "typography::font",
+            ],
+        )
+
+        for paths in (
+            ["vendor/producer-a/crates/pub-quill/src/typography.rs"],
+            [MODULE.PUB_QUILL_FONT, MODULE.PUB_QUILL_COLOR],
+            [MODULE.PUB_QUILL_FONT, "vendor/producer-a/crates/pub-reader/src/lib.rs"],
+        ):
+            mixed_plan = MODULE.build_plan(paths, "BASE", "HEAD")
+            mixed_ids = {command["id"] for command in mixed_plan["commands"]}
+            self.assertIn("vendor-source-free-tests", mixed_ids)
+            self.assertNotIn("pub-quill-font-tests", mixed_ids)
+
     def test_vendor_workspace_change_qualifies_donor_pub_model(self) -> None:
         plan = MODULE.build_plan(
             ["vendor/producer-a/Cargo.toml"],
