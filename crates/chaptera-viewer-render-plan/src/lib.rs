@@ -34,7 +34,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 mod mixed_size_layout;
-mod shared_layout_diagnostics;
+pub mod shared_layout_diagnostics;
 mod story_slice_layout;
 #[cfg(test)]
 use mixed_size_layout::{
