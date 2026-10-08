@@ -1,7 +1,11 @@
-use crate::{EditorSession, ImportedParagraphProjectionErrorV1};
+use crate::{
+    AuthoredParagraphAlignmentValueV1, EditorError, EditorSession, EffectiveParagraphAlignmentV1,
+    EffectiveParagraphAlignmentValueV1, ImportedParagraphProjectionErrorV1, ImportedParagraphV1,
+    ParagraphAlignmentAuthorityV1,
+};
 use pub_model::{ParagraphId, StoryId, TextRange};
 use pub_reader::{PubParagraphAlignment, PubParagraphAlignmentRun};
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportedParagraphAlignmentValueV1 {
@@ -53,7 +57,75 @@ impl From<ImportedParagraphProjectionErrorV1> for ImportedParagraphBaseAlignment
     }
 }
 
+fn effective_paragraph_alignment_rows_v1(
+    paragraphs: impl IntoIterator<Item = ImportedParagraphV1>,
+    base_by_id: &BTreeMap<ParagraphId, ImportedParagraphAlignmentValueV1>,
+    overrides: &BTreeMap<ParagraphId, AuthoredParagraphAlignmentValueV1>,
+) -> Vec<EffectiveParagraphAlignmentV1> {
+    let mut result = paragraphs
+        .into_iter()
+        .map(|paragraph| {
+            let imported_base = base_by_id.get(&paragraph.paragraph_id).copied();
+            let authored_override = overrides.get(&paragraph.paragraph_id).copied();
+            let (effective, authority) = if let Some(value) = authored_override {
+                (
+                    Some(EffectiveParagraphAlignmentValueV1::from(value)),
+                    Some(ParagraphAlignmentAuthorityV1::ChapteraOverride),
+                )
+            } else if let Some(value) = imported_base {
+                (
+                    Some(EffectiveParagraphAlignmentValueV1::from(value)),
+                    Some(ParagraphAlignmentAuthorityV1::ImportedBase),
+                )
+            } else {
+                (None, None)
+            };
+            EffectiveParagraphAlignmentV1 {
+                paragraph_id: paragraph.paragraph_id,
+                story_id: paragraph.story_id,
+                range: paragraph.range,
+                imported_base,
+                authored_override,
+                effective,
+                authority,
+            }
+        })
+        .collect::<Vec<_>>();
+    result.sort_by_key(|item| (item.story_id, item.range.start, item.paragraph_id));
+    result
+}
+
 impl EditorSession {
+    /// Resolves the complete current alignment authority for one Story in one
+    /// bounded batch. This is the layout-oriented companion to the existing
+    /// single-ParagraphId oracle and folds authored override history only once.
+    pub fn effective_story_paragraph_alignments_v1(
+        &self,
+        story_id: StoryId,
+    ) -> Result<Vec<EffectiveParagraphAlignmentV1>, EditorError> {
+        self.validate_source_identity()?;
+        let paragraphs = self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .into_iter()
+            .filter(|paragraph| paragraph.story_id == story_id)
+            .collect::<Vec<_>>();
+        let base_by_id = self
+            .imported_paragraph_base_alignments_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .into_iter()
+            .filter(|item| item.story_id == story_id)
+            .map(|item| (item.paragraph_id, item.alignment))
+            .collect::<BTreeMap<_, _>>();
+        let overrides = self.current_paragraph_alignment_overrides_v1()?;
+
+        Ok(effective_paragraph_alignment_rows_v1(
+            paragraphs,
+            &base_by_id,
+            &overrides,
+        ))
+    }
+
     /// Returns only imported paragraph base alignments that are fully and
     /// unambiguously covered by current source-authority alignment runs.
     ///
