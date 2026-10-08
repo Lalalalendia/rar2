@@ -2472,12 +2472,6 @@ fn resolve_text_layout_v1(
         }
     }
 
-    // An exact direct Story slice already proves source ownership for this
-    // frame. After rebasing the resolved line scalars above, the same bounded
-    // partial-overset law is safe for both whole-Story and exact-slice paths:
-    // visible lines may be painted, while the unconsumed tail remains overset.
-    // Projected paths remain excluded by the helper and mixed-size typography
-    // has already failed closed before reaching this point.
     let ordinary_partial_story_overset =
         ordinary_incomplete_layout_is_admitted_partial_story_overset(
             projected_target_frame_node_id,
