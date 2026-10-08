@@ -428,7 +428,10 @@ mod tests {
     use super::*;
     use pub_editor::{FormatPropertyV1, FormatValueV1, Sha256Digest, open_mature_0x2c_editor};
     use pub_layout::font_fingerprint_sha256;
-    use pub_model::{EMU_PER_POINT, LengthEmu};
+    use pub_model::{
+        Affine2D, CanonicalId, EMU_PER_POINT, LengthEmu, NodeId, Page, RectEmu, Size2D, Story,
+        StoryFrame,
+    };
     use sha2::{Digest, Sha256};
     use std::{env, fs};
 
@@ -444,6 +447,108 @@ mod tests {
             line_height_emu: LengthEmu::new(12 * EMU_PER_POINT),
             bytes,
         }
+    }
+
+    fn test_canonical_id(byte: u8) -> CanonicalId {
+        CanonicalId::from_bytes([byte; 16])
+    }
+
+    #[test]
+    fn story_shaping_scope_removes_unrelated_text_but_preserves_geometry_projection() {
+        let target_story = StoryId::from_canonical(test_canonical_id(1));
+        let other_story = StoryId::from_canonical(test_canonical_id(2));
+        let target_frame = NodeId::from_canonical(test_canonical_id(3));
+        let other_frame = NodeId::from_canonical(test_canonical_id(4));
+        let page_id = PageId::from_canonical(test_canonical_id(5));
+        let page_origin = page_id.into_canonical();
+
+        let mut authoring = BoundedAuthoringSlice {
+            pages: vec![Page {
+                id: page_id,
+                size: Size2D::new(LengthEmu::new(1000), LengthEmu::new(1000)),
+                bleed: None,
+                margins: None,
+                children: vec![target_frame, other_frame],
+                extensions: Vec::new(),
+            }],
+            node_geometry: vec![
+                pub_layout::BoundedNodeGeometryInput {
+                    node_id: target_frame,
+                    parent_origin: page_origin,
+                    bounds: RectEmu::new(
+                        LengthEmu::ZERO,
+                        LengthEmu::ZERO,
+                        LengthEmu::new(400),
+                        LengthEmu::new(400),
+                    ),
+                    transform: Affine2D::identity(),
+                },
+                pub_layout::BoundedNodeGeometryInput {
+                    node_id: other_frame,
+                    parent_origin: page_origin,
+                    bounds: RectEmu::new(
+                        LengthEmu::new(500),
+                        LengthEmu::ZERO,
+                        LengthEmu::new(400),
+                        LengthEmu::new(400),
+                    ),
+                    transform: Affine2D::identity(),
+                },
+            ],
+            stories: vec![
+                Story {
+                    id: target_story,
+                    text: "target".to_owned(),
+                    paragraphs: Vec::new(),
+                    runs: Vec::new(),
+                    fields: Vec::new(),
+                    hyperlinks: Vec::new(),
+                    source_refs: Vec::new(),
+                },
+                Story {
+                    id: other_story,
+                    text: "unrelated".to_owned(),
+                    paragraphs: Vec::new(),
+                    runs: Vec::new(),
+                    fields: Vec::new(),
+                    hyperlinks: Vec::new(),
+                    source_refs: Vec::new(),
+                },
+            ],
+            story_frames: vec![
+                StoryFrame {
+                    story_id: target_story,
+                    frame_id: target_frame,
+                    ordinal: 0,
+                    previous: None,
+                    next: None,
+                },
+                StoryFrame {
+                    story_id: other_story,
+                    frame_id: other_frame,
+                    ordinal: 0,
+                    previous: None,
+                    next: None,
+                },
+            ],
+            tables: Vec::new(),
+            guides: Vec::new(),
+            unknown_layout_state: Vec::new(),
+        };
+
+        let pages_before = authoring.pages.clone();
+        let geometry_before = authoring.node_geometry.clone();
+
+        retain_story_shaping_scope_v1(&mut authoring, target_story)
+            .expect("retain target Story shaping scope");
+
+        assert_eq!(authoring.stories.len(), 1);
+        assert_eq!(authoring.stories[0].id, target_story);
+        assert_eq!(authoring.story_frames.len(), 1);
+        assert_eq!(authoring.story_frames[0].story_id, target_story);
+        assert_eq!(authoring.story_frames[0].frame_id, target_frame);
+        assert_eq!(authoring.pages, pages_before);
+        assert_eq!(authoring.node_geometry, geometry_before);
     }
 
     #[test]
