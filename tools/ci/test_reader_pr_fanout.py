@@ -409,6 +409,28 @@ fn main() -> eframe::Result<()> {
         path_identity=False,
         update_accept=False,
     )
+    # Exact comment-only control #1985 proved node_materialization owns
+    # grouped/source-paint assembly and visible node output, not Virginia page-role
+    # or Quill provenance. Retain typography/shared visual coverage conservatively.
+    assert_scope(
+        [mod.READER_NODE_MATERIALIZATION],
+        tier_a=True,
+        reader_windows_smoke=True,
+        reader_windows=False,
+        editor_windows=False,
+        visual_oracle=True,
+        cloud_reference=True,
+        virginia_page_role=False,
+        visual_batch01=True,
+        typography_golden=True,
+        android_core=True,
+        android=False,
+        web=False,
+        local_portable=False,
+        installer=False,
+        path_identity=False,
+        update_accept=False,
+    )
     assert_scope(
         ["vendor/producer-a/crates/pub-reader/src/bin/source_image_export_probe.rs"],
         cloud_reference=False,
