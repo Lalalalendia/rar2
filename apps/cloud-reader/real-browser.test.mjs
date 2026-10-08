@@ -367,7 +367,7 @@ try {
     const sharedTextInkCensus = corpusDiagnosticMode && fixture.name === "06-modern2c-image-heavy"
       ? await page.locator('[data-text-viewport="fixed-frame"]').evaluateAll((viewports) => {
         const pages = [...document.querySelectorAll("#pages svg.page")];
-        const canonicalBounds = (element) => {
+        const canonicalBounds = (element, requirePositiveArea = false) => {
           const svg = element.closest("svg.page");
           const pageBounds = svg?.getBoundingClientRect() ?? null;
           const bounds = element.getBoundingClientRect();
@@ -382,7 +382,9 @@ try {
           const y = viewBox.y + (bounds.top - pageBounds.top) * scaleY;
           const width = bounds.width * scaleX;
           const height = bounds.height * scaleY;
-          if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
+          if (![x, y, width, height].every(Number.isFinite)
+              || width < 0 || height < 0
+              || (requirePositiveArea && (width <= 0 || height <= 0))) {
             throw new Error("shared text ink census produced invalid canonical bounds");
           }
           return {
@@ -402,7 +404,7 @@ try {
           const svg = viewport.closest("svg.page");
           const page = pages.indexOf(svg) + 1;
           if (page < 1) throw new Error("shared text viewport is outside a page");
-          const viewportBounds = canonicalBounds(viewport);
+          const viewportBounds = canonicalBounds(viewport, true);
           const lines = [...viewport.querySelectorAll('[data-text-authority="server-shared-resolved"]')];
           const lineRows = lines.map((line) => {
             const bounds = canonicalBounds(line);
@@ -422,7 +424,9 @@ try {
               max_font_size_px: Math.max(...fontSizes)
             };
           });
-          const inkRows = lines.map(canonicalBounds);
+          const inkRows = lines
+            .map((line) => canonicalBounds(line))
+            .filter((bounds) => bounds.width_emu > 0 && bounds.height_emu > 0);
           const inkUnion = unionBounds(inkRows);
           return {
             page,
