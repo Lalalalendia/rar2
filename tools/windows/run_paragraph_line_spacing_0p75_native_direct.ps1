@@ -32,7 +32,7 @@ $ExpectedPublisherExeSha256 = "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb
 
 $PinnedFiles = @(
     [pscustomobject]@{ Path = $Packet; Sha = "2f5e641a3c18215db7e2bd4df303cd55ddcf1f46" }
-    [pscustomobject]@{ Path = $Operation; Sha = "43096538f0705e8bbd5334f68c5a6bf013500392" }
+    [pscustomobject]@{ Path = $Operation; Sha = "25fecdb3ef88f507b8a2544ce2d8d8622903c6ba" }
     [pscustomobject]@{ Path = $Prepare; Sha = "0848e8e147dff5dab68065c37d2d73f72f09eb45" }
     [pscustomobject]@{ Path = $Finalize; Sha = "2a97d6f2c8be1265010a744c015ce8d288eb7e75" }
     [pscustomobject]@{ Path = $Runtime; Sha = "fed4c890a34d39401d3b5848cc16d1087f862a27" }
