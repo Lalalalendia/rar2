@@ -280,8 +280,7 @@ pub fn page_order_state_id_v1(document_id: DocumentId, page_ids: &[PageId]) -> S
     let mut encoded = String::with_capacity(64);
     for byte in digest {
         use std::fmt::Write as _;
-        write!(&mut encoded, "{byte:02x}")
-            .expect("writing lowercase hex into String cannot fail");
+        write!(&mut encoded, "{byte:02x}").expect("writing lowercase hex into String cannot fail");
     }
     format!("sha256:{encoded}")
 }
@@ -505,8 +504,7 @@ mod tests {
         let c = page("55555555-5555-4555-8555-555555555555");
         let document_id = document("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
         let transition =
-            plan_page_order_transition_v1(document_id, &[a, b, c], &[a, b, c], &[c, a, b])
-                .unwrap();
+            plan_page_order_transition_v1(document_id, &[a, b, c], &[a, b, c], &[c, a, b]).unwrap();
         let mut stale = vec![b, a, c];
 
         assert!(matches!(

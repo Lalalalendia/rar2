@@ -453,7 +453,6 @@ impl EditorSession {
         self.validate_source_identity()?;
         Ok(operation)
     }
-
 }
 
 pub(super) fn page_order_error_to_editor_v1(error: PageOrderErrorV1) -> EditorError {
