@@ -1,0 +1,7 @@
+# 2026-10-08 — damage predictor predecessor batch 23
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+recovery/damage-signature-v1 227ed78778876caa38d0e389d0b0004ed0d6f277 # #1618 original predictor, superseded by #1651/#1671 and fresh current-main #2242
+research/recovery-damage-signature-predictor-current 14df3df7139ff45eb4eccf9f9c618cd401ff17c1 # #1671 closed as superseded by byte-identical current-main successor #2242
+ops/branch-gc-20261008-superseded-predecessor-batch-22 1fbd1bf95c4e8e898a8efa06522c875a69be024f # completed #2230 clean receipt: 3/3 deleted
