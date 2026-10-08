@@ -570,7 +570,7 @@ pub(super) fn project_typography_catalog(
     }
 }
 
-fn utf16_range_to_scalar_range(text: &str, start_utf16: u32, end_utf16: u32) -> Option<(u32, u32)> {
+pub(super) fn utf16_range_to_scalar_range(text: &str, start_utf16: u32, end_utf16: u32) -> Option<(u32, u32)> {
     if start_utf16 > end_utf16 {
         return None;
     }
@@ -598,7 +598,7 @@ fn utf16_range_to_scalar_range(text: &str, start_utf16: u32, end_utf16: u32) -> 
     Some((boundary(text, start_utf16)?, boundary(text, end_utf16)?))
 }
 
-fn bounded_quill_text_rgb(
+pub(super) fn bounded_quill_text_rgb(
     direct_rgb: Option<[u8; 3]>,
     scheme_slot: Option<u8>,
     color_scheme: Option<&MatureColorScheme>,
