@@ -300,14 +300,37 @@ pub(super) fn shape_mixed_line_candidate_v1(
 }
 
 #[derive(Debug)]
-struct MixedSizeLayoutEvaluationV1 {
-    runs: Vec<AdmittedTypographyRunV1>,
-    cursor: u32,
-    used_height_emu: i64,
-    lines: Vec<RenderResolvedTextLineV1>,
+pub(super) struct MixedSizeLayoutEvaluationV1 {
+    pub(super) runs: Vec<AdmittedTypographyRunV1>,
+    pub(super) cursor: u32,
+    pub(super) used_height_emu: i64,
+    pub(super) physical_first_then_baseline_height_emu: Option<i64>,
+    pub(super) stop_width_fit_min_line_height_emu: Option<i64>,
+    pub(super) stop_width_fit_min_physical_extent_emu: Option<i64>,
+    pub(super) stop_width_fit_candidate_consumed_scalar_end: Option<u32>,
+    pub(super) lines: Vec<RenderResolvedTextLineV1>,
 }
 
-fn evaluate_mixed_size_text_layout_v1(
+fn mixed_candidate_physical_extent_emu_v1(
+    candidate: &MixedLineCandidateV1,
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+) -> Option<i64> {
+    candidate
+        .spans
+        .iter()
+        .map(|span| {
+            compatible_natural_line_height_emu_v1(
+                font.bytes,
+                font.face_index,
+                LengthEmu::new(span.font_size_emu),
+            )
+            .map(LengthEmu::get)
+        })
+        .collect::<Option<Vec<_>>>()
+        .and_then(|extents| extents.into_iter().max())
+}
+
+pub(super) fn evaluate_mixed_size_text_layout_v1(
     fragment: &RenderTextFragmentV1,
     font: &ExplicitRenderTextFontResourceV1<'_>,
     node_id: NodeId,
@@ -356,11 +379,16 @@ fn evaluate_mixed_size_text_layout_v1(
     let mut cursor = fragment.scalar_start;
     let mut cursor_safe_without_reshaping = true;
     let mut used_height_emu = 0_i64;
+    let mut physical_first_then_baseline_height_emu = Some(0_i64);
+    let mut stop_width_fit_min_line_height_emu = None;
+    let mut stop_width_fit_min_physical_extent_emu = None;
+    let mut stop_width_fit_candidate_consumed_scalar_end = None;
     let mut line_index = 0_u32;
     let mut lines = Vec::new();
 
     while cursor < fragment.scalar_end {
         let mut chosen = None;
+        let mut width_fit_rejected = None::<(i64, Option<i64>, u32)>;
         for candidate in policy
             .candidates
             .iter()
@@ -394,6 +422,14 @@ fn evaluate_mixed_size_text_layout_v1(
                 .is_some_and(|height| height <= bounds.height.get());
             if fits_width && fits_height {
                 chosen = Some((evaluated, candidate.safe_without_reshaping));
+            } else if fits_width {
+                let physical_extent = mixed_candidate_physical_extent_emu_v1(&evaluated, font);
+                let replace = width_fit_rejected
+                    .as_ref()
+                    .is_none_or(|(line_height, _, _)| evaluated.line_height_emu < *line_height);
+                if replace {
+                    width_fit_rejected = Some((evaluated.line_height_emu, physical_extent, evaluated.consumed_scalar_end));
+                }
             }
             if candidate.kind == BoundedBreakKind::Mandatory {
                 break;
@@ -401,11 +437,26 @@ fn evaluate_mixed_size_text_layout_v1(
         }
 
         let Some((chosen, chosen_boundary_safe_without_reshaping)) = chosen else {
+            if let Some((line_height, physical_extent, consumed_scalar_end)) = width_fit_rejected {
+                stop_width_fit_min_line_height_emu = Some(line_height);
+                stop_width_fit_min_physical_extent_emu = physical_extent;
+                stop_width_fit_candidate_consumed_scalar_end = Some(consumed_scalar_end);
+            }
             break;
         };
+        let chosen_physical_extent = mixed_candidate_physical_extent_emu_v1(&chosen, font);
         used_height_emu = used_height_emu
             .checked_add(chosen.line_height_emu)
             .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+        physical_first_then_baseline_height_emu = match (
+            physical_first_then_baseline_height_emu,
+            line_index,
+            chosen_physical_extent,
+        ) {
+            (Some(_), 0, Some(first_extent)) => Some(first_extent),
+            (Some(height), _, _) => height.checked_add(chosen.line_height_emu),
+            _ => None,
+        };
         let x_offset_emu = resolved_line_x_offset_emu_v1(
             fragment,
             node_id,
@@ -438,6 +489,10 @@ fn evaluate_mixed_size_text_layout_v1(
         runs,
         cursor,
         used_height_emu,
+        physical_first_then_baseline_height_emu,
+        stop_width_fit_min_line_height_emu,
+        stop_width_fit_min_physical_extent_emu,
+        stop_width_fit_candidate_consumed_scalar_end,
         lines,
     })
 }
