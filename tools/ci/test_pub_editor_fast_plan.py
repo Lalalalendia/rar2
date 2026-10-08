@@ -194,13 +194,33 @@ def main() -> int:
         "-p",
         "pub-editor",
     )
+    expected_compat_check = (
+        "cargo",
+        "check",
+        "--manifest-path",
+        "vendor/producer-a/Cargo.toml",
+        "-p",
+        "pub-editor-core-compat",
+    )
+
+    geometry_core_checks = mod.plan_for_paths(
+        ROOT, [GEOMETRY_CORE_PREFIX + "lib.rs"], mode="edit"
+    )
+    geometry_core_commands = [check.command for check in geometry_core_checks]
+    if expected_compat_check not in geometry_core_commands:
+        raise SystemExit("geometry-core edit must compile-check the thin core compatibility contract")
+    if expected_adapter_check in geometry_core_commands:
+        raise SystemExit("geometry-core-only edit must not compile-check full pub-editor")
+
 
     table_core_checks = mod.plan_for_paths(
         ROOT, [TABLE_CORE_PREFIX + "table_track_extent_v1.rs"], mode="edit"
     )
     table_core_commands = [check.command for check in table_core_checks]
-    if expected_adapter_check not in table_core_commands:
-        raise SystemExit("table-core edit must compile-check the pub-editor adapter")
+    if expected_compat_check not in table_core_commands:
+        raise SystemExit("table-core edit must compile-check the thin core compatibility contract")
+    if expected_adapter_check in table_core_commands:
+        raise SystemExit("table-core-only edit must not compile-check full pub-editor")
     for target in ("table_track_history_project_v1", "table_track_layout_integration_v1"):
         if any("--test" in command and target in command for command in table_core_commands):
             raise SystemExit(
@@ -221,8 +241,10 @@ def main() -> int:
             )
     if expected_core_test not in image_core_commands:
         raise SystemExit("image-core edit must run isolated pub-editor-image-core --lib")
-    if expected_adapter_check not in image_core_commands:
-        raise SystemExit("image-core edit must compile-check the pub-editor adapter")
+    if expected_compat_check not in image_core_commands:
+        raise SystemExit("image-core edit must compile-check the thin core compatibility contract")
+    if expected_adapter_check in image_core_commands:
+        raise SystemExit("image-core-only edit must not compile-check full pub-editor")
     if any("--test" in command and "image_crop_v1" in command for command in image_core_commands):
         raise SystemExit("image-core edit must not run image_crop_v1 adapter acceptance")
     if (
@@ -251,8 +273,10 @@ def main() -> int:
     )
     if expected_text_core_test not in text_core_commands:
         raise SystemExit("text-core edit must run isolated pub-editor-text-core --lib")
-    if expected_adapter_check not in text_core_commands:
-        raise SystemExit("text-core edit must compile-check the pub-editor adapter")
+    if expected_compat_check not in text_core_commands:
+        raise SystemExit("text-core edit must compile-check the thin core compatibility contract")
+    if expected_adapter_check in text_core_commands:
+        raise SystemExit("text-core-only edit must not compile-check full pub-editor")
     if any(
         "--test" in command and "story_text_session_v1" in command
         for command in text_core_commands
@@ -268,6 +292,29 @@ def main() -> int:
         "--lib",
     ) in text_core_commands:
         raise SystemExit("text-core edit must not run generic pub-editor --lib")
+
+    mixed_checks = mod.plan_for_paths(
+        ROOT,
+        [
+            GEOMETRY_CORE_PREFIX + "lib.rs",
+            PREFIX + "session_geometry.rs",
+        ],
+        mode="edit",
+    )
+    mixed_commands = [check.command for check in mixed_checks]
+    expected_root_package_check = (
+        "cargo",
+        "check",
+        "--manifest-path",
+        "vendor/producer-a/crates/pub-editor/Cargo.toml",
+    )
+    if (
+        expected_adapter_check not in mixed_commands
+        and expected_root_package_check not in mixed_commands
+    ):
+        raise SystemExit(
+            "mixed core + pub-editor adapter edit must retain full pub-editor compile check"
+        )
 
     print(
         "pub-editor fast plan contract: ok "
