@@ -949,6 +949,10 @@ pub fn from_viewer_geometry_with_fonts(
         .iter()
         .map(|font| (font.normalized_source_family(), font))
         .collect::<HashMap<_, _>>();
+    let configured_font_ids = configured_fonts
+        .iter()
+        .map(|font| font.resource_id.as_str())
+        .collect::<HashSet<_>>();
     let mut used_configured_font_ids = HashSet::<String>::new();
     let mut missing_configured_font_families = HashSet::<String>::new();
     let mut source_font_family_unresolved = false;
@@ -1010,7 +1014,9 @@ pub fn from_viewer_geometry_with_fonts(
                     }
                 }
             }
-            if let Some(resource_id) = text.backend_font_resource_id.as_ref() {
+            if let Some(resource_id) = text.backend_font_resource_id.as_ref()
+                && configured_font_ids.contains(resource_id.as_str())
+            {
                 used_configured_font_ids.insert(resource_id.clone());
             }
             if let Some(layout) = text.layout.as_ref()
@@ -1018,10 +1024,14 @@ pub fn from_viewer_geometry_with_fonts(
                     font_resource_id, ..
                 } = &layout.disposition
             {
-                used_configured_font_ids.insert(font_resource_id.clone());
+                if configured_font_ids.contains(font_resource_id.as_str()) {
+                    used_configured_font_ids.insert(font_resource_id.clone());
+                }
                 for line in &layout.lines {
                     for span in &line.spans {
-                        if let Some(resource_id) = span.font_resource_id.as_ref() {
+                        if let Some(resource_id) = span.font_resource_id.as_ref()
+                            && configured_font_ids.contains(resource_id.as_str())
+                        {
                             used_configured_font_ids.insert(resource_id.clone());
                         }
                     }
