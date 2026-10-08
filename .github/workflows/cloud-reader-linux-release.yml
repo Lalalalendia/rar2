@@ -8,9 +8,11 @@ on:
       - "apps/chaptera-server/**"
       - "crates/chaptera-untrusted-pub-scan/**"
       - "deploy/config/chaptera.reader.prod.example.toml"
+      - "deploy/fonts/**"
       - "deploy/systemd/chaptera-reader.service"
       - "deploy/nginx/chaptera-reader.conf.example"
       - "deploy/install-reader-host.sh"
+      - "deploy/update-reader-font-config.py"
       - "tools/migration_pdf_worker_isolation.py"
       - "tools/run_cloud_reader_guest_host_acceptance.py"
       - ".github/workflows/cloud-reader-linux-release.yml"
@@ -41,7 +43,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist/tools
+          mkdir -p dist/tools dist/fonts
           install -m 0755 target/release/chaptera dist/chaptera
           install -m 0644 deploy/config/chaptera.reader.prod.example.toml dist/chaptera.reader.prod.example.toml
           install -m 0644 deploy/systemd/chaptera-reader.service dist/chaptera-reader.service
@@ -49,6 +51,14 @@ jobs:
           install -m 0755 deploy/install-reader-host.sh dist/install-reader-host.sh
           install -m 0755 tools/migration_pdf_worker_isolation.py dist/tools/migration_pdf_worker_isolation.py
           install -m 0755 tools/run_cloud_reader_guest_host_acceptance.py dist/run_cloud_reader_guest_host_acceptance.py
+          install -m 0755 deploy/update-reader-font-config.py dist/update-reader-font-config.py
+          install -m 0644 deploy/fonts/Carlito-Regular.ttf dist/fonts/Carlito-Regular.ttf
+          install -m 0644 deploy/fonts/Caladea-Regular.ttf dist/fonts/Caladea-Regular.ttf
+          install -m 0644 deploy/fonts/OFL-Carlito.txt dist/fonts/OFL-Carlito.txt
+          install -m 0644 deploy/fonts/OFL-Caladea.txt dist/fonts/OFL-Caladea.txt
+          install -m 0644 deploy/fonts/README.md dist/fonts/README.md
+          test "$(sha256sum dist/fonts/Carlito-Regular.ttf | cut -d' ' -f1)" = "f6418f708baede9789daef5d458c0f53d2a888af9820e8062934e504fedc6595"
+          test "$(sha256sum dist/fonts/Caladea-Regular.ttf | cut -d' ' -f1)" = "f1e899278b7b4491aba5b6a8253c4b04c050cc59b21865be5c37559a775153cd"
           printf '%s\n' "${GITHUB_SHA}" > dist/COMMIT_SHA
           (cd dist && sha256sum \
             chaptera \
@@ -58,6 +68,12 @@ jobs:
             install-reader-host.sh \
             tools/migration_pdf_worker_isolation.py \
             run_cloud_reader_guest_host_acceptance.py \
+            update-reader-font-config.py \
+            fonts/Carlito-Regular.ttf \
+            fonts/Caladea-Regular.ttf \
+            fonts/OFL-Carlito.txt \
+            fonts/OFL-Caladea.txt \
+            fonts/README.md \
             COMMIT_SHA > SHA256SUMS)
           tar -C dist -czf chaptera-cloud-reader-linux-amd64.tar.gz \
             chaptera \
@@ -67,6 +83,8 @@ jobs:
             install-reader-host.sh \
             tools/migration_pdf_worker_isolation.py \
             run_cloud_reader_guest_host_acceptance.py \
+            update-reader-font-config.py \
+            fonts \
             COMMIT_SHA \
             SHA256SUMS
           sha256sum chaptera-cloud-reader-linux-amd64.tar.gz
