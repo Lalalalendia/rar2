@@ -6,7 +6,7 @@
 
 use super::{
     EditOperation, EditorSession, mature_0x2c_pub_format_manifest,
-    mature_0x2c_pub_persistence_target, replace_scalar_range_text,
+    mature_0x2c_pub_persistence_target, replace_scalar_range_text_v1,
 };
 use pub_export::{
     PersistenceCompatibilityAssessment, PersistenceCompatibilityError, PersistenceRequirement,
@@ -191,7 +191,7 @@ impl EditorSession {
                         let inverse_end = start_scalar.checked_add(replacement_len).ok_or(
                             EditorPubWriterAssessmentError::InvalidStoryHistory { story_id },
                         )?;
-                        before = replace_scalar_range_text(
+                        before = replace_scalar_range_text_v1(
                             &before,
                             *start_scalar,
                             inverse_end,
