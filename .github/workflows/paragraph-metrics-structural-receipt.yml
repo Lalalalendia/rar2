@@ -9,6 +9,7 @@ on:
       - "tools/research-runner/tests/test_paragraph_metrics_structural.py"
       - "tools/research-runner/manual/paragraph-metrics-structural-receipt-01.md"
       - "vendor/producer-a/crates/pub-quill/src/**"
+      - "!vendor/producer-a/crates/pub-quill/src/typography/color.rs"
       - "vendor/producer-a/crates/pub-quill/Cargo.toml"
   workflow_dispatch:
 
