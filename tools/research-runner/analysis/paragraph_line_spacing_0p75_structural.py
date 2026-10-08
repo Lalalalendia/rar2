@@ -21,7 +21,7 @@ _spec.loader.exec_module(base)
 EXPERIMENT = "PARAGRAPH-LINE-SPACING-0P75-NATIVE-01"
 NATIVE_SCHEMA = "chaptera.paragraph-line-spacing-0p75-native-01.v1"
 OUT_SCHEMA = "chaptera.paragraph-line-spacing-0p75-structural.v1"
-EXPECTED_ARMS = ("control", "single", "direct-0p75")
+EXPECTED_ARMS = ("control", "single", "direct-1p0", "direct-0p75")
 EXPECTED_SINGLE_PACKED = 152_400 * 8 + 2
 EXPECTED_0P75_PACKED = 114_300 * 8 + 2
 
@@ -125,7 +125,7 @@ def main() -> int:
         )
 
         arms = native.get("arms")
-        require(isinstance(arms, list) and len(arms) == len(EXPECTED_ARMS), "three-arm matrix required")
+        require(isinstance(arms, list) and len(arms) == len(EXPECTED_ARMS), "four-arm matrix required")
         by_name = {}
         for arm in arms:
             require(isinstance(arm, dict), "invalid native arm")
@@ -144,6 +144,7 @@ def main() -> int:
             "seed": private / "seed.pub",
             "control": private / "control" / "output.pub",
             "single": private / "single" / "output.pub",
+            "direct-1p0": private / "direct-1p0" / "output.pub",
             "direct-0p75": private / "direct-0p75" / "output.pub",
         }
         expected = {
@@ -192,17 +193,38 @@ def main() -> int:
 
         control_values = {c["raw_value"] for c in rows["control"]["raw_fdpp_0x34"] if c["raw_value"] is not None}
         single_values = {c["raw_value"] for c in rows["single"]["raw_fdpp_0x34"] if c["raw_value"] is not None}
+        direct_1p0_values = {c["raw_value"] for c in rows["direct-1p0"]["raw_fdpp_0x34"] if c["raw_value"] is not None}
         p075_values = {c["raw_value"] for c in rows["direct-0p75"]["raw_fdpp_0x34"] if c["raw_value"] is not None}
 
+        direct_1p0_spacing = rows["direct-1p0"]["fresh_reopen_line_spacing"]
         p075_spacing = rows["direct-0p75"]["fresh_reopen_line_spacing"]
+        direct_1p0_changes = rows["direct-1p0"]["control_to_arm_chunk_changes"]
+        p075_changes = rows["direct-0p75"]["control_to_arm_chunk_changes"]
+
+        diagnostic_checks = {
+            "preset_single_expected_packed_1219202_present": EXPECTED_SINGLE_PACKED in single_values,
+            "preset_single_stsh_unchanged_vs_control": rows["single"]["stsh_unchanged_vs_control"],
+            "preset_single_fresh_reopen_rule": rows["single"]["fresh_reopen_line_spacing_rule"],
+        }
         carrier_checks = {
-            "single_expected_packed_1219202_present": EXPECTED_SINGLE_PACKED in single_values,
+            "direct_1p0_expected_packed_1219202_present": EXPECTED_SINGLE_PACKED in direct_1p0_values,
+            "direct_1p0_expected_packed_absent_from_control": EXPECTED_SINGLE_PACKED not in control_values,
+            "direct_1p0_stsh_unchanged": rows["direct-1p0"]["stsh_unchanged_vs_control"],
+            "direct_1p0_fresh_reopen_reports_1p0": abs(direct_1p0_spacing - 1.0) < 1e-6,
+            "direct_1p0_roundtrip_stable": rows["direct-1p0"]["roundtrip_line_spacing_stable"],
+            "direct_1p0_only_fdpp_changed": bool(direct_1p0_changes)
+            and all(change.get("name") == "FDPP" for change in direct_1p0_changes),
             "p075_expected_packed_914402_present": EXPECTED_0P75_PACKED in p075_values,
             "p075_expected_packed_absent_from_control": EXPECTED_0P75_PACKED not in control_values,
-            "stsh_unchanged_single": rows["single"]["stsh_unchanged_vs_control"],
-            "stsh_unchanged_p075": rows["direct-0p75"]["stsh_unchanged_vs_control"],
+            "p075_stsh_unchanged": rows["direct-0p75"]["stsh_unchanged_vs_control"],
             "p075_fresh_reopen_reports_0p75": abs(p075_spacing - 0.75) < 1e-6,
             "p075_roundtrip_stable": rows["direct-0p75"]["roundtrip_line_spacing_stable"],
+            "p075_only_fdpp_changed": bool(p075_changes)
+            and all(change.get("name") == "FDPP" for change in p075_changes),
+            "direct_pair_fresh_reopen_rule_equal": abs(
+                rows["direct-1p0"]["fresh_reopen_line_spacing_rule"]
+                - rows["direct-0p75"]["fresh_reopen_line_spacing_rule"]
+            ) < 1e-6,
             "p075_geometry_has_progression": bool(
                 rows["direct-0p75"]["geometry_fresh_reopen"]["bound_top_deltas_points"]
             ),
@@ -214,7 +236,8 @@ def main() -> int:
             "experiment_id": EXPERIMENT,
             "source_native_receipt_sha256": base.digest(native_path.read_bytes()),
             "expected_packed_values": {
-                "single_152400": EXPECTED_SINGLE_PACKED,
+                "preset_single_152400": EXPECTED_SINGLE_PACKED,
+                "direct_1p0_152400": EXPECTED_SINGLE_PACKED,
                 "p075_114300": EXPECTED_0P75_PACKED,
             },
             "invariants": {
@@ -224,6 +247,7 @@ def main() -> int:
                 "story_partition_invariance_all_arms": True,
             },
             "arms": rows,
+            "diagnostic_checks": diagnostic_checks,
             "carrier_checks": carrier_checks,
             "native_114300_authority_candidate": candidate,
             "product_authority_granted": False,
@@ -234,7 +258,11 @@ def main() -> int:
             ),
         }
         out.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        print(json.dumps({"native_114300_authority_candidate": candidate, "carrier_checks": carrier_checks}, sort_keys=True))
+        print(json.dumps({
+            "native_114300_authority_candidate": candidate,
+            "diagnostic_checks": diagnostic_checks,
+            "carrier_checks": carrier_checks,
+        }, sort_keys=True))
         return 0
     except (base.StructuralError, OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
         print(f"0.75 spacing structural analysis failed: {error}", file=sys.stderr)
