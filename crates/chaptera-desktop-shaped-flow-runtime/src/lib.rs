@@ -9,7 +9,8 @@ use fixed_pdf_pages::bounded_authoring_slice_for_pages_v1;
 #[cfg(test)]
 use fixed_pdf_pages::qualified_page_set_error_v1;
 use pub_editor::{
-    EditorSession, EffectiveParagraphAlignmentValueV1, ImportedParagraphFlowConstraintV1,
+    EditorError, EditorSession, EffectiveParagraphAlignmentV1, EffectiveParagraphAlignmentValueV1,
+    ImportedParagraphFlowConstraintV1,
 };
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedLayoutProjection, BoundedParagraphFlowConstraint,
@@ -89,35 +90,20 @@ impl fmt::Display for DesktopShapedFlowRuntimeError {
 impl std::error::Error for DesktopShapedFlowRuntimeError {}
 
 fn effective_line_alignment_v1(
-    editor: &EditorSession,
+    paragraphs: &[EffectiveParagraphAlignmentV1],
     story_id: StoryId,
     scalar_start: u32,
     consumed_scalar_end: u32,
-) -> Result<Option<ParagraphAlignmentV1>, DesktopShapedFlowRuntimeError> {
-    let paragraphs = match editor.imported_paragraphs_v1() {
-        Ok(paragraphs) => paragraphs,
-        Err(_) => return Ok(None),
-    };
+) -> Option<ParagraphAlignmentV1> {
     let start = u64::from(scalar_start);
     let end = u64::from(consumed_scalar_end);
-    let Some(paragraph) = paragraphs.iter().find(|paragraph| {
+    let paragraph = paragraphs.iter().find(|paragraph| {
         paragraph.story_id == story_id
             && paragraph.range.start <= start
             && start < paragraph.range.end
             && end <= paragraph.range.end
-    }) else {
-        return Ok(None);
-    };
-
-    let effective = editor
-        .effective_paragraph_alignment_v1(paragraph.paragraph_id)
-        .map_err(|error| {
-            DesktopShapedFlowRuntimeError::new(
-                "paragraph_alignment_projection_failed",
-                format!("current ParagraphId alignment could not be resolved: {error}"),
-            )
-        })?;
-    Ok(rigid_line_alignment_v1(effective.effective))
+    })?;
+    rigid_line_alignment_v1(paragraph.effective)
 }
 
 fn rigid_line_alignment_v1(
@@ -147,14 +133,25 @@ fn current_story_line_offsets_v1(
         .collect::<Vec<_>>();
     source_lines.sort_by_key(|line| (line.scalar_start, line.frame_origin, line.frame_line_index));
 
+    let effective_paragraphs = match editor.effective_paragraph_alignments_for_story_v1(story_id) {
+        Ok(paragraphs) => paragraphs,
+        Err(EditorError::ParagraphAlignmentProjectionUnavailable) => Vec::new(),
+        Err(error) => {
+            return Err(DesktopShapedFlowRuntimeError::new(
+                "paragraph_alignment_projection_failed",
+                format!("current paragraph alignment batch could not be resolved: {error}"),
+            ));
+        }
+    };
+
     let mut offsets = BTreeMap::new();
     for (ordinal, line) in source_lines.into_iter().enumerate() {
         let Some(alignment) = effective_line_alignment_v1(
-            editor,
+            &effective_paragraphs,
             story_id,
             line.scalar_start,
             line.consumed_scalar_end,
-        )?
+        )
         else {
             continue;
         };
