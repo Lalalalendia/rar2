@@ -1,0 +1,5 @@
+# Research Wave 69 — superseded Carlton evidence refs
+research/carlton-paragraph-default-topology-01 eda41612dd1e17aa3881a5bc33a49c6899a76485
+research/carlton-paragraph-default-topology-01-v2 c40cc65dad54c95b3f8ec255333a1ed3a5720861
+research/carlton-full-extent-text-transform-01 f8eccb2a3eb8949cff3378b6f517eccb13120ec4
+ops/branch-gc-20261008-research-wave68 f1ae3d69b87054ef5a5afed819a2977ebaeeaf7e
