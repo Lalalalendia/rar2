@@ -136,7 +136,7 @@ export function projectCanonicalReport(value: unknown, exactSourceSha: string): 
     for (const key of countKeys) {
       const count = from[key];
       if (count === undefined || count === null) continue;
-      if (!Number.isSafeInteger(count) || (count as number) < 0 || (count as number) > 1_000_000) return null;
+      if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0 || count > 1_000_000) return null;
       safeSummary[key] = count as number;
     }
   }
