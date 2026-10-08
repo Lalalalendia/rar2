@@ -407,6 +407,39 @@ struct BlockObservation {
     value: Option<u32>,
 }
 
+/// Framed FDPC/STSH character observations for research only.
+/// These expose raw property ids/values without assigning product semantics.
+#[cfg(feature = "research-inspection")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuillRawCharacterProperty {
+    pub field_id: u16,
+    pub block_type: u8,
+    pub raw_tag: [u8; 2],
+    pub scalar_value: Option<u32>,
+    pub source: RawSpan,
+}
+
+#[cfg(feature = "research-inspection")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuillRawFdpcStyle {
+    pub descriptor_ordinal: u32,
+    pub style_ordinal: u32,
+    pub global_start_utf16: u32,
+    pub global_end_utf16: u32,
+    pub source: RawSpan,
+    pub properties: Vec<QuillRawCharacterProperty>,
+}
+
+#[cfg(feature = "research-inspection")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuillRawStshCharacterDefault {
+    pub logical_style_index: u32,
+    pub descriptor_ordinal: u32,
+    pub record_ordinal: u32,
+    pub source: RawSpan,
+    pub properties: Vec<QuillRawCharacterProperty>,
+}
+
 /// Framed observations for research, without assigning paragraph semantics.
 #[cfg(feature = "research-inspection")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -503,6 +536,187 @@ pub fn inspect_raw_fdpp_styles(
             properties,
         });
         previous_end = global_end_utf16;
+    }
+    Ok(result)
+}
+
+#[cfg(feature = "research-inspection")]
+fn inspect_style_properties(
+    bytes: &[u8],
+    style_source: &RawSpan,
+) -> Result<Vec<QuillRawCharacterProperty>, QuillTypographyReadError> {
+    let start = usize::try_from(style_source.offset)
+        .map_err(|_| QuillTypographyReadError::new("style offset exceeds usize"))?;
+    let len = usize::try_from(style_source.len)
+        .map_err(|_| QuillTypographyReadError::new("style length exceeds usize"))?;
+    let end = checked_end(start, len, bytes.len(), "raw character style")?;
+    let mut cursor = start + 4;
+    let mut unknown = BTreeSet::new();
+    let mut properties = Vec::new();
+    while cursor < end {
+        let raw_tag = [bytes[cursor], bytes[cursor + 1]];
+        let (block, next) = parse_block(bytes, cursor, end, &mut unknown)?;
+        if !unknown.is_empty() {
+            return Err(QuillTypographyReadError::new(
+                "raw character inspection requires fully known block framing",
+            ));
+        }
+        properties.push(QuillRawCharacterProperty {
+            field_id: block.id,
+            block_type: block.block_type,
+            raw_tag,
+            scalar_value: block.value,
+            source: RawSpan {
+                stream: style_source.stream.clone(),
+                offset: cursor as u64,
+                len: (next - cursor) as u64,
+            },
+        });
+        cursor = next;
+    }
+    if cursor != end {
+        return Err(QuillTypographyReadError::new(
+            "raw character style did not close exactly",
+        ));
+    }
+    Ok(properties)
+}
+
+#[cfg(feature = "research-inspection")]
+pub fn inspect_raw_fdpc_styles(
+    bytes: &[u8],
+    story_catalog: &QuillStoryCatalog,
+) -> Result<Vec<QuillRawFdpcStyle>, QuillTypographyReadError> {
+    let descriptors = story_catalog
+        .descriptor_nodes
+        .iter()
+        .flat_map(|node| node.descriptors.iter())
+        .enumerate()
+        .collect::<Vec<_>>();
+    let font_names = parse_font_catalog(bytes, &descriptors)?;
+    let mut unknown = BTreeSet::new();
+    let styles = parse_fdpc_styles(
+        bytes,
+        story_catalog,
+        &descriptors,
+        &font_names,
+        &mut unknown,
+    )?;
+    if !unknown.is_empty() {
+        return Err(QuillTypographyReadError::new(
+            "raw FDPC inspection requires fully known block framing",
+        ));
+    }
+    validate_monotone_fdpc_text_offsets(&styles)?;
+    let text_start = u32::try_from(story_catalog.text.source.offset)
+        .map_err(|_| QuillTypographyReadError::new("TEXT offset exceeds u32"))?;
+    let mut previous_end = 0_u32;
+    let mut result = Vec::new();
+    for style in styles {
+        let global_end_utf16 = style
+            .absolute_text_end
+            .checked_sub(text_start)
+            .ok_or_else(|| QuillTypographyReadError::new("FDPC boundary precedes TEXT"))?
+            / 2;
+        let properties = inspect_style_properties(bytes, &style.style_source)?;
+        result.push(QuillRawFdpcStyle {
+            descriptor_ordinal: style.fdpc_descriptor_ordinal,
+            style_ordinal: style.fdpc_style_ordinal,
+            global_start_utf16: previous_end,
+            global_end_utf16,
+            source: style.style_source,
+            properties,
+        });
+        previous_end = global_end_utf16;
+    }
+    Ok(result)
+}
+
+#[cfg(feature = "research-inspection")]
+pub fn inspect_raw_stsh_character_defaults(
+    bytes: &[u8],
+    story_catalog: &QuillStoryCatalog,
+) -> Result<Vec<QuillRawStshCharacterDefault>, QuillTypographyReadError> {
+    let descriptors = story_catalog
+        .descriptor_nodes
+        .iter()
+        .flat_map(|node| node.descriptors.iter())
+        .enumerate()
+        .collect::<Vec<_>>();
+    let stsh = descriptors
+        .iter()
+        .copied()
+        .filter(|(_, descriptor)| descriptor.name.value == STSH)
+        .collect::<Vec<_>>();
+    if stsh.len() < 2 {
+        return Err(QuillTypographyReadError::new(format!(
+            "expected second STSH descriptor, got {}",
+            stsh.len()
+        )));
+    }
+    let (descriptor_ordinal, descriptor) = stsh[1];
+    let start = to_usize(descriptor.data_offset.value, "STSH1 offset")?;
+    let len = to_usize(descriptor.data_length.value, "STSH1 length")?;
+    let end = checked_end(start, len, bytes.len(), "STSH1 chunk")?;
+    let count = to_usize(read_u32(bytes, start + 4, end)?, "STSH1 record count")?;
+    if count % 2 != 0 {
+        return Err(QuillTypographyReadError::new(
+            "STSH1 paired character/paragraph record count is odd",
+        ));
+    }
+    let offsets_start = start + 20;
+    let offsets_end = offsets_start
+        .checked_add(count.checked_mul(4).ok_or_else(|| {
+            QuillTypographyReadError::new("STSH1 offset table overflows usize")
+        })?)
+        .ok_or_else(|| QuillTypographyReadError::new("STSH1 offset table end overflows"))?;
+    if offsets_end > end {
+        return Err(QuillTypographyReadError::new(
+            "STSH1 offset table exceeds chunk",
+        ));
+    }
+    let mut offsets = Vec::with_capacity(count);
+    for ordinal in 0..count {
+        offsets.push(to_usize(
+            read_u32(bytes, offsets_start + ordinal * 4, end)?,
+            "STSH1 record offset",
+        )?);
+    }
+    let mut result = Vec::new();
+    for ordinal in (0..count).step_by(2) {
+        let record_start = start
+            .checked_add(20)
+            .and_then(|value| value.checked_add(offsets[ordinal]))
+            .ok_or_else(|| QuillTypographyReadError::new("STSH1 record offset overflows"))?;
+        if record_start.saturating_add(6) > end {
+            return Err(QuillTypographyReadError::new(
+                "STSH1 character record offset points outside style body",
+            ));
+        }
+        let style_start = record_start + 2;
+        let style_len = to_usize(read_u32(bytes, style_start, end)?, "STSH1 style length")?;
+        let style_end = checked_end(style_start, style_len, end, "STSH1 character style")?;
+        let source = RawSpan {
+            stream: story_catalog.text.source.stream.clone(),
+            offset: style_start as u64,
+            len: style_len as u64,
+        };
+        let properties = inspect_style_properties(bytes, &source)?;
+        if style_end != style_start + style_len {
+            return Err(QuillTypographyReadError::new(
+                "STSH1 character style extent mismatch",
+            ));
+        }
+        result.push(QuillRawStshCharacterDefault {
+            logical_style_index: u32::try_from(ordinal / 2)
+                .map_err(|_| QuillTypographyReadError::new("logical style index exceeds u32"))?,
+            descriptor_ordinal: u32::try_from(descriptor_ordinal)
+                .map_err(|_| QuillTypographyReadError::new("descriptor ordinal exceeds u32"))?,
+            record_ordinal: u32::try_from(ordinal)
+                .map_err(|_| QuillTypographyReadError::new("record ordinal exceeds u32"))?,
+            source,
+            properties,
+        });
     }
     Ok(result)
 }
