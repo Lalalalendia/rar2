@@ -197,7 +197,8 @@ jobs:
           set -euo pipefail
           cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml \
             -p pub-reader --bin shadow_effect_carrier_census -- \
-            "$RUNNER_TEMP/publisher-visual-supplemental/fixtures/06-modern2c-image-heavy.pub" exact06
+            "$RUNNER_TEMP/publisher-visual-supplemental/fixtures/06-modern2c-image-heavy.pub" exact06 \
+            "$RUNNER_TEMP/publisher-visual-supplemental/exact06-shadow-candidate-node-map.json"
           cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml \
             -p pub-reader --bin shadow_effect_carrier_census -- \
             "$RUNNER_TEMP/publisher-visual-supplemental/fixtures/100_b1faaba988e88b41.pub" exact100
@@ -246,6 +247,16 @@ jobs:
           READER_WORKER_CPU_SECONDS: "90"
           READER_WORKER_ADDRESS_SPACE_MB: "768"
         run: node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Correlate exact 06 shadow candidate cohort to off-scene omissions
+        run: |
+          set -euo pipefail
+          python tools/cloud_reader_shadow_candidate_spatial_correlation_v1.py \
+            "$RUNNER_TEMP/publisher-visual-supplemental/browser/06-modern2c-image-heavy-page-1.png" \
+            tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json \
+            "$RUNNER_TEMP/publisher-visual-supplemental/browser/06-modern2c-image-heavy-page-1-shadow-correlation-geometry.json" \
+            "$RUNNER_TEMP/publisher-visual-supplemental/exact06-shadow-candidate-node-map.json" \
+            06-modern2c-image-heavy 1
 
       - name: Build current-Reader supplemental execution receipt
         run: |
