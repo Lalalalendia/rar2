@@ -21,6 +21,7 @@
     "required": [
       "environment.json",
       "analysis/paragraph-line-spacing-0p75-native-01.json",
+      "analysis/paragraph-line-spacing-0p75-structural.json",
       "logs/paragraph-line-spacing-0p75-native-01.txt"
     ]
   }
