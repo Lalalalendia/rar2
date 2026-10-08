@@ -387,6 +387,28 @@ fn main() -> eframe::Result<()> {
         virginia_page_role=True,
         visual_batch01=True,
     )
+    # Exact comment-only control #1973 proved source_identity is a bounded
+    # identity/provenance owner. Keep shared compile/visual coverage, but do
+    # not charge typography-golden or Virginia page-role for this leaf.
+    assert_scope(
+        [mod.READER_SOURCE_IDENTITY],
+        tier_a=True,
+        reader_windows_smoke=True,
+        reader_windows=False,
+        editor_windows=False,
+        visual_oracle=True,
+        cloud_reference=False,
+        virginia_page_role=False,
+        visual_batch01=False,
+        typography_golden=False,
+        android_core=True,
+        android=False,
+        web=False,
+        local_portable=False,
+        installer=False,
+        path_identity=False,
+        update_accept=False,
+    )
     assert_scope(
         ["vendor/producer-a/crates/pub-reader/src/bin/source_image_export_probe.rs"],
         cloud_reference=False,
