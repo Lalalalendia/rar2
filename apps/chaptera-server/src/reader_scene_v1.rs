@@ -96,6 +96,15 @@ pub struct ReaderPreviewTextStyleV1 {
     pub font_size_emu: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color_rgb: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<ReaderPreviewTextRunV1>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReaderPreviewTextRunV1 {
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub font_size_emu: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -410,6 +419,7 @@ fn preview_text_style_from_render_text(
     let mut cursor = text.scalar_start;
     let mut first_font_size_emu = None;
     let mut mixed_font_size = false;
+    let mut runs = Vec::new();
     for run in &text.typography {
         if run.scalar_start != cursor
             || run.scalar_end <= run.scalar_start
@@ -427,6 +437,12 @@ fn preview_text_style_from_render_text(
                 Some(existing) if existing == size => {}
                 Some(_) => mixed_font_size = true,
             }
+            let run_end = run.scalar_end.min(paint_end);
+            runs.push(ReaderPreviewTextRunV1 {
+                scalar_start: run.scalar_start.checked_sub(text.scalar_start)?,
+                scalar_end: run_end.checked_sub(text.scalar_start)?,
+                font_size_emu: size,
+            });
         }
         cursor = run.scalar_end;
     }
@@ -436,12 +452,13 @@ fn preview_text_style_from_render_text(
 
     let font_size_emu = (!mixed_font_size).then_some(first_font_size_emu).flatten();
     let color_rgb = uniform_text_color_rgb_v1(text);
-    if font_size_emu.is_none() && color_rgb.is_none() {
+    if font_size_emu.is_none() && color_rgb.is_none() && runs.is_empty() {
         None
     } else {
         Some(ReaderPreviewTextStyleV1 {
             font_size_emu,
             color_rgb,
+            runs,
         })
     }
 }
