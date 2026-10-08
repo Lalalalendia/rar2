@@ -2,10 +2,10 @@ use anyhow::{Context, Result};
 use pub_cfb::read_stream_path;
 use pub_core::StreamPath;
 use pub_escher::{
-    inspect_dgg_default_options, inspect_sp_containers, Fopte, PUBLISHER_FIELD_SHAPE_ID,
+    Fopte, PUBLISHER_FIELD_SHAPE_ID, inspect_dgg_default_options, inspect_sp_containers,
 };
 use pub_model::{NodeId, PageId, Sha256Digest};
-use pub_reader::{build_mature_0x2c_source_graph, derive_pub_node_id, PubSourceGraph};
+use pub_reader::{PubSourceGraph, build_mature_0x2c_source_graph, derive_pub_node_id};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -148,10 +148,7 @@ fn observe_candidate(
         &mut histograms.property_record_layer,
         format!("{property}|{layer}"),
     );
-    bump(
-        &mut histograms.property_form,
-        format!("{property}|{form}"),
-    );
+    bump(&mut histograms.property_form, format!("{property}|{form}"));
     if let Some(node_kind) = node_kind {
         bump(&mut histograms.node_kind, node_kind.clone());
         bump(
@@ -182,8 +179,8 @@ fn main() -> Result<()> {
         anyhow::bail!("unexpected extra arguments");
     }
 
-    let bytes = fs::read(&source_path)
-        .with_context(|| format!("read {}", source_path.display()))?;
+    let bytes =
+        fs::read(&source_path).with_context(|| format!("read {}", source_path.display()))?;
     let hash = source_hash(&bytes);
     let source = build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), hash.clone())
         .context("build mature SourceGraph")?;
@@ -219,11 +216,7 @@ fn main() -> Result<()> {
         let seqs = shape
             .client_data
             .as_ref()
-            .map(|record| {
-                record
-                    .values(PUBLISHER_FIELD_SHAPE_ID)
-                    .collect::<Vec<_>>()
-            })
+            .map(|record| record.values(PUBLISHER_FIELD_SHAPE_ID).collect::<Vec<_>>())
             .unwrap_or_default();
         if seqs.len() != 1 {
             continue;
