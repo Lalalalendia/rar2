@@ -40,7 +40,7 @@ pub const DESKTOP_SHAPED_FLOW_RUNTIME_V1: &str = "chaptera.desktop-shaped-flow-r
 pub const CURRENT_FIXED_PDF_RESOURCE_INPUT_V1: &str =
     "chaptera.current-fixed-pdf-resource-input.v1";
 
-fn retain_story_layout_scope_v1(
+fn retain_story_shaping_scope_v1(
     authoring: &mut BoundedAuthoringSlice,
     story_id: StoryId,
 ) -> Result<(), DesktopShapedFlowRuntimeError> {
@@ -52,33 +52,12 @@ fn retain_story_layout_scope_v1(
         ));
     }
 
+    // Preserve the existing page/geometry/table/diagnostic projection for this
+    // slice. Only remove unrelated Story text and frame chains so shaped-flow
+    // cannot shape document-global text.
     authoring
         .story_frames
         .retain(|frame| frame.story_id == story_id);
-    let frame_ids = authoring
-        .story_frames
-        .iter()
-        .map(|frame| frame.frame_id)
-        .collect::<BTreeSet<_>>();
-    authoring
-        .node_geometry
-        .retain(|node| frame_ids.contains(&node.node_id));
-
-    let page_origins = authoring
-        .node_geometry
-        .iter()
-        .map(|node| node.parent_origin)
-        .collect::<BTreeSet<_>>();
-    authoring
-        .pages
-        .retain(|page| page_origins.contains(&page.id.into_canonical()));
-
-    // Tables/guides are not inputs to current Story shaping. Keep them out of
-    // the interactive projection so unrelated page content cannot re-enter the
-    // shaped-flow dependency set.
-    authoring.tables.clear();
-    authoring.guides.clear();
-    authoring.unknown_layout_state.clear();
     Ok(())
 }
 
@@ -391,7 +370,7 @@ fn build_current_story_layout_with_pages_v1(
         }
     };
     let mut authoring = authoring;
-    retain_story_layout_scope_v1(&mut authoring, story_id)?;
+    retain_story_shaping_scope_v1(&mut authoring, story_id)?;
     let projection = project_bounded(authoring);
 
     let runtime = BoundedShapedFlowRuntime {
@@ -454,7 +433,7 @@ mod tests {
     use pub_layout::font_fingerprint_sha256;
     use pub_model::{EMU_PER_POINT, LengthEmu};
     use sha2::{Digest, Sha256};
-    use std::{collections::BTreeSet, env, fs};
+    use std::{env, fs};
 
     fn test_font() -> ExplicitDesktopFontResourceV1<'static> {
         let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
@@ -615,18 +594,36 @@ mod tests {
             editor.graph().stories.len() > 1,
             "51318 must remain a multi-Story witness for Story-local shaping"
         );
-        let target_frame_ids = editor
-            .graph()
-            .nodes
-            .values()
-            .filter_map(|node| {
-                let frame = node.payload.story_frame.as_ref()?;
-                (frame.story_id == Some(story_id)).then_some(node.header.id)
-            })
-            .collect::<BTreeSet<_>>();
+        let mut shaping_scope =
+            pub_viewer::bounded_authoring_slice_from_resolved(editor.graph())
+                .expect("project multi-Story fixture before shaping scope");
+        let pages_before = shaping_scope.pages.len();
+        let geometry_before = shaping_scope.node_geometry.len();
+        let tables_before = shaping_scope.tables.len();
+        retain_story_shaping_scope_v1(&mut shaping_scope, story_id)
+            .expect("retain current Story shaping scope");
+        assert_eq!(shaping_scope.stories.len(), 1);
+        assert_eq!(shaping_scope.stories[0].id, story_id);
         assert!(
-            !target_frame_ids.is_empty(),
-            "selected Story must expose at least one frame"
+            shaping_scope
+                .story_frames
+                .iter()
+                .all(|frame| frame.story_id == story_id)
+        );
+        assert_eq!(
+            shaping_scope.pages.len(),
+            pages_before,
+            "Story-local shaping slice must not change page geometry scope yet"
+        );
+        assert_eq!(
+            shaping_scope.node_geometry.len(),
+            geometry_before,
+            "Story-local shaping slice must not change node geometry scope yet"
+        );
+        assert_eq!(
+            shaping_scope.tables.len(),
+            tables_before,
+            "Story-local shaping slice must not change table projection scope yet"
         );
 
         let layout =
@@ -640,14 +637,6 @@ mod tests {
                 .iter()
                 .all(|line| line.story_origin == story_id),
             "current Story layout must not shape unrelated Stories"
-        );
-        assert!(
-            layout
-                .shaped_flow
-                .nodes
-                .iter()
-                .all(|node| target_frame_ids.contains(&node.origin)),
-            "current Story layout must not project unrelated frame geometry"
         );
 
         editor.undo().expect("undo scoped Bold");
