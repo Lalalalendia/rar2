@@ -250,7 +250,7 @@ try {
         "base_font_unavailable", "span_font_unavailable", "span_font_fingerprint_mismatch",
         "invalid_text_viewport", "table_cell_preview"
       ]);
-      const sizeSources = new Set(["shared_resolved_plan", "source_uniform_preview", "generic_9pt"]);
+      const sizeSources = new Set(["shared_resolved_plan", "source_run_preview", "source_uniform_preview", "generic_9pt"]);
       const byKind = {}, byReason = {}, bySizeSource = {}, byPage = {}, byPageCause = {};
       const paintBoundsEmu = [];
       const pages = [...document.querySelectorAll("#pages svg.page")];
