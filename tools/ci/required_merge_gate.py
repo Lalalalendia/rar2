@@ -26,6 +26,18 @@ from source_fanout_budget import admitted_by_patterns, path_matches, extract_pul
 SELF_WORKFLOW = ".github/workflows/required-merge-gate.yml"
 SUCCESS = {"success"}
 PR_ACTIONS_DEFAULT = {"opened", "synchronize", "reopened"}
+GATE_AUTHORITY_PATHS = {
+    ".github/workflows/required-merge-gate.yml",
+    "tools/ci/required_merge_gate.py",
+    "tools/ci/test_required_merge_gate.py",
+}
+LOCAL_ACCEPTANCE_PATH = re.compile(
+    r"(?<![A-Za-z0-9_.-])("
+    r"(?:\.github/workflows|tools|scripts|deploy|installer)/"
+    r"[A-Za-z0-9_./-]+\.(?:py|mjs|js|ps1|sh|yml|yaml|json|toml|md|cmd)"
+    r"|Cargo\.toml|Cargo\.lock"
+    r")"
+)
 
 
 class GateError(RuntimeError):
@@ -179,6 +191,138 @@ def changed_paths(repository: str, pr_number: int, token: str) -> list[str]:
     raise GateError("PR file listing exceeds safe 3000-file limit")
 
 
+
+def fetch_current_base(repo: Path, branch: str) -> str:
+    remote_ref = f"refs/remotes/origin/{branch}"
+    try:
+        subprocess.check_call(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "origin",
+                f"+refs/heads/{branch}:{remote_ref}",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise GateError(f"cannot refresh current base branch {branch}") from exc
+    return git(repo, "rev-parse", remote_ref)
+
+
+def current_base_drift_paths(repo: Path, validated_base: str, current_base: str) -> set[str]:
+    if validated_base == current_base:
+        return set()
+    ancestor = subprocess.run(
+        ["git", "-C", str(repo), "merge-base", "--is-ancestor", validated_base, current_base],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if ancestor.returncode != 0:
+        raise GateError(
+            f"validated base {validated_base} is not an ancestor of current base {current_base}"
+        )
+    return {
+        path
+        for path in git(repo, "diff", "--name-only", f"{validated_base}...{current_base}").splitlines()
+        if path
+    }
+
+
+def workflow_acceptance_dependencies(text: str) -> set[str]:
+    return {match.group(1) for match in LOCAL_ACCEPTANCE_PATH.finditer(text)}
+
+
+def expected_acceptance_dependencies(
+    repo: Path, revision: str, workflows: Iterable[str]
+) -> set[str]:
+    dependencies = set(GATE_AUTHORITY_PATHS)
+    for workflow in workflows:
+        dependencies.add(workflow)
+        try:
+            text = base_file(repo, revision, workflow)
+        except subprocess.CalledProcessError:
+            continue
+        dependencies.update(workflow_acceptance_dependencies(text))
+    return dependencies
+
+
+def audit_base_drift(
+    repo: Path,
+    *,
+    validated_base: str,
+    current_base: str,
+    pr_paths: Iterable[str],
+    expected_validated: set[str],
+    expected_current: set[str],
+) -> tuple[list[str], set[str]]:
+    drift = current_base_drift_paths(repo, validated_base, current_base)
+    if not drift:
+        return [], drift
+
+    errors: list[str] = []
+    overlap = sorted(drift & set(pr_paths))
+    if overlap:
+        errors.append("current-base drift overlaps PR-owned paths: " + ", ".join(overlap))
+
+    added = sorted(expected_current - expected_validated)
+    removed = sorted(expected_validated - expected_current)
+    if added or removed:
+        detail = ["current-base drift changed applicable PR workflow authority"]
+        if added:
+            detail.append("added: " + ", ".join(added))
+        if removed:
+            detail.append("removed: " + ", ".join(removed))
+        errors.append("; ".join(detail))
+
+    dependencies = expected_acceptance_dependencies(
+        repo, validated_base, expected_validated
+    ) | expected_acceptance_dependencies(repo, current_base, expected_current)
+    material = sorted(drift & dependencies)
+    if material:
+        errors.append(
+            "current-base drift changed merge/acceptance dependencies: "
+            + ", ".join(material)
+        )
+
+    return errors, drift
+
+
+def stable_base_drift_audit(
+    repo: Path,
+    *,
+    base_branch: str,
+    validated_base: str,
+    pr_paths: list[str],
+    expected_validated: set[str],
+    action: str,
+) -> tuple[str, set[str]]:
+    for _ in range(3):
+        current_base = fetch_current_base(repo, base_branch)
+        expected_current = expected_workflows(
+            repo, current_base, pr_paths, action, base_branch
+        )
+        errors, drift = audit_base_drift(
+            repo,
+            validated_base=validated_base,
+            current_base=current_base,
+            pr_paths=pr_paths,
+            expected_validated=expected_validated,
+            expected_current=expected_current,
+        )
+        if errors:
+            raise GateError("\n".join(errors))
+        confirmed = fetch_current_base(repo, base_branch)
+        if confirmed == current_base:
+            return current_base, drift
+    raise GateError("base branch moved repeatedly during drift audit; retry on a stable base")
+
+
 def exact_head_runs(repository: str, branch: str, sha: str, token: str) -> dict[str, dict]:
     candidates: dict[str, dict] = {}
     query = urllib.parse.urlencode({"event": "pull_request", "branch": branch, "per_page": 100})
@@ -254,6 +398,21 @@ def main() -> int:
         if failures:
             raise GateError("failed PR workflow(s) on exact head")
         if not pending:
+            current_base, drift = stable_base_drift_audit(
+                Path("."),
+                base_branch=args.base_branch,
+                validated_base=args.base_sha,
+                pr_paths=paths,
+                expected_validated=expected,
+                action=args.action,
+            )
+            if current_base != args.base_sha:
+                print(
+                    "Required merge gate: disjoint base drift accepted "
+                    f"validated_base={args.base_sha} current_base={current_base} "
+                    f"drift_paths={len(drift)}",
+                    flush=True,
+                )
             print("Required merge gate: PASS; all applicable workflows green", flush=True)
             return 0
         if time.monotonic() >= limit:
