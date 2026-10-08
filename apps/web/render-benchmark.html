@@ -224,6 +224,139 @@
     };
   };
 
+  window.runReaderPictureContractProbe = async function runReaderPictureContractProbe() {
+    const pixel = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    const baseScene = {
+      protocol_version: "chaptera.scene.v1",
+      document_id: "18888888-8888-4888-8888-888888888888",
+      source_hash: "a".repeat(64),
+      revision_id: "sha256:" + "b".repeat(64),
+      snapshot_id: "sha256:" + "c".repeat(64),
+      layout_environment: {
+        environment_id: "sha256:" + "d".repeat(64),
+        engine_revision: "reader-picture-dom-probe",
+        font_set_fingerprint: "sha256:" + "e".repeat(64),
+        resource_fingerprint: "sha256:" + "f".repeat(64),
+      },
+      stacking_fidelity: "exact",
+      pages: [{
+        page_id: "17777777-7777-4777-8777-777777777777",
+        order: 0,
+        width_emu: 7772400,
+        height_emu: 10058400,
+      }],
+      nodes: [{
+        node_id: "16666666-6666-4666-8666-666666666666",
+        page_id: "17777777-7777-4777-8777-777777777777",
+        parent_node_id: null,
+        kind: "picture_frame",
+        bounds: { x: 95250, y: 190500, width: 952500, height: 476250 },
+        z_order: 0,
+        paint_order: 0,
+        paint_id: null,
+        resource_id: "image:probe",
+        transform: { a: "1", b: "0", c: "0", d: "1", tx: 0, ty: 0 },
+        visual_authority: "reader_scene",
+      }],
+      stories: [],
+      story_frames: [],
+      paints: [],
+      resources: [{
+        resource_id: "image:probe",
+        kind: "image",
+        mime: "image/png",
+        content_hash: null,
+        byte_len: null,
+        availability: "inline_data_url",
+        fetch_handle: null,
+        inline_data_url: pixel,
+      }],
+      diagnostics: [],
+      capabilities: [{ key: "render.resources", state: "supported", note: null }],
+      fidelity: { state: "supported", reasons: [] },
+    };
+
+    const cropScene = structuredClone(baseScene);
+    cropScene.nodes[0].image_source_window = {
+      left_q16: 16384,
+      top_q16: 0,
+      right_q16: 49152,
+      bottom_q16: 65536,
+    };
+    cropScene.nodes[0].image_recolor = {
+      target_rgb: [51, 102, 153],
+      preserve_grays: false,
+    };
+    host.replaceChildren();
+    let renderer = createRenderer("svg", host, cropScene, BASE_VIEW);
+    await raf2();
+    const viewport = host.querySelector('svg[data-picture-viewport="fixed-frame"]');
+    const cropped = viewport?.querySelector("image");
+    const filter = host.querySelector("filter[color-interpolation-filters='sRGB']");
+    if (!viewport || !cropped || !filter) {
+      renderer.destroy();
+      throw new Error("Reader crop/recolor fixed-frame SVG contract missing");
+    }
+    const cropReceipt = {
+      viewport_authority: viewport.getAttribute("data-picture-authority"),
+      viewport_width: Number(viewport.getAttribute("width")),
+      image_x: Number(cropped.getAttribute("x")),
+      image_width: Number(cropped.getAttribute("width")),
+      recolor_authority: cropped.getAttribute("data-image-recolor-authority"),
+      filter_bound: String(cropped.getAttribute("filter") ?? "").startsWith("url(#chaptera-editor-image-"),
+    };
+    renderer.destroy();
+
+    const rotationScene = structuredClone(baseScene);
+    rotationScene.nodes[0].image_content_rotation_degrees = 270;
+    host.replaceChildren();
+    renderer = createRenderer("svg", host, rotationScene, BASE_VIEW);
+    await raf2();
+    const rotated = host.querySelector('svg[data-picture-viewport="fixed-frame"] image');
+    if (!rotated) {
+      renderer.destroy();
+      throw new Error("Reader rotation fixed-frame SVG contract missing");
+    }
+    const rotationReceipt = {
+      transform: rotated.getAttribute("transform"),
+      viewport_fixed: host.querySelectorAll('svg[data-picture-viewport="fixed-frame"]').length === 1,
+    };
+    renderer.destroy();
+
+    const genericScene = structuredClone(baseScene);
+    delete genericScene.nodes[0].visual_authority;
+    host.replaceChildren();
+    renderer = createRenderer("svg", host, genericScene, BASE_VIEW);
+    await raf2();
+    const generic = host.querySelector('image[data-resource-authority="browser-scene-inline"]');
+    const genericReceipt = {
+      preserved: generic !== null,
+      reader_viewport_count: host.querySelectorAll('svg[data-picture-viewport="fixed-frame"]').length,
+    };
+    renderer.destroy();
+
+    if (cropReceipt.viewport_authority !== "reader-picture-content") {
+      throw new Error("Reader picture authority marker changed");
+    }
+    if (Math.abs(cropReceipt.image_x + 50) > 1e-9 || Math.abs(cropReceipt.image_width - 200) > 1e-9) {
+      throw new Error("Reader crop DOM geometry changed: " + JSON.stringify(cropReceipt));
+    }
+    if (cropReceipt.recolor_authority !== "source-picture-recolor" || !cropReceipt.filter_bound) {
+      throw new Error("Reader recolor DOM contract changed");
+    }
+    if (!String(rotationReceipt.transform ?? "").startsWith("rotate(270 ")) {
+      throw new Error("Reader cardinal rotation DOM contract changed");
+    }
+    if (!rotationReceipt.viewport_fixed) {
+      throw new Error("Reader rotation lost fixed-frame viewport");
+    }
+    if (!genericReceipt.preserved || genericReceipt.reader_viewport_count !== 0) {
+      throw new Error("generic BrowserScene inline image path regressed");
+    }
+
+    return { crop: cropReceipt, rotation: rotationReceipt, generic: genericReceipt };
+  };
+
   window.renderForScreenshot = async function renderForScreenshot(payloadText, kind, options = {}) {
     const snapshot = JSON.parse(payloadText);
     host.replaceChildren();

@@ -132,6 +132,10 @@ async function main() {
           ["synthetic-stress-5000", "synthetic_stress", stressSnapshot()]
         ];
 
+    const readerPictureContract = await page.evaluate(
+      async () => window.runReaderPictureContractProbe()
+    );
+
     const cases = [];
     for (const [fixture, inputClass, payloadText] of inputs) {
       const result = await page.evaluate(
@@ -184,6 +188,7 @@ async function main() {
       note: realPub
         ? "Pinned real SampleNewsletter BrowserSceneSnapshotV1 measurement focused on the first populated page. V2 corrects the V1 blank-page targeting bug; final WEB-RENDER-01 selection remains gated on WEB-COLOR-SURFACE-01."
         : "Protocol fixtures and synthetic stress only. Do not use this receipt as the final WEB-RENDER-01 technology decision.",
+      reader_picture_contract: readerPictureContract,
       cases
     };
     fs.writeFileSync(
