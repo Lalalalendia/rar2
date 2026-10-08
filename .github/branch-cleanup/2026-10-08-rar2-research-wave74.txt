@@ -1,0 +1,6 @@
+# Research Wave 74 — assimilated scheme/roundrect evidence
+research/reference-scheme-effective-01 d7fc20d65f12490ffdbbcd2c4a34f477db4721aa
+research/roundrect-line-projection-census-01 31d6e979f8df355b758eb10535676576536c08ce
+research/roundrect-line-census-01 376dad2d4de3ce2b35ab813c3bd3bf860efa6797
+research/publisher-sparse-solid-fill-ab-01 84751540f6ffda2ccf3126ce8fcc1f5f2783d435
+ops/branch-gc-20261008-research-wave73 ff1352d828d9ed2c4e215ad311de76356722c9ee
