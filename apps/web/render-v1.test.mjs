@@ -147,6 +147,7 @@ test("Reader-adapted inline image and preview typography survive the render plan
     font_size_emu: 190500,
     color_rgb: [12, 34, 56],
   };
+  textScene.nodes[0].visual_authority = "reader_scene";
   const textPlan = buildRenderPlan(textScene, VIEW);
   assert.equal(textPlan.pages[0].nodes[0].story.authority, "reader_scene_preview");
   assert.equal(textPlan.pages[0].nodes[0].story.style.font_size_css_px, 20);
