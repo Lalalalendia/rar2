@@ -579,12 +579,14 @@ def plan_for_paths(root: Path, paths: Iterable[str], *, mode: str = "edit") -> l
 
     package_manifests: set[str] = set()
     workspace_manifests: set[str] = set()
+    rust_sources: set[str] = set()
     rust_test_targets: set[tuple[str, str]] = set()
 
     for path in normalized:
         disk_path = root / path
         suffix = Path(path).suffix
         if suffix == RUST_SUFFIX and disk_path.exists():
+            rust_sources.add(path)
             manifest = nearest_package_manifest(root, path)
             if manifest:
                 manifest_rel = _rel(root, manifest)
@@ -627,12 +629,14 @@ def plan_for_paths(root: Path, paths: Iterable[str], *, mode: str = "edit") -> l
                 f"feature-loop compile for changed workspace manifest/lock: {manifest}",
             ))
 
-    for manifest in sorted(package_manifests):
+    for path in sorted(rust_sources):
         checks.append(Check(
-            "rustfmt-package",
-            ("cargo", "fmt", "--manifest-path", manifest, "--", "--check"),
-            f"format affected Rust package: {manifest}",
+            "rustfmt-file",
+            ("rustfmt", "--edition", "2024", "--check", path),
+            f"format changed Rust source only: {path}",
         ))
+
+    for manifest in sorted(package_manifests):
         checks.append(Check(
             "rust-check-package",
             ("cargo", "check", "--manifest-path", manifest),
@@ -657,7 +661,7 @@ def plan_for_paths(root: Path, paths: Iterable[str], *, mode: str = "edit") -> l
         "python-syntax": 10,
         "node-syntax": 10,
         "workflow-yaml": 10,
-        "rustfmt-package": 10,
+        "rustfmt-file": 10,
         "rust-workspace-metadata": 20,
         "python-micro-test": 20,
         "node-micro-test": 20,

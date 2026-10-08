@@ -90,13 +90,37 @@ def test_plan_routing_and_dedupe() -> None:
         manifest = "crates/foo/Cargo.toml"
 
         assert sum(command[:4] == ("cargo", "check", "--manifest-path", manifest) for command in actual) == 1
-        assert sum(command[:4] == ("cargo", "fmt", "--manifest-path", manifest) for command in actual) == 1
+        assert {
+            command[-1]
+            for command in actual
+            if command[:4] == ("rustfmt", "--edition", "2024", "--check")
+        } == {
+            "crates/foo/src/lib.rs",
+            "crates/foo/src/extra.rs",
+            "crates/foo/tests/extra.rs",
+        }
+        assert not any(command[:2] == ("cargo", "fmt") for command in actual)
         assert ("cargo", "test", "--manifest-path", manifest, "--test", "extra", "--no-fail-fast") in actual
         assert any(command[1:3] == ("-m", "py_compile") and "tools/ci/foo.py" in command for command in actual)
         assert any(command[-1] == "tools/ci/test_foo.py" for command in actual)
         assert ("node", "--check", "web/a.mjs") in actual
         assert ("node", "--test", "web/a.test.mjs") in actual
         assert ("ruby", "tools/ci/check_workflow_yaml_syntax.rb") in actual
+
+
+def test_package_manifest_only_change_does_not_format_unchanged_rust_sources() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        write(
+            root / "crates/foo/Cargo.toml",
+            "[package]\nname='foo'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        write(root / "crates/foo/src/lib.rs", "pub fn value() -> u8 { 1 }\n")
+
+        actual = commands(mod.plan_for_paths(root, ["crates/foo/Cargo.toml"]))
+        assert ("cargo", "check", "--manifest-path", "crates/foo/Cargo.toml") in actual
+        assert not any(command[0] == "rustfmt" for command in actual)
+        assert not any(command[:2] == ("cargo", "fmt") for command in actual)
 
 
 def test_same_stem_rust_source_discovers_exact_integration_test() -> None:
