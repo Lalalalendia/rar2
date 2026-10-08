@@ -1,0 +1,12 @@
+# Branch GC 2026-10-08 - Viewer restack batch 05
+# NEVER MERGE. Exact-SHA predecessor cleanup only.
+
+viewer/cardinal-picture-content-rotation-806 cda1d371bf25eff0f66487c53d347a73a0c43c9a # PR 808 -> merged 880
+viewer/cardinal-picture-content-rotation-current-806 77acb6bbbd4fa475760ad9b93c432cd6cf863829 # PR 817 -> merged 880
+viewer/cardinal-picture-content-rotation-main-806 dd28c4c11ca4f5e5cde503b346b9bf0895098619 # PR 823 -> merged 880
+viewer/direct-story-rotation-01 08ddfd0bb2bc45897e275f369cd61e38a667eb57 # PR 1561 -> merged 1579
+viewer/direct-story-rotation-01-v3 3d38b36d3e9c40cb03966eae3571f20490eb3a20 # PR 1570 -> merged 1579
+viewer/direct-story-rotation-01-v4 ddb7591a542f47b823c04eb743deb46792951351 # PR 1576 -> merged 1579
+viewer/mixed-family-text-current-807-v2 3ffeca7e85c9a9b14e2e2affa10fbcedd2f847d5 # PR 861 -> merged 939
+viewer/mixed-family-text-current-807-v3 0184d32008d8246ba63d58b197878676403a1761 # PR 901 -> merged 939
+ops/branch-gc-20261008-mainrs-queue-batch-04 6db111500f87d5de8667a15033c2e7ce2a28c951 # PR 2080 completed owner
