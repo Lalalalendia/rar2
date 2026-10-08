@@ -5761,7 +5761,12 @@ mod tests {
             Some(11)
         );
         assert_eq!(
-            layout.lines.iter().map(|line| line.text.as_str()).collect::<String>(),
+            layout
+                .lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>()
+                .concat(),
             "world"
         );
         assert!(layout.lines.iter().all(|line| {
