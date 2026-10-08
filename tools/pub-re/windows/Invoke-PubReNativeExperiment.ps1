@@ -13,6 +13,7 @@ $ErrorActionPreference = "Stop"
 
 $ExperimentSchema = "chaptera.pub-re-native-experiment.v1"
 $ReceiptSchema = "chaptera.pub-re-native-receipt.v1"
+$StageReceiptSchema = "chaptera.pub-re-native-stage.v1"
 $DiffSchema = "chaptera.pub-re-experiment.v1"
 $MsoAutomationSecurityForceDisable = 3
 $PbFilePublication = 1
@@ -179,6 +180,25 @@ function Write-Json {
         New-Item -ItemType Directory -Force -Path $parent | Out-Null
     }
     $Value | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath $Path -Encoding utf8
+}
+
+function Set-NativeStage {
+    param([Parameter(Mandatory = $true)][string]$Stage)
+
+    $script:NativeStageSequence = [int]$script:NativeStageSequence + 1
+    $script:NativeCurrentStage = $Stage
+    Write-Host ("PUB_RE_NATIVE_STAGE sequence={0} stage={1}" -f $script:NativeStageSequence, $Stage)
+
+    if (-not [string]::IsNullOrWhiteSpace([string]$script:NativeStageReceiptPath)) {
+        Write-Json -Value ([ordered]@{
+            schema = $StageReceiptSchema
+            experiment_id = [string]$script:NativeExperimentId
+            operation = [string]$script:NativeOperationKind
+            sequence = [int]$script:NativeStageSequence
+            stage = $Stage
+            failure_stage = [string]$script:NativeFailureStage
+        }) -Path $script:NativeStageReceiptPath
+    }
 }
 
 function Get-PublisherProcessCount {
@@ -565,6 +585,14 @@ $receipt = [ordered]@{
     }
 }
 
+$script:NativeStageSequence = 0
+$script:NativeCurrentStage = ""
+$script:NativeFailureStage = ""
+$script:NativeStageReceiptPath = Join-Path $evidenceDir "native-stage-receipt.json"
+$script:NativeExperimentId = [string]$manifest.experiment_id
+$script:NativeOperationKind = $operationKind
+Set-NativeStage "transaction_begin"
+
 $application = $null
 $document = $null
 $securityBefore = $null
@@ -572,8 +600,11 @@ $target = $null
 $mutatedPath = Join-Path $privateDir "mutated.pub"
 
 try {
+    Set-NativeStage "primary_application_create_begin"
     $appState = New-SafePublisherApplication -Visible:$visible
     $application = $appState.application
+    Set-NativeStage "primary_application_create_complete"
+
     $securityBefore = $appState.automation_security_before
     $receipt.automation_security.before = $securityBefore
     $receipt.publisher = [ordered]@{
@@ -582,8 +613,13 @@ try {
     }
 
     if ($operationKind -eq "snapshot_only") {
+        Set-NativeStage "primary_open_begin"
         $document = $application.Open($inputCopy, $true, $false)
+        Set-NativeStage "primary_open_complete"
+
+        Set-NativeStage "primary_inventory_begin"
         $receipt.before = Get-DocumentInventory $document
+        Set-NativeStage "primary_inventory_complete"
         $receipt.status = "complete"
     }
     else {
@@ -597,16 +633,25 @@ try {
         }
         $receipt.operation.delta_degrees = $delta
 
+        Set-NativeStage "primary_open_begin"
         $document = $application.Open($inputCopy, $false, $false)
+        Set-NativeStage "primary_open_complete"
+
+        Set-NativeStage "primary_selector_begin"
         $target = Find-TargetShape -Document $document -WantedPageId $wantedPageId -WantedShapeId $wantedShapeId
         if ($null -eq $target) {
+            Set-NativeStage "primary_selector_not_found"
             throw "selector_not_found"
         }
+        Set-NativeStage "primary_selector_complete"
 
         $receipt.before = Get-ShapeSnapshot -Shape $target.shape -PageId $wantedPageId -TraversalPath ([string]$target.traversal_path)
         $beforeRotation = [double]$target.shape.Rotation
+
+        Set-NativeStage "primary_mutation_begin"
         $target.shape.Rotation = $beforeRotation + $delta
         $afterRotation = [double]$target.shape.Rotation
+        Set-NativeStage "primary_mutation_complete"
         if ([math]::Abs($afterRotation - $beforeRotation) -lt 0.0000001) {
             throw "mutation_no_effect"
         }
@@ -617,7 +662,9 @@ try {
         }
         $receipt.after = Get-ShapeSnapshot -Shape $target.shape -PageId $wantedPageId -TraversalPath ([string]$target.traversal_path)
 
+        Set-NativeStage "primary_save_as_begin"
         $document.SaveAs($mutatedPath, $PbFilePublication, $false)
+        Set-NativeStage "primary_save_as_complete"
         $saved = Get-FileFingerprint $mutatedPath
         $receipt.save = [ordered]@{
             state = "ok"
@@ -627,21 +674,38 @@ try {
         $receipt.status = "saved"
     }
 }
+catch {
+    $script:NativeFailureStage = [string]$script:NativeCurrentStage
+    Write-Host ("PUB_RE_NATIVE_FAILURE_STAGE stage={0}" -f $script:NativeFailureStage)
+    Set-NativeStage "primary_exception_observed"
+    throw
+}
 finally {
     if ($null -ne $target) {
         Release-ComObject $target.shape
     }
     if ($null -ne $document) {
-        try { $document.Close() } catch {}
+        Set-NativeStage "primary_document_close_begin"
+        try {
+            $document.Close()
+            Set-NativeStage "primary_document_close_complete"
+        }
+        catch {
+            Set-NativeStage "primary_document_close_error"
+        }
         Release-ComObject $document
     }
     if ($null -ne $application) {
+        Set-NativeStage "primary_application_quit_begin"
         $closed = Close-SafePublisherApplication -Application $application -AutomationSecurityBefore $securityBefore
+        Set-NativeStage "primary_application_quit_complete"
         $receipt.automation_security.restore = $closed.security_restore
     }
 }
 
+Set-NativeStage "primary_process_exit_wait_begin"
 $primaryExited = Wait-PublisherExit -GraceSeconds $graceSeconds
+Set-NativeStage "primary_process_exit_wait_complete"
 $receipt.process_exit.primary = if ($primaryExited) { "ok" } else { "timeout" }
 if (-not $primaryExited) {
     $receipt.status = "process_exit_timeout"
@@ -655,18 +719,28 @@ if ($operationKind -eq "shape_rotation_delta" -and $receipt.save.state -eq "ok" 
     $reopenTarget = $null
 
     try {
+        Set-NativeStage "reopen_application_create_begin"
         $reopenState = New-SafePublisherApplication -Visible:$visible
         $reopenApplication = $reopenState.application
+        Set-NativeStage "reopen_application_create_complete"
+
         $reopenSecurityBefore = $reopenState.automation_security_before
+
+        Set-NativeStage "reopen_open_begin"
         $reopenDocument = $reopenApplication.Open($mutatedPath, $true, $false)
+        Set-NativeStage "reopen_open_complete"
+
+        Set-NativeStage "reopen_selector_begin"
         $reopenTarget = Find-TargetShape -Document $reopenDocument -WantedPageId ([int]$operation.selector.page_id) -WantedShapeId ([int]$operation.selector.shape_id)
         if ($null -eq $reopenTarget) {
+            Set-NativeStage "reopen_selector_not_found"
             $receipt.reopen = [ordered]@{
                 state = "selector_unresolved"
             }
             $receipt.status = "semantic_reopen_unresolved"
         }
         else {
+            Set-NativeStage "reopen_selector_complete"
             $receipt.reopen = [ordered]@{
                 state = "ok"
                 target = Get-ShapeSnapshot -Shape $reopenTarget.shape -PageId ([int]$operation.selector.page_id) -TraversalPath ([string]$reopenTarget.traversal_path)
@@ -674,24 +748,42 @@ if ($operationKind -eq "shape_rotation_delta" -and $receipt.save.state -eq "ok" 
             $receipt.status = "complete"
         }
     }
+    catch {
+        $script:NativeFailureStage = [string]$script:NativeCurrentStage
+        Write-Host ("PUB_RE_NATIVE_FAILURE_STAGE stage={0}" -f $script:NativeFailureStage)
+        Set-NativeStage "reopen_exception_observed"
+        throw
+    }
     finally {
         if ($null -ne $reopenTarget) { Release-ComObject $reopenTarget.shape }
         if ($null -ne $reopenDocument) {
-            try { $reopenDocument.Close() } catch {}
+            Set-NativeStage "reopen_document_close_begin"
+            try {
+                $reopenDocument.Close()
+                Set-NativeStage "reopen_document_close_complete"
+            }
+            catch {
+                Set-NativeStage "reopen_document_close_error"
+            }
             Release-ComObject $reopenDocument
         }
         if ($null -ne $reopenApplication) {
+            Set-NativeStage "reopen_application_quit_begin"
             [void](Close-SafePublisherApplication -Application $reopenApplication -AutomationSecurityBefore $reopenSecurityBefore)
+            Set-NativeStage "reopen_application_quit_complete"
         }
     }
 
+    Set-NativeStage "reopen_process_exit_wait_begin"
     $reopenExited = Wait-PublisherExit -GraceSeconds $graceSeconds
+    Set-NativeStage "reopen_process_exit_wait_complete"
     $receipt.process_exit.reopen = if ($reopenExited) { "ok" } else { "timeout" }
     if (-not $reopenExited) {
         $receipt.status = "process_exit_timeout"
     }
 }
 
+Set-NativeStage "transaction_complete"
 $nativeReceiptPath = Join-Path $evidenceDir "native-receipt.json"
 Write-Json -Value $receipt -Path $nativeReceiptPath
 

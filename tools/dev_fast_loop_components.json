@@ -351,11 +351,25 @@
       ]
     },
     {
-      "name": "pub-editor table track extent/history",
+      "name": "pub-editor table core laws",
       "paths": [
-        "vendor/producer-a/crates/pub-editor/src/session_table.rs",
-        "vendor/producer-a/crates/pub-editor-table-core/src/table_track_extent_v1.rs",
-        "vendor/producer-a/crates/pub-editor-table-core/src/table_track_history_v1.rs"
+        "vendor/producer-a/crates/pub-editor-table-core/src/*.rs"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "check",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor"
+        ]
+      ]
+    },
+    {
+      "name": "pub-editor table track session adapter",
+      "paths": [
+        "vendor/producer-a/crates/pub-editor/src/session_table.rs"
       ],
       "commands": [
         [
