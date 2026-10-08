@@ -10,6 +10,7 @@ import {
   imageResourcePaintPlan,
   presetShapePaintGeometry,
   previewTextPaintPlan,
+  previewTextSizeSource,
   resolvedTextLinePaintPlan,
   resolvedTextViewportGeometry,
   tableBorderPaintPlan,
@@ -463,6 +464,16 @@ test("browser preview remains conservative when bounded style is unavailable", (
     line_height_emu: 142_875,
     color: "#000"
   });
+});
+
+test("browser preview font-size provenance is distinct from source font identity", () => {
+  assert.equal(previewTextSizeSource({}), "generic_9pt");
+  assert.equal(previewTextSizeSource({ preview_text_style: { font_size_emu: null } }), "generic_9pt");
+  assert.equal(previewTextSizeSource({ preview_text_style: { font_size_emu: 457_200 } }),
+    "source_uniform_preview");
+  assert.equal(previewTextSizeSource({}, { font_size_emu: 152_400 }), "shared_resolved_plan");
+  assert.equal(previewTextSizeSource({ preview_text_style: { font_size_emu: 457_200 } },
+    { font_size_emu: 152_400 }), "shared_resolved_plan");
 });
 
 test("shared resolved text paint plan carries server text color", () => {

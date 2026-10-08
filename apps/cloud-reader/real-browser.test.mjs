@@ -243,6 +243,38 @@ try {
       expectedNodeOrderByPage,
       "browser must preserve server scene node order within each page"
     );
+    const browserPreviewCensus = await page.locator('[data-text-authority="browser-preview-only"]').evaluateAll((elements) => {
+      const kinds = new Set(["text_frame", "other_node_text", "table_cell"]);
+      const reasons = new Set([
+        "scene_layout_missing", "shared_plan_invalid", "server_layout_unavailable",
+        "base_font_unavailable", "span_font_unavailable", "span_font_fingerprint_mismatch",
+        "invalid_text_viewport", "table_cell_preview"
+      ]);
+      const sizeSources = new Set(["shared_resolved_plan", "source_uniform_preview", "generic_9pt"]);
+      const byKind = {}, byReason = {}, bySizeSource = {}, byPage = {}, byPageCause = {};
+      const pages = [...document.querySelectorAll("#pages svg.page")];
+      for (const element of elements) {
+        const kind = element.getAttribute("data-preview-kind");
+        const reason = element.getAttribute("data-preview-reason");
+        const sizeSource = element.getAttribute("data-preview-size-source");
+        if (!kinds.has(kind) || !reasons.has(reason) || !sizeSources.has(sizeSource)) {
+          throw new Error("browser preview census has an unknown paint decision");
+        }
+        const page = pages.indexOf(element.closest("svg.page")) + 1;
+        if (page < 1) throw new Error("browser preview was not painted inside an SVG page");
+        for (const [counts, key] of [
+          [byKind, kind], [byReason, reason], [bySizeSource, sizeSource],
+          [byPage, String(page)], [byPageCause, page + "|" + kind + "|" + reason + "|" + sizeSource]
+        ]) counts[key] = (counts[key] ?? 0) + 1;
+      }
+      return { total: elements.length, by_kind: byKind, by_reason: byReason,
+        by_size_source: bySizeSource, by_page: byPage, by_page_cause: byPageCause };
+    });
+    assert.equal(
+      Object.values(browserPreviewCensus.by_kind).reduce((sum, count) => sum + count, 0),
+      browserPreviewCensus.total,
+      "browser preview census must count only actually painted preview elements"
+    );
     const expectedLines = scene.nodes.flatMap((node) => node.text_layout?.disposition === "shared_resolved"
       ? node.text_layout.lines.map((line) => ({ node_id: node.node_id, index: line.line_index, text: line.text, font_size: node.text_layout.font_size_emu / 9525 })) : []);
     const painted = await page.locator('[data-text-authority="server-shared-resolved"]').evaluateAll((lines) => lines.map((line) => {
@@ -422,6 +454,8 @@ try {
       classification: receipt.classification, rendered: true, fidelity: scene.fidelity, stacking_fidelity: scene.stacking_fidelity,
       fidelity_reasons: fidelityReasons, diagnostic_codes: diagnosticCodes, pages: fixturePages, nodes: scene.nodes.length,
       node_kind_counts: nodeKindCounts, text_layout_disposition_counts: textLayoutDispositionCounts,
+      text_layout_fallback_counts: scene.text_layout_fallback_counts ?? {},
+      browser_preview_census: browserPreviewCensus,
       descriptor_only_resource_count: descriptorOnlyResourceCount, browser_preserved_scene_node_order: true,
       reference_raster_dpi: referenceRasterDpi || null, page_geometry: orderedPageGeometry,
       stories: scene.stories.length, shared_lines: painted.length, nonempty_shared_lines: nonempty.length,
