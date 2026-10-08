@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/publisher-visual-golden-supplemental.yml"
       - "tools/cloud_reader_visual_supplemental_v1.py"
+      - "deploy/fonts/**"
       - "tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv"
       - "tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json"
       - "apps/cloud-reader/**"
@@ -192,6 +193,42 @@ jobs:
           mkdir -p "$RUNNER_TEMP/publisher-visual-supplemental"
           python tools/cloud_reader_visual_supplemental_v1.py prepare             tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv             out/pinned1050/materialized/native             "$RUNNER_TEMP/publisher-visual-supplemental/fixtures"             "$RUNNER_TEMP/publisher-visual-supplemental/manifest.json"
 
+      - name: Prepare configured open-font registry
+        run: |
+          set -euo pipefail
+          registry="$RUNNER_TEMP/publisher-visual-supplemental/font-registry"
+          mkdir -p "$registry"
+          cp deploy/fonts/Carlito-Regular.ttf "$registry/Carlito-Regular.ttf"
+          cp deploy/fonts/Caladea-Regular.ttf "$registry/Caladea-Regular.ttf"
+          python - "$registry/manifest.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          payload = {
+              "protocol_version": "chaptera.reader-configured-font-manifest.v1",
+              "resources": [
+                  {
+                      "source_family": "Calibri",
+                      "expected_sha256": "f6418f708baede9789daef5d458c0f53d2a888af9820e8062934e504fedc6595",
+                      "face_index": 0,
+                      "mime": "font/ttf",
+                      "file_name": "Carlito-Regular.ttf",
+                  },
+                  {
+                      "source_family": "Cambria",
+                      "expected_sha256": "f1e899278b7b4491aba5b6a8253c4b04c050cc59b21865be5c37559a775153cd",
+                      "face_index": 0,
+                      "mime": "font/ttf",
+                      "file_name": "Caladea-Regular.ttf",
+                  },
+              ],
+          }
+          path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+          echo "READER_FONT_REGISTRY=$registry/manifest.json" >> "$GITHUB_ENV"
+
       - name: Build canonical Cloud Reader worker
         env:
           SUPPLEMENTAL_CARGO_CACHE_HIT: ${{ steps.supplemental-cargo-cache.outputs.cache-hit }}
@@ -228,6 +265,7 @@ jobs:
           REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           READER_CORPUS_DIAGNOSTIC: "1"
           READER_WORKER_BINARY: ${{ github.workspace }}/target/publisher-visual-supplemental-rust/debug/chaptera
+          READER_FONT_REGISTRY: ${{ env.READER_FONT_REGISTRY }}
           READER_REAL_MANIFEST: ${{ runner.temp }}/publisher-visual-supplemental/manifest.json
           READER_REAL_OUTPUT: ${{ runner.temp }}/publisher-visual-supplemental/browser
           READER_REFERENCE_RASTER_DPI: "144"
