@@ -9,6 +9,7 @@ on:
       - "!vendor/producer-a/crates/pub-editor/src/session_image.rs"
       - "!vendor/producer-a/crates/pub-editor/src/session_text.rs"
       - "!vendor/producer-a/crates/pub-editor/tests/story_text_session_v1.rs"
+      - "!vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs"
       - "packages/protocol/project-fork/**"
       - "tools/validate_project_fork_receipt.py"
       - ".github/workflows/w2-project-fork-receipt-v1.yml"

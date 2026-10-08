@@ -30,6 +30,9 @@ jobs:
       - name: Test source fanout budget laws
         run: python tools/ci/test_source_fanout_budget.py
 
+      - name: Test pub-editor integration-test path ownership
+        run: python tools/ci/test_pub_editor_test_path_ownership.py
+
       - name: Enforce source fanout and monolith ratchets
         env:
           SOURCE_FANOUT_BASE: ${{ github.event.pull_request.base.sha }}
