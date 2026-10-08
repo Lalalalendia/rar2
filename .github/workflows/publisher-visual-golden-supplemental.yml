@@ -125,6 +125,16 @@ jobs:
           mkdir -p "$RUNNER_TEMP/publisher-visual-supplemental"
           python tools/cloud_reader_visual_supplemental_v1.py prepare             tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv             out/pinned1050/materialized/native             "$RUNNER_TEMP/publisher-visual-supplemental/fixtures"             "$RUNNER_TEMP/publisher-visual-supplemental/manifest.json"
 
+      - name: Emit exact 05 grouped-rotation profile
+        env:
+          READER_CORPUS_DIAGNOSTIC: "1"
+        run: |
+          set -euo pipefail
+          cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader --bin source_image_export_probe -- \
+            "$RUNNER_TEMP/publisher-visual-supplemental/fixtures/05-modern2c-officeart-wmf.pub" \
+            >/dev/null
+
       - name: Build canonical Cloud Reader worker
         env:
           SUPPLEMENTAL_CARGO_CACHE_HIT: ${{ steps.supplemental-cargo-cache.outputs.cache-hit }}
