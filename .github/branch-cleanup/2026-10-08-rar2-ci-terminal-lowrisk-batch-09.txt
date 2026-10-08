@@ -1,0 +1,11 @@
+# 2026-10-08 — CI terminal low-risk batch 09
+# Never merge. Exact live tips with explicit merged replacement, terminal control, or completed GC receipt.
+# Runtime must protect open heads/bases and moved SHA tips.
+
+ci/desktop-main-rustfmt-repair-01 b3c5ff91c07b1a8ad83b91c7aea623fabd501627 # #1419 superseded by merged #1420; exact same rustfmt blob
+ci/duplicate-safe-negative-07 6bb8cb9aef79bb190ba286a41c3a2226a707d6a6 # #1399 terminal one-comment negative control
+ci/reader-product-cli-rustfmt-01 2e4bc809becf89cae286637241eb701894a8ac2b # #1320 formatting-only; replacement #1325 merged
+ci/rectangle-mainrs-negative-control 6729eb5f982177b9119745c70dc76ac6a7ca782f # #1292 terminal one-comment negative control
+ci/control-1795-base 05de3e7abdf56611e8ed83cf0ffe9fdf66f67079 # temporary scoped Cloud PR-trigger base for superseded closed #1809
+ci/control-1795-current-base 384302f6051f521db190253179ca93ea84a57fdf # temporary scoped Cloud PR-trigger base for closed #1811 exact-base census
+ops/branch-gc-20261008-ci-zero-unique-batch-08 427518052b375fa85c4809c966dbbee0ffe53931 # completed #2106 receipt 11/11
