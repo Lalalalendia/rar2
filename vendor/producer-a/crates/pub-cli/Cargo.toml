@@ -1,0 +1,24 @@
+[package]
+name = "pub-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pub"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+pub-editor = { path = "../pub-editor" }
+pub-export = { path = "../pub-export" }
+pub-layout = { path = "../pub-layout" }
+pub-model = { path = "../pub-model" }
+pub-output = { path = "../pub-output" }
+pub-pdf = { path = "../pub-pdf" }
+pub-reader = { path = "../pub-reader" }
+pub-viewer = { path = "../pub-viewer" }

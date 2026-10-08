@@ -1,0 +1,161 @@
+name: Free PUB PDF CLI V1
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/free-pub-pdf-cli-v1.yml"
+      - "vendor/producer-a/Cargo.toml"
+      - "vendor/producer-a/crates/pub-cli/**"
+      - "vendor/producer-a/crates/pub-pdf/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  bounded-pdf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Format and compile owned slice
+        run: |
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-cli -p pub-pdf -p pub-output -p pub-viewer -- --check
+          cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-cli -p pub-pdf -p pub-output -p pub-viewer --all-targets
+
+      - name: Run focused fixed-output tests
+        run: |
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-output reads_opentype_embedding_flags_without_licensing_guesswork
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-output restricted_font_is_explicit_block_by_default
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-pdf
+
+      - name: Build public CLI
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-cli --bin pub
+
+      - name: Acquire pinned Apache POI SampleNewsletter
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/SampleNewsletter.pub"
+          curl --fail --location --silent --show-error \
+            "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub" \
+            --output "$fixture"
+          actual_sha="$(sha256sum "$fixture" | awk '{print $1}')"
+          actual_size="$(wc -c < "$fixture" | tr -d ' ')"
+          test "$actual_sha" = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
+          test "$actual_size" = "291840"
+          echo "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" >> "$GITHUB_ENV"
+
+      - name: Materialize pinned fallback font
+        shell: bash
+        run: |
+          set -euo pipefail
+          font="$RUNNER_TEMP/chaptera-fallback.ttf"
+          cargo run -q -p chaptera-desktop-fallback-font-resource --bin materialize-fallback-font -- "$font"
+          test -s "$font"
+          echo "CHAPTERA_FIXED_OUTPUT_FONT=$font" >> "$GITHUB_ENV"
+
+      - name: Convert real PUB twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/free-pub-pdf-cli-v1"
+          mkdir -p "$out"
+          cli="vendor/producer-a/target/debug/pub"
+
+          "$cli" convert "$CHAPTERA_SAMPLE_NEWSLETTER" --to pdf --output "$out/a.pdf" --fallback-font "$CHAPTERA_FIXED_OUTPUT_FONT" --json > "$out/a.cli.json"
+          "$cli" convert "$CHAPTERA_SAMPLE_NEWSLETTER" --to pdf --output "$out/b.pdf" --fallback-font "$CHAPTERA_FIXED_OUTPUT_FONT" > "$out/b.cli.txt"
+
+          cmp "$out/a.pdf" "$out/b.pdf"
+          cmp "$out/a.pdf.loss.json" "$out/b.pdf.loss.json"
+          cmp "$out/a.pdf.loss.txt" "$out/b.pdf.loss.txt"
+          test "$(head -c 8 "$out/a.pdf")" = "%PDF-1.7"
+          test -s "$out/a.pdf.loss.json"
+          test -s "$out/a.pdf.loss.txt"
+          echo "CHAPTERA_CLI_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Validate source-safe acceptance receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          out = Path(os.environ["CHAPTERA_CLI_OUT"])
+          expected_source = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
+          report = json.loads((out / "a.pdf.loss.json").read_text(encoding="utf-8"))
+          cli_report = json.loads((out / "a.cli.json").read_text(encoding="utf-8"))
+
+          assert report == cli_report
+          assert report["schema_version"] == "free-pub-pdf-v0.1"
+          assert report["conversion_profile"]["source"]["source_sha256"] == expected_source
+          assert report["target"]["format"] == "pdf"
+          assert report["typography"]["disposition"] == "explicit_user_fallback_not_source_font"
+          assert len(report["typography"]["fallback_font"]["fingerprint_sha256"]) == 64
+          assert report["typography"]["shaped_flow"]["output_adapter_reshaping_calls"] == 0
+          assert report["typography"]["fixed_flow_receipt"]["invariants"]["reshaping_calls"] == 0
+          assert report["typography"]["fixed_flow_receipt"]["invariants"]["raw_text_emitted"] is False
+          assert report["typography"]["fixed_flow_receipt"]["invariants"]["line_order_preserved"] is True
+          assert report["pdf"]["capabilities"]["resolved_text"] is True
+          assert report["pdf"]["capabilities"]["images"] is True
+          assert report["typography"]["materialized_runs"]
+
+          deprecated = {
+              "pdf.text.multi_frame_unsupported",
+              "pdf.text.multiline_unsupported",
+              "pdf.text.non_ascii_unsupported",
+              "pdf.text.single_line_overflow",
+          }
+          assert all(item.get("code") not in deprecated for item in report["typography"]["skipped"])
+
+          def digest(name):
+              return hashlib.sha256((out / name).read_bytes()).hexdigest()
+
+          receipt = {
+              "schema": "chaptera.free-pub-pdf-cli-acceptance.v1",
+              "source_sha256": expected_source,
+              "pdf_sha256": digest("a.pdf"),
+              "loss_json_sha256": digest("a.pdf.loss.json"),
+              "loss_text_sha256": digest("a.pdf.loss.txt"),
+              "fallback_font_sha256": report["typography"]["fallback_font"]["fingerprint_sha256"],
+              "visible_line_count": report["typography"]["shaped_flow"]["visible_line_count"],
+              "materialized_run_count": len(report["typography"]["materialized_runs"]),
+              "skipped_run_count": len(report["typography"]["skipped"]),
+              "pdf_diagnostic_count": len(report["pdf"]["diagnostics"]),
+              "invariants": {
+                  "exact_source_identity": True,
+                  "deterministic_pdf_bytes": True,
+                  "deterministic_loss_report": True,
+                  "explicit_fallback_font": True,
+                  "opentype_embedding_flags_parsed": True,
+                  "output_adapter_reshaping_calls": 0,
+                  "raw_source_bytes_emitted": False,
+                  "raw_document_text_emitted": False,
+              },
+          }
+          (out / "acceptance.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: free-pub-pdf-cli-v1
+          path: ${{ env.CHAPTERA_CLI_OUT }}/acceptance.json
+          if-no-files-found: error
+          retention-days: 30

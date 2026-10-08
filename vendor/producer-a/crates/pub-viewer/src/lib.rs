@@ -2367,10 +2367,32 @@ pub fn open_mature_0x2c_geometry(
     Ok(open_mature_0x2c_bundle(bytes, environment)?.geometry)
 }
 
+/// Opens the current mature Viewer projection and returns the exact
+/// source-neutral layout projection used by the same open pass.
+///
+/// Fixed-output consumers can shape text from this projection without
+/// reparsing Publisher bytes or reconstructing Story/frame ownership.
+pub fn open_mature_0x2c_geometry_with_projection(
+    bytes: &[u8],
+    environment: BoundedLayoutEnvironment,
+) -> Result<(ViewerGeometryDocument, BoundedLayoutProjection)> {
+    let (bundle, projection) =
+        open_mature_0x2c_bundle_with_projection(bytes, environment)?;
+    Ok((bundle.geometry, projection))
+}
+
 fn open_mature_0x2c_bundle(
     bytes: &[u8],
     environment: BoundedLayoutEnvironment,
 ) -> Result<ViewerOpenBundle> {
+    open_mature_0x2c_bundle_with_projection(bytes, environment)
+        .map(|(bundle, _projection)| bundle)
+}
+
+fn open_mature_0x2c_bundle_with_projection(
+    bytes: &[u8],
+    environment: BoundedLayoutEnvironment,
+) -> Result<(ViewerOpenBundle, BoundedLayoutProjection)> {
     let pipeline = build_mature_0x2c_pipeline(bytes)?;
     let mut document = viewer_document_from_pipeline(bytes.len(), &pipeline)?;
     let effective_page_ids = document
@@ -2955,11 +2977,14 @@ fn open_mature_0x2c_bundle(
         decorative_border_resources,
         decorative_borders,
     };
-    Ok(ViewerOpenBundle {
-        geometry,
-        resolved_graph: pipeline.resolved.graph,
-        source_page_paint_orders,
-    })
+    Ok((
+        ViewerOpenBundle {
+            geometry,
+            resolved_graph: pipeline.resolved.graph,
+            source_page_paint_orders,
+        },
+        projection,
+    ))
 }
 
 fn viewer_fallback_text_flow_environment_v0_1() -> BoundedTextFlowEnvironment {
