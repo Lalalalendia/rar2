@@ -260,7 +260,7 @@ fn materialize_viewer_text_runs(
                     "code": "pdf.text.viewer_layout_missing",
                 }));
                 output.fallback_nodes.insert(node.node_id);
-                    continue;
+                continue;
             };
 
             match &layout.disposition {
@@ -290,7 +290,7 @@ fn materialize_viewer_text_runs(
                             "code": "pdf.text.viewer_font_resource_mismatch",
                         }));
                         output.fallback_nodes.insert(node.node_id);
-                    continue;
+                        continue;
                     }
                 }
             }
@@ -301,7 +301,7 @@ fn materialize_viewer_text_runs(
                     "code": "pdf.text.viewer_node_missing_from_scene",
                 }));
                 output.fallback_nodes.insert(node.node_id);
-                    continue;
+                continue;
             };
             if scene_bounds_for_node != &node.bounds {
                 output.skipped.push(serde_json::json!({
@@ -309,7 +309,7 @@ fn materialize_viewer_text_runs(
                     "code": "pdf.text.viewer_node_geometry_mismatch",
                 }));
                 output.fallback_nodes.insert(node.node_id);
-                    continue;
+                continue;
             }
 
             let text_bounds = node.text_bounds.unwrap_or(node.bounds);
@@ -345,7 +345,7 @@ fn materialize_viewer_text_runs(
                                 "code": "pdf.text.viewer_span_shaping_missing",
                             }));
                             output.fallback_nodes.insert(node.node_id);
-                    continue;
+                            continue;
                         };
                         if shaping.environment.face_index != fallback_font.face_index
                             || shaping.environment.layout.font_set_fingerprint
@@ -360,7 +360,7 @@ fn materialize_viewer_text_runs(
                                 "code": "pdf.text.viewer_span_font_resource_mismatch",
                             }));
                             output.fallback_nodes.insert(node.node_id);
-                    continue;
+                            continue;
                         }
                         let fill_rgb = resolved_text_color_for_range(
                             fragment,
