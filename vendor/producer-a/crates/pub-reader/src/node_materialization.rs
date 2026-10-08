@@ -400,6 +400,48 @@ pub(super) fn materialize_mature_nodes(
             explicit_image_crop.is_some(),
         );
 
+        if std::env::var_os("READER_CORPUS_DIAGNOSTIC").is_some() {
+            let document_page_ordinal = graph
+                .document
+                .pages
+                .iter()
+                .position(|candidate| *candidate == page_id)
+                .map(|index| index + 1);
+            let explicit_fill = explicit_paint.fill.solid
+                || explicit_paint.fill.color_rgb.is_some()
+                || explicit_paint.fill.visible.is_some();
+            let explicit_line = explicit_paint.line.color_rgb.is_some()
+                || explicit_paint.line.width_emu.is_some()
+                || explicit_paint.line.visible.is_some();
+            let effective_fill = effective_paint.as_ref().is_some_and(|paint| {
+                paint.fill.solid.is_some()
+                    || paint.fill.color_rgb.is_some()
+                    || paint.fill.visible.is_some()
+            });
+            let effective_line = effective_paint.as_ref().is_some_and(|paint| {
+                paint.line.color_rgb.is_some()
+                    || paint.line.width_emu.is_some()
+                    || paint.line.visible.is_some()
+            });
+            let raw_foptes = shape
+                .fopts
+                .iter()
+                .flat_map(|fopt| fopt.properties.iter())
+                .map(|property| (property.property_id(), property.op))
+                .collect::<Vec<_>>();
+            let raw_fsp = shape
+                .fsp
+                .as_ref()
+                .map(|fsp| (fsp.shape_type, fsp.flags, fsp.flags & (1 << 8) != 0));
+            eprintln!(
+                "SOURCE_NODE_PROFILE seq_num={seq_num} page_id={page_id:?} document_page_ordinal={document_page_ordinal:?} raw_type={raw_type:?} officeart_fsp={raw_fsp:?} story={} image_slot={image_slot:?} table={} grouped={} bounds={bounds:?} explicit_fill={explicit_fill} explicit_line={explicit_line} effective_fill={effective_fill} effective_line={effective_line} raw_foptes={raw_foptes:?} transform={:?}",
+                story_frame.is_some(),
+                table.is_some(),
+                !grouped_sources.is_empty(),
+                node_transform_projection
+            );
+        }
+
         let object_key = contents_object_key(seq_num);
         let mut source_refs = vec![source_ref(
             &graph.source,
