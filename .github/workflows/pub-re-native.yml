@@ -222,7 +222,10 @@ jobs:
 
               $pageId64 = [int64]$env:PUB_RE_PAGE_ID
               $shapeId64 = [int64]$env:PUB_RE_SHAPE_ID
-              $delta = [double]$env:PUB_RE_DELTA_DEGREES
+              $delta = [double]::Parse(
+                $env:PUB_RE_DELTA_DEGREES,
+                [System.Globalization.CultureInfo]::InvariantCulture
+              )
               if ($pageId64 -gt [int]::MaxValue -or $shapeId64 -gt [int]::MaxValue) {
                 throw "Publisher selector is outside signed 32-bit bounds"
               }
