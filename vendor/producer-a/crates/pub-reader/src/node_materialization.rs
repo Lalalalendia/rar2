@@ -102,7 +102,12 @@ pub(super) fn materialize_mature_nodes(
             && exact_story_identity.is_none()
             && image_slot.is_none()
         {
-            if has_default_rectangle_geometry(shape) {
+            if has_default_rectangle_geometry(shape)
+                && has_explicit_visible_solid_fill(
+                    shape,
+                    color_scheme.map(|scheme| &scheme.scheme),
+                )
+            {
                 Some(OFFICEART_SHAPE_TYPE_RECTANGLE)
             } else if has_default_ellipse_geometry(shape) {
                 Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
