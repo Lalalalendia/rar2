@@ -456,7 +456,11 @@ fn build_pdf_artifact(
         .tables
         .iter()
         .filter_map(|table| {
-            let Some(owner) = pdf_scene.nodes.iter().find(|node| node.origin == table.node_id) else {
+            let Some(owner) = pdf_scene
+                .nodes
+                .iter()
+                .find(|node| node.origin == table.node_id)
+            else {
                 table_paint_incomplete_count += 1;
                 return None;
             };
@@ -481,10 +485,8 @@ fn build_pdf_artifact(
 
             let mut borders = Vec::new();
             for border in &table.borders {
-                let horizontal =
-                    border.y1_emu == border.y2_emu && border.x1_emu < border.x2_emu;
-                let vertical =
-                    border.x1_emu == border.x2_emu && border.y1_emu < border.y2_emu;
+                let horizontal = border.y1_emu == border.y2_emu && border.x1_emu < border.x2_emu;
+                let vertical = border.x1_emu == border.x2_emu && border.y1_emu < border.y2_emu;
                 if border.width_emu <= 0 || (!horizontal && !vertical) {
                     complete = false;
                     continue;
