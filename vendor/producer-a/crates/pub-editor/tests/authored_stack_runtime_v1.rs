@@ -4,7 +4,8 @@ use pub_editor::{
     AuthoredEntityProvenanceV1, AuthoredShapePaintV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
     AuthoredStackReorderModeV1, EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_10,
     EDITOR_PROJECT_VERSION_V0_12, EDITOR_PROJECT_VERSION_V0_13, EDITOR_PROJECT_VERSION_V0_17,
-    EDITOR_PROJECT_VERSION_V0_22, EditOperation, EditorError, EditorProjectError, EditorSession,
+    EDITOR_PROJECT_VERSION_V0_22, EDITOR_PROJECT_VERSION_V0_23, EditOperation, EditorError,
+    EditorProjectError, EditorSession,
     LengthEmu, LineGeometryV1, PointEmuV1, RectEmu, Srgb8V1,
 };
 use pub_model::{
@@ -25,6 +26,18 @@ fn source_hash() -> Sha256Digest {
 
 fn page_id() -> PageId {
     canonical_id("11000000-0000-4000-8000-000000000001")
+}
+
+fn service_page_id() -> PageId {
+    canonical_id("11000000-0000-4000-8000-000000000002")
+}
+
+fn page_b_id() -> PageId {
+    canonical_id("11000000-0000-4000-8000-000000000003")
+}
+
+fn page_c_id() -> PageId {
+    canonical_id("11000000-0000-4000-8000-000000000004")
 }
 
 fn node_a() -> NodeId {
@@ -48,21 +61,22 @@ fn rect(x: i64) -> RectEmu {
     )
 }
 
+fn test_page(id: PageId) -> Page {
+    Page {
+        id,
+        size: Size2D::new(LengthEmu::new(8_000_000), LengthEmu::new(10_000_000)),
+        bleed: None,
+        margins: None,
+        children: Vec::new(),
+        extensions: Vec::new(),
+    }
+}
+
 fn graph() -> PubResolvedGraph {
     let page_id = page_id();
     let source_hash = source_hash();
     let mut pages = BTreeMap::new();
-    pages.insert(
-        page_id,
-        Page {
-            id: page_id,
-            size: Size2D::new(LengthEmu::new(8_000_000), LengthEmu::new(10_000_000)),
-            bleed: None,
-            margins: None,
-            children: Vec::new(),
-            extensions: Vec::new(),
-        },
-    );
+    pages.insert(page_id, test_page(page_id));
 
     ResolvedGraph {
         cdm_version: "0.1".into(),
@@ -78,6 +92,45 @@ fn graph() -> PubResolvedGraph {
             format_origin: "pub".into(),
             source_hash,
             pages: vec![page_id],
+            resources: Vec::new(),
+            styles: Vec::new(),
+        },
+        pages,
+        nodes: BTreeMap::new(),
+        stories: BTreeMap::new(),
+        paragraphs: BTreeMap::new(),
+        text_runs: BTreeMap::new(),
+        resources: BTreeMap::new(),
+        styles: BTreeMap::new(),
+        extensions: BTreeMap::new(),
+    }
+}
+
+fn page_order_graph() -> PubResolvedGraph {
+    let source_hash = source_hash();
+    let customer_a = page_id();
+    let service = service_page_id();
+    let customer_b = page_b_id();
+    let customer_c = page_c_id();
+    let mut pages = BTreeMap::new();
+    for page_id in [customer_a, service, customer_b, customer_c] {
+        pages.insert(page_id, test_page(page_id));
+    }
+
+    ResolvedGraph {
+        cdm_version: "0.1".into(),
+        resolver_version: "page-order-runtime-test".into(),
+        source: SourceDescriptor {
+            format: "pub".into(),
+            format_version: Some("0x2c".into()),
+            adapter_version: "pub-rs/test".into(),
+            source_hash,
+        },
+        document: Document {
+            id: canonical_id::<DocumentId>("33000000-0000-4000-8000-000000000001"),
+            format_origin: "pub".into(),
+            source_hash,
+            pages: vec![customer_a, service, customer_b, customer_c],
             resources: Vec::new(),
             styles: Vec::new(),
         },
@@ -222,7 +275,7 @@ fn identity_less_legacy_session_cannot_emit_v0_17_create_line_project() {
 
 #[test]
 fn create_delete_history_remains_v0_12_while_current_schema_advances() {
-    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_22);
+    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_23);
 
     let mut session = EditorSession::new(graph()).expect("session");
     create_two(&mut session);
@@ -293,6 +346,108 @@ fn reorder_is_one_v0_13_history_unit_with_exact_undo_redo_and_replay() {
         reopened.authored_stack(page_id()).expect("stack").members,
         vec![node_b(), node_a()]
     );
+}
+
+
+#[test]
+fn page_reorder_is_one_v0_23_history_unit_with_service_slot_preserved_and_exact_replay() {
+    let customer_a = page_id();
+    let service = service_page_id();
+    let customer_b = page_b_id();
+    let customer_c = page_c_id();
+    let admitted = vec![customer_a, customer_b, customer_c];
+    let reordered = vec![customer_c, customer_a, customer_b];
+
+    let mut session = EditorSession::new(page_order_graph()).expect("session");
+    assert_eq!(
+        session
+            .current_qualified_page_order_v1(&admitted)
+            .expect("qualified source order"),
+        admitted
+    );
+
+    let operation = session
+        .reorder_pages_v1(admitted.clone(), reordered.clone())
+        .expect("reorder customer pages");
+    assert!(matches!(operation, EditOperation::ReorderPagesV1 { .. }));
+    assert_eq!(
+        session.graph().document.pages,
+        vec![customer_c, service, customer_a, customer_b]
+    );
+    assert_eq!(
+        session
+            .current_qualified_page_order_v1(&admitted)
+            .expect("qualified reordered state"),
+        reordered
+    );
+
+    let project = session.project();
+    assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_23);
+    assert_eq!(project.operations, vec![operation.clone()]);
+
+    session.undo().expect("undo page reorder");
+    assert_eq!(
+        session.graph().document.pages,
+        vec![customer_a, service, customer_b, customer_c]
+    );
+    session.redo().expect("redo page reorder");
+    assert_eq!(
+        session.graph().document.pages,
+        vec![customer_c, service, customer_a, customer_b]
+    );
+
+    let mut reopened = EditorSession::new(page_order_graph()).expect("fresh session");
+    reopened.apply_project(&project).expect("replay page reorder");
+    assert_eq!(
+        reopened.graph().document.pages,
+        vec![customer_c, service, customer_a, customer_b]
+    );
+    assert_eq!(
+        reopened
+            .current_qualified_page_order_v1(&admitted)
+            .expect("reopened qualified order"),
+        reordered
+    );
+    assert_eq!(reopened.project(), project);
+    assert_eq!(reopened.source_hash(), source_hash());
+}
+
+#[test]
+fn pre_v0_23_or_stale_page_reorder_project_fails_transactionally() {
+    let admitted = vec![page_id(), page_b_id(), page_c_id()];
+    let reordered = vec![page_c_id(), page_id(), page_b_id()];
+
+    let mut producer = EditorSession::new(page_order_graph()).expect("producer");
+    producer
+        .reorder_pages_v1(admitted.clone(), reordered)
+        .expect("reorder");
+    let project = producer.project();
+
+    let mut legacy = project.clone();
+    legacy.schema_version = EDITOR_PROJECT_VERSION_V0_22.to_owned();
+    let mut target = EditorSession::new(page_order_graph()).expect("legacy target");
+    assert!(matches!(
+        target.apply_project(&legacy),
+        Err(EditorProjectError::LegacyProjectCarriesPageOrderOperation { index: 0 })
+    ));
+    assert!(target.operations().is_empty());
+
+    let mut stale_source = page_order_graph();
+    stale_source.document.pages = vec![
+        page_b_id(),
+        service_page_id(),
+        page_id(),
+        page_c_id(),
+    ];
+    let mut stale_target = EditorSession::new(stale_source).expect("stale target");
+    assert!(matches!(
+        stale_target.apply_project(&project),
+        Err(EditorProjectError::Operation {
+            index: 0,
+            error: EditorError::StalePageOrder
+        })
+    ));
+    assert!(stale_target.operations().is_empty());
 }
 
 #[test]
