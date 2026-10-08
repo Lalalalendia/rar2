@@ -1,0 +1,127 @@
+name: MEASURE exact 100 paint cell-area attribution
+
+on:
+  push:
+    branches:
+      - "measure/100-cell-area-offpaint-02"
+    paths:
+      - ".github/workflows/measure-100-cell-area-offpaint.yml"
+      - "apps/cloud-reader/real-browser.test.mjs"
+      - "tools/cloud_reader_visual_paint_cell_intersection_v1.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/publisher-visual-supplemental-rust
+
+jobs:
+  exact-100:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build supplemental Cargo cache key
+        id: cargo-key
+        env:
+          MANIFEST_HASH: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'apps/chaptera-server/Cargo.toml', 'crates/**/Cargo.toml', 'vendor/producer-a/Cargo.toml', 'vendor/producer-a/Cargo.lock', 'vendor/producer-a/crates/**/Cargo.toml') }}
+        run: |
+          set -euo pipefail
+          test -n "$MANIFEST_HASH"
+          echo "key=publisher-visual-supplemental-rust-v1-${RUNNER_OS}-rust-1.94.1-${MANIFEST_HASH}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore existing Cargo build cache only
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: target/publisher-visual-supplemental-rust
+          key: ${{ steps.cargo-key.outputs.key }}
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Prepare exact 100 fixture only
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
+          rm -rf "$RUNNER_TEMP/exact100"
+          mkdir -p "$RUNNER_TEMP/exact100"
+          python tools/cloud_reader_visual_supplemental_v1.py prepare \
+            tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv \
+            out/pinned1050/materialized/native \
+            "$RUNNER_TEMP/exact100/fixtures" \
+            "$RUNNER_TEMP/exact100/manifest.json"
+          python - "$RUNNER_TEMP/exact100/manifest.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          path = Path(sys.argv[1])
+          data = json.loads(path.read_text())
+          rows = [row for row in data["fixtures"] if row["name"] == "100_b1faaba988e88b41"]
+          assert len(rows) == 1, rows
+          data["fixtures"] = rows
+          path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+          print("exact100 fixture", rows[0]["sha256"], rows[0]["bytes"])
+          PY
+
+      - name: Build canonical Cloud Reader worker
+        run: |
+          set -euo pipefail
+          cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Restore pinned Playwright Chromium cache only
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cache/ms-playwright
+          key: publisher-visual-supplemental-${{ runner.os }}-playwright-1.55.0-chromium
+
+      - name: Install pinned browser runtime
+        run: |
+          set -euo pipefail
+          npm install --no-save playwright@1.55.0
+          npx playwright install chromium
+
+      - name: Render exact 100 and emit paint bounds
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.sha }}
+          READER_CORPUS_DIAGNOSTIC: "1"
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/publisher-visual-supplemental-rust/debug/chaptera
+          READER_REAL_MANIFEST: ${{ runner.temp }}/exact100/manifest.json
+          READER_REAL_OUTPUT: ${{ runner.temp }}/exact100/browser
+          READER_REFERENCE_RASTER_DPI: "144"
+          READER_CONTINUE_WORKER_FAILURES: "1"
+          READER_WORKER_TIMEOUT_SECONDS: "120"
+          READER_WORKER_CPU_SECONDS: "90"
+          READER_WORKER_ADDRESS_SPACE_MB: "768"
+        run: node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Attribute changed cells by paint-area intersection
+        run: |
+          set -euo pipefail
+          python tools/cloud_reader_visual_paint_cell_intersection_v1.py \
+            "$RUNNER_TEMP/exact100/browser/100_b1faaba988e88b41-page-1.png" \
+            tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json \
+            "$RUNNER_TEMP/exact100/browser/100_b1faaba988e88b41-page-1-paint-bounds-geometry.json" \
+            100_b1faaba988e88b41 1
