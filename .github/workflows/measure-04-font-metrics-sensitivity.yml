@@ -233,7 +233,11 @@ jobs:
               receipt = json.loads((browser / "receipt.json").read_text())
               result = [x for x in receipt["results"] if x["fixture"] == "04-modern2c-story-stress"][0]
               assert result["rendered"] is True
-              assert "source_font_resource_admitted" in result["diagnostic_codes"], result["diagnostic_codes"]
+              assert any(
+                  code == "source_font_resource_admitted"
+                  or code.endswith(":source_font_resource_admitted")
+                  for code in result["diagnostic_codes"]
+              ), result["diagnostic_codes"]
               fractions = []
               for index, shot in enumerate(result["screenshots"]):
                   metrics = compare_grid(
