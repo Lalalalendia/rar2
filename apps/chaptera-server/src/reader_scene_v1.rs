@@ -281,6 +281,8 @@ pub struct ReaderTextSpanV1 {
     pub font_resource_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_fingerprint_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_rgb: Option<[u8; 3]>,
 }
 
 #[derive(Debug, Serialize)]
@@ -493,6 +495,7 @@ fn reader_text_layout_from_render_text(
                         font_size_emu: span.font_size_emu,
                         font_resource_id: span.font_resource_id.clone(),
                         font_fingerprint_sha256: span.font_fingerprint_sha256.clone(),
+                        color_rgb: span.color_rgb,
                     })
                     .collect(),
             })
