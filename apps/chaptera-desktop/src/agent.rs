@@ -1,9 +1,9 @@
 mod operation_summary;
-use operation_summary::operation_summary;
 use chaptera_scene_instance::{
     GeometrySyncPolicyV1, ObjectMutationKindV1, SceneInstanceV1, admit_object_mutation_v1,
     direct_page_local_instance_v1, geometry_sync_policy_v1,
 };
+use operation_summary::operation_summary;
 use pub_editor::{
     EditOperation, EditorEditableTarget, EditorProject, EditorSession, LengthEmu, NodeId, RectEmu,
     StoryId,
