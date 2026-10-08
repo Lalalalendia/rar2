@@ -322,3 +322,23 @@ test("resolved Reader picture plan preserves frame while rotating content", () =
   assert.equal(image.viewport.x, page.x + scene.nodes[0].bounds.x / 9525);
   assert.match(image.content_transform, /^rotate\(270 /);
 });
+
+
+test("Reader picture out-of-domain fit window preserves blank destination margins", () => {
+  const geometry = imagePaintGeometry(
+    { x: 0, y: 0, width: 1200, height: 600 },
+    { left_q16: -16384, top_q16: 0, right_q16: 81920, bottom_q16: 65536 }
+  );
+  assert.equal(Math.round(geometry.x), 200);
+  assert.equal(Math.round(geometry.width), 800);
+});
+
+test("Reader picture invalid or non-overlapping source windows fail closed", () => {
+  assert.equal(
+    imagePaintGeometry(
+      { x: 0, y: 0, width: 100, height: 100 },
+      { left_q16: 70000, top_q16: 0, right_q16: 80000, bottom_q16: 65536 }
+    ),
+    null
+  );
+});
