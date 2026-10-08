@@ -95,8 +95,9 @@ fn convert(input: &Path, target: TargetArg, output: &Path, emit_json: bool) -> R
     let bytes = fs::read(input).with_context(|| format!("read {}", input.display()))?;
     let source_hash = sha256_digest(&bytes);
 
-    let source = pub_reader::build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash)
-        .context("build mature Publisher source graph")?;
+    let source =
+        pub_reader::build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash)
+            .context("build mature Publisher source graph")?;
     let resolved =
         pub_reader::resolve_pub_source_graph(&source.graph).context("resolve Publisher graph")?;
     if !resolved.diagnostics.is_empty() {
@@ -106,8 +107,8 @@ fn convert(input: &Path, target: TargetArg, output: &Path, emit_json: bool) -> R
         );
     }
 
-    let session =
-        open_mature_0x2c_editor(&bytes, source_hash).context("open current editable PUB session")?;
+    let session = open_mature_0x2c_editor(&bytes, source_hash)
+        .context("open current editable PUB session")?;
     let editor_target = target.editor_target();
     let label = source_label(input);
     let preview = session
@@ -132,8 +133,7 @@ fn convert(input: &Path, target: TargetArg, output: &Path, emit_json: bool) -> R
         bail!("preview/export LossReport mismatch");
     }
 
-    fs::write(output, &export.bytes)
-        .with_context(|| format!("write {}", output.display()))?;
+    fs::write(output, &export.bytes).with_context(|| format!("write {}", output.display()))?;
 
     let json_sidecar = sidecar_path(output, ".loss.json");
     let text_sidecar = sidecar_path(output, ".loss.txt");

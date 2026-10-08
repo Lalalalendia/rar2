@@ -454,4 +454,3 @@ fn sidecar_path(output: &Path, suffix: &str) -> PathBuf {
     value.push(suffix);
     PathBuf::from(value)
 }
-

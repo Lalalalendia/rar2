@@ -30,7 +30,13 @@ jobs:
 
       - name: Format and compile owned slice
         run: |
-          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-cli -p pub-pdf -p pub-output -p pub-viewer -- --check
+          rustfmt --edition 2024 --check \
+            vendor/producer-a/crates/pub-cli/src/main.rs \
+            vendor/producer-a/crates/pub-cli/src/fixed_pdf.rs \
+            vendor/producer-a/crates/pub-pdf/src/lib.rs \
+            vendor/producer-a/crates/pub-pdf/src/text.rs \
+            vendor/producer-a/crates/pub-output/src/lib.rs \
+            vendor/producer-a/crates/pub-viewer/src/lib.rs
           cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-cli -p pub-pdf -p pub-output -p pub-viewer --all-targets
 
       - name: Run focused fixed-output tests

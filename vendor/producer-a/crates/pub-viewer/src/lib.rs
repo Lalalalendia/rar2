@@ -2376,8 +2376,7 @@ pub fn open_mature_0x2c_geometry_with_projection(
     bytes: &[u8],
     environment: BoundedLayoutEnvironment,
 ) -> Result<(ViewerGeometryDocument, BoundedLayoutProjection)> {
-    let (bundle, projection) =
-        open_mature_0x2c_bundle_with_projection(bytes, environment)?;
+    let (bundle, projection) = open_mature_0x2c_bundle_with_projection(bytes, environment)?;
     Ok((bundle.geometry, projection))
 }
 
@@ -2385,8 +2384,7 @@ fn open_mature_0x2c_bundle(
     bytes: &[u8],
     environment: BoundedLayoutEnvironment,
 ) -> Result<ViewerOpenBundle> {
-    open_mature_0x2c_bundle_with_projection(bytes, environment)
-        .map(|(bundle, _projection)| bundle)
+    open_mature_0x2c_bundle_with_projection(bytes, environment).map(|(bundle, _projection)| bundle)
 }
 
 fn open_mature_0x2c_bundle_with_projection(
