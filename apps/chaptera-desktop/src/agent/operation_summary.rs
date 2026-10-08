@@ -369,4 +369,3 @@ pub(super) fn operation_summary(operation: &EditOperation) -> Value {
         }),
     }
 }
-
