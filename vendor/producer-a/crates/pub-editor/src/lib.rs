@@ -16,7 +16,11 @@ mod session_geometry;
 mod session_image;
 mod session_table;
 mod session_text;
-use session_geometry::{validate_move_nodes_transition, validate_resize_nodes_transition};
+use session_geometry::{
+    apply_authored_stack_history_forward_v1, authored_stack_operation_page_id_v1,
+    derive_authored_stacks_from_operations_v1, page_order_error_to_editor_v1,
+    validate_move_nodes_transition, validate_resize_nodes_transition,
+};
 use session_image::{
     apply_crop_forward, apply_crop_inverse, apply_image_forward, apply_image_inverse,
 };
@@ -39,15 +43,18 @@ pub use pub_editor_authoring_core::{
     AuthoredStackReorderModeV1, AuthoredStackReorderTransitionV1, AuthoredStackV1,
     AuthoredTableStoryRangesV1, CreateLineRuntimeValidationError,
     CreateShapeRuntimeValidationError, CreateTablePlanV1, CreateTableRuntimeV1,
-    CreateTableRuntimeValidationError, LineGeometryV1, PointEmuV1, Srgb8V1,
-    apply_authored_stack_reorder_forward_v1, apply_authored_stack_reorder_inverse_v1,
-    apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
-    apply_create_table_forward_v1, apply_create_table_inverse_v1, authored_stack_state_id_v1,
-    build_create_table_plan_v1, line_bounds_v1, plan_create_line_append_v1,
+    CreateTableRuntimeValidationError, LineGeometryV1, PAGE_ORDER_PROTOCOL_V1, PageOrderErrorV1,
+    PageOrderTransitionV1, PointEmuV1, Srgb8V1, apply_authored_stack_reorder_forward_v1,
+    apply_authored_stack_reorder_inverse_v1, apply_authored_stack_transition_forward_v1,
+    apply_authored_stack_transition_inverse_v1, apply_create_table_forward_v1,
+    apply_create_table_inverse_v1, apply_page_order_transition_forward_v1,
+    apply_page_order_transition_inverse_v1, authored_stack_state_id_v1, build_create_table_plan_v1,
+    line_bounds_v1, page_order_state_id_v1, plan_create_line_append_v1,
     plan_create_shape_append_v1, plan_create_table_append_v1, plan_delete_shape_remove_v1,
-    plan_reorder_authored_stack_v1, rebuild_authored_table_story_v1,
-    validate_authored_line_runtime_v1, validate_authored_shape_runtime_v1,
-    validate_authored_stack_v1, validate_create_table_runtime_v1,
+    plan_page_order_transition_v1, plan_reorder_authored_stack_v1, qualified_page_order_v1,
+    rebuild_authored_table_story_v1, validate_authored_line_runtime_v1,
+    validate_authored_shape_runtime_v1, validate_authored_stack_v1,
+    validate_create_table_runtime_v1,
 };
 
 pub use duplicate_authored_rectangle_v1::{
@@ -182,7 +189,8 @@ pub const EDITOR_PROJECT_VERSION_V0_19: &str = "pub-editor-v0.19";
 pub const EDITOR_PROJECT_VERSION_V0_20: &str = "pub-editor-v0.20";
 pub const EDITOR_PROJECT_VERSION_V0_21: &str = "pub-editor-v0.21";
 pub const EDITOR_PROJECT_VERSION_V0_22: &str = "pub-editor-v0.22";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_22;
+pub const EDITOR_PROJECT_VERSION_V0_23: &str = "pub-editor-v0.23";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_23;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
 pub const PUB_MATURE_0X2C_SCHEMA_FENCE: &str = "pub-family-0x2c";
 
@@ -361,6 +369,9 @@ pub enum EditOperation {
     ReorderAuthoredStack {
         transition: AuthoredStackReorderTransitionV1,
     },
+    ReorderPagesV1 {
+        transition: PageOrderTransitionV1,
+    },
     SetTextFormatProperty {
         story_id: StoryId,
         start_scalar: u32,
@@ -451,6 +462,7 @@ impl EditOperation {
             | Self::DeleteTableColumn { .. }
             | Self::DeleteNode { .. }
             | Self::ReorderAuthoredStack { .. }
+            | Self::ReorderPagesV1 { .. }
             | Self::SetTextFormatProperty { .. }
             | Self::ClearTextFormatPropertyOverride { .. }
             | Self::SetTextFormatPropertyScopedV1 { .. }
@@ -677,6 +689,11 @@ impl PersistenceRequirements for EditOperation {
                 feature: "node.authored_stack_order".into(),
                 origin: Some(transition.node_id.into_canonical()),
                 property_path: Some("page.authored_stack".into()),
+            }],
+            Self::ReorderPagesV1 { transition } => vec![PersistenceRequirement {
+                feature: "document.page_order".into(),
+                origin: Some(transition.document_id.into_canonical()),
+                property_path: Some("document.pages".into()),
             }],
             Self::SetTextFormatProperty { story_id, .. }
             | Self::ClearTextFormatPropertyOverride { story_id, .. }
@@ -1268,6 +1285,11 @@ pub enum EditorError {
     StaleAuthoredStack {
         page_id: PageId,
     },
+    PageOrderUnsupported {
+        message: String,
+    },
+    PageOrderNoChange,
+    StalePageOrder,
     NodeMoveUnsupported {
         node_id: NodeId,
     },
@@ -1627,6 +1649,15 @@ impl fmt::Display for EditorError {
                 "authored stack for page {} no longer matches the persisted transition precondition",
                 page_id.as_canonical()
             ),
+            Self::PageOrderUnsupported { message } => {
+                write!(formatter, "page reorder is unsupported: {message}")
+            }
+            Self::PageOrderNoChange => {
+                formatter.write_str("requested page order does not change the current document")
+            }
+            Self::StalePageOrder => formatter.write_str(
+                "current customer-page order no longer matches the reorder precondition",
+            ),
             Self::NodeMoveUnsupported { node_id } => write!(
                 formatter,
                 "node {} is outside the bounded directly-page-owned move slice",
@@ -1828,6 +1859,9 @@ impl EditorError {
             Self::AuthoredStackReorderUnsupported { .. } => "authored_stack_reorder_unsupported",
             Self::AuthoredStackReorderNoChange { .. } => "authored_stack_reorder_no_change",
             Self::StaleAuthoredStack { .. } => "stale_authored_stack",
+            Self::PageOrderUnsupported { .. } => "page_order_unsupported",
+            Self::PageOrderNoChange => "page_order_no_change",
+            Self::StalePageOrder => "stale_page_order",
             Self::NodeMoveUnsupported { .. } => "node_move_unsupported",
             Self::NodeMoveNoChange { .. } => "node_move_no_change",
             Self::NodeMoveOverflow { .. } => "node_move_overflow",
@@ -2148,6 +2182,11 @@ fn is_scoped_text_format_operation_v1(operation: &EditOperation) -> bool {
 fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
     if operations
         .iter()
+        .any(|operation| matches!(operation, EditOperation::ReorderPagesV1 { .. }))
+    {
+        EDITOR_PROJECT_VERSION_V0_23
+    } else if operations
+        .iter()
         .any(|operation| matches!(operation, EditOperation::LinkTextFrameTail { .. }))
     {
         EDITOR_PROJECT_VERSION_V0_22
@@ -2405,6 +2444,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesReorderAuthoredStackOperation {
         index: usize,
     },
+    LegacyProjectCarriesPageOrderOperation {
+        index: usize,
+    },
     LegacyProjectCarriesTextFormatOperation {
         index: usize,
     },
@@ -2465,7 +2507,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, {EDITOR_PROJECT_VERSION_V0_18:?}, {EDITOR_PROJECT_VERSION_V0_19:?}, {EDITOR_PROJECT_VERSION_V0_20:?}, {EDITOR_PROJECT_VERSION_V0_21:?}, or {EDITOR_PROJECT_VERSION_V0_22:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, {EDITOR_PROJECT_VERSION_V0_18:?}, {EDITOR_PROJECT_VERSION_V0_19:?}, {EDITOR_PROJECT_VERSION_V0_20:?}, {EDITOR_PROJECT_VERSION_V0_21:?}, {EDITOR_PROJECT_VERSION_V0_22:?}, or {EDITOR_PROJECT_VERSION_V0_23:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -2536,6 +2578,10 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesReorderAuthoredStackOperation { index } => write!(
                 formatter,
                 "editor project operation {index} uses ReorderAuthoredStack but the project schema predates pub-editor-v0.13"
+            ),
+            Self::LegacyProjectCarriesPageOrderOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses ReorderPagesV1 but the project schema predates pub-editor-v0.23"
             ),
             Self::LegacyProjectCarriesTextFormatOperation { index } => write!(
                 formatter,
@@ -3609,6 +3655,10 @@ impl EditorSession {
             .undo
             .iter()
             .any(|operation| matches!(operation, EditOperation::ReorderAuthoredStack { .. }));
+        let carries_page_reorder = self
+            .undo
+            .iter()
+            .any(|operation| matches!(operation, EditOperation::ReorderPagesV1 { .. }));
         let carries_text_format = self
             .undo
             .iter()
@@ -3649,6 +3699,7 @@ impl EditorSession {
             || carries_table_track_extent
             || carries_crop
             || carries_reorder
+            || carries_page_reorder
             || carries_text_format
             || carries_paragraph_alignment
             || carries_create_line
@@ -3797,7 +3848,9 @@ impl EditorSession {
         self.validate_source_identity()
             .map_err(EditorProjectError::Session)?;
 
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_22 {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+        {
             if let Some(index) = project
                 .operations
                 .iter()
@@ -3830,6 +3883,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             return Err(EditorProjectError::UnsupportedSchema {
                 found: project.schema_version.clone(),
@@ -3868,6 +3922,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project
                 .operations
@@ -3895,6 +3950,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project
                 .operations
@@ -3921,6 +3977,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && !project.table_grids.is_empty()
         {
             return Err(EditorProjectError::LegacyProjectCarriesTableGrids);
@@ -3941,6 +3998,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
@@ -3963,6 +4021,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project
                 .operations
@@ -3986,6 +4045,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project
                 .operations
@@ -4008,6 +4068,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project
                 .operations
@@ -4023,6 +4084,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project
                 .operations
@@ -4037,6 +4099,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project
                 .operations
@@ -4044,6 +4107,15 @@ impl EditorSession {
                 .position(|operation| matches!(operation, EditOperation::CreateTable { .. }))
             {
                 return Err(EditorProjectError::LegacyProjectCarriesCreateTableOperation { index });
+            }
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_23 {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(|operation| matches!(operation, EditOperation::ReorderPagesV1 { .. }))
+            {
+                return Err(EditorProjectError::LegacyProjectCarriesPageOrderOperation { index });
             }
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
@@ -4058,6 +4130,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project
                 .operations
@@ -4080,6 +4153,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project
                 .operations
@@ -4099,6 +4173,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::ReorderAuthoredStack { .. })
@@ -4117,6 +4192,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project
                 .operations
@@ -4133,6 +4209,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project
                 .operations
@@ -4152,6 +4229,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
@@ -4169,6 +4247,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project
                 .operations
@@ -4181,6 +4260,7 @@ impl EditorSession {
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::SetTableTrackExtent { .. })
@@ -4192,6 +4272,7 @@ impl EditorSession {
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
         {
             if let Some(index) = project
                 .operations
@@ -4213,6 +4294,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.identity.is_some()
         {
             return Err(EditorProjectError::LegacyProjectCarriesIdentity);
@@ -4228,7 +4310,8 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_19
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_20
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_21
-            || project.schema_version == EDITOR_PROJECT_VERSION_V0_22)
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_22
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_23)
             && project.identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
@@ -4263,6 +4346,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_20
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_21
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_22
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_23
         {
             let expected = required_editor_asset_refs_v1(&project.operations)
                 .into_iter()
@@ -4337,6 +4421,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_20
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_21
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_22
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_23
         {
             let actual_grids =
                 effective_table_grids_with_history(&candidate.graph, &candidate.undo);
@@ -5464,21 +5549,6 @@ impl EditorSession {
         Ok(operation)
     }
 
-    fn current_authored_stack_v1(&self, page_id: PageId) -> AuthoredStackV1 {
-        self.authored_stacks
-            .get(&page_id)
-            .cloned()
-            .unwrap_or_else(|| AuthoredStackV1::empty(page_id))
-    }
-
-    fn install_authored_stack_v1(&mut self, stack: AuthoredStackV1) {
-        if stack.members.is_empty() {
-            self.authored_stacks.remove(&stack.page_id);
-        } else {
-            self.authored_stacks.insert(stack.page_id, stack);
-        }
-    }
-
     pub fn create_shape(
         &mut self,
         node_id: NodeId,
@@ -5800,82 +5870,6 @@ impl EditorSession {
 
         self.authored_shapes = candidate_shapes;
         self.install_authored_stack_v1(after_stack);
-        self.undo.push(operation.clone());
-        self.redo.clear();
-        self.validate_source_identity()?;
-        Ok(operation)
-    }
-
-    pub fn reorder_authored_stack(
-        &mut self,
-        page_id: PageId,
-        node_id: NodeId,
-        mode: AuthoredStackReorderModeV1,
-    ) -> Result<EditOperation, EditorError> {
-        self.validate_source_identity()?;
-        if self.project_identity.is_none() {
-            return Err(EditorError::AuthoredStackReorderUnsupported { node_id });
-        }
-        let shape = self
-            .authored_shapes
-            .get(&node_id)
-            .ok_or(EditorError::AuthoredStackReorderUnsupported { node_id })?;
-        if shape.page_id != page_id
-            || shape.parent_id != page_id
-            || validate_authored_shape_runtime_v1(shape).is_err()
-        {
-            return Err(EditorError::AuthoredStackReorderUnsupported { node_id });
-        }
-
-        let before = self.current_authored_stack_v1(page_id);
-        let transition = plan_reorder_authored_stack_v1(&before, node_id, mode).map_err(
-            |error| match error {
-                AuthoredStackReorderErrorV1::NoChange { .. } => {
-                    EditorError::AuthoredStackReorderNoChange { node_id }
-                }
-                AuthoredStackReorderErrorV1::MissingMember { .. }
-                | AuthoredStackReorderErrorV1::PageMismatch
-                | AuthoredStackReorderErrorV1::InvalidStack => {
-                    EditorError::AuthoredStackReorderUnsupported { node_id }
-                }
-                AuthoredStackReorderErrorV1::BeforeStateMismatch
-                | AuthoredStackReorderErrorV1::AfterStateMismatch
-                | AuthoredStackReorderErrorV1::TransitionMismatch => {
-                    EditorError::StaleAuthoredStack { page_id }
-                }
-            },
-        )?;
-        self.consume_canonical_reorder_authored_stack(EditOperation::ReorderAuthoredStack {
-            transition,
-        })
-    }
-
-    fn consume_canonical_reorder_authored_stack(
-        &mut self,
-        operation: EditOperation,
-    ) -> Result<EditOperation, EditorError> {
-        self.validate_source_identity()?;
-        let EditOperation::ReorderAuthoredStack { transition } = &operation else {
-            unreachable!("consume_canonical_reorder_authored_stack receives ReorderAuthoredStack")
-        };
-        let shape = self.authored_shapes.get(&transition.node_id).ok_or(
-            EditorError::AuthoredStackReorderUnsupported {
-                node_id: transition.node_id,
-            },
-        )?;
-        if shape.page_id != transition.page_id || shape.parent_id != transition.page_id {
-            return Err(EditorError::AuthoredStackReorderUnsupported {
-                node_id: transition.node_id,
-            });
-        }
-        let current = self.current_authored_stack_v1(transition.page_id);
-        let after =
-            apply_authored_stack_reorder_forward_v1(&current, transition).map_err(|_| {
-                EditorError::StaleAuthoredStack {
-                    page_id: transition.page_id,
-                }
-            })?;
-        self.install_authored_stack_v1(after);
         self.undo.push(operation.clone());
         self.redo.clear();
         self.validate_source_identity()?;
@@ -6464,6 +6458,9 @@ fn replay_canonical_operation(
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::ReorderAuthoredStack { .. } => session
             .consume_canonical_reorder_authored_stack(expected.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::ReorderPagesV1 { transition } => session
+            .reorder_pages_v1(transition.before.clone(), transition.after.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::SetTextFormatProperty {
             story_id,
@@ -7628,6 +7625,14 @@ fn apply_forward(
         EditOperation::ReorderAuthoredStack { .. } => {
             unreachable!("ReorderAuthoredStack is applied to the authored lane overlay state")
         }
+        EditOperation::ReorderPagesV1 { transition } => {
+            apply_page_order_transition_forward_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                transition,
+            )
+            .map_err(page_order_error_to_editor_v1)?;
+        }
         EditOperation::SetTextFormatProperty { .. }
         | EditOperation::ClearTextFormatPropertyOverride { .. }
         | EditOperation::SetTextFormatPropertyScopedV1 { .. }
@@ -7883,6 +7888,14 @@ fn apply_inverse(
         EditOperation::ReorderAuthoredStack { .. } => {
             unreachable!("ReorderAuthoredStack is reverted in the authored lane overlay state")
         }
+        EditOperation::ReorderPagesV1 { transition } => {
+            apply_page_order_transition_inverse_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                transition,
+            )
+            .map_err(page_order_error_to_editor_v1)?;
+        }
         EditOperation::SetTextFormatProperty { .. }
         | EditOperation::ClearTextFormatPropertyOverride { .. }
         | EditOperation::SetTextFormatPropertyScopedV1 { .. }
@@ -7895,117 +7908,6 @@ fn apply_inverse(
         }
     }
     Ok(())
-}
-
-fn authored_stack_operation_page_id_v1(operation: &EditOperation) -> Option<PageId> {
-    match operation {
-        EditOperation::CreateShape { page_id, .. }
-        | EditOperation::CreateLine { page_id, .. }
-        | EditOperation::DeleteNode { page_id, .. } => Some(*page_id),
-        EditOperation::CreateTable { table } => Some(table.page_id),
-        EditOperation::ReorderAuthoredStack { transition } => Some(transition.page_id),
-        _ => None,
-    }
-}
-
-fn install_authored_stack_in_map_v1(
-    stacks: &mut BTreeMap<PageId, AuthoredStackV1>,
-    stack: AuthoredStackV1,
-) {
-    if stack.members.is_empty() {
-        stacks.remove(&stack.page_id);
-    } else {
-        stacks.insert(stack.page_id, stack);
-    }
-}
-
-fn apply_authored_stack_history_forward_v1(
-    stacks: &mut BTreeMap<PageId, AuthoredStackV1>,
-    operation: &EditOperation,
-) -> Result<(), EditorError> {
-    match operation {
-        EditOperation::CreateShape { page_id, .. } => {
-            let shape = authored_shape_from_operation(operation)
-                .expect("CreateShape reconstructs authored shape");
-            let before = stacks
-                .get(page_id)
-                .cloned()
-                .unwrap_or_else(|| AuthoredStackV1::empty(*page_id));
-            let transition = plan_create_shape_append_v1(&before, &shape)
-                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
-            let after = apply_authored_stack_transition_forward_v1(&before, &transition)
-                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
-            install_authored_stack_in_map_v1(stacks, after);
-        }
-        EditOperation::CreateLine { page_id, .. } => {
-            let line = authored_line_from_operation(operation)
-                .expect("CreateLine reconstructs authored line");
-            let before = stacks
-                .get(page_id)
-                .cloned()
-                .unwrap_or_else(|| AuthoredStackV1::empty(*page_id));
-            let transition = plan_create_line_append_v1(&before, &line)
-                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
-            let after = apply_authored_stack_transition_forward_v1(&before, &transition)
-                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
-            install_authored_stack_in_map_v1(stacks, after);
-        }
-        EditOperation::CreateTable { table } => {
-            let before = stacks
-                .get(&table.page_id)
-                .cloned()
-                .unwrap_or_else(|| AuthoredStackV1::empty(table.page_id));
-            let transition = plan_create_table_append_v1(&before, table.node_id, table.page_id)
-                .map_err(|_| EditorError::StaleAuthoredStack {
-                    page_id: table.page_id,
-                })?;
-            let after =
-                apply_authored_stack_transition_forward_v1(&before, &transition).map_err(|_| {
-                    EditorError::StaleAuthoredStack {
-                        page_id: table.page_id,
-                    }
-                })?;
-            install_authored_stack_in_map_v1(stacks, after);
-        }
-        EditOperation::DeleteNode {
-            page_id, before, ..
-        } => {
-            let stack = stacks
-                .get(page_id)
-                .cloned()
-                .unwrap_or_else(|| AuthoredStackV1::empty(*page_id));
-            let transition = plan_delete_shape_remove_v1(&stack, before)
-                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
-            let after = apply_authored_stack_transition_forward_v1(&stack, &transition)
-                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
-            install_authored_stack_in_map_v1(stacks, after);
-        }
-        EditOperation::ReorderAuthoredStack { transition } => {
-            let current = stacks
-                .get(&transition.page_id)
-                .cloned()
-                .unwrap_or_else(|| AuthoredStackV1::empty(transition.page_id));
-            let after =
-                apply_authored_stack_reorder_forward_v1(&current, transition).map_err(|_| {
-                    EditorError::StaleAuthoredStack {
-                        page_id: transition.page_id,
-                    }
-                })?;
-            install_authored_stack_in_map_v1(stacks, after);
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn derive_authored_stacks_from_operations_v1(
-    operations: &[EditOperation],
-) -> Result<BTreeMap<PageId, AuthoredStackV1>, EditorError> {
-    let mut stacks = BTreeMap::new();
-    for operation in operations {
-        apply_authored_stack_history_forward_v1(&mut stacks, operation)?;
-    }
-    Ok(stacks)
 }
 
 fn authored_shape_from_operation(operation: &EditOperation) -> Option<AuthoredShapeRuntimeV1> {
