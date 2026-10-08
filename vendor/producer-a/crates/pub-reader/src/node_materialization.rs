@@ -399,6 +399,21 @@ pub(super) fn materialize_mature_nodes(
             direct_story_candidate,
             explicit_image_crop.is_some(),
         );
+        if image_slot.is_some() && std::env::var_os("READER_CORPUS_DIAGNOSTIC").is_some() {
+            let rotation_ops = shape
+                .fopts
+                .iter()
+                .flat_map(|record| record.properties.iter())
+                .filter(|property| property.property_id() == OFFICE_ART_PROPERTY_ROTATION)
+                .map(|property| (property.op, property.f_bid(), property.f_complex()))
+                .collect::<Vec<_>>();
+            eprintln!(
+                "IMAGE_PLACEMENT_PROFILE seq_num={seq_num} page_id={page_id:?} image_slot={image_slot:?} direct_image_candidate={direct_image_candidate} grouped={:?} bounds={bounds:?} rotation_ops={rotation_ops:?} fsp_flags={:?} crop={explicit_image_crop:?} recolor={explicit_image_recolor:?} transform={:?}",
+                !grouped_sources.is_empty(),
+                shape.fsp.as_ref().map(|fsp| fsp.flags),
+                node_transform_projection
+            );
+        }
 
         let object_key = contents_object_key(seq_num);
         let mut source_refs = vec![source_ref(
