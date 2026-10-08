@@ -599,7 +599,12 @@ fn build_pdf_artifact(
             resource_fingerprint: fallback_resource_id.clone(),
         },
     )
-    .context("resolve bounded physical geometry for fixed PDF")?;
+    .map_err(|blocked| {
+        anyhow::anyhow!(
+            "resolve bounded physical geometry for fixed PDF blocked by {} projection diagnostics",
+            blocked.projection_errors.len()
+        )
+    })?;
     let scene_node_ids = pdf_scene
         .nodes
         .iter()
