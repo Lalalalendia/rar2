@@ -432,8 +432,8 @@ function appendText(group, defs, node, fonts, index) {
     width: viewportGeometry.width,
     height: viewportGeometry.height,
     viewBox: viewportGeometry.view_box,
-    overflow: "hidden",
-    "data-text-viewport": "fixed-frame"
+    overflow: "visible",
+    "data-text-viewport": "measurement-unclipped"
   });
   group.appendChild(local);
 
