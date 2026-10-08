@@ -17,10 +17,12 @@ PUB_EDITOR_SRC = ROOT / "vendor" / "producer-a" / "crates" / "pub-editor" / "src
 AUTHORING_CORE_SRC = ROOT / "vendor" / "producer-a" / "crates" / "pub-editor-authoring-core" / "src"
 TABLE_CORE_SRC = ROOT / "vendor" / "producer-a" / "crates" / "pub-editor-table-core" / "src"
 GEOMETRY_CORE_SRC = ROOT / "vendor" / "producer-a" / "crates" / "pub-editor-geometry-core" / "src"
+IMAGE_CORE_SRC = ROOT / "vendor" / "producer-a" / "crates" / "pub-editor-image-core" / "src"
 PREFIX = "vendor/producer-a/crates/pub-editor/src/"
 AUTHORING_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-authoring-core/src/"
 TABLE_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-table-core/src/"
 GEOMETRY_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-geometry-core/src/"
+IMAGE_CORE_PREFIX = "vendor/producer-a/crates/pub-editor-image-core/src/"
 
 
 def is_pub_editor_test(command: tuple[str, ...]) -> bool:
@@ -33,6 +35,7 @@ def is_pub_editor_test(command: tuple[str, ...]) -> bool:
             "pub-editor-authoring-core",
             "pub-editor-table-core",
             "pub-editor-geometry-core",
+            "pub-editor-image-core",
         }:
             return True
     if "--manifest-path" in command:
@@ -44,6 +47,7 @@ def is_pub_editor_test(command: tuple[str, ...]) -> bool:
                 or manifest.endswith("/pub-editor-authoring-core/Cargo.toml")
                 or manifest.endswith("/pub-editor-table-core/Cargo.toml")
                 or manifest.endswith("/pub-editor-geometry-core/Cargo.toml")
+                or manifest.endswith("/pub-editor-image-core/Cargo.toml")
             )
     return False
 
@@ -106,6 +110,18 @@ def main() -> int:
             if not is_bounded_test(command):
                 unbounded.append((rel, command))
 
+    for source in sorted(IMAGE_CORE_SRC.glob("*.rs")):
+        rel = IMAGE_CORE_PREFIX + source.name
+        checks = mod.plan_for_paths(ROOT, [rel], mode="edit")
+        test_commands = [check.command for check in checks if is_pub_editor_test(check.command)]
+
+        if source.name != "lib.rs" and not test_commands:
+            uncovered.append(rel)
+
+        for command in test_commands:
+            if not is_bounded_test(command):
+                unbounded.append((rel, command))
+
     lib_checks = mod.plan_for_paths(ROOT, [PREFIX + "lib.rs"], mode="edit")
     lib_tests = [check.command for check in lib_checks if is_pub_editor_test(check.command)]
     if not lib_tests or not all("--lib" in command for command in lib_tests):
@@ -139,9 +155,47 @@ def main() -> int:
         if not any("--test" in command and target in command for command in commands):
             raise SystemExit(f"{path}: expected exact integration target {target!r}")
 
+    image_core_checks = mod.plan_for_paths(
+        ROOT, [IMAGE_CORE_PREFIX + "lib.rs"], mode="edit"
+    )
+    image_core_commands = [check.command for check in image_core_checks]
+    expected_core_test = (
+        "cargo",
+        "test",
+        "--manifest-path",
+        "vendor/producer-a/Cargo.toml",
+        "-p",
+        "pub-editor-image-core",
+        "--lib",
+    )
+    expected_adapter_check = (
+        "cargo",
+        "check",
+        "--manifest-path",
+        "vendor/producer-a/Cargo.toml",
+        "-p",
+        "pub-editor",
+    )
+    if expected_core_test not in image_core_commands:
+        raise SystemExit("image-core edit must run isolated pub-editor-image-core --lib")
+    if expected_adapter_check not in image_core_commands:
+        raise SystemExit("image-core edit must compile-check the pub-editor adapter")
+    if any("--test" in command and "image_crop_v1" in command for command in image_core_commands):
+        raise SystemExit("image-core edit must not run image_crop_v1 adapter acceptance")
+    if (
+        "cargo",
+        "test",
+        "--manifest-path",
+        "vendor/producer-a/Cargo.toml",
+        "-p",
+        "pub-editor",
+        "--lib",
+    ) in image_core_commands:
+        raise SystemExit("image-core edit must not run generic pub-editor --lib")
+
     print(
         "pub-editor fast plan contract: ok "
-        f"({len(list(PUB_EDITOR_SRC.glob('*.rs'))) + len(list(AUTHORING_CORE_SRC.glob('*.rs'))) + len(list(TABLE_CORE_SRC.glob('*.rs'))) + len(list(GEOMETRY_CORE_SRC.glob('*.rs')))} source modules audited)"
+        f"({len(list(PUB_EDITOR_SRC.glob('*.rs'))) + len(list(AUTHORING_CORE_SRC.glob('*.rs'))) + len(list(TABLE_CORE_SRC.glob('*.rs'))) + len(list(GEOMETRY_CORE_SRC.glob('*.rs'))) + len(list(IMAGE_CORE_SRC.glob('*.rs')))} source modules audited)"
     )
     return 0
 

@@ -5,6 +5,10 @@
 //! root facade because they consume multiple editor domains.
 
 use super::*;
+use pub_editor_image_core::{
+    apply_image_crop_forward_v1, apply_image_crop_inverse_v1, apply_image_replacement_forward_v1,
+    apply_image_replacement_inverse_v1, effective_image_crop_state_v1,
+};
 
 impl EditorSession {
     pub fn source_image_count(&self) -> usize {
@@ -247,11 +251,8 @@ pub(super) fn apply_image_forward(
         unreachable!("only ReplaceImage reaches image overlay apply")
     };
 
-    if replacements.get(node_id).copied() != *before_asset {
-        return Err(EditorError::StaleImageOperation { node_id: *node_id });
-    }
-    replacements.insert(*node_id, *after_asset);
-    Ok(())
+    apply_image_replacement_forward_v1(replacements, *node_id, *before_asset, *after_asset)
+        .map_err(|_| EditorError::StaleImageOperation { node_id: *node_id })
 }
 
 pub(super) fn apply_image_inverse(
@@ -267,15 +268,8 @@ pub(super) fn apply_image_inverse(
         unreachable!("only ReplaceImage reaches image overlay inverse")
     };
 
-    if replacements.get(node_id).copied() != Some(*after_asset) {
-        return Err(EditorError::StaleImageOperation { node_id: *node_id });
-    }
-    if let Some(before_asset) = before_asset {
-        replacements.insert(*node_id, *before_asset);
-    } else {
-        replacements.remove(node_id);
-    }
-    Ok(())
+    apply_image_replacement_inverse_v1(replacements, *node_id, *before_asset, *after_asset)
+        .map_err(|_| EditorError::StaleImageOperation { node_id: *node_id })
 }
 
 fn source_image_crop_state(graph: &PubResolvedGraph, node_id: NodeId) -> Option<ImageCropStateV1> {
@@ -301,10 +295,7 @@ fn effective_image_crop_state(
     overrides: &BTreeMap<NodeId, ImageCropStateV1>,
     node_id: NodeId,
 ) -> Option<ImageCropStateV1> {
-    overrides
-        .get(&node_id)
-        .copied()
-        .or_else(|| source_image_crop_state(graph, node_id))
+    effective_image_crop_state_v1(source_image_crop_state(graph, node_id), overrides, node_id)
 }
 
 pub(super) fn apply_crop_forward(
@@ -320,11 +311,15 @@ pub(super) fn apply_crop_forward(
     else {
         unreachable!("only SetImageCrop reaches crop overlay apply")
     };
-    if effective_image_crop_state(graph, overrides, *node_id) != Some(*before) {
-        return Err(EditorError::StaleImageCrop { node_id: *node_id });
-    }
-    overrides.insert(*node_id, *after);
-    Ok(())
+
+    apply_image_crop_forward_v1(
+        source_image_crop_state(graph, *node_id),
+        overrides,
+        *node_id,
+        *before,
+        *after,
+    )
+    .map_err(|_| EditorError::StaleImageCrop { node_id: *node_id })
 }
 
 pub(super) fn apply_crop_inverse(
@@ -340,15 +335,15 @@ pub(super) fn apply_crop_inverse(
     else {
         unreachable!("only SetImageCrop reaches crop overlay inverse")
     };
-    if effective_image_crop_state(graph, overrides, *node_id) != Some(*after) {
-        return Err(EditorError::StaleImageCrop { node_id: *node_id });
-    }
-    if source_image_crop_state(graph, *node_id) == Some(*before) {
-        overrides.remove(node_id);
-    } else {
-        overrides.insert(*node_id, *before);
-    }
-    Ok(())
+
+    apply_image_crop_inverse_v1(
+        source_image_crop_state(graph, *node_id),
+        overrides,
+        *node_id,
+        *before,
+        *after,
+    )
+    .map_err(|_| EditorError::StaleImageCrop { node_id: *node_id })
 }
 
 #[cfg(test)]

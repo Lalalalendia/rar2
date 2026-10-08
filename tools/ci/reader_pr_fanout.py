@@ -18,6 +18,7 @@ EVIDENCE_ONLY_PATHS = {
 VIEWER_AUTHORING_PROJECTION = (
     "vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
 )
+VIEWER_FACADE = "vendor/producer-a/crates/pub-viewer/src/lib.rs"
 VIEWER_IMAGES = "vendor/producer-a/crates/pub-viewer/src/images.rs"
 READER_PAINT_PROJECTION = "vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
 READER_PAGE_PROJECTION = "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
@@ -161,6 +162,25 @@ def desktop_main_visual_change_is_neutral(base_source: str, head_source: str) ->
     base = without_standalone_rust_comments(base_source)
     head = without_standalone_rust_comments(head_source)
     return base is not None and head is not None and base == head
+
+
+VIEWER_AUTHORING_REEXPORT = re.compile(
+    r"^pub use authoring_projection::[A-Za-z_][A-Za-z0-9_]*;$"
+)
+
+
+def viewer_authoring_facade_diff_is_product_neutral(diff_text: str) -> bool:
+    changed = []
+    for line in diff_text.splitlines():
+        if line.startswith(("+++", "---", "@@")):
+            continue
+        if not line.startswith(("+", "-")):
+            continue
+        payload = line[1:].strip()
+        if not payload:
+            continue
+        changed.append(payload)
+    return bool(changed) and all(VIEWER_AUTHORING_REEXPORT.fullmatch(line) for line in changed)
 
 
 def cfg_test_module_line(source: str) -> int | None:
@@ -602,8 +622,10 @@ def classify(
     dynamic_evidence_only_paths: set[str] | None = None,
     *,
     visual_neutral_paths: set[str] | None = None,
+    product_neutral_paths: set[str] | None = None,
 ) -> dict[str, bool]:
     evidence_only = EVIDENCE_ONLY_PATHS | (dynamic_evidence_only_paths or set())
+    product_neutral = product_neutral_paths or set()
     semantic_paths = [path for path in paths if path not in evidence_only]
     # Standalone Rust integration tests are development/evidence surfaces, not
     # shipped product inputs. Keep them in Tier A so they still compile/lint
@@ -613,6 +635,7 @@ def classify(
         path
         for path in semantic_paths
         if not is_rust_integration_test_path(path)
+        and path not in product_neutral
         and path not in {VIEWER_AUTHORING_PROJECTION, READER_STORY_FRAME_ANALYSIS}
     ]
     mapping = {
@@ -728,6 +751,25 @@ def main() -> int:
         return 2
 
     dynamic_evidence_only = test_region_evidence_only_paths(args.base, args.head, paths)
+    product_neutral: set[str] = set()
+    if VIEWER_FACADE in paths and VIEWER_AUTHORING_PROJECTION in paths:
+        try:
+            facade_diff = subprocess.check_output(
+                [
+                    "git",
+                    "diff",
+                    "--unified=0",
+                    f"{args.base}...{args.head}",
+                    "--",
+                    VIEWER_FACADE,
+                ],
+                text=True,
+            )
+        except subprocess.CalledProcessError:
+            facade_diff = ""
+        if viewer_authoring_facade_diff_is_product_neutral(facade_diff):
+            product_neutral.add(VIEWER_FACADE)
+
     visual_neutral: set[str] = set()
     if DESKTOP_MAIN in paths:
         try:
@@ -743,7 +785,12 @@ def main() -> int:
             base_main = None
         if base_main is not None and desktop_main_visual_change_is_neutral(base_main, desktop_main):
             visual_neutral.add(DESKTOP_MAIN)
-    scopes = classify(paths, dynamic_evidence_only, visual_neutral_paths=visual_neutral)
+    scopes = classify(
+        paths,
+        dynamic_evidence_only,
+        visual_neutral_paths=visual_neutral,
+        product_neutral_paths=product_neutral,
+    )
     receipt = {
         "schema": "chaptera.reader-pr-fanout.v1",
         "base_sha": args.base,
@@ -753,6 +800,7 @@ def main() -> int:
             (EVIDENCE_ONLY_PATHS & set(paths)) | dynamic_evidence_only
         ),
         "visual_neutral_paths": sorted(visual_neutral),
+        "product_neutral_paths": sorted(product_neutral),
         "scopes": scopes,
     }
 
