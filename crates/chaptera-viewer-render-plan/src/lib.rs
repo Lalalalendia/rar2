@@ -3172,12 +3172,11 @@ mod tests {
             paragraph_flow_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
-            images: vec![ViewerEmbeddedImage {
+            images: vec![ViewerEmbeddedImage::exact(
                 resource_id,
-                mime: "image/png".into(),
-                source_exact: true,
-                node_ids: vec![node_id],
-                placements: vec![ViewerImagePlacementV1 {
+                "image/png".into(),
+                vec![node_id],
+                vec![ViewerImagePlacementV1 {
                     node_id,
                     source_window: Some(ViewerImageSourceWindowV1 {
                         left_q16: 8_192,
@@ -3188,8 +3187,8 @@ mod tests {
                     content_rotation_degrees: None,
                     recolor: None,
                 }],
-                bytes: vec![0x89, b'P', b'N', b'G'],
-            }],
+                vec![0x89, b'P', b'N', b'G'],
+            )],
             decorative_borders: Vec::new(),
             decorative_border_resources: Vec::new(),
         }
