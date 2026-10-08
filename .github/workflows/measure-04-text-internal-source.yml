@@ -1,0 +1,44 @@
+name: MEASURE exact 04 text-internal source census
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/measure-04-text-internal-source.yml"
+      - "tools/research-runner/source-text-internal-04-probe/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  exact-04:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify and census exact 04
+        run: |
+          set -euo pipefail
+          pub="out/pinned1050/materialized/native/5e7d865b1b99e18719eaeef65a836170e9184f181a023d4756767a388585563e.pub"
+          test -f "$pub"
+          test "$(sha256sum "$pub" | awk '{print $1}')" = "5e7d865b1b99e18719eaeef65a836170e9184f181a023d4756767a388585563e"
+          cargo run --quiet \
+            --manifest-path tools/research-runner/source-text-internal-04-probe/Cargo.toml \
+            -- "$pub"
