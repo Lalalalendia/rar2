@@ -107,6 +107,8 @@ def main() -> None:
     area_membership = Counter()
     remaining_gap_bands = Counter()
     remaining_nearest_class = Counter()
+    ellipse_nearest_direction = Counter()
+    ellipse_nearest_gap_bands = Counter()
 
     cell_width = width_emu / GRID_W
     cell_height = height_emu / GRID_H
@@ -177,6 +179,42 @@ def main() -> None:
                         band = ">4"
                     remaining_gap_bands[band] += 1
                     remaining_nearest_class["+".join(nearest_classes)] += 1
+
+                    if "ellipse" in nearest_classes:
+                        ellipse_nearest_gap_bands[band] += 1
+                        ellipse_candidates = []
+                        for box in boxes.get("ellipse", []):
+                            gap_x = max(box[0] - x1, x0 - box[2], 0.0) / cell_width
+                            gap_y = max(box[1] - y1, y0 - box[3], 0.0) / cell_height
+                            distance = max(gap_x, gap_y)
+                            if abs(distance - nearest) <= 1e-12:
+                                ellipse_candidates.append(box)
+                        directions = set()
+                        for box in ellipse_candidates:
+                            horizontal = (
+                                "left"
+                                if x1 <= box[0]
+                                else "right"
+                                if x0 >= box[2]
+                                else "overlap_x"
+                            )
+                            vertical = (
+                                "above"
+                                if y1 <= box[1]
+                                else "below"
+                                if y0 >= box[3]
+                                else "overlap_y"
+                            )
+                            if horizontal == "overlap_x":
+                                direction = vertical
+                            elif vertical == "overlap_y":
+                                direction = horizontal
+                            else:
+                                direction = f"{vertical}_{horizontal}"
+                            directions.add(direction)
+                        ellipse_nearest_direction[
+                            "+".join(sorted(directions)) if directions else "unresolved"
+                        ] += 1
             else:
                 reclassified[area_key] += 1
 
@@ -203,6 +241,10 @@ def main() -> None:
         "remaining_area_none_nearest_paint_class": dict(
             sorted(remaining_nearest_class.items(), key=lambda item: (-item[1], item[0]))
         ),
+        "ellipse_nearest_direction": dict(
+            sorted(ellipse_nearest_direction.items(), key=lambda item: (-item[1], item[0]))
+        ),
+        "ellipse_nearest_gap_bands": dict(sorted(ellipse_nearest_gap_bands.items())),
         "center_membership_counts": dict(
             sorted(center_membership.items(), key=lambda item: (-item[1], item[0]))
         ),
