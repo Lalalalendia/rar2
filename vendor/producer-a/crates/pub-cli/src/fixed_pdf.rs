@@ -848,8 +848,9 @@ fn sidecar_path(output: &Path, suffix: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{report_path_label, retain_scene_node_ids};
-    use pub_model::{CanonicalId, NodeId};
+    use super::{report_path_label, resolved_text_color_for_range, retain_scene_node_ids};
+    use chaptera_viewer_render_plan::{RenderTextFragmentV1, RenderTypographyRunV1};
+    use pub_model::{CanonicalId, NodeId, StoryId};
     use std::collections::BTreeSet;
     use std::path::Path;
 
@@ -887,5 +888,58 @@ mod tests {
 
         assert_eq!(kept, vec![present]);
         assert_eq!(filtered_count, 1);
+    }
+
+
+    fn color_fragment(colors: [[u8; 3]; 2]) -> RenderTextFragmentV1 {
+        RenderTextFragmentV1 {
+            story_id: StoryId::from_canonical(CanonicalId::from_bytes([3; 16])),
+            scalar_start: 0,
+            scalar_end: 4,
+            text: "abcd".into(),
+            line_count: 1,
+            typography: vec![
+                RenderTypographyRunV1 {
+                    scalar_start: 0,
+                    scalar_end: 2,
+                    source_font_name: "Example".into(),
+                    text_size_emu: 100_000,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: Some(colors[0]),
+                    color_inherited: false,
+                    bold: Some(false),
+                    italic: Some(false),
+                },
+                RenderTypographyRunV1 {
+                    scalar_start: 2,
+                    scalar_end: 4,
+                    source_font_name: "Example".into(),
+                    text_size_emu: 100_000,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: Some(colors[1]),
+                    color_inherited: false,
+                    bold: Some(false),
+                    italic: Some(false),
+                },
+            ],
+            paragraph_alignments: Vec::new(),
+            backend_font_resource_id: None,
+            layout: None,
+        }
+    }
+
+    #[test]
+    fn viewer_text_color_range_requires_complete_uniform_authority() {
+        let red = [200, 10, 20];
+        let blue = [10, 20, 200];
+
+        let uniform = color_fragment([red, red]);
+        assert_eq!(resolved_text_color_for_range(&uniform, 1, 3), Some(red));
+
+        let mixed = color_fragment([red, blue]);
+        assert_eq!(resolved_text_color_for_range(&mixed, 1, 3), None);
+        assert_eq!(resolved_text_color_for_range(&mixed, 0, 2), Some(red));
     }
 }
