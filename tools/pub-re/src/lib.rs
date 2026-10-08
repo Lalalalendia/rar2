@@ -393,12 +393,7 @@ fn stream_bytes(input: &LoadedInput, path: &str) -> Result<Vec<u8>> {
         .with_context(|| format!("read logical stream {path}"))
 }
 
-fn changed_stream(
-    path: String,
-    before: &[u8],
-    after: &[u8],
-    max_ranges: usize,
-) -> ChangedStreamV1 {
+fn changed_stream(path: String, before: &[u8], after: &[u8], max_ranges: usize) -> ChangedStreamV1 {
     let prefix = common_prefix_len(before, after);
     let suffix = common_suffix_len(before, after, prefix);
 
@@ -598,7 +593,10 @@ mod tests {
         assert_eq!(receipt.status, "no_stream_payload_change");
         assert!(!receipt.cfb.logical_change_detected);
         assert!(receipt.cfb.changed_streams.is_empty());
-        assert_ne!(receipt.inputs["before"].sha256, receipt.inputs["after"].sha256);
+        assert_ne!(
+            receipt.inputs["before"].sha256,
+            receipt.inputs["after"].sha256
+        );
     }
 
     #[test]
