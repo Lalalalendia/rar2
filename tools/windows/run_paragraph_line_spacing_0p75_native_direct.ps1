@@ -60,6 +60,9 @@ function Resolve-CanonicalFixture {
     if (-not [string]::IsNullOrWhiteSpace([string]$env:PUB_RESEARCH_FIXTURE_ROOT)) {
         $rootCandidates += [string]$env:PUB_RESEARCH_FIXTURE_ROOT
     }
+    if (-not [string]::IsNullOrWhiteSpace([string]$env:USERPROFILE)) {
+        $rootCandidates += (Join-Path ([string]$env:USERPROFILE) "rar2\realtest")
+    }
     $rootCandidates += $RepoRoot
     $rootCandidates += (Split-Path -Parent $RepoRoot)
     $seen = @{}
