@@ -14,7 +14,7 @@ use serde_json::json;
 #[cfg(feature = "cmo-slot-compose")]
 use sha2::{Digest, Sha256};
 #[cfg(feature = "cmo-slot-compose")]
-use std::{collections::BTreeMap, env, fs, io::Cursor};
+use std::{collections::{BTreeMap, BTreeSet}, env, fs, io::Cursor};
 
 #[cfg(feature = "cmo-slot-compose")]
 fn source_hash(bytes: &[u8]) -> Sha256Digest {
@@ -61,6 +61,49 @@ fn main() -> Result<()> {
         .map(|diagnostic| diagnostic.code.clone())
         .collect::<Vec<_>>();
 
+    let selected_page_ids = visual
+        .document
+        .pages
+        .iter()
+        .map(|page| page.id.as_canonical().to_string())
+        .collect::<BTreeSet<_>>();
+    let selected_master_relations = master_bridge
+        .output
+        .context
+        .master_relations
+        .iter()
+        .filter(|relation| selected_page_ids.contains(&relation.source_page_id))
+        .collect::<Vec<_>>();
+    let selected_master_page_ids = selected_master_relations
+        .iter()
+        .map(|relation| relation.master_page_id.as_str())
+        .collect::<BTreeSet<_>>();
+
+    let mut selected_master_source_child_count = 0_usize;
+    let mut selected_master_source_node_kind_counts = BTreeMap::<String, usize>::new();
+    for (page_id, page) in &source.graph.pages {
+        if !selected_master_page_ids.contains(page_id.as_canonical().to_string().as_str()) {
+            continue;
+        }
+        selected_master_source_child_count += page.children.len();
+        for node_id in &page.children {
+            if let Some(node) = source.graph.nodes.get(node_id) {
+                *selected_master_source_node_kind_counts
+                    .entry(format!("{:?}", node.kind))
+                    .or_default() += 1;
+            }
+        }
+    }
+
+    let selected_inherited_master_instance_count = visual
+        .projected_instances
+        .iter()
+        .filter(|instance| {
+            selected_page_ids.contains(&instance.scene_instance.target_page_id)
+                && format!("{:?}", instance.scene_instance.projection_kind) == "InheritedMaster"
+        })
+        .count();
+
     let page_with_applied_master_count = roles
         .pages
         .iter()
@@ -93,6 +136,11 @@ fn main() -> Result<()> {
         "projected_instance_count": visual.projected_instances.len(),
         "projection_kind_counts": projection_kind_counts,
         "master_diagnostic_codes": master_diagnostic_codes,
+        "selected_viewer_page_with_master_relation_count": selected_master_relations.len(),
+        "selected_master_unique_page_count": selected_master_page_ids.len(),
+        "selected_master_source_child_count": selected_master_source_child_count,
+        "selected_master_source_node_kind_counts": selected_master_source_node_kind_counts,
+        "selected_inherited_master_instance_count": selected_inherited_master_instance_count,
         "claims": {
             "story_text_emitted": false,
             "raw_page_ids_emitted": false,
