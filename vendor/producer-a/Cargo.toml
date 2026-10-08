@@ -14,6 +14,7 @@ members = [
   "crates/pub-interaction",
   "crates/pub-export",
   "crates/pub-output",
+  "crates/pub-pdf",
   "crates/pub-idml",
   "crates/pub-docx",
   "crates/pub-odg",
@@ -22,6 +23,7 @@ members = [
   "crates/pub-editor-geometry-core",
   "crates/pub-editor-table-core",
   "crates/pub-editor",
+  "crates/pub-cli",
   "producer",
 ]
 
