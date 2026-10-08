@@ -4,7 +4,7 @@ use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedText, BoundedShapingRuntime,
     font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
 };
-use pub_model::{EMU_PER_POINT, LengthEmu};
+use pub_model::{EMU_PER_POINT, LengthEmu, NodeId};
 use pub_output::{
     ExplicitFontResource, FixedOutputFontProfile, FontIdentity, OutputFontRequest,
     PreferredEmbedding, plan_output_fonts, read_opentype_embedding_flags,
@@ -66,6 +66,25 @@ fn report_path_label(path: &Path, fallback: &str) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or(fallback)
         .to_owned()
+}
+
+fn retain_scene_node_ids(
+    node_ids: &[NodeId],
+    scene_node_ids: &BTreeSet<NodeId>,
+) -> (Vec<NodeId>, usize) {
+    let mut filtered_count = 0usize;
+    let kept = node_ids
+        .iter()
+        .copied()
+        .filter(|node_id| {
+            let keep = scene_node_ids.contains(node_id);
+            if !keep {
+                filtered_count += 1;
+            }
+            keep
+        })
+        .collect();
+    (kept, filtered_count)
 }
 
 pub fn convert_pdf(
@@ -214,6 +233,11 @@ fn build_pdf_artifact(
     )
     .context("resolve bounded shaped text flow for fixed PDF")?;
     let pdf_scene = shaped_flow.geometry_scene();
+    let scene_node_ids = pdf_scene
+        .nodes
+        .iter()
+        .map(|node| node.origin)
+        .collect::<BTreeSet<_>>();
 
     let mut text_runs = Vec::new();
     let mut used_glyph_ids = BTreeSet::new();
@@ -381,11 +405,16 @@ fn build_pdf_artifact(
         )
     };
 
-    let resources = FixedPdfResources {
-        node_paints: visual
-            .paints
-            .iter()
-            .map(|paint| FixedNodePaint {
+    let mut filtered_paint_node_count = 0usize;
+    let node_paints = visual
+        .paints
+        .iter()
+        .filter_map(|paint| {
+            if !scene_node_ids.contains(&paint.node_id) {
+                filtered_paint_node_count += 1;
+                return None;
+            }
+            Some(FixedNodePaint {
                 node_id: paint.node_id,
                 fill_rgb: paint.solid_fill_rgb,
                 stroke: paint.solid_line.as_ref().map(|line| FixedStroke {
@@ -393,17 +422,34 @@ fn build_pdf_artifact(
                     width_emu: line.width_emu,
                 }),
             })
-            .collect(),
-        images: visual
-            .images
-            .iter()
-            .map(|image| FixedImageResource {
+        })
+        .collect();
+
+    let mut filtered_image_use_count = 0usize;
+    let mut filtered_image_resource_count = 0usize;
+    let images = visual
+        .images
+        .iter()
+        .filter_map(|image| {
+            let (node_ids, filtered_count) =
+                retain_scene_node_ids(&image.node_ids, &scene_node_ids);
+            filtered_image_use_count += filtered_count;
+            if node_ids.is_empty() {
+                filtered_image_resource_count += 1;
+                return None;
+            }
+            Some(FixedImageResource {
                 resource_id: image.resource_id,
                 mime: image.mime.clone(),
-                node_ids: image.node_ids.clone(),
+                node_ids,
                 bytes: image.bytes.clone(),
             })
-            .collect(),
+        })
+        .collect();
+
+    let resources = FixedPdfResources {
+        node_paints,
+        images,
         font_plan,
         fonts,
         text_runs,
@@ -423,7 +469,7 @@ fn build_pdf_artifact(
         .filter(|node| node.disposition != pub_pdf::PdfRenderDisposition::Painted)
         .count();
 
-    let report = serde_json::json!({
+    let mut report = serde_json::json!({
         "schema_version": PDF_PRODUCT_SCHEMA,
         "source": {
             "label": source_label,
@@ -462,6 +508,23 @@ fn build_pdf_artifact(
         "pdf": &rendered.report,
     });
 
+    if filtered_paint_node_count > 0
+        || filtered_image_use_count > 0
+        || filtered_image_resource_count > 0
+    {
+        report
+            .as_object_mut()
+            .expect("fixed-PDF loss report must be an object")
+            .insert(
+                "resource_projection".into(),
+                serde_json::json!({
+                    "filtered_paint_node_count": filtered_paint_node_count,
+                    "filtered_image_use_count": filtered_image_use_count,
+                    "filtered_image_resource_count": filtered_image_resource_count,
+                }),
+            );
+    }
+
     let summary = format!(
         "source: {}\ntarget: pdf / basic-fixed\nresult: ready_with_losses\nconversion_fence_sha256: {}\ntypography: explicit_user_fallback_not_source_font\nfallback_font_sha256: {}\ntext_runs_materialized: {}\ntext_runs_skipped: {}\npdf_nodes_unsupported_or_partial: {}\npdf_diagnostics: {}\n",
         report["source"]["label"].as_str().unwrap_or("-"),
@@ -476,6 +539,16 @@ fn build_pdf_artifact(
         unsupported_pdf_nodes,
         rendered.report.diagnostics.len(),
     );
+    let summary = if filtered_paint_node_count > 0
+        || filtered_image_use_count > 0
+        || filtered_image_resource_count > 0
+    {
+        format!(
+            "{summary}pdf_resources_filtered_paint_nodes: {filtered_paint_node_count}\npdf_resources_filtered_image_uses: {filtered_image_use_count}\npdf_resources_filtered_image_resources: {filtered_image_resource_count}\n"
+        )
+    } else {
+        summary
+    };
 
     Ok((rendered.bytes, report, summary))
 }
@@ -488,7 +561,9 @@ fn sidecar_path(output: &Path, suffix: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::report_path_label;
+    use super::{report_path_label, retain_scene_node_ids};
+    use pub_model::{CanonicalId, NodeId};
+    use std::collections::BTreeSet;
     use std::path::Path;
 
     #[test]
@@ -513,5 +588,17 @@ mod tests {
     #[test]
     fn report_label_falls_back_without_filename() {
         assert_eq!(report_path_label(Path::new(""), "input.pub"), "input.pub");
+    }
+
+    #[test]
+    fn resource_scene_projection_filters_only_absent_node_ids() {
+        let present = NodeId::from_canonical(CanonicalId::from_bytes([1; 16]));
+        let absent = NodeId::from_canonical(CanonicalId::from_bytes([2; 16]));
+        let scene = BTreeSet::from([present]);
+
+        let (kept, filtered_count) = retain_scene_node_ids(&[present, absent], &scene);
+
+        assert_eq!(kept, vec![present]);
+        assert_eq!(filtered_count, 1);
     }
 }
