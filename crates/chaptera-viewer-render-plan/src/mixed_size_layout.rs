@@ -823,12 +823,14 @@ mod tests {
         let resolved = resolve_mixed_size_text_layout_v1(
             &fragment,
             &font,
-            false,
+            MixedSizeSourceAuthorityV1 {
+                font_is_source_resolved: false,
+                source_line_spacing_for_range: |_, _| None,
+            },
             node_id,
             &bounds,
             &fingerprint,
             None,
-            |_, _| None,
         );
         assert!(matches!(
             resolved.disposition,
@@ -912,12 +914,14 @@ mod tests {
         let without_source_authority = resolve_mixed_size_text_layout_v1(
             &fragment,
             &font,
-            true,
+            MixedSizeSourceAuthorityV1 {
+                font_is_source_resolved: true,
+                source_line_spacing_for_range: |_, _| None,
+            },
             node_id,
             &bounds,
             &fingerprint,
             None,
-            |_, _| None,
         );
         assert_eq!(
             without_source_authority.disposition,
@@ -929,16 +933,18 @@ mod tests {
         let with_wrong_proportional_mode = resolve_mixed_size_text_layout_v1(
             &fragment,
             &font,
-            true,
+            MixedSizeSourceAuthorityV1 {
+                font_is_source_resolved: true,
+                source_line_spacing_for_range: |_, _| {
+                    Some(ViewerParagraphLineSpacing::Proportional {
+                        point_equivalent_emu: PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1,
+                    })
+                },
+            },
             node_id,
             &bounds,
             &fingerprint,
             None,
-            |_, _| {
-                Some(ViewerParagraphLineSpacing::Proportional {
-                    point_equivalent_emu: PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1,
-                })
-            },
         );
         assert_eq!(
             with_wrong_proportional_mode.disposition,
@@ -950,16 +956,18 @@ mod tests {
         let with_fallback_font = resolve_mixed_size_text_layout_v1(
             &fragment,
             &font,
-            false,
+            MixedSizeSourceAuthorityV1 {
+                font_is_source_resolved: false,
+                source_line_spacing_for_range: |_, _| {
+                    Some(ViewerParagraphLineSpacing::Proportional {
+                        point_equivalent_emu: PUBLISHER_THREE_QUARTER_POINT_EQUIVALENT_EMU_V1,
+                    })
+                },
+            },
             node_id,
             &bounds,
             &fingerprint,
             None,
-            |_, _| {
-                Some(ViewerParagraphLineSpacing::Proportional {
-                    point_equivalent_emu: PUBLISHER_THREE_QUARTER_POINT_EQUIVALENT_EMU_V1,
-                })
-            },
         );
         assert_eq!(
             with_fallback_font.disposition,
@@ -971,16 +979,18 @@ mod tests {
         let resolved = resolve_mixed_size_text_layout_v1(
             &fragment,
             &font,
-            true,
+            MixedSizeSourceAuthorityV1 {
+                font_is_source_resolved: true,
+                source_line_spacing_for_range: |start, end| {
+                    (start == 3 && end == 5).then_some(ViewerParagraphLineSpacing::Proportional {
+                        point_equivalent_emu: PUBLISHER_THREE_QUARTER_POINT_EQUIVALENT_EMU_V1,
+                    })
+                },
+            },
             node_id,
             &bounds,
             &fingerprint,
             None,
-            |start, end| {
-                (start == 3 && end == 5).then_some(ViewerParagraphLineSpacing::Proportional {
-                    point_equivalent_emu: PUBLISHER_THREE_QUARTER_POINT_EQUIVALENT_EMU_V1,
-                })
-            },
         );
         assert!(matches!(
             resolved.disposition,
@@ -1021,12 +1031,14 @@ mod tests {
         let partial = resolve_mixed_size_text_layout_v1(
             &fragment,
             &font,
-            false,
+            MixedSizeSourceAuthorityV1 {
+                font_is_source_resolved: false,
+                source_line_spacing_for_range: |_, _| None,
+            },
             node_id,
             &one_line_bounds,
             &fingerprint,
             None,
-            |_, _| None,
         );
         assert_eq!(
             partial.disposition,
@@ -1045,12 +1057,14 @@ mod tests {
         let zero_line = resolve_mixed_size_text_layout_v1(
             &fragment,
             &font,
-            false,
+            MixedSizeSourceAuthorityV1 {
+                font_is_source_resolved: false,
+                source_line_spacing_for_range: |_, _| None,
+            },
             node_id,
             &zero_line_bounds,
             &fingerprint,
             None,
-            |_, _| None,
         );
         assert_eq!(
             zero_line.disposition,
