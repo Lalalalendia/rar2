@@ -318,15 +318,43 @@ pub fn build_current_story_layout_v1(
     layout_revision_id: &str,
     font: &ExplicitDesktopFontResourceV1<'_>,
 ) -> Result<DesktopStoryLayoutV1, DesktopShapedFlowRuntimeError> {
-    build_current_story_layout_with_pages_v1(editor, story_id, layout_revision_id, font, None)
+    build_current_story_layout_core_v1(
+        editor,
+        story_id,
+        layout_revision_id,
+        font,
+        None,
+        true,
+    )
 }
 
+/// Fixed-output callers intentionally retain full projected Story shaping.
+/// Their resource packet may need text for moved/resized nodes outside the
+/// primary edited Story.
 fn build_current_story_layout_with_pages_v1(
     editor: &EditorSession,
     story_id: StoryId,
     layout_revision_id: &str,
     font: &ExplicitDesktopFontResourceV1<'_>,
     page_ids: Option<&[PageId]>,
+) -> Result<DesktopStoryLayoutV1, DesktopShapedFlowRuntimeError> {
+    build_current_story_layout_core_v1(
+        editor,
+        story_id,
+        layout_revision_id,
+        font,
+        page_ids,
+        false,
+    )
+}
+
+fn build_current_story_layout_core_v1(
+    editor: &EditorSession,
+    story_id: StoryId,
+    layout_revision_id: &str,
+    font: &ExplicitDesktopFontResourceV1<'_>,
+    page_ids: Option<&[PageId]>,
+    scope_shaping_to_current_story: bool,
 ) -> Result<DesktopStoryLayoutV1, DesktopShapedFlowRuntimeError> {
     if layout_revision_id.is_empty() {
         return Err(DesktopShapedFlowRuntimeError::new(
@@ -363,7 +391,9 @@ fn build_current_story_layout_with_pages_v1(
         }
     };
     let mut projection = project_bounded(authoring);
-    retain_story_shaping_scope_v1(&mut projection, story_id)?;
+    if scope_shaping_to_current_story {
+        retain_story_shaping_scope_v1(&mut projection, story_id)?;
+    }
 
     let runtime = BoundedShapedFlowRuntime {
         shaping: BoundedShapingRuntime {
