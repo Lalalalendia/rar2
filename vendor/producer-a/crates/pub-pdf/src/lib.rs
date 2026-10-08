@@ -1106,7 +1106,6 @@ mod tests {
         assert!(text.contains("0 0 1 RG\n1 w\n30 40 70 60 re\nS"));
     }
 
-
     #[test]
     fn emitted_node_paint_preserves_scene_vector_order() {
         let output = render_bounded_pdf(
