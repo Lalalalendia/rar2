@@ -203,6 +203,31 @@ jobs:
           echo "supplemental_cargo_cache_hit=${SUPPLEMENTAL_CARGO_CACHE_HIT:-unknown}" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "supplemental_cargo_build_seconds=$elapsed" | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: Classify exact 06 dominant long omission band
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/exact06-long-band"
+          rm -rf "$root"
+          mkdir -p "$root/worker"
+          python tools/migration_pdf_worker_isolation.py run \
+            --output-dir "$root/worker" \
+            --input "$RUNNER_TEMP/publisher-visual-supplemental/fixtures/06-modern2c-image-heavy.pub" \
+            --timeout 120 --address-space-mb 768 --cpu-seconds 90 \
+            --open-files 64 --output-file-mb 32 --clear-environment -- \
+            "$CARGO_TARGET_DIR/debug/chaptera" guest-reader-scene \
+            --session-id guest:00000000000000000000000000000001 \
+            --expected-sha256 059dde4bcb408374f14273275febd8158dc8d02960966488dd4324cfd4dcc238 \
+            --expected-byte-len 1884160 \
+            > "$root/isolation.json"
+          test -f "$root/worker/result.json"
+          python tools/cloud_reader_scene_band_paint_census_v1.py \
+            "$root/worker/result.json" \
+            --fixture 06-modern2c-image-heavy \
+            --page 1 \
+            --min-col 12 --max-col 62 \
+            --min-row 4 --max-row 5 \
+            --max-gap 2
+
       - name: Restore pinned Playwright Chromium cache
         id: playwright-chromium-cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
