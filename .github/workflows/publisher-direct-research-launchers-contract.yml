@@ -34,7 +34,8 @@ jobs:
           foreach ($path in @(
             "tools/windows/run_master_projection_stack_auth_direct.ps1",
             "tools/windows/run_paragraph_metrics_auth_direct.ps1",
-            "tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1"
+            "tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1",
+            "tools/research-runner/operations/paragraph_line_spacing_0p75_native_01.ps1"
           )) {
             $tokens = $null
             $errors = $null

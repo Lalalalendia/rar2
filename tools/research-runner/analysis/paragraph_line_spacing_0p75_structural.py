@@ -106,6 +106,48 @@ def arm_spacing(arm: dict[str, Any], field: str, label: str) -> float:
     return safe_number(snapshot.get("line_spacing"), f"{label}: {field}.line_spacing")
 
 
+def mixed_size_snapshot(value: Any, label: str) -> dict[str, Any]:
+    """Source-safe geometry + three fixed font samples; no source Story text."""
+    require(isinstance(value, dict), f"{label}: mixed witness missing")
+    start, end = value.get("range_start"), value.get("range_end")
+    require(type(start) is int and type(end) is int and 0 <= start < end, f"{label}: invalid range")
+    large_start, large_end = value.get("large_run_start"), value.get("large_run_end")
+    require(
+        type(large_start) is int and type(large_end) is int
+        and start <= large_start < large_end <= end,
+        f"{label}: invalid 18pt source range",
+    )
+    samples = value.get("font_samples")
+    require(isinstance(samples, list) and len(samples) == 3, f"{label}: expected three fixed font samples")
+    roles = ("prefix", "large", "suffix")
+    expected_points = (12.0, 18.0, 12.0)
+    families = []
+    points = []
+    for sample, role, expected in zip(samples, roles, expected_points):
+        require(isinstance(sample, dict) and sample.get("role") == role, f"{label}: wrong sample role")
+        family = sample.get("family")
+        require(isinstance(family, dict) and family.get("state") == "value", f"{label}: font family unavailable")
+        require(isinstance(family.get("value"), str) and family["value"].strip(), f"{label}: font family empty")
+        point = safe_number(sample.get("point_size"), f"{label}: {role} point size")
+        require(abs(point - expected) < 0.01, f"{label}: expected {expected}pt at {role}")
+        families.append(family["value"])
+        points.append(point)
+    require(len(set(families)) == 1 and families[0].casefold() == "arial", f"{label}: mixed font family not Arial")
+    paragraph = value.get("paragraph")
+    require(isinstance(paragraph, dict), f"{label}: mixed paragraph snapshot missing")
+    return {
+        "range_start": start,
+        "range_end": end,
+        "large_run_start": large_start,
+        "large_run_end": large_end,
+        "font_family": families[0],
+        "point_samples": points,
+        "line_spacing": safe_number(paragraph.get("line_spacing"), f"{label}: LineSpacing"),
+        "line_spacing_rule": safe_number(paragraph.get("line_spacing_rule"), f"{label}: LineSpacingRule"),
+        "geometry": geometry(value.get("geometry"), f"{label}: geometry"),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", type=Path, required=True)
@@ -120,6 +162,8 @@ def main() -> int:
         require(isinstance(native, dict), "native receipt must be an object")
         require(native.get("schema") == NATIVE_SCHEMA, "native schema mismatch")
         require(native.get("experiment_id") == EXPERIMENT, "native experiment mismatch")
+        composition_profile = native.get("composition_profile", "uniform-12")
+        require(composition_profile in {"uniform-12", "mixed-12-18-12"}, "unknown composition profile")
         require(
             native.get("verdict") == "native-roundtrip-and-line-geometry-captured-not-yet-carrier-authority",
             "native geometry revision required",
@@ -191,6 +235,72 @@ def main() -> int:
                 "raw_fdpp_0x34": candidates,
                 "stsh_unchanged_vs_control": stsh_identity(observation) == control_stsh,
                 "control_to_arm_chunk_changes": base.chunk_changes(control, observation),
+            }
+
+        mixed_size_research = None
+        if composition_profile == "mixed-12-18-12":
+            seed_mixed = mixed_size_snapshot(
+                native["seed"].get("mixed_size_before_save"), "seed mixed paragraph"
+            )
+            normalized = {}
+            for name in EXPECTED_ARMS:
+                witness = by_name[name].get("mixed_size")
+                require(isinstance(witness, dict), f"{name}: missing mixed-size arm")
+                normalized[name] = {
+                    "before": mixed_size_snapshot(witness.get("before_mutation"), f"{name}: mixed before"),
+                    "after": mixed_size_snapshot(witness.get("after_mutation"), f"{name}: mixed after"),
+                    "fresh": mixed_size_snapshot(witness.get("fresh_reopen"), f"{name}: mixed fresh"),
+                }
+                # Save/reopen can normalize STSH and physical line placement.
+                # Require every independently opened arm to share its baseline;
+                # record (rather than reject) a seed-before-save difference.
+                require(
+                    normalized[name]["after"]["range_start"] == seed_mixed["range_start"]
+                    and normalized[name]["fresh"]["range_end"] == seed_mixed["range_end"],
+                    f"{name}: mixed-size Story range moved",
+                )
+            pre_mutation_baseline = normalized["control"]["before"]
+            require(
+                all(normalized[name]["before"] == pre_mutation_baseline for name in EXPECTED_ARMS),
+                "mixed-size arm baselines differ before mutation",
+            )
+            pair = {name: normalized[name] for name in ("direct-0p75", "direct-0p80")}
+            for name, expected in (("direct-0p75", 0.75), ("direct-0p80", 0.80)):
+                require(
+                    abs(pair[name]["fresh"]["line_spacing"] - expected) < 1e-6
+                    and abs(pair[name]["fresh"]["line_spacing_rule"] - 5.0) < 1e-6,
+                    f"{name}: mixed-size spacing/rule failed to persist",
+                )
+                require(pair[name]["fresh"]["geometry"]["line_count"] >= 2, f"{name}: mixed paragraph has fewer than two lines")
+            g75 = pair["direct-0p75"]["fresh"]["geometry"]
+            g80 = pair["direct-0p80"]["fresh"]["geometry"]
+            mixed_size_research = {
+                "witness": "one-third-paragraph Arial 12/18/12",
+                "selected_source_range": [seed_mixed["range_start"], seed_mixed["range_end"]],
+                "source_family": seed_mixed["font_family"],
+                "point_size_samples": seed_mixed["point_samples"],
+                "large_font_run_start_end": [seed_mixed["large_run_start"], seed_mixed["large_run_end"]],
+                "seed_vs_reopened_baseline_identical": seed_mixed == pre_mutation_baseline,
+                "arms": {
+                    name: {
+                        "fresh_reopen_line_spacing": normalized[name]["fresh"]["line_spacing"],
+                        "fresh_reopen_line_spacing_rule": normalized[name]["fresh"]["line_spacing_rule"],
+                        "line_geometry_fresh_reopen": normalized[name]["fresh"]["geometry"],
+                        "line_indices_intersecting_18pt_run": [
+                            line["index"]
+                            for line in normalized[name]["fresh"]["geometry"]["lines"]
+                            if line["start"] < normalized[name]["fresh"]["large_run_end"]
+                            and line["end"] > normalized[name]["fresh"]["large_run_start"]
+                        ],
+                        "geometry_roundtrip_stable": (
+                            normalized[name]["after"]["geometry"] == normalized[name]["fresh"]["geometry"]
+                        ),
+                    }
+                    for name in ("control", "direct-0p75", "direct-0p80")
+                },
+                "matched_custom_pair_identical_line_geometry": g75 == g80,
+                "matched_custom_pair_line_count_difference": g75["line_count"] - g80["line_count"],
+                "mixed_size_product_authority_granted": False,
             }
 
         control_values = {c["raw_value"] for c in rows["control"]["raw_fdpp_0x34"] if c["raw_value"] is not None}
@@ -271,6 +381,8 @@ def main() -> int:
                 "story_partition_invariance_all_arms": True,
             },
             "arms": rows,
+            "composition_profile": composition_profile,
+            "mixed_size_research": mixed_size_research,
             "diagnostic_checks": diagnostic_checks,
             "carrier_checks": carrier_checks,
             "native_114300_authority_candidate": candidate,
@@ -280,7 +392,8 @@ def main() -> int:
                 "0.75 roundtrip/carrier/geometry witness against a same-rule direct 0.80 control. "
                 "Native geometry may quantize or plateau between nearby custom values; this receipt "
                 "proves the measured 0.75 geometry but not global linearity. Product execution still requires "
-                "explicit consumer review against the exact082 line-level authority and negative controls."
+                "explicit consumer review against the exact082 line-level authority and negative controls. "
+                "Optional mixed-size geometry is a separate Arial research witness, not exact082 font authorization."
             ),
         }
         out.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
