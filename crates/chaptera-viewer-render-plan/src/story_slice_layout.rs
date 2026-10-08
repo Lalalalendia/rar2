@@ -55,10 +55,7 @@ pub(super) fn exact_direct_story_slice_scalar_base_v1(
     fragment: &RenderTextFragmentV1,
     story_text: &str,
 ) -> Option<u32> {
-    if projected_target_frame_node_id.is_some()
-        || fragment.scalar_start == 0
-        || fragment.scalar_start >= fragment.scalar_end
-    {
+    if projected_target_frame_node_id.is_some() || fragment.scalar_start >= fragment.scalar_end {
         return None;
     }
 
@@ -103,7 +100,10 @@ pub(super) fn exact_direct_story_slice_scalar_base_v1(
         }
     }
     let frame = matching_frame?;
-    if story_frame_count < 2 || frame.ordinal == 0 {
+    if story_frame_count < 2 {
+        return None;
+    }
+    if (frame.ordinal == 0) != (fragment.scalar_start == 0) {
         return None;
     }
 
