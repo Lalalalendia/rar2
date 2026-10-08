@@ -33,7 +33,9 @@ use images::{
 };
 
 pub use tables::{ViewerTable, ViewerTableBorderSegment, ViewerTableCell};
-use tables::{unique_table_column_boundary, viewer_tables_from_resolved};
+use tables::viewer_tables_from_resolved;
+#[cfg(test)]
+use tables::{unique_table_column_boundary, unique_table_row_boundary};
 
 use anyhow::{Context, Result, anyhow};
 #[cfg(feature = "cmo-slot-compose")]
@@ -49,7 +51,7 @@ use chaptera_scene_instance::{
 use pub_layout::{BoundedAuthoringSlice, BoundedNodeGeometryInput};
 pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
 use pub_layout::{
-    BoundedLayoutProjection, BoundedParagraphFlowConstraint, BoundedParagraphFlowRun,
+    BoundedParagraphFlowConstraint, BoundedParagraphFlowRun,
     BoundedTextFlowEnvironment, BoundedTextMetrics, ProjectedStoryFrame, ProjectionDiagnostic,
     ResolveDiagnostic, ResolvedPhysicalNode, project_bounded, resolve_bounded_geometry,
     resolve_bounded_text_flow_with_paragraph_flow,
@@ -57,11 +59,10 @@ use pub_layout::{
 #[cfg(feature = "cmo-slot-compose")]
 use pub_model::CanonicalId;
 #[cfg(test)]
-use pub_model::StoryFrame;
+use pub_model::{StoryFrame, TableCellAddress, TableCellId};
 use pub_model::{
     Affine2D, AuthorityClass, LengthEmu, Node, NodeId, NodeKind, PageId, ReadConfidence, RectEmu,
-    ResourceId, Sha256Digest, SourceDerivedIdInput, SourceRole, StoryId, TableCellAddress,
-    TableCellId, derive_source_canonical_id,
+    ResourceId, Sha256Digest, SourceDerivedIdInput, SourceRole, StoryId, derive_source_canonical_id,
 };
 use pub_paint_bridge::{
     PubEffectiveFillSourceV1, PubEffectiveLineSourceV1, PubEffectivePaintAuthorityV1,
@@ -113,7 +114,7 @@ use pub_reader::{
     build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
     build_mature_0x2c_wmf_preview_bundle_from_bytes, derive_pub_page_id,
-    materialize_bounded_table_cells, rasterize_wmf_preview, read_legacy_0x22_image_wmfs,
+    rasterize_wmf_preview, read_legacy_0x22_image_wmfs,
     resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
     select_unambiguous_legacy_ole_cached_presentation,
 };
