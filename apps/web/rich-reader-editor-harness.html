@@ -1,0 +1,118 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Chaptera Rich Reader Editor Harness</title>
+<style>
+  html,body{margin:0;background:#ddd;font-family:system-ui,sans-serif}
+  #host{width:420px;min-height:180px;padding:8px;touch-action:none}
+</style>
+<div id="host" aria-label="rich reader editor"></div>
+<script type="module">
+import { RichReaderEditorShellV1 } from "./rich-reader-editor-shell-v1.mjs";
+import { projectReaderSceneToEditorInteractionScene } from "./reader-scene-editor-interaction-v1.mjs";
+
+const DOC="10000000-0000-4000-8000-000000000001";
+const PAGE="20000000-0000-4000-8000-000000000001";
+const DIRECT="30000000-0000-4000-8000-000000000001";
+const PROJECTED_ORIGIN="30000000-0000-4000-8000-000000000002";
+const PROJECTED="sha256:"+"d".repeat(64);
+const SOURCE="a".repeat(64);
+const BASE="sha256:"+"b".repeat(64);
+const CHILD="sha256:"+"c".repeat(64);
+
+function richScene(revisionId,x=95250,y=95250){
+  return {
+    protocol_version:"chaptera.reader-scene.v1",
+    document_id:DOC,
+    source_hash:SOURCE,
+    revision_id:revisionId,
+    scene_authority:"server_viewer_projection",
+    stacking_fidelity:"partial",
+    fidelity:{state:"partial",reasons:["synthetic_harness"]},
+    pages:[{page_id:PAGE,order:0,width_emu:952500,height_emu:952500}],
+    nodes:[
+      {
+        node_id:DIRECT,
+        page_id:PAGE,
+        kind:"shape",
+        bounds:{x,y,width:190500,height:190500},
+        transform:{a:"1",b:"0",c:"0",d:"1",tx:0,ty:0},
+        paint:{preset_shape:null,fill_rgb:[10,120,200],line:null}
+      },
+      {
+        node_id:PROJECTED,
+        origin_node_id:PROJECTED_ORIGIN,
+        page_id:PAGE,
+        kind:"shape",
+        bounds:{x:571500,y:95250,width:190500,height:190500},
+        transform:{a:"1",b:"0",c:"0",d:"1",tx:0,ty:0},
+        paint:{preset_shape:null,fill_rgb:[180,70,20],line:null}
+      }
+    ],
+    stories:[],resources:[],fonts:[],diagnostics:[]
+  };
+}
+
+let current=richScene(BASE);
+const calls=[];
+const service={
+  async currentRichEditorState(){
+    return {
+      current_document:{
+        protocol_version:"chaptera.current-document.v1",
+        document_id:DOC,source_hash:SOURCE,revision_id:current.revision_id
+      },
+      reader_scene:structuredClone(current),
+      interaction_scene:projectReaderSceneToEditorInteractionScene(current)
+    };
+  },
+  async commit(request){
+    calls.push(structuredClone(request));
+    current=richScene(CHILD,request.command.x_emu,request.command.y_emu);
+    return {
+      protocol_version:"chaptera.commit-accepted.v1",
+      document_id:DOC,
+      source_hash:SOURCE,
+      base_revision_id:request.base_revision_id,
+      revision_id:CHILD,
+      state_id:"sha256:"+"e".repeat(64),
+      client_operation_id:request.client_operation_id,
+      canonical_operation:{
+        kind:"move_node",
+        node_id:DIRECT,
+        before:{x:95250,y:95250,width:190500,height:190500},
+        after:{
+          x:request.command.x_emu,
+          y:request.command.y_emu,
+          width:190500,
+          height:190500
+        }
+      },
+      project_schema_version:"pub-editor-v0.11",
+      canonical_revision_schema_version:"chaptera.cdm.authoring-revision.v1",
+      canonical_authoring_revision_id:"f".repeat(64),
+      replayed:false,
+      scene_refresh:"full_snapshot"
+    };
+  },
+  async readerSceneForRevision(revisionId){
+    if(current.revision_id!==revisionId) throw new Error("synthetic revision mismatch");
+    return structuredClone(current);
+  }
+};
+
+const host=document.querySelector("#host");
+const states=[];
+const shell=new RichReaderEditorShellV1({
+  host,
+  service,
+  renderOptions:{emuPerCssPx:9525,maxPageWidth:400},
+  operationIdFactory:()=> "rich-harness-move-1",
+  onState:(state)=>states.push(structuredClone(state))
+});
+await shell.start();
+window.__shell=shell;
+window.__serviceCalls=calls;
+window.__states=states;
+window.__ids={DOC,PAGE,DIRECT,PROJECTED,BASE,CHILD};
+window.__richReaderEditorReady=true;
+</script>

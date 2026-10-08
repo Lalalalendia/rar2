@@ -12,6 +12,12 @@ on:
       - "apps/web/observability-v1.test.mjs"
       - "apps/web/editor-shell-http-harness.html"
       - "apps/web/editor-shell-v1.mjs"
+      - "apps/web/reader-scene-editor-interaction-v1.mjs"
+      - "apps/web/reader-scene-editor-interaction-v1.test.mjs"
+      - "apps/web/rich-reader-editor-shell-v1.mjs"
+      - "apps/web/rich-reader-editor-shell-v1.test.mjs"
+      - "apps/web/rich-reader-editor-harness.html"
+      - "tools/run_rich_reader_editor_harness.mjs"
       - "services/editor-api/web_shell_http_harness.py"
       - "services/editor-api/observability.py"
       - "services/editor-api/test_observability.py"
@@ -49,6 +55,8 @@ jobs:
           node --test apps/web/interaction-v1.test.mjs
           node --test apps/web/current-authoring-graph-scene-v1.test.mjs
           node --test apps/web/chaptera-product-editor-service-v1.test.mjs
+          node --test apps/web/reader-scene-editor-interaction-v1.test.mjs
+          node --test apps/web/rich-reader-editor-shell-v1.test.mjs
           node --test apps/web/render-v1.test.mjs
           node --test apps/web/observability-v1.test.mjs
       - name: Install Playwright
@@ -57,8 +65,12 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Run browser-to-HTTP process boundary
         run: node tools/run_web_editor_http_harness.mjs
+      - name: Smoke rich Reader pixels with canonical MoveNode overlay
+        run: node tools/run_rich_reader_editor_harness.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: web-editor-http-seam-chromium
-          path: target/web-editor-http/chromium-http-*
+          path: |
+            target/web-editor-http/chromium-http-*
+            target/web-editor-rich/chromium-rich-editor-smoke.json
           if-no-files-found: error
