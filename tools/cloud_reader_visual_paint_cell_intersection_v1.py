@@ -110,6 +110,7 @@ def main() -> None:
     ellipse_nearest_direction = Counter()
     ellipse_nearest_gap_bands = Counter()
     remaining_cells = set()
+    remaining_cell_nearest_class = {}
     remaining_reference_rgb_sum = [0, 0, 0]
     remaining_reference_rgb_quantized = Counter()
 
@@ -188,7 +189,9 @@ def main() -> None:
                     else:
                         band = ">4"
                     remaining_gap_bands[band] += 1
-                    remaining_nearest_class["+".join(nearest_classes)] += 1
+                    nearest_key = "+".join(nearest_classes)
+                    remaining_nearest_class[nearest_key] += 1
+                    remaining_cell_nearest_class[(col, row)] = nearest_key
 
                     if "ellipse" in nearest_classes:
                         ellipse_nearest_gap_bands[band] += 1
@@ -274,12 +277,19 @@ def main() -> None:
                     unseen.remove(neighbor)
                     stack.append(neighbor)
                     component.append(neighbor)
+        nearest_counts = Counter(
+            remaining_cell_nearest_class.get(cell, "unresolved")
+            for cell in component
+        )
         component_bboxes.append({
             "size": len(component),
             "min_col": min(col for col, _ in component),
             "max_col": max(col for col, _ in component),
             "min_row": min(row for _, row in component),
             "max_row": max(row for _, row in component),
+            "nearest_paint_classes": dict(
+                sorted(nearest_counts.items(), key=lambda item: (-item[1], item[0]))
+            ),
         })
     component_bboxes.sort(key=lambda item: (-item["size"], item["min_row"], item["min_col"]))
 
