@@ -59,26 +59,26 @@ pub fn classify_mixed_size_layout_capacity_v1(
             .checked_add(height)
             .is_some_and(|total| total <= bounds.height.get())
     });
-    let physical_first_then_baseline_next_fits_height =
-        match (evaluation.physical_first_then_baseline_height_emu, next_line_height) {
-            (Some(used), Some(height)) if !evaluation.lines.is_empty() => used
-                .checked_add(height)
-                .map(|total| total <= bounds.height.get()),
-            (Some(_), Some(_)) => evaluation
-                .stop_width_fit_min_physical_extent_emu
-                .map(|extent| extent <= bounds.height.get()),
-            _ => None,
-        };
+    let physical_first_then_baseline_next_fits_height = match (
+        evaluation.physical_first_then_baseline_height_emu,
+        next_line_height,
+    ) {
+        (Some(used), Some(height)) if !evaluation.lines.is_empty() => used
+            .checked_add(height)
+            .map(|total| total <= bounds.height.get()),
+        (Some(_), Some(_)) => evaluation
+            .stop_width_fit_min_physical_extent_emu
+            .map(|extent| extent <= bounds.height.get()),
+        _ => None,
+    };
 
     Some(MixedSizeLayoutCapacityDiagnosticV1 {
         accepted_lines: evaluation.lines.len(),
         frame_height_emu: bounds.height.get(),
         used_height_emu: evaluation.used_height_emu,
-        physical_first_then_baseline_height_emu: evaluation
-            .physical_first_then_baseline_height_emu,
+        physical_first_then_baseline_height_emu: evaluation.physical_first_then_baseline_height_emu,
         next_width_fit_line_height_emu: next_line_height,
-        next_width_fit_physical_extent_emu: evaluation
-            .stop_width_fit_min_physical_extent_emu,
+        next_width_fit_physical_extent_emu: evaluation.stop_width_fit_min_physical_extent_emu,
         current_next_fits_height,
         physical_first_then_baseline_next_fits_height,
     })
