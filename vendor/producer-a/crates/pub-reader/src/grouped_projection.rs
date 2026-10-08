@@ -132,9 +132,7 @@ pub(super) fn project_grouped_object_shape(
                 .collect::<Vec<_>>();
             match rotations.as_slice() {
                 [property]
-                    if !property.f_bid()
-                        && !property.f_complex()
-                        && property.op as i32 != 0 =>
+                    if !property.f_bid() && !property.f_complex() && property.op as i32 != 0 =>
                 {
                     Some(property.op)
                 }
@@ -154,9 +152,7 @@ pub(super) fn project_grouped_object_shape(
         if ancestor_rotation_op.is_some()
             && (depth != 1 || child_rotation_op.is_none() || ancestor_flip_h)
         {
-            bail!(
-                "group ancestor rotation requires rotated unflipped depth-1 image"
-            );
+            bail!("group ancestor rotation requires rotated unflipped depth-1 image");
         }
 
         let fspgr = group_shape
