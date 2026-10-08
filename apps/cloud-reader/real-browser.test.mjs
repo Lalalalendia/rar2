@@ -218,6 +218,59 @@ try {
     }
     const scene = receipt.scene;
     assert.equal(scene.protocol_version, "chaptera.reader-scene.v1");
+    if (corpusDiagnosticMode && ["06-modern2c-image-heavy", "100_b1faaba988e88b41"].includes(fixture.name)) {
+      const firstPage = [...scene.pages].sort((left, right) => left.order - right.order)[0];
+      const classifyPaintNode = (node) => {
+        if (node.kind === "picture_frame") return "picture";
+        if (node.kind === "text_frame") return "text";
+        if (node.paint?.preset_shape === "ellipse") return "ellipse";
+        if (node.paint) return "other_painted";
+        return "unpainted";
+      };
+      const paintBoundsForNode = (node) => {
+        const semantic = node.bounds;
+        if (node.kind === "text_frame") {
+          return node.text_bounds ?? semantic;
+        }
+        if (node.kind === "picture_frame") {
+          return semantic;
+        }
+        const lineWidth = Number(node.paint?.line?.width_emu ?? 0);
+        if (Number.isFinite(lineWidth) && lineWidth > 0) {
+          const half = lineWidth / 2;
+          return {
+            x: semantic.x - half,
+            y: semantic.y - half,
+            width: semantic.width + lineWidth,
+            height: semantic.height + lineWidth
+          };
+        }
+        return semantic;
+      };
+      const diagnosticGeometry = {
+        schema: "chaptera.visual-paint-bounds-geometry.v1",
+        fixture: fixture.name,
+        page: 1,
+        page_id: firstPage.page_id,
+        width_emu: firstPage.width_emu,
+        height_emu: firstPage.height_emu,
+        nodes: scene.nodes
+          .filter((node) => node.page_id === firstPage.page_id)
+          .map((node) => ({
+            class: classifyPaintNode(node),
+            semantic_bounds: node.bounds,
+            paint_bounds: paintBoundsForNode(node),
+            text_bounds: node.text_bounds ?? null,
+            stroke_width_emu: Number(node.paint?.line?.width_emu ?? 0),
+            preset_shape: node.paint?.preset_shape ?? null,
+            transform: node.transform
+          }))
+      };
+      await writeFile(
+        join(output, fixture.name + "-page-1-paint-bounds-geometry.json"),
+        JSON.stringify(diagnosticGeometry, null, 2) + "\n"
+      );
+    }
     if (fixture.pages != null) assert.equal(scene.pages.length, fixture.pages);
     const fixturePages = scene.pages.length;
     active = { fixture, receipt };
