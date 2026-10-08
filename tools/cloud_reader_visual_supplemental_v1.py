@@ -32,6 +32,79 @@ def checked_sha256_digest(value: object, source: str) -> str:
     return value
 
 
+
+EXACT06_SOURCE_SHA256 = "059dde4bcb408374f14273275febd8158dc8d02960966488dd4324cfd4dcc238"
+
+
+def source_safe_exact06_line_geometry(value: object) -> dict:
+    """Retain only aggregate canonical EMU dimensions, never Story/node identities."""
+    keys = {
+        "page", "selection", "frame_bounds_emu", "line_count",
+        "line_union_bounds_emu", "last_line_bottom_emu", "frame_bottom_emu",
+        "band_start_emu", "gap_line_union_bottom_to_frame_bottom_emu",
+        "gap_line_union_bottom_to_band_start_emu",
+        "gap_frame_bottom_to_band_start_emu", "layout_font_size_emu",
+        "layout_line_height_emu", "font_fingerprint_sha256",
+        "span_font_sizes_emu", "span_font_fingerprints_sha256",
+    }
+    if not isinstance(value, dict) or set(value) != keys:
+        raise ValueError("exact06 wide SharedResolved geometry missing or schema drift")
+    if value["page"] != 1 or value["selection"] != "widest_shared_resolved_text_bounds":
+        raise ValueError("exact06 wide SharedResolved geometry selected an invalid page/selector")
+
+    def checked_int(item: object, field: str) -> int:
+        if type(item) is not int or abs(item) > 100_000_000:
+            raise ValueError(f"exact06 geometry invalid safe integer: {field}")
+        return item
+
+    bounds_keys = {"x_emu", "y_emu", "width_emu", "height_emu"}
+    for field in ("frame_bounds_emu", "line_union_bounds_emu"):
+        bounds = value[field]
+        if not isinstance(bounds, dict) or set(bounds) != bounds_keys:
+            raise ValueError(f"exact06 geometry invalid bounds: {field}")
+        for key in bounds_keys:
+            checked_int(bounds[key], f"{field}.{key}")
+        if bounds["width_emu"] <= 0 or bounds["height_emu"] <= 0:
+            raise ValueError(f"exact06 geometry nonpositive bounds: {field}")
+
+    int_fields = keys - {
+        "page", "selection", "frame_bounds_emu", "line_union_bounds_emu",
+        "font_fingerprint_sha256", "span_font_sizes_emu", "span_font_fingerprints_sha256",
+    }
+    for field in int_fields:
+        checked_int(value[field], field)
+    if value["layout_font_size_emu"] <= 0 or value["layout_line_height_emu"] <= 0:
+        raise ValueError("exact06 layout font metrics must be positive")
+    checked_sha256_digest(value["font_fingerprint_sha256"], "exact06 layout font")
+    span_sizes = value["span_font_sizes_emu"]
+    if not isinstance(span_sizes, list) or span_sizes != sorted(set(span_sizes)):
+        raise ValueError("exact06 span font sizes must be a sorted unique list")
+    for index, size in enumerate(span_sizes):
+        if checked_int(size, f"span_font_sizes_emu[{index}]") <= 0:
+            raise ValueError("exact06 span font sizes must be positive")
+    span_fingerprints = value["span_font_fingerprints_sha256"]
+    if (
+        not isinstance(span_fingerprints, list)
+        or span_fingerprints != sorted(set(span_fingerprints))
+    ):
+        raise ValueError("exact06 span font fingerprints must be a sorted unique list")
+    for index, digest in enumerate(span_fingerprints):
+        checked_sha256_digest(digest, f"exact06 span font fingerprint {index}")
+    if value["line_count"] < 1 or value["band_start_emu"] != 945_000:
+        raise ValueError("exact06 geometry missing lines or known band anchor drift")
+    frame = value["frame_bounds_emu"]
+    line = value["line_union_bounds_emu"]
+    line_bottom = line["y_emu"] + line["height_emu"]
+    if value["frame_bottom_emu"] != frame["y_emu"] + frame["height_emu"]:
+        raise ValueError("exact06 geometry inconsistent frame bottom")
+    if value["gap_line_union_bottom_to_frame_bottom_emu"] != value["frame_bottom_emu"] - line_bottom:
+        raise ValueError("exact06 geometry inconsistent frame/line gap")
+    if value["gap_line_union_bottom_to_band_start_emu"] != 945_000 - line_bottom:
+        raise ValueError("exact06 geometry inconsistent band/line gap")
+    if value["gap_frame_bottom_to_band_start_emu"] != 945_000 - value["frame_bottom_emu"]:
+        raise ValueError("exact06 geometry inconsistent frame/band gap")
+    return {field: value[field] for field in keys}
+
 def hosted_rows(pairs_csv: Path) -> list[dict[str, str]]:
     rows = list(csv.DictReader(pairs_csv.open(newline="", encoding="utf-8-sig")))
     hosted = [row for row in rows if row["family"] != EXTERNAL_FAMILY]
@@ -282,6 +355,10 @@ def summarize(pairs_csv: Path, browser_receipt: Path, reference_path: Path, out:
             "visual_degeneracies": actual.get("visual_degeneracies", []),
             "visual_degeneracy_count": int(actual.get("visual_degeneracy_count", 0) or 0),
         }
+        if row["pub_sha256"] == EXACT06_SOURCE_SHA256:
+            result["wide_shared_text_line_geometry_emu"] = source_safe_exact06_line_geometry(
+                actual.get("wide_shared_text_line_geometry_emu")
+            )
         results.append(result)
         if not rendered:
             unsupported.append(result)
