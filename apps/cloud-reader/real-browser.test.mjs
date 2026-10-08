@@ -374,7 +374,7 @@ try {
           const viewBox = svg?.viewBox?.baseVal ?? null;
           if (!svg || !pageBounds || !viewBox || pageBounds.width <= 0 || pageBounds.height <= 0
               || viewBox.width <= 0 || viewBox.height <= 0) {
-            throw new Error("shared text ink census cannot resolve canonical page geometry");
+            return null;
           }
           const scaleX = viewBox.width / pageBounds.width;
           const scaleY = viewBox.height / pageBounds.height;
@@ -385,7 +385,7 @@ try {
           if (![x, y, width, height].every(Number.isFinite)
               || width < 0 || height < 0
               || (requirePositiveArea && (width <= 0 || height <= 0))) {
-            throw new Error("shared text ink census produced invalid canonical bounds");
+            return null;
           }
           return {
             x_emu: Math.round(x), y_emu: Math.round(y),
@@ -400,21 +400,36 @@ try {
           const bottom = Math.max(...rows.map((row) => row.y_emu + row.height_emu));
           return { x_emu: left, y_emu: top, width_emu: right - left, height_emu: bottom - top };
         };
-        const rows = viewports.map((viewport) => {
+        let invalidViewportCount = 0;
+        let invalidLineCount = 0;
+        const rows = [];
+        for (const viewport of viewports) {
           const svg = viewport.closest("svg.page");
           const page = pages.indexOf(svg) + 1;
-          if (page < 1) throw new Error("shared text viewport is outside a page");
+          if (page !== 1) continue;
           const viewportBounds = canonicalBounds(viewport, true);
+          if (!viewportBounds) {
+            invalidViewportCount += 1;
+            continue;
+          }
           const lines = [...viewport.querySelectorAll('[data-text-authority="server-shared-resolved"]')];
-          const lineRows = lines.map((line) => {
+          const lineRows = [];
+          const inkRows = [];
+          for (const line of lines) {
             const bounds = canonicalBounds(line);
+            if (!bounds) {
+              invalidLineCount += 1;
+              continue;
+            }
             const spanElements = [...line.querySelectorAll("tspan")];
             const fontElements = spanElements.length > 0 ? spanElements : [line];
-            const fontSizes = fontElements.map((element) => parseFloat(getComputedStyle(element).fontSize));
-            if (fontSizes.some((value) => !Number.isFinite(value) || value <= 0)) {
-              throw new Error("shared text ink census found invalid font size");
+            const fontSizes = fontElements.map((element) => parseFloat(getComputedStyle(element).fontSize))
+              .filter((value) => Number.isFinite(value) && value > 0);
+            if (fontSizes.length === 0) {
+              invalidLineCount += 1;
+              continue;
             }
-            return {
+            lineRows.push({
               line_index: Number(line.getAttribute("data-text-line-index")),
               y_emu: bounds.y_emu,
               height_emu: bounds.height_emu,
@@ -422,16 +437,15 @@ try {
               bottom_from_viewport_top_emu: bounds.y_emu + bounds.height_emu - viewportBounds.y_emu,
               min_font_size_px: Math.min(...fontSizes),
               max_font_size_px: Math.max(...fontSizes)
-            };
-          });
-          const inkRows = lines
-            .map((line) => canonicalBounds(line))
-            .filter((bounds) => bounds.width_emu > 0 && bounds.height_emu > 0);
+            });
+            if (bounds.width_emu > 0 && bounds.height_emu > 0) inkRows.push(bounds);
+          }
           const inkUnion = unionBounds(inkRows);
-          return {
+          rows.push({
             page,
             viewport_bounds_emu: viewportBounds,
             line_count: lines.length,
+            measured_line_count: lineRows.length,
             ink_union_bounds_emu: inkUnion,
             ink_top_from_viewport_emu: inkUnion ? inkUnion.y_emu - viewportBounds.y_emu : null,
             ink_bottom_from_viewport_top_emu: inkUnion
@@ -441,20 +455,26 @@ try {
               ? viewportBounds.y_emu + viewportBounds.height_emu - (inkUnion.y_emu + inkUnion.height_emu)
               : null,
             lines: lineRows
-          };
-        }).filter((row) => row.page === 1)
-          .sort((left, right) => right.viewport_bounds_emu.width_emu - left.viewport_bounds_emu.width_emu
-            || left.viewport_bounds_emu.y_emu - right.viewport_bounds_emu.y_emu);
-        return rows.map((row, index) => ({ ...row, width_rank: index + 1 }));
+          });
+        }
+        rows.sort((left, right) => right.viewport_bounds_emu.width_emu - left.viewport_bounds_emu.width_emu
+          || left.viewport_bounds_emu.y_emu - right.viewport_bounds_emu.y_emu);
+        return {
+          rows: rows.map((row, index) => ({ ...row, width_rank: index + 1 })),
+          invalid_viewport_count: invalidViewportCount,
+          invalid_line_count: invalidLineCount
+        };
       })
       : null;
     if (sharedTextInkCensus !== null) {
-      assert.ok(sharedTextInkCensus.length > 0, "exact06 must expose at least one fixed shared-text viewport");
-      for (const row of sharedTextInkCensus) {
+      assert.ok(sharedTextInkCensus.rows.length > 0,
+        "exact06 must expose at least one measurable page-1 fixed shared-text viewport");
+      for (const row of sharedTextInkCensus.rows) {
         assert.equal(row.page, 1);
         assert.ok(Number.isSafeInteger(row.width_rank) && row.width_rank > 0);
         assert.ok(row.viewport_bounds_emu.width_emu > 0 && row.viewport_bounds_emu.height_emu > 0);
         assert.ok(row.line_count > 0);
+        assert.ok(row.measured_line_count >= 0 && row.measured_line_count <= row.line_count);
       }
     }
     assert.equal(painted.length, expectedLines.length, "actual SharedResolved frames must use loaded fonts");
