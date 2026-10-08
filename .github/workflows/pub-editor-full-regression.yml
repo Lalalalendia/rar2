@@ -47,6 +47,7 @@ jobs:
           cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor-geometry-core -- --check
           cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor-image-core -- --check
           cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor-text-core -- --check
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor-core-compat -- --check
           cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
 
       - name: Lint all editor targets
@@ -56,6 +57,7 @@ jobs:
           cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor-geometry-core --all-targets -- -D warnings
           cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor-image-core --all-targets -- -D warnings
           cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor-text-core --all-targets -- -D warnings
+          cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor-core-compat --all-targets -- -D warnings
           cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets -- -D warnings
 
       - name: Run complete authoring-core regression
@@ -72,6 +74,9 @@ jobs:
 
       - name: Run complete text-core regression
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor-text-core
+
+      - name: Check core compatibility contract
+        run: cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor-core-compat
 
       - name: Run complete pub-editor regression
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor
