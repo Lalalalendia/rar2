@@ -3463,6 +3463,60 @@ mod tests {
     }
 
     #[test]
+    fn paragraph_line_spacing_range_requires_one_complete_fresh_source_run() {
+        let mut visual = fixture();
+        let story_id = visual.document.stories[0].id;
+        let story_text = visual.document.stories[0].text.clone();
+        let story_len = u32::try_from(story_text.chars().count()).expect("bounded story");
+        assert!(story_len >= 4);
+
+        visual.paragraph_line_spacings = vec![ViewerParagraphLineSpacingRun {
+            story_id,
+            scalar_start: 0,
+            scalar_end: story_len,
+            line_spacing: ViewerParagraphLineSpacing::Proportional {
+                point_equivalent_emu: PUBLISHER_THREE_QUARTER_POINT_EQUIVALENT_EMU_V1,
+            },
+            source_value: Some(914_402),
+            source_story_text_sha256: viewer_story_text_sha256(&story_text),
+        }];
+
+        assert_eq!(
+            source_paragraph_line_spacing_for_range_v1(&visual, story_id, 1, 4),
+            Some(ViewerParagraphLineSpacing::Proportional {
+                point_equivalent_emu: PUBLISHER_THREE_QUARTER_POINT_EQUIVALENT_EMU_V1,
+            })
+        );
+        assert_eq!(
+            source_paragraph_line_spacing_for_range_v1(&visual, story_id, 2, 2),
+            None
+        );
+
+        visual.paragraph_line_spacings[0].scalar_end = 3;
+        assert_eq!(
+            source_paragraph_line_spacing_for_range_v1(&visual, story_id, 1, 4),
+            None
+        );
+
+        visual.paragraph_line_spacings[0].scalar_end = story_len;
+        visual
+            .paragraph_line_spacings
+            .push(visual.paragraph_line_spacings[0].clone());
+        assert_eq!(
+            source_paragraph_line_spacing_for_range_v1(&visual, story_id, 1, 4),
+            None
+        );
+
+        visual.paragraph_line_spacings.truncate(1);
+        visual.paragraph_line_spacings[0].source_story_text_sha256 =
+            viewer_story_text_sha256("stale");
+        assert_eq!(
+            source_paragraph_line_spacing_for_range_v1(&visual, story_id, 1, 4),
+            None
+        );
+    }
+
+    #[test]
     fn proportional_line_height_scales_only_native_proven_modes() {
         let natural = 198_636;
         assert_eq!(
