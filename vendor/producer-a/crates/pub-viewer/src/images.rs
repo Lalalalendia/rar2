@@ -243,21 +243,13 @@ mod tests {
         let resource = ResourceId::from_canonical(id(70));
         let node = NodeId::from_canonical(id(60));
 
-        let generic = ViewerEmbeddedImage::preview_png(
-            resource,
-            vec![node],
-            Vec::new(),
-            vec![1, 2, 3],
-        );
+        let generic =
+            ViewerEmbeddedImage::preview_png(resource, vec![node], Vec::new(), vec![1, 2, 3]);
         assert!(!generic.source_exact);
         assert!(!generic.derived_transparent_canvas);
 
-        let wmf = ViewerEmbeddedImage::wmf_preview_png(
-            resource,
-            vec![node],
-            Vec::new(),
-            vec![1, 2, 3],
-        );
+        let wmf =
+            ViewerEmbeddedImage::wmf_preview_png(resource, vec![node], Vec::new(), vec![1, 2, 3]);
         assert!(!wmf.source_exact);
         assert!(wmf.derived_transparent_canvas);
 
