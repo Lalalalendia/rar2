@@ -507,6 +507,9 @@ SHARED_DESKTOP_FILES = {
     # TextBox creation shell already has dedicated Linux contract + Windows GUI
     # acceptance; avoid paying the broad Editor package gate for this exact leaf.
     "apps/chaptera-desktop/src/text_box_creation_shell.rs",
+    # History shortcuts have their own Linux contract + real Windows GUI owner;
+    # avoid the broad Editor package gate for this exact semantic leaf.
+    "apps/chaptera-desktop/src/history.rs",
 }
 
 
