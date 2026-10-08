@@ -122,6 +122,7 @@ jobs:
 
           $output = Join-Path $env:RUNNER_TEMP ("pub-re-native-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
           New-Item -ItemType Directory -Force -Path $output | Out-Null
+          "PUB_RE_NATIVE_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
           if ($env:PUB_RE_COMMAND_MODE -eq "manifest") {
             if ([string]::IsNullOrWhiteSpace($env:PUB_RE_MANIFEST_ROOT)) {
@@ -201,7 +202,6 @@ jobs:
           }
 
           "PUB_RE_NATIVE_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "PUB_RE_NATIVE_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build standalone PUB RE
         shell: powershell
