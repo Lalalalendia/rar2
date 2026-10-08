@@ -1,0 +1,27 @@
+# Branch GC 2026-10-08 — manual-only SHA-pinned reviewed archive batch
+ # DO NOT MERGE: dispatch workflow only on THIS BRANCH after review.
+# 20 closed-unmerged PR refs; runtime must skip open heads/bases, mismatched SHA, protected refs.
+
+# CI: completed sacrificial controls (Playwright adopted via merged #1948)
+ci/batch01-playwright-cache-smoke-01 dcc31d8f20a646d0f634579696ab7d96e43d8223 # closed PR 1944
+ci/pub-editor-session-image-leaf-proof-01 3639f45f339d2ed56d8e72f0063f0c5a3a91a598 # closed PR 1862
+ci/pub-editor-session-image-leaf-proof-02 dc2eed96ba101b39c5442dc87e1e8ddd5714928c # closed PR 1850
+ci/pub-editor-session-image-leaf-proof-03 1081ec8122c50ea262d64ecda101558f82431642 # closed PR 1858
+ci/pub-editor-session-text-leaf-proof-01 5cb6617a3e66e2872d3a9ed3707322d7900dcd9e # closed PR 1885
+ci/pub-viewer-images-leaf-proof-01 1feb2dc320f08f2f8cbfa2d922168dbf7b4dc260 # closed PR 1907
+ci/pub-viewer-images-leaf-proof-02 e85e5b0359a8f2feaa7d805fa58b2b57488ee440 # closed PR 1915
+ci/pub-viewer-images-leaf-proof-03 6d8c5c2b24569080c7b5e6c01622ab79f81873a1 # closed PR 1918
+# Viewer: cardinal rotation in merged #880, mixed-family in #939, direct Story in #1579; #1013 falsified by #1018
+viewer/cardinal-picture-content-rotation-current-main-806-v2 72faa70f7127ef01f5d998a8d33aad9b42cb38ba # closed PR 839
+viewer/cardinal-picture-content-rotation-current-main-806-v3 5e408f46eb3f79580e26b19f6712e304f24ee44b # closed PR 858
+viewer/cardinal-picture-content-rotation-current-main-806-v4 093b2bef00aefe0873ec78fa116d8bf9f4a831e0 # closed PR 869
+viewer/mixed-family-text-current-main-807-v3 77e6ad7ff999c5cb7078fd2d09c1d107ae620c57 # closed PR 912
+viewer/mixed-family-text-current-main-807-v5 e182fd1d5ef8a8e8b2365a87fb08c0849c850e87 # closed PR 946
+viewer/mature-multiroot-page-role-1012 8634519c31e41d671fc1680bcd4901c92959b487 # closed PR 1013
+viewer/direct-story-rotation-01-v2 8441d8c81061924664efbd2ddd9dbef07898047a # closed PR 1562
+# OPS: completed GC execution-only owners (five green guarded receipts)
+ops/branch-gc-20261007-live-wave25-reconciled f45f9800870675b6a2f57a6185326e67c93cfed0 # closed PR 1801
+ops/branch-gc-20261008-research-wave62 0c39cf1a252f3cbd0cedbb8c642599b00bad5412 # closed PR 1942
+ops/branch-gc-20261008-research-wave90 0cf0b5fc12e9ed07870839d807390ece72ddfdc3 # closed PR 2056
+ops/branch-gc-20261008-validation-wave54 97316ee30d67dbbc97683d3aee01632f43a6bb06 # closed PR 1914
+ops/branch-gc-20261008-validation-wave56 0304c72f8bb14cf661ef913e3c635de6fa303ccf # closed PR 1923
