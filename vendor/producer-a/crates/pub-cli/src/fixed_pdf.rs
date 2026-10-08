@@ -559,6 +559,10 @@ fn build_pdf_artifact(
     conversion_profile
         .engine_versions
         .insert("pub-output".into(), "fixed-output-font-plan-v0.1".into());
+    conversion_profile.engine_versions.insert(
+        "chaptera-viewer-render-plan".into(),
+        chaptera_viewer_render_plan::SHARED_TEXT_LAYOUT_REVISION_V1.into(),
+    );
     conversion_profile.resources.insert(
         "font.fallback".into(),
         format!("sha256:{fallback_fingerprint}"),
@@ -765,6 +769,8 @@ fn build_pdf_artifact(
             "source_font_identity_available": false,
             "disposition": "explicit_user_fallback_not_source_font",
             "font_size_pt": FALLBACK_FONT_SIZE_PT,
+            "font_size_semantics": "fallback_default_only",
+            "layout_authority": "viewer_shared_resolved",
             "fallback_font": {
                 "label": fallback_label,
                 "fingerprint_sha256": fallback_fingerprint,
@@ -773,12 +779,15 @@ fn build_pdf_artifact(
             },
             "fixed_flow_receipt": fixed_flow_receipt,
             "shaped_flow": {
-                "line_height_emu": shaped_flow.environment.line_height.get(),
-                "visible_line_count": shaped_flow.lines.len(),
-                "reshaped_line_count": reshaped_line_count,
-                "story_overset": story_overset,
+                "layout_authority": "viewer_shared_resolved",
+                "fallback_line_height_emu": line_height_emu,
+                "visible_line_count": visible_line_count,
+                "reshaped_line_count": 0,
+                "reshaped_line_count_known": false,
+                "story_overset": null,
                 "output_adapter_reshaping_calls": 0,
-                "diagnostics": shaped_flow_diagnostics,
+                "diagnostics": [],
+                "layout_fallback_counts": &layout_fallback_counts,
             },
             "materialized_runs": materialized,
             "skipped": skipped,
