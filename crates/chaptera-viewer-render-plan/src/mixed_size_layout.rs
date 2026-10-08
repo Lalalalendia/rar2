@@ -579,7 +579,6 @@ pub(super) fn resolve_mixed_size_text_layout_v1<F>(
     bounds: &RectEmu,
     fingerprint: &str,
     vertical_alignment: Option<ViewerTextVerticalAlignment>,
-    source_line_spacing_for_range: F,
 ) -> RenderTextLayoutV1
 where
     F: Fn(u32, u32) -> Option<ViewerParagraphLineSpacing>,
