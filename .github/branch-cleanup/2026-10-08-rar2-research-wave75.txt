@@ -1,0 +1,6 @@
+# Research Wave 75 — assimilated BorderArt/master-paint/story-domain evidence
+research/borderart-stretch-static-01 2c74bb7f67aa2acf2bbf774c28256392752dc4e3
+research/borderart-viewer-raster-census-01 18db1204cba4d90ebc158a694bba59398f4bbdf6
+research/master-shape-paint-census-01 a8d59b7de6e196f60b24016ae438cb44c1b4ded2
+research/story-edit-domain-terminal-cr-census-01 50e55105218778f1908bb5a9081906fc9ab3ee44
+ops/branch-gc-20261008-research-wave74 7fc3488c78c30f70b3d8c35fb6ac982a999174b1
