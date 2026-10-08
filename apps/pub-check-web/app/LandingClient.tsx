@@ -158,6 +158,10 @@ export default function LandingClient({initialCountry,initialLocale}:{initialCou
             <div className="resultGrid">
               <div className="metric"><span>{copy.compatibility}</span><b>{canonicalLabels[locale][canonical.state]}</b></div>
               {canonical.contentSummary?.page_count!==undefined&&<div className="metric"><span>{canonicalCopy[locale].pages}</span><b>{canonical.contentSummary.page_count}</b></div>}
+              {canonical.contentSummary?.text_frame_count!==undefined&&<div className="metric"><span>{locale==='ru-RU'?'Текстовые блоки':'Text frames'}</span><b>{canonical.contentSummary.text_frame_count}</b></div>}
+              {canonical.contentSummary?.picture_frame_count!==undefined&&<div className="metric"><span>{locale==='ru-RU'?'Изображения':'Picture frames'}</span><b>{canonical.contentSummary.picture_frame_count}</b></div>}
+              {canonical.contentSummary?.table_count!==undefined&&<div className="metric"><span>{locale==='ru-RU'?'Таблицы':'Tables'}</span><b>{canonical.contentSummary.table_count}</b></div>}
+              {canonical.contentSummary?.recovered_image_count!==undefined&&<div className="metric"><span>{locale==='ru-RU'?'Восстановленные изображения':'Recovered images'}</span><b>{canonical.contentSummary.recovered_image_count}</b></div>}
               <div className="metric"><span>{canonicalCopy[locale].idml}</span><b>{canonicalCopy[locale].unverified}</b></div>
               <div className="metric"><span>{canonicalCopy[locale].odg}</span><b>{canonicalCopy[locale].unverified}</b></div>
               <div className="metric"><span>{copy.emailMetric}</span><b>{status?.emailStatus==='sent'?copy.emailSent:copy.emailPrepared}</b></div>
