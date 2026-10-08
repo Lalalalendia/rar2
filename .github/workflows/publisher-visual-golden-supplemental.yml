@@ -192,6 +192,16 @@ jobs:
           mkdir -p "$RUNNER_TEMP/publisher-visual-supplemental"
           python tools/cloud_reader_visual_supplemental_v1.py prepare             tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv             out/pinned1050/materialized/native             "$RUNNER_TEMP/publisher-visual-supplemental/fixtures"             "$RUNNER_TEMP/publisher-visual-supplemental/manifest.json"
 
+      - name: Classify exact 06 and 100 off-scene page authority
+        run: |
+          set -euo pipefail
+          cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer --features cmo-slot-compose --bin offscene_page_layer_probe -- \
+            "$RUNNER_TEMP/publisher-visual-supplemental/fixtures/06-modern2c-image-heavy.pub" exact06
+          cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer --features cmo-slot-compose --bin offscene_page_layer_probe -- \
+            "$RUNNER_TEMP/publisher-visual-supplemental/fixtures/100_b1faaba988e88b41.pub" exact100
+
       - name: Build canonical Cloud Reader worker
         env:
           SUPPLEMENTAL_CARGO_CACHE_HIT: ${{ steps.supplemental-cargo-cache.outputs.cache-hit }}
@@ -236,6 +246,20 @@ jobs:
           READER_WORKER_CPU_SECONDS: "90"
           READER_WORKER_ADDRESS_SPACE_MB: "768"
         run: node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Classify exact 06 and 100 off-scene omission distance
+        run: |
+          set -euo pipefail
+          python tools/cloud_reader_offscene_spatial_distance_v1.py \
+            "$RUNNER_TEMP/publisher-visual-supplemental/browser/06-modern2c-image-heavy-page-1.png" \
+            tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json \
+            "$RUNNER_TEMP/publisher-visual-supplemental/browser/06-modern2c-image-heavy-page-1-spatial-geometry.json" \
+            06-modern2c-image-heavy 1
+          python tools/cloud_reader_offscene_spatial_distance_v1.py \
+            "$RUNNER_TEMP/publisher-visual-supplemental/browser/100_b1faaba988e88b41-page-1.png" \
+            tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json \
+            "$RUNNER_TEMP/publisher-visual-supplemental/browser/100_b1faaba988e88b41-page-1-spatial-geometry.json" \
+            100_b1faaba988e88b41 1
 
       - name: Build current-Reader supplemental execution receipt
         run: |
