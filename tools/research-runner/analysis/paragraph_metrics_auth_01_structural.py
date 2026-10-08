@@ -18,6 +18,7 @@ EXPERIMENT = "PARAGRAPH-METRICS-AUTH-01"
 SPECS = {
     "control": ("control", 0.0),
     "line-single": ("line-single", 1.0),
+    "line-0p75": ("line-proportional", 0.75),
     "line-1p5": ("line-1p5", 1.5),
     "line-exact-18pt": ("line-exact", 18.0),
     "line-exact-24pt": ("line-exact", 24.0),
@@ -191,7 +192,7 @@ def analyze(output_root: Path, snapshot_reader: Callable[[Path], dict[str, Any]]
     require(native.get("experiment_id") == EXPERIMENT, "native experiment mismatch")
     require(native.get("verdict") == "native-semantic-arms-captured-with-common-seed", "causal-seed native revision required")
     arms = native.get("arms")
-    require(isinstance(arms, list) and len(arms) == len(SPECS), "complete eleven-arm matrix required")
+    require(isinstance(arms, list) and len(arms) == len(SPECS), "complete declared-arm matrix required")
     by_name = {}
     for arm in arms:
         require(isinstance(arm, dict), "invalid native arm")
@@ -256,7 +257,8 @@ def analyze(output_root: Path, snapshot_reader: Callable[[Path], dict[str, Any]]
         "seed_to_control_chunk_changes": chunk_changes(seed, control),
         "arms": rows,
         "invariants": {
-            "complete_eleven_arm_matrix": True, "exact_artifact_identity_join": True,
+            "complete_eleven_arm_matrix": True, "complete_twelve_arm_matrix": True,
+            "exact_artifact_identity_join": True,
             "common_pre_mutation_snapshots": True,
             "quill_text_byte_invariance_all_arms": True, "confirmed_story_partition_invariant": True,
             "raw_fdpp_framing_known": True, "paragraph_metric_semantics_granted": False,
