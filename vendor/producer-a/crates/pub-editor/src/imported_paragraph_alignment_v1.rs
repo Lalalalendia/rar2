@@ -1,6 +1,7 @@
 use crate::{
-    EditorError, EditorSession, EffectiveParagraphAlignmentV1, EffectiveParagraphAlignmentValueV1,
-    ImportedParagraphProjectionErrorV1, ImportedParagraphV1, ParagraphAlignmentAuthorityV1,
+    AuthoredParagraphAlignmentValueV1, EditorError, EditorSession, EffectiveParagraphAlignmentV1,
+    EffectiveParagraphAlignmentValueV1, ImportedParagraphProjectionErrorV1, ImportedParagraphV1,
+    ParagraphAlignmentAuthorityV1,
 };
 use pub_model::{ParagraphId, StoryId, TextRange};
 use pub_reader::{PubParagraphAlignment, PubParagraphAlignmentRun};
@@ -108,44 +109,15 @@ impl EditorSession {
         let paragraphs = self
             .imported_paragraphs_v1()
             .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?;
-        let base_by_id = self
-            .imported_paragraph_base_alignments_from_paragraphs_v1(&paragraphs)
-            .into_iter()
-            .map(|item| (item.paragraph_id, item.alignment))
-            .collect::<BTreeMap<_, _>>();
+        let base_alignments =
+            self.imported_paragraph_base_alignments_from_paragraphs_v1(&paragraphs);
         let overrides = self.current_paragraph_alignment_overrides_v1()?;
 
-        Ok(paragraphs
-            .into_iter()
-            .map(|paragraph| {
-                let paragraph_id = paragraph.paragraph_id;
-                let imported_base = base_by_id.get(&paragraph_id).copied();
-                let authored_override = overrides.get(&paragraph_id).copied();
-                let (effective, authority) = if let Some(value) = authored_override {
-                    (
-                        Some(EffectiveParagraphAlignmentValueV1::from(value)),
-                        Some(ParagraphAlignmentAuthorityV1::ChapteraOverride),
-                    )
-                } else if let Some(value) = imported_base {
-                    (
-                        Some(EffectiveParagraphAlignmentValueV1::from(value)),
-                        Some(ParagraphAlignmentAuthorityV1::ImportedBase),
-                    )
-                } else {
-                    (None, None)
-                };
-
-                EffectiveParagraphAlignmentV1 {
-                    paragraph_id,
-                    story_id: paragraph.story_id,
-                    range: paragraph.range,
-                    imported_base,
-                    authored_override,
-                    effective,
-                    authority,
-                }
-            })
-            .collect())
+        Ok(effective_paragraph_alignments_from_snapshot_v1(
+            &paragraphs,
+            &base_alignments,
+            &overrides,
+        ))
     }
 
     pub fn imported_paragraph_base_alignment_v1(
@@ -158,6 +130,49 @@ impl EditorSession {
             .into_iter()
             .find(|item| item.paragraph_id == paragraph_id))
     }
+}
+
+fn effective_paragraph_alignments_from_snapshot_v1(
+    paragraphs: &[ImportedParagraphV1],
+    base_alignments: &[ImportedParagraphBaseAlignmentV1],
+    overrides: &BTreeMap<ParagraphId, AuthoredParagraphAlignmentValueV1>,
+) -> Vec<EffectiveParagraphAlignmentV1> {
+    let base_by_id = base_alignments
+        .iter()
+        .map(|item| (item.paragraph_id, item.alignment))
+        .collect::<BTreeMap<_, _>>();
+
+    paragraphs
+        .iter()
+        .map(|paragraph| {
+            let paragraph_id = paragraph.paragraph_id;
+            let imported_base = base_by_id.get(&paragraph_id).copied();
+            let authored_override = overrides.get(&paragraph_id).copied();
+            let (effective, authority) = if let Some(value) = authored_override {
+                (
+                    Some(EffectiveParagraphAlignmentValueV1::from(value)),
+                    Some(ParagraphAlignmentAuthorityV1::ChapteraOverride),
+                )
+            } else if let Some(value) = imported_base {
+                (
+                    Some(EffectiveParagraphAlignmentValueV1::from(value)),
+                    Some(ParagraphAlignmentAuthorityV1::ImportedBase),
+                )
+            } else {
+                (None, None)
+            };
+
+            EffectiveParagraphAlignmentV1 {
+                paragraph_id,
+                story_id: paragraph.story_id,
+                range: paragraph.range,
+                imported_base,
+                authored_override,
+                effective,
+                authority,
+            }
+        })
+        .collect()
 }
 
 fn resolve_paragraph_alignment_v1(
@@ -284,6 +299,92 @@ mod tests {
                 .any(|item| item.alignment == ImportedParagraphAlignmentValueV1::Right),
             "Carlton Reception authority must retain at least one grounded Right paragraph base"
         );
+    }
+
+    fn paragraph_id(last: u8) -> ParagraphId {
+        serde_json::from_str(&format!(
+            "\"20000000-0000-4000-8000-0000000000{last:02x}\""
+        ))
+        .expect("canonical ParagraphId")
+    }
+
+    #[test]
+    fn effective_snapshot_prefers_override_then_imported_base_then_none() {
+        let story = story_id();
+        let first = ImportedParagraphV1 {
+            paragraph_id: paragraph_id(1),
+            story_id: story,
+            range: TextRange::new(0, 4).unwrap(),
+        };
+        let second = ImportedParagraphV1 {
+            paragraph_id: paragraph_id(2),
+            story_id: story,
+            range: TextRange::new(4, 8).unwrap(),
+        };
+        let third = ImportedParagraphV1 {
+            paragraph_id: paragraph_id(3),
+            story_id: story,
+            range: TextRange::new(8, 12).unwrap(),
+        };
+        let base = vec![
+            ImportedParagraphBaseAlignmentV1 {
+                paragraph_id: first.paragraph_id,
+                story_id: story,
+                range: first.range,
+                alignment: ImportedParagraphAlignmentValueV1::Center,
+            },
+            ImportedParagraphBaseAlignmentV1 {
+                paragraph_id: second.paragraph_id,
+                story_id: story,
+                range: second.range,
+                alignment: ImportedParagraphAlignmentValueV1::Right,
+            },
+        ];
+        let overrides = BTreeMap::from([(
+            first.paragraph_id,
+            AuthoredParagraphAlignmentValueV1::Justify,
+        )]);
+
+        let effective = effective_paragraph_alignments_from_snapshot_v1(
+            &[first.clone(), second.clone(), third.clone()],
+            &base,
+            &overrides,
+        );
+
+        assert_eq!(effective.len(), 3);
+        assert_eq!(effective[0].paragraph_id, first.paragraph_id);
+        assert_eq!(
+            effective[0].imported_base,
+            Some(ImportedParagraphAlignmentValueV1::Center)
+        );
+        assert_eq!(
+            effective[0].authored_override,
+            Some(AuthoredParagraphAlignmentValueV1::Justify)
+        );
+        assert_eq!(
+            effective[0].effective,
+            Some(EffectiveParagraphAlignmentValueV1::Justify)
+        );
+        assert_eq!(
+            effective[0].authority,
+            Some(ParagraphAlignmentAuthorityV1::ChapteraOverride)
+        );
+
+        assert_eq!(effective[1].paragraph_id, second.paragraph_id);
+        assert_eq!(
+            effective[1].effective,
+            Some(EffectiveParagraphAlignmentValueV1::Right)
+        );
+        assert_eq!(
+            effective[1].authority,
+            Some(ParagraphAlignmentAuthorityV1::ImportedBase)
+        );
+
+        assert_eq!(effective[2].paragraph_id, third.paragraph_id);
+        assert_eq!(effective[2].imported_base, None);
+        assert_eq!(effective[2].authored_override, None);
+        assert_eq!(effective[2].effective, None);
+        assert_eq!(effective[2].authority, None);
     }
 
     #[test]
