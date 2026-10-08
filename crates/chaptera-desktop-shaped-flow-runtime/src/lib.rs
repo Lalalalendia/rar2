@@ -696,9 +696,8 @@ mod tests {
             editor.graph().stories.len() > 1,
             "51318 must remain a multi-Story witness for Story-local shaping"
         );
-        let mut shaping_scope =
-            pub_viewer::bounded_authoring_slice_from_resolved(editor.graph())
-                .expect("project multi-Story fixture before shaping scope");
+        let mut shaping_scope = pub_viewer::bounded_authoring_slice_from_resolved(editor.graph())
+            .expect("project multi-Story fixture before shaping scope");
         let pages_before = shaping_scope.pages.len();
         let geometry_before = shaping_scope.node_geometry.len();
         let tables_before = shaping_scope.tables.len();
