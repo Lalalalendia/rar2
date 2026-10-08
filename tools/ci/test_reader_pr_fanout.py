@@ -476,6 +476,26 @@ fn main() -> eframe::Result<()> {
         android=False,
     )
     assert_scope(
+        ["apps/chaptera-desktop/src/text_session_shell.rs"],
+        tier_a=True,
+        desktop_rustfmt=True,
+        editor_windows=False,
+        reader_windows_smoke=False,
+        reader_windows=False,
+        android_core=False,
+        android=False,
+    )
+    assert_scope(
+        ["apps/chaptera-desktop/src/selection_keyboard_shell.rs"],
+        tier_a=True,
+        desktop_rustfmt=True,
+        editor_windows=False,
+        reader_windows_smoke=False,
+        reader_windows=False,
+        android_core=False,
+        android=False,
+    )
+    assert_scope(
         ["crates/chaptera-update-orchestrator/src/lib.rs"],
         tier_a=False,
         update_accept=True,

@@ -45,6 +45,7 @@ jobs:
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-output restricted_font_is_explicit_block_by_default
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-pdf
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-cli report_label_ --bin pub
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-cli resource_scene_ --bin pub
 
       - name: Build public CLI
         run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-cli --bin pub
@@ -108,6 +109,7 @@ jobs:
 
           assert report == cli_report
           assert report["schema_version"] == "free-pub-pdf-v0.1"
+          assert "resource_projection" not in report
           assert report["source"]["label"] == "SampleNewsletter.pub"
           assert report["typography"]["fallback_font"]["label"] == "chaptera-fallback.ttf"
           assert "/" not in report["source"]["label"] and "\\" not in report["source"]["label"]
@@ -135,6 +137,26 @@ jobs:
           def digest(name):
               return hashlib.sha256((out / name).read_bytes()).hexdigest()
 
+          canonical = {
+              "pdf_sha256": digest("a.pdf"),
+              "loss_json_sha256": digest("a.pdf.loss.json"),
+              "loss_text_sha256": digest("a.pdf.loss.txt"),
+          }
+          print("alpha_candidate_hashes=" + json.dumps(canonical, sort_keys=True))
+          diagnostic_codes = {
+              item.get("code") for item in report["pdf"].get("diagnostics", [])
+          }
+          assert "pdf.image.alpha_unsupported" not in diagnostic_codes
+          assert any(
+              item.get("code") == "pdf.node.painted_exact_image"
+              for item in report["pdf"].get("nodes", [])
+          )
+
+          # Canonical exact-alpha baseline from the preceding exact-head diagnostic run.
+          assert canonical["pdf_sha256"] == "05dd841a35e562d285e1595c1d41661f7225dd397d0f6d5b1eb95183b5c16e8c"
+          assert canonical["loss_json_sha256"] == "b0c0e2b407675b8a7919c313803f99d82f24ac02a1e3b96a9425a93e34f39800"
+          assert canonical["loss_text_sha256"] == "1ac7585a0cfad88104ba7a2212b708e2d90ec11efea0d768808e5442205fe449"
+
           receipt = {
               "schema": "chaptera.free-pub-pdf-cli-acceptance.v1",
               "source_sha256": expected_source,
@@ -145,7 +167,7 @@ jobs:
               "visible_line_count": report["typography"]["shaped_flow"]["visible_line_count"],
               "materialized_run_count": len(report["typography"]["materialized_runs"]),
               "skipped_run_count": len(report["typography"]["skipped"]),
-              "pdf_diagnostic_count": len(report["pdf"]["diagnostics"]),
+              "pdf_diagnostic_count": len(report["pdf"].get("diagnostics", [])),
               "invariants": {
                   "exact_source_identity": True,
                   "deterministic_pdf_bytes": True,

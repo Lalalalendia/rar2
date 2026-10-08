@@ -1,0 +1,96 @@
+name: PUB PDF CLI Publisher fingerprint census
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-pdf-cli-publisher-oracle-v1.yml"
+      - "tools/pub_pdf_cli_publisher_oracle_v1.py"
+      - "tools/test_pub_pdf_cli_publisher_oracle_v1.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: pub-pdf-cli-publisher-fingerprint-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test source-safe census contract
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir "PyMuPDF==1.26.7" "Pillow==12.3.0"
+          python -m py_compile tools/pub_pdf_cli_publisher_oracle_v1.py
+          python tools/test_pub_pdf_cli_publisher_oracle_v1.py
+
+  compare-publisher:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Install pinned comparator libraries
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir "PyMuPDF==1.26.7" "Pillow==12.3.0"
+          python -m py_compile tools/pub_pdf_cli_publisher_oracle_v1.py
+          python tools/test_pub_pdf_cli_publisher_oracle_v1.py
+      - name: Acquire pinned exact-1050 corpus once
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+      - name: Verify exact source bundle
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(s + "\n" for s in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          print("source corpus pinned", digest)
+          PY
+      - name: Build actual public PUB-to-PDF CLI
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-cli --bin pub
+      - name: Materialize existing pinned fallback font
+        run: |
+          cargo run -q -p chaptera-desktop-fallback-font-resource --bin materialize-fallback-font -- "$RUNNER_TEMP/chaptera-fallback.ttf"
+          test -s "$RUNNER_TEMP/chaptera-fallback.ttf"
+      - name: Run source-bound Publisher reference PDF comparison
+        run: |
+          mkdir -p target/pub-pdf-cli-publisher-oracle-v1
+          python tools/pub_pdf_cli_publisher_oracle_v1.py \
+            --batch01 tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json \
+            --supplemental tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json \
+            --source-root out/pinned1050/materialized/native \
+            --cli vendor/producer-a/target/debug/pub \
+            --fallback-font "$RUNNER_TEMP/chaptera-fallback.ttf" \
+            --timeout 120 \
+            --out target/pub-pdf-cli-publisher-oracle-v1/receipt.json
+      - name: Upload source-safe raster receipt only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-pdf-cli-publisher-oracle-v1
+          path: target/pub-pdf-cli-publisher-oracle-v1/receipt.json
+          if-no-files-found: warn
+          retention-days: 30
