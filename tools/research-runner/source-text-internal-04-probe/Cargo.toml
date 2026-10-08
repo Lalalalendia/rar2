@@ -1,0 +1,12 @@
+[package]
+name = "source-text-internal-04-probe"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.1"
+license = "MIT OR Apache-2.0"
+
+[workspace]
+
+[dependencies]
+chaptera-viewer-render-plan = { path = "../../../crates/chaptera-viewer-render-plan" }
+pub-viewer = { path = "../../../vendor/producer-a/crates/pub-viewer" }
