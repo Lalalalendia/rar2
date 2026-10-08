@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use pub_editor::{
-    EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_19, EDITOR_PROJECT_VERSION_V0_22,
+    EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_19, EDITOR_PROJECT_VERSION_V0_23,
     EditOperation, EditorError, EditorSession, ImageCropStateV1, LengthEmu, NodeId, RectEmu,
     Sha256Digest,
 };
@@ -137,7 +137,7 @@ fn current_image_resources_follow_public_replace_image_overlay() {
 
 #[test]
 fn set_image_crop_has_canonical_wire_shape_and_v0_19_fence() {
-    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_22);
+    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_23);
     assert_eq!(EDITOR_PROJECT_VERSION_V0_19, "pub-editor-v0.19");
 
     let operation = EditOperation::SetImageCrop {

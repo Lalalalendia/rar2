@@ -18,8 +18,11 @@ pub use authored_stack_lifecycle_v1::{
 };
 pub use authored_stack_runtime_v1::{
     AuthoredStackReorderErrorV1, AuthoredStackReorderModeV1, AuthoredStackReorderTransitionV1,
+    PAGE_ORDER_PROTOCOL_V1, PageOrderErrorV1, PageOrderTransitionV1,
     apply_authored_stack_reorder_forward_v1, apply_authored_stack_reorder_inverse_v1,
-    plan_reorder_authored_stack_v1,
+    apply_page_order_transition_forward_v1, apply_page_order_transition_inverse_v1,
+    page_order_state_id_v1, plan_page_order_transition_v1, plan_reorder_authored_stack_v1,
+    qualified_page_order_v1,
 };
 pub use create_line_runtime_v1::{
     AuthoredLineRuntimeV1, CreateLineRuntimeValidationError, LineGeometryV1, PointEmuV1,

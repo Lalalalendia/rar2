@@ -150,6 +150,7 @@ impl EditorSession {
                 | EditOperation::DeleteTableColumn { .. }
                 | EditOperation::DeleteNode { .. }
                 | EditOperation::ReorderAuthoredStack { .. }
+                | EditOperation::ReorderPagesV1 { .. }
                 | EditOperation::SetTextFormatProperty { .. }
                 | EditOperation::ClearTextFormatPropertyOverride { .. }
                 | EditOperation::SetTextFormatPropertyScopedV1 { .. }
@@ -261,6 +262,7 @@ impl EditorSession {
                 | EditOperation::DeleteTableColumn { .. }
                 | EditOperation::DeleteNode { .. }
                 | EditOperation::ReorderAuthoredStack { .. }
+                | EditOperation::ReorderPagesV1 { .. }
                 | EditOperation::SetTextFormatProperty { .. }
                 | EditOperation::ClearTextFormatPropertyOverride { .. }
                 | EditOperation::SetTextFormatPropertyScopedV1 { .. }
