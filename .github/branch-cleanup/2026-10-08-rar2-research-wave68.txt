@@ -1,0 +1,5 @@
+# Research Wave 68 — assimilated TABLE-border discriminators
+research/table-border-composition-overlap-780 ae2124f53fcea4cc47af3b34a331ec110687b409
+research/table-border-geometry-authority-785 629c7c4d6f5dda839219a67bd45aea2002ba685f
+research/table-border-child-anchor-785 a177fc3d1c7bf824a843994f45d0d69b926bf12e
+ops/branch-gc-20261008-research-wave67 53aae6e48ac8ae91f32d1b8ee4dbc61a6693b8b8
