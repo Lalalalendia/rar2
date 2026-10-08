@@ -51,6 +51,144 @@ impl TechnicalEmbeddingFlags {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FontEmbeddingReadError {
+    InvalidSfnt,
+    FaceIndexOutOfRange { face_index: u32, face_count: u32 },
+    MissingOs2Table,
+    TruncatedOs2Table,
+    AmbiguousEmbeddingLevel { fs_type: u16 },
+}
+
+impl std::fmt::Display for FontEmbeddingReadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSfnt => {
+                formatter.write_str("font bytes are not a supported SFNT/TTC container")
+            }
+            Self::FaceIndexOutOfRange {
+                face_index,
+                face_count,
+            } => write!(
+                formatter,
+                "font face index {face_index} is outside container face count {face_count}"
+            ),
+            Self::MissingOs2Table => {
+                formatter.write_str("font has no OS/2 table with embedding flags")
+            }
+            Self::TruncatedOs2Table => {
+                formatter.write_str("font OS/2 table is truncated before fsType")
+            }
+            Self::AmbiguousEmbeddingLevel { fs_type } => write!(
+                formatter,
+                "font OS/2 fsType has conflicting embedding-level bits: 0x{fs_type:04X}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FontEmbeddingReadError {}
+
+/// Reads the policy-relevant OpenType OS/2 fsType bits from explicit font bytes.
+///
+/// This is a technical parser, not a legal licensing judgement. A zero embedding
+/// level is reported as Installable; restricted, preview/print, editable,
+/// no-subsetting, and bitmap-only bits are preserved exactly. Conflicting level
+/// bits fail closed as ambiguous.
+pub fn read_opentype_embedding_flags(
+    bytes: &[u8],
+    face_index: u32,
+) -> Result<TechnicalEmbeddingFlags, FontEmbeddingReadError> {
+    let sfnt_offset = sfnt_face_offset(bytes, face_index)?;
+    let num_tables = read_u16(bytes, sfnt_offset + 4).ok_or(FontEmbeddingReadError::InvalidSfnt)?;
+    let records_offset = sfnt_offset
+        .checked_add(12)
+        .ok_or(FontEmbeddingReadError::InvalidSfnt)?;
+
+    let mut os2 = None;
+    for index in 0..usize::from(num_tables) {
+        let record = records_offset
+            .checked_add(index.saturating_mul(16))
+            .ok_or(FontEmbeddingReadError::InvalidSfnt)?;
+        let tag = bytes
+            .get(record..record + 4)
+            .ok_or(FontEmbeddingReadError::InvalidSfnt)?;
+        let offset = read_u32(bytes, record + 8).ok_or(FontEmbeddingReadError::InvalidSfnt)?;
+        let length = read_u32(bytes, record + 12).ok_or(FontEmbeddingReadError::InvalidSfnt)?;
+        if tag == b"OS/2" {
+            os2 = Some((offset as usize, length as usize));
+            break;
+        }
+    }
+
+    let (os2_offset, os2_len) = os2.ok_or(FontEmbeddingReadError::MissingOs2Table)?;
+    if os2_len < 10 {
+        return Err(FontEmbeddingReadError::TruncatedOs2Table);
+    }
+    let fs_type =
+        read_u16(bytes, os2_offset + 8).ok_or(FontEmbeddingReadError::TruncatedOs2Table)?;
+
+    let level_bits = fs_type & 0x000E;
+    let level = match level_bits {
+        0x0000 => EmbeddingLevel::Installable,
+        0x0002 => EmbeddingLevel::Restricted,
+        0x0004 => EmbeddingLevel::PreviewPrint,
+        0x0008 => EmbeddingLevel::Editable,
+        _ => return Err(FontEmbeddingReadError::AmbiguousEmbeddingLevel { fs_type }),
+    };
+
+    Ok(TechnicalEmbeddingFlags {
+        level,
+        no_subsetting: fs_type & 0x0100 != 0,
+        bitmap_only: fs_type & 0x0200 != 0,
+    })
+}
+
+fn sfnt_face_offset(bytes: &[u8], face_index: u32) -> Result<usize, FontEmbeddingReadError> {
+    let signature = bytes.get(0..4).ok_or(FontEmbeddingReadError::InvalidSfnt)?;
+    if signature == b"ttcf" {
+        let face_count = read_u32(bytes, 8).ok_or(FontEmbeddingReadError::InvalidSfnt)?;
+        if face_index >= face_count {
+            return Err(FontEmbeddingReadError::FaceIndexOutOfRange {
+                face_index,
+                face_count,
+            });
+        }
+        let offset_position = 12usize
+            .checked_add(face_index as usize * 4)
+            .ok_or(FontEmbeddingReadError::InvalidSfnt)?;
+        return read_u32(bytes, offset_position)
+            .map(|offset| offset as usize)
+            .ok_or(FontEmbeddingReadError::InvalidSfnt);
+    }
+
+    if face_index != 0 {
+        return Err(FontEmbeddingReadError::FaceIndexOutOfRange {
+            face_index,
+            face_count: 1,
+        });
+    }
+    if signature == b"\x00\x01\x00\x00"
+        || signature == b"true"
+        || signature == b"typ1"
+        || signature == b"OTTO"
+    {
+        Ok(0)
+    } else {
+        Err(FontEmbeddingReadError::InvalidSfnt)
+    }
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    let value = bytes.get(offset..offset.checked_add(2)?)?;
+    Some(u16::from_be_bytes([value[0], value[1]]))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    let value = bytes.get(offset..offset.checked_add(4)?)?;
+    Some(u32::from_be_bytes([value[0], value[1], value[2], value[3]]))
+}
+
 #[derive(Debug, Clone)]
 pub struct ExplicitFontResource<'a> {
     pub identity: FontIdentity,
@@ -843,6 +981,45 @@ mod tests {
             fallback_resource: None,
             used_glyph_ids: used(glyphs),
         }
+    }
+
+    fn fake_sfnt_with_fs_type(fs_type: u16) -> Vec<u8> {
+        let mut bytes = vec![0_u8; 64];
+        bytes[0..4].copy_from_slice(&[0x00, 0x01, 0x00, 0x00]);
+        bytes[4..6].copy_from_slice(&1_u16.to_be_bytes());
+        bytes[12..16].copy_from_slice(b"OS/2");
+        bytes[20..24].copy_from_slice(&32_u32.to_be_bytes());
+        bytes[24..28].copy_from_slice(&10_u32.to_be_bytes());
+        bytes[40..42].copy_from_slice(&fs_type.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn reads_opentype_embedding_flags_without_licensing_guesswork() {
+        assert_eq!(
+            read_opentype_embedding_flags(&fake_sfnt_with_fs_type(0), 0).unwrap(),
+            TechnicalEmbeddingFlags::installable()
+        );
+        assert_eq!(
+            read_opentype_embedding_flags(&fake_sfnt_with_fs_type(0x0104), 0).unwrap(),
+            TechnicalEmbeddingFlags {
+                level: EmbeddingLevel::PreviewPrint,
+                no_subsetting: true,
+                bitmap_only: false,
+            }
+        );
+        assert_eq!(
+            read_opentype_embedding_flags(&fake_sfnt_with_fs_type(0x0208), 0).unwrap(),
+            TechnicalEmbeddingFlags {
+                level: EmbeddingLevel::Editable,
+                no_subsetting: false,
+                bitmap_only: true,
+            }
+        );
+        assert!(matches!(
+            read_opentype_embedding_flags(&fake_sfnt_with_fs_type(0x000C), 0),
+            Err(FontEmbeddingReadError::AmbiguousEmbeddingLevel { .. })
+        ));
     }
 
     #[test]
