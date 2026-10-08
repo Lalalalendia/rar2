@@ -12,6 +12,84 @@ pub struct SharedLayoutIncompleteCauseV1 {
     pub cause: &'static str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MixedSizeLayoutCapacityDiagnosticV1 {
+    pub accepted_lines: usize,
+    pub frame_height_emu: i64,
+    pub used_height_emu: i64,
+    pub physical_first_then_baseline_height_emu: Option<i64>,
+    pub next_width_fit_line_height_emu: Option<i64>,
+    pub next_width_fit_physical_extent_emu: Option<i64>,
+    pub next_width_fit_scalar_start: Option<u32>,
+    pub next_width_fit_scalar_end: Option<u32>,
+    pub next_width_fit_consumed_scalar_end: Option<u32>,
+    pub current_next_fits_height: Option<bool>,
+    pub physical_first_then_baseline_next_fits_height: Option<bool>,
+}
+
+pub fn classify_mixed_size_layout_capacity_v1(
+    fragment: &RenderTextFragmentV1,
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+    node_id: NodeId,
+    bounds: &RectEmu,
+) -> Option<MixedSizeLayoutCapacityDiagnosticV1> {
+    if bounds.width.get() <= 0
+        || bounds.height.get() <= 0
+        || font.resource_id.is_empty()
+        || font.bytes.is_empty()
+        || font.default_font_size_emu <= 0
+        || font.default_line_height_emu <= 0
+    {
+        return None;
+    }
+    let fingerprint = font_fingerprint_sha256(font.bytes);
+    if font.expected_sha256.is_empty() || fingerprint != font.expected_sha256 {
+        return None;
+    }
+
+    let evaluation = super::mixed_size_layout::evaluate_mixed_size_text_layout_v1(
+        fragment,
+        font,
+        node_id,
+        bounds,
+        &fingerprint,
+    )
+    .ok()?;
+    let next_line_height = evaluation.stop_width_fit_min_line_height_emu;
+    let current_next_fits_height = next_line_height.map(|height| {
+        evaluation
+            .used_height_emu
+            .checked_add(height)
+            .is_some_and(|total| total <= bounds.height.get())
+    });
+    let physical_first_then_baseline_next_fits_height = match (
+        evaluation.physical_first_then_baseline_height_emu,
+        next_line_height,
+    ) {
+        (Some(used), Some(height)) if !evaluation.lines.is_empty() => used
+            .checked_add(height)
+            .map(|total| total <= bounds.height.get()),
+        (Some(_), Some(_)) => evaluation
+            .stop_width_fit_min_physical_extent_emu
+            .map(|extent| extent <= bounds.height.get()),
+        _ => None,
+    };
+
+    Some(MixedSizeLayoutCapacityDiagnosticV1 {
+        accepted_lines: evaluation.lines.len(),
+        frame_height_emu: bounds.height.get(),
+        used_height_emu: evaluation.used_height_emu,
+        physical_first_then_baseline_height_emu: evaluation.physical_first_then_baseline_height_emu,
+        next_width_fit_line_height_emu: next_line_height,
+        next_width_fit_physical_extent_emu: evaluation.stop_width_fit_min_physical_extent_emu,
+        next_width_fit_scalar_start: evaluation.stop_width_fit_scalar_start,
+        next_width_fit_scalar_end: evaluation.stop_width_fit_scalar_end,
+        next_width_fit_consumed_scalar_end: evaluation.stop_width_fit_consumed_scalar_end,
+        current_next_fits_height,
+        physical_first_then_baseline_next_fits_height,
+    })
+}
+
 /// Replays one already-classified SharedLayoutIncomplete fragment through the
 /// same uniform shared-flow law and returns only source-safe causal classes.
 ///
