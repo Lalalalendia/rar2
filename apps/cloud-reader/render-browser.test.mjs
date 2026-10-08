@@ -184,3 +184,4 @@ try {
   server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
 }
+// Measurement-only control branch for pinned preview-face A/B; no renderer semantics changed.
