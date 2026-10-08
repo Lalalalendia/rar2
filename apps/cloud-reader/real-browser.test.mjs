@@ -256,23 +256,21 @@ try {
       const pages = [...document.querySelectorAll("#pages svg.page")];
       const pagePaintBoundsEmu = (element) => {
         const svg = element.closest("svg.page");
-        const box = typeof element.getBBox === "function" ? element.getBBox() : null;
-        const ctm = typeof element.getCTM === "function" ? element.getCTM() : null;
-        if (!svg || !box || !ctm) throw new Error("browser preview census cannot resolve canonical paint bounds");
-        const corners = [
-          [box.x, box.y],
-          [box.x + box.width, box.y],
-          [box.x, box.y + box.height],
-          [box.x + box.width, box.y + box.height]
-        ].map(([x, y]) => ({
-          x: ctm.a * x + ctm.c * y + ctm.e,
-          y: ctm.b * x + ctm.d * y + ctm.f
-        }));
-        const xs = corners.map((point) => point.x);
-        const ys = corners.map((point) => point.y);
-        const x = Math.min(...xs), y = Math.min(...ys);
-        const width = Math.max(...xs) - x, height = Math.max(...ys) - y;
-        if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
+        const pageBounds = svg?.getBoundingClientRect() ?? null;
+        const paintBounds = element.getBoundingClientRect();
+        const viewBox = svg?.viewBox?.baseVal ?? null;
+        if (!svg || !pageBounds || !viewBox || pageBounds.width <= 0 || pageBounds.height <= 0
+            || viewBox.width <= 0 || viewBox.height <= 0) {
+          throw new Error("browser preview census cannot resolve canonical page geometry");
+        }
+        const scaleX = viewBox.width / pageBounds.width;
+        const scaleY = viewBox.height / pageBounds.height;
+        const x = viewBox.x + (paintBounds.left - pageBounds.left) * scaleX;
+        const y = viewBox.y + (paintBounds.top - pageBounds.top) * scaleY;
+        const width = paintBounds.width * scaleX;
+        const height = paintBounds.height * scaleY;
+        if (![x, y, width, height, scaleX, scaleY].every(Number.isFinite)
+            || width <= 0 || height <= 0 || scaleX <= 0 || scaleY <= 0) {
           throw new Error("browser preview census produced invalid canonical paint bounds");
         }
         return {
