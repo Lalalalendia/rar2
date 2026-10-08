@@ -252,6 +252,10 @@ def summarize(pairs_csv: Path, browser_receipt: Path, reference_path: Path, out:
             checked_sha256_digest(actual.get("worker_receipt_sha256"), "worker receipt")
             if rendered else None
         )
+        scene_sha256 = (
+            checked_sha256_digest(actual.get("scene_sha256"), "reader Scene")
+            if rendered else None
+        )
         candidate_pages = actual.get("pages") if rendered else None
         expected_pages = int(row["pdf_pages"])
         page_match = rendered and candidate_pages == expected_pages
@@ -263,6 +267,7 @@ def summarize(pairs_csv: Path, browser_receipt: Path, reference_path: Path, out:
             "pub_sha256": row["pub_sha256"],
             "reference_pdf_sha256": row["pdf_sha256"],
             "worker_receipt_sha256": worker_receipt_sha256,
+            "scene_sha256": scene_sha256,
             "reference_pages": expected_pages,
             "rendered": rendered,
             "classification": actual.get("classification"),
@@ -332,6 +337,8 @@ def summarize(pairs_csv: Path, browser_receipt: Path, reference_path: Path, out:
             "raw_pdf_bytes_emitted": False,
             "raw_story_text_emitted": False,
             "worker_and_raster_sha256_are_observation_identities_only": True,
+            "worker_receipt_sha256_includes_volatile_timings": True,
+            "scene_sha256_excludes_worker_timings": True,
         },
         "pairs": results,
         "unsupported_pairs": unsupported,
