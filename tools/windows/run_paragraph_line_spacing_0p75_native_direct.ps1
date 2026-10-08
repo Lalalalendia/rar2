@@ -9,6 +9,7 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 Push-Location $RepoRoot
+$fixture = $null
 
 $Packet = Join-Path $RepoRoot "tools/research-runner/experiments/paragraph-line-spacing-0p75-native-01.packet.json"
 $Operation = Join-Path $RepoRoot "tools/research-runner/operations/paragraph_line_spacing_0p75_native_01.ps1"
@@ -215,5 +216,10 @@ try {
     Get-Content -LiteralPath $structuralPath -Raw
 }
 finally {
+    if ($null -ne $fixture -and [bool]$fixture.Staged -and
+        -not [string]::IsNullOrWhiteSpace([string]$fixture.Root) -and
+        (Test-Path -LiteralPath ([string]$fixture.Root))) {
+        Remove-Item -LiteralPath ([string]$fixture.Root) -Recurse -Force -ErrorAction SilentlyContinue
+    }
     Pop-Location
 }
