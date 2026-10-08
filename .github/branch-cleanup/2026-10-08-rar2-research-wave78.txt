@@ -1,0 +1,6 @@
+# Research Wave 78 — superseded paragraph metrics + assimilated LastFmt evidence
+research/paragraph-metrics-causal-analysis-823 cd4ea742b1811bbab67661475c16a9ec2f4c8bdf
+research/paragraph-metrics-causal-analysis-823-v3 ee31a76ad9212554bcd8173a504d60cbc0ef79a4
+research/lastfmt-mirror-modern-01 d8d703918f0769fa466e70f2c8ba7968216f9fc4
+research/lastfmt-mirror-modern-02 767b70b8e52dd77e57eecce4b9cb795fe0d1e8d4
+ops/branch-gc-20261008-research-wave77 d0648cb6dc7b782a10c370962d9194e1fe5989c4
