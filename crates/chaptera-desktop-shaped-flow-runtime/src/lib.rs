@@ -936,6 +936,27 @@ mod tests {
         }
     }
 
+    fn assert_paragraph_alignment_batch_matches_scalar_v1(
+        editor: &EditorSession,
+        story_id: StoryId,
+        paragraph_id: pub_model::ParagraphId,
+    ) {
+        let scalar = editor
+            .effective_paragraph_alignment_v1(paragraph_id)
+            .expect("scalar paragraph alignment authority");
+        let batch = editor
+            .effective_paragraph_alignments_for_story_v1(story_id)
+            .expect("batch paragraph alignment authority");
+        let from_batch = batch
+            .iter()
+            .find(|item| item.paragraph_id == paragraph_id)
+            .expect("batch must contain the same current ParagraphId");
+        assert_eq!(
+            from_batch, &scalar,
+            "batch paragraph authority must be exactly scalar-equivalent"
+        );
+    }
+
     #[test]
     fn real_carlton_paragraph_alignment_moves_caret_and_clear_restores_source_geometry() {
         let Some(path) = env::var_os("CHAPTERA_CARLTON_PUB") else {
@@ -1065,6 +1086,7 @@ mod tests {
             flow_ordinal,
             expected_paragraph_offset_v1(base_alignment, content_width_emu, measured_width_emu),
         );
+        assert_paragraph_alignment_batch_matches_scalar_v1(&editor, story_id, paragraph_id);
 
         let mut paragraph_history_active = false;
         for (alignment, authored) in [
@@ -1115,6 +1137,7 @@ mod tests {
                 );
             }
 
+            assert_paragraph_alignment_batch_matches_scalar_v1(&editor, story_id, paragraph_id);
             let layout = build_current_story_layout_v1(
                 &editor,
                 story_id,
@@ -1150,6 +1173,7 @@ mod tests {
             "paragraph_alignment_lifecycle_unsupported"
         );
 
+        assert_paragraph_alignment_batch_matches_scalar_v1(&editor, story_id, paragraph_id);
         let cleared = build_current_story_layout_v1(&editor, story_id, "paragraph:clear", &font)
             .expect("rebuild paragraph layout after Clear");
         assert_caret_flow_shift_v1(
@@ -1158,6 +1182,11 @@ mod tests {
             flow_ordinal,
             expected_paragraph_offset_v1(base_alignment, content_width_emu, measured_width_emu),
         );
+
+        editor.undo().expect("undo Clear paragraph alignment");
+        assert_paragraph_alignment_batch_matches_scalar_v1(&editor, story_id, paragraph_id);
+        editor.redo().expect("redo Clear paragraph alignment");
+        assert_paragraph_alignment_batch_matches_scalar_v1(&editor, story_id, paragraph_id);
         assert_eq!(editor.source_hash(), source_hash);
     }
 
