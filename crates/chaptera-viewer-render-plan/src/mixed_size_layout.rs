@@ -1,5 +1,5 @@
 use super::*;
-
+// Measurement-only base control for #2141; no product behavior change.\n
 #[derive(Debug, Clone, Copy)]
 pub(super) struct AdmittedTypographyRunV1 {
     pub(super) scalar_start: u32,
