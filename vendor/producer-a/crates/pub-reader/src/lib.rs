@@ -1129,7 +1129,8 @@ mod tests {
     #[test]
     fn page_extent_consensus_accepts_one_extent() {
         assert_eq!(
-            publication_document::require_consensus_page_extent(&[(7_560_000, 10_692_000)]).unwrap(),
+            publication_document::require_consensus_page_extent(&[(7_560_000, 10_692_000)])
+                .unwrap(),
             (7_560_000, 10_692_000)
         );
     }
@@ -1149,9 +1150,11 @@ mod tests {
 
     #[test]
     fn page_extent_consensus_rejects_conflicts() {
-        let error =
-            publication_document::require_consensus_page_extent(&[(7_772_400, 10_058_400), (7_560_000, 10_692_000)])
-                .unwrap_err();
+        let error = publication_document::require_consensus_page_extent(&[
+            (7_772_400, 10_058_400),
+            (7_560_000, 10_692_000),
+        ])
+        .unwrap_err();
 
         assert!(
             error
@@ -1162,7 +1165,8 @@ mod tests {
 
     #[test]
     fn page_extent_consensus_rejects_zero_dimension() {
-        let error = publication_document::require_consensus_page_extent(&[(7_772_400, 0)]).unwrap_err();
+        let error =
+            publication_document::require_consensus_page_extent(&[(7_772_400, 0)]).unwrap_err();
         assert!(error.to_string().contains("must be positive"));
     }
 
