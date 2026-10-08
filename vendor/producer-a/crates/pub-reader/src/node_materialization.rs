@@ -101,9 +101,14 @@ pub(super) fn materialize_mature_nodes(
         let exact_grouped_primitive_shape_type = if raw_type == Some(RAW_TYPE_SHAPE)
             && exact_story_identity.is_none()
             && image_slot.is_none()
-            && has_default_ellipse_geometry(shape)
         {
-            Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
+            if has_default_rectangle_geometry(shape) {
+                Some(OFFICEART_SHAPE_TYPE_RECTANGLE)
+            } else if has_default_ellipse_geometry(shape) {
+                Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -440,6 +445,17 @@ pub(super) fn materialize_mature_nodes(
                     ));
                 }
             }
+        }
+        if has_default_rectangle_geometry(shape) {
+            source_refs.push(source_ref(
+                &graph.source,
+                &shape.source,
+                Some(format!("escher/client-data-shape-id/{seq_num}")),
+                Some("SpContainer/FSP/default-rectangle".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ));
         }
         if has_default_roundrect_geometry(shape) {
             source_refs.push(source_ref(
