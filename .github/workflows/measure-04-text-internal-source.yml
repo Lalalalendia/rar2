@@ -1,7 +1,9 @@
 name: MEASURE exact 04 text-internal source census
 
 on:
-  pull_request:
+  push:
+    branches:
+      - "measure/04-text-internal-source-census-01"
     paths:
       - ".github/workflows/measure-04-text-internal-source.yml"
       - "tools/research-runner/source-text-internal-04-probe/**"
