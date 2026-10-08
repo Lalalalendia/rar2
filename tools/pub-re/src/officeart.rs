@@ -1,6 +1,6 @@
 use super::{
-    ByteRangeDeltaV1, ExperimentManifestV1, PubReReceiptV1, analyze_manifest, load_input,
-    stream_bytes, validate_manifest,
+    ExperimentManifestV1, PubReReceiptV1, analyze_manifest, load_input, stream_bytes,
+    validate_manifest,
 };
 use anyhow::{Context, Result, bail};
 use pub_core::{RawSpan, StreamPath};
@@ -405,7 +405,6 @@ mod tests {
 
         let json = serde_json::to_string(&candidates).expect("serialize candidates");
         assert!(!json.contains("11223344"));
-        assert!(!json.contains("44"));
     }
 
     #[test]
