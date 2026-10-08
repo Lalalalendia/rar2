@@ -167,7 +167,7 @@ jobs:
               "visible_line_count": report["typography"]["shaped_flow"]["visible_line_count"],
               "materialized_run_count": len(report["typography"]["materialized_runs"]),
               "skipped_run_count": len(report["typography"]["skipped"]),
-              "pdf_diagnostic_count": len(report["pdf"]["diagnostics"]),
+              "pdf_diagnostic_count": len(report["pdf"].get("diagnostics", [])),
               "invariants": {
                   "exact_source_identity": True,
                   "deterministic_pdf_bytes": True,
