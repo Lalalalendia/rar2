@@ -143,11 +143,13 @@ jobs:
               "loss_text_sha256": digest("a.pdf.loss.txt"),
           }
           print("alpha_candidate_hashes=" + json.dumps(canonical, sort_keys=True))
-          diagnostic_codes = {item.get("code") for item in report["pdf"]["diagnostics"]}
+          diagnostic_codes = {
+              item.get("code") for item in report["pdf"].get("diagnostics", [])
+          }
           assert "pdf.image.alpha_unsupported" not in diagnostic_codes
           assert any(
               item.get("code") == "pdf.node.painted_exact_image"
-              for item in report["pdf"]["nodes"]
+              for item in report["pdf"].get("nodes", [])
           )
 
           # Canonical exact-alpha baseline from the preceding exact-head diagnostic run.
