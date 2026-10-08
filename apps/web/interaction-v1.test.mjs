@@ -171,3 +171,19 @@ test("stale rejection restores base scene rather than auto-reapplying", () => {
   assert.equal(reconciled.preview_bounds, null);
   assert.equal(reconciled.code, "stale_revision");
 });
+
+
+test("hit testing ignores Reader projected visual instances that are not editable", () => {
+  const scene = fixture("group-table.json");
+  scene.nodes[2].editable = false;
+  scene.nodes[2].bounds = { ...scene.nodes[1].bounds };
+  scene.nodes[2].z_order = 99;
+  scene.nodes[2].paint_order = 99;
+  const point = {
+    x_emu: scene.nodes[1].bounds.x + 10,
+    y_emu: scene.nodes[1].bounds.y + 10,
+  };
+  const hit = hitTestSnapshot(scene, scene.pages[0].page_id, point);
+  assert.equal(hit.kind, "hit");
+  assert.equal(hit.node_id, scene.nodes[1].node_id);
+});
