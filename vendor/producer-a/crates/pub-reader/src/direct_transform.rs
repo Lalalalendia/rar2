@@ -211,10 +211,6 @@ pub(super) struct BoundedGroupedImageTransform {
     pub(super) child_rotation_op: Option<u32>,
     pub(super) ancestor_horizontal_flip: bool,
     pub(super) ancestor_rotation_op: Option<u32>,
-    pub(super) group_source_width: Option<i128>,
-    pub(super) group_source_height: Option<i128>,
-    pub(super) group_target_width: Option<i128>,
-    pub(super) group_target_height: Option<i128>,
     pub(super) ancestor_bounds: Option<RectEmu>,
 }
 
@@ -325,37 +321,19 @@ fn bounded_grouped_image_rotation_transform(
 ) -> Option<Affine2D> {
     let child_rotation_op = projection.child_rotation_op?;
     let ancestor_rotation_op = projection.ancestor_rotation_op?;
-    let source_width = projection.group_source_width?;
-    let source_height = projection.group_source_height?;
-    let target_width = projection.group_target_width?;
-    let target_height = projection.group_target_height?;
     let ancestor_bounds = projection.ancestor_bounds?;
-    if projection.ancestor_horizontal_flip
-        || source_width <= 0
-        || source_height <= 0
-        || target_width <= 0
-        || target_height <= 0
-    {
+    if projection.ancestor_horizontal_flip {
         return None;
     }
 
-    let ratio_x_over_y = checked_div_round_nearest_i128(
-        target_width
-            .checked_mul(source_height)?
-            .checked_mul(AFFINE_DECIMAL_SCALE)?,
-        source_width.checked_mul(target_height)?,
-    )?;
-    let ratio_y_over_x = checked_div_round_nearest_i128(
-        target_height
-            .checked_mul(source_width)?
-            .checked_mul(AFFINE_DECIMAL_SCALE)?,
-        source_height.checked_mul(target_width)?,
-    )?;
+    // FSPGR/ChildAnchor scaling has already produced child_bounds in page space.
+    // OfficeArt rotation remains a separate shape transform and therefore rotates
+    // the projected rectangle without conjugating the rotation through group scale.
     let (child_sine, child_cosine) = officeart_rotation_sin_cos_scaled(child_rotation_op);
     let child = affine_scaled_about_bounds(
         child_cosine,
-        checked_mul_affine_scaled(ratio_y_over_x, child_sine)?,
-        checked_mul_affine_scaled(-ratio_x_over_y, child_sine)?,
+        child_sine,
+        -child_sine,
         child_cosine,
         child_bounds,
     )?;
@@ -503,15 +481,11 @@ mod grouped_flip_tests {
     use super::*;
 
     #[test]
-    fn anisotropic_group_rotation_conjugates_child_rotation_and_composes_ancestor() {
+    fn projected_child_rotation_composes_with_ancestor_rotation() {
         let projection = BoundedGroupedImageTransform {
             child_rotation_op: Some(45 * 65_536),
             ancestor_horizontal_flip: false,
             ancestor_rotation_op: Some(30 * 65_536),
-            group_source_width: Some(1_000),
-            group_source_height: Some(1_000),
-            group_target_width: Some(2_000),
-            group_target_height: Some(1_000),
             ancestor_bounds: Some(RectEmu::new(
                 LengthEmu::new(0),
                 LengthEmu::new(0),
@@ -533,7 +507,10 @@ mod grouped_flip_tests {
         assert_ne!(transform, Affine2D::identity());
         assert_ne!(transform.b.as_str(), "0");
         assert_ne!(transform.c.as_str(), "0");
-        assert_ne!(transform.b.as_str(), transform.c.as_str());
+        assert_eq!(
+            transform.b.as_str().trim_start_matches('-'),
+            transform.c.as_str().trim_start_matches('-')
+        );
     }
 
     #[test]
