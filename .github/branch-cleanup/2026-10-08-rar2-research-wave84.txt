@@ -1,0 +1,3 @@
+# Research Wave 84 — exact PAGE-role evidence-only head
+research/page-service-role-01-fields-v2 e103dfdd790252748341e8eaa8a5db1b3508f3e2
+ops/branch-gc-20261008-research-wave83 ef9abed9923d55dd8e0456346a575156b0cd7287
