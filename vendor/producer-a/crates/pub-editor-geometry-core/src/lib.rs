@@ -1,4 +1,4 @@
-//! Compile-isolated Move/Resize transition laws shared by pub-editor.
+//! Compile-isolated Move/Resize transition laws shared by pub-editor (compat control).
 //!
 //! This crate contains only session-neutral geometry primitives. It must not
 //! depend on pub-editor, EditorSession, or PubResolvedGraph.
