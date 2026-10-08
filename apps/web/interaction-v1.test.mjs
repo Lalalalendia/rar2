@@ -174,16 +174,27 @@ test("stale rejection restores base scene rather than auto-reapplying", () => {
 
 
 test("hit testing ignores Reader projected visual instances that are not editable", () => {
-  const scene = fixture("group-table.json");
-  scene.nodes[2].editable = false;
-  scene.nodes[2].bounds = { ...scene.nodes[1].bounds };
-  scene.nodes[2].z_order = 99;
-  scene.nodes[2].paint_order = 99;
-  const point = {
-    x_emu: scene.nodes[1].bounds.x + 10,
-    y_emu: scene.nodes[1].bounds.y + 10,
+  const pageId = "page";
+  const editable = {
+    node_id: "editable",
+    page_id: pageId,
+    bounds: { x: 100, y: 100, width: 400, height: 300 },
+    z_order: 1,
+    paint_order: 1,
   };
-  const hit = hitTestSnapshot(scene, scene.pages[0].page_id, point);
+  const projected = {
+    node_id: "projected",
+    page_id: pageId,
+    bounds: { ...editable.bounds },
+    z_order: 99,
+    paint_order: 99,
+    editable: false,
+  };
+  const scene = {
+    stacking_fidelity: "exact",
+    nodes: [editable, projected],
+  };
+  const hit = hitTestSnapshot(scene, pageId, { x_emu: 110, y_emu: 110 });
   assert.equal(hit.kind, "hit");
-  assert.equal(hit.node_id, scene.nodes[1].node_id);
+  assert.equal(hit.node_id, "editable");
 });
