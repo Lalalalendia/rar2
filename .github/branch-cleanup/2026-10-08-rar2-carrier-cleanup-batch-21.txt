@@ -1,0 +1,6 @@
+# 2026-10-08 — carrier cleanup batch 21
+# Never merge. Completed execution-only GC carrier refs only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+ops/branch-gc-20261008-superseded-owner-batch-19 22e41e8aedfa63e8b4a6009f29c5f5597f101090 # completed #2225 clean receipt: 2/2 deleted
+ops/branch-gc-20261008-cloud-editor-predecessor-batch-20 22696b62087fd896451a96b53f3657383f965d13 # completed #2227 clean receipt: 3/3 deleted
