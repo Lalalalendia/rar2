@@ -285,9 +285,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             .map(|value| value.to_string_lossy().into_owned())
             .unwrap_or_else(|| "/Escher/EscherStm".to_owned());
         if args.next().is_some() {
-            return Err(
-                "usage: officeart-connector-rule-read FILE [LOGICAL_STREAM]".into(),
-            );
+            return Err("usage: officeart-connector-rule-read FILE [LOGICAL_STREAM]".into());
         }
         stream
     };
