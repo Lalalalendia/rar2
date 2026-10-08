@@ -7,18 +7,72 @@ on:
         description: "Manifest filename under PUB_RE_MANIFEST_ROOT on the dedicated Windows runner"
         required: true
         type: string
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
 
-concurrency:
-  group: pub-re-native-publisher-oracle
-  cancel-in-progress: false
-
 jobs:
+  gate:
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.number == 2193 &&
+          github.actor == 'Lalalalendia' &&
+          github.event.comment.user.login == 'Lalalalendia' &&
+          github.event.comment.author_association == 'OWNER'
+        )
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      manifest_name: ${{ steps.command.outputs.manifest_name }}
+    steps:
+      - name: Resolve trusted native command
+        id: command
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_MANIFEST_NAME: ${{ inputs.manifest_name }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+
+          manifest_re = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json")
+          event_name = os.environ["EVENT_NAME"]
+
+          if event_name == "workflow_dispatch":
+              candidate = os.environ.get("INPUT_MANIFEST_NAME", "")
+          else:
+              body = os.environ.get("COMMENT_BODY", "")
+              match = re.fullmatch(
+                  r"/pub-re-native ([A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json)",
+                  body,
+              )
+              if match is None:
+                  raise SystemExit("invalid PUB RE native control command")
+              candidate = match.group(1)
+
+          if manifest_re.fullmatch(candidate) is None:
+              raise SystemExit("manifest_name must be a simple .json filename")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"manifest_name={candidate}\n")
+          PY
+
   native:
+    needs: gate
+    if: ${{ needs.gate.result == 'success' }}
     runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
     timeout-minutes: 30
+    concurrency:
+      group: pub-re-native-publisher-oracle
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
 
@@ -39,7 +93,7 @@ jobs:
       - name: Resolve local manifest safely
         shell: powershell
         env:
-          PUB_RE_MANIFEST_NAME: ${{ inputs.manifest_name }}
+          PUB_RE_MANIFEST_NAME: ${{ needs.gate.outputs.manifest_name }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
