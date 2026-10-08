@@ -1,33 +1,56 @@
-async function dispatchGitHub(checkId: string, origin: string) {
-  const token = process.env.GITHUB_CHECKER_TOKEN;
-  const repository = process.env.GITHUB_CHECKER_REPOSITORY || 'Lalalalendia/rar2';
-  const ref = process.env.GITHUB_CHECKER_REF || 'main';
-  if (!token) return 'not_configured' as const;
+// An environment override must not silently dispatch a customer file to an
+// old fork or an unreviewed workflow ref. Production worker authority lives
+// exclusively in this repository's main branch.
+export const CANONICAL_CHECKER_REPOSITORY = 'Lalalalendia/rar2';
+export const CANONICAL_CHECKER_REF = 'main';
 
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
-    return 'failed' as const;
+export type DispatchStatus = 'sent' | 'failed' | 'not_configured';
+
+export function dispatchFailureResult(status: DispatchStatus) {
+  if (status === 'sent') return null;
+  return {
+    compatibility: 'failed' as const,
+    summary: 'The compatibility check could not be started reliably.',
+    diagnosticsCode: 'pub_check.dispatch_failure',
+  };
+}
+
+async function dispatchGitHub(checkId: string): Promise<DispatchStatus> {
+  const token = process.env.GITHUB_CHECKER_TOKEN;
+  if (!token) return 'not_configured';
+
+  const repository = process.env.GITHUB_CHECKER_REPOSITORY || CANONICAL_CHECKER_REPOSITORY;
+  const ref = process.env.GITHUB_CHECKER_REF || CANONICAL_CHECKER_REF;
+  if (repository !== CANONICAL_CHECKER_REPOSITORY || ref !== CANONICAL_CHECKER_REF) {
+    return 'failed';
   }
 
-  const response = await fetch(
-    `https://api.github.com/repos/${repository}/actions/workflows/pub-check-worker.yml/dispatches`,
-    {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${token}`,
-        accept: 'application/vnd.github+json',
-        'content-type': 'application/json',
-        'x-github-api-version': '2022-11-28',
-      },
-      body: JSON.stringify({
-        ref,
-        inputs: {
-          check_id: checkId,
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(
+      'https://api.github.com/repos/Lalalalendia/rar2/actions/workflows/pub-check-worker.yml/dispatches',
+      {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer ' + token,
+          accept: 'application/vnd.github+json',
+          'content-type': 'application/json',
+          'x-github-api-version': '2022-11-28',
         },
-      }),
-    },
-  );
-
-  return response.status === 204 ? ('sent' as const) : ('failed' as const);
+        body: JSON.stringify({
+          ref: CANONICAL_CHECKER_REF,
+          inputs: { check_id: checkId },
+        }),
+        signal: controller.signal,
+      },
+    );
+    return response.status === 204 ? 'sent' : 'failed';
+  } catch {
+    return 'failed';
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function dispatchWebhook(checkId: string, origin: string) {
@@ -63,7 +86,7 @@ async function dispatchWebhook(checkId: string, origin: string) {
 
 export async function dispatchCheck(checkId: string, origin: string) {
   if (process.env.GITHUB_CHECKER_TOKEN) {
-    return dispatchGitHub(checkId, origin);
+    return dispatchGitHub(checkId);
   }
   return dispatchWebhook(checkId, origin);
 }
