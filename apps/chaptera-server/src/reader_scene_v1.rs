@@ -2457,6 +2457,22 @@ mod tests {
                 render_uniform_yellow_fragments,
             );
 
+            let unconfigured_scene = from_viewer_geometry(
+                "probe:unconfigured-font".to_owned(),
+                actual_sha256.clone(),
+                "probe:source".to_owned(),
+                &bundle.geometry,
+                &bundle.source_page_paint_orders,
+            )
+            .expect("exact Carlton unconfigured-font consumer must project");
+            assert!(
+                !unconfigured_scene
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "source_font_resource_admitted"),
+                "shared fallback resource must not be reported as a configured exact font"
+            );
+
             let configured_scene = from_viewer_geometry_with_fonts(
                 "probe:configured-font".to_owned(),
                 actual_sha256.clone(),
@@ -2466,6 +2482,14 @@ mod tests {
                 &[configured],
             )
             .expect("exact Carlton configured-font consumer must project");
+            assert!(
+                configured_scene
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "source_font_resource_admitted"
+                        && diagnostic.message.starts_with("1 configured exact font resource")),
+                "actual configured exact font resource must retain admission telemetry"
+            );
 
             let projected_configured_layouts = configured_scene
                 .nodes
