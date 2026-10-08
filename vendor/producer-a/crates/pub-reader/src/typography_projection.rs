@@ -5,6 +5,52 @@
 
 use super::*;
 
+pub(super) fn utf16_range_to_scalar_range(
+    text: &str,
+    start_utf16: u32,
+    end_utf16: u32,
+) -> Option<(u32, u32)> {
+    if start_utf16 > end_utf16 {
+        return None;
+    }
+
+    fn boundary(text: &str, target_utf16: u32) -> Option<u32> {
+        if target_utf16 == 0 {
+            return Some(0);
+        }
+
+        let mut utf16_cursor = 0_u32;
+        let mut scalar_cursor = 0_u32;
+        for scalar in text.chars() {
+            utf16_cursor = utf16_cursor.checked_add(scalar.len_utf16() as u32)?;
+            scalar_cursor = scalar_cursor.checked_add(1)?;
+            if utf16_cursor == target_utf16 {
+                return Some(scalar_cursor);
+            }
+            if utf16_cursor > target_utf16 {
+                return None;
+            }
+        }
+        (utf16_cursor == target_utf16).then_some(scalar_cursor)
+    }
+
+    Some((boundary(text, start_utf16)?, boundary(text, end_utf16)?))
+}
+
+pub(super) fn bounded_quill_text_rgb(
+    direct_rgb: Option<[u8; 3]>,
+    scheme_slot: Option<u8>,
+    color_scheme: Option<&MatureColorScheme>,
+) -> Option<[u8; 3]> {
+    match (direct_rgb, scheme_slot) {
+        (Some(rgb), None) => Some(rgb),
+        (None, Some(slot)) => color_scheme?.slots.get(usize::from(slot))?.rgb,
+        // Both carriers at once are not a grounded Quill state; neither is
+        // absence of both. Keep those cases fail-closed.
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PubScriptFontEntryDisposition {
