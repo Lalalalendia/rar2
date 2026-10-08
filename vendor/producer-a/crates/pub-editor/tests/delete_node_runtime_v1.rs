@@ -1,3 +1,4 @@
+// CI sacrificial routing control for #2204; no runtime/test semantic change.
 use std::collections::BTreeMap;
 
 use pub_editor::{
