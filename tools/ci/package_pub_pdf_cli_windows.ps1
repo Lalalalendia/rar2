@@ -129,7 +129,7 @@ Invoke-WebRequest -Uri "https://raw.githubusercontent.com/apache/poi/942d95d85b1
 Assert-Same "fixture SHA256" (Get-Sha256 $fixture) $sourceSha
 Assert-Same "fixture size" (Get-Item -LiteralPath $fixture).Length 291840
 
-$font = Join-Path $work "acceptance-fallback.ttf"
+$font = Join-Path $work "chaptera-fallback.ttf"
 Push-Location $root
 try {
     & cargo run -q -p chaptera-desktop-fallback-font-resource --bin materialize-fallback-font -- $font
@@ -162,6 +162,8 @@ Assert-Same "PDF header" ([System.Text.Encoding]::ASCII.GetString($pdfBytes, 0, 
 $report = Get-Content -Raw -LiteralPath "$pdfA.loss.json" | ConvertFrom-Json -Depth 100
 $cliReport = Get-Content -Raw -LiteralPath $jsonA | ConvertFrom-Json -Depth 100
 Assert-Same "loss report schema" $report.schema_version "free-pub-pdf-v0.1"
+Assert-Same "source report label" $report.source.label "SampleNewsletter.pub"
+Assert-Same "fallback report label" $report.typography.fallback_font.label "chaptera-fallback.ttf"
 Assert-Same "CLI and sidecar schema" $cliReport.schema_version $report.schema_version
 Assert-Same "source hash in report" $report.conversion_profile.source.source_sha256 $sourceSha
 Assert-Same "target format" $report.target.format "pdf"
@@ -185,7 +187,9 @@ $receipt = [ordered]@{
     zip_sha256 = $zipSha
     binary_sha256 = $exeSha
     source_sha256 = $sourceSha
+    source_label = $report.source.label
     fallback_font_sha256 = $fontSha
+    fallback_font_label = $report.typography.fallback_font.label
     pdf_sha256 = Get-Sha256 $pdfA
     loss_json_sha256 = Get-Sha256 "$pdfA.loss.json"
     loss_text_sha256 = Get-Sha256 "$pdfA.loss.txt"

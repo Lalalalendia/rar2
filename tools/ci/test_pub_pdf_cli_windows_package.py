@@ -5,6 +5,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/pub-pdf-cli-windows-package.yml"
 SCRIPT = ROOT / "tools/ci/package_pub_pdf_cli_windows.ps1"
+SOURCE = ROOT / "vendor/producer-a/crates/pub-cli/src/fixed_pdf.rs"
 
 
 def require(fragment: str, body: str, label: str) -> None:
@@ -12,11 +13,12 @@ def require(fragment: str, body: str, label: str) -> None:
         raise AssertionError(f"{label}: required contract missing: {fragment!r}")
 
 
-def validate(workflow: str, script: str) -> None:
+def validate(workflow: str, script: str, source: str) -> None:
     for fragment in (
         "  pull_request:",
         "  push:\n    branches: [main]",
         '      - ".github/workflows/pub-pdf-cli-windows-package.yml"',
+        '      - "vendor/producer-a/crates/pub-cli/src/fixed_pdf.rs"',
         '      - "tools/ci/package_pub_pdf_cli_windows.ps1"',
         "  workflow_dispatch:",
         "  contents: read",
@@ -50,6 +52,9 @@ def validate(workflow: str, script: str) -> None:
         "& $freshExe convert $fixture --to pdf",
         '".loss.json", ".loss.txt"',
         '"SampleNewsletter.pub"',
+        '"chaptera-fallback.ttf"',
+        'Assert-Same "source report label" $report.source.label "SampleNewsletter.pub"',
+        'Assert-Same "fallback report label" $report.typography.fallback_font.label "chaptera-fallback.ttf"',
         "Get-Sha256 $fixture",
         "Get-Sha256 $font",
         'materialize-fallback-font',
@@ -59,6 +64,14 @@ def validate(workflow: str, script: str) -> None:
         "extracted_binary_executed = $true",
     ):
         require(fragment, script, "package script")
+    for fragment in (
+        'report_path_label(input, "input.pub")',
+        'report_path_label(fallback_font, "fallback-font.ttf")',
+    ):
+        require(fragment, source, "fixed PDF source")
+    for forbidden in ("input.display().to_string()", "fallback_font.display().to_string()"):
+        if forbidden in source:
+            raise AssertionError(f"fixed PDF source: absolute report-path carrier returned: {forbidden!r}")
     for forbidden in ("gh release", "Publish-Module", "Invoke-RestMethod -Method Post"):
         if forbidden in script:
             raise AssertionError(f"package script: forbidden publication action: {forbidden!r}")
@@ -66,30 +79,37 @@ def validate(workflow: str, script: str) -> None:
 
 class PreviewContract(unittest.TestCase):
     def test_actual_files(self) -> None:
-        validate(WORKFLOW.read_text(encoding="utf-8"), SCRIPT.read_text(encoding="utf-8"))
+        validate(
+            WORKFLOW.read_text(encoding="utf-8"),
+            SCRIPT.read_text(encoding="utf-8"),
+            SOURCE.read_text(encoding="utf-8"),
+        )
 
     def test_cannot_allow_pr_binary_build(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         script = SCRIPT.read_text(encoding="utf-8")
+        source = SOURCE.read_text(encoding="utf-8")
         weakened = workflow.replace(
             "github.event_name != 'pull_request' && github.ref == 'refs/heads/main'",
             "true",
         )
         with self.assertRaises(AssertionError):
-            validate(weakened, script)
+            validate(weakened, script, source)
 
     def test_cannot_drop_extracted_smoke(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         script = SCRIPT.read_text(encoding="utf-8")
+        source = SOURCE.read_text(encoding="utf-8")
         weakened = script.replace("& $freshExe convert $fixture --to pdf", "& $built convert $fixture --to pdf")
         with self.assertRaises(AssertionError):
-            validate(workflow, weakened)
+            validate(workflow, weakened, source)
 
     def test_cannot_claim_signed_release(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         script = SCRIPT.read_text(encoding="utf-8")
+        source = SOURCE.read_text(encoding="utf-8")
         with self.assertRaises(AssertionError):
-            validate(workflow.replace("contents: read", "contents: write"), script)
+            validate(workflow.replace("contents: read", "contents: write"), script, source)
 
 
 if __name__ == "__main__":

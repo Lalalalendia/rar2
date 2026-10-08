@@ -44,6 +44,7 @@ jobs:
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-output reads_opentype_embedding_flags_without_licensing_guesswork
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-output restricted_font_is_explicit_block_by_default
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-pdf
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-cli report_label_ --bin pub
 
       - name: Build public CLI
         run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-cli --bin pub
@@ -107,6 +108,10 @@ jobs:
 
           assert report == cli_report
           assert report["schema_version"] == "free-pub-pdf-v0.1"
+          assert report["source"]["label"] == "SampleNewsletter.pub"
+          assert report["typography"]["fallback_font"]["label"] == "chaptera-fallback.ttf"
+          assert "/" not in report["source"]["label"] and "\\" not in report["source"]["label"]
+          assert "/" not in report["typography"]["fallback_font"]["label"] and "\\" not in report["typography"]["fallback_font"]["label"]
           assert report["conversion_profile"]["source"]["source_sha256"] == expected_source
           assert report["target"]["format"] == "pdf"
           assert report["typography"]["disposition"] == "explicit_user_fallback_not_source_font"
@@ -145,6 +150,7 @@ jobs:
                   "exact_source_identity": True,
                   "deterministic_pdf_bytes": True,
                   "deterministic_loss_report": True,
+                  "portable_report_labels": True,
                   "explicit_fallback_font": True,
                   "opentype_embedding_flags_parsed": True,
                   "output_adapter_reshaping_calls": 0,
