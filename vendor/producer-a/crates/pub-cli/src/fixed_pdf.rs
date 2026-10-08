@@ -4,10 +4,7 @@ use chaptera_viewer_render_plan::{
     RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_v1,
 };
 use pub_export::{ConversionProfile, EnvironmentFence, TargetProfile};
-use pub_layout::{
-    BoundedLayoutEnvironment, BoundedResolvedScene, BoundedShapedText, font_fingerprint_sha256,
-    project_bounded, resolve_bounded_geometry,
-};
+use pub_layout::{BoundedResolvedScene, BoundedShapedText, font_fingerprint_sha256};
 use pub_model::{EMU_PER_POINT, LengthEmu, NodeId};
 use pub_output::{
     ExplicitFontResource, FixedOutputFontProfile, FontIdentity, OutputFontRequest,
@@ -507,19 +504,10 @@ fn build_pdf_artifact(
     let bundle =
         pub_viewer::open_pub_bundle(pub_bytes, pub_viewer::viewer_geometry_environment_v0_1())
             .context("open mature-0x2C PUB for bounded PDF conversion")?;
-    let effective_page_ids = bundle
-        .geometry
-        .document
-        .pages
-        .iter()
-        .map(|page| page.id)
-        .collect::<Vec<_>>();
-    let authoring = pub_viewer::bounded_authoring_slice_from_resolved_pages(
-        &bundle.resolved_graph,
-        &effective_page_ids,
-    )
-    .context("project effective mature pages for bounded PDF conversion")?;
-    let projection = project_bounded(authoring);
+    // Viewer geometry is already the source-neutral physical scene used by the
+    // product Reader. Do not send it back through project_bounded(): that
+    // projector intentionally normalizes node vectors by canonical identity,
+    // which destroys DTP paint order before fixed-output serialization.
     let visual = bundle.geometry;
 
     let embedding = read_opentype_embedding_flags(fallback_font_bytes, 0)
@@ -591,20 +579,9 @@ fn build_pdf_artifact(
         default_line_height_emu: line_height_emu,
         bytes: fallback_font_bytes,
     };
-    let pdf_scene = resolve_bounded_geometry(
-        &projection,
-        BoundedLayoutEnvironment {
-            engine_revision: PDF_PRODUCT_SCHEMA.into(),
-            font_set_fingerprint: fallback_fingerprint.clone(),
-            resource_fingerprint: fallback_resource_id.clone(),
-        },
-    )
-    .map_err(|blocked| {
-        anyhow::anyhow!(
-            "resolve bounded physical geometry for fixed PDF blocked by {} projection diagnostics",
-            blocked.projection_errors.len()
-        )
-    })?;
+    // Preserve Viewer page/node vector order verbatim. The fixed PDF backend
+    // must consume product paint order, not rederive geometry from sorted IDs.
+    let pdf_scene = visual.scene.clone();
     let scene_node_ids = pdf_scene
         .nodes
         .iter()
