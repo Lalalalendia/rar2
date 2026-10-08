@@ -2,8 +2,11 @@ name: PR merge authority
 
 on:
   # fanout: global-pr-required
+  # Do not add ready_for_review here: it does not change the PR head, while
+  # retriggering this workflow would cancel the head-change authority run even
+  # though default pull_request workflows do not re-register on that action.
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
