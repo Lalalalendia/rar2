@@ -258,7 +258,9 @@ pub use table_bridge::{
     materialize_bounded_table_cells,
 };
 #[cfg(test)]
-use typography_projection::{bounded_quill_text_rgb, project_effective_boolean_v1, utf16_range_to_scalar_range};
+use typography_projection::{
+    bounded_quill_text_rgb, project_effective_boolean_v1, utf16_range_to_scalar_range,
+};
 pub use typography_projection::{
     PubParagraphAlignment, PubParagraphAlignmentRun, PubParagraphFlowConstraint,
     PubParagraphFlowRun, PubParagraphLineSpacing, PubParagraphLineSpacingRun, PubScriptFontEntry,
@@ -515,21 +517,6 @@ pub fn build_mature_0x2c_from_streams(
         paragraph_flow_runs,
         script_font_maps,
     })
-}
-
-    utf16_cursor = utf16_cursor.checked_add(scalar.len_utf16() as u32)?;
-            scalar_cursor = scalar_cursor.checked_add(1)?;
-            if utf16_cursor == target_utf16 {
-                return Some(scalar_cursor);
-            }
-            if utf16_cursor > target_utf16 {
-                return None;
-            }
-        }
-        (utf16_cursor == target_utf16).then_some(scalar_cursor)
-    }
-
-    Some((boundary(text, start_utf16)?, boundary(text, end_utf16)?))
 }
 
 fn consensus_publication_page_extent(
