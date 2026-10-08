@@ -27,10 +27,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.94.1"
-
       - name: Validate bounded job identity
         shell: bash
         run: |
