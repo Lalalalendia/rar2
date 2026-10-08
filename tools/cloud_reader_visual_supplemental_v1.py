@@ -258,6 +258,7 @@ def summarize(pairs_csv: Path, browser_receipt: Path, reference_path: Path, out:
             "diagnostic_codes": actual.get("diagnostic_codes", []),
             "text_layout_fallback_counts": actual.get("text_layout_fallback_counts", {}),
             "browser_preview_census": actual.get("browser_preview_census", {}),
+            "shared_text_ink_census": actual.get("shared_text_ink_census"),
             "visual_degeneracies": actual.get("visual_degeneracies", []),
             "visual_degeneracy_count": int(actual.get("visual_degeneracy_count", 0) or 0),
         }
