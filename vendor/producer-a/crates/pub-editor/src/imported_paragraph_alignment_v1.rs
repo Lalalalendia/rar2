@@ -105,13 +105,16 @@ impl EditorSession {
         &self,
         story_id: StoryId,
     ) -> Result<Vec<EffectiveParagraphAlignmentV1>, EditorError> {
-        self.validate_source_identity()?;
         let paragraphs = self
             .imported_paragraphs_v1()
             .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
             .into_iter()
             .filter(|paragraph| paragraph.story_id == story_id)
             .collect::<Vec<_>>();
+        if paragraphs.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.validate_source_identity()?;
         let base_by_id = self
             .imported_paragraph_base_alignments_from_paragraphs_v1(&paragraphs)
             .into_iter()
