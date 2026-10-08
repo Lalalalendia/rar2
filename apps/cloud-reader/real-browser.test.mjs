@@ -17,6 +17,64 @@ const output = resolve(process.env.READER_REAL_OUTPUT ?? join(repo, "target/clou
 const worker = resolve(process.env.READER_WORKER_BINARY ?? join(repo, "target/debug/chaptera"));
 const run = promisify(execFile);
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+// Diagnostic-only PNG comparison. Decode only when the two screenshot byte
+// identities differ; never publish pixels or change the Publisher-oracle PNG.
+async function compareDecodedPngPixels(page, first, second) {
+  return page.evaluate(async ({ firstBase64, secondBase64 }) => {
+    const decode = async (base64) => {
+      const raw = atob(base64);
+      const bytes = Uint8Array.from(raw, (char) => char.charCodeAt(0));
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (!context) throw new Error("PNG pixel discriminator requires Canvas2D");
+      context.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      return { width: canvas.width, height: canvas.height,
+        rgba: context.getImageData(0, 0, canvas.width, canvas.height).data };
+    };
+    const a = await decode(firstBase64);
+    const b = await decode(secondBase64);
+    if (a.width !== b.width || a.height !== b.height) {
+      return { first_width: a.width, first_height: a.height,
+        second_width: b.width, second_height: b.height,
+        changed_pixel_count: null, max_channel_delta: null, changed_bounds: null };
+    }
+    let changedPixels = 0;
+    let maxChannelDelta = 0;
+    let minX = a.width;
+    let minY = a.height;
+    let maxX = -1;
+    let maxY = -1;
+    for (let pixel = 0; pixel < a.width * a.height; pixel++) {
+      let pixelChanged = false;
+      for (let channel = 0; channel < 4; channel++) {
+        const index = pixel * 4 + channel;
+        const delta = Math.abs(a.rgba[index] - b.rgba[index]);
+        maxChannelDelta = Math.max(maxChannelDelta, delta);
+        pixelChanged ||= delta > 0;
+      }
+      if (pixelChanged) {
+        changedPixels++;
+        const x = pixel % a.width;
+        const y = Math.floor(pixel / a.width);
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    return { first_width: a.width, first_height: a.height,
+      second_width: b.width, second_height: b.height,
+      changed_pixel_count: changedPixels, max_channel_delta: maxChannelDelta,
+      changed_bounds: changedPixels === 0 ? null : {
+        x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1
+      } };
+  }, { firstBase64: first.toString("base64"), secondBase64: second.toString("base64") });
+}
+
 const defaultFixtures = [
   { name: "SampleNewsletter", sha256: "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf", bytes: 291840, pages: 4, require_render: true, require_shared_text: true },
   { name: "SampleBrochure", sha256: "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87", bytes: 161792, pages: 2, require_render: true, require_shared_text: true }
@@ -463,6 +521,11 @@ try {
       // capture observes same-Scene paint stability without replacing it.
       const png = await pageSvg.screenshot({ path: join(output, filename) });
       const repeatPng = await pageSvg.screenshot();
+      const firstHash = sha256(png);
+      const secondHash = sha256(repeatPng);
+      const decodedPixelDiff = firstHash === secondHash
+        ? null
+        : await compareDecodedPngPixels(page, png, repeatPng);
       if (referenceRasterDpi > 0) {
         await pageSvg.evaluate((svg) => {
           svg.style.removeProperty("position");
@@ -471,8 +534,8 @@ try {
           svg.style.removeProperty("z-index");
         });
       }
-      screenshots.push({ page: i + 1, filename, sha256: sha256(png),
-        repeat_sha256: sha256(repeatPng) });
+      screenshots.push({ page: i + 1, filename, sha256: firstHash,
+        repeat_sha256: secondHash, repeat_decoded_pixel_diff: decodedPixelDiff });
     }
     const nonempty = painted.filter((line) => line.text.trim());
     const fidelityReasons = [...(scene.fidelity?.reasons ?? [])].sort();
