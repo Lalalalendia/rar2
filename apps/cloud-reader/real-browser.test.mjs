@@ -218,6 +218,69 @@ try {
     }
     const scene = receipt.scene;
     assert.equal(scene.protocol_version, "chaptera.reader-scene.v1");
+    if (corpusDiagnosticMode && fixture.name === "06-modern2c-image-heavy") {
+      const firstPage = [...scene.pages].sort((left, right) => left.order - right.order)[0];
+      const classifyPaintNode = (node) => {
+        if (node.kind === "picture_frame") return "picture";
+        if (node.kind === "text_frame") return "text";
+        if (node.paint?.preset_shape === "ellipse") return "ellipse";
+        if (node.paint) return "other_painted";
+        return "unpainted";
+      };
+      const paintBoundsForNode = (node) => {
+        const semantic = node.bounds;
+        if (node.kind === "text_frame") return node.text_bounds ?? semantic;
+        if (node.kind === "picture_frame") return semantic;
+
+        const boxes = [];
+        if (Array.isArray(node.paint?.fill_rgb)) boxes.push(semantic);
+        if (node.table) boxes.push(semantic);
+
+        const placements = node.decorative_border?.placements ?? [];
+        if (placements.length) {
+          for (const placement of placements) {
+            if (placement?.bounds) boxes.push(placement.bounds);
+          }
+        } else {
+          const lineWidth = Number(node.paint?.line?.width_emu ?? 0);
+          if (Number.isFinite(lineWidth) && lineWidth > 0) {
+            const half = lineWidth / 2;
+            boxes.push({
+              x: semantic.x - half,
+              y: semantic.y - half,
+              width: semantic.width + lineWidth,
+              height: semantic.height + lineWidth
+            });
+          }
+        }
+
+        if (!boxes.length) return null;
+        const left = Math.min(...boxes.map((box) => Number(box.x)));
+        const top = Math.min(...boxes.map((box) => Number(box.y)));
+        const right = Math.max(...boxes.map((box) => Number(box.x) + Number(box.width)));
+        const bottom = Math.max(...boxes.map((box) => Number(box.y) + Number(box.height)));
+        return { x: left, y: top, width: right - left, height: bottom - top };
+      };
+      const diagnosticGeometry = {
+        schema: "chaptera.visual-paint-bounds-geometry.v1",
+        fixture: fixture.name,
+        page: 1,
+        page_id: firstPage.page_id,
+        width_emu: firstPage.width_emu,
+        height_emu: firstPage.height_emu,
+        nodes: scene.nodes
+          .filter((node) => node.page_id === firstPage.page_id)
+          .map((node) => ({
+            class: classifyPaintNode(node),
+            paint_bounds: paintBoundsForNode(node),
+            transform: node.transform
+          }))
+      };
+      await writeFile(
+        join(output, fixture.name + "-page-1-paint-bounds-geometry.json"),
+        JSON.stringify(diagnosticGeometry, null, 2) + "\n"
+      );
+    }
     if (fixture.pages != null) assert.equal(scene.pages.length, fixture.pages);
     const fixturePages = scene.pages.length;
     active = { fixture, receipt };
