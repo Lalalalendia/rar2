@@ -1,0 +1,40 @@
+name: TEMP page-reorder rustfmt
+
+on:
+  push:
+    branches:
+      - authoring/page-reorder-01
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temp-page-reorder-rustfmt
+  cancel-in-progress: true
+
+jobs:
+  rustfmt:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: authoring/page-reorder-01
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Apply canonical formatting
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -p pub-editor-authoring-core
+          if git diff --quiet -- vendor/producer-a/crates/pub-editor vendor/producer-a/crates/pub-editor-authoring-core; then
+            echo "already formatted"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add vendor/producer-a/crates/pub-editor vendor/producer-a/crates/pub-editor-authoring-core
+          git commit -m "AUTHORING-PAGE-REORDER-01: rustfmt"
+          git push origin HEAD:authoring/page-reorder-01
