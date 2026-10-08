@@ -1,0 +1,6 @@
+# 2026-10-08 — superseded owner batch 19
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+fix/pub-pdf-cli-viewer-text-layout-01 3028fa7f6f9385edcb2768a539b8db188c344428 # #2103 closed as superseded by current-main successor #2211
+ops/branch-gc-20261008-control-refresh-batch-18 478a0ce969fb1a8ae30dec45a83a9d3dbd0e3640 # completed #2219 clean receipt: 2/2 deleted
