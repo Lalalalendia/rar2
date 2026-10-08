@@ -117,3 +117,5 @@ jobs:
         run: python tools/ci/test_closed_pr_cache_gc_dry_run.py
       - name: Guard Cloud reference PR shared-cache read-only policy
         run: python tools/ci/test_cloud_reference_pr_cache_mode.py
+      - name: Guard Batch01 PR Cargo restore-only policy
+        run: python tools/ci/test_batch01_pr_cargo_cache_mode.py
