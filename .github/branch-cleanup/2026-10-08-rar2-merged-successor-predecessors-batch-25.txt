@@ -1,0 +1,8 @@
+# 2026-10-08 — merged-successor predecessors batch 25
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+ci/local-portable-asset-split-01 0febcb14ebc8ca82211dbc560a1e4093029032da # #2241 closed after stronger merged replacement #2268
+ci/local-portable-web-asset-fastpath-01 241e4570ae84b3fbd09c6614ce33a357c0291bbb # #2264 direct predecessor of merged current-main #2268
+ci/pub-editor-core-compat-01 e46122f35ef469219b521f55260640c28a9ceb63 # #2261 explicitly superseded by merged current-main #2271
+ops/branch-gc-20261008-restack-predecessor-batch-24 bc80619bb82f462bd01c0229fb2bfcedec02b519 # completed #2263 clean receipt: 3/3 deleted
