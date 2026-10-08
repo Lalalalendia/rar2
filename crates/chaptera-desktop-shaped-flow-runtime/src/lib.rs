@@ -12,9 +12,9 @@ use pub_editor::{
     EditorSession, EffectiveParagraphAlignmentValueV1, ImportedParagraphFlowConstraintV1,
 };
 use pub_layout::{
-    BoundedLayoutEnvironment, BoundedParagraphFlowConstraint, BoundedParagraphFlowRun,
-    BoundedShapedFlowRuntime, BoundedShapedFlowScene, BoundedShapingRuntime, project_bounded,
-    resolve_bounded_shaped_flow_with_paragraph_flow,
+    BoundedLayoutEnvironment, BoundedLayoutProjection, BoundedParagraphFlowConstraint,
+    BoundedParagraphFlowRun, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
+    BoundedShapingRuntime, project_bounded, resolve_bounded_shaped_flow_with_paragraph_flow,
 };
 use pub_line_placement::{
     LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
@@ -36,6 +36,23 @@ pub use font_resource::{ExplicitDesktopFontResourceV1, validate_explicit_font_re
 pub const DESKTOP_SHAPED_FLOW_RUNTIME_V1: &str = "chaptera.desktop-shaped-flow-runtime.v1";
 pub const CURRENT_FIXED_PDF_RESOURCE_INPUT_V1: &str =
     "chaptera.current-fixed-pdf-resource-input.v1";
+
+fn retain_story_shaping_scope_v1(
+    projection: &mut BoundedLayoutProjection,
+    story_id: StoryId,
+) -> Result<(), DesktopShapedFlowRuntimeError> {
+    projection.stories.retain(|story| story.origin == story_id);
+    if projection.stories.len() != 1 {
+        return Err(DesktopShapedFlowRuntimeError::new(
+            "story_missing",
+            "requested Story is absent from bounded layout projection",
+        ));
+    }
+
+    // Scope only the expensive shaped-text loop. Keep StoryFrames and every
+    // geometry/projection diagnostic input unchanged for this slice.
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopStoryLayoutV1 {
@@ -301,15 +318,29 @@ pub fn build_current_story_layout_v1(
     layout_revision_id: &str,
     font: &ExplicitDesktopFontResourceV1<'_>,
 ) -> Result<DesktopStoryLayoutV1, DesktopShapedFlowRuntimeError> {
-    build_current_story_layout_with_pages_v1(editor, story_id, layout_revision_id, font, None)
+    build_current_story_layout_core_v1(editor, story_id, layout_revision_id, font, None, true)
 }
 
+/// Fixed-output callers intentionally retain full projected Story shaping.
+/// Their resource packet may need text for moved/resized nodes outside the
+/// primary edited Story.
 fn build_current_story_layout_with_pages_v1(
     editor: &EditorSession,
     story_id: StoryId,
     layout_revision_id: &str,
     font: &ExplicitDesktopFontResourceV1<'_>,
     page_ids: Option<&[PageId]>,
+) -> Result<DesktopStoryLayoutV1, DesktopShapedFlowRuntimeError> {
+    build_current_story_layout_core_v1(editor, story_id, layout_revision_id, font, page_ids, false)
+}
+
+fn build_current_story_layout_core_v1(
+    editor: &EditorSession,
+    story_id: StoryId,
+    layout_revision_id: &str,
+    font: &ExplicitDesktopFontResourceV1<'_>,
+    page_ids: Option<&[PageId]>,
+    scope_shaping_to_current_story: bool,
 ) -> Result<DesktopStoryLayoutV1, DesktopShapedFlowRuntimeError> {
     if layout_revision_id.is_empty() {
         return Err(DesktopShapedFlowRuntimeError::new(
@@ -345,7 +376,10 @@ fn build_current_story_layout_with_pages_v1(
             })?
         }
     };
-    let projection = project_bounded(authoring);
+    let mut projection = project_bounded(authoring);
+    if scope_shaping_to_current_story {
+        retain_story_shaping_scope_v1(&mut projection, story_id)?;
+    }
 
     let runtime = BoundedShapedFlowRuntime {
         shaping: BoundedShapingRuntime {
@@ -405,7 +439,10 @@ mod tests {
     use super::*;
     use pub_editor::{FormatPropertyV1, FormatValueV1, Sha256Digest, open_mature_0x2c_editor};
     use pub_layout::font_fingerprint_sha256;
-    use pub_model::{EMU_PER_POINT, LengthEmu};
+    use pub_model::{
+        Affine2D, CanonicalId, EMU_PER_POINT, LengthEmu, NodeId, Page, RectEmu, Size2D, Story,
+        StoryFrame,
+    };
     use sha2::{Digest, Sha256};
     use std::{env, fs};
 
@@ -421,6 +458,114 @@ mod tests {
             line_height_emu: LengthEmu::new(12 * EMU_PER_POINT),
             bytes,
         }
+    }
+
+    fn test_canonical_id(byte: u8) -> CanonicalId {
+        CanonicalId::from_bytes([byte; 16])
+    }
+
+    #[test]
+    fn story_shaping_scope_removes_unrelated_text_but_preserves_geometry_projection() {
+        let target_story = StoryId::from_canonical(test_canonical_id(1));
+        let other_story = StoryId::from_canonical(test_canonical_id(2));
+        let target_frame = NodeId::from_canonical(test_canonical_id(3));
+        let other_frame = NodeId::from_canonical(test_canonical_id(4));
+        let page_id = PageId::from_canonical(test_canonical_id(5));
+        let page_origin = page_id.into_canonical();
+
+        let authoring = pub_layout::BoundedAuthoringSlice {
+            pages: vec![Page {
+                id: page_id,
+                size: Size2D::new(LengthEmu::new(1000), LengthEmu::new(1000)),
+                bleed: None,
+                margins: None,
+                children: vec![target_frame, other_frame],
+                extensions: Vec::new(),
+            }],
+            node_geometry: vec![
+                pub_layout::BoundedNodeGeometryInput {
+                    node_id: target_frame,
+                    parent_origin: page_origin,
+                    bounds: RectEmu::new(
+                        LengthEmu::ZERO,
+                        LengthEmu::ZERO,
+                        LengthEmu::new(400),
+                        LengthEmu::new(400),
+                    ),
+                    transform: Affine2D::identity(),
+                },
+                pub_layout::BoundedNodeGeometryInput {
+                    node_id: other_frame,
+                    parent_origin: page_origin,
+                    bounds: RectEmu::new(
+                        LengthEmu::new(500),
+                        LengthEmu::ZERO,
+                        LengthEmu::new(400),
+                        LengthEmu::new(400),
+                    ),
+                    transform: Affine2D::identity(),
+                },
+            ],
+            stories: vec![
+                Story {
+                    id: target_story,
+                    text: "target".to_owned(),
+                    paragraphs: Vec::new(),
+                    runs: Vec::new(),
+                    fields: Vec::new(),
+                    hyperlinks: Vec::new(),
+                    source_refs: Vec::new(),
+                },
+                Story {
+                    id: other_story,
+                    text: "unrelated".to_owned(),
+                    paragraphs: Vec::new(),
+                    runs: Vec::new(),
+                    fields: Vec::new(),
+                    hyperlinks: Vec::new(),
+                    source_refs: Vec::new(),
+                },
+            ],
+            story_frames: vec![
+                StoryFrame {
+                    story_id: target_story,
+                    frame_id: target_frame,
+                    ordinal: 0,
+                    previous: None,
+                    next: None,
+                },
+                StoryFrame {
+                    story_id: other_story,
+                    frame_id: other_frame,
+                    ordinal: 0,
+                    previous: None,
+                    next: None,
+                },
+            ],
+            tables: Vec::new(),
+            guides: Vec::new(),
+            unknown_layout_state: Vec::new(),
+        };
+
+        let mut projection = project_bounded(authoring);
+        let pages_before = projection.pages.clone();
+        let geometry_before = projection.node_geometry.clone();
+        let frames_before = projection.story_frames.clone();
+        let tables_before = projection.tables.clone();
+        let guides_before = projection.guides.clone();
+        let diagnostics_before = projection.diagnostics.clone();
+
+        retain_story_shaping_scope_v1(&mut projection, target_story)
+            .expect("retain target Story shaping scope");
+
+        assert_eq!(projection.stories.len(), 1);
+        assert_eq!(projection.stories[0].origin, target_story);
+        assert_eq!(projection.story_frames, frames_before);
+        assert_eq!(projection.pages, pages_before);
+        assert_eq!(projection.node_geometry, geometry_before);
+        assert_eq!(projection.tables, tables_before);
+        assert_eq!(projection.guides, guides_before);
+        assert_eq!(projection.diagnostics, diagnostics_before);
     }
 
     #[test]
@@ -564,10 +709,55 @@ mod tests {
             .expect("edited interval remains covered");
         assert_eq!(changed.bold, Some(desired));
         assert_eq!(changed.italic, first.italic);
+        assert!(
+            editor.graph().stories.len() > 1,
+            "51318 must remain a multi-Story witness for Story-local shaping"
+        );
+        let shaping_authoring = pub_viewer::bounded_authoring_slice_from_resolved(editor.graph())
+            .expect("project multi-Story fixture before shaping scope");
+        let mut shaping_scope = project_bounded(shaping_authoring);
+        let pages_before = shaping_scope.pages.clone();
+        let geometry_before = shaping_scope.node_geometry.clone();
+        let frames_before = shaping_scope.story_frames.clone();
+        let tables_before = shaping_scope.tables.clone();
+        let diagnostics_before = shaping_scope.diagnostics.clone();
+        retain_story_shaping_scope_v1(&mut shaping_scope, story_id)
+            .expect("retain current Story shaping scope");
+        assert_eq!(shaping_scope.stories.len(), 1);
+        assert_eq!(shaping_scope.stories[0].origin, story_id);
+        assert_eq!(
+            shaping_scope.story_frames, frames_before,
+            "Story-local shaping slice must not change frame projection yet"
+        );
+        assert_eq!(
+            shaping_scope.pages, pages_before,
+            "Story-local shaping slice must not change page geometry scope yet"
+        );
+        assert_eq!(
+            shaping_scope.node_geometry, geometry_before,
+            "Story-local shaping slice must not change node geometry scope yet"
+        );
+        assert_eq!(
+            shaping_scope.tables, tables_before,
+            "Story-local shaping slice must not change table projection scope yet"
+        );
+        assert_eq!(
+            shaping_scope.diagnostics, diagnostics_before,
+            "Story-local shaping slice must not change projection diagnostics"
+        );
+
         let layout =
             build_current_story_layout_v1(&editor, story_id, "layout:scoped-bold", &test_font())
                 .expect("current shaped-flow layout consumes scoped boolean typography");
         assert_eq!(layout.current_boolean_typography, after);
+        assert!(
+            layout
+                .shaped_flow
+                .lines
+                .iter()
+                .all(|line| line.story_origin == story_id),
+            "current Story layout must not shape unrelated Stories"
+        );
 
         editor.undo().expect("undo scoped Bold");
         assert_eq!(
