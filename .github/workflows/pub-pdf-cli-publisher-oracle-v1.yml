@@ -33,7 +33,7 @@ jobs:
           python tools/test_pub_pdf_cli_publisher_oracle_v1.py
 
   compare-publisher:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'validation/pub-pdf-wmf-preview-alpha-ab-02'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
