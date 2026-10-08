@@ -1,0 +1,3 @@
+# Research Wave 81 — assimilated raw0x59 census
+research/mature-029-special59-signature-1065 040f985c0d5b89ca52c7cfb306e99e803b890194
+ops/branch-gc-20261008-research-wave80 76db518e0750cada9511792f5904b7472bcae9a3
