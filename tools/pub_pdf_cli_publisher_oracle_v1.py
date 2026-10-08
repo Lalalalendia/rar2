@@ -126,7 +126,10 @@ def compare_pdf(path: Path, pair: dict) -> dict:
 
 def classify_cli_failure(stderr: str) -> str:
     """Map CLI stderr to a bounded source-safe status; never emit raw stderr."""
-    if "bounded PDF conversion currently requires mature 0x2C PUB input" in stderr:
+    if (
+        "bounded PDF conversion currently requires mature 0x2C PUB input" in stderr
+        or "bounded PDF conversion currently requires mature 0x2C or legacy 0x22 low-text PUB input" in stderr
+    ):
         return "unsupported_pub_route"
     if "fallback font cannot be embedded under fixed PDF policy" in stderr:
         return "fallback_font_embedding_blocked"
