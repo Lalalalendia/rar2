@@ -393,8 +393,10 @@ jobs:
             throw "publisher_busy_before_bounded_wrapper"
           }
 
-          $stdout = Join-Path $env:PUB_RE_NATIVE_OUTPUT "private\native-child.stdout.txt"
-          $stderr = Join-Path $env:PUB_RE_NATIVE_OUTPUT "private\native-child.stderr.txt"
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "private"
+          New-Item -ItemType Directory -Force -Path $private | Out-Null
+          $stdout = Join-Path $private "native-child.stdout.txt"
+          $stderr = Join-Path $private "native-child.stderr.txt"
           $script = Join-Path $env:GITHUB_WORKSPACE "tools\pub-re\windows\Invoke-PubReNativeExperiment.ps1"
           $env:PUB_RE_NATIVE_CHILD_SCRIPT = $script
           $startedUtc = [DateTime]::UtcNow
