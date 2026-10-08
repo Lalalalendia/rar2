@@ -520,6 +520,9 @@ SHARED_DESKTOP_FILES = {
     # History shortcuts have their own Linux contract + real Windows GUI owner;
     # avoid the broad Editor package gate for this exact semantic leaf.
     "apps/chaptera-desktop/src/history.rs",
+    # Duplicate Rectangle has its own focused core + real Windows GUI owner;
+    # do not add the broad Editor package gate for this exact semantic leaf.
+    "apps/chaptera-desktop/src/duplicate_rectangle.rs",
 }
 
 
