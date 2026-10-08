@@ -1,0 +1,16 @@
+# 2026-10-08 — terminal measurement branch GC batch 05
+# Never merge. All refs are closed-unmerged measurement branches at exact recorded PR head SHA.
+# Runtime must skip moved tips and any ref that becomes an open PR head/base.
+
+measure/05-p4-direct-rotation-null-control-01 fc8821ab8a18957f6997f0e3d32079525a4f0cdb # closed terminal MEASURE PR 2020
+measure/05-p4-direct-rotation-parent-control-01 e2903c8831c44e18613a52637d9a4b1f6fe090ba # closed terminal MEASURE PR 2022
+measure/05-p4-image-placement-census-01 c97bd5249eb0142458e1c07073d8488fc9c72fdb # closed terminal MEASURE PR 2009
+measure/06-100-offscene-page-layer-census-01 4c799cf8774392550799e9ff9aed9be9ad434804 # closed terminal MEASURE PR 2057
+measure/06-p1-none-omission-owner-01 9323f2f6059ed5d80b74d041812197c5361de623 # closed terminal MEASURE PR 2046
+measure/06-p1-off-scene-omission-distance-01 250df5a69a30649ad590f52a41426840ff9fe3a8 # closed terminal MEASURE PR 2047
+measure/06-p1-spatial-residual-attribution-01 5d8dabbbb65e511e81a67ae727cc9903d529ca19 # closed terminal MEASURE PR 2040
+measure/06-p1-unknown-node-census-01 6b3bb23a84766bd5711bc823f12cc16b5f9f2421 # closed terminal MEASURE PR 2015
+measure/100-p1-picture-census-01 1c88202bcdea1db3ca04e803d669116fa4dd0199 # closed terminal MEASURE PR 2045
+measure/cloud-shared-layout-cause-082-100-01 54d67a60cfff3a4308db44d8b2ab0d64b93195e7 # closed terminal MEASURE PR 2075
+measure/04-narrow-font-metrics-sensitivity-01 b690431ef409a0c145d32d68e8ccf5eed501abfe # closed terminal MEASURE PR 2081
+measure/100-source-visual-inventory-01 b091d2303be66584a45bf042e0062aa4e02c0a3a # closed terminal MEASURE PR 2085
