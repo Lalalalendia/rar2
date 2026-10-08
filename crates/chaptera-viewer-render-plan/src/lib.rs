@@ -42,8 +42,8 @@ use mixed_size_layout::{
     shape_mixed_line_candidate_v1,
 };
 use mixed_size_layout::{
-    MixedLineCandidateV1, admitted_font_size_emu, resolve_mixed_size_text_layout_v1,
-    scalar_text_range_v1,
+    MixedLineCandidateV1, MixedSizeSourceAuthorityV1, admitted_font_size_emu,
+    resolve_mixed_size_text_layout_v1, scalar_text_range_v1,
 };
 pub use shared_layout_diagnostics::{
     SharedLayoutIncompleteCauseV1, classify_shared_layout_incomplete_cause_v1,
@@ -2389,19 +2389,21 @@ fn resolve_text_layout_v1(
             return resolve_mixed_size_text_layout_v1(
                 fragment,
                 font,
-                font_is_source_resolved,
+                MixedSizeSourceAuthorityV1 {
+                    font_is_source_resolved,
+                    source_line_spacing_for_range: |scalar_start, scalar_end| {
+                        source_paragraph_line_spacing_for_range_v1(
+                            visual,
+                            fragment.story_id,
+                            scalar_start,
+                            scalar_end,
+                        )
+                    },
+                },
                 node_id,
                 &bounds,
                 &fingerprint,
                 vertical_alignment,
-                |scalar_start, scalar_end| {
-                    source_paragraph_line_spacing_for_range_v1(
-                        visual,
-                        fragment.story_id,
-                        scalar_start,
-                        scalar_end,
-                    )
-                },
             );
         }
         Err(reason) => return fallback_layout(reason),
