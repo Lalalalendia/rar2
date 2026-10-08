@@ -31,6 +31,7 @@ UNRELATED_HEAVY_WORKFLOWS = (
     ".github/workflows/editor-build-once-pr.yml",
     ".github/workflows/w2-longform-fixed-pdf-current-revision.yml",
     ".github/workflows/editor-desktop-textbox-restore-v1.yml",
+    ".github/workflows/cloud-export-executor-producer-v1.yml",
 )
 
 
