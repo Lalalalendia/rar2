@@ -7,6 +7,8 @@ on:
       - ".github/workflows/pub-pdf-cli-windows-package.yml"
       - "tools/ci/package_pub_pdf_cli_windows.ps1"
       - "tools/ci/test_pub_pdf_cli_windows_package.py"
+      - "tools/ci/package_pub_pdf_cli_windows.ps1"
+      - "tools/ci/test_pub_pdf_cli_windows_package.py"
   push:
     branches: [main]
     paths:

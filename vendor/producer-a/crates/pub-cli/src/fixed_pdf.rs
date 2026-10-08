@@ -60,6 +60,14 @@ fn shaped_glyph_sequence_hash(glyphs: &[pub_layout::BoundedShapedGlyph]) -> Resu
     sha256_json_id(&serde_json::json!(normalized))
 }
 
+fn report_path_label(path: &Path, fallback: &str) -> String {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback)
+        .to_owned()
+}
+
 pub fn convert_pdf(
     input: &Path,
     output: &Path,
@@ -71,9 +79,9 @@ pub fn convert_pdf(
         .with_context(|| format!("read explicit fallback font {}", fallback_font.display()))?;
     let (artifact, report, summary) = build_pdf_artifact(
         &pub_bytes,
-        input.display().to_string(),
+        report_path_label(input, "input.pub"),
         &font_bytes,
-        fallback_font.display().to_string(),
+        report_path_label(fallback_font, "fallback-font.ttf"),
     )?;
 
     if let Some(parent) = output
@@ -476,4 +484,34 @@ fn sidecar_path(output: &Path, suffix: &str) -> PathBuf {
     let mut value = OsString::from(output.as_os_str());
     value.push(suffix);
     PathBuf::from(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::report_path_label;
+    use std::path::Path;
+
+    #[test]
+    fn report_label_drops_parent_directories() {
+        let first = Path::new("runner-a")
+            .join("nested")
+            .join("SampleNewsletter.pub");
+        let second = Path::new("runner-b")
+            .join("other")
+            .join("SampleNewsletter.pub");
+
+        assert_eq!(
+            report_path_label(&first, "input.pub"),
+            "SampleNewsletter.pub"
+        );
+        assert_eq!(
+            report_path_label(&second, "input.pub"),
+            "SampleNewsletter.pub"
+        );
+    }
+
+    #[test]
+    fn report_label_falls_back_without_filename() {
+        assert_eq!(report_path_label(Path::new(""), "input.pub"), "input.pub");
+    }
 }
