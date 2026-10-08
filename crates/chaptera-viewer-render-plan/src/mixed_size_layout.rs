@@ -432,11 +432,7 @@ fn evaluate_mixed_size_text_layout_v1(
             }
         }
 
-        let Some((
-            chosen,
-            chosen_boundary_safe_without_reshaping,
-            chosen_used_height_emu,
-        )) = chosen
+        let Some((chosen, chosen_boundary_safe_without_reshaping, chosen_used_height_emu)) = chosen
         else {
             break;
         };
@@ -584,19 +580,13 @@ mod tests {
         };
         let fragment = mixed_fragment("aa\rbb");
         let node_id = NodeId::from_canonical(pub_model::CanonicalId::from_bytes([4; 16]));
-        let first_physical_extent_emu = compatible_natural_line_height_emu_v1(
-            bytes,
-            0,
-            LengthEmu::new(default_font_size_emu),
-        )
-        .map(LengthEmu::get)
-        .expect("test font physical extent");
-        let second_baseline_advance_emu = scaled_line_height_emu(
-            18 * 12_700,
-            default_font_size_emu,
-            default_line_height_emu,
-        )
-        .expect("scaled second-line baseline");
+        let first_physical_extent_emu =
+            compatible_natural_line_height_emu_v1(bytes, 0, LengthEmu::new(default_font_size_emu))
+                .map(LengthEmu::get)
+                .expect("test font physical extent");
+        let second_baseline_advance_emu =
+            scaled_line_height_emu(18 * 12_700, default_font_size_emu, default_line_height_emu)
+                .expect("scaled second-line baseline");
         assert!(first_physical_extent_emu < default_line_height_emu);
 
         let bounds = RectEmu::new(
