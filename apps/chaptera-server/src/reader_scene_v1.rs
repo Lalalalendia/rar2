@@ -1891,13 +1891,18 @@ mod tests {
     };
 
     use chaptera_scene_instance::SceneProjectionKindV1;
+    use chaptera_viewer_render_plan::shared_layout_diagnostics::classify_mixed_size_layout_capacity_v1;
     use chaptera_viewer_render_plan::{
-        RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
+        RenderTextFragmentV1, RenderTextLayoutDispositionV1,
+        build_page_render_plan_with_text_layout_resolver_v1,
         build_page_render_plan_with_text_layout_resolvers_v1,
         build_page_render_plan_with_text_layout_v1, classify_shared_layout_incomplete_cause_v1,
         effective_source_font_family_v1, uniform_text_color_rgb_v1,
     };
-    use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
+    use pub_viewer::{
+        ViewerGeometryDocument, ViewerParagraphLineSpacing, open_pub_bundle,
+        viewer_geometry_environment_v0_1,
+    };
     use sha2::{Digest, Sha256};
 
     use super::{
@@ -1945,6 +1950,113 @@ mod tests {
             ProbeImageInlineAdmission::AggregateBudgetExhausted
         } else {
             ProbeImageInlineAdmission::Inline
+        }
+    }
+
+    fn mixed_size_line_spacing_signature(
+        visual: &ViewerGeometryDocument,
+        fragment: &RenderTextFragmentV1,
+    ) -> String {
+        let Some(story) = visual
+            .document
+            .stories
+            .iter()
+            .find(|story| story.id == fragment.story_id)
+        else {
+            return "story_missing".to_owned();
+        };
+
+        let mut runs = visual
+            .paragraph_line_spacings
+            .iter()
+            .filter(|run| run.story_id == fragment.story_id)
+            .filter(|run| run.applies_to_story_text(&story.text))
+            .filter(|run| {
+                run.scalar_end > fragment.scalar_start && run.scalar_start < fragment.scalar_end
+            })
+            .collect::<Vec<_>>();
+        runs.sort_by_key(|run| (run.scalar_start, run.scalar_end));
+
+        if runs.is_empty() {
+            return "none".to_owned();
+        }
+
+        let full_single = runs.len() == 1
+            && runs[0].scalar_start <= fragment.scalar_start
+            && runs[0].scalar_end >= fragment.scalar_end;
+        let parts = runs
+            .iter()
+            .map(|run| {
+                let provenance = if run.source_value.is_some() {
+                    "explicit"
+                } else {
+                    "inherited"
+                };
+                match run.line_spacing {
+                    ViewerParagraphLineSpacing::Proportional {
+                        point_equivalent_emu,
+                    } => format!("proportional-{point_equivalent_emu}-{provenance}"),
+                    ViewerParagraphLineSpacing::Absolute { spacing_emu } => {
+                        format!("absolute-{spacing_emu}-{provenance}")
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+
+        format!(
+            "{}:{}",
+            if full_single {
+                "full"
+            } else {
+                "partial_or_multiple"
+            },
+            parts.join("+")
+        )
+    }
+
+    fn mixed_size_flow_signature(
+        visual: &ViewerGeometryDocument,
+        fragment: &RenderTextFragmentV1,
+    ) -> String {
+        let Some(story) = visual
+            .document
+            .stories
+            .iter()
+            .find(|story| story.id == fragment.story_id)
+        else {
+            return "story_missing".to_owned();
+        };
+        let mut constraints = visual
+            .paragraph_flow_runs
+            .iter()
+            .filter(|run| run.story_id == fragment.story_id)
+            .filter(|run| run.applies_to_story_text(&story.text))
+            .filter(|run| {
+                run.scalar_end > fragment.scalar_start && run.scalar_start < fragment.scalar_end
+            })
+            .map(|run| format!("{:?}", run.constraint))
+            .collect::<Vec<_>>();
+        constraints.sort();
+        constraints.dedup();
+        if constraints.is_empty() {
+            "none".to_owned()
+        } else {
+            constraints.join("+")
+        }
+    }
+
+    fn mixed_size_alignment_signature(fragment: &RenderTextFragmentV1) -> String {
+        let mut alignments = fragment
+            .paragraph_alignments
+            .iter()
+            .map(|run| format!("{:?}", run.alignment))
+            .collect::<Vec<_>>();
+        alignments.sort();
+        alignments.dedup();
+        if alignments.is_empty() {
+            "left_or_default".to_owned()
+        } else {
+            alignments.join("+")
         }
     }
 
@@ -2583,6 +2695,7 @@ mod tests {
         let mut fallback_sli_probe_path_counts = BTreeMap::<&'static str, usize>::new();
         let mut fallback_sli_probe_consumption_counts = BTreeMap::<&'static str, usize>::new();
         let mut fallback_sli_probe_cause_counts = BTreeMap::<&'static str, usize>::new();
+        let mut mixed_size_sli_semantics = BTreeMap::<String, usize>::new();
 
         let configured_probe = (actual_sha256
             == "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3")
@@ -2708,6 +2821,78 @@ mod tests {
                 *fallback_sli_probe_cause_counts
                     .entry(cause.cause)
                     .or_default() += 1;
+
+                if cause.path == "mixed_size_path" {
+                    let bounds = node.text_bounds.unwrap_or(node.bounds);
+                    let mut sizes = text
+                        .typography
+                        .iter()
+                        .map(|run| run.text_size_emu)
+                        .collect::<Vec<_>>();
+                    sizes.sort_unstable();
+                    sizes.dedup();
+                    let scalar_span = text.scalar_end.saturating_sub(text.scalar_start);
+                    let capacity = classify_mixed_size_layout_capacity_v1(
+                        &bundle.geometry,
+                        text,
+                        &font,
+                        node.node_id,
+                        &bounds,
+                        false, // This probe binds only the fallback font.
+                    )
+                    .map(|capacity| {
+                        let line_authority = format!(
+                            "source_font_bound=false:accepted_spacing_histogram={}:first_spacing={}:last_spacing={}:next_spacing={}:first_height={}:last_height={}",
+                            serde_json::to_string(&capacity.accepted_line_spacing_counts)
+                                .expect("serialize source line authority histogram"),
+                            capacity.first_accepted_line_spacing.as_deref().unwrap_or("none"),
+                            capacity.last_accepted_line_spacing.as_deref().unwrap_or("none"),
+                            capacity.next_width_fit_line_spacing.as_deref().unwrap_or("none"),
+                            capacity.first_line_height_emu
+                                .map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                            capacity.last_line_height_emu
+                                .map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                        );
+                        format!(
+                            "accepted={}:used={}:first_physical_then_baseline={}:next_line_height={}:next_physical={}:current_next_fits={}:first_physical_next_fits={}:{}",
+                            capacity.accepted_lines,
+                            capacity.used_height_emu,
+                            capacity
+                                .physical_first_then_baseline_height_emu
+                                .map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                            capacity
+                                .next_width_fit_line_height_emu
+                                .map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                            capacity
+                                .next_width_fit_physical_extent_emu
+                                .map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                            capacity
+                                .current_next_fits_height
+                                .map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                            capacity
+                                .physical_first_then_baseline_next_fits_height
+                                .map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                            line_authority,
+                        )
+                    })
+                    .unwrap_or_else(|| "unavailable".to_owned());
+                    let key = format!(
+                        "p{}:source_lines={}:scalar_span={}:size_count={}:size_min={}:size_max={}:spacing={}:flow={}:align={}:frame_w={}:frame_h={}:capacity={}",
+                        page_index + 1,
+                        text.line_count,
+                        scalar_span,
+                        sizes.len(),
+                        sizes.first().copied().unwrap_or_default(),
+                        sizes.last().copied().unwrap_or_default(),
+                        mixed_size_line_spacing_signature(&bundle.geometry, text),
+                        mixed_size_flow_signature(&bundle.geometry, text),
+                        mixed_size_alignment_signature(text),
+                        bounds.width.get(),
+                        bounds.height.get(),
+                        capacity,
+                    );
+                    *mixed_size_sli_semantics.entry(key).or_default() += 1;
+                }
             }
 
             for node in plan.nodes {
@@ -2851,6 +3036,8 @@ mod tests {
                 .expect("serialize fallback-only SLI consumption census");
         let fallback_sli_probe_cause_json = serde_json::to_string(&fallback_sli_probe_cause_counts)
             .expect("serialize fallback-only SLI cause census");
+        let mixed_size_sli_semantics_json = serde_json::to_string(&mixed_size_sli_semantics)
+            .expect("serialize mixed-size SLI semantic census");
 
         assert_eq!(
             fallback_sli_probe_cause_counts.values().sum::<usize>(),
@@ -2942,6 +3129,11 @@ mod tests {
             fallback_sli_probe_path_json,
             fallback_sli_probe_consumption_json,
             fallback_sli_probe_cause_json,
+        );
+
+        println!(
+            "CLOUD_READER_MIXED_SIZE_SLI_SEMANTICS source_sha256={} rows={}",
+            actual_sha256, mixed_size_sli_semantics_json,
         );
 
         println!(
