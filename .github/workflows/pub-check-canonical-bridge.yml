@@ -39,4 +39,4 @@ jobs:
         run: npm run typecheck
       - name: Verify canonical report boundary
         working-directory: apps/pub-check-web
-        run: node --experimental-strip-types --test tests/canonical-report.test.mjs
+        run: node --experimental-strip-types --test tests/*.test.mjs
