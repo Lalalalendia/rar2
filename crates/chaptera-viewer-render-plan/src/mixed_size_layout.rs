@@ -336,6 +336,7 @@ fn evaluate_mixed_size_text_layout_v1(
     node_id: NodeId,
     bounds: &RectEmu,
     fingerprint: &str,
+    use_first_physical_extent: bool,
 ) -> Result<MixedSizeLayoutEvaluationV1, RenderTextLayoutFallbackReasonV1> {
     let runs = admitted_typography_runs_v1(fragment, font.default_font_size_emu)?;
     if runs.len() < 2
@@ -412,7 +413,7 @@ fn evaluate_mixed_size_text_layout_v1(
                 )?
             };
             let fits_width = evaluated.measured_width_emu <= bounds.width.get();
-            let candidate_used_height_emu = if line_index == 0 {
+            let candidate_used_height_emu = if use_first_physical_extent && line_index == 0 {
                 mixed_candidate_physical_extent_emu_v1(&evaluated, font)?
             } else {
                 used_height_emu
@@ -481,15 +482,25 @@ pub(super) fn resolve_mixed_size_text_layout_v1(
     fingerprint: &str,
     vertical_alignment: Option<ViewerTextVerticalAlignment>,
 ) -> RenderTextLayoutV1 {
-    let evaluation =
-        match evaluate_mixed_size_text_layout_v1(fragment, font, node_id, bounds, fingerprint) {
+    let baseline =
+        match evaluate_mixed_size_text_layout_v1(fragment, font, node_id, bounds, fingerprint, false)
+        {
             Ok(value) => value,
             Err(reason) => return fallback_layout(reason),
         };
 
-    if evaluation.cursor != fragment.scalar_end {
-        return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
-    }
+    let evaluation = if baseline.cursor == fragment.scalar_end {
+        baseline
+    } else {
+        match evaluate_mixed_size_text_layout_v1(fragment, font, node_id, bounds, fingerprint, true)
+        {
+            Ok(value) if value.cursor == fragment.scalar_end => value,
+            Ok(_) => {
+                return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
+            }
+            Err(reason) => return fallback_layout(reason),
+        }
+    };
 
     let max_font_size_emu = evaluation
         .runs
