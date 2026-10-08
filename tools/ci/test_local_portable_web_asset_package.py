@@ -27,6 +27,7 @@ def sha256_bytes(value: bytes) -> str:
 
 
 def make_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
+    root.mkdir(parents=True, exist_ok=True)
     chaptera = root / "chaptera.exe"
     producer = root / "chaptera-producer-a.exe"
     chaptera.write_bytes(b"chaptera-web-asset-contract\n")
