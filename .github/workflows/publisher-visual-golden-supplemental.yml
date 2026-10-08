@@ -237,6 +237,17 @@ jobs:
           READER_WORKER_ADDRESS_SPACE_MB: "768"
         run: node apps/cloud-reader/real-browser.test.mjs
 
+      - name: Attribute exact 06/100 residual with renderer-true paint bounds
+        run: |
+          set -euo pipefail
+          for fixture in 06-modern2c-image-heavy 100_b1faaba988e88b41; do
+            python tools/cloud_reader_visual_paint_bounds_attribution_v1.py \
+              "$RUNNER_TEMP/publisher-visual-supplemental/browser/${fixture}-page-1.png" \
+              tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json \
+              "$RUNNER_TEMP/publisher-visual-supplemental/browser/${fixture}-page-1-paint-bounds-geometry.json" \
+              "$fixture" 1
+          done
+
       - name: Build current-Reader supplemental execution receipt
         run: |
           set -euo pipefail
