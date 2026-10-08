@@ -1,0 +1,7 @@
+# 2026-10-08 — terminal/superseded batch 15
+# Never merge. Exact live tips from closed-unmerged PRs with explicit stale/duplicate/superseded authority.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+validation/pub-pdf-wmf-preview-alpha-ab-01 aac6ead44c81e0219560492e0619f56f8008297a # #2192 stale validation, superseded before execution after #2191 head moved
+measure/mixed-size-line-authority-20261008 fcd6b6613892e5981fdb2d2b6976fc50bc8ffc3d # #2162 duplicate diagnostic; current owner #2158
+ci/pub-editor-image-core-split-01 f5bb505ecd7d11127d3ee8f402e288738d7784eb # #2125 exact 15-file payload superseded by merged current-main restack #2173
