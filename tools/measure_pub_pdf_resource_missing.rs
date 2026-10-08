@@ -9,7 +9,8 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-const SCHEMA: &str = "chaptera.pub-pdf-resource-missing-census.v1";
+const SCHEMA: &str = "chaptera.pub-pdf-resource-missing-census.v2";
+const MAX_BOUNDED_SOURCE_LINE_WIDTH_EMU_V1: i64 = 0x0132_F540;
 
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
@@ -42,6 +43,40 @@ fn explicit_paint_signal(node: &Node<PubResolvedNodePayload>) -> bool {
         || paint.line.color_rgb.is_some()
         || paint.line.width_emu.is_some()
         || paint.line.visible.is_some()
+}
+
+fn bounded_visible_paint(node: &Node<PubResolvedNodePayload>) -> (bool, bool) {
+    if let Some(effective) = node.payload.effective_paint.as_ref() {
+        let fill = matches!(
+            (
+                effective.fill.solid.as_ref(),
+                effective.fill.color_rgb.as_ref(),
+                effective.fill.visible.as_ref(),
+            ),
+            (Some(solid), Some(_), Some(visible)) if solid.value && visible.value
+        );
+        let line = matches!(
+            (
+                effective.line.color_rgb.as_ref(),
+                effective.line.width_emu.as_ref(),
+                effective.line.visible.as_ref(),
+            ),
+            (Some(_), Some(width), Some(visible))
+                if visible.value
+                    && width.value > 0
+                    && width.value <= MAX_BOUNDED_SOURCE_LINE_WIDTH_EMU_V1
+        );
+        return (fill, line);
+    }
+
+    let paint = &node.payload.explicit_paint;
+    let fill = paint.fill.solid && paint.fill.visible == Some(true) && paint.fill.color_rgb.is_some();
+    let line = matches!(
+        (paint.line.visible, paint.line.color_rgb, paint.line.width_emu),
+        (Some(true), Some(_), Some(width))
+            if width > 0 && width <= MAX_BOUNDED_SOURCE_LINE_WIDTH_EMU_V1
+    );
+    (fill, line)
 }
 
 fn preset_name(paint: &ViewerNodePaint) -> Option<&'static str> {
@@ -110,9 +145,19 @@ fn classify(
                     None => "shape_empty_viewer_paint",
                 }
             } else if node.payload.effective_paint.is_some() {
-                "shape_effective_paint_not_projected"
+                let (fill, line) = bounded_visible_paint(node);
+                if fill || line {
+                    "shape_visible_effective_paint_not_projected"
+                } else {
+                    "shape_effective_paint_nonpaintable"
+                }
             } else if explicit_paint_signal(node) {
-                "shape_explicit_paint_not_projected"
+                let (fill, line) = bounded_visible_paint(node);
+                if fill || line {
+                    "shape_visible_explicit_paint_not_projected"
+                } else {
+                    "shape_explicit_paint_nonpaintable"
+                }
             } else {
                 "shape_without_paint_semantics"
             }
@@ -245,6 +290,16 @@ fn main() -> Result<()> {
         }
         if explicit_paint_signal(node) {
             bump(&mut feature_counts, "payload_explicit_paint_signal");
+        }
+        let (bounded_fill, bounded_line) = bounded_visible_paint(node);
+        if bounded_fill {
+            bump(&mut feature_counts, "payload_bounded_visible_fill");
+        }
+        if bounded_line {
+            bump(&mut feature_counts, "payload_bounded_visible_line");
+        }
+        if bounded_fill || bounded_line {
+            bump(&mut feature_counts, "payload_bounded_visible_paint");
         }
         if node.payload.image_slot.is_some() {
             bump(&mut feature_counts, "payload_image_slot");
