@@ -38,7 +38,7 @@ export function previewTextPaintPlan(node, resolvedPlan = null) {
   const lineHeightEmu = resolvedPlan?.line_height_emu
     ?? (previewFontSize == null
       ? PREVIEW_LINE_HEIGHT_EMU
-      : Math.round(fontSizeEmu * PREVIEW_LINE_HEIGHT_EMU / PREVIEW_FONT_SIZE_EMU));
+      : previewLineHeightEmu(fontSizeEmu));
   const color = resolvedPlan?.color
     ?? rgb(preview?.color_rgb)
     ?? "#000";
@@ -49,9 +49,48 @@ export function previewTextPaintPlan(node, resolvedPlan = null) {
   });
 }
 
+function previewLineHeightEmu(fontSizeEmu) {
+  return Math.round(fontSizeEmu * PREVIEW_LINE_HEIGHT_EMU / PREVIEW_FONT_SIZE_EMU);
+}
+
+export function previewTextSizeRunPlan(node) {
+  const runs = node?.preview_text_style?.size_runs;
+  if (!Array.isArray(runs) || runs.length === 0 || typeof node?.text !== "string") return null;
+
+  const scalars = Array.from(node.text);
+  const paintScalarLength = scalars.at(-1) === "\r" ? scalars.length - 1 : scalars.length;
+  if (paintScalarLength <= 0) return null;
+
+  let cursor = 0;
+  const planned = [];
+  for (const run of runs) {
+    const start = safeInteger(run?.local_scalar_start, "preview.size_run.local_scalar_start");
+    const end = safeInteger(run?.local_scalar_end, "preview.size_run.local_scalar_end");
+    const fontSizeEmu = safeInteger(run?.font_size_emu, "preview.size_run.font_size_emu");
+    if (start !== cursor || end <= start || end > paintScalarLength || fontSizeEmu <= 0) {
+      return null;
+    }
+    planned.push(Object.freeze({
+      local_scalar_start: start,
+      local_scalar_end: end,
+      text: scalars.slice(start, end).join(""),
+      font_size_emu: fontSizeEmu,
+      line_height_emu: previewLineHeightEmu(fontSizeEmu)
+    }));
+    cursor = end;
+  }
+  if (cursor !== paintScalarLength) return null;
+
+  return Object.freeze({
+    runs: Object.freeze(planned),
+    tail: scalars.slice(paintScalarLength).join("")
+  });
+}
+
 export function previewTextSizeSource(node, plan = null) {
   if (plan) return "shared_resolved_plan";
   if (node?.preview_text_style?.font_size_emu != null) return "source_uniform_preview";
+  if (previewTextSizeRunPlan(node)) return "source_run_sizes";
   return "generic_9pt";
 }
 
@@ -370,15 +409,30 @@ export function resolvedTextViewportGeometry(bounds) {
 function appendPreviewText(group, node, plan, reason) {
   if (!node.text) return;
   const bounds = node.text_bounds ?? node.bounds;
+  const sizeRunPlan = plan == null ? previewTextSizeRunPlan(node) : null;
   const foreign = previewForeignObject(bounds, {
     "data-text-authority": "browser-preview-only",
     "data-preview-kind": node.kind === "text_frame" ? "text_frame" : "other_node_text",
     "data-preview-reason": reason,
-    "data-preview-size-source": previewTextSizeSource(node, plan)
+    "data-preview-size-source": previewTextSizeSource(node, plan),
+    "data-preview-size-run-count": sizeRunPlan?.runs.length ?? 0
   });
   const div = document.createElementNS(XHTML_NS, "div");
   previewTextStyle(div, node, plan);
-  div.textContent = node.text;
+  if (sizeRunPlan) {
+    for (const run of sizeRunPlan.runs) {
+      const span = document.createElementNS(XHTML_NS, "span");
+      span.setAttribute("data-preview-size-run", "true");
+      span.setAttribute("data-preview-font-size-emu", String(run.font_size_emu));
+      span.style.fontSize = (run.font_size_emu / EMU_PER_CSS_PX) + "px";
+      span.style.lineHeight = (run.line_height_emu / EMU_PER_CSS_PX) + "px";
+      span.textContent = run.text;
+      div.appendChild(span);
+    }
+    if (sizeRunPlan.tail) div.appendChild(document.createTextNode(sizeRunPlan.tail));
+  } else {
+    div.textContent = node.text;
+  }
   foreign.appendChild(div);
   group.appendChild(foreign);
 }

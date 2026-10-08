@@ -10,6 +10,7 @@ import {
   imageResourcePaintPlan,
   presetShapePaintGeometry,
   previewTextPaintPlan,
+  previewTextSizeRunPlan,
   previewTextSizeSource,
   resolvedTextLinePaintPlan,
   resolvedTextViewportGeometry,
@@ -471,9 +472,39 @@ test("browser preview font-size provenance is distinct from source font identity
   assert.equal(previewTextSizeSource({ preview_text_style: { font_size_emu: null } }), "generic_9pt");
   assert.equal(previewTextSizeSource({ preview_text_style: { font_size_emu: 457_200 } }),
     "source_uniform_preview");
+  assert.equal(previewTextSizeSource({
+    text: "A💜B",
+    preview_text_style: { font_size_emu: null, size_runs: [
+      { local_scalar_start: 0, local_scalar_end: 1, font_size_emu: 304_800 },
+      { local_scalar_start: 1, local_scalar_end: 2, font_size_emu: 177_800 },
+      { local_scalar_start: 2, local_scalar_end: 3, font_size_emu: 304_800 }
+    ] }
+  }), "source_run_sizes");
   assert.equal(previewTextSizeSource({}, { font_size_emu: 152_400 }), "shared_resolved_plan");
   assert.equal(previewTextSizeSource({ preview_text_style: { font_size_emu: 457_200 } },
     { font_size_emu: 152_400 }), "shared_resolved_plan");
+});
+
+test("browser preview size runs use Unicode scalar offsets and preserve a terminal paragraph mark", () => {
+  const plan = previewTextSizeRunPlan({
+    text: "A💜B\r",
+    preview_text_style: { size_runs: [
+      { local_scalar_start: 0, local_scalar_end: 1, font_size_emu: 304_800 },
+      { local_scalar_start: 1, local_scalar_end: 2, font_size_emu: 177_800 },
+      { local_scalar_start: 2, local_scalar_end: 3, font_size_emu: 304_800 }
+    ] }
+  });
+  assert.deepEqual(plan.runs.map((run) => [run.text, run.font_size_emu]), [
+    ["A", 304_800], ["💜", 177_800], ["B", 304_800]
+  ]);
+  assert.equal(plan.tail, "\r");
+  assert.equal(previewTextSizeRunPlan({
+    text: "A💜B",
+    preview_text_style: { size_runs: [
+      { local_scalar_start: 0, local_scalar_end: 1, font_size_emu: 304_800 },
+      { local_scalar_start: 2, local_scalar_end: 3, font_size_emu: 177_800 }
+    ] }
+  }), null, "gapped scalar coverage must fall back to the existing generic preview");
 });
 
 test("shared resolved text paint plan carries server text color", () => {

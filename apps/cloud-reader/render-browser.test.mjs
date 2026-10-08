@@ -51,6 +51,13 @@ const scene = {
         lines: [{ line_index: 0, text: "Server line A", measured_width_emu: emu(120), line_height_emu: emu(20) },
           { line_index: 1, text: "Server line B", measured_width_emu: emu(120), line_height_emu: emu(20) }]
       }
+    },
+    { node_id: "mixed-preview", page_id: "p", kind: "text_frame", bounds: rectangle(350, 350, 220, 40),
+      text: "A💜B", preview_text_style: { size_runs: [
+        { local_scalar_start: 0, local_scalar_end: 1, font_size_emu: emu(24) },
+        { local_scalar_start: 1, local_scalar_end: 2, font_size_emu: emu(14) },
+        { local_scalar_start: 2, local_scalar_end: 3, font_size_emu: emu(24) }
+      ] }
     }
   ], stories: [], resources: [
     { resource_id: "border-r", mime: "image/png", availability: "inline_data_url", inline_data_url: pixelPng }
@@ -89,8 +96,11 @@ try {
       inside_frame: text.x >= frame.x - 0.1 && text.right <= frame.right + 0.1 && text.y >= frame.y - 0.1 && text.bottom <= frame.bottom + 0.1 };
   }));
   await page.screenshot({ path: join(output, "preview-text.png") });
-  assert.equal(measurements.length, 4);
-  const expectedFrames = [[50, 50, 240, 60], [50, 150, 240, 80], [310, 150, 240, 80], [50, 280, 300, 80]];
+  assert.equal(measurements.length, 5);
+  const expectedFrames = [
+    [50, 50, 240, 60], [50, 150, 240, 80], [310, 150, 240, 80],
+    [50, 280, 300, 80], [370, 370, 220, 40]
+  ];
   measurements.forEach((measurement, index) => {
     measurement.frame.forEach((value, component) => assert.ok(Math.abs(value - expectedFrames[index][component]) < 0.1,
       "preview CSS conversion must preserve canonical page-space bounds"));
@@ -113,8 +123,21 @@ try {
     { node: "table", kind: "table_cell", reason: "table_cell_preview", sizeSource: "generic_9pt" },
     { node: "table", kind: "table_cell", reason: "table_cell_preview", sizeSource: "generic_9pt" },
     { node: "unresolved-font", kind: "other_node_text", reason: "base_font_unavailable",
-      sizeSource: "shared_resolved_plan" }
+      sizeSource: "shared_resolved_plan" },
+    { node: "mixed-preview", kind: "text_frame", reason: "scene_layout_missing",
+      sizeSource: "source_run_sizes" }
   ]);
+  const mixedPreview = await page.locator('[data-node-id="mixed-preview"] foreignObject').evaluate((element) => ({
+    text: element.firstElementChild.textContent,
+    run_text: [...element.querySelectorAll('[data-preview-size-run="true"]')].map((span) => span.textContent),
+    run_font_sizes_px: [...element.querySelectorAll('[data-preview-size-run="true"]')]
+      .map((span) => parseFloat(getComputedStyle(span).fontSize)),
+    run_count: Number(element.getAttribute("data-preview-size-run-count"))
+  }));
+  assert.equal(mixedPreview.text, "A💜B");
+  assert.deepEqual(mixedPreview.run_text, ["A", "💜", "B"]);
+  assert.deepEqual(mixedPreview.run_font_sizes_px, [24, 14, 24]);
+  assert.equal(mixedPreview.run_count, 3);
   const shared = await page.locator('[data-text-authority="server-shared-resolved"]').evaluateAll((lines) => lines.map((line) => {
     const bounds = line.getBoundingClientRect();
     return { text: line.textContent, font_size_px: parseFloat(getComputedStyle(line).fontSize),

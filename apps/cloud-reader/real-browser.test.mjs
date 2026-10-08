@@ -250,8 +250,11 @@ try {
         "base_font_unavailable", "span_font_unavailable", "span_font_fingerprint_mismatch",
         "invalid_text_viewport", "table_cell_preview"
       ]);
-      const sizeSources = new Set(["shared_resolved_plan", "source_uniform_preview", "generic_9pt"]);
+      const sizeSources = new Set([
+        "shared_resolved_plan", "source_uniform_preview", "source_run_sizes", "generic_9pt"
+      ]);
       const byKind = {}, byReason = {}, bySizeSource = {}, byPage = {}, byPageCause = {};
+      const sizeRunFontSizeEmu = {};
       const paintBoundsEmu = [];
       const pages = [...document.querySelectorAll("#pages svg.page")];
       const pagePaintBoundsEmu = (element) => {
@@ -293,6 +296,17 @@ try {
           [byKind, kind], [byReason, reason], [bySizeSource, sizeSource],
           [byPage, String(page)], [byPageCause, page + "|" + kind + "|" + reason + "|" + sizeSource]
         ]) counts[key] = (counts[key] ?? 0) + 1;
+        const sizeRunElements = [...element.querySelectorAll('[data-preview-size-run="true"]')];
+        if ((sizeSource === "source_run_sizes") !== (sizeRunElements.length > 0)) {
+          throw new Error("browser preview size-run provenance does not match actual DOM spans");
+        }
+        for (const span of sizeRunElements) {
+          const size = Number(span.getAttribute("data-preview-font-size-emu"));
+          if (!Number.isSafeInteger(size) || size <= 0) {
+            throw new Error("browser preview size run must expose a positive integer EMU size");
+          }
+          sizeRunFontSizeEmu[String(size)] = (sizeRunFontSizeEmu[String(size)] ?? 0) + 1;
+        }
         paintBoundsEmu.push({
           page,
           kind,
@@ -303,7 +317,7 @@ try {
       }
       return { total: elements.length, by_kind: byKind, by_reason: byReason,
         by_size_source: bySizeSource, by_page: byPage, by_page_cause: byPageCause,
-        paint_bounds_emu: paintBoundsEmu };
+        size_run_font_size_emu: sizeRunFontSizeEmu, paint_bounds_emu: paintBoundsEmu };
     });
     assert.equal(
       Object.values(browserPreviewCensus.by_kind).reduce((sum, count) => sum + count, 0),
@@ -315,6 +329,20 @@ try {
       browserPreviewCensus.total,
       "browser preview census must locate every actually painted preview element"
     );
+    if (fixture.sha256 === "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf") {
+      assert.deepEqual(
+        browserPreviewCensus.by_size_source,
+        { source_run_sizes: 1 },
+        "SampleNewsletter mixed-size preview must execute source-authorized scalar size runs"
+      );
+    }
+    if (fixture.sha256 === "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87") {
+      assert.deepEqual(
+        browserPreviewCensus.by_size_source,
+        { source_uniform_preview: 1 },
+        "SampleBrochure uniform preview must remain on the existing uniform fast path"
+      );
+    }
     for (const bounds of browserPreviewCensus.paint_bounds_emu) {
       assert.ok(Number.isSafeInteger(bounds.page) && bounds.page > 0);
       for (const key of ["x_emu", "y_emu", "width_emu", "height_emu"]) {
