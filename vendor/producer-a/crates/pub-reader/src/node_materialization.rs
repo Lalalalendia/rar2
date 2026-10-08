@@ -48,6 +48,19 @@ pub(super) fn materialize_mature_nodes(
     }
     let dgg_defaults = dgg_default_inventory.drawing_groups.first();
 
+    let diagnostic_enabled = std::env::var_os("READER_CORPUS_DIAGNOSTIC").is_some();
+    let mut diagnostic_source_nodes = 0usize;
+    let mut diagnostic_story_nodes = 0usize;
+    let mut diagnostic_image_nodes = 0usize;
+    let mut diagnostic_table_nodes = 0usize;
+    let mut diagnostic_primitive_nodes = 0usize;
+    let mut diagnostic_ellipse_nodes = 0usize;
+    let mut diagnostic_line_nodes = 0usize;
+    let mut diagnostic_roundrect_nodes = 0usize;
+    let mut diagnostic_painted_primitives = 0usize;
+    let mut diagnostic_unpainted_primitives = 0usize;
+    let mut diagnostic_grouped_nodes = 0usize;
+
     for reference in references.values() {
         let raw_type = single_raw_type(reference);
         if raw_type != Some(RAW_TYPE_SHAPE) && raw_type != Some(RAW_TYPE_TABLE) {
@@ -566,6 +579,38 @@ pub(super) fn materialize_mature_nodes(
             source_refs.extend(table_story.source_refs.clone());
         }
 
+        if diagnostic_enabled {
+            diagnostic_source_nodes += 1;
+            if story_frame.is_some() {
+                diagnostic_story_nodes += 1;
+            }
+            if image_slot.is_some() {
+                diagnostic_image_nodes += 1;
+            }
+            if raw_type == Some(RAW_TYPE_TABLE) {
+                diagnostic_table_nodes += 1;
+            }
+            if !grouped_sources.is_empty() {
+                diagnostic_grouped_nodes += 1;
+            }
+            if raw_type == Some(RAW_TYPE_SHAPE)
+                && story_frame.is_none()
+                && image_slot.is_none()
+            {
+                diagnostic_primitive_nodes += 1;
+                diagnostic_ellipse_nodes += usize::from(has_default_ellipse_geometry(shape));
+                diagnostic_line_nodes += usize::from(has_default_line_geometry(shape));
+                diagnostic_roundrect_nodes += usize::from(has_default_roundrect_geometry(shape));
+                let painted = has_explicit_officeart_paint_observation(shape)
+                    || effective_paint.is_some();
+                if painted {
+                    diagnostic_painted_primitives += 1;
+                } else {
+                    diagnostic_unpainted_primitives += 1;
+                }
+            }
+        }
+
         graph.nodes.insert(
             node_id,
             Node {
@@ -603,6 +648,12 @@ pub(super) fn materialize_mature_nodes(
                     table,
                 },
             },
+        );
+    }
+
+    if diagnostic_enabled {
+        eprintln!(
+            "SOURCE_VISUAL_INVENTORY source_nodes={diagnostic_source_nodes} story_nodes={diagnostic_story_nodes} image_nodes={diagnostic_image_nodes} table_nodes={diagnostic_table_nodes} primitive_nodes={diagnostic_primitive_nodes} ellipse_nodes={diagnostic_ellipse_nodes} line_nodes={diagnostic_line_nodes} roundrect_nodes={diagnostic_roundrect_nodes} painted_primitives={diagnostic_painted_primitives} unpainted_primitives={diagnostic_unpainted_primitives} grouped_nodes={diagnostic_grouped_nodes}"
         );
     }
 
