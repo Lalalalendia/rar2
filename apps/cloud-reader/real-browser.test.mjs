@@ -153,12 +153,16 @@ try {
     const workerOutput = join(temporary, fixture.name + "-worker");
     let isolation;
     try {
-      const { stdout } = await run("python3", [join(repo, "tools/migration_pdf_worker_isolation.py"), "run",
+      const workerArgs = [join(repo, "tools/migration_pdf_worker_isolation.py"), "run",
         "--output-dir", workerOutput, "--input", source, "--timeout", String(workerTimeoutSeconds),
         "--address-space-mb", String(workerAddressSpaceMb),
         "--cpu-seconds", String(workerCpuSeconds), "--open-files", "64", "--output-file-mb", "32", "--clear-environment", "--",
         worker, "guest-reader-scene", "--session-id", "guest:" + String(index + 1).padStart(32, "0"),
-        "--expected-sha256", fixture.sha256, "--expected-byte-len", String(fixture.bytes)],
+        "--expected-sha256", fixture.sha256, "--expected-byte-len", String(fixture.bytes)];
+      if (process.env.READER_FONT_REGISTRY) {
+        workerArgs.push("--font-registry", resolve(process.env.READER_FONT_REGISTRY));
+      }
+      const { stdout } = await run("python3", workerArgs,
         { cwd: repo, timeout: (workerTimeoutSeconds + 10) * 1000, maxBuffer: 1024 * 1024 });
       isolation = JSON.parse(stdout);
       assert.equal(isolation.status, "success");
