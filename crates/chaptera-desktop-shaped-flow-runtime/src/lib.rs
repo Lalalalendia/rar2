@@ -12,16 +12,19 @@ use pub_editor::{
     EditorSession, EffectiveParagraphAlignmentValueV1, ImportedParagraphFlowConstraintV1,
 };
 use pub_layout::{
-    BoundedLayoutEnvironment, BoundedParagraphFlowConstraint, BoundedParagraphFlowRun,
-    BoundedShapedFlowRuntime, BoundedShapedFlowScene, BoundedShapingRuntime, project_bounded,
-    resolve_bounded_shaped_flow_with_paragraph_flow,
+    BoundedAuthoringSlice, BoundedLayoutEnvironment, BoundedParagraphFlowConstraint,
+    BoundedParagraphFlowRun, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
+    BoundedShapingRuntime, project_bounded, resolve_bounded_shaped_flow_with_paragraph_flow,
 };
 use pub_line_placement::{
     LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
     ResolvedLineInputV1, resolve_paragraph_line_placement_v1,
 };
 use pub_model::{PageId, StoryId};
-use std::{collections::BTreeMap, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 pub use current_typography::{
     DesktopCurrentBooleanTypographyRunV1, current_story_boolean_typography_v1,
@@ -36,6 +39,48 @@ pub use font_resource::{ExplicitDesktopFontResourceV1, validate_explicit_font_re
 pub const DESKTOP_SHAPED_FLOW_RUNTIME_V1: &str = "chaptera.desktop-shaped-flow-runtime.v1";
 pub const CURRENT_FIXED_PDF_RESOURCE_INPUT_V1: &str =
     "chaptera.current-fixed-pdf-resource-input.v1";
+
+fn retain_story_layout_scope_v1(
+    authoring: &mut BoundedAuthoringSlice,
+    story_id: StoryId,
+) -> Result<(), DesktopShapedFlowRuntimeError> {
+    authoring.stories.retain(|story| story.id == story_id);
+    if authoring.stories.len() != 1 {
+        return Err(DesktopShapedFlowRuntimeError::new(
+            "story_missing",
+            "requested Story is absent from bounded authoring projection",
+        ));
+    }
+
+    authoring
+        .story_frames
+        .retain(|frame| frame.story_id == story_id);
+    let frame_ids = authoring
+        .story_frames
+        .iter()
+        .map(|frame| frame.frame_id)
+        .collect::<BTreeSet<_>>();
+    authoring
+        .node_geometry
+        .retain(|node| frame_ids.contains(&node.node_id));
+
+    let page_origins = authoring
+        .node_geometry
+        .iter()
+        .map(|node| node.parent_origin)
+        .collect::<BTreeSet<_>>();
+    authoring
+        .pages
+        .retain(|page| page_origins.contains(&page.id.into_canonical()));
+
+    // Tables/guides are not inputs to current Story shaping. Keep them out of
+    // the interactive projection so unrelated page content cannot re-enter the
+    // shaped-flow dependency set.
+    authoring.tables.clear();
+    authoring.guides.clear();
+    authoring.unknown_layout_state.clear();
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopStoryLayoutV1 {
@@ -345,6 +390,8 @@ fn build_current_story_layout_with_pages_v1(
             })?
         }
     };
+    let mut authoring = authoring;
+    retain_story_layout_scope_v1(&mut authoring, story_id)?;
     let projection = project_bounded(authoring);
 
     let runtime = BoundedShapedFlowRuntime {
@@ -407,7 +454,7 @@ mod tests {
     use pub_layout::font_fingerprint_sha256;
     use pub_model::{EMU_PER_POINT, LengthEmu};
     use sha2::{Digest, Sha256};
-    use std::{env, fs};
+    use std::{collections::BTreeSet, env, fs};
 
     fn test_font() -> ExplicitDesktopFontResourceV1<'static> {
         let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
@@ -564,10 +611,44 @@ mod tests {
             .expect("edited interval remains covered");
         assert_eq!(changed.bold, Some(desired));
         assert_eq!(changed.italic, first.italic);
+        assert!(
+            editor.graph().stories.len() > 1,
+            "51318 must remain a multi-Story witness for Story-local shaping"
+        );
+        let target_frame_ids = editor
+            .graph()
+            .nodes
+            .values()
+            .filter_map(|node| {
+                let frame = node.payload.story_frame.as_ref()?;
+                (frame.story_id == Some(story_id)).then_some(node.header.id)
+            })
+            .collect::<BTreeSet<_>>();
+        assert!(
+            !target_frame_ids.is_empty(),
+            "selected Story must expose at least one frame"
+        );
+
         let layout =
             build_current_story_layout_v1(&editor, story_id, "layout:scoped-bold", &test_font())
                 .expect("current shaped-flow layout consumes scoped boolean typography");
         assert_eq!(layout.current_boolean_typography, after);
+        assert!(
+            layout
+                .shaped_flow
+                .lines
+                .iter()
+                .all(|line| line.story_origin == story_id),
+            "current Story layout must not shape unrelated Stories"
+        );
+        assert!(
+            layout
+                .shaped_flow
+                .nodes
+                .iter()
+                .all(|node| target_frame_ids.contains(&node.origin)),
+            "current Story layout must not project unrelated frame geometry"
+        );
 
         editor.undo().expect("undo scoped Bold");
         assert_eq!(
