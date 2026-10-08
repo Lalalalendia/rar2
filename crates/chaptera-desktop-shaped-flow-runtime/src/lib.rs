@@ -9,7 +9,8 @@ use fixed_pdf_pages::bounded_authoring_slice_for_pages_v1;
 #[cfg(test)]
 use fixed_pdf_pages::qualified_page_set_error_v1;
 use pub_editor::{
-    EditorSession, EffectiveParagraphAlignmentValueV1, ImportedParagraphFlowConstraintV1,
+    EditorSession, EffectiveParagraphAlignmentV1, EffectiveParagraphAlignmentValueV1,
+    ImportedParagraphFlowConstraintV1,
 };
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedLayoutProjection, BoundedParagraphFlowConstraint,
@@ -88,36 +89,42 @@ impl fmt::Display for DesktopShapedFlowRuntimeError {
 
 impl std::error::Error for DesktopShapedFlowRuntimeError {}
 
-fn effective_line_alignment_v1(
+fn current_story_effective_paragraph_alignments_v1(
     editor: &EditorSession,
+    story_id: StoryId,
+) -> Result<Vec<EffectiveParagraphAlignmentV1>, DesktopShapedFlowRuntimeError> {
+    // Preserve the old line-local fallback: if immutable-source ParagraphId
+    // projection itself is unavailable, paragraph alignment contributes no
+    // rigid line offset instead of failing the whole Story layout.
+    if editor.imported_paragraphs_v1().is_err() {
+        return Ok(Vec::new());
+    }
+
+    editor
+        .effective_story_paragraph_alignments_v1(story_id)
+        .map_err(|error| {
+            DesktopShapedFlowRuntimeError::new(
+                "paragraph_alignment_projection_failed",
+                format!("current Story paragraph alignment could not be resolved: {error}"),
+            )
+        })
+}
+
+fn effective_line_alignment_v1(
+    effective_alignments: &[EffectiveParagraphAlignmentV1],
     story_id: StoryId,
     scalar_start: u32,
     consumed_scalar_end: u32,
-) -> Result<Option<ParagraphAlignmentV1>, DesktopShapedFlowRuntimeError> {
-    let paragraphs = match editor.imported_paragraphs_v1() {
-        Ok(paragraphs) => paragraphs,
-        Err(_) => return Ok(None),
-    };
+) -> Option<ParagraphAlignmentV1> {
     let start = u64::from(scalar_start);
     let end = u64::from(consumed_scalar_end);
-    let Some(paragraph) = paragraphs.iter().find(|paragraph| {
+    let effective = effective_alignments.iter().find(|paragraph| {
         paragraph.story_id == story_id
             && paragraph.range.start <= start
             && start < paragraph.range.end
             && end <= paragraph.range.end
-    }) else {
-        return Ok(None);
-    };
-
-    let effective = editor
-        .effective_paragraph_alignment_v1(paragraph.paragraph_id)
-        .map_err(|error| {
-            DesktopShapedFlowRuntimeError::new(
-                "paragraph_alignment_projection_failed",
-                format!("current ParagraphId alignment could not be resolved: {error}"),
-            )
-        })?;
-    Ok(rigid_line_alignment_v1(effective.effective))
+    })?;
+    rigid_line_alignment_v1(effective.effective)
 }
 
 fn rigid_line_alignment_v1(
@@ -135,7 +142,7 @@ fn rigid_line_alignment_v1(
 }
 
 fn current_story_line_offsets_v1(
-    editor: &EditorSession,
+    effective_alignments: &[EffectiveParagraphAlignmentV1],
     story_id: StoryId,
     layout_revision_id: &str,
     shaped_flow: &BoundedShapedFlowScene,
@@ -150,12 +157,11 @@ fn current_story_line_offsets_v1(
     let mut offsets = BTreeMap::new();
     for (ordinal, line) in source_lines.into_iter().enumerate() {
         let Some(alignment) = effective_line_alignment_v1(
-            editor,
+            effective_alignments,
             story_id,
             line.scalar_start,
             line.consumed_scalar_end,
-        )?
-        else {
+        ) else {
             continue;
         };
         let frame = shaped_flow
@@ -365,6 +371,8 @@ fn build_current_story_layout_core_v1(
     let fingerprint = validate_explicit_font_resource_v1(font)?;
     let current_boolean_typography = current_story_boolean_typography_v1(editor, story_id)?;
     let current_paragraph_flow = current_story_paragraph_flow_v1(editor, story_id)?;
+    let current_paragraph_alignments =
+        current_story_effective_paragraph_alignments_v1(editor, story_id)?;
     let authoring = match page_ids {
         Some(page_ids) => bounded_authoring_slice_for_pages_v1(editor, page_ids)?,
         None => {
@@ -427,8 +435,12 @@ fn build_current_story_layout_core_v1(
             format!("shaped-flow caret projection failed: {error}"),
         )
     })?;
-    let line_offsets =
-        current_story_line_offsets_v1(editor, story_id, layout_revision_id, &shaped_flow)?;
+    let line_offsets = current_story_line_offsets_v1(
+        &current_paragraph_alignments,
+        story_id,
+        layout_revision_id,
+        &shaped_flow,
+    )?;
     apply_line_offsets_to_caret_map_v1(&mut caret_map, &line_offsets)?;
 
     Ok(DesktopStoryLayoutV1 {
