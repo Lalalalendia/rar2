@@ -260,7 +260,7 @@ fn materialize_viewer_text_runs(
                     "code": "pdf.text.viewer_layout_missing",
                 }));
                 output.fallback_nodes.insert(node.node_id);
-                continue;
+                    continue;
             };
 
             match &layout.disposition {
@@ -275,7 +275,7 @@ fn materialize_viewer_text_runs(
                         "reason": reason.code(),
                     }));
                     output.fallback_nodes.insert(node.node_id);
-                continue;
+                    continue;
                 }
                 RenderTextLayoutDispositionV1::SharedResolved {
                     font_resource_id,
@@ -290,7 +290,7 @@ fn materialize_viewer_text_runs(
                             "code": "pdf.text.viewer_font_resource_mismatch",
                         }));
                         output.fallback_nodes.insert(node.node_id);
-                continue;
+                    continue;
                     }
                 }
             }
@@ -301,7 +301,7 @@ fn materialize_viewer_text_runs(
                     "code": "pdf.text.viewer_node_missing_from_scene",
                 }));
                 output.fallback_nodes.insert(node.node_id);
-                continue;
+                    continue;
             };
             if scene_bounds_for_node != &node.bounds {
                 output.skipped.push(serde_json::json!({
@@ -309,7 +309,7 @@ fn materialize_viewer_text_runs(
                     "code": "pdf.text.viewer_node_geometry_mismatch",
                 }));
                 output.fallback_nodes.insert(node.node_id);
-                continue;
+                    continue;
             }
 
             let text_bounds = node.text_bounds.unwrap_or(node.bounds);
@@ -345,7 +345,7 @@ fn materialize_viewer_text_runs(
                                 "code": "pdf.text.viewer_span_shaping_missing",
                             }));
                             output.fallback_nodes.insert(node.node_id);
-                continue;
+                    continue;
                         };
                         if shaping.environment.face_index != fallback_font.face_index
                             || shaping.environment.layout.font_set_fingerprint
@@ -360,7 +360,7 @@ fn materialize_viewer_text_runs(
                                 "code": "pdf.text.viewer_span_font_resource_mismatch",
                             }));
                             output.fallback_nodes.insert(node.node_id);
-                continue;
+                    continue;
                         }
                         let fill_rgb = resolved_text_color_for_range(
                             fragment,
@@ -408,7 +408,7 @@ fn materialize_viewer_text_runs(
                         "code": "pdf.text.viewer_line_shaping_missing",
                     }));
                     output.fallback_nodes.insert(node.node_id);
-                continue;
+                    continue;
                 };
                 if shaping.environment.face_index != fallback_font.face_index
                     || shaping.environment.layout.font_set_fingerprint
@@ -422,7 +422,7 @@ fn materialize_viewer_text_runs(
                         "code": "pdf.text.viewer_line_font_resource_mismatch",
                     }));
                     output.fallback_nodes.insert(node.node_id);
-                continue;
+                    continue;
                 }
                 let fill_rgb =
                     resolved_text_color_for_range(fragment, line.scalar_start, line.scalar_end)
@@ -461,11 +461,7 @@ fn materialize_viewer_text_runs(
     Ok(output)
 }
 
-fn json_value_has_node(
-    value: &Value,
-    field: &str,
-    nodes: &BTreeSet<NodeId>,
-) -> bool {
+fn json_value_has_node(value: &Value, field: &str, nodes: &BTreeSet<NodeId>) -> bool {
     let Some(candidate) = value.get(field) else {
         return false;
     };
@@ -764,8 +760,7 @@ fn build_pdf_artifact(
         default_line_height_emu: line_height_emu,
         bytes: fallback_font_bytes,
     };
-    let mut viewer_text =
-        materialize_viewer_text_runs(&visual, &pdf_scene, &fallback_render_font)?;
+    let mut viewer_text = materialize_viewer_text_runs(&visual, &pdf_scene, &fallback_render_font)?;
 
     // A Viewer node replaces the old bounded approximation only when the node
     // has at least one resolved run and no hard Viewer-layout failure.
@@ -780,31 +775,25 @@ fn build_pdf_artifact(
         .collect::<BTreeSet<_>>();
 
     text_runs.retain(|run| !viewer_replacement_nodes.contains(&run.node_id));
-    materialized.retain(|item| {
-        !json_value_has_node(item, "frame_id", &viewer_replacement_nodes)
-    });
-    skipped.retain(|item| {
-        !json_value_has_node(item, "frame_id", &viewer_replacement_nodes)
-    });
-    receipt_lines.retain(|item| {
-        !json_value_has_node(item, "frame_node_id", &viewer_replacement_nodes)
-    });
-    receipt_runs.retain(|item| {
-        !json_value_has_node(item, "frame_node_id", &viewer_replacement_nodes)
-    });
+    materialized.retain(|item| !json_value_has_node(item, "frame_id", &viewer_replacement_nodes));
+    skipped.retain(|item| !json_value_has_node(item, "frame_id", &viewer_replacement_nodes));
+    receipt_lines
+        .retain(|item| !json_value_has_node(item, "frame_node_id", &viewer_replacement_nodes));
+    receipt_runs
+        .retain(|item| !json_value_has_node(item, "frame_node_id", &viewer_replacement_nodes));
 
     viewer_text
         .text_runs
         .retain(|run| viewer_replacement_nodes.contains(&run.node_id));
-    viewer_text.materialized.retain(|item| {
-        !json_value_has_node(item, "frame_id", &viewer_text.fallback_nodes)
-    });
-    viewer_text.receipt_lines.retain(|item| {
-        !json_value_has_node(item, "frame_node_id", &viewer_text.fallback_nodes)
-    });
-    viewer_text.receipt_runs.retain(|item| {
-        !json_value_has_node(item, "frame_node_id", &viewer_text.fallback_nodes)
-    });
+    viewer_text
+        .materialized
+        .retain(|item| !json_value_has_node(item, "frame_id", &viewer_text.fallback_nodes));
+    viewer_text
+        .receipt_lines
+        .retain(|item| !json_value_has_node(item, "frame_node_id", &viewer_text.fallback_nodes));
+    viewer_text
+        .receipt_runs
+        .retain(|item| !json_value_has_node(item, "frame_node_id", &viewer_text.fallback_nodes));
 
     text_runs.extend(viewer_text.text_runs);
     materialized.extend(viewer_text.materialized);
