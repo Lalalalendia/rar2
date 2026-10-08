@@ -1,0 +1,5 @@
+{
+  "schema": "chaptera.source-fanout-root.v1",
+  "path": "apps/chaptera-desktop/src/agent.rs",
+  "max_lines": 3061
+}

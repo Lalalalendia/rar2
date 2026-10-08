@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import tempfile
 from pathlib import Path
@@ -221,6 +222,233 @@ def test_fanout_reduction_passes() -> None:
     assert evaluate(root, base, head) == []
 
 
+
+def write_v2_budget(
+    root: Path,
+    shared: dict[str, int],
+    *,
+    leaf_limit: int = 1,
+    tracked_roots: list[str] | None = None,
+    shard_names: dict[str, str] | None = None,
+) -> dict[str, str]:
+    tracked = tracked_roots or ["src/"]
+    policy = {
+        "schema": mod.BUDGET_SCHEMA_V2,
+        "new_leaf_max_conditional_workflows": leaf_limit,
+        "tracked_roots": tracked,
+    }
+    (root / mod.BUDGET_PATH).write_text(
+        json.dumps(policy, indent=2) + "\n", encoding="utf-8"
+    )
+    shard_dir = root / mod.ROOT_SHARD_DIR
+    shard_dir.mkdir(parents=True, exist_ok=True)
+    for existing in shard_dir.glob("*.json"):
+        existing.unlink()
+    result: dict[str, str] = {}
+    for index, (source, ceiling) in enumerate(sorted(shared.items())):
+        name = (shard_names or {}).get(source, f"root-{index}.json")
+        shard = shard_dir / name
+        shard.write_text(
+            json.dumps(
+                {
+                    "schema": mod.ROOT_SHARD_SCHEMA,
+                    "path": source,
+                    "max_lines": ceiling,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        result[source] = shard.relative_to(root).as_posix()
+    return result
+
+
+def init_repo_v2() -> tuple[Path, str, dict[str, str]]:
+    root, _ = init_repo()
+    shards = write_v2_budget(root, {"src/lib.rs": 1})
+    base = commit(root, "v2 base")
+    return root, base, shards
+
+
+def test_v1_to_v2_migration_preserves_authority() -> None:
+    root, base = init_repo()
+    write_v2_budget(root, {"src/lib.rs": 1})
+    head = commit(root, "migrate to shards")
+    assert evaluate(root, base, head) == []
+    budget = mod.read_budget(root, head)
+    assert budget is not None
+    assert budget["schema"] == mod.BUDGET_SCHEMA_V2
+    assert budget["shared_roots"] == {"src/lib.rs": {"max_lines": 1}}
+
+
+def test_v1_to_v2_migration_cannot_change_ceiling() -> None:
+    root, base = init_repo()
+    write_v2_budget(root, {"src/lib.rs": 2})
+    head = commit(root, "bad migration")
+    expect_error(
+        evaluate(root, base, head),
+        "v1 -> v2 migration must preserve all shared-root ceilings exactly",
+    )
+
+
+def test_v2_removed_shard_fails() -> None:
+    root, base, shards = init_repo_v2()
+    (root / shards["src/lib.rs"]).unlink()
+    head = commit(root, "remove root shard")
+    expect_error(evaluate(root, base, head), "shared-root shard removed")
+
+
+def test_v2_new_exemption_fails() -> None:
+    root, base, _ = init_repo_v2()
+    shard_dir = root / mod.ROOT_SHARD_DIR
+    (shard_dir / "leaf.json").write_text(
+        json.dumps(
+            {
+                "schema": mod.ROOT_SHARD_SCHEMA,
+                "path": "src/leaf.rs",
+                "max_lines": 1,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    head = commit(root, "add exemption")
+    expect_error(
+        evaluate(root, base, head),
+        "new shared-root exemptions are forbidden",
+    )
+
+
+def test_v2_duplicate_root_fails_closed() -> None:
+    root, _, shards = init_repo_v2()
+    original = json.loads((root / shards["src/lib.rs"]).read_text(encoding="utf-8"))
+    (root / mod.ROOT_SHARD_DIR / "duplicate.json").write_text(
+        json.dumps(original, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    head = commit(root, "duplicate root")
+    try:
+        mod.read_budget(root, head)
+    except mod.BudgetError as exc:
+        assert "duplicate shared-root path" in str(exc)
+    else:
+        raise AssertionError("duplicate shared-root shard must fail closed")
+
+
+def test_v2_malformed_shard_fails_closed() -> None:
+    root, _, shards = init_repo_v2()
+    (root / shards["src/lib.rs"]).write_text("{not-json\n", encoding="utf-8")
+    head = commit(root, "malformed root")
+    try:
+        mod.read_budget(root, head)
+    except mod.BudgetError as exc:
+        assert "invalid JSON" in str(exc)
+    else:
+        raise AssertionError("malformed shared-root shard must fail closed")
+
+
+def test_v2_path_spoof_fails() -> None:
+    root, base, shards = init_repo_v2()
+    shard = root / shards["src/lib.rs"]
+    data = json.loads(shard.read_text(encoding="utf-8"))
+    data["path"] = "src/spoof.rs"
+    shard.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    head = commit(root, "spoof root path")
+    errors = evaluate(root, base, head)
+    expect_error(errors, "new shared-root exemptions are forbidden")
+    expect_error(errors, "shared-root shard removed")
+
+
+def test_v2_shard_rename_fails() -> None:
+    root, base, shards = init_repo_v2()
+    old = root / shards["src/lib.rs"]
+    new = old.with_name("renamed.json")
+    old.rename(new)
+    head = commit(root, "rename shard")
+    expect_error(evaluate(root, base, head), "shared-root shard path changed")
+
+
+def test_v2_ceiling_increase_fails() -> None:
+    root, base, shards = init_repo_v2()
+    shard = root / shards["src/lib.rs"]
+    data = json.loads(shard.read_text(encoding="utf-8"))
+    data["max_lines"] = 2
+    shard.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    head = commit(root, "raise ceiling")
+    expect_error(evaluate(root, base, head), "line ceiling increased")
+
+
+def test_v2_global_leaf_budget_increase_fails() -> None:
+    root, base, _ = init_repo_v2()
+    policy = json.loads((root / mod.BUDGET_PATH).read_text(encoding="utf-8"))
+    policy["new_leaf_max_conditional_workflows"] = 2
+    (root / mod.BUDGET_PATH).write_text(
+        json.dumps(policy, indent=2) + "\n", encoding="utf-8"
+    )
+    head = commit(root, "raise leaf budget")
+    expect_error(evaluate(root, base, head), "budget increased")
+
+
+def test_v2_shrink_requires_own_shard_ratchet() -> None:
+    root, base, _ = init_repo_v2()
+    (root / "src/lib.rs").write_text("", encoding="utf-8")
+    head = commit(root, "shrink without shard")
+    expect_error(evaluate(root, base, head), "MONOLITH CEILING NOT RATCHETED")
+
+
+def test_disjoint_roots_have_disjoint_budget_paths() -> None:
+    root, _, _ = init_repo_v2()
+    (root / "src/a.rs").write_text("fn a() {}\nfn a2() {}\n", encoding="utf-8")
+    (root / "src/b.rs").write_text("fn b() {}\nfn b2() {}\n", encoding="utf-8")
+    shards = write_v2_budget(
+        root,
+        {"src/a.rs": 2, "src/b.rs": 2},
+        shard_names={"src/a.rs": "a.json", "src/b.rs": "b.json"},
+    )
+    base = commit(root, "two root base")
+
+    subprocess.run(
+        ["git", "-C", str(root), "checkout", "-qb", "root-a", base], check=True
+    )
+    (root / "src/a.rs").write_text("fn a() {}\n", encoding="utf-8")
+    a_shard = root / shards["src/a.rs"]
+    a_data = json.loads(a_shard.read_text(encoding="utf-8"))
+    a_data["max_lines"] = 1
+    a_shard.write_text(json.dumps(a_data, indent=2) + "\n", encoding="utf-8")
+    a_head = commit(root, "shrink a")
+    assert evaluate(root, base, a_head) == []
+
+    subprocess.run(
+        ["git", "-C", str(root), "checkout", "-qb", "root-b", base], check=True
+    )
+    (root / "src/b.rs").write_text("fn b() {}\n", encoding="utf-8")
+    b_shard = root / shards["src/b.rs"]
+    b_data = json.loads(b_shard.read_text(encoding="utf-8"))
+    b_data["max_lines"] = 1
+    b_shard.write_text(json.dumps(b_data, indent=2) + "\n", encoding="utf-8")
+    b_head = commit(root, "shrink b")
+    assert evaluate(root, base, b_head) == []
+
+    def budget_paths(head: str) -> set[str]:
+        changed = subprocess.check_output(
+            ["git", "-C", str(root), "diff", "--name-only", f"{base}...{head}"],
+            text=True,
+        ).splitlines()
+        return {
+            path
+            for path in changed
+            if path == mod.BUDGET_PATH or path.startswith(mod.ROOT_SHARD_DIR)
+        }
+
+    a_budget = budget_paths(a_head)
+    b_budget = budget_paths(b_head)
+    assert a_budget == {shards["src/a.rs"]}
+    assert b_budget == {shards["src/b.rs"]}
+    assert a_budget.isdisjoint(b_budget)
+
+
 def main() -> int:
     test_patterns()
     test_yaml_paths()
@@ -232,6 +460,18 @@ def main() -> int:
     test_monolith_growth()
     test_monolith_shrink_requires_ceiling_drop()
     test_fanout_reduction_passes()
+    test_v1_to_v2_migration_preserves_authority()
+    test_v1_to_v2_migration_cannot_change_ceiling()
+    test_v2_removed_shard_fails()
+    test_v2_new_exemption_fails()
+    test_v2_duplicate_root_fails_closed()
+    test_v2_malformed_shard_fails_closed()
+    test_v2_path_spoof_fails()
+    test_v2_shard_rename_fails()
+    test_v2_ceiling_increase_fails()
+    test_v2_global_leaf_budget_increase_fails()
+    test_v2_shrink_requires_own_shard_ratchet()
+    test_disjoint_roots_have_disjoint_budget_paths()
     print("source fanout budget tests: ok")
     return 0
 

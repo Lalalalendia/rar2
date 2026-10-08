@@ -13,8 +13,12 @@ from pathlib import Path
 from typing import Iterable
 
 BUDGET_PATH = "tools/ci/source_fanout_budget.json"
+ROOT_SHARD_DIR = "tools/ci/source_fanout_roots/"
 WORKFLOW_DIR = ".github/workflows/"
 WORKFLOW_SUFFIXES = (".yml", ".yaml")
+BUDGET_SCHEMA_V1 = "chaptera.source-fanout-budget.v1"
+BUDGET_SCHEMA_V2 = "chaptera.source-fanout-budget.v2"
+ROOT_SHARD_SCHEMA = "chaptera.source-fanout-root.v1"
 
 
 class BudgetError(RuntimeError):
@@ -48,27 +52,91 @@ def git_paths(repo: Path, revision: str, prefix: str | None = None) -> list[str]
     return [line for line in git(repo, *args).splitlines() if line]
 
 
+def _json_object(raw: str, *, path: str, revision: str) -> dict:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise BudgetError(f"{path}: invalid JSON at {revision}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise BudgetError(f"{path}: top-level value must be an object")
+    return data
+
+
+def _read_root_shards(repo: Path, revision: str) -> tuple[dict, dict]:
+    shared: dict[str, dict[str, int]] = {}
+    shard_paths: dict[str, str] = {}
+    for shard_path in sorted(
+        path
+        for path in git_paths(repo, revision, ROOT_SHARD_DIR)
+        if path.endswith(".json")
+    ):
+        raw = git_show(repo, revision, shard_path)
+        if raw is None:
+            raise BudgetError(f"{shard_path}: disappeared while reading {revision}")
+        data = _json_object(raw, path=shard_path, revision=revision)
+        if set(data) != {"schema", "path", "max_lines"}:
+            raise BudgetError(
+                f"{shard_path}: root shard must contain exactly schema/path/max_lines"
+            )
+        if data.get("schema") != ROOT_SHARD_SCHEMA:
+            raise BudgetError(f"{shard_path}: unsupported root shard schema")
+        source = data.get("path")
+        ceiling = data.get("max_lines")
+        if (
+            not isinstance(source, str)
+            or not source.endswith(".rs")
+            or source.startswith("/")
+            or ".." in Path(source).parts
+        ):
+            raise BudgetError(f"{shard_path}: invalid shared-root path: {source!r}")
+        if not isinstance(ceiling, int) or ceiling < 1:
+            raise BudgetError(f"{shard_path}: max_lines must be a positive integer")
+        if source in shared:
+            raise BudgetError(
+                f"duplicate shared-root path {source}: "
+                f"{shard_paths[source]} and {shard_path}"
+            )
+        shared[source] = {"max_lines": ceiling}
+        shard_paths[source] = shard_path
+    return shared, shard_paths
+
+
 def read_budget(repo: Path, revision: str) -> dict | None:
     raw = git_show(repo, revision, BUDGET_PATH)
     if raw is None:
         return None
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise BudgetError(f"{BUDGET_PATH}: invalid JSON at {revision}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise BudgetError(f"{BUDGET_PATH}: top-level value must be an object")
-    return data
+    data = _json_object(raw, path=BUDGET_PATH, revision=revision)
+    schema = data.get("schema")
+    if schema == BUDGET_SCHEMA_V1:
+        result = dict(data)
+        result["_format"] = "v1"
+        result["_root_shards"] = {}
+        return result
+    if schema == BUDGET_SCHEMA_V2:
+        if "shared_roots" in data:
+            raise BudgetError(
+                f"{BUDGET_PATH}: v2 policy must not inline shared_roots"
+            )
+        shared, shards = _read_root_shards(repo, revision)
+        result = dict(data)
+        result["shared_roots"] = shared
+        result["_format"] = "v2"
+        result["_root_shards"] = shards
+        return result
+    raise BudgetError(f"{BUDGET_PATH}: unsupported source fanout budget schema")
 
 
 def validate_budget_shape(budget: dict) -> None:
-    if budget.get("schema") != "chaptera.source-fanout-budget.v1":
+    schema = budget.get("schema")
+    if schema not in {BUDGET_SCHEMA_V1, BUDGET_SCHEMA_V2}:
         raise BudgetError("unsupported source fanout budget schema")
     limit = budget.get("new_leaf_max_conditional_workflows")
     if not isinstance(limit, int) or limit < 0:
         raise BudgetError("new_leaf_max_conditional_workflows must be a non-negative integer")
     roots = budget.get("tracked_roots")
-    if not isinstance(roots, list) or not roots or not all(isinstance(x, str) and x for x in roots):
+    if not isinstance(roots, list) or not roots or not all(
+        isinstance(x, str) and x for x in roots
+    ):
         raise BudgetError("tracked_roots must be a non-empty string array")
     shared = budget.get("shared_roots")
     if not isinstance(shared, dict):
@@ -76,11 +144,19 @@ def validate_budget_shape(budget: dict) -> None:
     for path, config in shared.items():
         if not isinstance(path, str) or not path.endswith(".rs"):
             raise BudgetError(f"shared root must be an .rs path: {path!r}")
+        if schema == BUDGET_SCHEMA_V2 and not any(
+            path.startswith(prefix) for prefix in roots
+        ):
+            raise BudgetError(f"shared root is outside tracked_roots: {path}")
         if not isinstance(config, dict):
             raise BudgetError(f"shared root config must be an object: {path}")
         max_lines = config.get("max_lines")
         if not isinstance(max_lines, int) or max_lines < 1:
             raise BudgetError(f"shared root max_lines must be a positive integer: {path}")
+    if schema == BUDGET_SCHEMA_V2:
+        shards = budget.get("_root_shards")
+        if not isinstance(shards, dict) or set(shards) != set(shared):
+            raise BudgetError("v2 shared roots must map one-to-one to root shards")
 
 
 def validate_budget_ratchet(base: dict | None, head: dict) -> list[str]:
@@ -89,6 +165,11 @@ def validate_budget_ratchet(base: dict | None, head: dict) -> list[str]:
         return []
     validate_budget_shape(base)
     errors: list[str] = []
+
+    base_schema = base["schema"]
+    head_schema = head["schema"]
+    if base_schema == BUDGET_SCHEMA_V2 and head_schema == BUDGET_SCHEMA_V1:
+        errors.append("source fanout budget schema downgrade is forbidden")
 
     base_limit = base["new_leaf_max_conditional_workflows"]
     head_limit = head["new_leaf_max_conditional_workflows"]
@@ -105,20 +186,45 @@ def validate_budget_ratchet(base: dict | None, head: dict) -> list[str]:
 
     base_shared = base["shared_roots"]
     head_shared = head["shared_roots"]
+
+    if base_schema == BUDGET_SCHEMA_V1 and head_schema == BUDGET_SCHEMA_V2:
+        if base_limit != head_limit:
+            errors.append(
+                "v1 -> v2 migration must preserve new leaf workflow budget exactly"
+            )
+        if base["tracked_roots"] != head["tracked_roots"]:
+            errors.append("v1 -> v2 migration must preserve tracked_roots exactly")
+        if base_shared != head_shared:
+            errors.append("v1 -> v2 migration must preserve all shared-root ceilings exactly")
+        return errors
+
     new_shared = sorted(set(head_shared) - set(base_shared))
     if new_shared:
         errors.append(
             "new shared-root exemptions are forbidden in ordinary PRs: "
             + ", ".join(new_shared)
         )
+    removed_shared = sorted(set(base_shared) - set(head_shared))
+    if removed_shared:
+        errors.append(
+            "shared-root shard removed: " + ", ".join(removed_shared)
+        )
 
-    for path, config in base_shared.items():
-        if path not in head_shared:
-            continue
-        old = config["max_lines"]
+    for path in sorted(set(base_shared) & set(head_shared)):
+        old = base_shared[path]["max_lines"]
         new = head_shared[path]["max_lines"]
         if new > old:
             errors.append(f"monolith line ceiling increased for {path}: {old} -> {new}")
+
+    if base_schema == BUDGET_SCHEMA_V2 and head_schema == BUDGET_SCHEMA_V2:
+        base_shards = base.get("_root_shards", {})
+        head_shards = head.get("_root_shards", {})
+        for path in sorted(set(base_shared) & set(head_shared)):
+            if base_shards.get(path) != head_shards.get(path):
+                errors.append(
+                    f"shared-root shard path changed for {path}: "
+                    f"{base_shards.get(path)} -> {head_shards.get(path)}"
+                )
 
     return errors
 
