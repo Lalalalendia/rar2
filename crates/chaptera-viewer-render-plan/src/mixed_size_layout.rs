@@ -428,11 +428,12 @@ pub(super) fn evaluate_mixed_size_text_layout_v1(
                 chosen = Some((evaluated, candidate.safe_without_reshaping));
             } else if fits_width {
                 let physical_extent = mixed_candidate_physical_extent_emu_v1(&evaluated, font);
-                let replace = width_fit_rejected
-                    .as_ref()
-                    .is_none_or(|(line_height, _, _, _, _)| {
-                        evaluated.line_height_emu < *line_height
-                    });
+                let replace =
+                    width_fit_rejected
+                        .as_ref()
+                        .is_none_or(|(line_height, _, _, _, _)| {
+                            evaluated.line_height_emu < *line_height
+                        });
                 if replace {
                     width_fit_rejected = Some((
                         evaluated.line_height_emu,
