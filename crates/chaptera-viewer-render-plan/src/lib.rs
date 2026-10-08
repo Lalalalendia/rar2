@@ -888,6 +888,8 @@ pub struct RenderResolvedTextSpanV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_fingerprint_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_rgb: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shaping: Option<RenderResolvedShapingV1>,
 }
 
@@ -2278,6 +2280,107 @@ fn resolved_uniform_line_height_emu_v1(
     )
 }
 
+fn paint_only_color_spans_v1(
+    fragment: &RenderTextFragmentV1,
+    line_scalar_start: u32,
+    line_scalar_end: u32,
+    line_text: &str,
+    line_measured_width_emu: i64,
+    glyphs: &[BoundedShapedGlyph],
+    font_size_emu: i64,
+    font_resource_id: &str,
+    font_fingerprint_sha256: &str,
+) -> Option<Vec<RenderResolvedTextSpanV1>> {
+    if line_scalar_start >= line_scalar_end
+        || font_size_emu <= 0
+        || font_resource_id.is_empty()
+        || font_fingerprint_sha256.is_empty()
+    {
+        return None;
+    }
+
+    let expected_scalars = usize::try_from(line_scalar_end.checked_sub(line_scalar_start)?).ok()?;
+    let chars = line_text.chars().collect::<Vec<_>>();
+    if chars.len() != expected_scalars {
+        return None;
+    }
+
+    let mut cursor = line_scalar_start;
+    let mut segments = Vec::<(u32, u32, [u8; 3])>::new();
+    let mut colors = BTreeSet::<[u8; 3]>::new();
+    for run in &fragment.typography {
+        let start = run.scalar_start.max(line_scalar_start);
+        let end = run.scalar_end.min(line_scalar_end);
+        if start >= end {
+            continue;
+        }
+        if start != cursor {
+            return None;
+        }
+        let color = run.color_rgb?;
+        segments.push((start, end, color));
+        colors.insert(color);
+        cursor = end;
+    }
+    if cursor != line_scalar_end || colors.len() < 2 {
+        return None;
+    }
+
+    let mut cluster_boundaries = BTreeSet::<u32>::new();
+    cluster_boundaries.insert(line_scalar_start);
+    cluster_boundaries.insert(line_scalar_end);
+    for glyph in glyphs {
+        if glyph.cluster >= line_scalar_start && glyph.cluster < line_scalar_end {
+            cluster_boundaries.insert(glyph.cluster);
+        }
+    }
+    if segments.iter().any(|(start, end, _)| {
+        !cluster_boundaries.contains(start) || !cluster_boundaries.contains(end)
+    }) {
+        return None;
+    }
+
+    let total_width = glyphs.iter().try_fold(0_i64, |sum, glyph| {
+        sum.checked_add(glyph.x_advance.get())
+    })?;
+    if total_width != line_measured_width_emu {
+        return None;
+    }
+
+    let mut spans = Vec::with_capacity(segments.len());
+    for (start, end, color_rgb) in segments {
+        let x_offset_emu = glyphs
+            .iter()
+            .filter(|glyph| glyph.cluster < start)
+            .try_fold(0_i64, |sum, glyph| sum.checked_add(glyph.x_advance.get()))?;
+        let measured_width_emu = glyphs
+            .iter()
+            .filter(|glyph| glyph.cluster >= start && glyph.cluster < end)
+            .try_fold(0_i64, |sum, glyph| sum.checked_add(glyph.x_advance.get()))?;
+
+        let local_start = usize::try_from(start.checked_sub(line_scalar_start)?).ok()?;
+        let local_end = usize::try_from(end.checked_sub(line_scalar_start)?).ok()?;
+        if local_start >= local_end || local_end > chars.len() {
+            return None;
+        }
+
+        spans.push(RenderResolvedTextSpanV1 {
+            scalar_start: start,
+            scalar_end: end,
+            text: chars[local_start..local_end].iter().collect(),
+            x_offset_emu,
+            measured_width_emu,
+            font_size_emu,
+            font_resource_id: Some(font_resource_id.to_owned()),
+            font_fingerprint_sha256: Some(font_fingerprint_sha256.to_owned()),
+            color_rgb: Some(color_rgb),
+            shaping: None,
+        });
+    }
+
+    Some(spans)
+}
+
 fn resolve_text_layout_v1(
     visual: &ViewerGeometryDocument,
     target: RenderTextLayoutTargetV1,
@@ -2495,29 +2598,44 @@ fn resolve_text_layout_v1(
 
     let lines: Vec<RenderResolvedTextLineV1> = source_lines
         .into_iter()
-        .map(|line| RenderResolvedTextLineV1 {
-            line_index: line.frame_line_index,
-            scalar_start: line.scalar_start,
-            scalar_end: line.scalar_end,
-            consumed_scalar_end: line.consumed_scalar_end,
-            text: line.text,
-            measured_width_emu: line.measured_width.get(),
-            line_height_emu,
-            x_offset_emu: resolved_line_x_offset_emu_v1(
+        .map(|line| {
+            let measured_width_emu = line.measured_width.get();
+            let spans = paint_only_color_spans_v1(
                 fragment,
-                node_id,
-                &bounds,
-                line.frame_line_index,
-                line.scalar_start..line.scalar_end,
-                line.measured_width.get(),
+                line.scalar_start,
+                line.scalar_end,
+                &line.text,
+                measured_width_emu,
+                &line.glyphs,
+                font_size_emu,
+                font.resource_id,
                 &fingerprint,
-            ),
-            spans: Vec::new(),
-            shaping: Some(RenderResolvedShapingV1 {
-                environment: shaping_environment.clone(),
-                units_per_em: line.units_per_em,
-                glyphs: line.glyphs,
-            }),
+            )
+            .unwrap_or_default();
+            RenderResolvedTextLineV1 {
+                line_index: line.frame_line_index,
+                scalar_start: line.scalar_start,
+                scalar_end: line.scalar_end,
+                consumed_scalar_end: line.consumed_scalar_end,
+                text: line.text,
+                measured_width_emu,
+                line_height_emu,
+                x_offset_emu: resolved_line_x_offset_emu_v1(
+                    fragment,
+                    node_id,
+                    &bounds,
+                    line.frame_line_index,
+                    line.scalar_start..line.scalar_end,
+                    measured_width_emu,
+                    &fingerprint,
+                ),
+                spans,
+                shaping: Some(RenderResolvedShapingV1 {
+                    environment: shaping_environment.clone(),
+                    units_per_em: line.units_per_em,
+                    glyphs: line.glyphs,
+                }),
+            }
         })
         .collect();
 
@@ -2721,6 +2839,7 @@ fn shape_mixed_family_line_candidate_v1(
             font_size_emu: run.font_size_emu,
             font_resource_id: Some(run.font.resource_id.to_owned()),
             font_fingerprint_sha256: Some(run.font_fingerprint_sha256.clone()),
+            color_rgb: None,
             shaping: Some(RenderResolvedShapingV1 {
                 environment: shaped.environment,
                 units_per_em: shaped.units_per_em,
