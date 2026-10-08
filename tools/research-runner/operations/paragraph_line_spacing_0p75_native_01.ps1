@@ -107,14 +107,19 @@ function Get-MixedSizeSnapshot($range, [string]$phase) {
         }
         finally { Release-Com $char }
     }
-    return [ordered]@{
-        phase = $phase
-        range_start = [int]$range.Start
-        range_end = [int]$range.End
-        font_samples = $samples
-        paragraph = Get-ParagraphSnapshot $range.ParagraphFormat $phase
-        geometry = Get-LineGeometry $range $phase
+    $paragraph = $null
+    try {
+        $paragraph = $range.ParagraphFormat
+        return [ordered]@{
+            phase = $phase
+            range_start = [int]$range.Start
+            range_end = [int]$range.End
+            font_samples = $samples
+            paragraph = Get-ParagraphSnapshot $paragraph $phase
+            geometry = Get-LineGeometry $range $phase
+        }
     }
+    finally { Release-Com $paragraph }
 }
 
 function New-SeedFixture() {
@@ -123,6 +128,7 @@ function New-SeedFixture() {
     Write-ResearchStage "seed_copy_complete"
 
     $app = $null; $doc = $null; $shape = $null; $range = $null; $paragraphRange = $null; $paragraph = $null
+    $mixedSeedRange = $null; $mixedSeedRun = $null
     try {
         Write-ResearchStage "seed_application_create_begin"
         $app = New-PubPublisherApplication
@@ -165,6 +171,7 @@ function New-SeedFixture() {
         Write-ResearchStage "seed_save_complete"
     }
     finally {
+        Release-Com $mixedSeedRun; Release-Com $mixedSeedRange
         Release-Com $paragraph; Release-Com $paragraphRange; Release-Com $range; Release-Com $shape
         if ($null -ne $doc) { Write-ResearchStage "seed_document_close_begin" }
         Close-Document $doc
@@ -190,6 +197,7 @@ function Invoke-Arm([string]$name, [string]$kind) {
     Copy-Item -LiteralPath $seedPub -Destination $output -Force
 
     $app = $null; $doc = $null; $shape = $null; $range = $null; $paragraphRange = $null; $paragraph = $null
+    $mixedRange = $null; $mixedParagraph = $null
     try {
         Write-ResearchStage ("arm_{0}_application_create_begin" -f $name)
         $app = New-PubPublisherApplication
@@ -238,6 +246,7 @@ function Invoke-Arm([string]$name, [string]$kind) {
         Write-ResearchStage ("arm_{0}_save_complete" -f $name)
     }
     finally {
+        Release-Com $mixedParagraph; Release-Com $mixedRange
         Release-Com $paragraph; Release-Com $paragraphRange; Release-Com $range; Release-Com $shape
         if ($null -ne $doc) { Write-ResearchStage ("arm_{0}_document_close_begin" -f $name) }
         Close-Document $doc
@@ -248,6 +257,7 @@ function Invoke-Arm([string]$name, [string]$kind) {
     }
 
     $app2 = $null; $doc2 = $null; $shape2 = $null; $range2 = $null; $paragraphRange2 = $null; $paragraph2 = $null
+    $mixedRange2 = $null
     try {
         Write-ResearchStage ("arm_{0}_reopen_application_create_begin" -f $name)
         $app2 = New-PubPublisherApplication
@@ -270,6 +280,7 @@ function Invoke-Arm([string]$name, [string]$kind) {
         }
     }
     finally {
+        Release-Com $mixedRange2
         Release-Com $paragraph2; Release-Com $paragraphRange2; Release-Com $range2; Release-Com $shape2
         if ($null -ne $doc2) { Write-ResearchStage ("arm_{0}_reopen_document_close_begin" -f $name) }
         Close-Document $doc2
