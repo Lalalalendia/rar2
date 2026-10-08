@@ -190,7 +190,7 @@ fn consensus_publication_page_extent(
     Ok((width_emu, height_emu, dimensions.len()))
 }
 
-fn require_consensus_page_extent(extents: &[(u32, u32)]) -> Result<(u32, u32)> {
+pub(super) fn require_consensus_page_extent(extents: &[(u32, u32)]) -> Result<(u32, u32)> {
     let first = extents
         .first()
         .copied()
