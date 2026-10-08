@@ -1,3 +1,4 @@
+// CI routing sacrificial control for #2251; no test behavior change.
 use std::collections::BTreeMap;
 
 use pub_editor::{
