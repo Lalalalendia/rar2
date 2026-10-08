@@ -1,4 +1,4 @@
-name: Partial root Contents source-safe census binary (one-shot)
+name: Truncated Contents semantic census (one-shot)
 
 on:
   push:
@@ -13,16 +13,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-
       - uses: dtolnay/rust-toolchain@stable
-
-      - name: Build existing partial root Contents census
-        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin partial-root-contents-census --release
-
-      - name: Upload source-safe census binary
+      - name: Build truncated Contents research binary
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin truncated-contents-semantics-once --release
+      - name: Upload binary only
         uses: actions/upload-artifact@v4
         with:
-          name: partial-root-contents-census-linux-once
-          path: vendor/producer-a/target/release/partial-root-contents-census
+          name: truncated-contents-semantics-once-linux
+          path: vendor/producer-a/target/release/truncated-contents-semantics-once
           if-no-files-found: error
           retention-days: 1
