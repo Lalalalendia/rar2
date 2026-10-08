@@ -1,9 +1,10 @@
 use anyhow::{Context, Result, bail};
-use pub_export::{ConversionProfile, EnvironmentFence, TargetProfile};
-use pub_layout::{
-    BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedText, BoundedShapingRuntime,
-    font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
+use chaptera_viewer_render_plan::{
+    ExplicitRenderTextFontResourceV1, RenderResolvedShapingV1, RenderTextFragmentV1,
+    RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_v1,
 };
+use pub_export::{ConversionProfile, EnvironmentFence, TargetProfile};
+use pub_layout::{BoundedResolvedScene, BoundedShapedText, font_fingerprint_sha256};
 use pub_model::{EMU_PER_POINT, LengthEmu, NodeId};
 use pub_output::{
     ExplicitFontResource, FixedOutputFontProfile, FontIdentity, OutputFontRequest,
@@ -87,6 +88,367 @@ fn retain_scene_node_ids(
     (kept, filtered_count)
 }
 
+#[derive(Default)]
+struct ViewerTextMaterialization {
+    text_runs: Vec<FixedTextRun>,
+    used_glyph_ids: BTreeSet<u32>,
+    materialized: Vec<Value>,
+    skipped: Vec<Value>,
+    receipt_lines: Vec<Value>,
+    receipt_runs: Vec<Value>,
+    layout_fallback_counts: BTreeMap<String, usize>,
+    visible_line_count: usize,
+}
+
+fn resolved_text_color_for_range(
+    fragment: &RenderTextFragmentV1,
+    scalar_start: u32,
+    scalar_end: u32,
+) -> Option<[u8; 3]> {
+    if scalar_start >= scalar_end {
+        return None;
+    }
+
+    let mut cursor = scalar_start;
+    let mut resolved = None;
+    for run in &fragment.typography {
+        if run.scalar_end <= scalar_start || run.scalar_start >= scalar_end {
+            continue;
+        }
+        if run.scalar_end <= run.scalar_start {
+            return None;
+        }
+        let start = run.scalar_start.max(scalar_start);
+        let end = run.scalar_end.min(scalar_end);
+        if start != cursor || end <= start {
+            return None;
+        }
+        let color = run.color_rgb?;
+        match resolved {
+            None => resolved = Some(color),
+            Some(existing) if existing == color => {}
+            Some(_) => return None,
+        }
+        cursor = end;
+    }
+
+    (cursor == scalar_end).then_some(resolved).flatten()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_viewer_text_run(
+    output: &mut ViewerTextMaterialization,
+    node_id: NodeId,
+    scalar_start: u32,
+    scalar_end: u32,
+    logical_text: &str,
+    measured_width_emu: i64,
+    shaping: &RenderResolvedShapingV1,
+    baseline_x: i64,
+    baseline_y: i64,
+    fill_rgb: [u8; 3],
+    source_kind: &str,
+) -> Result<()> {
+    if logical_text.is_empty() {
+        return Ok(());
+    }
+    if measured_width_emu <= 0 || shaping.units_per_em == 0 {
+        output.skipped.push(serde_json::json!({
+            "node_id": node_id,
+            "scalar_start": scalar_start,
+            "scalar_end": scalar_end,
+            "code": "pdf.text.viewer_shaping_invalid",
+        }));
+        return Ok(());
+    }
+    if shaping.glyphs.iter().any(|glyph| glyph.glyph_id == 0) {
+        output.skipped.push(serde_json::json!({
+            "node_id": node_id,
+            "scalar_start": scalar_start,
+            "scalar_end": scalar_end,
+            "code": "pdf.text.fallback_missing_glyph",
+        }));
+        return Ok(());
+    }
+
+    output
+        .used_glyph_ids
+        .extend(shaping.glyphs.iter().map(|glyph| glyph.glyph_id));
+    let glyph_sequence_hash = shaped_glyph_sequence_hash(&shaping.glyphs)?;
+    let run_index = output.receipt_runs.len();
+
+    output.materialized.push(serde_json::json!({
+        "run_index": run_index,
+        "frame_id": node_id,
+        "scalar_start": scalar_start,
+        "scalar_end": scalar_end,
+        "logical_text": logical_text,
+        "source_kind": source_kind,
+        "baseline_x": baseline_x,
+        "baseline_y": baseline_y,
+        "fill_rgb": fill_rgb,
+    }));
+    output.receipt_lines.push(serde_json::json!({
+        "line_index": output.receipt_lines.len(),
+        "frame_node_id": node_id,
+        "scalar_start": scalar_start,
+        "scalar_end": scalar_end,
+        "glyph_count": shaping.glyphs.len(),
+        "glyph_sequence_hash": glyph_sequence_hash,
+        "units_per_em": shaping.units_per_em,
+        "measured_width": measured_width_emu,
+        "source_kind": source_kind,
+    }));
+    output.receipt_runs.push(serde_json::json!({
+        "run_index": run_index,
+        "frame_node_id": node_id,
+        "scalar_base": scalar_start,
+        "scalar_end": scalar_end,
+        "glyph_count": shaping.glyphs.len(),
+        "glyph_sequence_hash": glyph_sequence_hash,
+        "baseline_x": baseline_x,
+        "baseline_y": baseline_y,
+        "fill_rgb": fill_rgb,
+        "source_kind": source_kind,
+    }));
+    output.text_runs.push(FixedTextRun {
+        node_id,
+        scalar_base: scalar_start,
+        logical_text: logical_text.to_owned(),
+        shaped: BoundedShapedText {
+            environment: shaping.environment.clone(),
+            units_per_em: shaping.units_per_em,
+            glyphs: shaping.glyphs.clone(),
+            total_x_advance: LengthEmu::new(measured_width_emu),
+        },
+        baseline_x: LengthEmu::new(baseline_x),
+        baseline_y: LengthEmu::new(baseline_y),
+        fill_rgb,
+    });
+    Ok(())
+}
+
+fn materialize_viewer_text_runs(
+    visual: &pub_viewer::ViewerGeometryDocument,
+    pdf_scene: &BoundedResolvedScene,
+    fallback_font: &ExplicitRenderTextFontResourceV1<'_>,
+) -> Result<ViewerTextMaterialization> {
+    let scene_bounds = pdf_scene
+        .nodes
+        .iter()
+        .map(|node| (node.origin, node.bounds))
+        .collect::<BTreeMap<_, _>>();
+    let mut output = ViewerTextMaterialization::default();
+
+    for page_index in 0..visual.document.pages.len() {
+        let plan = build_page_render_plan_with_text_layout_v1(visual, page_index, fallback_font)
+            .with_context(|| format!("build Viewer resolved text layout for page {page_index}"))?;
+
+        for node in &plan.nodes {
+            let Some(fragment) = node.text.as_ref() else {
+                continue;
+            };
+            let Some(layout) = fragment.layout.as_ref() else {
+                output.skipped.push(serde_json::json!({
+                    "node_id": node.node_id,
+                    "code": "pdf.text.viewer_layout_missing",
+                }));
+                continue;
+            };
+
+            match &layout.disposition {
+                RenderTextLayoutDispositionV1::BackendFallback { reason } => {
+                    *output
+                        .layout_fallback_counts
+                        .entry(reason.code().to_owned())
+                        .or_default() += 1;
+                    output.skipped.push(serde_json::json!({
+                        "node_id": node.node_id,
+                        "code": "pdf.text.viewer_layout_fallback",
+                        "reason": reason.code(),
+                    }));
+                    continue;
+                }
+                RenderTextLayoutDispositionV1::SharedResolved {
+                    font_resource_id,
+                    font_fingerprint_sha256,
+                    ..
+                } => {
+                    if font_resource_id != fallback_font.resource_id
+                        || font_fingerprint_sha256 != fallback_font.expected_sha256
+                    {
+                        output.skipped.push(serde_json::json!({
+                            "node_id": node.node_id,
+                            "code": "pdf.text.viewer_font_resource_mismatch",
+                        }));
+                        continue;
+                    }
+                }
+            }
+
+            let Some(scene_bounds_for_node) = scene_bounds.get(&node.node_id) else {
+                output.skipped.push(serde_json::json!({
+                    "node_id": node.node_id,
+                    "code": "pdf.text.viewer_node_missing_from_scene",
+                }));
+                continue;
+            };
+            if scene_bounds_for_node != &node.bounds {
+                output.skipped.push(serde_json::json!({
+                    "node_id": node.node_id,
+                    "code": "pdf.text.viewer_node_geometry_mismatch",
+                }));
+                continue;
+            }
+
+            let text_bounds = node.text_bounds.unwrap_or(node.bounds);
+            let base_x = text_bounds
+                .x
+                .get()
+                .checked_sub(node.bounds.x.get())
+                .context("Viewer text bounds x offset overflow")?;
+            let base_y = text_bounds
+                .y
+                .get()
+                .checked_sub(node.bounds.y.get())
+                .context("Viewer text bounds y offset overflow")?;
+            let mut line_top = 0_i64;
+
+            for line in &layout.lines {
+                output.visible_line_count += 1;
+                let current_line_top = line_top;
+                line_top = line_top
+                    .checked_add(line.line_height_emu)
+                    .context("Viewer text line top overflow")?;
+                if line.text.is_empty() {
+                    continue;
+                }
+
+                if !line.spans.is_empty() {
+                    for span in &line.spans {
+                        let Some(shaping) = span.shaping.as_ref() else {
+                            output.skipped.push(serde_json::json!({
+                                "node_id": node.node_id,
+                                "scalar_start": span.scalar_start,
+                                "scalar_end": span.scalar_end,
+                                "code": "pdf.text.viewer_span_shaping_missing",
+                            }));
+                            continue;
+                        };
+                        if shaping.environment.face_index != fallback_font.face_index
+                            || shaping.environment.layout.font_set_fingerprint
+                                != fallback_font.expected_sha256
+                            || shaping.environment.layout.resource_fingerprint
+                                != fallback_font.resource_id
+                        {
+                            output.skipped.push(serde_json::json!({
+                                "node_id": node.node_id,
+                                "scalar_start": span.scalar_start,
+                                "scalar_end": span.scalar_end,
+                                "code": "pdf.text.viewer_span_font_resource_mismatch",
+                            }));
+                            continue;
+                        }
+                        let Some(fill_rgb) = resolved_text_color_for_range(
+                            fragment,
+                            span.scalar_start,
+                            span.scalar_end,
+                        ) else {
+                            output.skipped.push(serde_json::json!({
+                                "node_id": node.node_id,
+                                "scalar_start": span.scalar_start,
+                                "scalar_end": span.scalar_end,
+                                "code": "pdf.text.viewer_color_unresolved",
+                            }));
+                            continue;
+                        };
+                        let baseline_x = base_x
+                            .checked_add(line.x_offset_emu)
+                            .and_then(|value| value.checked_add(span.x_offset_emu))
+                            .context("Viewer text span baseline x overflow")?;
+                        let baseline_y = base_y
+                            .checked_add(layout.vertical_offset_emu)
+                            .and_then(|value| value.checked_add(current_line_top))
+                            .and_then(|value| value.checked_add(span.font_size_emu))
+                            .context("Viewer text span baseline y overflow")?;
+                        push_viewer_text_run(
+                            &mut output,
+                            node.node_id,
+                            span.scalar_start,
+                            span.scalar_end,
+                            &span.text,
+                            span.measured_width_emu,
+                            shaping,
+                            baseline_x,
+                            baseline_y,
+                            fill_rgb,
+                            "viewer_shared_resolved_span",
+                        )?;
+                    }
+                    continue;
+                }
+
+                let Some(shaping) = line.shaping.as_ref() else {
+                    output.skipped.push(serde_json::json!({
+                        "node_id": node.node_id,
+                        "scalar_start": line.scalar_start,
+                        "scalar_end": line.scalar_end,
+                        "code": "pdf.text.viewer_line_shaping_missing",
+                    }));
+                    continue;
+                };
+                if shaping.environment.face_index != fallback_font.face_index
+                    || shaping.environment.layout.font_set_fingerprint
+                        != fallback_font.expected_sha256
+                    || shaping.environment.layout.resource_fingerprint != fallback_font.resource_id
+                {
+                    output.skipped.push(serde_json::json!({
+                        "node_id": node.node_id,
+                        "scalar_start": line.scalar_start,
+                        "scalar_end": line.scalar_end,
+                        "code": "pdf.text.viewer_line_font_resource_mismatch",
+                    }));
+                    continue;
+                }
+                let Some(fill_rgb) =
+                    resolved_text_color_for_range(fragment, line.scalar_start, line.scalar_end)
+                else {
+                    output.skipped.push(serde_json::json!({
+                        "node_id": node.node_id,
+                        "scalar_start": line.scalar_start,
+                        "scalar_end": line.scalar_end,
+                        "code": "pdf.text.viewer_color_unresolved",
+                    }));
+                    continue;
+                };
+                let baseline_x = base_x
+                    .checked_add(line.x_offset_emu)
+                    .context("Viewer text line baseline x overflow")?;
+                let baseline_y = base_y
+                    .checked_add(layout.vertical_offset_emu)
+                    .and_then(|value| value.checked_add(current_line_top))
+                    .and_then(|value| value.checked_add(shaping.environment.font_size_emu.get()))
+                    .context("Viewer text line baseline y overflow")?;
+                push_viewer_text_run(
+                    &mut output,
+                    node.node_id,
+                    line.scalar_start,
+                    line.scalar_end,
+                    &line.text,
+                    line.measured_width_emu,
+                    shaping,
+                    baseline_x,
+                    baseline_y,
+                    fill_rgb,
+                    "viewer_shared_resolved_line",
+                )?;
+            }
+        }
+    }
+
+    Ok(output)
+}
+
 pub fn convert_pdf(
     input: &Path,
     output: &Path,
@@ -146,28 +508,14 @@ fn build_pdf_artifact(
             )
         }
     };
-    let route_uses_viewer_scene = matches!(
-        classification.route,
-        pub_viewer::PubReaderRoute::Legacy22LowText | pub_viewer::PubReaderRoute::Legacy22Quill
-    );
     let bundle =
         pub_viewer::open_pub_bundle(pub_bytes, pub_viewer::viewer_geometry_environment_v0_1())
             .context("open supported PUB for bounded PDF conversion")?;
-    let effective_page_ids = bundle
-        .geometry
-        .document
-        .pages
-        .iter()
-        .map(|page| page.id)
-        .collect::<Vec<_>>();
-    let authoring = pub_viewer::bounded_authoring_slice_from_resolved_pages(
-        &bundle.resolved_graph,
-        &effective_page_ids,
-    )
-    .context("project effective PUB pages for bounded PDF conversion")?;
-    let projection = project_bounded(authoring);
+    // Viewer geometry is already the source-neutral physical scene used by the
+    // product Reader. Do not send it back through project_bounded(): that
+    // projector intentionally normalizes node vectors by canonical identity,
+    // which destroys DTP paint order before fixed-output serialization.
     let visual = bundle.geometry;
-    let viewer_scene = visual.scene.clone();
 
     let embedding = read_opentype_embedding_flags(fallback_font_bytes, 0)
         .context("read fallback-font OpenType embedding flags")?;
@@ -205,6 +553,10 @@ fn build_pdf_artifact(
     conversion_profile
         .engine_versions
         .insert("pub-output".into(), "fixed-output-font-plan-v0.1".into());
+    conversion_profile.engine_versions.insert(
+        "chaptera-viewer-render-plan".into(),
+        chaptera_viewer_render_plan::SHARED_TEXT_LAYOUT_REVISION_V1.into(),
+    );
     conversion_profile.resources.insert(
         "font.fallback".into(),
         format!("sha256:{fallback_fingerprint}"),
@@ -221,165 +573,61 @@ fn build_pdf_artifact(
         .identity()
         .context("derive deterministic PDF conversion fence")?;
     let font_size_emu = LengthEmu::new(FALLBACK_FONT_SIZE_PT * EMU_PER_POINT);
-    let shaping_runtime = BoundedShapingRuntime {
-        layout: BoundedLayoutEnvironment {
-            engine_revision: PDF_PRODUCT_SCHEMA.into(),
-            font_set_fingerprint: fallback_fingerprint.clone(),
-            resource_fingerprint: format!("explicit-user-fallback:{fallback_fingerprint}"),
-        },
-        face_index: 0,
-        font_size_emu,
-        font_bytes: fallback_font_bytes,
-    };
-
     let line_height_emu = font_size_emu
         .get()
         .checked_mul(FALLBACK_LINE_HEIGHT_MULTIPLIER)
         .context("bounded PDF fallback line-height overflow")?;
-    let shaped_flow = resolve_bounded_shaped_flow(
-        &projection,
-        &BoundedShapedFlowRuntime {
-            shaping: shaping_runtime.clone(),
-            line_height: LengthEmu::new(line_height_emu),
-        },
-    )
-    .context("resolve bounded shaped text flow for fixed PDF")?;
-    // Legacy no-Quill Viewer owns additional source-backed geometry laws
-    // (structural point-group suppression and bounded grouped-image placement).
-    // Reuse that already-resolved scene rather than duplicating its private
-    // projector in the CLI. Mature 0x2C retains the established shaped-flow
-    // geometry path byte-for-byte.
-    let pdf_scene = if route_uses_viewer_scene {
-        viewer_scene
-    } else {
-        shaped_flow.geometry_scene()
+    let fallback_resource_id = format!("explicit-user-fallback:{fallback_fingerprint}");
+    let fallback_render_font = ExplicitRenderTextFontResourceV1 {
+        resource_id: &fallback_resource_id,
+        expected_sha256: &fallback_fingerprint,
+        face_index: 0,
+        default_font_size_emu: font_size_emu.get(),
+        default_line_height_emu: line_height_emu,
+        bytes: fallback_font_bytes,
     };
+    // Preserve Viewer page/node vector order verbatim. The fixed PDF backend
+    // must consume product paint order, not rederive geometry from sorted IDs.
+    let pdf_scene = visual.scene.clone();
     let scene_node_ids = pdf_scene
         .nodes
         .iter()
         .map(|node| node.origin)
         .collect::<BTreeSet<_>>();
 
-    let mut text_runs = Vec::new();
-    let mut used_glyph_ids = BTreeSet::new();
-    let mut materialized = Vec::new();
-    let mut skipped = Vec::new();
-    let mut receipt_lines = Vec::new();
-    let mut receipt_runs = Vec::new();
-
-    for (line_index, line) in shaped_flow.lines.iter().enumerate() {
-        if line.text.is_empty() {
-            continue;
-        }
-        if line.glyphs.iter().any(|glyph| glyph.glyph_id == 0) {
-            skipped.push(serde_json::json!({
-                "story_id": line.story_origin,
-                "frame_id": line.frame_origin,
-                "scalar_start": line.scalar_start,
-                "scalar_end": line.scalar_end,
-                "code": "pdf.text.fallback_missing_glyph",
-            }));
-            continue;
-        }
-
-        let row_offset = i64::from(line.frame_line_index)
-            .checked_mul(shaped_flow.environment.line_height.get())
-            .context("bounded PDF shaped-flow row offset overflow")?;
-        let baseline_y = row_offset
-            .checked_add(font_size_emu.get())
-            .context("bounded PDF shaped-flow baseline overflow")?;
-
-        used_glyph_ids.extend(line.glyphs.iter().map(|glyph| glyph.glyph_id));
-        materialized.push(serde_json::json!({
-            "line_index": line_index,
-            "story_id": line.story_origin,
-            "frame_id": line.frame_origin,
-            "frame_line_index": line.frame_line_index,
-            "scalar_start": line.scalar_start,
-            "scalar_end": line.scalar_end,
-            "logical_text": line.text,
-            "reshaped_for_break": line.reshaped_for_break,
-        }));
-
-        text_runs.push(FixedTextRun {
-            node_id: line.frame_origin,
-            scalar_base: line.scalar_start,
-            logical_text: line.text.clone(),
-            shaped: BoundedShapedText {
-                environment: shaped_flow.environment.shaping.clone(),
-                units_per_em: line.units_per_em,
-                glyphs: line.glyphs.clone(),
-                total_x_advance: line.measured_width,
-            },
-            baseline_x: LengthEmu::ZERO,
-            baseline_y: LengthEmu::new(baseline_y),
-            fill_rgb: [0, 0, 0],
-        });
-
-        let glyph_sequence_hash = shaped_glyph_sequence_hash(&line.glyphs)?;
-        receipt_lines.push(serde_json::json!({
-            "line_index": receipt_lines.len(),
-            "frame_node_id": line.frame_origin,
-            "story_id": line.story_origin,
-            "scalar_start": line.scalar_start,
-            "scalar_end": line.scalar_end,
-            "glyph_count": line.glyphs.len(),
-            "glyph_sequence_hash": glyph_sequence_hash,
-            "units_per_em": line.units_per_em,
-            "measured_width": line.measured_width.get(),
-        }));
-        receipt_runs.push(serde_json::json!({
-            "run_index": receipt_runs.len(),
-            "frame_node_id": line.frame_origin,
-            "story_id": line.story_origin,
-            "scalar_base": line.scalar_start,
-            "scalar_end": line.scalar_end,
-            "glyph_count": line.glyphs.len(),
-            "glyph_sequence_hash": glyph_sequence_hash,
-            "baseline_x": 0,
-            "baseline_y": baseline_y,
-        }));
-    }
-
-    let shaped_flow_diagnostics = shaped_flow
-        .diagnostics
-        .iter()
-        .map(|diagnostic| {
-            serde_json::json!({
-                "code": diagnostic.code,
-                "origin": diagnostic.origin,
-            })
-        })
-        .collect::<Vec<_>>();
-    let story_overset = shaped_flow
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == "story_overset");
-    let reshaped_line_count = shaped_flow
-        .lines
-        .iter()
-        .filter(|line| line.reshaped_for_break)
-        .count();
+    let ViewerTextMaterialization {
+        text_runs,
+        used_glyph_ids,
+        materialized,
+        skipped,
+        receipt_lines,
+        receipt_runs,
+        layout_fallback_counts,
+        visible_line_count,
+    } = materialize_viewer_text_runs(&visual, &pdf_scene, &fallback_render_font)?;
 
     let receipt_flow_id = sha256_json_id(&serde_json::json!({
         "source_hash": visual.document.source.source_hash.to_string(),
-        "font_size_emu": font_size_emu.get(),
-        "line_height_emu": shaped_flow.environment.line_height.get(),
-        "story_overset": story_overset,
+        "layout_authority": "viewer_shared_resolved",
+        "fallback_font_size_emu": font_size_emu.get(),
+        "fallback_line_height_emu": line_height_emu,
+        "layout_fallback_counts": &layout_fallback_counts,
         "lines": &receipt_lines,
     }))?;
     let fixed_flow_receipt = serde_json::json!({
         "receipt_version": FIXED_FLOW_RECEIPT_VERSION,
         "producer": {
-            "implementation": "chaptera-pub-cli-fixed-flow",
+            "implementation": "chaptera-pub-cli-viewer-resolved-layout",
             "commit_or_build": format!("conversion:{}", conversion_fence.digest_sha256),
             "core_integration": true,
         },
         "source_hash": visual.document.source.source_hash.to_string(),
         "flow_id": receipt_flow_id,
+        "layout_authority": "viewer_shared_resolved",
         "lines": receipt_lines,
         "runs": receipt_runs,
-        "story_overset": story_overset,
+        "story_overset": null,
+        "layout_fallback_counts": &layout_fallback_counts,
         "invariants": {
             "reshaping_calls": 0,
             "raw_text_emitted": false,
@@ -387,6 +635,7 @@ fn build_pdf_artifact(
             "overset_tail_painted": false,
             "line_order_preserved": true,
             "story_global_clusters_preserved": true,
+            "viewer_resolved_geometry_consumed": true,
         },
     });
 
@@ -509,6 +758,8 @@ fn build_pdf_artifact(
             "source_font_identity_available": false,
             "disposition": "explicit_user_fallback_not_source_font",
             "font_size_pt": FALLBACK_FONT_SIZE_PT,
+            "font_size_semantics": "fallback_default_only",
+            "layout_authority": "viewer_shared_resolved",
             "fallback_font": {
                 "label": fallback_label,
                 "fingerprint_sha256": fallback_fingerprint,
@@ -517,12 +768,15 @@ fn build_pdf_artifact(
             },
             "fixed_flow_receipt": fixed_flow_receipt,
             "shaped_flow": {
-                "line_height_emu": shaped_flow.environment.line_height.get(),
-                "visible_line_count": shaped_flow.lines.len(),
-                "reshaped_line_count": reshaped_line_count,
-                "story_overset": story_overset,
+                "layout_authority": "viewer_shared_resolved",
+                "fallback_line_height_emu": line_height_emu,
+                "visible_line_count": visible_line_count,
+                "reshaped_line_count": 0,
+                "reshaped_line_count_known": false,
+                "story_overset": null,
                 "output_adapter_reshaping_calls": 0,
-                "diagnostics": shaped_flow_diagnostics,
+                "diagnostics": [],
+                "layout_fallback_counts": &layout_fallback_counts,
             },
             "materialized_runs": materialized,
             "skipped": skipped,
@@ -583,8 +837,9 @@ fn sidecar_path(output: &Path, suffix: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{report_path_label, retain_scene_node_ids};
-    use pub_model::{CanonicalId, NodeId};
+    use super::{report_path_label, resolved_text_color_for_range, retain_scene_node_ids};
+    use chaptera_viewer_render_plan::{RenderTextFragmentV1, RenderTypographyRunV1};
+    use pub_model::{CanonicalId, NodeId, StoryId};
     use std::collections::BTreeSet;
     use std::path::Path;
 
@@ -622,5 +877,57 @@ mod tests {
 
         assert_eq!(kept, vec![present]);
         assert_eq!(filtered_count, 1);
+    }
+
+    fn color_fragment(colors: [[u8; 3]; 2]) -> RenderTextFragmentV1 {
+        RenderTextFragmentV1 {
+            story_id: StoryId::from_canonical(CanonicalId::from_bytes([3; 16])),
+            scalar_start: 0,
+            scalar_end: 4,
+            text: "abcd".into(),
+            line_count: 1,
+            typography: vec![
+                RenderTypographyRunV1 {
+                    scalar_start: 0,
+                    scalar_end: 2,
+                    source_font_name: "Example".into(),
+                    text_size_emu: 100_000,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: Some(colors[0]),
+                    color_inherited: false,
+                    bold: Some(false),
+                    italic: Some(false),
+                },
+                RenderTypographyRunV1 {
+                    scalar_start: 2,
+                    scalar_end: 4,
+                    source_font_name: "Example".into(),
+                    text_size_emu: 100_000,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: Some(colors[1]),
+                    color_inherited: false,
+                    bold: Some(false),
+                    italic: Some(false),
+                },
+            ],
+            paragraph_alignments: Vec::new(),
+            backend_font_resource_id: None,
+            layout: None,
+        }
+    }
+
+    #[test]
+    fn viewer_text_color_range_requires_complete_uniform_authority() {
+        let red = [200, 10, 20];
+        let blue = [10, 20, 200];
+
+        let uniform = color_fragment([red, red]);
+        assert_eq!(resolved_text_color_for_range(&uniform, 1, 3), Some(red));
+
+        let mixed = color_fragment([red, blue]);
+        assert_eq!(resolved_text_color_for_range(&mixed, 1, 3), None);
+        assert_eq!(resolved_text_color_for_range(&mixed, 0, 2), Some(red));
     }
 }
