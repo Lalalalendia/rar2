@@ -497,6 +497,26 @@ try {
     }
     const descriptorOnlyResourceCount = (scene.resources ?? [])
       .filter((resource) => resource.availability !== "inline_data_url").length;
+    let spanBackedLineCount = 0;
+    let distributedSpanLineCount = 0;
+    if (corpusDiagnosticMode) {
+      for (const node of scene.nodes) {
+        if (node.text_layout?.disposition !== "shared_resolved") continue;
+        for (const line of node.text_layout.lines ?? []) {
+          const spans = line.spans ?? [];
+          if (spans.length === 0) continue;
+          spanBackedLineCount += 1;
+          let naturalOffset = 0;
+          if (spans.some((span) => {
+            const distributed = span.x_offset_emu > naturalOffset;
+            naturalOffset += span.measured_width_emu;
+            return distributed;
+          })) {
+            distributedSpanLineCount += 1;
+          }
+        }
+      }
+    }
     results.push({ fixture: fixture.name, source_sha256: fixture.sha256, source_byte_len: fixture.bytes,
       classification: receipt.classification, rendered: true, fidelity: scene.fidelity, stacking_fidelity: scene.stacking_fidelity,
       fidelity_reasons: fidelityReasons, diagnostic_codes: diagnosticCodes, pages: fixturePages, nodes: scene.nodes.length,
@@ -506,12 +526,25 @@ try {
       descriptor_only_resource_count: descriptorOnlyResourceCount, browser_preserved_scene_node_order: true,
       reference_raster_dpi: referenceRasterDpi || null, page_geometry: orderedPageGeometry,
       stories: scene.stories.length, shared_lines: painted.length, nonempty_shared_lines: nonempty.length,
+      ...(corpusDiagnosticMode ? {
+        span_backed_line_count: spanBackedLineCount,
+        distributed_span_line_count: distributedSpanLineCount
+      } : {}),
       visual_degeneracies: visualDegeneracies, visual_degeneracy_count: visualDegeneracies.length,
       shared_line_height_px: nonempty.length > 0
         ? { min: Math.min(...nonempty.map((line) => line.height)), max: Math.max(...nonempty.map((line) => line.height)) }
         : null,
       worker_receipt_sha256: sha256(receiptBytes), filesystem_confinement: true, network_policy: isolation.network_policy, screenshots });
-    console.log(JSON.stringify({ fixture: fixture.name, classification: receipt.classification, pages: fixturePages, readable_shared_lines: nonempty.length }));
+    console.log(JSON.stringify({
+      fixture: fixture.name,
+      classification: receipt.classification,
+      pages: fixturePages,
+      readable_shared_lines: nonempty.length,
+      ...(corpusDiagnosticMode ? {
+        span_backed_line_count: spanBackedLineCount,
+        distributed_span_line_count: distributedSpanLineCount
+      } : {})
+    }));
   }
   assert.deepEqual(errors, []);
   assert.deepEqual(foreign, []);
