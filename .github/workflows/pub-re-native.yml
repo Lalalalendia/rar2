@@ -35,6 +35,7 @@ jobs:
       page_id: ${{ steps.command.outputs.page_id }}
       shape_id: ${{ steps.command.outputs.shape_id }}
       delta_degrees: ${{ steps.command.outputs.delta_degrees }}
+      research_id: ${{ steps.command.outputs.research_id }}
     steps:
       - name: Resolve trusted native command
         id: command
@@ -57,6 +58,7 @@ jobs:
           page_id = ""
           shape_id = ""
           delta_degrees = ""
+          research_id = ""
 
           if event_name == "workflow_dispatch":
               manifest_name = os.environ.get("INPUT_MANIFEST_NAME", "")
@@ -75,6 +77,10 @@ jobs:
               )
               rotation_match = re.fullmatch(
                   r"/pub-re-native rotate ([a-z0-9][a-z0-9._-]{0,63}) ([1-9][0-9]{0,9}) ([1-9][0-9]{0,9}) (-?[0-9]+(?:[.][0-9]{1,6})?)",
+                  body,
+              )
+              research_match = re.fullmatch(
+                  r"/pub-re-native research (paragraph-line-spacing-0p75)",
                   body,
               )
               if manifest_match is not None:
@@ -97,6 +103,9 @@ jobs:
                       raise SystemExit("Publisher selector is outside signed 32-bit bounds")
                   if not 0.000001 <= abs(delta_value) <= 45.0:
                       raise SystemExit("rotation delta must be nonzero and within 45 degrees")
+              elif research_match is not None:
+                  command_mode = "research_0p75"
+                  research_id = research_match.group(1)
               else:
                   raise SystemExit("invalid PUB RE native control command")
 
@@ -110,6 +119,7 @@ jobs:
               output.write(f"page_id={page_id}\n")
               output.write(f"shape_id={shape_id}\n")
               output.write(f"delta_degrees={delta_degrees}\n")
+              output.write(f"research_id={research_id}\n")
           PY
 
   native:
@@ -146,6 +156,7 @@ jobs:
           PUB_RE_PAGE_ID: ${{ needs.gate.outputs.page_id }}
           PUB_RE_SHAPE_ID: ${{ needs.gate.outputs.shape_id }}
           PUB_RE_DELTA_DEGREES: ${{ needs.gate.outputs.delta_degrees }}
+          PUB_RE_RESEARCH_ID: ${{ needs.gate.outputs.research_id }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
@@ -154,7 +165,16 @@ jobs:
           New-Item -ItemType Directory -Force -Path $output | Out-Null
           "PUB_RE_NATIVE_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-          if ($env:PUB_RE_COMMAND_MODE -eq "manifest") {
+          if ($env:PUB_RE_COMMAND_MODE -eq "research_0p75") {
+            if ($env:PUB_RE_RESEARCH_ID -ne "paragraph-line-spacing-0p75") {
+              throw "unsupported bounded research id"
+            }
+            $researchOutput = Join-Path $output "research-output"
+            $researchZip = Join-Path $output "private-return.zip"
+            "PUB_RE_RESEARCH_OUTPUT=$researchOutput" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            "PUB_RE_RESEARCH_RETURN_ZIP=$researchZip" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+          elseif ($env:PUB_RE_COMMAND_MODE -eq "manifest") {
             if ([string]::IsNullOrWhiteSpace($env:PUB_RE_MANIFEST_ROOT)) {
               throw "PUB_RE_MANIFEST_ROOT is not configured on the dedicated runner"
             }
@@ -266,13 +286,17 @@ jobs:
             throw "unsupported PUB RE native command mode"
           }
 
-          "PUB_RE_NATIVE_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ($env:PUB_RE_COMMAND_MODE -ne "research_0p75") {
+            "PUB_RE_NATIVE_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
 
       - name: Build standalone PUB RE
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' }}
         shell: powershell
         run: cargo build --release --manifest-path tools/pub-re/Cargo.toml --bin pub-re
 
       - name: Run bounded native Publisher transaction
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' }}
         shell: powershell
         run: |
           & tools/pub-re/windows/Invoke-PubReNativeExperiment.ps1 `
@@ -280,6 +304,7 @@ jobs:
             -OutputRoot $env:PUB_RE_NATIVE_OUTPUT
 
       - name: Join native output to CFB and OfficeArt provenance
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' }}
         shell: powershell
         run: |
           Set-StrictMode -Version Latest
@@ -306,6 +331,7 @@ jobs:
           }
 
       - name: Enforce source-safe evidence boundary
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' }}
         shell: powershell
         run: |
           Set-StrictMode -Version Latest
@@ -332,9 +358,67 @@ jobs:
           }
 
       - name: Upload source-safe receipts only
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' }}
         uses: actions/upload-artifact@v4
         with:
           name: pub-re-native-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Run bounded 0.75 paragraph research
+        if: ${{ needs.gate.outputs.command_mode == 'research_0p75' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          & tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1 `
+            -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT `
+            -ReturnZip $env:PUB_RE_RESEARCH_RETURN_ZIP
+          if (-not $?) {
+            throw "bounded 0.75 paragraph research failed"
+          }
+
+      - name: Stage source-safe 0.75 research receipts
+        if: ${{ needs.gate.outputs.command_mode == 'research_0p75' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          $native = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\paragraph-line-spacing-0p75-native-01.json"
+          $structural = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\paragraph-line-spacing-0p75-structural.json"
+          foreach ($path in @($native, $structural)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "required source-safe 0.75 receipt missing"
+            }
+            $text = Get-Content -LiteralPath $path -Raw
+            if ($text -match '(?i)[A-Z]:\\\\' -or $text -match '\\\\\\\\[^"\\s]+\\\\') {
+              throw "source-safe 0.75 receipt contains an absolute filesystem path"
+            }
+            [void]($text | ConvertFrom-Json)
+            Copy-Item -LiteralPath $path -Destination $evidence -Force
+          }
+
+          $receipt = Get-Content -LiteralPath $structural -Raw | ConvertFrom-Json
+          if ($receipt.schema -ne "chaptera.paragraph-line-spacing-0p75-structural.v1") {
+            throw "unexpected 0.75 structural receipt schema"
+          }
+          if ($receipt.experiment_id -ne "PARAGRAPH-LINE-SPACING-0P75-NATIVE-01") {
+            throw "unexpected 0.75 structural experiment id"
+          }
+          if ($receipt.native_114300_authority_candidate -isnot [bool]) {
+            throw "0.75 structural receipt must carry a boolean authority candidate"
+          }
+
+      - name: Upload source-safe 0.75 research receipts only
+        if: ${{ needs.gate.outputs.command_mode == 'research_0p75' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-paragraph-line-spacing-0p75-evidence
           path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
           if-no-files-found: error
           retention-days: 14
