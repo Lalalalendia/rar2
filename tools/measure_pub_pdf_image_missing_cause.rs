@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use pub_escher::BlipKind;
 use pub_model::{NodeId, NodeKind, Sha256Digest};
 use pub_reader::{
     PubAssetManifestDiagnostic, PubImageResourceDiagnostic, build_mature_0x2c_source_graph,
@@ -41,18 +42,32 @@ fn node_kind_name(kind: NodeKind) -> &'static str {
     }
 }
 
-fn manifest_diagnostic_code(diagnostic: &PubAssetManifestDiagnostic) -> (&'static str, u32) {
+fn blip_kind_name(kind: BlipKind) -> &'static str {
+    match kind {
+        BlipKind::Emf => "emf",
+        BlipKind::Wmf => "wmf",
+        BlipKind::Pict => "pict",
+        BlipKind::Jpeg => "jpeg",
+        BlipKind::Png => "png",
+        BlipKind::Gif => "gif",
+        BlipKind::Dib => "dib",
+        BlipKind::Tiff => "tiff",
+        BlipKind::Unknown => "unknown",
+    }
+}
+
+fn manifest_diagnostic_code(diagnostic: &PubAssetManifestDiagnostic) -> (String, u32) {
     match diagnostic {
-        PubAssetManifestDiagnostic::MissingBStoreSlot { slot } => ("missing_bstore_slot", *slot),
-        PubAssetManifestDiagnostic::EmptyBStoreSlot { slot } => ("empty_bstore_slot", *slot),
+        PubAssetManifestDiagnostic::MissingBStoreSlot { slot } => ("missing_bstore_slot".into(), *slot),
+        PubAssetManifestDiagnostic::EmptyBStoreSlot { slot } => ("empty_bstore_slot".into(), *slot),
         PubAssetManifestDiagnostic::DelayedBlipUnresolved { slot, .. } => {
-            ("delayed_blip_unresolved", *slot)
+            ("delayed_blip_unresolved".into(), *slot)
         }
         PubAssetManifestDiagnostic::EmbeddedBlipNotExtracted { slot } => {
-            ("embedded_blip_not_extracted", *slot)
+            ("embedded_blip_not_extracted".into(), *slot)
         }
-        PubAssetManifestDiagnostic::StandardPayloadUnavailable { slot, .. } => {
-            ("standard_payload_unavailable", *slot)
+        PubAssetManifestDiagnostic::StandardPayloadUnavailable { slot, kind } => {
+            (format!("standard_payload_unavailable_{}", blip_kind_name(*kind)), *slot)
         }
     }
 }
@@ -112,7 +127,7 @@ fn main() -> Result<()> {
     let catalog = build_pub_image_resource_catalog(&source.graph, &manifest)
         .context("build exact image resource catalog")?;
 
-    let mut manifest_diagnostics = BTreeMap::<u32, Vec<&'static str>>::new();
+    let mut manifest_diagnostics = BTreeMap::<u32, Vec<String>>::new();
     for diagnostic in &manifest.diagnostics {
         let (code, slot) = manifest_diagnostic_code(diagnostic);
         manifest_diagnostics.entry(slot).or_default().push(code);
@@ -206,7 +221,7 @@ fn main() -> Result<()> {
                 bump(&mut cause_counts, "manifest_diagnostic_empty");
             } else {
                 for code in codes {
-                    bump(&mut cause_counts, *code);
+                    bump(&mut cause_counts, code.clone());
                 }
             }
             continue;
