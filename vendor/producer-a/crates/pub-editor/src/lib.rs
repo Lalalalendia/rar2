@@ -69,6 +69,10 @@ pub use pub_editor_geometry_core::{
     MAX_MOVE_NODES_V1, MAX_RESIZE_NODES_V1, MoveNodeBatchEntry, ResizeNodeBatchEntry,
 };
 pub use pub_editor_image_core::ImageCropStateV1;
+pub use pub_editor_text_core::story_state_id_v1;
+use pub_editor_text_core::{
+    apply_story_range_forward_v1, apply_story_range_inverse_v1, replace_scalar_range_text_v1,
+};
 pub use pub_editor_table_core::{
     SetTableTrackExtentErrorV1, SetTableTrackExtentHistoryV1, TABLE_TRACK_EXTENT_HISTORY_V1,
     TableTrackExtentHistoryErrorV1, TableTrackExtentPlanV1, TableTrackTargetV1,
@@ -182,24 +186,6 @@ pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_22;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
 pub const PUB_MATURE_0X2C_SCHEMA_FENCE: &str = "pub-family-0x2c";
 
-/// Canonical Story-state identity shared with services/editor-api/story_range_v1.py.
-pub fn story_state_id_v1(story_id: StoryId, text: &str) -> String {
-    let payload = serde_json::json!({
-        "protocol_version": "chaptera.story-state.v1",
-        "story_id": story_id.as_canonical().to_string(),
-        "text": text,
-    });
-    let bytes =
-        serde_json::to_vec(&payload).expect("canonical Story state JSON serialization cannot fail");
-    let digest = Sha256::digest(bytes);
-    let mut encoded = String::with_capacity(64);
-    for byte in digest {
-        use std::fmt::Write as _;
-        write!(&mut encoded, "{byte:02x}").expect("writing lowercase hex into String cannot fail");
-    }
-    format!("sha256:{encoded}")
-}
-
 /// Canonical authored-shape state identity used by persisted DeleteNode V1.
 pub fn authored_shape_state_id_v1(shape: &AuthoredShapeRuntimeV1) -> String {
     let payload = serde_json::json!({
@@ -215,40 +201,6 @@ pub fn authored_shape_state_id_v1(shape: &AuthoredShapeRuntimeV1) -> String {
         write!(&mut encoded, "{byte:02x}").expect("writing lowercase hex into String cannot fail");
     }
     format!("sha256:{encoded}")
-}
-
-fn scalar_byte_offset(text: &str, scalar_index: u32) -> Option<usize> {
-    let target = usize::try_from(scalar_index).ok()?;
-    if target == text.chars().count() {
-        return Some(text.len());
-    }
-    text.char_indices().nth(target).map(|(offset, _)| offset)
-}
-
-fn replace_scalar_range_text(
-    text: &str,
-    start_scalar: u32,
-    end_scalar: u32,
-    expected_before: &str,
-    replacement_text: &str,
-) -> Option<String> {
-    if end_scalar < start_scalar {
-        return None;
-    }
-    let start = scalar_byte_offset(text, start_scalar)?;
-    let end = scalar_byte_offset(text, end_scalar)?;
-    if text.get(start..end)? != expected_before {
-        return None;
-    }
-    let mut after = String::with_capacity(
-        text.len()
-            .saturating_sub(end.saturating_sub(start))
-            .saturating_add(replacement_text.len()),
-    );
-    after.push_str(&text[..start]);
-    after.push_str(replacement_text);
-    after.push_str(&text[end..]);
-    Some(after)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -7473,27 +7425,19 @@ fn apply_forward(
                 .ok_or(EditorError::MissingStory {
                     story_id: *story_id,
                 })?;
-            if story_state_id_v1(*story_id, &story.text) != *before_story_state_id {
-                return Err(EditorError::StaleOperation {
-                    story_id: *story_id,
-                });
-            }
-            let after = replace_scalar_range_text(
+            story.text = apply_story_range_forward_v1(
                 &story.text,
+                *story_id,
                 *start_scalar,
                 *end_scalar,
                 expected_before,
                 replacement_text,
+                before_story_state_id,
+                after_story_state_id,
             )
-            .ok_or(EditorError::StaleOperation {
+            .map_err(|_| EditorError::StaleOperation {
                 story_id: *story_id,
             })?;
-            if story_state_id_v1(*story_id, &after) != *after_story_state_id {
-                return Err(EditorError::StaleOperation {
-                    story_id: *story_id,
-                });
-            }
-            story.text = after;
         }
         EditOperation::ReplaceStoryText {
             story_id,
@@ -7721,38 +7665,18 @@ fn apply_inverse(
                 .ok_or(EditorError::MissingStory {
                     story_id: *story_id,
                 })?;
-            if story_state_id_v1(*story_id, &story.text) != *after_story_state_id {
-                return Err(EditorError::StaleOperation {
-                    story_id: *story_id,
-                });
-            }
-            let replacement_end = start_scalar
-                .checked_add(
-                    u32::try_from(replacement_text.chars().count()).map_err(|_| {
-                        EditorError::StaleOperation {
-                            story_id: *story_id,
-                        }
-                    })?,
-                )
-                .ok_or(EditorError::StaleOperation {
-                    story_id: *story_id,
-                })?;
-            let before = replace_scalar_range_text(
+            story.text = apply_story_range_inverse_v1(
                 &story.text,
+                *story_id,
                 *start_scalar,
-                replacement_end,
-                replacement_text,
                 expected_before,
+                replacement_text,
+                before_story_state_id,
+                after_story_state_id,
             )
-            .ok_or(EditorError::StaleOperation {
+            .map_err(|_| EditorError::StaleOperation {
                 story_id: *story_id,
             })?;
-            if story_state_id_v1(*story_id, &before) != *before_story_state_id {
-                return Err(EditorError::StaleOperation {
-                    story_id: *story_id,
-                });
-            }
-            story.text = before;
         }
         EditOperation::ReplaceStoryText {
             story_id,
