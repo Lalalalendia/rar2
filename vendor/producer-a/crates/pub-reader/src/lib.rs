@@ -150,7 +150,8 @@ use paint_projection::{
     bounded_officeart_image_recolor, bounded_officeart_rgb, direct_officeart_rgb,
     effective_paint_has_dgg_authority, explicit_officeart_paint, has_default_ellipse_geometry,
     has_default_line_geometry, has_default_rectangle_geometry, has_default_roundrect_geometry,
-    has_explicit_officeart_paint_observation, has_shape_local_dash_gel,
+    has_explicit_officeart_paint_observation, has_explicit_visible_solid_fill,
+    has_shape_local_dash_gel,
     paint_context_uses_officeart_scheme_color, unique_explicit_officeart_scalar,
 };
 #[cfg(test)]
