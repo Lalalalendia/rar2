@@ -96,9 +96,10 @@ def main() -> None:
         semantic_boxes.setdefault(category, []).append(
             transformed_bbox(node["semantic_bounds"], node.get("transform"))
         )
-        paint_boxes.setdefault(category, []).append(
-            transformed_bbox(node["paint_bounds"], node.get("transform"))
-        )
+        if node.get("paint_bounds") is not None:
+            paint_boxes.setdefault(category, []).append(
+                transformed_bbox(node["paint_bounds"], node.get("transform"))
+            )
         node_counts[category] += 1
         if float(node.get("stroke_width_emu") or 0) > 0:
             stroke_nodes[category] += 1
