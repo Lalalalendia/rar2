@@ -139,14 +139,17 @@ fn build_pdf_artifact(
     let source_profile_id = match classification.route {
         pub_viewer::PubReaderRoute::Mature2c => "pub-mature-0x2c-v0.1",
         pub_viewer::PubReaderRoute::Legacy22LowText => "pub-legacy-0x22-low-text-v0.1",
+        pub_viewer::PubReaderRoute::Legacy22Quill => "pub-legacy-0x22-quill-v0.1",
         _ => {
             bail!(
-                "bounded PDF conversion currently requires mature 0x2C or legacy 0x22 low-text PUB input"
+                "bounded PDF conversion currently requires mature 0x2C, legacy 0x22 low-text, or legacy 0x22 Quill PUB input"
             )
         }
     };
-    let route_uses_viewer_scene =
-        classification.route == pub_viewer::PubReaderRoute::Legacy22LowText;
+    let route_uses_viewer_scene = matches!(
+        classification.route,
+        pub_viewer::PubReaderRoute::Legacy22LowText | pub_viewer::PubReaderRoute::Legacy22Quill
+    );
     let bundle =
         pub_viewer::open_pub_bundle(pub_bytes, pub_viewer::viewer_geometry_environment_v0_1())
             .context("open supported PUB for bounded PDF conversion")?;
