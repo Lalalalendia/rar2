@@ -43,6 +43,7 @@ jobs:
       - name: Prepare exact 100 fixture
         run: |
           set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
           rm -rf "$RUNNER_TEMP/exact100-source"
           mkdir -p "$RUNNER_TEMP/exact100-source"
           python tools/cloud_reader_visual_supplemental_v1.py prepare \
