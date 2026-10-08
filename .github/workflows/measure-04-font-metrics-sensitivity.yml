@@ -3,7 +3,7 @@ name: MEASURE exact 04 font-metrics sensitivity
 on:
   push:
     branches:
-      - "measure/04-font-metrics-sensitivity-01"
+      - "measure/04-font-metrics-sensitivity-02"
     paths:
       - ".github/workflows/measure-04-font-metrics-sensitivity.yml"
       - "apps/cloud-reader/real-browser.test.mjs"
@@ -101,6 +101,13 @@ jobs:
           npm install --no-save playwright@1.55.0
           npx playwright install chromium
 
+      - name: Install Arial Narrow metric-compatible measurement font
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends fonts-liberation-sans-narrow
+          fc-cache -f
+
       - name: Build explicit metric-sensitivity font registries
         run: |
           set -euo pipefail
@@ -130,7 +137,8 @@ jobs:
             narrow_sha="$(sha256sum "$narrow_file" | awk '{print $1}')"
             narrow_available=1
           else
-            narrow_sha=""
+            echo "Liberation Sans Narrow measurement resource unavailable after package install" >&2
+            exit 1
           fi
           echo "NARROW_AVAILABLE=$narrow_available" >> "$GITHUB_ENV"
 
