@@ -1,6 +1,6 @@
 async function dispatchGitHub(checkId: string, origin: string) {
   const token = process.env.GITHUB_CHECKER_TOKEN;
-  const repository = process.env.GITHUB_CHECKER_REPOSITORY || 'HeisLuka/rar';
+  const repository = process.env.GITHUB_CHECKER_REPOSITORY || 'Lalalalendia/rar2';
   const ref = process.env.GITHUB_CHECKER_REF || 'main';
   if (!token) return 'not_configured' as const;
 
