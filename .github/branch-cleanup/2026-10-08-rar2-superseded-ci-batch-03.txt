@@ -1,0 +1,14 @@
+# Branch GC 2026-10-08 — superseded CI batch 03
+# NEVER MERGE. Exact-SHA predecessor cleanup only.
+# All semantic authority retained in merged/current successors; runtime rechecks open heads/bases and moved tips.
+
+ci/batch01-bounded-worker-cpu-budget-01 a0aae0d4ec8ea5e19e7a8bd0c5967cde4b6e7dee # PR 864 superseded by merged 847
+ci/batch01-full-page-identity-baseline-1025-v2 380acf199b976080d582b694f3c02472736b681c # PR 1144 exact blob -> merged 1147
+ci/batch01-page-identity-order-baseline-1025 03ec9ae4c8a766bb57494e16d3259dc82f77f3b8 # PR 1130 -> 1144 -> merged 1147
+ci/integration-train-verify-01 61eb0ba11d1a1e57a48d297d2472df3474ba6f63 # PR 1710 -> merged 1711
+ci/reader-cross-backend-visual-parity cf13324bbe47320477d2080c177c6c271bbf61e7 # PR 1898 -> open clean successor 1903
+ci/batch01-stage-aware-membership-gate-1100 c38650ecd52c1587a141ca979e005f93275d94fd # PR 1105 -> 1142 -> 1157 -> merged 1158
+ci/batch01-stage-aware-membership-gate-1100-v2 57556a23e801ae8e26a30c79ee56fc129f273141 # PR 1142 -> 1157 -> merged 1158
+ci/batch01-stage-aware-membership-gate-1100-v3 d14a0d138626e636f20dc2683e5e95b013a7e449 # PR 1157 -> merged 1158
+ci/pub-editor-bounded-unit-targets-02 a7a45fce1e6705db1cbdf15aeaa50f31f6b6f1cf # PR 1734 -> merged 1742
+ops/branch-gc-20261008-ci-controls-batch-02 2fa9710e46ecb5669deca3bd7c50344af2c4745a # PR 2077 completed GC owner
