@@ -126,6 +126,23 @@ jobs:
           mkdir -p "$RUNNER_TEMP/publisher-visual-supplemental"
           python tools/cloud_reader_visual_supplemental_v1.py prepare             tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv             out/pinned1050/materialized/native             "$RUNNER_TEMP/publisher-visual-supplemental/fixtures"             "$RUNNER_TEMP/publisher-visual-supplemental/manifest.json"
 
+      - name: Emit visible source font family census
+        run: |
+          set -euo pipefail
+          for item in \
+            "081_8ca766c139a8e011:081-control" \
+            "082_2531deb3629797af:082-target" \
+            "089_9923f422543b1ed4:089-target" \
+            "099_00092479c94bf5ac:099-control" \
+            "100_b1faaba988e88b41:100-target"; do
+            fixture="${item%%:*}"
+            label="${item#*:}"
+            path="$RUNNER_TEMP/publisher-visual-supplemental/fixtures/$fixture.pub"
+            test -f "$path"
+            cargo run --quiet -p chaptera-viewer-render-plan \
+              --bin source_font_family_census -- "$path" "$label"
+          done
+
       - name: Build canonical Cloud Reader worker
         env:
           SUPPLEMENTAL_CARGO_CACHE_HIT: ${{ steps.supplemental-cargo-cache.outputs.cache-hit }}
