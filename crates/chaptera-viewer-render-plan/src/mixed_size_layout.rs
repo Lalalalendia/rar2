@@ -305,6 +305,7 @@ struct MixedSizeLayoutEvaluationV1 {
     cursor: u32,
     used_height_emu: i64,
     terminal_mandatory_stop: Option<MixedLineCandidateV1>,
+    terminal_visible_stop: Option<MixedLineCandidateV1>,
     lines: Vec<RenderResolvedTextLineV1>,
 }
 
@@ -339,6 +340,65 @@ fn frozen_mixed_prefix_height_emu_v1(
         height = height.checked_add(line.line_height_emu)?;
     }
     Some(height)
+}
+
+fn authoritative_terminal_visible_line_height_emu_v1<F>(
+    scalar_start: u32,
+    candidate: &MixedLineCandidateV1,
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+    font_is_source_resolved: bool,
+    source_line_spacing_for_range: &F,
+) -> Option<i64>
+where
+    F: Fn(u32, u32) -> Option<ViewerParagraphLineSpacing>,
+{
+    if !font_is_source_resolved
+        || scalar_start >= candidate.scalar_end
+        || candidate.text.is_empty()
+        || candidate.spans.is_empty()
+    {
+        return None;
+    }
+
+    let point_equivalent_emu =
+        match source_line_spacing_for_range(scalar_start, candidate.scalar_end)? {
+            ViewerParagraphLineSpacing::Proportional {
+                point_equivalent_emu,
+            } if point_equivalent_emu == PUBLISHER_THREE_QUARTER_POINT_EQUIVALENT_EMU_V1 => {
+                point_equivalent_emu
+            }
+            ViewerParagraphLineSpacing::Proportional { .. }
+            | ViewerParagraphLineSpacing::Absolute { .. } => return None,
+        };
+
+    let mut coverage_cursor = scalar_start;
+    let mut max_advance_emu = None;
+    for span in &candidate.spans {
+        if span.scalar_start != coverage_cursor
+            || span.scalar_end <= span.scalar_start
+            || span.scalar_end > candidate.scalar_end
+        {
+            return None;
+        }
+        let natural_line_height_emu = compatible_natural_line_height_emu_v1(
+            font.bytes,
+            font.face_index,
+            LengthEmu::new(span.font_size_emu),
+        )
+        .map(LengthEmu::get)?;
+        let advance_emu =
+            scale_proportional_line_height_emu_v1(natural_line_height_emu, point_equivalent_emu)?;
+        max_advance_emu = Some(
+            max_advance_emu
+                .map_or(advance_emu, |current: i64| current.max(advance_emu)),
+        );
+        coverage_cursor = span.scalar_end;
+    }
+
+    if coverage_cursor != candidate.scalar_end {
+        return None;
+    }
+    max_advance_emu
 }
 
 fn evaluate_mixed_size_text_layout_v1(
@@ -391,12 +451,15 @@ fn evaluate_mixed_size_text_layout_v1(
     let mut cursor_safe_without_reshaping = true;
     let mut used_height_emu = 0_i64;
     let mut terminal_mandatory_stop = None;
+    let mut terminal_visible_stop = None;
     let mut line_index = 0_u32;
     let mut lines = Vec::new();
 
     while cursor < fragment.scalar_end {
         let mut chosen = None;
         let mut rejected_terminal_mandatory = None;
+        let mut rejected_terminal_visible = None;
+        let mut rejected_terminal_visible_ambiguous = false;
         for candidate in policy
             .candidates
             .iter()
@@ -438,6 +501,17 @@ fn evaluate_mixed_size_text_layout_v1(
                 && evaluated.spans.is_empty()
             {
                 rejected_terminal_mandatory = Some(evaluated);
+            } else if fits_width
+                && evaluated.scalar_end > cursor
+                && evaluated.consumed_scalar_end == fragment.scalar_end
+                && !evaluated.text.is_empty()
+                && !evaluated.spans.is_empty()
+            {
+                if rejected_terminal_visible.is_some() {
+                    rejected_terminal_visible_ambiguous = true;
+                } else {
+                    rejected_terminal_visible = Some(evaluated);
+                }
             }
             if candidate.kind == BoundedBreakKind::Mandatory {
                 break;
@@ -446,6 +520,11 @@ fn evaluate_mixed_size_text_layout_v1(
 
         let Some((chosen, chosen_boundary_safe_without_reshaping)) = chosen else {
             terminal_mandatory_stop = rejected_terminal_mandatory;
+            terminal_visible_stop = if rejected_terminal_visible_ambiguous {
+                None
+            } else {
+                rejected_terminal_visible
+            };
             break;
         };
         used_height_emu = used_height_emu
@@ -484,18 +563,24 @@ fn evaluate_mixed_size_text_layout_v1(
         cursor,
         used_height_emu,
         terminal_mandatory_stop,
+        terminal_visible_stop,
         lines,
     })
 }
 
-pub(super) fn resolve_mixed_size_text_layout_v1(
+pub(super) fn resolve_mixed_size_text_layout_v1<F>(
     fragment: &RenderTextFragmentV1,
     font: &ExplicitRenderTextFontResourceV1<'_>,
+    font_is_source_resolved: bool,
     node_id: NodeId,
     bounds: &RectEmu,
     fingerprint: &str,
     vertical_alignment: Option<ViewerTextVerticalAlignment>,
-) -> RenderTextLayoutV1 {
+    source_line_spacing_for_range: F,
+) -> RenderTextLayoutV1
+where
+    F: Fn(u32, u32) -> Option<ViewerParagraphLineSpacing>,
+{
     let mut evaluation =
         match evaluate_mixed_size_text_layout_v1(fragment, font, node_id, bounds, fingerprint) {
             Ok(value) => value,
@@ -503,41 +588,93 @@ pub(super) fn resolve_mixed_size_text_layout_v1(
         };
 
     if evaluation.cursor != fragment.scalar_end {
-        let Some(terminal) = evaluation.terminal_mandatory_stop.take() else {
-            return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
-        };
         let Some(prefix_height_emu) = frozen_mixed_prefix_height_emu_v1(&evaluation.lines, font)
         else {
             return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
         };
-        let Some(completed_height_emu) = prefix_height_emu.checked_add(terminal.line_height_emu)
-        else {
-            return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
-        };
-        if completed_height_emu > bounds.height.get()
-            || terminal.scalar_end != evaluation.cursor
-            || terminal.consumed_scalar_end != fragment.scalar_end
-        {
+
+        if let Some(terminal) = evaluation.terminal_mandatory_stop.take() {
+            let Some(completed_height_emu) = prefix_height_emu.checked_add(terminal.line_height_emu)
+            else {
+                return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
+            };
+            if completed_height_emu > bounds.height.get()
+                || terminal.scalar_end != evaluation.cursor
+                || terminal.consumed_scalar_end != fragment.scalar_end
+            {
+                return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
+            }
+
+            let Ok(line_index) = u32::try_from(evaluation.lines.len()) else {
+                return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed);
+            };
+            evaluation.lines.push(RenderResolvedTextLineV1 {
+                line_index,
+                scalar_start: evaluation.cursor,
+                scalar_end: terminal.scalar_end,
+                consumed_scalar_end: terminal.consumed_scalar_end,
+                text: terminal.text,
+                measured_width_emu: terminal.measured_width_emu,
+                line_height_emu: terminal.line_height_emu,
+                x_offset_emu: 0,
+                spans: terminal.spans,
+                shaping: None,
+            });
+            evaluation.cursor = terminal.consumed_scalar_end;
+            evaluation.used_height_emu = completed_height_emu;
+        } else if let Some(terminal) = evaluation.terminal_visible_stop.take() {
+            let Some(authoritative_line_height_emu) =
+                authoritative_terminal_visible_line_height_emu_v1(
+                    evaluation.cursor,
+                    &terminal,
+                    font,
+                    font_is_source_resolved,
+                    &source_line_spacing_for_range,
+                )
+            else {
+                return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
+            };
+            let Some(completed_height_emu) =
+                prefix_height_emu.checked_add(authoritative_line_height_emu)
+            else {
+                return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
+            };
+            if completed_height_emu > bounds.height.get()
+                || terminal.scalar_end <= evaluation.cursor
+                || terminal.consumed_scalar_end != fragment.scalar_end
+            {
+                return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
+            }
+
+            let Ok(line_index) = u32::try_from(evaluation.lines.len()) else {
+                return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed);
+            };
+            let x_offset_emu = resolved_line_x_offset_emu_v1(
+                fragment,
+                node_id,
+                bounds,
+                line_index,
+                evaluation.cursor..terminal.scalar_end,
+                terminal.measured_width_emu,
+                fingerprint,
+            );
+            evaluation.lines.push(RenderResolvedTextLineV1 {
+                line_index,
+                scalar_start: evaluation.cursor,
+                scalar_end: terminal.scalar_end,
+                consumed_scalar_end: terminal.consumed_scalar_end,
+                text: terminal.text,
+                measured_width_emu: terminal.measured_width_emu,
+                line_height_emu: authoritative_line_height_emu,
+                x_offset_emu,
+                spans: terminal.spans,
+                shaping: None,
+            });
+            evaluation.cursor = terminal.consumed_scalar_end;
+            evaluation.used_height_emu = completed_height_emu;
+        } else {
             return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
         }
-
-        let Ok(line_index) = u32::try_from(evaluation.lines.len()) else {
-            return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed);
-        };
-        evaluation.lines.push(RenderResolvedTextLineV1 {
-            line_index,
-            scalar_start: evaluation.cursor,
-            scalar_end: terminal.scalar_end,
-            consumed_scalar_end: terminal.consumed_scalar_end,
-            text: terminal.text,
-            measured_width_emu: terminal.measured_width_emu,
-            line_height_emu: terminal.line_height_emu,
-            x_offset_emu: 0,
-            spans: terminal.spans,
-            shaping: None,
-        });
-        evaluation.cursor = terminal.consumed_scalar_end;
-        evaluation.used_height_emu = completed_height_emu;
     }
 
     if evaluation.cursor != fragment.scalar_end {
