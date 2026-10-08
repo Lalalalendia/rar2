@@ -190,6 +190,7 @@ def safe_loss_summary(receipt: dict) -> dict:
             "table_max_rows",
             "table_max_columns",
             "table_spanning_cell_count",
+            "table_fallback_geometry_cell_count",
             "table_nonempty_cell_count",
             "table_story_range_cell_count",
             "table_hidden_fill_cell_count",
