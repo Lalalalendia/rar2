@@ -170,7 +170,6 @@ fn table_span_is_one(value: &u32) -> bool {
     *value == 1
 }
 
-
 pub(super) fn viewer_tables_from_resolved(
     graph: &PubResolvedGraph,
     projection: &BoundedLayoutProjection,
@@ -305,4 +304,3 @@ pub(super) fn viewer_tables_from_resolved(
     tables.sort_by_key(|table| table.node_id);
     (tables, diagnostics)
 }
-

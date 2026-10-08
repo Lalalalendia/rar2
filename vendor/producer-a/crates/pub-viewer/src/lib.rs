@@ -50,9 +50,9 @@ use pub_layout::{BoundedAuthoringSlice, BoundedNodeGeometryInput};
 pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
 use pub_layout::{
     BoundedLayoutProjection, BoundedParagraphFlowConstraint, BoundedParagraphFlowRun,
-    BoundedTextFlowEnvironment, BoundedTextMetrics,
-    ProjectedStoryFrame, ProjectionDiagnostic, ResolveDiagnostic, ResolvedPhysicalNode,
-    project_bounded, resolve_bounded_geometry, resolve_bounded_text_flow_with_paragraph_flow,
+    BoundedTextFlowEnvironment, BoundedTextMetrics, ProjectedStoryFrame, ProjectionDiagnostic,
+    ResolveDiagnostic, ResolvedPhysicalNode, project_bounded, resolve_bounded_geometry,
+    resolve_bounded_text_flow_with_paragraph_flow,
 };
 #[cfg(feature = "cmo-slot-compose")]
 use pub_model::CanonicalId;
