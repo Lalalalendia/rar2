@@ -75,3 +75,9 @@ jobs:
           cargo test -p chaptera-desktop
           gui_ctrl_page_shortcuts_reuse_canonical_page_navigation_without_revision
           -- --ignored --nocapture
+
+      - name: Prove real GUI customer-page reorder
+        run: >-
+          cargo test -p chaptera-desktop
+          gui_move_page_command_commits_one_reorder_and_replays_on_real_pub
+          -- --ignored --nocapture
