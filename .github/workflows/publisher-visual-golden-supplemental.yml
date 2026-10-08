@@ -1,4 +1,5 @@
 name: Publisher visual golden supplemental current Reader
+# Measurement control: exact semantic parent for PR #2020.
 
 on:
   pull_request:
