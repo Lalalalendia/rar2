@@ -10,6 +10,7 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 Push-Location $RepoRoot
 $fixture = $null
+$ProbeBuildRoot = $null
 
 $Packet = Join-Path $RepoRoot "tools/research-runner/experiments/paragraph-line-spacing-0p75-native-01.packet.json"
 $Operation = Join-Path $RepoRoot "tools/research-runner/operations/paragraph_line_spacing_0p75_native_01.ps1"
@@ -184,10 +185,14 @@ try {
     Assert-LastExit "paragraph_line_spacing_0p75_native_01.ps1"
 
     $cargo = Get-Command cargo -ErrorAction Stop
-    & $cargo.Source build --offline --locked --release --manifest-path $ProbeManifest
+    # Pin the output to an ephemeral directory. On the Windows oracle, Cargo
+    # can honor an inherited CARGO_TARGET_DIR instead of the manifest-local
+    # target path: a successful offline build must not imply the binary is
+    # present under paragraph-metrics-probe/target.
+    $ProbeBuildRoot = Join-Path ([IO.Path]::GetTempPath()) ("chaptera-0p75-probe-target-" + [guid]::NewGuid().ToString("N"))
+    & $cargo.Source build --offline --locked --release --manifest-path $ProbeManifest --target-dir $ProbeBuildRoot
     Assert-LastExit "paragraph-metrics-probe offline build"
-    $ProbeRoot = Split-Path -Parent $ProbeManifest
-    $Probe = Join-Path $ProbeRoot "target/release/paragraph-metrics-probe.exe"
+    $Probe = Join-Path $ProbeBuildRoot "release/paragraph-metrics-probe.exe"
     if (-not (Test-Path -LiteralPath $Probe -PathType Leaf)) {
         throw "Structural snapshot tool missing after offline build: $Probe"
     }
@@ -231,6 +236,13 @@ try {
     Get-Content -LiteralPath $structuralPath -Raw
 }
 finally {
+    # The build target is a launcher-owned GUID temp directory, never a
+    # caller-supplied path. Keep it out of the private return ZIP and the
+    # persistent self-hosted workspace after success or failure.
+    if (-not [string]::IsNullOrWhiteSpace([string]$ProbeBuildRoot) -and
+        (Test-Path -LiteralPath $ProbeBuildRoot)) {
+        Remove-Item -LiteralPath $ProbeBuildRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
     if ($null -ne $fixture -and [bool]$fixture.Staged -and
         -not [string]::IsNullOrWhiteSpace([string]$fixture.Root) -and
         (Test-Path -LiteralPath ([string]$fixture.Root))) {
