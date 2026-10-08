@@ -75,6 +75,7 @@ pub fn registry() -> BTreeMap<String, FormatProfileEntry> {
     let entries = [
         pub_source_profile(),
         pub_legacy22_low_text_source_profile(),
+        pub_legacy22_quill_source_profile(),
         idml_target_profile(),
         odg_target_profile(),
         pdf_target_profile(),
@@ -165,6 +166,38 @@ fn pub_legacy22_low_text_source_profile() -> FormatProfileEntry {
         corpus: vec![CorpusReference {
             fixture_id: "002_4ab9b74e2f15b6f1.pub".into(),
             sha256: "4ab9b74e2f15b6f12e82fac111fb7c524dd44742d883ef52a72922428cdd106b".into(),
+        }],
+    }
+}
+
+fn pub_legacy22_quill_source_profile() -> FormatProfileEntry {
+    FormatProfileEntry {
+        profile_id: "pub-legacy-0x22-quill-v0.1".into(),
+        direction: FormatDirection::Source,
+        format: "microsoft-publisher-pub".into(),
+        profile_version: "0.1".into(),
+        specification: SpecificationReference {
+            authority: "PUB project canonical research".into(),
+            title: "Bounded Publisher legacy-0x22 Quill source profile".into(),
+            version_fence: "legacy-0x22-quill-bounded".into(),
+            reference: "project://pub/canonical/legacy-0x22-quill".into(),
+        },
+        adapter: AdapterReference {
+            crate_name: "pub-reader".into(),
+            implementation_version: "pub-reader-v0.1".into(),
+        },
+        capabilities: vec![
+            "inspect".into(),
+            "viewer_scene".into(),
+            "convert".into(),
+        ],
+        validator: ValidatorReference {
+            profile_id: "pub-reader-legacy-0x22-quill".into(),
+            version: "v0.1".into(),
+        },
+        corpus: vec![CorpusReference {
+            fixture_id: "059_1b3d00a67c370d99.pub".into(),
+            sha256: "1b3d00a67c370d9938f67c198ba1ba90f0e962d95c7db9557e9a3e2cdf134886".into(),
         }],
     }
 }
@@ -275,6 +308,7 @@ mod tests {
         for id in [
             "pub-mature-0x2c-v0.1",
             "pub-legacy-0x22-low-text-v0.1",
+            "pub-legacy-0x22-quill-v0.1",
             "idml-bounded-v0.1",
             "odg-bounded-v0.1",
             "pdf-basic-fixed-v0.1",
@@ -313,6 +347,7 @@ mod tests {
                 "odg-bounded-v0.1",
                 "pdf-basic-fixed-v0.1",
                 "pub-legacy-0x22-low-text-v0.1",
+                "pub-legacy-0x22-quill-v0.1",
                 "pub-mature-0x2c-v0.1"
             ]
         );
