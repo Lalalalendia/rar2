@@ -433,8 +433,20 @@ pub(super) fn materialize_mature_nodes(
                 .fsp
                 .as_ref()
                 .map(|fsp| (fsp.shape_type, fsp.flags, fsp.flags & (1 << 8) != 0));
+            let explicit_line_state = (
+                &explicit_paint.line.color_rgb,
+                &explicit_paint.line.width_emu,
+                &explicit_paint.line.visible,
+            );
+            let effective_line_state = effective_paint.as_ref().map(|paint| {
+                (
+                    &paint.line.color_rgb,
+                    &paint.line.width_emu,
+                    &paint.line.visible,
+                )
+            });
             eprintln!(
-                "SOURCE_NODE_PROFILE seq_num={seq_num} page_id={page_id:?} document_page_ordinal={document_page_ordinal:?} raw_type={raw_type:?} officeart_fsp={raw_fsp:?} story={} image_slot={image_slot:?} table={} grouped={} bounds={bounds:?} explicit_fill={explicit_fill} explicit_line={explicit_line} effective_fill={effective_fill} effective_line={effective_line} raw_foptes={raw_foptes:?} transform={:?}",
+                "SOURCE_NODE_PROFILE seq_num={seq_num} page_id={page_id:?} document_page_ordinal={document_page_ordinal:?} raw_type={raw_type:?} officeart_fsp={raw_fsp:?} story={} image_slot={image_slot:?} table={} grouped={} bounds={bounds:?} explicit_fill={explicit_fill} explicit_line={explicit_line} effective_fill={effective_fill} effective_line={effective_line} explicit_line_state={explicit_line_state:?} effective_line_state={effective_line_state:?} raw_foptes={raw_foptes:?} transform={:?}",
                 story_frame.is_some(),
                 table.is_some(),
                 !grouped_sources.is_empty(),
