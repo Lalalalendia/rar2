@@ -22,6 +22,46 @@ fn paragraph_alignment_shortcut_v1(
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum CanvasTextMutationFinalization {
+    NoChange,
+    Rejected(String),
+    Committed { status: String, rebind_failed: bool },
+}
+
+/// The canonical EditOperation is already in EditorSession by the time
+/// text-session rebind can fail. Never classify that failure as a rejected edit.
+fn classify_canvas_text_mutation(
+    before_operations: usize,
+    after_operations: usize,
+    outcome: Result<(), String>,
+    committed_status: &str,
+    rejected_context: &str,
+) -> CanvasTextMutationFinalization {
+    if after_operations > before_operations {
+        let (status, rebind_failed) = match outcome {
+            Ok(()) => (committed_status.to_owned(), false),
+            Err(error) => (
+                format!(
+                    "{committed_status} Post-commit caret/layout rebind failed: {error}. Re-enter Edit Text to continue."
+                ),
+                true,
+            ),
+        };
+        CanvasTextMutationFinalization::Committed {
+            status,
+            rebind_failed,
+        }
+    } else {
+        match outcome {
+            Ok(()) => CanvasTextMutationFinalization::NoChange,
+            Err(error) => {
+                CanvasTextMutationFinalization::Rejected(format!("{rejected_context}: {error}"))
+            }
+        }
+    }
+}
+
 impl ViewerApp {
     pub(super) fn enter_canvas_text_mode(
         &mut self,
@@ -102,43 +142,65 @@ impl ViewerApp {
         }
     }
 
-    fn refresh_visual_text_projection_from_editor(&mut self) -> Result<(), String> {
-        let editor = self
+    /// One committed canvas text mutation has one finish-owned Viewer refresh.
+    /// In particular, do not refresh Viewer here before finish_authoring_change.
+    fn finish_canvas_text_mutation(
+        &mut self,
+        before_operations: usize,
+        outcome: Result<(), String>,
+        committed_status: &str,
+        rejected_context: &str,
+    ) {
+        let after_operations = self
             .editor
             .as_ref()
-            .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
-        let visual = self
-            .visual
-            .as_mut()
-            .ok_or_else(|| "Viewer projection is unavailable.".to_owned())?;
-        visual
-            .refresh_text_projection_from_resolved(editor.graph())
-            .map_err(|error| format!("refresh current Story projection: {error:#}"))
+            .map(|editor| editor.operations().len())
+            .unwrap_or(before_operations);
+        match classify_canvas_text_mutation(
+            before_operations,
+            after_operations,
+            outcome,
+            committed_status,
+            rejected_context,
+        ) {
+            CanvasTextMutationFinalization::NoChange => {}
+            CanvasTextMutationFinalization::Rejected(error) => {
+                self.edit_status = Some(error);
+            }
+            CanvasTextMutationFinalization::Committed {
+                status,
+                rebind_failed,
+            } => {
+                if rebind_failed {
+                    // The old caret/session revision is no longer authoritative.
+                    self.text_mode = None;
+                }
+                // This owns dirty-state, export/cache invalidation and one
+                // fail-closed Viewer text projection, including search-buffer sync.
+                self.finish_authoring_change(&status);
+            }
+        }
     }
 
     fn apply_canvas_text_input(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
+        let before_operations = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.operations().len())
+            .unwrap_or(0);
         let outcome = match (&mut self.editor, &mut self.text_mode) {
             (Some(editor), Some(mode)) => text_session::replace_external_text(editor, mode, text),
             _ => return,
         };
-        match outcome {
-            Ok(()) => match self.refresh_visual_text_projection_from_editor() {
-                Ok(()) => self.finish_authoring_change(
-                    "Typed on the canvas through one canonical ReplaceStoryRange operation.",
-                ),
-                Err(error) => {
-                    self.edit_status = Some(format!(
-                        "Text was committed, but the canvas projection could not be refreshed: {error}"
-                    ));
-                }
-            },
-            Err(error) => {
-                self.edit_status = Some(format!("Canvas text input rejected: {error}"));
-            }
-        }
+        self.finish_canvas_text_mutation(
+            before_operations,
+            outcome,
+            "Typed on the canvas through one canonical ReplaceStoryRange operation.",
+            "Canvas text input rejected",
+        );
     }
 
     pub(super) fn canvas_boolean_format_state_v1(
@@ -273,30 +335,12 @@ impl ViewerApp {
             }
             _ => return,
         };
-        match outcome {
-            Ok(()) => {
-                let after_operations = self
-                    .editor
-                    .as_ref()
-                    .map(|editor| editor.operations().len())
-                    .unwrap_or(before_operations);
-                if after_operations > before_operations {
-                    match self.refresh_visual_text_projection_from_editor() {
-                        Ok(()) => self.finish_authoring_change(
-                            "Canvas text keyboard edit committed through canonical Story range authority.",
-                        ),
-                        Err(error) => {
-                            self.edit_status = Some(format!(
-                                "Text keyboard edit was committed, but the canvas projection could not be refreshed: {error}"
-                            ));
-                        }
-                    }
-                }
-            }
-            Err(error) => {
-                self.edit_status = Some(format!("Canvas text keyboard input rejected: {error}"));
-            }
-        }
+        self.finish_canvas_text_mutation(
+            before_operations,
+            outcome,
+            "Canvas text keyboard edit committed through canonical Story range authority.",
+            "Canvas text keyboard input rejected",
+        );
     }
 
     pub(super) fn reposition_canvas_text_caret(
@@ -748,8 +792,75 @@ pub(super) fn strict_document_rect_interior(
 
 #[cfg(test)]
 mod tests {
-    use super::{paragraph_alignment_shortcut_v1, strict_document_rect_interior};
+    use super::{
+        CanvasTextMutationFinalization, classify_canvas_text_mutation,
+        paragraph_alignment_shortcut_v1, strict_document_rect_interior,
+    };
     use crate::egui;
+
+    #[test]
+    fn accepted_canvas_text_commits_have_one_finish_owned_refresh_route() {
+        let result =
+            classify_canvas_text_mutation(7, 8, Ok(()), "Text committed.", "Text rejected");
+        assert_eq!(
+            result,
+            CanvasTextMutationFinalization::Committed {
+                status: "Text committed.".to_owned(),
+                rebind_failed: false,
+            }
+        );
+
+        // Caret navigation creates no Editor operation and must not repaint.
+        assert_eq!(
+            classify_canvas_text_mutation(8, 8, Ok(()), "Text committed.", "Text rejected"),
+            CanvasTextMutationFinalization::NoChange
+        );
+    }
+
+    #[test]
+    fn accepted_edit_with_failed_rebind_is_not_misreported_as_rejected() {
+        let outcome = classify_canvas_text_mutation(
+            7,
+            8,
+            Err("caret projection failed".to_owned()),
+            "Text committed.",
+            "Text rejected",
+        );
+        let CanvasTextMutationFinalization::Committed {
+            status,
+            rebind_failed,
+        } = outcome
+        else {
+            panic!("a committed Editor operation must be finalized exactly once");
+        };
+        assert!(rebind_failed);
+        assert!(status.contains("Post-commit caret/layout rebind failed"));
+        assert!(status.contains("Re-enter Edit Text"));
+        assert_ne!(status, "Text rejected: caret projection failed");
+
+        assert_eq!(
+            classify_canvas_text_mutation(
+                8,
+                8,
+                Err("stale selection".to_owned()),
+                "Text committed.",
+                "Text rejected"
+            ),
+            CanvasTextMutationFinalization::Rejected("Text rejected: stale selection".to_owned())
+        );
+    }
+
+    #[test]
+    fn canvas_text_shell_has_no_second_viewer_reprojection_path() {
+        // Source-level fanout guard complements real Desktop GUI visual tests.
+        let source = include_str!("text_session_shell.rs");
+        let old_helper = ["refresh_visual_text", "_projection_from_editor"].concat();
+        let direct_refresh = [".refresh_text_projection", "_from_resolved("].concat();
+        let canonical_finish = ["self.", "finish_authoring_change(&status)"].concat();
+        assert!(!source.contains(&old_helper));
+        assert!(!source.contains(&direct_refresh));
+        assert_eq!(source.matches(&canonical_finish).count(), 1);
+    }
 
     #[test]
     fn paragraph_alignment_shortcuts_are_text_session_scoped_and_exact() {
