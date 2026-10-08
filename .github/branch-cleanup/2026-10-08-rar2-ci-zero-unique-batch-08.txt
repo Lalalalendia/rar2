@@ -1,0 +1,15 @@
+# 2026-10-08 — CI zero-unique batch 08
+# Never merge. Ten CI refs have ahead_by=0 vs current main; one completed GC carrier.
+# Exact SHA pins; runtime protects open heads/bases and moved tips.
+
+ci/carlton-supported-subset-baseline-refresh-01 df9cc236a7e4bd2518a71d97fbaf30fbb0c0542c # ahead=0 vs main
+ci/chatgpt-event-controller-limits-01 6d913f02af45989da0aeb0f638bc3b95bcbb1951 # ahead=0 vs main
+ci/fix-batch01-reference-digest 3dcdd676dfbddb3862e89a8df8d0385b88fe8d85 # ahead=0 vs main
+ci/migration-pr-consumer-cap-01 38cc35eb4dcaef80d05881f851735ad29774c71a # ahead=0 vs main
+ci/pub-reader-source-identity-split-01 d05112faf15c83b8152bf16679e72ce3684ed616 # ahead=0 vs main
+ci/typography-projection-current-control-02 05210fa640649d2f8a7332cb02d632c354f07937 # ahead=0 vs main
+ci/pub-editor-continuity-selective-01 186a067de174999d01cb68ae9c165b33af7308b0 # ahead=0 vs main
+ci/pub-editor-session-table-split-03 f7488f1c985e84e4eeaa1f714beb9bba9c002d4e # ahead=0 vs main
+ci/pub-editor-session-table-split-current-01 05210fa640649d2f8a7332cb02d632c354f07937 # ahead=0 vs main
+ci/pub-editor-table-core-01 94207b8b74d8e65f5a40fa74b7110fdfd1998e8e # ahead=0 vs main
+ops/branch-gc-20261008-viewer-superseded-batch-07 22ad666789fd29f5c9827c689d9a8656551d3f16 # completed #2102 receipt 10/10
