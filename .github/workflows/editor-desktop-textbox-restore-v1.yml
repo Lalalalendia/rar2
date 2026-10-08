@@ -13,6 +13,7 @@ on:
       - "crates/chaptera-canvas-creation-interaction/**"
       - "crates/chaptera-desktop-fallback-font-resource/**"
       - "vendor/producer-a/crates/pub-editor/**"
+      - "!vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs"
       - "!vendor/producer-a/crates/pub-editor/src/session_geometry.rs"
       - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
       - "!vendor/producer-a/crates/pub-editor/src/session_image.rs"
