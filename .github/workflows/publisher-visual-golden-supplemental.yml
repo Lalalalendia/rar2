@@ -240,7 +240,7 @@ jobs:
       - name: Attribute exact 06/100 residual with renderer-true paint bounds
         run: |
           set -euo pipefail
-          for fixture in 06-modern2c-image-heavy 100_b1faaba988e88b41; do
+          for fixture in 04-modern2c-story-stress 06-modern2c-image-heavy 100_b1faaba988e88b41; do
             python tools/cloud_reader_visual_paint_bounds_attribution_v1.py \
               "$RUNNER_TEMP/publisher-visual-supplemental/browser/${fixture}-page-1.png" \
               tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json \
