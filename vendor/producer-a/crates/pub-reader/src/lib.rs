@@ -196,6 +196,8 @@ use pub_quill::{
     bounded_mcld_text_insets,
 };
 use publication_document::{PublicationDocumentBootstrap, materialize_publication_document};
+#[cfg(test)]
+use publication_document::require_consensus_page_extent;
 use quill_admission::{QuillAdmission, admit_quill_projection_inputs};
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
@@ -517,60 +519,6 @@ pub fn build_mature_0x2c_from_streams(
         paragraph_flow_runs,
         script_font_maps,
     })
-}
-
-fn consensus_publication_page_extent(
-    stream: StreamPath,
-    contents: &[u8],
-    references: &BTreeMap<u32, Contents0x2cChunkReference>,
-) -> Result<(u32, u32, usize)> {
-    let margins = references
-        .values()
-        .filter(|reference| single_raw_type(reference) == Some(RAW_TYPE_MARGINS))
-        .collect::<Vec<_>>();
-
-    if margins.is_empty() {
-        bail!("missing Margins/OplMg raw type 0x{RAW_TYPE_MARGINS:02X}");
-    }
-
-    let mut dimensions = Vec::with_capacity(margins.len());
-    for reference in margins {
-        let chunk = chunk_for_reference(stream.clone(), contents, reference)?;
-        let extent = parse_confirmed_margins_page_extent(contents, &chunk).with_context(|| {
-            format!("parse Margins/OplMg page extent seq {}", reference.seq_num)
-        })?;
-        dimensions.push((extent.width_emu, extent.height_emu));
-    }
-
-    let (width_emu, height_emu) = require_consensus_page_extent(&dimensions)?;
-    Ok((width_emu, height_emu, dimensions.len()))
-}
-
-fn require_consensus_page_extent(extents: &[(u32, u32)]) -> Result<(u32, u32)> {
-    let first = extents
-        .first()
-        .copied()
-        .context("publication has no confirmed Margins/OplMg page extent")?;
-    if first.0 == 0 || first.1 == 0 {
-        bail!("publication page extent must be positive");
-    }
-
-    for &(width_emu, height_emu) in &extents[1..] {
-        if width_emu == 0 || height_emu == 0 {
-            bail!("publication page extent must be positive");
-        }
-        if (width_emu, height_emu) != first {
-            bail!(
-                "conflicting Margins/OplMg page extents: expected {}x{} EMU, found {}x{} EMU",
-                first.0,
-                first.1,
-                width_emu,
-                height_emu
-            );
-        }
-    }
-
-    Ok(first)
 }
 
 fn decode_utf16le_strict(bytes: &[u8]) -> Result<String> {
