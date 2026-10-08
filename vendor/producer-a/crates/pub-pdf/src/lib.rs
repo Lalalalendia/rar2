@@ -569,7 +569,8 @@ fn prepare_image(image: &FixedImageResource) -> Result<PreparedImage, PdfRenderE
     if has_alpha && !image.source_exact {
         return Ok(PreparedImage::Unsupported {
             code: "pdf.image.preview_alpha_unsupported".into(),
-            message: "alpha-bearing derived preview is outside the exact embedded-image PDF slice".into(),
+            message: "alpha-bearing derived preview is outside the exact embedded-image PDF slice"
+                .into(),
         });
     }
     Ok(PreparedImage::Rgb {
@@ -1275,9 +1276,13 @@ mod tests {
 
         let text = String::from_utf8_lossy(&output.bytes);
         assert!(!text.contains("/SMask "));
-        assert!(output.report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "pdf.image.preview_alpha_unsupported"
-        }));
+        assert!(
+            output
+                .report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.code == "pdf.image.preview_alpha_unsupported" })
+        );
     }
 
     #[test]
