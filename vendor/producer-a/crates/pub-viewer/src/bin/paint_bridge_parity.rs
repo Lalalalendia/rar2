@@ -1,7 +1,7 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use pub_layout::BoundedLayoutEnvironment;
 use pub_model::Sha256Digest;
-use pub_reader::{PubNodePayload, build_mature_0x2c_source_graph};
+use pub_reader::{build_mature_0x2c_source_graph, PubNodePayload};
 use pub_viewer::open_mature_0x2c_geometry;
 use sha2::{Digest, Sha256};
 use std::{env, fs, io::Cursor};
