@@ -1,0 +1,67 @@
+name: MEASURE exact 100 source visual inventory
+
+on:
+  push:
+    branches:
+      - "measure/100-source-visual-inventory-01"
+    paths:
+      - ".github/workflows/measure-100-source-visual-inventory.yml"
+      - "vendor/producer-a/crates/pub-reader/src/node_materialization.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  exact-100-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Prepare exact 100 fixture
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/exact100-source"
+          mkdir -p "$RUNNER_TEMP/exact100-source"
+          python tools/cloud_reader_visual_supplemental_v1.py prepare \
+            tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv \
+            out/pinned1050/materialized/native \
+            "$RUNNER_TEMP/exact100-source/fixtures" \
+            "$RUNNER_TEMP/exact100-source/manifest.json"
+          test -f "$RUNNER_TEMP/exact100-source/fixtures/100_b1faaba988e88b41.pub"
+          test "$(sha256sum "$RUNNER_TEMP/exact100-source/fixtures/100_b1faaba988e88b41.pub" | awk '{print $1}')" = "b1faaba988e88b4134dc8a495cb68c6f7496f3fbaedcba65fa6e02f39b29b621"
+
+      - name: Emit exact 100 aggregate source visual inventory
+        env:
+          READER_CORPUS_DIAGNOSTIC: "1"
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/exact100-source/source-inventory.log"
+          cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader --bin source_image_export_probe -- \
+            "$RUNNER_TEMP/exact100-source/fixtures/100_b1faaba988e88b41.pub" \
+            >/dev/null 2>"$log"
+          grep '^SOURCE_VISUAL_INVENTORY ' "$log"
+          test "$(grep -c '^SOURCE_VISUAL_INVENTORY ' "$log")" -eq 1
