@@ -1,6 +1,7 @@
 name: PR merge authority
 
 on:
+  # fanout: global-pr-required
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
