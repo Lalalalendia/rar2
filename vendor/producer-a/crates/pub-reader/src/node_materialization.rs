@@ -1,4 +1,8 @@
 use super::*;
+use super::paint_projection::{
+    OFFICEART_SHAPE_TYPE_RECTANGLE, has_default_rectangle_geometry,
+    has_explicit_visible_solid_fill,
+};
 
 pub(super) struct MatureNodeMaterializationContext<'a> {
     pub(super) source_hash: &'a Sha256Digest,
@@ -103,10 +107,7 @@ pub(super) fn materialize_mature_nodes(
             && image_slot.is_none()
         {
             if has_default_rectangle_geometry(shape)
-                && has_explicit_visible_solid_fill(
-                    shape,
-                    color_scheme.map(|scheme| &scheme.scheme),
-                )
+                && has_explicit_visible_solid_fill(shape, color_scheme.map(|scheme| &scheme.scheme))
             {
                 Some(OFFICEART_SHAPE_TYPE_RECTANGLE)
             } else if has_default_ellipse_geometry(shape) {
