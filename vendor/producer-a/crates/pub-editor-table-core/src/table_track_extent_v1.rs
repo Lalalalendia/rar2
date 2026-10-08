@@ -1,3 +1,4 @@
+//! Steady-state control for table-track core fast-loop ownership.
 use pub_model::{EffectiveTableGridV1, LengthEmu, RectEmu, TableColumnId, TableRowId};
 use serde::{Deserialize, Serialize};
 
