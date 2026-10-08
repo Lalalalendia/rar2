@@ -1,7 +1,7 @@
 use super::DesktopShapedFlowRuntimeError;
 use pub_editor::EditorSession;
-use pub_layout::BoundedAuthoringSlice;
-use pub_model::PageId;
+use pub_layout::{BoundedAuthoringSlice, BoundedGuideInput};
+use pub_model::{PageId, PublisherGuideRole};
 use std::collections::BTreeSet;
 
 pub(crate) fn qualified_page_set_error_v1(
@@ -13,6 +13,26 @@ pub(crate) fn qualified_page_set_error_v1(
             "current fixed-PDF input requires at least one qualified customer page",
         ));
     }
+    Ok(())
+}
+
+pub(crate) fn append_current_authored_ruler_guides_v1(
+    editor: &EditorSession,
+    authoring: &mut BoundedAuthoringSlice,
+) -> Result<(), DesktopShapedFlowRuntimeError> {
+    let guides = editor.current_authored_ruler_guides_v1().map_err(|error| {
+        DesktopShapedFlowRuntimeError::new(
+            "authoring_guide_projection_failed",
+            format!("current authored ruler guides could not be resolved: {error}"),
+        )
+    })?;
+    authoring
+        .guides
+        .extend(guides.into_iter().map(|authored| BoundedGuideInput {
+            page_id: authored.page_id,
+            guide: authored.guide,
+            provenance: PublisherGuideRole::PageRulerGuide,
+        }));
     Ok(())
 }
 
@@ -28,6 +48,7 @@ pub(crate) fn bounded_authoring_slice_for_pages_v1(
                 format!("resolved graph could not enter bounded layout projection: {error}"),
             )
         })?;
+    append_current_authored_ruler_guides_v1(editor, &mut authoring)?;
 
     let requested_pages = page_ids.iter().copied().collect::<BTreeSet<_>>();
     let available_pages = authoring

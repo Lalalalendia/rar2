@@ -8,8 +8,8 @@ use pub_editor::{
     EDITOR_PROJECT_VERSION_V0_14, EDITOR_PROJECT_VERSION_V0_15, EDITOR_PROJECT_VERSION_V0_16,
     EDITOR_PROJECT_VERSION_V0_17, EDITOR_PROJECT_VERSION_V0_18, EDITOR_PROJECT_VERSION_V0_19,
     EDITOR_PROJECT_VERSION_V0_20, EDITOR_PROJECT_VERSION_V0_21, EDITOR_PROJECT_VERSION_V0_22,
-    EDITOR_PROJECT_VERSION_V0_23, EditOperation, EditorProject, Sha256Digest,
-    open_mature_0x2c_editor,
+    EDITOR_PROJECT_VERSION_V0_23, EDITOR_PROJECT_VERSION_V0_24, EditOperation, EditorProject,
+    Sha256Digest, open_mature_0x2c_editor,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -500,6 +500,7 @@ fn cloud_replay_requires_local_identity(schema_version: &str) -> bool {
         EDITOR_PROJECT_VERSION_V0_21,
         EDITOR_PROJECT_VERSION_V0_22,
         EDITOR_PROJECT_VERSION_V0_23,
+        EDITOR_PROJECT_VERSION_V0_24,
     ]
     .contains(&schema_version)
 }
@@ -513,6 +514,7 @@ fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
 
     for operation in &project.operations {
         let operation_rank = match operation {
+            EditOperation::RulerGuideV1 { .. } => 24,
             EditOperation::ReorderPagesV1 { .. } => 23,
             EditOperation::LinkTextFrameTail { .. } => 22,
             EditOperation::InsertTableRow { .. }
@@ -547,6 +549,7 @@ fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
     }
 
     match rank {
+        24 => EDITOR_PROJECT_VERSION_V0_24,
         23 => EDITOR_PROJECT_VERSION_V0_23,
         22 => EDITOR_PROJECT_VERSION_V0_22,
         21 => EDITOR_PROJECT_VERSION_V0_21,
