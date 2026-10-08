@@ -160,12 +160,12 @@ export default function LandingClient({initialCountry,initialLocale}:{initialCou
               {canonical.contentSummary?.page_count!==undefined&&<div className="metric"><span>{canonicalCopy[locale].pages}</span><b>{canonical.contentSummary.page_count}</b></div>}
               <div className="metric"><span>{canonicalCopy[locale].idml}</span><b>{canonicalCopy[locale].unverified}</b></div>
               <div className="metric"><span>{canonicalCopy[locale].odg}</span><b>{canonicalCopy[locale].unverified}</b></div>
-              <div className="metric"><span>{copy.emailMetric}</span><b>{status.emailStatus==='sent'?copy.emailSent:copy.emailPrepared}</b></div>
+              <div className="metric"><span>{copy.emailMetric}</span><b>{status?.emailStatus==='sent'?copy.emailSent:copy.emailPrepared}</b></div>
             </div>
             {canonical.limitations.length>0&&<div className="resultDetails"><strong>{canonicalCopy[locale].limitations}</strong><ul>{canonical.limitations.map(l=><li key={l.code}>{l.message}</li>)}</ul></div>}
             <div className="resultDetails"><strong>{canonicalCopy[locale].next}</strong><p>{canonicalCopy[locale].nextSteps[canonical.state]}</p></div>
           </>}
-          {legacy&&<div className="resultGrid"><div className="metric"><span>{copy.compatibility}</span><b>{compatibilityLabels[locale][legacy.compatibility]}</b></div><div className="metric"><span>{copy.publisherFamily}</span><b>{legacy.publisherFamily||copy.notIdentified}</b></div><div className="metric"><span>{copy.emailMetric}</span><b>{status.emailStatus==='sent'?copy.emailSent:copy.emailPrepared}</b></div></div>}
+          {legacy&&<div className="resultGrid"><div className="metric"><span>{copy.compatibility}</span><b>{compatibilityLabels[locale][legacy.compatibility]}</b></div><div className="metric"><span>{copy.publisherFamily}</span><b>{legacy.publisherFamily||copy.notIdentified}</b></div><div className="metric"><span>{copy.emailMetric}</span><b>{status?.emailStatus==='sent'?copy.emailSent:copy.emailPrepared}</b></div></div>}
           {status?.status==='failed'&&<div className="error">{copy.reliableFailure}</div>}</div>}
       </div>
     </section>
