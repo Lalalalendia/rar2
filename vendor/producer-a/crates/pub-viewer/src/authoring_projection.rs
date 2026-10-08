@@ -105,7 +105,7 @@ pub(super) fn bounded_legacy_noquill_authoring_slice_from_resolved_pages(
     Ok(authoring)
 }
 
-pub(super) fn bounded_authoring_slice_from_resolved_pages(
+pub fn bounded_authoring_slice_from_resolved_pages(
     graph: &PubResolvedGraph,
     page_ids: &[PageId],
 ) -> Result<BoundedAuthoringSlice> {
