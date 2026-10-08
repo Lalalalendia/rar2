@@ -2949,8 +2949,29 @@ fn resolve_text_layout_v1(
         .collect::<Vec<_>>();
     source_lines.sort_by_key(|line| line.frame_line_index);
 
-    let ordinary_partial_story_overset =
-        ordinary_incomplete_layout_is_admitted_partial_story_overset(
+    if layout_scalar_base > 0 {
+        for line in &mut source_lines {
+            let (Some(scalar_start), Some(scalar_end), Some(consumed_scalar_end)) = (
+                line.scalar_start.checked_add(layout_scalar_base),
+                line.scalar_end.checked_add(layout_scalar_base),
+                line.consumed_scalar_end.checked_add(layout_scalar_base),
+            ) else {
+                return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed);
+            };
+            line.scalar_start = scalar_start;
+            line.scalar_end = scalar_end;
+            line.consumed_scalar_end = consumed_scalar_end;
+            for glyph in &mut line.glyphs {
+                let Some(cluster) = glyph.cluster.checked_add(layout_scalar_base) else {
+                    return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed);
+                };
+                glyph.cluster = cluster;
+            }
+        }
+    }
+
+    let ordinary_partial_story_overset = layout_scalar_base == 0
+        && ordinary_incomplete_layout_is_admitted_partial_story_overset(
             projected_target_frame_node_id,
             &scene.diagnostics,
             story.id,
@@ -2958,11 +2979,12 @@ fn resolve_text_layout_v1(
                 .iter()
                 .any(|line| line.scalar_end > line.scalar_start && line.measured_width.get() > 0),
             source_lines.last().map(|line| line.consumed_scalar_end),
-            story_scalar_len,
+            layout_expected_scalar_end,
         );
 
-    if story_scalar_len > 0
-        && source_lines.last().map(|line| line.consumed_scalar_end) != Some(story_scalar_len)
+    if layout_expected_scalar_end > fragment.scalar_start
+        && source_lines.last().map(|line| line.consumed_scalar_end)
+            != Some(layout_expected_scalar_end)
         && !projected_explicit_overset
         && !ordinary_partial_story_overset
     {
