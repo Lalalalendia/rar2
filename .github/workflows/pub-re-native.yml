@@ -29,7 +29,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      command_mode: ${{ steps.command.outputs.command_mode }}
       manifest_name: ${{ steps.command.outputs.manifest_name }}
+      fixture_alias: ${{ steps.command.outputs.fixture_alias }}
     steps:
       - name: Resolve trusted native command
         id: command
@@ -44,25 +46,43 @@ jobs:
           import re
 
           manifest_re = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json")
+          alias_re = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
           event_name = os.environ["EVENT_NAME"]
+          command_mode = ""
+          manifest_name = ""
+          fixture_alias = ""
 
           if event_name == "workflow_dispatch":
-              candidate = os.environ.get("INPUT_MANIFEST_NAME", "")
+              manifest_name = os.environ.get("INPUT_MANIFEST_NAME", "")
+              if manifest_re.fullmatch(manifest_name) is None:
+                  raise SystemExit("manifest_name must be a simple .json filename")
+              command_mode = "manifest"
           else:
               body = os.environ.get("COMMENT_BODY", "")
-              match = re.fullmatch(
+              manifest_match = re.fullmatch(
                   r"/pub-re-native ([A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json)",
                   body,
               )
-              if match is None:
+              snapshot_match = re.fullmatch(
+                  r"/pub-re-native snapshot ([a-z0-9][a-z0-9._-]{0,63})",
+                  body,
+              )
+              if manifest_match is not None:
+                  command_mode = "manifest"
+                  manifest_name = manifest_match.group(1)
+              elif snapshot_match is not None:
+                  command_mode = "snapshot_alias"
+                  fixture_alias = snapshot_match.group(1)
+              else:
                   raise SystemExit("invalid PUB RE native control command")
-              candidate = match.group(1)
 
-          if manifest_re.fullmatch(candidate) is None:
-              raise SystemExit("manifest_name must be a simple .json filename")
+          if command_mode == "snapshot_alias" and alias_re.fullmatch(fixture_alias) is None:
+              raise SystemExit("fixture alias is invalid")
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"manifest_name={candidate}\n")
+              output.write(f"command_mode={command_mode}\n")
+              output.write(f"manifest_name={manifest_name}\n")
+              output.write(f"fixture_alias={fixture_alias}\n")
           PY
 
   native:
@@ -90,31 +110,98 @@ jobs:
         with:
           toolchain: "1.94.1"
 
-      - name: Resolve local manifest safely
+      - name: Resolve native input safely
         shell: powershell
         env:
+          PUB_RE_COMMAND_MODE: ${{ needs.gate.outputs.command_mode }}
           PUB_RE_MANIFEST_NAME: ${{ needs.gate.outputs.manifest_name }}
+          PUB_RE_FIXTURE_ALIAS: ${{ needs.gate.outputs.fixture_alias }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
 
-          if ([string]::IsNullOrWhiteSpace($env:PUB_RE_MANIFEST_ROOT)) {
-            throw "PUB_RE_MANIFEST_ROOT is not configured on the dedicated runner"
-          }
-          if ($env:PUB_RE_MANIFEST_NAME -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json$') {
-            throw "manifest_name must be a simple .json filename"
-          }
-
-          $manifest = Join-Path $env:PUB_RE_MANIFEST_ROOT $env:PUB_RE_MANIFEST_NAME
-          if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
-            throw "requested native experiment manifest is not present"
-          }
-
           $output = Join-Path $env:RUNNER_TEMP ("pub-re-native-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
           New-Item -ItemType Directory -Force -Path $output | Out-Null
+          "PUB_RE_NATIVE_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          if ($env:PUB_RE_COMMAND_MODE -eq "manifest") {
+            if ([string]::IsNullOrWhiteSpace($env:PUB_RE_MANIFEST_ROOT)) {
+              throw "PUB_RE_MANIFEST_ROOT is not configured on the dedicated runner"
+            }
+            if ($env:PUB_RE_MANIFEST_NAME -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json$') {
+              throw "manifest_name must be a simple .json filename"
+            }
+
+            $manifest = Join-Path $env:PUB_RE_MANIFEST_ROOT $env:PUB_RE_MANIFEST_NAME
+            if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
+              throw "requested native experiment manifest is not present"
+            }
+          }
+          elseif ($env:PUB_RE_COMMAND_MODE -eq "snapshot_alias") {
+            if ($env:PUB_RE_FIXTURE_ALIAS -notmatch '^[a-z0-9][a-z0-9._-]{0,63}$') {
+              throw "fixture alias is invalid"
+            }
+
+            $registryPath = Join-Path $env:GITHUB_WORKSPACE "tools\pub-re\native-fixtures.json"
+            $registry = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
+            if ([string]$registry.schema -ne "chaptera.pub-re-native-fixture-registry.v1") {
+              throw "native fixture registry schema is unsupported"
+            }
+
+            $matches = @($registry.fixtures | Where-Object { [string]$_.alias -eq $env:PUB_RE_FIXTURE_ALIAS })
+            if ($matches.Count -ne 1) {
+              throw "native fixture alias must resolve exactly once"
+            }
+
+            $entry = $matches[0]
+            $expectedSha = ([string]$entry.expected_sha256).ToLowerInvariant()
+            if ($expectedSha -notmatch '^[0-9a-f]{64}$') {
+              throw "native fixture registry SHA-256 is invalid"
+            }
+            $expectedByteLen = [int64]$entry.expected_byte_len
+            if ($expectedByteLen -lt 1 -or $expectedByteLen -gt 67108864) {
+              throw "native fixture registry byte length is outside the bounded policy"
+            }
+
+            $uri = [Uri]([string]$entry.download_url)
+            if ($uri.Scheme -ne "https" -or $uri.Host -ne "raw.githubusercontent.com") {
+              throw "native fixture download URL is outside the public allowlist"
+            }
+
+            $download = Join-Path $output "source.pub"
+            Invoke-WebRequest -Uri $uri.AbsoluteUri -OutFile $download -UseBasicParsing
+
+            $item = Get-Item -LiteralPath $download
+            $actualSha = (Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actualSha -ne $expectedSha -or [int64]$item.Length -ne $expectedByteLen) {
+              throw "downloaded native fixture does not match the pinned registry entry"
+            }
+
+            $generated = [ordered]@{
+              schema = "chaptera.pub-re-native-experiment.v1"
+              experiment_id = ("snapshot-{0}-{1}" -f $env:PUB_RE_FIXTURE_ALIAS, $env:GITHUB_RUN_ID)
+              source = [ordered]@{
+                path = $download
+                expected_sha256 = $expectedSha
+              }
+              operation = [ordered]@{
+                kind = "snapshot_only"
+              }
+              policy = [ordered]@{
+                writer = "current"
+                visible = $false
+                process_exit_grace_seconds = 60
+              }
+            }
+
+            $manifest = Join-Path $output "generated-manifest.json"
+            $generated | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifest -Encoding utf8
+          }
+          else {
+            throw "unsupported PUB RE native command mode"
+          }
 
           "PUB_RE_NATIVE_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "PUB_RE_NATIVE_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build standalone PUB RE
         shell: powershell

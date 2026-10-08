@@ -69,6 +69,20 @@ The dispatch-only workflow `PUB RE native Publisher experiment` requires a self-
 self-hosted, Windows, X64, chaptera-publisher-oracle
 ```
 
-Configure `PUB_RE_MANIFEST_ROOT` on that runner. Workflow input is only a simple manifest filename under that root; local source paths stay inside the private manifest and never enter GitHub inputs.
+Configure `PUB_RE_MANIFEST_ROOT` on that runner for private/manual manifests. Workflow input remains only a simple manifest filename under that root; local source paths stay inside the private manifest and never enter GitHub inputs.
+
+The owner-only control issue also supports repository-pinned public fixture aliases:
+
+```text
+/pub-re-native snapshot sample-newsletter
+```
+
+Aliases live in `tools/pub-re/native-fixtures.json`. For this mode the hosted gate passes only the validated alias. The Windows job then reads the protected-main registry, downloads the exact HTTPS fixture into `RUNNER_TEMP`, verifies both pinned SHA-256 and byte length, generates an ephemeral `snapshot_only` manifest, runs Publisher, and deletes the downloaded source with the normal `always()` cleanup. No runner-local manifest or persistent fixture is required.
+
+The legacy owner command remains available for private runner-local manifests:
+
+```text
+/pub-re-native sample-newsletter-snapshot.json
+```
 
 The workflow uploads only JSON from the run's `evidence` directory and deletes the private copied/mutated PUB files in an `always()` cleanup step.
