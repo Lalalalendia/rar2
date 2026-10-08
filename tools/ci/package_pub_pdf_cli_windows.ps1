@@ -52,7 +52,7 @@ Chaptera PUB to PDF CLI - UNSIGNED TECHNICAL PREVIEW
 Windows x64, standalone command-line executable. No installer or signing.
 
 In PowerShell:
-  .\pub.exe convert "input.pub" --to pdf --output "output.pdf" --fallback-font "C:\path\licensed-font.ttf"
+  .\pub.exe convert "input.pub" --to pdf --output "output.pdf" --fallback-font "licensed-font.ttf"
 
 The TTF/TTC font file must be supplied by the user. The package does not
 contain or select any fallback font automatically. It checks OpenType
