@@ -1,3 +1,4 @@
+//! Compatibility-pilot steady-state control for table-track core.
 use pub_model::{EffectiveTableGridV1, LengthEmu, RectEmu, TableColumnId, TableRowId};
 use serde::{Deserialize, Serialize};
 
