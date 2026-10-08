@@ -464,6 +464,7 @@ pub fn shared_core() {}
         "crates/chaptera-desktop-fallback-font-resource/src/lib.rs",
         "vendor/producer-a/crates/pub-layout/src/shaped_flow.rs",
         ".github/workflows/editor-fixed-pdf-current-revision.yml",
+        ".github/workflows/w2-longform-fixed-pdf-current-revision.yml",
         "tools/ci/pub_editor_pr_fanout.py",
         "tools/ci/test_pub_editor_pr_fanout.py",
     ):
@@ -472,6 +473,21 @@ pub fn shared_core() {}
             path,
             reason,
         )
+
+    run, reason = classify_fixed_pdf(
+        ["vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs"]
+    )
+    assert run is False and reason == "proven_non_fixed_pdf_pub_editor_slice"
+
+    run, reason = classify_fixed_pdf(
+        [
+            "vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs",
+            mod.PUB_EDITOR_LIB,
+        ],
+        base,
+        core_head,
+    )
+    assert run is True and reason == "pub_editor_lib_core_change"
 
     run, reason = classify_fixed_pdf(["README.md"])
     assert run is False and reason == "no_fixed_pdf_owner_changed"
