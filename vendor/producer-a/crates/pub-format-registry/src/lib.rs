@@ -74,6 +74,7 @@ impl std::error::Error for RegistryError {}
 pub fn registry() -> BTreeMap<String, FormatProfileEntry> {
     let entries = [
         pub_source_profile(),
+        pub_legacy22_low_text_source_profile(),
         idml_target_profile(),
         odg_target_profile(),
         pdf_target_profile(),
@@ -132,6 +133,38 @@ fn pub_source_profile() -> FormatProfileEntry {
         corpus: vec![CorpusReference {
             fixture_id: "SampleNewsletter.pub".into(),
             sha256: "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf".into(),
+        }],
+    }
+}
+
+fn pub_legacy22_low_text_source_profile() -> FormatProfileEntry {
+    FormatProfileEntry {
+        profile_id: "pub-legacy-0x22-low-text-v0.1".into(),
+        direction: FormatDirection::Source,
+        format: "microsoft-publisher-pub".into(),
+        profile_version: "0.1".into(),
+        specification: SpecificationReference {
+            authority: "PUB project canonical research".into(),
+            title: "Bounded Publisher legacy-0x22 low-text source profile".into(),
+            version_fence: "legacy-0x22-low-text-bounded".into(),
+            reference: "project://pub/canonical/legacy-0x22-low-text".into(),
+        },
+        adapter: AdapterReference {
+            crate_name: "pub-reader".into(),
+            implementation_version: "pub-reader-v0.1".into(),
+        },
+        capabilities: vec![
+            "inspect".into(),
+            "viewer_scene".into(),
+            "convert".into(),
+        ],
+        validator: ValidatorReference {
+            profile_id: "pub-reader-legacy-0x22-low-text".into(),
+            version: "v0.1".into(),
+        },
+        corpus: vec![CorpusReference {
+            fixture_id: "002_4ab9b74e2f15b6f1.pub".into(),
+            sha256: "4ab9b74e2f15b6f12e82fac111fb7c524dd44742d883ef52a72922428cdd106b".into(),
         }],
     }
 }
@@ -241,6 +274,7 @@ mod tests {
     fn resolves_current_pub_idml_odg_pdf_profiles() {
         for id in [
             "pub-mature-0x2c-v0.1",
+            "pub-legacy-0x22-low-text-v0.1",
             "idml-bounded-v0.1",
             "odg-bounded-v0.1",
             "pdf-basic-fixed-v0.1",
@@ -278,6 +312,7 @@ mod tests {
                 "idml-bounded-v0.1",
                 "odg-bounded-v0.1",
                 "pdf-basic-fixed-v0.1",
+                "pub-legacy-0x22-low-text-v0.1",
                 "pub-mature-0x2c-v0.1"
             ]
         );
