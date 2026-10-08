@@ -31,11 +31,11 @@ $ExpectedPublisherExeSha256 = "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb
 
 $PinnedFiles = @(
     [pscustomobject]@{ Path = $Packet; Sha = "2f5e641a3c18215db7e2bd4df303cd55ddcf1f46" }
-    [pscustomobject]@{ Path = $Operation; Sha = "ce13a9e3a17e999b4f9de3630057a7db0e6f8775" }
+    [pscustomobject]@{ Path = $Operation; Sha = "0b04d6ea6d10643dc8c0f271c53336222f47067e" }
     [pscustomobject]@{ Path = $Prepare; Sha = "0848e8e147dff5dab68065c37d2d73f72f09eb45" }
     [pscustomobject]@{ Path = $Finalize; Sha = "2a97d6f2c8be1265010a744c015ce8d288eb7e75" }
     [pscustomobject]@{ Path = $Runtime; Sha = "fed4c890a34d39401d3b5848cc16d1087f862a27" }
-    [pscustomobject]@{ Path = $Analyzer; Sha = "064aa8a41231fe52b727393b4775df1d3f0d4a49" }
+    [pscustomobject]@{ Path = $Analyzer; Sha = "bde7bc5fb6cbcd44f5bbe769c75b73d65a4a4e32" }
     [pscustomobject]@{ Path = $StructuralBase; Sha = "1d12b34de10ad74ea49a4fa2cabbe01b44198331" }
     [pscustomobject]@{ Path = $ProbeManifest; Sha = "40d209d6e193d477635d72fb34e7bd9f640d7270" }
     [pscustomobject]@{ Path = $ProbeLock; Sha = "828e76d2f85c1238ced8081796a58c309d5fbade" }
@@ -216,7 +216,7 @@ try {
     }
 
     $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
-    if (@($result.arms).Count -ne 3) { throw "Expected exactly 3 native arms." }
+    if (@($result.arms).Count -ne 4) { throw "Expected exactly 4 native arms." }
     foreach ($arm in @($result.arms)) {
         if ($null -eq $arm.line_geometry_fresh_reopen -or [int]$arm.line_geometry_fresh_reopen.line_count -lt 1) {
             throw "Fresh-reopen line geometry missing for arm $($arm.arm)"
