@@ -104,19 +104,17 @@ jobs:
           test -n "$MANIFEST_HASH"
           echo "key=cloud-reader-reference-rust-v2-${RUNNER_OS}-rust-1.94.1-${MANIFEST_HASH}" >> "$GITHUB_OUTPUT"
 
-      - name: Verify effective Cloud reference PR cache access
+      - name: Report Cloud reference cache access context
         shell: bash
         run: |
           set -euo pipefail
           echo "cloud_reference_cache_mode=${ACTIONS_CACHE_MODE:-unknown}" | tee -a "$GITHUB_STEP_SUMMARY"
-          if [[ "$GITHUB_EVENT_NAME" == "pull_request" && "${ACTIONS_CACHE_MODE:-}" != "read" ]]; then
-            echo "::error::Cloud reference PR must restore caches read-only; PR cache writes are forbidden."
-            exit 1
-          fi
+          echo "cloud_reference_cache_event=$GITHUB_EVENT_NAME" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Restore/save Cloud reference Cargo build cache
+      # Restore-only in ALL contexts: a PR must never upload a 1.56-GB private copy.
+      - name: Restore Cloud reference Cargo build cache
         id: cloud-reference-cargo-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target/cloud-reader-reference-rust
           key: ${{ steps.cloud-reference-cache-key.outputs.key }}
@@ -316,6 +314,16 @@ jobs:
           )
           print(json.dumps(rows, indent=2, sort_keys=True))
           PY
+
+      # Save the shared cache only AFTER trusted-main product acceptance succeeds.
+      # The PR caller is capped at read-only; explicit save gating is independent
+      # of runner ACTIONS_CACHE_MODE availability.
+      - name: Save trusted main Cloud reference Cargo cache
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cloud-reference-cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/cloud-reader-reference-rust
+          key: ${{ steps.cloud-reference-cache-key.outputs.key }}
 
       - name: Copy sanitized acquisition receipts
         run: |
