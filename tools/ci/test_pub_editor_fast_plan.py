@@ -163,6 +163,7 @@ def main() -> int:
         AUTHORING_CORE_PREFIX + "create_table_runtime_v1.rs": "create_table_runtime_v1",
         AUTHORING_CORE_PREFIX + "authored_stack_lifecycle_v1.rs": "authored_stack_lifecycle_v1",
         TABLE_CORE_PREFIX + "table_track_extent_v1.rs": "table_track_extent_v1",
+        TABLE_CORE_PREFIX + "table_track_history_v1.rs": "table_track_history_v1",
         AUTHORING_CORE_PREFIX + "authored_stack_runtime_v1.rs": "authored_stack_runtime_v1",
         AUTHORING_CORE_PREFIX + "create_line_runtime_v1.rs": "create_line_runtime_v1",
     }
@@ -193,6 +194,31 @@ def main() -> int:
         "-p",
         "pub-editor",
     )
+
+    table_core_checks = mod.plan_for_paths(
+        ROOT, [TABLE_CORE_PREFIX + "table_track_extent_v1.rs"], mode="edit"
+    )
+    table_core_commands = [check.command for check in table_core_checks]
+    if expected_adapter_check not in table_core_commands:
+        raise SystemExit("table-core edit must compile-check the pub-editor adapter")
+    for target in ("table_track_history_project_v1", "table_track_layout_integration_v1"):
+        if any("--test" in command and target in command for command in table_core_commands):
+            raise SystemExit(
+                f"table-core edit must not run session adapter acceptance {target}"
+            )
+
+    session_table_checks = mod.plan_for_paths(
+        ROOT, [PREFIX + "session_table.rs"], mode="edit"
+    )
+    session_table_commands = [check.command for check in session_table_checks]
+    for target in ("table_track_history_project_v1", "table_track_layout_integration_v1"):
+        if not any(
+            "--test" in command and target in command
+            for command in session_table_commands
+        ):
+            raise SystemExit(
+                f"session_table.rs must retain table adapter acceptance {target}"
+            )
     if expected_core_test not in image_core_commands:
         raise SystemExit("image-core edit must run isolated pub-editor-image-core --lib")
     if expected_adapter_check not in image_core_commands:
