@@ -510,8 +510,7 @@ pub(super) fn resolve_mixed_size_text_layout_v1(
         else {
             return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
         };
-        let Some(completed_height_emu) =
-            prefix_height_emu.checked_add(terminal.line_height_emu)
+        let Some(completed_height_emu) = prefix_height_emu.checked_add(terminal.line_height_emu)
         else {
             return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
         };
@@ -634,14 +633,11 @@ mod tests {
         };
         let fragment = mixed_fragment("aa\r\r");
         let node_id = NodeId::from_canonical(pub_model::CanonicalId::from_bytes([4; 16]));
-        let first_physical_extent_emu = compatible_natural_line_height_emu_v1(
-            bytes,
-            0,
-            LengthEmu::new(default_font_size_emu),
-        )
-        .map(LengthEmu::get)
-        .expect("test font physical extent")
-        .min(default_line_height_emu);
+        let first_physical_extent_emu =
+            compatible_natural_line_height_emu_v1(bytes, 0, LengthEmu::new(default_font_size_emu))
+                .map(LengthEmu::get)
+                .expect("test font physical extent")
+                .min(default_line_height_emu);
         assert!(first_physical_extent_emu < default_line_height_emu);
 
         let bounds = RectEmu::new(
