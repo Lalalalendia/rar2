@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/measure-04-text-color-span.yml"
       - "crates/chaptera-viewer-render-plan/src/lib.rs"
+      - "crates/chaptera-viewer-render-plan/src/mixed_size_layout.rs"
       - "apps/chaptera-server/src/reader_scene_v1.rs"
       - "apps/cloud-reader/render-v1.mjs"
       - "apps/cloud-reader/real-browser.test.mjs"
