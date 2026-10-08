@@ -41,9 +41,7 @@ fn retain_story_shaping_scope_v1(
     projection: &mut BoundedLayoutProjection,
     story_id: StoryId,
 ) -> Result<(), DesktopShapedFlowRuntimeError> {
-    projection
-        .stories
-        .retain(|story| story.origin == story_id);
+    projection.stories.retain(|story| story.origin == story_id);
     if projection.stories.len() != 1 {
         return Err(DesktopShapedFlowRuntimeError::new(
             "story_missing",
@@ -699,9 +697,8 @@ mod tests {
             editor.graph().stories.len() > 1,
             "51318 must remain a multi-Story witness for Story-local shaping"
         );
-        let shaping_authoring =
-            pub_viewer::bounded_authoring_slice_from_resolved(editor.graph())
-                .expect("project multi-Story fixture before shaping scope");
+        let shaping_authoring = pub_viewer::bounded_authoring_slice_from_resolved(editor.graph())
+            .expect("project multi-Story fixture before shaping scope");
         let mut shaping_scope = project_bounded(shaping_authoring);
         let pages_before = shaping_scope.pages.clone();
         let geometry_before = shaping_scope.node_geometry.clone();
