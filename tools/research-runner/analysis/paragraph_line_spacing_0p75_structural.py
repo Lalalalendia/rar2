@@ -21,8 +21,9 @@ _spec.loader.exec_module(base)
 EXPERIMENT = "PARAGRAPH-LINE-SPACING-0P75-NATIVE-01"
 NATIVE_SCHEMA = "chaptera.paragraph-line-spacing-0p75-native-01.v1"
 OUT_SCHEMA = "chaptera.paragraph-line-spacing-0p75-structural.v1"
-EXPECTED_ARMS = ("control", "single", "direct-1p0", "direct-0p75")
+EXPECTED_ARMS = ("control", "single", "direct-1p0", "direct-0p80", "direct-0p75")
 EXPECTED_SINGLE_PACKED = 152_400 * 8 + 2
+EXPECTED_0P80_PACKED = 121_920 * 8 + 2
 EXPECTED_0P75_PACKED = 114_300 * 8 + 2
 
 
@@ -125,7 +126,7 @@ def main() -> int:
         )
 
         arms = native.get("arms")
-        require(isinstance(arms, list) and len(arms) == len(EXPECTED_ARMS), "four-arm matrix required")
+        require(isinstance(arms, list) and len(arms) == len(EXPECTED_ARMS), "five-arm matrix required")
         by_name = {}
         for arm in arms:
             require(isinstance(arm, dict), "invalid native arm")
@@ -145,6 +146,7 @@ def main() -> int:
             "control": private / "control" / "output.pub",
             "single": private / "single" / "output.pub",
             "direct-1p0": private / "direct-1p0" / "output.pub",
+            "direct-0p80": private / "direct-0p80" / "output.pub",
             "direct-0p75": private / "direct-0p75" / "output.pub",
         }
         expected = {
@@ -194,40 +196,48 @@ def main() -> int:
         control_values = {c["raw_value"] for c in rows["control"]["raw_fdpp_0x34"] if c["raw_value"] is not None}
         single_values = {c["raw_value"] for c in rows["single"]["raw_fdpp_0x34"] if c["raw_value"] is not None}
         direct_1p0_values = {c["raw_value"] for c in rows["direct-1p0"]["raw_fdpp_0x34"] if c["raw_value"] is not None}
+        direct_0p80_values = {c["raw_value"] for c in rows["direct-0p80"]["raw_fdpp_0x34"] if c["raw_value"] is not None}
         p075_values = {c["raw_value"] for c in rows["direct-0p75"]["raw_fdpp_0x34"] if c["raw_value"] is not None}
 
         direct_1p0_spacing = rows["direct-1p0"]["fresh_reopen_line_spacing"]
+        direct_0p80_spacing = rows["direct-0p80"]["fresh_reopen_line_spacing"]
         p075_spacing = rows["direct-0p75"]["fresh_reopen_line_spacing"]
-        direct_1p0_changes = rows["direct-1p0"]["control_to_arm_chunk_changes"]
-        p075_changes = rows["direct-0p75"]["control_to_arm_chunk_changes"]
+        matched_pair_changes = base.chunk_changes(snapshots["direct-0p80"], snapshots["direct-0p75"])
+        direct_0p80_geometry = rows["direct-0p80"]["geometry_fresh_reopen"]["bound_top_deltas_points"]
+        p075_geometry = rows["direct-0p75"]["geometry_fresh_reopen"]["bound_top_deltas_points"]
 
         diagnostic_checks = {
             "preset_single_expected_packed_1219202_present": EXPECTED_SINGLE_PACKED in single_values,
             "preset_single_stsh_unchanged_vs_control": rows["single"]["stsh_unchanged_vs_control"],
             "preset_single_fresh_reopen_rule": rows["single"]["fresh_reopen_line_spacing_rule"],
+            "direct_1p0_expected_packed_1219202_present": EXPECTED_SINGLE_PACKED in direct_1p0_values,
+            "direct_1p0_stsh_unchanged_vs_control": rows["direct-1p0"]["stsh_unchanged_vs_control"],
+            "direct_1p0_fresh_reopen_rule": rows["direct-1p0"]["fresh_reopen_line_spacing_rule"],
+            "direct_1p0_fresh_reopen_reports_1p0": abs(direct_1p0_spacing - 1.0) < 1e-6,
         }
         carrier_checks = {
-            "direct_1p0_expected_packed_1219202_present": EXPECTED_SINGLE_PACKED in direct_1p0_values,
-            "direct_1p0_expected_packed_absent_from_control": EXPECTED_SINGLE_PACKED not in control_values,
-            "direct_1p0_stsh_unchanged": rows["direct-1p0"]["stsh_unchanged_vs_control"],
-            "direct_1p0_fresh_reopen_reports_1p0": abs(direct_1p0_spacing - 1.0) < 1e-6,
-            "direct_1p0_roundtrip_stable": rows["direct-1p0"]["roundtrip_line_spacing_stable"],
-            "direct_1p0_only_fdpp_changed": bool(direct_1p0_changes)
-            and all(change.get("name") == "FDPP" for change in direct_1p0_changes),
+            "direct_0p80_expected_packed_975362_present": EXPECTED_0P80_PACKED in direct_0p80_values,
+            "direct_0p80_expected_packed_absent_from_control": EXPECTED_0P80_PACKED not in control_values,
+            "direct_0p80_fresh_reopen_reports_0p80": abs(direct_0p80_spacing - 0.80) < 1e-6,
+            "direct_0p80_roundtrip_stable": rows["direct-0p80"]["roundtrip_line_spacing_stable"],
+            "direct_0p80_custom_rule_5": abs(rows["direct-0p80"]["fresh_reopen_line_spacing_rule"] - 5.0) < 1e-6,
             "p075_expected_packed_914402_present": EXPECTED_0P75_PACKED in p075_values,
             "p075_expected_packed_absent_from_control": EXPECTED_0P75_PACKED not in control_values,
-            "p075_stsh_unchanged": rows["direct-0p75"]["stsh_unchanged_vs_control"],
             "p075_fresh_reopen_reports_0p75": abs(p075_spacing - 0.75) < 1e-6,
             "p075_roundtrip_stable": rows["direct-0p75"]["roundtrip_line_spacing_stable"],
-            "p075_only_fdpp_changed": bool(p075_changes)
-            and all(change.get("name") == "FDPP" for change in p075_changes),
-            "direct_pair_fresh_reopen_rule_equal": abs(
-                rows["direct-1p0"]["fresh_reopen_line_spacing_rule"]
+            "p075_custom_rule_5": abs(rows["direct-0p75"]["fresh_reopen_line_spacing_rule"] - 5.0) < 1e-6,
+            "matched_pair_stsh_equal": stsh_identity(snapshots["direct-0p80"]) == stsh_identity(snapshots["direct-0p75"]),
+            "matched_pair_only_fdpp_changed": bool(matched_pair_changes)
+            and all(change.get("name") == "FDPP" for change in matched_pair_changes),
+            "matched_pair_fresh_reopen_rule_equal": abs(
+                rows["direct-0p80"]["fresh_reopen_line_spacing_rule"]
                 - rows["direct-0p75"]["fresh_reopen_line_spacing_rule"]
             ) < 1e-6,
-            "p075_geometry_has_progression": bool(
-                rows["direct-0p75"]["geometry_fresh_reopen"]["bound_top_deltas_points"]
-            ),
+            "direct_0p80_geometry_has_progression": bool(direct_0p80_geometry),
+            "p075_geometry_has_progression": bool(p075_geometry),
+            "geometry_orders_with_direct_spacing": bool(direct_0p80_geometry)
+            and bool(p075_geometry)
+            and p075_geometry[0] < direct_0p80_geometry[0],
         }
         candidate = all(carrier_checks.values())
 
@@ -238,6 +248,7 @@ def main() -> int:
             "expected_packed_values": {
                 "preset_single_152400": EXPECTED_SINGLE_PACKED,
                 "direct_1p0_152400": EXPECTED_SINGLE_PACKED,
+                "direct_0p80_121920": EXPECTED_0P80_PACKED,
                 "p075_114300": EXPECTED_0P75_PACKED,
             },
             "invariants": {
@@ -253,7 +264,8 @@ def main() -> int:
             "product_authority_granted": False,
             "boundary": (
                 "A true native_114300_authority_candidate proves the focused Publisher2019 "
-                "0.75 roundtrip/carrier/geometry witness only. Product execution still requires "
+                "0.75 roundtrip/carrier/geometry witness against a same-rule direct 0.80 control only. "
+                "Product execution still requires "
                 "explicit consumer review against the exact082 line-level authority and negative controls."
             ),
         }
