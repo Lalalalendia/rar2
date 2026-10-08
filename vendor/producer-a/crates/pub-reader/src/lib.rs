@@ -196,6 +196,8 @@ use pub_quill::{
     bounded_mcld_text_insets,
 };
 use publication_document::{PublicationDocumentBootstrap, materialize_publication_document};
+#[cfg(test)]
+use publication_document::require_consensus_page_extent;
 use quill_admission::{QuillAdmission, admit_quill_projection_inputs};
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
@@ -353,18 +355,6 @@ pub fn build_mature_0x2c_source_graph<R: Read + Seek>(
     build_mature_0x2c_from_streams(source_hash, &contents, &quill, &escher)
 }
 
-fn shape_has_nonzero_rotation(shape: &pub_escher::SpContainerObservation) -> bool {
-    shape.fopts.iter().any(|record| {
-        record.properties.iter().any(|property| {
-            property.property_id() == OFFICEART_PROPERTY_ROTATION && property.op != 0
-        })
-    })
-}
-
-fn shape_has_fsp_flag(shape: &pub_escher::SpContainerObservation, flag: u32) -> bool {
-    shape.fsp.as_ref().is_some_and(|fsp| fsp.flags & flag != 0)
-}
-
 pub fn build_mature_0x2c_from_streams(
     source_hash: Sha256Digest,
     contents: &[u8],
@@ -517,99 +507,6 @@ pub fn build_mature_0x2c_from_streams(
         paragraph_flow_runs,
         script_font_maps,
     })
-}
-
-fn consensus_publication_page_extent(
-    stream: StreamPath,
-    contents: &[u8],
-    references: &BTreeMap<u32, Contents0x2cChunkReference>,
-) -> Result<(u32, u32, usize)> {
-    let margins = references
-        .values()
-        .filter(|reference| single_raw_type(reference) == Some(RAW_TYPE_MARGINS))
-        .collect::<Vec<_>>();
-
-    if margins.is_empty() {
-        bail!("missing Margins/OplMg raw type 0x{RAW_TYPE_MARGINS:02X}");
-    }
-
-    let mut dimensions = Vec::with_capacity(margins.len());
-    for reference in margins {
-        let chunk = chunk_for_reference(stream.clone(), contents, reference)?;
-        let extent = parse_confirmed_margins_page_extent(contents, &chunk).with_context(|| {
-            format!("parse Margins/OplMg page extent seq {}", reference.seq_num)
-        })?;
-        dimensions.push((extent.width_emu, extent.height_emu));
-    }
-
-    let (width_emu, height_emu) = require_consensus_page_extent(&dimensions)?;
-    Ok((width_emu, height_emu, dimensions.len()))
-}
-
-fn require_consensus_page_extent(extents: &[(u32, u32)]) -> Result<(u32, u32)> {
-    let first = extents
-        .first()
-        .copied()
-        .context("publication has no confirmed Margins/OplMg page extent")?;
-    if first.0 == 0 || first.1 == 0 {
-        bail!("publication page extent must be positive");
-    }
-
-    for &(width_emu, height_emu) in &extents[1..] {
-        if width_emu == 0 || height_emu == 0 {
-            bail!("publication page extent must be positive");
-        }
-        if (width_emu, height_emu) != first {
-            bail!(
-                "conflicting Margins/OplMg page extents: expected {}x{} EMU, found {}x{} EMU",
-                first.0,
-                first.1,
-                width_emu,
-                height_emu
-            );
-        }
-    }
-
-    Ok(first)
-}
-
-fn decode_utf16le_strict(bytes: &[u8]) -> Result<String> {
-    if bytes.len() % 2 != 0 {
-        bail!("UTF-16LE byte length is odd: {}", bytes.len());
-    }
-    let units = bytes
-        .chunks_exact(2)
-        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-        .collect::<Vec<_>>();
-    String::from_utf16(&units).map_err(|error| anyhow!("invalid UTF-16LE: {error}"))
-}
-
-fn exact_image_slot(
-    shape: &pub_escher::SpContainerObservation,
-    seq_num: u32,
-    diagnostics: &mut Vec<PubBridgeDiagnostic>,
-) -> Option<u32> {
-    let mut slots = shape
-        .fopts
-        .iter()
-        .flat_map(|record| record.properties.iter())
-        .filter(|property| {
-            property.property_id() == OFFICE_ART_PROPERTY_PIB && property.op_is_blip_id()
-        })
-        .map(|property| property.op)
-        .collect::<BTreeSet<_>>();
-
-    match slots.len() {
-        0 => None,
-        1 => slots.pop_first(),
-        _ => {
-            diagnostics.push(PubBridgeDiagnostic::AmbiguousImageSlot {
-                seq_num,
-                slots: slots.into_iter().collect(),
-            });
-            None
-        }
-    }
 }
 
 use anchor_geometry::{
