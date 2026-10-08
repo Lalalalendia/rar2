@@ -8,7 +8,11 @@ import {
   RENDERER_KINDS,
   assertSceneSourceNeutral,
   buildOverlayPlan,
-  buildRenderPlan
+  buildRenderPlan,
+  imageContentRotationGeometry,
+  imagePaintGeometry,
+  imageRecolorPaintPlan,
+  resolvedEditorImagePlan
 } from "./render-v1.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -245,4 +249,76 @@ test("Reader shared-resolved text fails closed to preview on font fingerprint mi
   const plan = buildRenderPlan(scene, VIEW);
   assert.equal(plan.pages[0].nodes[0].story.resolved_text, null);
   assert.equal(plan.pages[0].nodes[0].story.authority, "reader_scene_preview");
+});
+
+
+test("Reader picture crop maps q16 source window into fixed-frame image geometry", () => {
+  assert.deepEqual(
+    imagePaintGeometry(
+      { x: 0, y: 0, width: 1000, height: 800 },
+      { left_q16: 16384, top_q16: 0, right_q16: 49152, bottom_q16: 65536 }
+    ),
+    { x: -500, y: 0, width: 2000, height: 800 }
+  );
+});
+
+test("Reader picture cardinal rotation stays content-local and rejects unsupported angles", () => {
+  assert.deepEqual(
+    imageContentRotationGeometry({ x: 100, y: 200, width: 300, height: 900 }, 270),
+    { x: -200, y: 500, width: 900, height: 300, transform: "rotate(270 250 650)" }
+  );
+  assert.equal(
+    imageContentRotationGeometry({ x: 0, y: 0, width: 100, height: 200 }, 45),
+    null
+  );
+});
+
+test("Reader picture recolor keeps bounded sRGB matrix semantics", () => {
+  const plan = imageRecolorPaintPlan({
+    image_recolor: { target_rgb: [51, 102, 153], preserve_grays: false }
+  });
+  assert.ok(plan);
+  assert.equal(plan.values.split(/\s+/).length, 20);
+  assert.equal(
+    imageRecolorPaintPlan({ image_recolor: { target_rgb: [1, 2, 3], preserve_grays: true } }),
+    null
+  );
+});
+
+test("Reader picture render plan uses fixed-frame crop and fails closed on crop plus rotation", () => {
+  const scene = fixture("exact-image.json");
+  scene.nodes[0].visual_authority = "reader_scene";
+  scene.nodes[0].image_source_window = {
+    left_q16: 16384,
+    top_q16: 0,
+    right_q16: 49152,
+    bottom_q16: 65536,
+  };
+  scene.resources[0].availability = "inline_data_url";
+  scene.resources[0].inline_data_url = "data:image/png;base64,iVBORw0KGgo=";
+
+  const plan = buildRenderPlan(scene, VIEW);
+  const image = plan.pages[0].nodes[0].resource.resolved_image;
+  assert.equal(image.authority, "reader-picture-content");
+  assert.equal(image.viewport.width, plan.pages[0].nodes[0].width);
+  assert.equal(image.geometry.x, -plan.pages[0].nodes[0].width / 2);
+  assert.equal(image.geometry.width, plan.pages[0].nodes[0].width * 2);
+
+  scene.nodes[0].image_content_rotation_degrees = 90;
+  const invalid = buildRenderPlan(scene, VIEW);
+  assert.equal(invalid.pages[0].nodes[0].resource.resolved_image, null);
+});
+
+test("resolved Reader picture plan preserves frame while rotating content", () => {
+  const scene = fixture("exact-image.json");
+  scene.nodes[0].visual_authority = "reader_scene";
+  scene.nodes[0].image_content_rotation_degrees = 270;
+  scene.resources[0].availability = "inline_data_url";
+  scene.resources[0].inline_data_url = "data:image/png;base64,iVBORw0KGgo=";
+  const resources = new Map(scene.resources.map((resource) => [resource.resource_id, resource]));
+  const page = { x: 24, y: 24 };
+  const image = resolvedEditorImagePlan(scene.nodes[0], resources.get(scene.nodes[0].resource_id), page, VIEW);
+  assert.ok(image);
+  assert.equal(image.viewport.x, page.x + scene.nodes[0].bounds.x / 9525);
+  assert.match(image.content_transform, /^rotate\(270 /);
 });
