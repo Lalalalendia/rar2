@@ -107,6 +107,9 @@ def main() -> None:
     area_membership = Counter()
     remaining_gap_bands = Counter()
     remaining_nearest_class = Counter()
+    remaining_cells = set()
+    remaining_reference_rgb_sum = [0, 0, 0]
+    remaining_reference_rgb_quantized = Counter()
 
     cell_width = width_emu / GRID_W
     cell_height = height_emu / GRID_H
@@ -149,6 +152,13 @@ def main() -> None:
             center_none_omission += 1
             if not area_names:
                 area_none_omission += 1
+                remaining_cells.add((col, row))
+                remaining_reference_rgb_sum[0] += reference_rgb[0]
+                remaining_reference_rgb_sum[1] += reference_rgb[1]
+                remaining_reference_rgb_sum[2] += reference_rgb[2]
+                remaining_reference_rgb_quantized[
+                    tuple((channel // 32) * 32 for channel in reference_rgb)
+                ] += 1
                 nearest = None
                 nearest_classes = []
                 for name in sorted(boxes):
@@ -180,6 +190,80 @@ def main() -> None:
             else:
                 reclassified[area_key] += 1
 
+    occupied_columns = sorted({col for col, _ in remaining_cells})
+    occupied_rows = sorted({row for _, row in remaining_cells})
+    if remaining_cells:
+        min_col = min(col for col, _ in remaining_cells)
+        max_col = max(col for col, _ in remaining_cells)
+        min_row = min(row for _, row in remaining_cells)
+        max_row = max(row for _, row in remaining_cells)
+        remaining_bbox = {
+            "min_col": min_col,
+            "max_col": max_col,
+            "min_row": min_row,
+            "max_row": max_row,
+            "width_cells": max_col - min_col + 1,
+            "height_cells": max_row - min_row + 1,
+        }
+    else:
+        remaining_bbox = None
+
+    edge_bands = Counter()
+    quadrants = Counter()
+    for col, row in remaining_cells:
+        edge_distance = min(col, row, GRID_W - 1 - col, GRID_H - 1 - row)
+        if edge_distance <= 1:
+            edge_bands["<=1"] += 1
+        elif edge_distance <= 2:
+            edge_bands["(1,2]"] += 1
+        elif edge_distance <= 4:
+            edge_bands["(2,4]"] += 1
+        elif edge_distance <= 8:
+            edge_bands["(4,8]"] += 1
+        else:
+            edge_bands[">8"] += 1
+        horizontal = "left" if col < GRID_W / 2 else "right"
+        vertical = "top" if row < GRID_H / 2 else "bottom"
+        quadrants[f"{vertical}_{horizontal}"] += 1
+
+    unseen = set(remaining_cells)
+    component_sizes = []
+    component_bboxes = []
+    while unseen:
+        seed = unseen.pop()
+        stack = [seed]
+        component = [seed]
+        while stack:
+            col, row = stack.pop()
+            for neighbor in ((col - 1, row), (col + 1, row), (col, row - 1), (col, row + 1)):
+                if neighbor in unseen:
+                    unseen.remove(neighbor)
+                    stack.append(neighbor)
+                    component.append(neighbor)
+        component_sizes.append(len(component))
+        component_bboxes.append({
+            "size": len(component),
+            "min_col": min(col for col, _ in component),
+            "max_col": max(col for col, _ in component),
+            "min_row": min(row for _, row in component),
+            "max_row": max(row for _, row in component),
+        })
+    component_sizes.sort(reverse=True)
+    component_bboxes.sort(key=lambda item: (-item["size"], item["min_row"], item["min_col"]))
+
+    reference_rgb_mean = (
+        [
+            round(channel_sum / len(remaining_cells), 3)
+            for channel_sum in remaining_reference_rgb_sum
+        ]
+        if remaining_cells
+        else None
+    )
+    reference_rgb_quantized_top = [
+        {"rgb": list(rgb_key), "count": count}
+        for rgb_key, count in remaining_reference_rgb_quantized.most_common(12)
+    ]
+
     payload = {
         "schema": "chaptera.visual-paint-cell-intersection.v1",
         "fixture": args.fixture,
@@ -203,6 +287,18 @@ def main() -> None:
         "remaining_area_none_nearest_paint_class": dict(
             sorted(remaining_nearest_class.items(), key=lambda item: (-item[1], item[0]))
         ),
+        "remaining_area_none_topology": {
+            "occupied_column_count": len(occupied_columns),
+            "occupied_row_count": len(occupied_rows),
+            "bbox": remaining_bbox,
+            "page_edge_bands": dict(sorted(edge_bands.items())),
+            "quadrants": dict(sorted(quadrants.items())),
+            "component_count": len(component_sizes),
+            "component_sizes_desc": component_sizes,
+            "largest_components": component_bboxes[:12],
+            "reference_rgb_mean": reference_rgb_mean,
+            "reference_rgb_quantized_top": reference_rgb_quantized_top,
+        },
         "center_membership_counts": dict(
             sorted(center_membership.items(), key=lambda item: (-item[1], item[0]))
         ),
