@@ -18,12 +18,15 @@ CLASSES = ("picture", "text", "ellipse", "other_painted", "empty_emf")
 WHITE_FLOOR = 245
 
 
-def transformed_bbox(node: dict) -> tuple[float, float, float, float]:
+def raw_bbox(node: dict) -> tuple[float, float, float, float]:
     bounds = node["bounds"]
     x0 = float(bounds["x"])
     y0 = float(bounds["y"])
-    x1 = x0 + float(bounds["width"])
-    y1 = y0 + float(bounds["height"])
+    return (x0, y0, x0 + float(bounds["width"]), y0 + float(bounds["height"]))
+
+
+def transformed_bbox(node: dict) -> tuple[float, float, float, float]:
+    x0, y0, x1, y1 = raw_bbox(node)
     transform = node.get("transform")
     if not transform:
         return (x0, y0, x1, y1)
@@ -84,10 +87,12 @@ def main() -> None:
         raise ValueError("page geometry must be positive")
 
     boxes = {name: [] for name in CLASSES}
+    raw_boxes = {name: [] for name in CLASSES}
     for node in geometry["nodes"]:
         category = node["class"]
         if category not in boxes:
             raise ValueError(f"unsupported node class: {category!r}")
+        raw_boxes[category].append(raw_bbox(node))
         boxes[category].append(transformed_bbox(node))
 
     changed_total = 0
@@ -97,6 +102,7 @@ def main() -> None:
     covered_counts = Counter()
     changed_by_class = Counter()
     error_by_class = {name: Counter() for name in CLASSES}
+    none_omission_raw_membership = Counter()
 
     for cell in range(GRID_W * GRID_H):
         col = cell % GRID_W
@@ -130,6 +136,14 @@ def main() -> None:
         key = "+".join(membership) if membership else "none"
         combination_counts[key] += 1
         combination_error_types.setdefault(key, Counter())[error_type] += 1
+        if not membership and error_type == "omission":
+            raw_membership = tuple(
+                name
+                for name in CLASSES
+                if any(contains(box, x, y) for box in raw_boxes[name])
+            )
+            raw_key = "+".join(raw_membership) if raw_membership else "none"
+            none_omission_raw_membership[raw_key] += 1
         for name in membership:
             changed_by_class[name] += 1
             error_by_class[name][error_type] += 1
@@ -166,6 +180,12 @@ def main() -> None:
                 combination_counts.items(), key=lambda item: (-item[1], item[0])
             )
         },
+        "none_omission_raw_membership": dict(
+            sorted(
+                none_omission_raw_membership.items(),
+                key=lambda item: (-item[1], item[0]),
+            )
+        ),
         "claims": {
             "aggregate_only": True,
             "raw_candidate_pixels_emitted": False,
