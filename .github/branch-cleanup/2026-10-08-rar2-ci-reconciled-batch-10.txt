@@ -1,0 +1,8 @@
+# 2026-10-08 — CI reconciled batch 10
+# Never merge. Exact live tips with explicit replacement/tree-parity evidence.
+# Runtime protects open PR heads/bases and moved tips.
+
+ci/duplicate-core-positive-06 1f0a61e8180965a5799aa674d674e2c5cc4959b1 # stale-base prep; exact one-line diff restacked and accepted as #1400
+ci/duplicate-safe-negative-06 844faf0e6c26c4153cc9cff324b888ff21d36a38 # stale-base prep; exact one-line diff restacked and accepted as #1399
+ci/pub-reader-direct-transform-routing-02 cf02ee46632c3ab5fdde60dca9e0d4def15f1c46 # live branch net tree == current main; routing semantics merged via #1837
+ops/branch-gc-20261008-ci-terminal-lowrisk-batch-09 fc8d7a9810683f469853a2be3edd857859b6f227 # completed #2114 receipt 7/7
