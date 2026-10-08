@@ -38,6 +38,7 @@ pub(super) const LINE_USE_LINE_BIT: u32 = 1 << 19;
 pub(super) const LINE_LINE_BIT: u32 = 1 << 3;
 pub(super) const OFFICEART_FSP_CONNECTOR_BIT: u32 = 1 << 8;
 pub(super) const OFFICEART_SHAPE_TYPE_NOT_PRIMITIVE: u16 = 0x0000;
+pub(super) const OFFICEART_SHAPE_TYPE_RECTANGLE: u16 = 0x0001;
 pub(super) const OFFICEART_SHAPE_TYPE_ELLIPSE: u16 = 0x0003;
 pub(super) const OFFICEART_SHAPE_TYPE_LINE: u16 = 0x0014;
 
@@ -59,6 +60,10 @@ pub(super) enum PaintLineVisibilityLayer {
     Absent,
     Value(PubEffectivePaintValue<bool>),
     Unresolved,
+}
+
+pub(super) fn has_default_rectangle_geometry(shape: &pub_escher::SpContainerObservation) -> bool {
+    shape.fsp.as_ref().map(|fsp| fsp.shape_type) == Some(OFFICEART_SHAPE_TYPE_RECTANGLE)
 }
 
 pub(super) fn has_default_roundrect_geometry(shape: &pub_escher::SpContainerObservation) -> bool {
