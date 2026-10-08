@@ -1,0 +1,14 @@
+# 2026-10-08 — Viewer superseded predecessor batch 07
+# Never merge. Exact live tips only; semantic authority is merged or terminally falsified with merged replacement.
+# Runtime rechecks open heads/bases and exact SHA lease.
+
+viewer/carlton-plain-text-frame-01 9367c143d0c2874b667fee779d947df7c78bff00 # #512 falsified; source-order owner #522 merged
+viewer/carlton-plain-text-frame-current-main-01 f72432fd98a8337e7327d9f45100823b31f53a88 # #521 falsified; source-order owner #522 merged
+viewer/mixed-size-shared-layout-01 2044734233297c144c9c1a655a23caa77cb98dd0 # #475 superseded by merged #476
+viewer/roundrect-geometry-01b 3c08232045daf571076685737caa16d82c86ce37 # #486 superseded; final RoundRect #766 merged
+viewer/roundrect-geometry-clean-01 7effff021b5e1a2afe1844ff0a1642fa7929d1ac # #500 predecessor; final RoundRect #766 merged
+viewer/inherited-master-bridge-1113 d7fdc4f2fa67da1980e44e417e6f9be0f1ee3bef # #1305 superseded by merged #1316
+viewer/inherited-master-bridge-1113-v2 38ff379d62c76bd14fe090a15afacb726d79f490 # #1307 superseded by merged #1316
+viewer/ordinary-story-overset-current-main-01 6627b7e8ff6a41423a06c6c886f78770de9cc002 # #1519 underbounded; corrected owner #1531 merged
+viewer/shared-text-local-clip-01 fd66709adca0868b0b7bd7a96e43a18fc0fca8b0 # #1573 restacked and merged as #1582
+ops/branch-gc-20261008-table-predecessors-batch-06 c78433c97d468ae9f5e3063699aa72a9cb528004 # completed #2098 receipt 9/9
