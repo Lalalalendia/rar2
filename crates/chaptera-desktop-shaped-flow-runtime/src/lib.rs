@@ -12,7 +12,7 @@ use pub_editor::{
     EditorSession, EffectiveParagraphAlignmentValueV1, ImportedParagraphFlowConstraintV1,
 };
 use pub_layout::{
-    BoundedAuthoringSlice, BoundedLayoutEnvironment, BoundedParagraphFlowConstraint,
+    BoundedLayoutEnvironment, BoundedLayoutProjection, BoundedParagraphFlowConstraint,
     BoundedParagraphFlowRun, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
     BoundedShapingRuntime, project_bounded, resolve_bounded_shaped_flow_with_paragraph_flow,
 };
@@ -38,23 +38,21 @@ pub const CURRENT_FIXED_PDF_RESOURCE_INPUT_V1: &str =
     "chaptera.current-fixed-pdf-resource-input.v1";
 
 fn retain_story_shaping_scope_v1(
-    authoring: &mut BoundedAuthoringSlice,
+    projection: &mut BoundedLayoutProjection,
     story_id: StoryId,
 ) -> Result<(), DesktopShapedFlowRuntimeError> {
-    authoring.stories.retain(|story| story.id == story_id);
-    if authoring.stories.len() != 1 {
+    projection
+        .stories
+        .retain(|story| story.origin == story_id);
+    if projection.stories.len() != 1 {
         return Err(DesktopShapedFlowRuntimeError::new(
             "story_missing",
-            "requested Story is absent from bounded authoring projection",
+            "requested Story is absent from bounded layout projection",
         ));
     }
 
-    // Preserve the existing page/geometry/table/diagnostic projection for this
-    // slice. Only remove unrelated Story text and frame chains so shaped-flow
-    // cannot shape document-global text.
-    authoring
-        .story_frames
-        .retain(|frame| frame.story_id == story_id);
+    // Scope only the expensive shaped-text loop. Keep StoryFrames and every
+    // geometry/projection diagnostic input unchanged for this slice.
     Ok(())
 }
 
@@ -366,9 +364,8 @@ fn build_current_story_layout_with_pages_v1(
             })?
         }
     };
-    let mut authoring = authoring;
-    retain_story_shaping_scope_v1(&mut authoring, story_id)?;
-    let projection = project_bounded(authoring);
+    let mut projection = project_bounded(authoring);
+    retain_story_shaping_scope_v1(&mut projection, story_id)?;
 
     let runtime = BoundedShapedFlowRuntime {
         shaping: BoundedShapingRuntime {
@@ -462,7 +459,7 @@ mod tests {
         let page_id = PageId::from_canonical(test_canonical_id(5));
         let page_origin = page_id.into_canonical();
 
-        let mut authoring = BoundedAuthoringSlice {
+        let authoring = pub_layout::BoundedAuthoringSlice {
             pages: vec![Page {
                 id: page_id,
                 size: Size2D::new(LengthEmu::new(1000), LengthEmu::new(1000)),
@@ -536,19 +533,25 @@ mod tests {
             unknown_layout_state: Vec::new(),
         };
 
-        let pages_before = authoring.pages.clone();
-        let geometry_before = authoring.node_geometry.clone();
+        let mut projection = project_bounded(authoring);
+        let pages_before = projection.pages.clone();
+        let geometry_before = projection.node_geometry.clone();
+        let frames_before = projection.story_frames.clone();
+        let tables_before = projection.tables.clone();
+        let guides_before = projection.guides.clone();
+        let diagnostics_before = projection.diagnostics.clone();
 
-        retain_story_shaping_scope_v1(&mut authoring, target_story)
+        retain_story_shaping_scope_v1(&mut projection, target_story)
             .expect("retain target Story shaping scope");
 
-        assert_eq!(authoring.stories.len(), 1);
-        assert_eq!(authoring.stories[0].id, target_story);
-        assert_eq!(authoring.story_frames.len(), 1);
-        assert_eq!(authoring.story_frames[0].story_id, target_story);
-        assert_eq!(authoring.story_frames[0].frame_id, target_frame);
-        assert_eq!(authoring.pages, pages_before);
-        assert_eq!(authoring.node_geometry, geometry_before);
+        assert_eq!(projection.stories.len(), 1);
+        assert_eq!(projection.stories[0].origin, target_story);
+        assert_eq!(projection.story_frames, frames_before);
+        assert_eq!(projection.pages, pages_before);
+        assert_eq!(projection.node_geometry, geometry_before);
+        assert_eq!(projection.tables, tables_before);
+        assert_eq!(projection.guides, guides_before);
+        assert_eq!(projection.diagnostics, diagnostics_before);
     }
 
     #[test]
@@ -696,35 +699,38 @@ mod tests {
             editor.graph().stories.len() > 1,
             "51318 must remain a multi-Story witness for Story-local shaping"
         );
-        let mut shaping_scope = pub_viewer::bounded_authoring_slice_from_resolved(editor.graph())
-            .expect("project multi-Story fixture before shaping scope");
-        let pages_before = shaping_scope.pages.len();
-        let geometry_before = shaping_scope.node_geometry.len();
-        let tables_before = shaping_scope.tables.len();
+        let shaping_authoring =
+            pub_viewer::bounded_authoring_slice_from_resolved(editor.graph())
+                .expect("project multi-Story fixture before shaping scope");
+        let mut shaping_scope = project_bounded(shaping_authoring);
+        let pages_before = shaping_scope.pages.clone();
+        let geometry_before = shaping_scope.node_geometry.clone();
+        let frames_before = shaping_scope.story_frames.clone();
+        let tables_before = shaping_scope.tables.clone();
+        let diagnostics_before = shaping_scope.diagnostics.clone();
         retain_story_shaping_scope_v1(&mut shaping_scope, story_id)
             .expect("retain current Story shaping scope");
         assert_eq!(shaping_scope.stories.len(), 1);
-        assert_eq!(shaping_scope.stories[0].id, story_id);
-        assert!(
-            shaping_scope
-                .story_frames
-                .iter()
-                .all(|frame| frame.story_id == story_id)
+        assert_eq!(shaping_scope.stories[0].origin, story_id);
+        assert_eq!(
+            shaping_scope.story_frames, frames_before,
+            "Story-local shaping slice must not change frame projection yet"
         );
         assert_eq!(
-            shaping_scope.pages.len(),
-            pages_before,
+            shaping_scope.pages, pages_before,
             "Story-local shaping slice must not change page geometry scope yet"
         );
         assert_eq!(
-            shaping_scope.node_geometry.len(),
-            geometry_before,
+            shaping_scope.node_geometry, geometry_before,
             "Story-local shaping slice must not change node geometry scope yet"
         );
         assert_eq!(
-            shaping_scope.tables.len(),
-            tables_before,
+            shaping_scope.tables, tables_before,
             "Story-local shaping slice must not change table projection scope yet"
+        );
+        assert_eq!(
+            shaping_scope.diagnostics, diagnostics_before,
+            "Story-local shaping slice must not change projection diagnostics"
         );
 
         let layout =
