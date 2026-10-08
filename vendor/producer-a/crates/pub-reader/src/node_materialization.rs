@@ -1,3 +1,4 @@
+//! CI leaf-control: comment-only node materialization steady-state proof.
 use super::*;
 
 pub(super) struct MatureNodeMaterializationContext<'a> {
