@@ -95,7 +95,7 @@ pub use family_classifier::{
 };
 use grouped_projection::{
     GroupedProjectionContext, coordinate_rect_i128, project_grouped_object_shape,
-    project_rect_trunc,, shape_has_nonzero_rotation, shape_has_fsp_flag
+    project_rect_trunc, shape_has_nonzero_rotation, shape_has_fsp_flag
 };
 pub use guide_bridge::{
     PubGroundedGuideBuild, PubGuideObservation, PubGuideProjectionDiagnostic,
