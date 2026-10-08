@@ -368,7 +368,15 @@ fn build_current_story_layout_core_v1(
     let authoring = match page_ids {
         Some(page_ids) => bounded_authoring_slice_for_pages_v1(editor, page_ids)?,
         None => {
-            pub_viewer::bounded_authoring_slice_from_resolved(editor.graph()).map_err(|error| {
+            let projected = if scope_shaping_to_current_story {
+                pub_viewer::bounded_authoring_slice_from_resolved_story_payload(
+                    editor.graph(),
+                    story_id,
+                )
+            } else {
+                pub_viewer::bounded_authoring_slice_from_resolved(editor.graph())
+            };
+            projected.map_err(|error| {
                 DesktopShapedFlowRuntimeError::new(
                     "authoring_projection_failed",
                     format!("resolved graph could not enter bounded layout projection: {error}"),
@@ -713,37 +721,71 @@ mod tests {
             editor.graph().stories.len() > 1,
             "51318 must remain a multi-Story witness for Story-local shaping"
         );
-        let shaping_authoring = pub_viewer::bounded_authoring_slice_from_resolved(editor.graph())
-            .expect("project multi-Story fixture before shaping scope");
-        let mut shaping_scope = project_bounded(shaping_authoring);
-        let pages_before = shaping_scope.pages.clone();
-        let geometry_before = shaping_scope.node_geometry.clone();
-        let frames_before = shaping_scope.story_frames.clone();
-        let tables_before = shaping_scope.tables.clone();
-        let diagnostics_before = shaping_scope.diagnostics.clone();
-        retain_story_shaping_scope_v1(&mut shaping_scope, story_id)
-            .expect("retain current Story shaping scope");
-        assert_eq!(shaping_scope.stories.len(), 1);
-        assert_eq!(shaping_scope.stories[0].origin, story_id);
+        let full_authoring = pub_viewer::bounded_authoring_slice_from_resolved(editor.graph())
+            .expect("project multi-Story fixture with full Story payloads");
+        let sparse_authoring = pub_viewer::bounded_authoring_slice_from_resolved_story_payload(
+            editor.graph(),
+            story_id,
+        )
+        .expect("project multi-Story fixture with active Story payload only");
+        let mut full_scope = project_bounded(full_authoring);
+        let mut sparse_scope = project_bounded(sparse_authoring);
+
         assert_eq!(
-            shaping_scope.story_frames, frames_before,
-            "Story-local shaping slice must not change frame projection yet"
+            sparse_scope
+                .stories
+                .iter()
+                .map(|story| story.origin)
+                .collect::<Vec<_>>(),
+            full_scope
+                .stories
+                .iter()
+                .map(|story| story.origin)
+                .collect::<Vec<_>>(),
+            "sparse materialization must preserve every Story identity"
         );
+        assert_eq!(sparse_scope.pages, full_scope.pages);
+        assert_eq!(sparse_scope.node_geometry, full_scope.node_geometry);
+        assert_eq!(sparse_scope.story_frames, full_scope.story_frames);
+        assert_eq!(sparse_scope.tables, full_scope.tables);
+        assert_eq!(sparse_scope.guides, full_scope.guides);
         assert_eq!(
-            shaping_scope.pages, pages_before,
-            "Story-local shaping slice must not change page geometry scope yet"
+            sparse_scope.diagnostics, full_scope.diagnostics,
+            "sparse Story payloads must not change projection diagnostics"
         );
+
+        let sparse_target = sparse_scope
+            .stories
+            .iter()
+            .find(|story| story.origin == story_id)
+            .expect("sparse projection keeps active Story");
+        let full_target = full_scope
+            .stories
+            .iter()
+            .find(|story| story.origin == story_id)
+            .expect("full projection keeps active Story");
         assert_eq!(
-            shaping_scope.node_geometry, geometry_before,
-            "Story-local shaping slice must not change node geometry scope yet"
+            sparse_target, full_target,
+            "active Story payload must remain byte-for-byte projection equivalent"
         );
-        assert_eq!(
-            shaping_scope.tables, tables_before,
-            "Story-local shaping slice must not change table projection scope yet"
+        assert!(
+            sparse_scope
+                .stories
+                .iter()
+                .filter(|story| story.origin != story_id)
+                .all(|story| story.text.is_empty()
+                    && story.paragraph_origins.is_empty()
+                    && story.run_origins.is_empty()),
+            "unrelated Story payload must not be cloned into interactive projection"
         );
+
+        retain_story_shaping_scope_v1(&mut full_scope, story_id)
+            .expect("retain full-materialized current Story shaping scope");
+        retain_story_shaping_scope_v1(&mut sparse_scope, story_id)
+            .expect("retain sparse-materialized current Story shaping scope");
         assert_eq!(
-            shaping_scope.diagnostics, diagnostics_before,
-            "Story-local shaping slice must not change projection diagnostics"
+            sparse_scope, full_scope,
+            "after Story shaping scope, sparse and full materialization must be exactly equivalent"
         );
 
         let layout =
