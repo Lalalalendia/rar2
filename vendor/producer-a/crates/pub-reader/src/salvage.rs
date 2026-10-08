@@ -1353,8 +1353,7 @@ mod tests {
             0,
             "EscherDelayStm marker must begin a directory entry"
         );
-        bytes[offset + 120..offset + 124]
-            .copy_from_slice(&(declared_len as u32).to_le_bytes());
+        bytes[offset + 120..offset + 124].copy_from_slice(&(declared_len as u32).to_le_bytes());
         bytes[offset + 124..offset + 128].copy_from_slice(&0u32.to_le_bytes());
         bytes
     }
