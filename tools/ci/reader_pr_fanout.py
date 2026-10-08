@@ -523,6 +523,9 @@ SHARED_DESKTOP_FILES = {
     # Duplicate Rectangle has its own focused core + real Windows GUI owner;
     # do not add the broad Editor package gate for this exact semantic leaf.
     "apps/chaptera-desktop/src/duplicate_rectangle.rs",
+    # Page navigation shortcuts have a focused Linux contract + real Windows GUI
+    # owner; avoid the broad Editor package gate for this exact semantic leaf.
+    "apps/chaptera-desktop/src/page_navigation.rs",
 }
 
 
