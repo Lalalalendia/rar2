@@ -177,7 +177,7 @@ impl ViewerApp {
                 }
                 // This owns dirty-state, export/cache invalidation and one
                 // fail-closed Viewer text projection, including search-buffer sync.
-                self.finish_authoring_change(&status);
+                self.finish_text_authoring_change(&status);
             }
         }
     }
@@ -229,7 +229,7 @@ impl ViewerApp {
             _ => return,
         };
         match outcome {
-            Ok(_) => self.finish_authoring_change(&format!(
+            Ok(_) => self.finish_text_authoring_change(&format!(
                 "{} formatting committed through one canonical scoped text-format operation.",
                 property.label()
             )),
@@ -251,7 +251,7 @@ impl ViewerApp {
             _ => return,
         };
         match outcome {
-            Ok(_) => self.finish_authoring_change(&format!(
+            Ok(_) => self.finish_text_authoring_change(&format!(
                 "{} Chaptera override cleared; source/base formatting is effective again.",
                 property.label()
             )),
@@ -289,7 +289,7 @@ impl ViewerApp {
             _ => return,
         };
         match outcome {
-            Ok(Some(_)) => self.finish_authoring_change(
+            Ok(Some(_)) => self.finish_text_authoring_change(
                 "Paragraph alignment committed through one canonical ParagraphId operation.",
             ),
             Ok(None) => {
@@ -310,7 +310,7 @@ impl ViewerApp {
             _ => return,
         };
         match outcome {
-            Ok(_) => self.finish_authoring_change(
+            Ok(_) => self.finish_text_authoring_change(
                 "Paragraph alignment Chaptera override cleared; source/base alignment is effective again.",
             ),
             Err(error) => {
@@ -856,7 +856,7 @@ mod tests {
         let source = include_str!("text_session_shell.rs");
         let old_helper = ["refresh_visual_text", "_projection_from_editor"].concat();
         let direct_refresh = [".refresh_text_projection", "_from_resolved("].concat();
-        let canonical_finish = ["self.", "finish_authoring_change(&status)"].concat();
+        let canonical_finish = ["self.", "finish_text_authoring_change(&status)"].concat();
         assert!(!source.contains(&old_helper));
         assert!(!source.contains(&direct_refresh));
         assert_eq!(source.matches(&canonical_finish).count(), 1);
