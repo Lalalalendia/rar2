@@ -1,5 +1,5 @@
 const READER_SCENE_V1 = "chaptera.reader-scene.v1";
-const BROWSER_SCENE_V1 = "chaptera.scene.v1";
+export const EDITOR_RENDER_SCENE_V1 = "chaptera.editor-render-scene.v1";
 
 function object(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -141,6 +141,8 @@ export async function adaptReaderSceneToEditorScene(readerScene) {
     availability: resource.availability,
     fetch_handle: null,
     inline_data_url: resource.inline_data_url ?? null,
+    expected_sha256: null,
+    family_name: null,
   }));
   const fontResources = [...(readerScene.fonts ?? [])].map((font) => ({
     resource_id: font.resource_id,
@@ -202,7 +204,7 @@ export async function adaptReaderSceneToEditorScene(readerScene) {
   };
 
   const scene = {
-    protocol_version: BROWSER_SCENE_V1,
+    protocol_version: EDITOR_RENDER_SCENE_V1,
     document_id: readerScene.document_id,
     source_hash: readerScene.source_hash,
     revision_id: readerScene.revision_id,

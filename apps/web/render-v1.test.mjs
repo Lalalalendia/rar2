@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 
 import {
   RENDERER_KINDS,
+  RENDER_SCENE_PROTOCOLS,
+  isRenderableSceneProtocol,
   assertSceneSourceNeutral,
   buildOverlayPlan,
   buildRenderPlan,
@@ -38,6 +40,22 @@ function deepFreeze(value) {
 
 test("preflight exposes all required renderer candidates", () => {
   assert.deepEqual(RENDERER_KINDS, ["svg", "canvas2d", "webgl2-hybrid"]);
+});
+
+test("renderer protocol discriminator keeps canonical and Editor render scenes explicit", () => {
+  assert.deepEqual(RENDER_SCENE_PROTOCOLS, [
+    "chaptera.scene.v1",
+    "chaptera.editor-render-scene.v1",
+  ]);
+  assert.equal(isRenderableSceneProtocol("chaptera.scene.v1"), true);
+  assert.equal(isRenderableSceneProtocol("chaptera.editor-render-scene.v1"), true);
+  assert.equal(isRenderableSceneProtocol("chaptera.reader-scene.v1"), false);
+
+  const editorScene = fixture("simple-text.json");
+  editorScene.protocol_version = "chaptera.editor-render-scene.v1";
+  assert.doesNotThrow(() => buildRenderPlan(editorScene, VIEW));
+  editorScene.protocol_version = "chaptera.reader-scene.v1";
+  assert.throws(() => buildRenderPlan(editorScene, VIEW), /EditorRenderSceneV1/);
 });
 
 test("render plan is deterministic and does not mutate a frozen scene", () => {

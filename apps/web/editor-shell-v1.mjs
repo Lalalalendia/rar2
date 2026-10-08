@@ -1,4 +1,4 @@
-import { createRenderer, normalizeView } from "./render-v1.mjs";
+import { createRenderer, isRenderableSceneProtocol, normalizeView } from "./render-v1.mjs";
 import {
   MoveGestureV1,
   TransientSelectionV1,
@@ -162,8 +162,8 @@ export class BrowserEditorShellV1 {
 
     if (reconciliation.kind === "accepted_waiting_for_scene") {
       const next = await this.service.sceneForRevision(result.revision_id);
-      if (!next || next.protocol_version !== "chaptera.scene.v1") {
-        throw new Error("service did not return BrowserSceneSnapshotV1");
+      if (!next || !isRenderableSceneProtocol(next.protocol_version)) {
+        throw new Error("service did not return a renderable Scene protocol");
       }
       if (next.document_id !== this.snapshot.document_id) throw new Error("scene document identity changed");
       if (next.source_hash !== this.snapshot.source_hash) throw new Error("scene source identity changed");
