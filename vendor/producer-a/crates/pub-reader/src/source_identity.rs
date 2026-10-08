@@ -1,4 +1,5 @@
 //! Canonical source identity and provenance helpers for mature PUB.
+//! CI post-routing control: comment-only source identity proof.
 //!
 //! This owner defines stable object-key vocabularies, source-derived model IDs,
 //! and exact byte-range SourceRef construction. Parsing, Story decoding,
