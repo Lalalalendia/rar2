@@ -5676,6 +5676,134 @@ mod tests {
         assert_eq!(fragment.text, "hello");
     }
 
+    fn exact_multiframe_slice_visual(fragment_text: &str) -> ViewerGeometryDocument {
+        let mut visual = fixture();
+        let page_id = visual.document.pages[0].id;
+        let node_id = visual.scene.nodes[0].origin;
+        let story_id = visual.document.stories[0].id;
+        let story_text = "hello world";
+
+        visual.document.stories[0].text = story_text.to_owned();
+        visual.document.pages[0].width_emu = 10_000_000;
+        visual.document.pages[0].height_emu = 10_000_000;
+        visual.scene.surfaces[0].size =
+            Size2D::new(LengthEmu::new(10_000_000), LengthEmu::new(10_000_000));
+        visual.scene.nodes[0].parent_origin = page_id.into_canonical();
+        visual.scene.nodes[0].bounds = RectEmu::new(
+            LengthEmu::ZERO,
+            LengthEmu::ZERO,
+            LengthEmu::new(5_000_000),
+            LengthEmu::new(5_000_000),
+        );
+        visual.text_fragments[0].scalar_start = 6;
+        visual.text_fragments[0].scalar_end = 11;
+        visual.text_fragments[0].text = fragment_text.to_owned();
+        visual.text_fragments[0].line_count = 1;
+        visual.story_frames = vec![
+            pub_viewer::ViewerStoryFrame {
+                story_id,
+                frame_id: NodeId::from_canonical(canonical(10)),
+                ordinal: 0,
+                text_content_bounds: None,
+                vertical_alignment: None,
+            },
+            pub_viewer::ViewerStoryFrame {
+                story_id,
+                frame_id: node_id,
+                ordinal: 1,
+                text_content_bounds: None,
+                vertical_alignment: None,
+            },
+        ];
+        visual.typography_runs = vec![ViewerTypographyRun {
+            story_id,
+            scalar_start: 6,
+            scalar_end: 11,
+            source_font_name: "Source Font".to_owned(),
+            text_size_emu: 12 * 12_700,
+            font_inherited: false,
+            size_inherited: false,
+            color_rgb: None,
+            color_inherited: false,
+            bold: None,
+            italic: None,
+            source_story_text_sha256: viewer_story_text_sha256(story_text),
+        }];
+        visual
+    }
+
+    #[test]
+    fn exact_nonzero_multiframe_story_slice_uses_shared_layout_with_global_scalars() {
+        let visual = exact_multiframe_slice_visual("world");
+        let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let fingerprint = font_fingerprint_sha256(bytes);
+        let fallback = ExplicitRenderTextFontResourceV1 {
+            resource_id: "test:noto-serif",
+            expected_sha256: &fingerprint,
+            face_index: 0,
+            default_font_size_emu: 12 * 12_700,
+            default_line_height_emu: 14 * 12_700,
+            bytes,
+        };
+
+        let plan =
+            build_page_render_plan_with_text_layout_v1(&visual, 0, &fallback).expect("render plan");
+        let text = plan.nodes[0].text.as_ref().expect("render text");
+        let layout = text.layout.as_ref().expect("shared layout");
+        assert!(matches!(
+            layout.disposition,
+            RenderTextLayoutDispositionV1::SharedResolved { .. }
+        ));
+        assert!(!layout.lines.is_empty());
+        assert_eq!(layout.lines[0].scalar_start, 6);
+        assert_eq!(
+            layout.lines.last().map(|line| line.consumed_scalar_end),
+            Some(11)
+        );
+        assert_eq!(
+            layout.lines.iter().map(|line| line.text.as_str()).collect::<String>(),
+            "world"
+        );
+        assert!(layout.lines.iter().all(|line| {
+            line.scalar_start >= 6
+                && line.scalar_end <= 11
+                && line.consumed_scalar_end <= 11
+                && line
+                    .shaping
+                    .as_ref()
+                    .is_some_and(|shaping| shaping.glyphs.iter().all(|glyph| glyph.cluster >= 6))
+        }));
+    }
+
+    #[test]
+    fn modified_nonzero_multiframe_story_slice_stays_story_extent_fail_closed() {
+        let visual = exact_multiframe_slice_visual("wurld");
+        let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let fingerprint = font_fingerprint_sha256(bytes);
+        let fallback = ExplicitRenderTextFontResourceV1 {
+            resource_id: "test:noto-serif",
+            expected_sha256: &fingerprint,
+            face_index: 0,
+            default_font_size_emu: 12 * 12_700,
+            default_line_height_emu: 14 * 12_700,
+            bytes,
+        };
+
+        let plan =
+            build_page_render_plan_with_text_layout_v1(&visual, 0, &fallback).expect("render plan");
+        let layout = plan.nodes[0]
+            .text
+            .as_ref()
+            .and_then(|text| text.layout.as_ref())
+            .expect("fallback layout");
+        assert_eq!(
+            layout.disposition,
+            RenderTextLayoutDispositionV1::BackendFallback {
+                reason: RenderTextLayoutFallbackReasonV1::StoryExtentMismatch,
+            }
+        );
+    }
+
     #[test]
     fn full_extent_modified_text_stays_fail_closed() {
         let mut visual = fixture();
