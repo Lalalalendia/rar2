@@ -2334,22 +2334,38 @@ pub fn classify_shared_layout_incomplete_cause_v1(
         };
     };
 
-    let frame_ordinal =
+    let exact_slice_scalar_base = exact_direct_story_slice_scalar_base_v1(
+        visual,
+        page.page_id,
+        node.node_id,
+        None,
+        fragment,
+        &story.text,
+    );
+    let diagnostic_path = if exact_slice_scalar_base.is_some() {
+        "exact_slice_uniform_path"
+    } else {
+        "uniform_path"
+    };
+    let frame_ordinal = if exact_slice_scalar_base.is_some() {
+        0
+    } else {
         match admitted_layout_frame_ordinal(visual, fragment.story_id, node.node_id, None) {
             Ok(value) => value,
             Err(_) => {
                 return SharedLayoutIncompleteCauseV1 {
-                    path: "uniform_path",
+                    path: diagnostic_path,
                     consumption: "unknown",
                     cause: "frame_fail_closed",
                 };
             }
-        };
+        }
+    };
 
     let bounds = node.text_bounds.unwrap_or(node.bounds);
     if bounds.width.get() <= 0 || bounds.height.get() <= 0 {
         return SharedLayoutIncompleteCauseV1 {
-            path: "uniform_path",
+            path: diagnostic_path,
             consumption: "unknown",
             cause: "frame_geometry_invalid",
         };
@@ -2361,7 +2377,7 @@ pub fn classify_shared_layout_incomplete_cause_v1(
         || font.default_line_height_emu <= 0
     {
         return SharedLayoutIncompleteCauseV1 {
-            path: "uniform_path",
+            path: diagnostic_path,
             consumption: "unknown",
             cause: "font_resource_invalid",
         };
@@ -2369,7 +2385,7 @@ pub fn classify_shared_layout_incomplete_cause_v1(
     let fingerprint = font_fingerprint_sha256(font.bytes);
     if font.expected_sha256.is_empty() || fingerprint != font.expected_sha256 {
         return SharedLayoutIncompleteCauseV1 {
-            path: "uniform_path",
+            path: diagnostic_path,
             consumption: "unknown",
             cause: "font_fingerprint_mismatch",
         };
@@ -2383,7 +2399,7 @@ pub fn classify_shared_layout_incomplete_cause_v1(
         font_is_source_resolved,
     ) else {
         return SharedLayoutIncompleteCauseV1 {
-            path: "uniform_path",
+            path: diagnostic_path,
             consumption: "unknown",
             cause: "line_height_unavailable",
         };
@@ -2435,7 +2451,7 @@ pub fn classify_shared_layout_incomplete_cause_v1(
 
     let Ok(scene) = resolve_bounded_shaped_flow(&projection, &runtime) else {
         return SharedLayoutIncompleteCauseV1 {
-            path: "uniform_path",
+            path: diagnostic_path,
             consumption: "unknown",
             cause: "shared_layout_error",
         };
@@ -2454,6 +2470,8 @@ pub fn classify_shared_layout_incomplete_cause_v1(
     let cursor = source_lines
         .last()
         .map(|line| line.consumed_scalar_end)
+        .unwrap_or_default()
+        .checked_add(exact_slice_scalar_base.unwrap_or_default())
         .unwrap_or(fragment.scalar_start);
 
     let has_no_capacity = scene
@@ -2499,7 +2517,7 @@ pub fn classify_shared_layout_incomplete_cause_v1(
     };
 
     SharedLayoutIncompleteCauseV1 {
-        path: "uniform_path",
+        path: diagnostic_path,
         consumption,
         cause,
     }
