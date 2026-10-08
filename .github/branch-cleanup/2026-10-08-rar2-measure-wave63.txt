@@ -1,0 +1,4 @@
+# Measure Wave 63 — zero-unique refs already fully reachable from main
+measure/first-line-fit-1411-base-85b884 85b884fb31b2fe6d1d2dc8573a653817ac61b81a
+measure/scriptfont-effective-probe-807 204958bc4727a337520ed852e5611049ec7a2296
+ops/branch-gc-20261008-measure-wave62 d6c4f0c44e7f770f9b334e5c3ae886166d197e84
