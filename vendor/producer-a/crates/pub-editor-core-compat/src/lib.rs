@@ -25,7 +25,10 @@ use pub_editor_text_core::{
     StoryRangeTransitionErrorV1, apply_story_range_forward_v1, apply_story_range_inverse_v1,
     replace_scalar_range_text_v1, story_state_id_v1,
 };
-use pub_model::{EffectiveTableGridV1, LengthEmu, NodeId, PageId, RectEmu, Sha256Digest, StoryId};
+use pub_model::{
+    Affine2D, CanonicalId, EffectiveTableGridV1, LengthEmu, NodeId, PageId, RectEmu, Sha256Digest,
+    StoryId,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use std::collections::BTreeMap;
 
@@ -120,12 +123,13 @@ pub type PlanTableTrackExtentV1Fn =
     ) -> Result<TableTrackExtentPlanV1, SetTableTrackExtentErrorV1>;
 pub const PLAN_TABLE_TRACK_EXTENT_V1: PlanTableTrackExtentV1Fn = plan_table_track_extent_v1;
 
-pub type CanonicalTableTrackExtentHistoryV1Fn = fn(
-    &EffectiveTableGridV1,
-    RectEmu,
-    TableTrackTargetV1,
-    LengthEmu,
-) -> Result<SetTableTrackExtentHistoryV1, TableTrackExtentHistoryErrorV1>;
+pub type CanonicalTableTrackExtentHistoryV1Fn =
+    fn(
+        &EffectiveTableGridV1,
+        RectEmu,
+        TableTrackTargetV1,
+        LengthEmu,
+    ) -> Result<SetTableTrackExtentHistoryV1, TableTrackExtentHistoryErrorV1>;
 pub const CANONICAL_TABLE_TRACK_EXTENT_HISTORY_V1: CanonicalTableTrackExtentHistoryV1Fn =
     canonical_table_track_extent_history_v1;
 
@@ -149,3 +153,152 @@ pub fn assert_adapter_wire_traits() {
     assert_serde_owned::<TableTrackTargetV1>();
     assert_serde_owned::<SetTableTrackExtentHistoryV1>();
 }
+
+pub fn assert_geometry_adapter_field_shape(
+    move_entry: MoveNodeBatchEntry,
+    resize_entry: ResizeNodeBatchEntry,
+    snapshot: GeometryNodeSnapshotV1,
+) {
+    let MoveNodeBatchEntry {
+        node_id,
+        before,
+        after,
+    } = move_entry;
+    let _: NodeId = node_id;
+    let _: RectEmu = before;
+    let _: RectEmu = after;
+
+    let ResizeNodeBatchEntry {
+        node_id,
+        before,
+        after,
+    } = resize_entry;
+    let _: NodeId = node_id;
+    let _: RectEmu = before;
+    let _: RectEmu = after;
+
+    let GeometryNodeSnapshotV1 {
+        node_id,
+        parent_id,
+        bounds,
+        transform,
+    } = snapshot;
+    let _: NodeId = node_id;
+    let _: CanonicalId = parent_id;
+    let _: RectEmu = bounds;
+    let _: Affine2D = transform;
+}
+
+pub fn move_transition_error_shape(error: MoveNodesTransitionErrorV1) -> &'static str {
+    match error {
+        MoveNodesTransitionErrorV1::Empty => "empty",
+        MoveNodesTransitionErrorV1::TooLarge { found } => {
+            let _: usize = found;
+            "too_large"
+        }
+        MoveNodesTransitionErrorV1::Duplicate { node_id } => {
+            let _: NodeId = node_id;
+            "duplicate"
+        }
+        MoveNodesTransitionErrorV1::SizeChanged { node_id } => {
+            let _: NodeId = node_id;
+            "size_changed"
+        }
+        MoveNodesTransitionErrorV1::NoChange { node_id } => {
+            let _: NodeId = node_id;
+            "no_change"
+        }
+        MoveNodesTransitionErrorV1::NodeUnsupported { node_id } => {
+            let _: NodeId = node_id;
+            "node_unsupported"
+        }
+        MoveNodesTransitionErrorV1::PageMismatch { node_id, page_id } => {
+            let _: NodeId = node_id;
+            let _: PageId = page_id;
+            "page_mismatch"
+        }
+        MoveNodesTransitionErrorV1::Stale { node_id } => {
+            let _: NodeId = node_id;
+            "stale"
+        }
+    }
+}
+
+pub fn resize_transition_error_shape(error: ResizeNodesTransitionErrorV1) -> &'static str {
+    match error {
+        ResizeNodesTransitionErrorV1::InvalidCount { found } => {
+            let _: usize = found;
+            "invalid_count"
+        }
+        ResizeNodesTransitionErrorV1::Duplicate { node_id } => {
+            let _: NodeId = node_id;
+            "duplicate"
+        }
+        ResizeNodesTransitionErrorV1::NotCanonical { node_id } => {
+            let _: NodeId = node_id;
+            "not_canonical"
+        }
+        ResizeNodesTransitionErrorV1::PageMismatch { node_id, page_id } => {
+            let _: NodeId = node_id;
+            let _: PageId = page_id;
+            "page_mismatch"
+        }
+        ResizeNodesTransitionErrorV1::NodeUnsupported { node_id } => {
+            let _: NodeId = node_id;
+            "node_unsupported"
+        }
+        ResizeNodesTransitionErrorV1::NonPositive { node_id } => {
+            let _: NodeId = node_id;
+            "non_positive"
+        }
+        ResizeNodesTransitionErrorV1::Overflow { node_id } => {
+            let _: NodeId = node_id;
+            "overflow"
+        }
+        ResizeNodesTransitionErrorV1::Stale { node_id } => {
+            let _: NodeId = node_id;
+            "stale"
+        }
+        ResizeNodesTransitionErrorV1::NoSizeChange => "no_size_change",
+    }
+}
+
+pub fn assert_image_crop_adapter_field_shape(crop: ImageCropStateV1) {
+    let ImageCropStateV1 {
+        top_raw,
+        bottom_raw,
+        left_raw,
+        right_raw,
+    } = crop;
+    let _: Option<u32> = top_raw;
+    let _: Option<u32> = bottom_raw;
+    let _: Option<u32> = left_raw;
+    let _: Option<u32> = right_raw;
+}
+
+pub fn assert_table_history_adapter_field_shape(history: SetTableTrackExtentHistoryV1) {
+    let SetTableTrackExtentHistoryV1 {
+        protocol_version,
+        table_id,
+        target,
+        before_extent,
+        after_extent,
+        before_bounds,
+        after_bounds,
+    } = history;
+    let _: String = protocol_version;
+    let _: NodeId = table_id;
+    let _: TableTrackTargetV1 = target;
+    let _: LengthEmu = before_extent;
+    let _: LengthEmu = after_extent;
+    let _: RectEmu = before_bounds;
+    let _: RectEmu = after_bounds;
+}
+
+pub fn table_track_target_variant_shape(target: TableTrackTargetV1) -> &'static str {
+    match target {
+        TableTrackTargetV1::Row(_) => "row",
+        TableTrackTargetV1::Column(_) => "column",
+    }
+}
+
