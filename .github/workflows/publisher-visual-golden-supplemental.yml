@@ -139,8 +139,9 @@ jobs:
             label="${item#*:}"
             path="$RUNNER_TEMP/publisher-visual-supplemental/fixtures/$fixture.pub"
             test -f "$path"
-            cargo run --quiet -p chaptera-viewer-render-plan \
-              --bin source_font_family_census -- "$path" "$label"
+            cargo run --quiet \
+              --manifest-path tools/research-runner/source-font-family-probe/Cargo.toml \
+              -- "$path" "$label"
           done
 
       - name: Build canonical Cloud Reader worker
