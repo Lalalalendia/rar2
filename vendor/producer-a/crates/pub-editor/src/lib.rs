@@ -6,7 +6,6 @@
 //! resolved authoring graph. Native PUB materialization remains a separate
 //! writer gate.
 
-mod authored_page_identity_history_v1;
 mod authored_paragraph_alignment_v1;
 mod duplicate_authored_rectangle_v1;
 mod imported_paragraph_alignment_v1;
@@ -17,6 +16,11 @@ mod session_geometry;
 mod session_image;
 mod session_table;
 mod session_text;
+use session_text::{
+    apply_text_format_history_operation_semantic_v1, apply_text_format_history_operation_v1,
+    is_scoped_text_format_operation_v1, text_format_operation_property_v1,
+    text_format_operation_story_id_v1,
+};
 use session_geometry::{
     apply_authored_stack_history_forward_v1, authored_stack_operation_page_id_v1,
     derive_authored_stacks_from_operations_v1, page_order_error_to_editor_v1,
@@ -2177,38 +2181,6 @@ fn paragraph_alignment_transition_error_to_editor_v1(
     }
 }
 
-fn text_format_operation_story_id_v1(operation: &EditOperation) -> Option<StoryId> {
-    match operation {
-        EditOperation::SetTextFormatProperty { story_id, .. }
-        | EditOperation::ClearTextFormatPropertyOverride { story_id, .. }
-        | EditOperation::SetTextFormatPropertyScopedV1 { story_id, .. }
-        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 { story_id, .. } => {
-            Some(*story_id)
-        }
-        _ => None,
-    }
-}
-
-fn text_format_operation_property_v1(operation: &EditOperation) -> Option<FormatPropertyV1> {
-    match operation {
-        EditOperation::SetTextFormatProperty { property, .. }
-        | EditOperation::ClearTextFormatPropertyOverride { property, .. }
-        | EditOperation::SetTextFormatPropertyScopedV1 { property, .. }
-        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 { property, .. } => {
-            Some(*property)
-        }
-        _ => None,
-    }
-}
-
-fn is_scoped_text_format_operation_v1(operation: &EditOperation) -> bool {
-    matches!(
-        operation,
-        EditOperation::SetTextFormatPropertyScopedV1 { .. }
-            | EditOperation::ClearTextFormatPropertyOverrideScopedV1 { .. }
-    )
-}
-
 fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
     if operations.iter().any(|operation| {
         matches!(
@@ -2275,154 +2247,6 @@ fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static 
     } else {
         EDITOR_PROJECT_VERSION_V0_12
     }
-}
-
-fn apply_text_format_history_operation_semantic_v1(
-    state: &TextFormatOverlayStateV1,
-    operation: &EditOperation,
-) -> Result<TextFormatOverlayStateV1, EditorError> {
-    let story_id = text_format_operation_story_id_v1(operation)
-        .expect("semantic text-format replay receives only text-format operations");
-    if state.story_id != story_id.as_canonical().to_string() {
-        return Err(EditorError::TextFormatStateInvalid {
-            story_id,
-            message: "format operation Story does not match overlay Story".to_owned(),
-        });
-    }
-    let current_hash =
-        state_hash_v1(state).map_err(|error| EditorError::TextFormatStateInvalid {
-            story_id,
-            message: error.to_string(),
-        })?;
-    let receipt = match operation {
-        EditOperation::SetTextFormatProperty {
-            start_scalar,
-            end_scalar,
-            property,
-            value,
-            ..
-        }
-        | EditOperation::SetTextFormatPropertyScopedV1 {
-            start_scalar,
-            end_scalar,
-            property,
-            value,
-            ..
-        } => overlay_set_text_format_property_v1(
-            state,
-            *start_scalar,
-            *end_scalar,
-            *property,
-            value.clone(),
-            &current_hash,
-        ),
-        EditOperation::ClearTextFormatPropertyOverride {
-            start_scalar,
-            end_scalar,
-            property,
-            ..
-        }
-        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
-            start_scalar,
-            end_scalar,
-            property,
-            ..
-        } => overlay_clear_text_format_property_override_v1(
-            state,
-            *start_scalar,
-            *end_scalar,
-            *property,
-            &current_hash,
-        ),
-        _ => unreachable!("semantic text-format replay receives only text-format operations"),
-    }
-    .map_err(|error| EditorError::TextFormatStateInvalid {
-        story_id,
-        message: error.to_string(),
-    })?;
-    Ok(receipt.after_state)
-}
-
-fn apply_text_format_history_operation_v1(
-    state: &TextFormatOverlayStateV1,
-    operation: &EditOperation,
-) -> Result<TextFormatOverlayStateV1, EditorError> {
-    if is_scoped_text_format_operation_v1(operation) {
-        let story_id = text_format_operation_story_id_v1(operation)
-            .expect("scoped format operation has Story");
-        return Err(EditorError::TextFormatStateInvalid {
-            story_id,
-            message: "property-scoped text-format operation cannot be validated in complete-overlay hash domain".to_owned(),
-        });
-    }
-
-    let (story_id, before_state_hash, after_state_hash, receipt) = match operation {
-        EditOperation::SetTextFormatProperty {
-            story_id,
-            start_scalar,
-            end_scalar,
-            property,
-            value,
-            before_state_hash,
-            after_state_hash,
-        } => (
-            *story_id,
-            before_state_hash,
-            after_state_hash,
-            overlay_set_text_format_property_v1(
-                state,
-                *start_scalar,
-                *end_scalar,
-                *property,
-                value.clone(),
-                before_state_hash,
-            ),
-        ),
-        EditOperation::ClearTextFormatPropertyOverride {
-            story_id,
-            start_scalar,
-            end_scalar,
-            property,
-            before_state_hash,
-            after_state_hash,
-        } => (
-            *story_id,
-            before_state_hash,
-            after_state_hash,
-            overlay_clear_text_format_property_override_v1(
-                state,
-                *start_scalar,
-                *end_scalar,
-                *property,
-                before_state_hash,
-            ),
-        ),
-        _ => unreachable!(
-            "checked complete-overlay replay admits only legacy text-format operations"
-        ),
-    };
-
-    if state.story_id != story_id.as_canonical().to_string() {
-        return Err(EditorError::TextFormatStateInvalid {
-            story_id,
-            message: "format operation Story does not match overlay Story".to_owned(),
-        });
-    }
-
-    let receipt = receipt.map_err(|error| EditorError::TextFormatStateInvalid {
-        story_id,
-        message: error.to_string(),
-    })?;
-    if receipt.command.before_state_hash != *before_state_hash
-        || receipt.command.after_state_hash != *after_state_hash
-    {
-        return Err(EditorError::TextFormatStateInvalid {
-            story_id,
-            message: "persisted format operation hashes do not match deterministic replay"
-                .to_owned(),
-        });
-    }
-    Ok(receipt.after_state)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

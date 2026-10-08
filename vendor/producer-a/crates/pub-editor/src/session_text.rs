@@ -164,3 +164,183 @@ impl EditorSession {
         self.replace_story_range(story_id, 0, scalar_len, before, replacement)
     }
 }
+
+pub(super) fn text_format_operation_story_id_v1(operation: &EditOperation) -> Option<StoryId> {
+    match operation {
+        EditOperation::SetTextFormatProperty { story_id, .. }
+        | EditOperation::ClearTextFormatPropertyOverride { story_id, .. }
+        | EditOperation::SetTextFormatPropertyScopedV1 { story_id, .. }
+        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 { story_id, .. } => {
+            Some(*story_id)
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn text_format_operation_property_v1(operation: &EditOperation) -> Option<FormatPropertyV1> {
+    match operation {
+        EditOperation::SetTextFormatProperty { property, .. }
+        | EditOperation::ClearTextFormatPropertyOverride { property, .. }
+        | EditOperation::SetTextFormatPropertyScopedV1 { property, .. }
+        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 { property, .. } => {
+            Some(*property)
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn is_scoped_text_format_operation_v1(operation: &EditOperation) -> bool {
+    matches!(
+        operation,
+        EditOperation::SetTextFormatPropertyScopedV1 { .. }
+            | EditOperation::ClearTextFormatPropertyOverrideScopedV1 { .. }
+    )
+}
+
+pub(super) fn apply_text_format_history_operation_semantic_v1(
+    state: &TextFormatOverlayStateV1,
+    operation: &EditOperation,
+) -> Result<TextFormatOverlayStateV1, EditorError> {
+    let story_id = text_format_operation_story_id_v1(operation)
+        .expect("semantic text-format replay receives only text-format operations");
+    if state.story_id != story_id.as_canonical().to_string() {
+        return Err(EditorError::TextFormatStateInvalid {
+            story_id,
+            message: "format operation Story does not match overlay Story".to_owned(),
+        });
+    }
+    let current_hash =
+        state_hash_v1(state).map_err(|error| EditorError::TextFormatStateInvalid {
+            story_id,
+            message: error.to_string(),
+        })?;
+    let receipt = match operation {
+        EditOperation::SetTextFormatProperty {
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            ..
+        }
+        | EditOperation::SetTextFormatPropertyScopedV1 {
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            ..
+        } => overlay_set_text_format_property_v1(
+            state,
+            *start_scalar,
+            *end_scalar,
+            *property,
+            value.clone(),
+            &current_hash,
+        ),
+        EditOperation::ClearTextFormatPropertyOverride {
+            start_scalar,
+            end_scalar,
+            property,
+            ..
+        }
+        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
+            start_scalar,
+            end_scalar,
+            property,
+            ..
+        } => overlay_clear_text_format_property_override_v1(
+            state,
+            *start_scalar,
+            *end_scalar,
+            *property,
+            &current_hash,
+        ),
+        _ => unreachable!("semantic text-format replay receives only text-format operations"),
+    }
+    .map_err(|error| EditorError::TextFormatStateInvalid {
+        story_id,
+        message: error.to_string(),
+    })?;
+    Ok(receipt.after_state)
+}
+
+pub(super) fn apply_text_format_history_operation_v1(
+    state: &TextFormatOverlayStateV1,
+    operation: &EditOperation,
+) -> Result<TextFormatOverlayStateV1, EditorError> {
+    if is_scoped_text_format_operation_v1(operation) {
+        let story_id = text_format_operation_story_id_v1(operation)
+            .expect("scoped format operation has Story");
+        return Err(EditorError::TextFormatStateInvalid {
+            story_id,
+            message: "property-scoped text-format operation cannot be validated in complete-overlay hash domain".to_owned(),
+        });
+    }
+
+    let (story_id, before_state_hash, after_state_hash, receipt) = match operation {
+        EditOperation::SetTextFormatProperty {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            before_state_hash,
+            after_state_hash,
+        } => (
+            *story_id,
+            before_state_hash,
+            after_state_hash,
+            overlay_set_text_format_property_v1(
+                state,
+                *start_scalar,
+                *end_scalar,
+                *property,
+                value.clone(),
+                before_state_hash,
+            ),
+        ),
+        EditOperation::ClearTextFormatPropertyOverride {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            before_state_hash,
+            after_state_hash,
+        } => (
+            *story_id,
+            before_state_hash,
+            after_state_hash,
+            overlay_clear_text_format_property_override_v1(
+                state,
+                *start_scalar,
+                *end_scalar,
+                *property,
+                before_state_hash,
+            ),
+        ),
+        _ => unreachable!(
+            "checked complete-overlay replay admits only legacy text-format operations"
+        ),
+    };
+
+    if state.story_id != story_id.as_canonical().to_string() {
+        return Err(EditorError::TextFormatStateInvalid {
+            story_id,
+            message: "format operation Story does not match overlay Story".to_owned(),
+        });
+    }
+
+    let receipt = receipt.map_err(|error| EditorError::TextFormatStateInvalid {
+        story_id,
+        message: error.to_string(),
+    })?;
+    if receipt.command.before_state_hash != *before_state_hash
+        || receipt.command.after_state_hash != *after_state_hash
+    {
+        return Err(EditorError::TextFormatStateInvalid {
+            story_id,
+            message: "persisted format operation hashes do not match deterministic replay"
+                .to_owned(),
+        });
+    }
+    Ok(receipt.after_state)
+}
