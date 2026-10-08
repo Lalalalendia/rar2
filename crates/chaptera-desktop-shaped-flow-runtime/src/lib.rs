@@ -723,12 +723,11 @@ mod tests {
         );
         let full_authoring = pub_viewer::bounded_authoring_slice_from_resolved(editor.graph())
             .expect("project multi-Story fixture with full Story payloads");
-        let sparse_authoring =
-            pub_viewer::bounded_authoring_slice_from_resolved_story_payload(
-                editor.graph(),
-                story_id,
-            )
-            .expect("project multi-Story fixture with active Story payload only");
+        let sparse_authoring = pub_viewer::bounded_authoring_slice_from_resolved_story_payload(
+            editor.graph(),
+            story_id,
+        )
+        .expect("project multi-Story fixture with active Story payload only");
         let mut full_scope = project_bounded(full_authoring);
         let mut sparse_scope = project_bounded(sparse_authoring);
 
