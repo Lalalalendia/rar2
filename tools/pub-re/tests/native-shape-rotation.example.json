@@ -1,0 +1,24 @@
+{
+  "schema": "chaptera.pub-re-native-experiment.v1",
+  "experiment_id": "example-shape-rotation-delta",
+  "source": {
+    "path": "fixtures/example.pub",
+    "expected_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "operation": {
+    "kind": "shape_rotation_delta",
+    "selector": {
+      "page_id": 123456,
+      "shape_id": 42
+    },
+    "delta_degrees": 1
+  },
+  "policy": {
+    "writer": "current",
+    "visible": false,
+    "process_exit_grace_seconds": 60
+  },
+  "attribution": {
+    "officeart_stream": "/Contents"
+  }
+}

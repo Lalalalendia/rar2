@@ -5,6 +5,7 @@ on:
     paths:
       - "tools/pub-re/**"
       - ".github/workflows/pub-re-v0.yml"
+      - ".github/workflows/pub-re-native.yml"
   workflow_dispatch:
     inputs:
       manifest_path:
@@ -39,6 +40,27 @@ jobs:
 
       - name: Compile CLI
         run: cargo build --manifest-path tools/pub-re/Cargo.toml --bin pub-re
+
+      - name: Validate native Publisher harness contract without COM
+        shell: pwsh
+        run: |
+          $script = "tools/pub-re/windows/Invoke-PubReNativeExperiment.ps1"
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $script).Path,
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+
+          & $script `
+            -ManifestPath "tools/pub-re/tests/native-shape-rotation.example.json" `
+            -OutputRoot (Join-Path $env:RUNNER_TEMP "pub-re-native-validate") `
+            -ValidateManifestOnly
 
       - name: Analyze repository-local manifest
         if: github.event_name == 'workflow_dispatch' && inputs.manifest_path != ''
