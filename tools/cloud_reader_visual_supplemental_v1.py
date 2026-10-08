@@ -32,6 +32,51 @@ def checked_sha256_digest(value: object, source: str) -> str:
     return value
 
 
+def checked_same_session_pixel_diff(value: object) -> dict:
+    """Accept numeric Canvas2D RGBA deltas only; never raw PNG/pixel payloads."""
+    if not isinstance(value, dict):
+        raise ValueError("missing same-session decoded PNG discriminator")
+    fields = {"first_width", "first_height", "second_width", "second_height",
+              "changed_pixel_count", "max_channel_delta", "changed_bounds"}
+    if set(value) != fields:
+        raise ValueError("unexpected same-session decoded PNG discriminator fields")
+    for field in ("first_width", "first_height", "second_width", "second_height"):
+        if type(value[field]) is not int or value[field] <= 0:
+            raise ValueError(f"invalid same-session PNG dimension: {field}")
+    same_dimensions = (
+        value["first_width"] == value["second_width"]
+        and value["first_height"] == value["second_height"]
+    )
+    count = value["changed_pixel_count"]
+    delta = value["max_channel_delta"]
+    bounds = value["changed_bounds"]
+    if not same_dimensions:
+        if count is not None or delta is not None or bounds is not None:
+            raise ValueError("dimension mismatch must not assert decoded pixel delta")
+        return value
+    if type(count) is not int or not 0 <= count <= value["first_width"] * value["first_height"]:
+        raise ValueError("invalid same-session changed pixel count")
+    if type(delta) is not int or not 0 <= delta <= 255:
+        raise ValueError("invalid same-session RGBA channel delta")
+    if (count == 0) != (delta == 0):
+        raise ValueError("pixel and channel difference disagree")
+    if count == 0:
+        if bounds is not None:
+            raise ValueError("identical decoded pixels must not have changed bounds")
+    else:
+        if not isinstance(bounds, dict) or set(bounds) != {"x", "y", "width", "height"}:
+            raise ValueError("changed decoded pixels require a numeric bounding box")
+        for field in ("x", "y", "width", "height"):
+            if type(bounds[field]) is not int:
+                raise ValueError(f"invalid changed pixel bounds: {field}")
+        if (bounds["x"] < 0 or bounds["y"] < 0 or bounds["width"] <= 0
+                or bounds["height"] <= 0
+                or bounds["x"] + bounds["width"] > value["first_width"]
+                or bounds["y"] + bounds["height"] > value["first_height"]):
+            raise ValueError("changed pixel bounds exceed decoded screenshot")
+    return value
+
+
 def hosted_rows(pairs_csv: Path) -> list[dict[str, str]]:
     rows = list(csv.DictReader(pairs_csv.open(newline="", encoding="utf-8-sig")))
     hosted = [row for row in rows if row["family"] != EXTERNAL_FAMILY]
@@ -166,6 +211,21 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
             same_session_capture_equal = (
                 candidate_raster_sha256 == second_capture_raster_sha256
             )
+            pixel_report = shot.get("repeat_decoded_pixel_diff")
+            if same_session_capture_equal:
+                if pixel_report is not None:
+                    raise ValueError("identical PNG SHA must skip decoded pixel discriminator")
+                decoded_pixel_outcome = "identical_png"
+                decoded_pixel_diff = None
+            else:
+                decoded_pixel_diff = checked_same_session_pixel_diff(pixel_report)
+                if (decoded_pixel_diff["first_width"] != decoded_pixel_diff["second_width"]
+                        or decoded_pixel_diff["first_height"] != decoded_pixel_diff["second_height"]):
+                    decoded_pixel_outcome = "dimensions_changed"
+                elif decoded_pixel_diff["changed_pixel_count"] == 0:
+                    decoded_pixel_outcome = "encoding_only"
+                else:
+                    decoded_pixel_outcome = "rgba_changed"
             candidate = image_grid(png)
             reference_bytes = reference_grid(pair["pages"][index])
             metrics = compare_grid(candidate, reference_bytes)
@@ -184,6 +244,8 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
                 "candidate_raster_sha256": candidate_raster_sha256,
                 "second_capture_raster_sha256": second_capture_raster_sha256,
                 "same_session_captures_identical": same_session_capture_equal,
+                "same_session_decoded_pixel_outcome": decoded_pixel_outcome,
+                "same_session_decoded_pixel_diff": decoded_pixel_diff,
                 **metrics,
                 "reference_media_extent_delta": {
                     "width_pt": round(width_pt - ref_page["media_width_pt"], 6),
@@ -210,6 +272,8 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
             "page": row["page"],
             "first_capture_sha256": row["candidate_raster_sha256"],
             "second_capture_sha256": row["second_capture_raster_sha256"],
+            "decoded_pixel_outcome": row["same_session_decoded_pixel_outcome"],
+            "decoded_pixel_diff": row["same_session_decoded_pixel_diff"],
         }
         for row in page_rows
         if not row["same_session_captures_identical"]
@@ -226,6 +290,15 @@ def visual_comparison(browser: dict, browser_receipt: Path, reference: dict) -> 
         "compared_page_count": len(page_rows),
         "same_session_capture_compared_page_count": len(page_rows),
         "same_session_capture_mismatch_page_count": len(same_session_mismatches),
+        "same_session_capture_rgba_changed_page_count": sum(
+            row["decoded_pixel_outcome"] == "rgba_changed" for row in same_session_mismatches
+        ),
+        "same_session_capture_encoding_only_page_count": sum(
+            row["decoded_pixel_outcome"] == "encoding_only" for row in same_session_mismatches
+        ),
+        "same_session_capture_dimensions_changed_page_count": sum(
+            row["decoded_pixel_outcome"] == "dimensions_changed" for row in same_session_mismatches
+        ),
         "same_session_capture_mismatches": same_session_mismatches,
         "unavailable_pair_count": len(unavailable),
         "corpus_mean_changed_cell_fraction": (
@@ -364,6 +437,7 @@ def summarize(pairs_csv: Path, browser_receipt: Path, reference_path: Path, out:
             "scene_sha256_excludes_worker_timings": True,
             "same_session_second_capture_is_digest_only": True,
             "publisher_raster_comparison_uses_first_capture_only": True,
+            "second_capture_rgba_diff_numeric_aggregate_only": True,
         },
         "pairs": results,
         "unsupported_pairs": unsupported,
