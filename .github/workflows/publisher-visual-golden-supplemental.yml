@@ -90,12 +90,17 @@ jobs:
             echo "supplemental_cargo_cache_inventory=unavailable (read-only API)" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          main_inventory="$RUNNER_TEMP/supplemental-main-cache-inventory.json"
+          if ! gh api "repos/${GITHUB_REPOSITORY}/actions/caches?ref=refs/heads/main&per_page=100&key=${CACHE_KEY}" > "$main_inventory"; then
+            echo "supplemental_cargo_cache_main_index=unavailable" | tee -a "$GITHUB_STEP_SUMMARY"
+            printf '{}' > "$main_inventory"
+          fi
           usage="$RUNNER_TEMP/supplemental-cache-usage.json"
           if ! gh api "repos/${GITHUB_REPOSITORY}/actions/cache/usage" > "$usage"; then
             echo "supplemental_cargo_cache_repo_usage=unavailable" | tee -a "$GITHUB_STEP_SUMMARY"
             printf '{}' > "$usage"
           fi
-          python - "$inventory" "$CACHE_KEY" "$usage" <<'PY'
+          python - "$inventory" "$CACHE_KEY" "$usage" "$main_inventory" <<'PY'
           import json
           import os
           import sys
@@ -104,21 +109,27 @@ jobs:
               payload = json.load(stream)
           with open(sys.argv[3], encoding="utf-8") as stream:
               usage = json.load(stream)
+          with open(sys.argv[4], encoding="utf-8") as stream:
+              main_payload = json.load(stream)
           key = sys.argv[2]
           entries = [
               cache for cache in payload.get("actions_caches", [])
               if cache.get("key") == key
           ]
           entries.sort(key=lambda cache: cache.get("created_at", ""), reverse=True)
-          main = [cache for cache in entries if cache.get("ref") == "refs/heads/main"]
+          main = [
+              cache for cache in main_payload.get("actions_caches", [])
+              if cache.get("key") == key and cache.get("ref") == "refs/heads/main"
+          ]
           print(f"supplemental_cargo_cache_index_exact_count={len(entries)}")
+          print(f"supplemental_cargo_cache_index_truncated={payload.get('total_count', 0) > len(payload.get('actions_caches', []))}")
           print(f"supplemental_cargo_cache_index_main_count={len(main)}")
           print(f"repo_cache_total_bytes={usage.get('active_caches_size_in_bytes', 'unavailable')}")
           print(f"repo_cache_total_entries={usage.get('active_caches_count', 'unavailable')}")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               print(f"supplemental_cargo_cache_index_exact_count={len(entries)}", file=summary)
               print(f"supplemental_cargo_cache_index_main_count={len(main)}", file=summary)
-          for cache in entries[:25]:
+          for cache in (main + entries[:25]):
               print(
                   "supplemental_cargo_cache_entry "
                   f"ref={cache.get('ref')} "
