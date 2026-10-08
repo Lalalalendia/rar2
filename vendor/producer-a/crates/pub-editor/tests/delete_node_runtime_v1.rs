@@ -1,3 +1,4 @@
+// CI sacrificial routing control after #2262: no test or product semantics change.
 use std::collections::BTreeMap;
 
 use pub_editor::{
