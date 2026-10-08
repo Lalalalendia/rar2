@@ -95,7 +95,7 @@ pub use family_classifier::{
 };
 use grouped_projection::{
     GroupedProjectionContext, coordinate_rect_i128, project_grouped_object_shape,
-    project_rect_trunc, shape_has_nonzero_rotation, shape_has_fsp_flag
+    project_rect_trunc, shape_has_fsp_flag, shape_has_nonzero_rotation,
 };
 pub use guide_bridge::{
     PubGroundedGuideBuild, PubGuideObservation, PubGuideProjectionDiagnostic,
@@ -1142,7 +1142,8 @@ mod tests {
     #[test]
     fn page_extent_consensus_accepts_one_extent() {
         assert_eq!(
-            publication_document::require_consensus_page_extent(&[(7_560_000, 10_692_000)]).unwrap(),
+            publication_document::require_consensus_page_extent(&[(7_560_000, 10_692_000)])
+                .unwrap(),
             (7_560_000, 10_692_000)
         );
     }
