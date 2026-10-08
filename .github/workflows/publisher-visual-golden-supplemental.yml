@@ -11,6 +11,7 @@ on:
       - "apps/chaptera-server/src/reader_scene_v1.rs"
       - "apps/chaptera-server/src/guest_reader_worker.rs"
       - "crates/chaptera-viewer-render-plan/**"
+      - "!crates/chaptera-viewer-render-plan/src/shared_layout_diagnostics.rs"
       - "vendor/producer-a/crates/pub-viewer/Cargo.toml"
       - "vendor/producer-a/crates/pub-viewer/src/**"
       - "!vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
