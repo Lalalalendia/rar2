@@ -214,7 +214,48 @@ jobs:
               }
             }
             else {
-              if ($env:PUB_RE_PAGE_ID -notmatch '^[1-9][0-9]{0,9}
+              if ($env:PUB_RE_PAGE_ID -notmatch '^[1-9][0-9]{0,9}$' -or
+                  $env:PUB_RE_SHAPE_ID -notmatch '^[1-9][0-9]{0,9}$' -or
+                  $env:PUB_RE_DELTA_DEGREES -notmatch '^-?[0-9]+([.][0-9]{1,6})?$') {
+                throw "rotation selector or delta is invalid"
+              }
+
+              $pageId64 = [int64]$env:PUB_RE_PAGE_ID
+              $shapeId64 = [int64]$env:PUB_RE_SHAPE_ID
+              $delta = [double]$env:PUB_RE_DELTA_DEGREES
+              if ($pageId64 -gt [int]::MaxValue -or $shapeId64 -gt [int]::MaxValue) {
+                throw "Publisher selector is outside signed 32-bit bounds"
+              }
+              if ([math]::Abs($delta) -lt 0.000001 -or [math]::Abs($delta) -gt 45.0) {
+                throw "rotation delta must be nonzero and within 45 degrees"
+              }
+
+              $experimentPrefix = "rotate"
+              $operation = [ordered]@{
+                kind = "shape_rotation_delta"
+                selector = [ordered]@{
+                  page_id = [int]$pageId64
+                  shape_id = [int]$shapeId64
+                }
+                delta_degrees = $delta
+              }
+            }
+
+            $generated = [ordered]@{
+              schema = "chaptera.pub-re-native-experiment.v1"
+              experiment_id = ("{0}-{1}-{2}" -f $experimentPrefix, $env:PUB_RE_FIXTURE_ALIAS, $env:GITHUB_RUN_ID)
+              source = [ordered]@{
+                path = $download
+                expected_sha256 = $expectedSha
+              }
+              operation = $operation
+              policy = [ordered]@{
+                writer = "current"
+                visible = $false
+                process_exit_grace_seconds = 60
+              }
+            }
+
             $manifest = Join-Path $output "generated-manifest.json"
             $generated | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifest -Encoding utf8
           }
