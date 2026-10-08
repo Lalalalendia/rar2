@@ -418,11 +418,17 @@ try {
     }
     const descriptorOnlyResourceCount = (scene.resources ?? [])
       .filter((resource) => resource.availability !== "inline_data_url").length;
+    const coloredSpanCount = scene.nodes
+      .flatMap((node) => node.text_layout?.lines ?? [])
+      .flatMap((line) => line.spans ?? [])
+      .filter((span) => Array.isArray(span.color_rgb) && span.color_rgb.length === 3)
+      .length;
     results.push({ fixture: fixture.name, source_sha256: fixture.sha256, source_byte_len: fixture.bytes,
       classification: receipt.classification, rendered: true, fidelity: scene.fidelity, stacking_fidelity: scene.stacking_fidelity,
       fidelity_reasons: fidelityReasons, diagnostic_codes: diagnosticCodes, pages: fixturePages, nodes: scene.nodes.length,
       node_kind_counts: nodeKindCounts, text_layout_disposition_counts: textLayoutDispositionCounts,
-      descriptor_only_resource_count: descriptorOnlyResourceCount, browser_preserved_scene_node_order: true,
+      descriptor_only_resource_count: descriptorOnlyResourceCount, colored_span_count: coloredSpanCount,
+      browser_preserved_scene_node_order: true,
       reference_raster_dpi: referenceRasterDpi || null, page_geometry: orderedPageGeometry,
       stories: scene.stories.length, shared_lines: painted.length, nonempty_shared_lines: nonempty.length,
       visual_degeneracies: visualDegeneracies, visual_degeneracy_count: visualDegeneracies.length,
