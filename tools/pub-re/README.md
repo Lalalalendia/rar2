@@ -63,12 +63,39 @@ The optional `attribution.officeart_stream` field chains the native result direc
 
 ### Dedicated runner
 
-The dispatch-only workflow `PUB RE native Publisher experiment` requires a self-hosted runner labelled:
+The `PUB RE native Publisher experiment` workflow requires a self-hosted runner labelled:
 
 ```
 self-hosted, Windows, X64, chaptera-publisher-oracle
 ```
 
-Configure `PUB_RE_MANIFEST_ROOT` on that runner. Workflow input is only a simple manifest filename under that root; local source paths stay inside the private manifest and never enter GitHub inputs.
+Configure `PUB_RE_MANIFEST_ROOT` on that runner for private/manual manifests. Workflow input remains only a simple manifest filename under that root; local source paths stay inside the private manifest and never enter GitHub inputs.
+
+The owner-only control issue also supports repository-pinned public fixture aliases:
+
+```text
+/pub-re-native snapshot sample-newsletter
+/pub-re-native rotate sample-newsletter 33554698 292 1
+```
+
+Aliases live in `tools/pub-re/native-fixtures.json`. For these modes the hosted gate passes only validated source-safe fields. The Windows job then reads the protected-main registry, downloads the exact HTTPS fixture into `RUNNER_TEMP`, verifies both pinned SHA-256 and byte length, generates an ephemeral native manifest, runs Publisher, and deletes the downloaded source with the normal `always()` cleanup. No runner-local manifest or persistent fixture is required.
+
+The rotation command is deliberately bounded: `PageID` and `Shape.ID` must be positive signed-32-bit integers, and the delta must be nonzero with absolute value at most 45 degrees. The generated manifest uses `shape_rotation_delta`, so the normal save/reopen receipt and CFB differential join run automatically.
+
+A trusted owner can cancel a queued or running PUB RE native workflow without touching the Windows machine:
+
+```text
+/pub-re-native cancel 37829026048
+```
+
+The cancel path runs on GitHub-hosted infrastructure with job-scoped `actions: write` permission. It accepts only a numeric run ID and verifies that the target is this repository's exact `.github/workflows/pub-re-native.yml` workflow before calling the GitHub Actions cancel endpoint. Cancel commands never schedule the Windows native job.
+
+Normal native manifest/snapshot/rotation jobs have a five-minute wall-clock timeout; the bounded `research_0p75` mode keeps its existing 30-minute allowance. This watchdog is separate from the harness's 60-second Publisher process-exit grace because synchronous COM calls can block before an exit wait is reached.
+
+The legacy owner command remains available for private runner-local manifests:
+
+```text
+/pub-re-native sample-newsletter-snapshot.json
+```
 
 The workflow uploads only JSON from the run's `evidence` directory and deletes the private copied/mutated PUB files in an `always()` cleanup step.

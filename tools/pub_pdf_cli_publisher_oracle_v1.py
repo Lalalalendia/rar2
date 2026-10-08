@@ -129,6 +129,7 @@ def classify_cli_failure(stderr: str) -> str:
     if (
         "bounded PDF conversion currently requires mature 0x2C PUB input" in stderr
         or "bounded PDF conversion currently requires mature 0x2C or legacy 0x22 low-text PUB input" in stderr
+        or "bounded PDF conversion currently requires mature 0x2C, legacy 0x22 low-text, or legacy 0x22 Quill PUB input" in stderr
     ):
         return "unsupported_pub_route"
     if "fallback font cannot be embedded under fixed PDF policy" in stderr:

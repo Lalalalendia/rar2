@@ -1,0 +1,18 @@
+{
+  "schema": "chaptera.pub-re-native-fixture-registry.v1",
+  "fixtures": [
+    {
+      "alias": "sample-newsletter",
+      "file_name": "SampleNewsletter.pub",
+      "expected_sha256": "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
+      "expected_byte_len": 291840,
+      "download_url": "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub",
+      "provenance": {
+        "kind": "public-pinned",
+        "repository": "apache/poi",
+        "revision": "942d95d85b15d0dfdb3bc9ba1b4f273f277757c8",
+        "path": "test-data/publisher/SampleNewsletter.pub"
+      }
+    }
+  ]
+}
