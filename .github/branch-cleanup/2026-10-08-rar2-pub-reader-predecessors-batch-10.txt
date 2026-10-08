@@ -1,0 +1,9 @@
+# 2026-10-08 — pub-reader predecessor GC batch 10
+# Never merge. Exact live tips with merged successor authority or completed GC receipt.
+# Runtime rechecks open heads/bases and exact SHA lease.
+
+ci/pub-reader-helper-ownership-cleanup-01-prep 58c6f6abb249ddb3f5d2dd0581e0c7700cd4b97b # #1998 superseded by merged #2005/#2014
+ci/pub-reader-contents-reference-split-current-03 ac466d442c8dfd1469c055b3e8c0d1424d220035 # #1929 superseded by merged #1924; unique helper landed #1947
+ci/pub-reader-source-identity-split-current-03 dd952c91924062fed021b0d03c92d5548637102b # #1955 compile-failed predecessor; corrected #1963 merged
+ci/pub-reader-node-materialization-clean-20261008 989adbe3e8dcf6e9cff8fd78d1cc11d6e7ef96cf # #1965 stale predecessor; fresh #1975 merged
+ops/branch-gc-20261008-ci-terminal-lowrisk-batch-09 fc8d7a9810683f469853a2be3edd857859b6f227 # completed #2114 receipt 7/7
