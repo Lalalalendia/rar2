@@ -12,7 +12,7 @@ $ExpectedPublisherBuild = "12527"
 $ExpectedPublisherFileVersion = "16.0.12527.22145"
 $ExpectedPublisherExeSha256 = "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb9f178df834ab20b"
 $ExpectedPreparationMerge = "edc03eac3c6ad58214d8a69388100748412ec88f"
-$ExpectedStructuralMerge = "af05e48044e6ccac9cc7b8e935c2c58886c5ec4b"
+$ExpectedStructuralRevision = "1d8b8b4c04b2670dbfdbe03b2cdbc89fb4b615c0"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $Packet = Join-Path $RepoRoot "tools/research-runner/experiments/paragraph-metrics-auth-01.packet.json"
@@ -53,16 +53,16 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Checkout does not contain required causal matrix merge $ExpectedPreparationMerge"
     }
-    & git merge-base --is-ancestor $ExpectedStructuralMerge HEAD
+    & git merge-base --is-ancestor $ExpectedStructuralRevision HEAD
     if ($LASTEXITCODE -ne 0) {
-        throw "Checkout does not contain required structural receipt merge $ExpectedStructuralMerge"
+        throw "Checkout does not contain required structural receipt revision $ExpectedStructuralRevision"
     }
-    & git diff --quiet $ExpectedStructuralMerge -- `
+    & git diff --quiet $ExpectedStructuralRevision -- `
         tools/research-runner/paragraph-metrics-probe `
         tools/research-runner/analysis/paragraph_metrics_auth_01_structural.py `
         vendor/producer-a/crates/pub-quill
     if ($LASTEXITCODE -ne 0) {
-        throw "Structural paragraph-metrics implementation drifted after $ExpectedStructuralMerge; refresh direct-launcher pins before collecting authority."
+        throw "Structural paragraph-metrics implementation drifted after $ExpectedStructuralRevision; refresh direct-launcher pins before collecting authority."
     }
 
     foreach ($entry in $PinnedFiles) {
