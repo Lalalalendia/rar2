@@ -1,0 +1,97 @@
+name: MEASURE exact 06 long-band paint census
+
+on:
+  push:
+    branches:
+      - "measure/06-long-band-paint-census-01"
+    paths:
+      - ".github/workflows/measure-06-long-band-paint-census.yml"
+      - "tools/cloud_reader_scene_band_paint_census_v1.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/publisher-visual-supplemental-rust
+
+jobs:
+  exact-06-band:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Build supplemental Cargo cache key
+        id: cargo-key
+        env:
+          MANIFEST_HASH: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'apps/chaptera-server/Cargo.toml', 'crates/**/Cargo.toml', 'vendor/producer-a/Cargo.toml', 'vendor/producer-a/Cargo.lock', 'vendor/producer-a/crates/**/Cargo.toml') }}
+        run: |
+          set -euo pipefail
+          test -n "$MANIFEST_HASH"
+          echo "key=publisher-visual-supplemental-rust-v1-${RUNNER_OS}-rust-1.94.1-${MANIFEST_HASH}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore existing Cargo build cache only
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: target/publisher-visual-supplemental-rust
+          key: ${{ steps.cargo-key.outputs.key }}
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Prepare exact 06 fixture only
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
+          root="$RUNNER_TEMP/exact06-band"
+          rm -rf "$root"
+          mkdir -p "$root"
+          python tools/cloud_reader_visual_supplemental_v1.py prepare             tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv             out/pinned1050/materialized/native             "$root/fixtures"             "$root/manifest.json"
+          python - "$root/manifest.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          p=Path(sys.argv[1])
+          data=json.loads(p.read_text())
+          rows=[r for r in data["fixtures"] if r["name"]=="06-modern2c-image-heavy"]
+          assert len(rows)==1, rows
+          data["fixtures"]=rows
+          p.write_text(json.dumps(data,indent=2,sort_keys=True)+"\n")
+          PY
+          test "$(sha256sum "$root/fixtures/06-modern2c-image-heavy.pub" | awk '{print $1}')" = "059dde4bcb408374f14273275febd8158dc8d02960966488dd4324cfd4dcc238"
+
+      - name: Build canonical Cloud Reader worker
+        run: |
+          set -euo pipefail
+          cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Produce exact 06 source-neutral Scene
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/exact06-band"
+          mkdir -p "$root/worker"
+          python tools/migration_pdf_worker_isolation.py run             --output-dir "$root/worker"             --input "$root/fixtures/06-modern2c-image-heavy.pub"             --timeout 120 --address-space-mb 768 --cpu-seconds 90             --open-files 64 --output-file-mb 32 --clear-environment --             "$CARGO_TARGET_DIR/debug/chaptera" guest-reader-scene             --session-id guest:00000000000000000000000000000001             --expected-sha256 059dde4bcb408374f14273275febd8158dc8d02960966488dd4324cfd4dcc238             --expected-byte-len 1884160             > "$root/isolation.json"
+          test -f "$root/worker/result.json"
+
+      - name: Classify dominant 71-cell band
+        run: |
+          set -euo pipefail
+          python tools/cloud_reader_scene_band_paint_census_v1.py             "$RUNNER_TEMP/exact06-band/worker/result.json"             --fixture 06-modern2c-image-heavy             --page 1             --min-col 12 --max-col 62             --min-row 4 --max-row 5             --max-gap 2
