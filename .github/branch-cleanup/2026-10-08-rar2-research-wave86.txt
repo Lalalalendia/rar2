@@ -1,0 +1,3 @@
+# Research Wave 86 — superseded OleData F selector predecessor
+research/legacy22-oledata-f-noruntime b7ef486a5bc07711d85d9a6ea8a27609be7c1de5
+ops/branch-gc-20261008-research-wave85 28299dbada3ad435add03230b2743c9f73e7fef1
