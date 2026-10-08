@@ -1,0 +1,3 @@
+# Research Wave 87 — terminal PERLOST provenance ref
+research/legacy22-perlost-discriminator-20260929 7bc737884c7aae4f86d441f9ff1a4e5e5992e3f2
+ops/branch-gc-20261008-research-wave86 51b4d9357f0e090de7a5c838e34c847fb11020f4
