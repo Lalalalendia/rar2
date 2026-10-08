@@ -218,7 +218,7 @@ try {
     }
     const scene = receipt.scene;
     assert.equal(scene.protocol_version, "chaptera.reader-scene.v1");
-    if (corpusDiagnosticMode && ["06-modern2c-image-heavy", "100_b1faaba988e88b41"].includes(fixture.name)) {
+    if (corpusDiagnosticMode && ["04-modern2c-story-stress", "06-modern2c-image-heavy", "100_b1faaba988e88b41"].includes(fixture.name)) {
       const firstPage = [...scene.pages].sort((left, right) => left.order - right.order)[0];
       const classifyPaintNode = (node) => {
         if (node.kind === "picture_frame") return "picture";
