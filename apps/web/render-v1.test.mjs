@@ -160,3 +160,89 @@ test("renderer strips unsafe inline image data URLs instead of handing them to D
   const plan = buildRenderPlan(scene, VIEW);
   assert.equal(plan.pages[0].nodes[0].resource.inline_data_url, null);
 });
+
+
+test("Reader shared-resolved text uses server line positions and exact inline font resource", () => {
+  const scene = fixture("simple-text.json");
+  const fontSha = "c".repeat(64);
+  const fontId = "font:reader-fallback";
+  scene.nodes[0].visual_authority = "reader_scene";
+  scene.nodes[0].text_bounds = {
+    x: 914400,
+    y: 914400,
+    width: 5486400,
+    height: 1371600,
+  };
+  scene.nodes[0].text_layout = {
+    disposition: "shared_resolved",
+    font_resource_id: fontId,
+    font_fingerprint_sha256: fontSha,
+    font_size_emu: 190500,
+    line_height_emu: 228600,
+    color_rgb: [12, 34, 56],
+    vertical_offset_emu: 9525,
+    lines: [{
+      line_index: 0,
+      scalar_start: 0,
+      scalar_end: 16,
+      consumed_scalar_end: 16,
+      text: "Hello, Publisher",
+      x_offset_emu: 19050,
+      measured_width_emu: 952500,
+      line_height_emu: 228600,
+      spans: [],
+    }],
+  };
+  scene.resources.push({
+    resource_id: fontId,
+    kind: "font",
+    mime: "font/ttf",
+    content_hash: fontSha,
+    byte_len: null,
+    availability: "available",
+    fetch_handle: null,
+    inline_data_url: "data:font/ttf;base64,AA==",
+    expected_sha256: fontSha,
+    family_name: "Chaptera Fallback",
+  });
+
+  const plan = buildRenderPlan(scene, VIEW);
+  const text = plan.pages[0].nodes[0].story.resolved_text;
+  assert.equal(text.authority, "server-shared-resolved");
+  assert.equal(text.font_resource_id, fontId);
+  assert.equal(text.font_family, "ChapteraEditor_" + fontSha.slice(0, 16));
+  assert.equal(text.font_size_css_px, 20);
+  assert.equal(text.fill, "rgb(12 34 56)");
+  assert.equal(text.lines[0].x, plan.pages[0].x + (914400 + 19050) / 9525);
+  assert.equal(text.lines[0].y, plan.pages[0].y + (914400 + 9525) / 9525);
+  assert.equal(text.font_faces.length, 1);
+});
+
+test("Reader shared-resolved text fails closed to preview on font fingerprint mismatch", () => {
+  const scene = fixture("simple-text.json");
+  const fontId = "font:reader-fallback";
+  scene.nodes[0].visual_authority = "reader_scene";
+  scene.nodes[0].text_layout = {
+    disposition: "shared_resolved",
+    font_resource_id: fontId,
+    font_fingerprint_sha256: "d".repeat(64),
+    font_size_emu: 114300,
+    line_height_emu: 142875,
+    vertical_offset_emu: 0,
+    lines: [],
+  };
+  scene.resources.push({
+    resource_id: fontId,
+    kind: "font",
+    mime: "font/ttf",
+    content_hash: "c".repeat(64),
+    byte_len: null,
+    availability: "available",
+    fetch_handle: null,
+    inline_data_url: "data:font/ttf;base64,AA==",
+    expected_sha256: "c".repeat(64),
+  });
+  const plan = buildRenderPlan(scene, VIEW);
+  assert.equal(plan.pages[0].nodes[0].story.resolved_text, null);
+  assert.equal(plan.pages[0].nodes[0].story.authority, "reader_scene_preview");
+});
