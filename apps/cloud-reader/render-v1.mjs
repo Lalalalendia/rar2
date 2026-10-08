@@ -45,8 +45,7 @@ export function previewTextPaintPlan(node, resolvedPlan = null) {
   return Object.freeze({
     font_size_emu: fontSizeEmu,
     line_height_emu: lineHeightEmu,
-    color,
-    font_resource_id: preview?.font_resource_id ?? null
+    color
   });
 }
 
@@ -58,8 +57,9 @@ export function previewTextSizeSource(node, plan = null) {
 
 function previewTextStyle(div, node, plan = null, fonts = null) {
   const preview = previewTextPaintPlan(node, plan);
-  const installed = preview.font_resource_id && fonts
-    ? fonts.get(preview.font_resource_id) ?? null
+  const previewFontResourceId = node?.preview_text_style?.font_resource_id ?? null;
+  const installed = previewFontResourceId && fonts
+    ? fonts.get(previewFontResourceId) ?? null
     : null;
   div.style.width = "100%";
   div.style.height = "100%";
