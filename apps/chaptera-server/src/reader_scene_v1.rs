@@ -1895,8 +1895,9 @@ mod tests {
         RenderTextFragmentV1, RenderTextLayoutDispositionV1,
         build_page_render_plan_with_text_layout_resolver_v1,
         build_page_render_plan_with_text_layout_resolvers_v1,
-        build_page_render_plan_with_text_layout_v1, classify_shared_layout_incomplete_cause_v1,
-        effective_source_font_family_v1, uniform_text_color_rgb_v1,
+        build_page_render_plan_with_text_layout_v1, classify_mixed_size_layout_capacity_v1,
+        classify_shared_layout_incomplete_cause_v1, effective_source_font_family_v1,
+        uniform_text_color_rgb_v1,
     };
     use pub_viewer::{
         ViewerGeometryDocument, ViewerParagraphLineSpacing, open_pub_bundle,
@@ -2827,8 +2828,37 @@ mod tests {
                     sizes.sort_unstable();
                     sizes.dedup();
                     let scalar_span = text.scalar_end.saturating_sub(text.scalar_start);
+                    let capacity = classify_mixed_size_layout_capacity_v1(
+                        text,
+                        &font,
+                        node.node_id,
+                        &bounds,
+                    )
+                    .map(|capacity| {
+                        format!(
+                            "accepted={}:used={}:first_physical_then_baseline={}:next_line_height={}:next_physical={}:current_next_fits={}:first_physical_next_fits={}",
+                            capacity.accepted_lines,
+                            capacity.used_height_emu,
+                            capacity
+                                .physical_first_then_baseline_height_emu
+                                .map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                            capacity
+                                .next_width_fit_line_height_emu
+                                .map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                            capacity
+                                .next_width_fit_physical_extent_emu
+                                .map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                            capacity
+                                .current_next_fits_height
+                                .map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                            capacity
+                                .physical_first_then_baseline_next_fits_height
+                                .map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                        )
+                    })
+                    .unwrap_or_else(|| "unavailable".to_owned());
                     let key = format!(
-                        "p{}:source_lines={}:scalar_span={}:size_count={}:size_min={}:size_max={}:spacing={}:flow={}:align={}:frame_w={}:frame_h={}",
+                        "p{}:source_lines={}:scalar_span={}:size_count={}:size_min={}:size_max={}:spacing={}:flow={}:align={}:frame_w={}:frame_h={}:capacity={}",
                         page_index + 1,
                         text.line_count,
                         scalar_span,
@@ -2840,6 +2870,7 @@ mod tests {
                         mixed_size_alignment_signature(text),
                         bounds.width.get(),
                         bounds.height.get(),
+                        capacity,
                     );
                     *mixed_size_sli_semantics.entry(key).or_default() += 1;
                 }
