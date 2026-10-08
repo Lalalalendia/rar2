@@ -1,3 +1,4 @@
+// CI sacrificial trigger for #2215: unchanged DeleteNode test semantics.
 use std::collections::BTreeMap;
 
 use pub_editor::{
