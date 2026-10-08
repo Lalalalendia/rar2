@@ -191,6 +191,7 @@ pub(super) fn reuse_mixed_line_candidate_v1(
             font_size_emu: run.font_size_emu,
             font_resource_id: None,
             font_fingerprint_sha256: None,
+            color_rgb: None,
             shaping: Some(RenderResolvedShapingV1 {
                 environment: prepared.shaping.environment.clone(),
                 units_per_em: prepared.shaping.units_per_em,
@@ -277,6 +278,7 @@ pub(super) fn shape_mixed_line_candidate_v1(
             font_size_emu: run.font_size_emu,
             font_resource_id: None,
             font_fingerprint_sha256: None,
+            color_rgb: None,
             shaping: Some(RenderResolvedShapingV1 {
                 environment: shaped.environment,
                 units_per_em: shaped.units_per_em,
