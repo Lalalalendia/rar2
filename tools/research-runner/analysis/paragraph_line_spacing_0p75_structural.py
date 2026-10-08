@@ -111,6 +111,12 @@ def mixed_size_snapshot(value: Any, label: str) -> dict[str, Any]:
     require(isinstance(value, dict), f"{label}: mixed witness missing")
     start, end = value.get("range_start"), value.get("range_end")
     require(type(start) is int and type(end) is int and 0 <= start < end, f"{label}: invalid range")
+    large_start, large_end = value.get("large_run_start"), value.get("large_run_end")
+    require(
+        type(large_start) is int and type(large_end) is int
+        and start <= large_start < large_end <= end,
+        f"{label}: invalid 18pt source range",
+    )
     samples = value.get("font_samples")
     require(isinstance(samples, list) and len(samples) == 3, f"{label}: expected three fixed font samples")
     roles = ("prefix", "large", "suffix")
@@ -132,6 +138,8 @@ def mixed_size_snapshot(value: Any, label: str) -> dict[str, Any]:
     return {
         "range_start": start,
         "range_end": end,
+        "large_run_start": large_start,
+        "large_run_end": large_end,
         "font_family": families[0],
         "point_samples": points,
         "line_spacing": safe_number(paragraph.get("line_spacing"), f"{label}: LineSpacing"),
@@ -271,12 +279,19 @@ def main() -> int:
                 "selected_source_range": [seed_mixed["range_start"], seed_mixed["range_end"]],
                 "source_family": seed_mixed["font_family"],
                 "point_size_samples": seed_mixed["point_samples"],
+                "large_font_run_start_end": [seed_mixed["large_run_start"], seed_mixed["large_run_end"]],
                 "seed_vs_reopened_baseline_identical": seed_mixed == pre_mutation_baseline,
                 "arms": {
                     name: {
                         "fresh_reopen_line_spacing": normalized[name]["fresh"]["line_spacing"],
                         "fresh_reopen_line_spacing_rule": normalized[name]["fresh"]["line_spacing_rule"],
                         "line_geometry_fresh_reopen": normalized[name]["fresh"]["geometry"],
+                        "line_indices_intersecting_18pt_run": [
+                            line["index"]
+                            for line in normalized[name]["fresh"]["geometry"]["lines"]
+                            if line["start"] < normalized[name]["fresh"]["large_run_end"]
+                            and line["end"] > normalized[name]["fresh"]["large_run_start"]
+                        ],
                         "geometry_roundtrip_stable": (
                             normalized[name]["after"]["geometry"] == normalized[name]["fresh"]["geometry"]
                         ),
