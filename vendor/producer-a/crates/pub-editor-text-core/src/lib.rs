@@ -1,4 +1,4 @@
-//! Compile-isolated plain Story range transition laws.
+//! Compile-isolated plain Story range transition laws (steady-state control).
 //!
 //! This crate is session-neutral by design. It must not depend on pub-editor,
 //! pub-reader, layout/export/viewer/writer code, or EditorSession.
