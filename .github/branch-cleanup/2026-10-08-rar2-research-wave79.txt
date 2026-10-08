@@ -1,0 +1,5 @@
+# Research Wave 79 — superseded master-projection stacking predecessors
+research/master-projection-stack-auth-1118 10c2adcadbc1403c5178dc9864937c796feeccba
+research/master-projection-stack-auth-1118-v2 b192b463c388a07363fd5349459ae18214a8abe4
+research/master-projection-stack-auth-1118-v3 e7ba40db952e4d1f6b73cb5476e030f75a12f087
+ops/branch-gc-20261008-research-wave78 796364c7f1f78f5fd9c8e38c898308b9780999f0
