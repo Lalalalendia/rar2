@@ -1412,10 +1412,11 @@ mod tests {
     #[test]
     fn truncated_cfb_raw_carrier_bounds_recovered_prefix_not_declared_len() {
         let declared_len = READER_SALVAGE_MAX_STREAM_BYTES + 1;
-        let bytes = overstate_delay_declared_len(
+        let mut bytes = overstate_delay_declared_len(
             corrupt_first_minifat_entry(synthetic_pub_cfb_with_delay_png()),
             declared_len,
         );
+        bytes.extend_from_slice(&[0xaa; 37]);
         let source_sha = source_sha256(&bytes);
 
         assert!(
