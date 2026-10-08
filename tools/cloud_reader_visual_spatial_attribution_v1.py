@@ -93,6 +93,7 @@ def main() -> None:
     changed_total = 0
     error_types = Counter()
     combination_counts = Counter()
+    combination_error_types = {}
     covered_counts = Counter()
     changed_by_class = Counter()
     error_by_class = {name: Counter() for name in CLASSES}
@@ -128,6 +129,7 @@ def main() -> None:
 
         key = "+".join(membership) if membership else "none"
         combination_counts[key] += 1
+        combination_error_types.setdefault(key, Counter())[error_type] += 1
         for name in membership:
             changed_by_class[name] += 1
             error_by_class[name][error_type] += 1
@@ -158,6 +160,12 @@ def main() -> None:
         "changed_membership_combinations": dict(
             sorted(combination_counts.items(), key=lambda item: (-item[1], item[0]))
         ),
+        "changed_membership_combination_error_types": {
+            key: dict(sorted(combination_error_types[key].items()))
+            for key, _ in sorted(
+                combination_counts.items(), key=lambda item: (-item[1], item[0])
+            )
+        },
         "claims": {
             "aggregate_only": True,
             "raw_candidate_pixels_emitted": False,
