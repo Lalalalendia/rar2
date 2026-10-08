@@ -58,6 +58,41 @@ pub struct ViewerEmbeddedImage {
     pub bytes: Vec<u8>,
 }
 
+impl ViewerEmbeddedImage {
+    pub(super) fn preview_png(
+        resource_id: ResourceId,
+        node_ids: Vec<NodeId>,
+        placements: Vec<ViewerImagePlacementV1>,
+        bytes: Vec<u8>,
+    ) -> Self {
+        Self {
+            resource_id,
+            mime: "image/png".to_owned(),
+            source_exact: false,
+            node_ids,
+            placements,
+            bytes,
+        }
+    }
+
+    pub(super) fn exact(
+        resource_id: ResourceId,
+        mime: String,
+        node_ids: Vec<NodeId>,
+        placements: Vec<ViewerImagePlacementV1>,
+        bytes: Vec<u8>,
+    ) -> Self {
+        Self {
+            resource_id,
+            mime,
+            source_exact: true,
+            node_ids,
+            placements,
+            bytes,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) struct ViewerImagePageAdmissionStatsV1 {
     pub(super) dropped_node_uses: usize,
