@@ -101,6 +101,20 @@ try {
     assert.equal(measurement.inside_frame, true);
     assert.equal(measurement.authority, "browser-preview-only");
   }
+  const previewMetadata = await page.locator('[data-text-authority="browser-preview-only"]')
+    .evaluateAll((elements) => elements.map((element) => ({
+      node: element.closest("[data-node-id]")?.getAttribute("data-node-id"),
+      kind: element.getAttribute("data-preview-kind"),
+      reason: element.getAttribute("data-preview-reason"),
+      sizeSource: element.getAttribute("data-preview-size-source")
+    })));
+  assert.deepEqual(previewMetadata, [
+    { node: "text", kind: "other_node_text", reason: "scene_layout_missing", sizeSource: "generic_9pt" },
+    { node: "table", kind: "table_cell", reason: "table_cell_preview", sizeSource: "generic_9pt" },
+    { node: "table", kind: "table_cell", reason: "table_cell_preview", sizeSource: "generic_9pt" },
+    { node: "unresolved-font", kind: "other_node_text", reason: "base_font_unavailable",
+      sizeSource: "shared_resolved_plan" }
+  ]);
   const shared = await page.locator('[data-text-authority="server-shared-resolved"]').evaluateAll((lines) => lines.map((line) => {
     const bounds = line.getBoundingClientRect();
     return { text: line.textContent, font_size_px: parseFloat(getComputedStyle(line).fontSize),

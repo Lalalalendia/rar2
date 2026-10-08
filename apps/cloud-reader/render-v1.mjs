@@ -49,6 +49,12 @@ export function previewTextPaintPlan(node, resolvedPlan = null) {
   });
 }
 
+export function previewTextSizeSource(node, plan = null) {
+  if (plan) return "shared_resolved_plan";
+  if (node?.preview_text_style?.font_size_emu != null) return "source_uniform_preview";
+  return "generic_9pt";
+}
+
 function previewTextStyle(div, node, plan = null) {
   const preview = previewTextPaintPlan(node, plan);
   div.style.width = "100%";
@@ -361,11 +367,14 @@ export function resolvedTextViewportGeometry(bounds) {
   });
 }
 
-function appendPreviewText(group, node, plan = null) {
+function appendPreviewText(group, node, plan, reason) {
   if (!node.text) return;
   const bounds = node.text_bounds ?? node.bounds;
   const foreign = previewForeignObject(bounds, {
-    "data-text-authority": "browser-preview-only"
+    "data-text-authority": "browser-preview-only",
+    "data-preview-kind": node.kind === "text_frame" ? "text_frame" : "other_node_text",
+    "data-preview-reason": reason,
+    "data-preview-size-source": previewTextSizeSource(node, plan)
   });
   const div = document.createElementNS(XHTML_NS, "div");
   previewTextStyle(div, node, plan);
@@ -377,9 +386,16 @@ function appendPreviewText(group, node, plan = null) {
 function appendText(group, defs, node, fonts, index) {
   if (!node.text) return;
   const plan = resolvedTextLinePaintPlan(node);
-  const installed = plan ? fonts.get(plan.font_resource_id) ?? null : null;
-  if (!plan || !installed) {
-    appendPreviewText(group, node, plan);
+  if (!plan) {
+    const reason = node.text_layout == null ? "scene_layout_missing"
+      : node.text_layout.disposition === "shared_resolved" ? "shared_plan_invalid"
+      : "server_layout_unavailable";
+    appendPreviewText(group, node, null, reason);
+    return;
+  }
+  const installed = fonts.get(plan.font_resource_id) ?? null;
+  if (!installed) {
+    appendPreviewText(group, node, plan, "base_font_unavailable");
     return;
   }
 
@@ -388,9 +404,12 @@ function appendText(group, defs, node, fonts, index) {
     for (const span of line.spans) {
       if (!span.font_resource_id) continue;
       const spanInstalled = fonts.get(span.font_resource_id) ?? null;
-      if (!spanInstalled
-          || spanInstalled.resource.expected_sha256 !== span.font_fingerprint_sha256) {
-        appendPreviewText(group, node, plan);
+      if (!spanInstalled) {
+        appendPreviewText(group, node, plan, "span_font_unavailable");
+        return;
+      }
+      if (spanInstalled.resource.expected_sha256 !== span.font_fingerprint_sha256) {
+        appendPreviewText(group, node, plan, "span_font_fingerprint_mismatch");
         return;
       }
       spanFonts.set(span.font_resource_id, spanInstalled);
@@ -399,7 +418,7 @@ function appendText(group, defs, node, fonts, index) {
 
   const viewportGeometry = resolvedTextViewportGeometry(plan.bounds);
   if (!viewportGeometry) {
-    appendPreviewText(group, node, plan);
+    appendPreviewText(group, node, plan, "invalid_text_viewport");
     return;
   }
 
@@ -527,7 +546,10 @@ function appendTableText(group, node) {
       "data-table-row": cell.row,
       "data-table-column": cell.column,
       "data-table-paint-authority": fillPlan ? "source-t595" : "none",
-      "data-text-authority": "browser-preview-only"
+      "data-text-authority": "browser-preview-only",
+      "data-preview-kind": "table_cell",
+      "data-preview-reason": "table_cell_preview",
+      "data-preview-size-source": previewTextSizeSource(node)
     });
     const div = document.createElementNS(XHTML_NS, "div");
     previewTextStyle(div, node);
