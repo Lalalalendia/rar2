@@ -218,6 +218,17 @@ try {
     }
     const scene = receipt.scene;
     assert.equal(scene.protocol_version, "chaptera.reader-scene.v1");
+    if (corpusDiagnosticMode && fixture.name === "05-modern2c-officeart-wmf") {
+      console.log("SCENE_PAGE_ORDER " + JSON.stringify(
+        [...scene.pages]
+          .sort((left, right) => left.order - right.order)
+          .map((pageModel, index) => ({
+            raster_ordinal: index + 1,
+            page_id: pageModel.page_id,
+            scene_order: pageModel.order
+          }))
+      ));
+    }
     if (fixture.pages != null) assert.equal(scene.pages.length, fixture.pages);
     const fixturePages = scene.pages.length;
     active = { fixture, receipt };
