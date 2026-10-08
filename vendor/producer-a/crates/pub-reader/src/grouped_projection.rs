@@ -157,6 +157,12 @@ pub(super) fn project_grouped_object_shape(
 
         let parent_seq =
             single_parent_seq(group_reference).context("group parent is missing or ambiguous")?;
+        if ancestor_rotation && std::env::var_os("READER_CORPUS_DIAGNOSTIC").is_some() {
+            eprintln!(
+                "GROUPED_ROTATION_PAGE first_group_seq={first_group_seq} depth={depth} parent_seq={parent_seq} page_id={:?}",
+                context.page_seq_to_id.get(&parent_seq)
+            );
+        }
         if let Some(&page_id) = context.page_seq_to_id.get(&parent_seq) {
             let anchor = group_shape
                 .client_anchor
