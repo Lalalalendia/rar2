@@ -1,0 +1,4 @@
+# Research Wave 72 — assimilated mature-029 discriminators
+research/mature-029-secondary-applied-ab-1028 1b983c4e5fa4b1f5f833d39c4098482c1d6738ba
+research/mature-029-spread-raster-1057 1bcefeb6cb037fd4ee8bf6f86e9b8ec5d5cfaace
+ops/branch-gc-20261008-research-wave71 e24c231d50bf9bc03747550d8bbcaba117264293
