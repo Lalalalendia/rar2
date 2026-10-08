@@ -717,12 +717,9 @@ impl EditorSession {
 mod authored_page_identity_tests {
     use super::*;
     use crate::{
-        AuthoredEntityProvenanceV1, EDITOR_PROJECT_VERSION_V0_24, EditorProject,
-        PubResolvedGraph,
+        AuthoredEntityProvenanceV1, EDITOR_PROJECT_VERSION_V0_24, EditorProject, PubResolvedGraph,
     };
-    use pub_model::{
-        Document, LengthEmu, Page, Sha256Digest, Size2D, SourceDescriptor,
-    };
+    use pub_model::{Document, LengthEmu, Page, Sha256Digest, Size2D, SourceDescriptor};
 
     fn source_hash() -> Sha256Digest {
         Sha256Digest::from_bytes([0x5a; 32])
@@ -804,7 +801,9 @@ mod authored_page_identity_tests {
         ));
         assert_eq!(session.graph(), &source_before);
         assert_eq!(
-            session.authored_page_identities_v1().get(&authored_page_id()),
+            session
+                .authored_page_identities_v1()
+                .get(&authored_page_id()),
             Some(&identity())
         );
 
@@ -814,7 +813,9 @@ mod authored_page_identity_tests {
 
         session.redo().expect("redo identity registration");
         assert_eq!(
-            session.authored_page_identities_v1().get(&authored_page_id()),
+            session
+                .authored_page_identities_v1()
+                .get(&authored_page_id()),
             Some(&identity())
         );
         assert_eq!(session.graph(), &source_before);
@@ -838,7 +839,9 @@ mod authored_page_identity_tests {
 
         assert_eq!(reopened.operations(), decoded.operations.as_slice());
         assert_eq!(
-            reopened.authored_page_identities_v1().get(&authored_page_id()),
+            reopened
+                .authored_page_identities_v1()
+                .get(&authored_page_id()),
             Some(&identity())
         );
     }

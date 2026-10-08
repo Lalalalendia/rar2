@@ -16,11 +16,6 @@ mod session_geometry;
 mod session_image;
 mod session_table;
 mod session_text;
-use session_text::{
-    apply_text_format_history_operation_semantic_v1, apply_text_format_history_operation_v1,
-    is_scoped_text_format_operation_v1, text_format_operation_property_v1,
-    text_format_operation_story_id_v1,
-};
 use session_geometry::{
     apply_authored_stack_history_forward_v1, authored_stack_operation_page_id_v1,
     derive_authored_stacks_from_operations_v1, page_order_error_to_editor_v1,
@@ -28,6 +23,11 @@ use session_geometry::{
 };
 use session_image::{
     apply_crop_forward, apply_crop_inverse, apply_image_forward, apply_image_inverse,
+};
+use session_text::{
+    apply_text_format_history_operation_semantic_v1, apply_text_format_history_operation_v1,
+    is_scoped_text_format_operation_v1, text_format_operation_property_v1,
+    text_format_operation_story_id_v1,
 };
 mod table_rowcol_graph_v1;
 mod table_rowcol_history_v1;
@@ -42,26 +42,24 @@ pub use authored_paragraph_alignment_v1::{
 pub use pub_editor_authoring_core::{
     AUTHORED_STACK_PROTOCOL_V1, AUTHORED_TABLE_SENTINEL_CONTENTS_SEQ_NUM_V1,
     AUTHORED_TABLE_SENTINEL_TEXT_ID_V1, AuthoredEntityProvenanceV1, AuthoredLineRuntimeV1,
-    AuthoredPageIdentityV1, AuthoredPageIdentityValidationErrorV1,
-    AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1, AuthoredShapeTransformV1,
-    AuthoredSolidFillV1, AuthoredSolidStrokeV1, AuthoredStackLifecycleErrorV1,
-    AuthoredStackLifecycleKindV1, AuthoredStackLifecycleTransitionV1, AuthoredStackReorderErrorV1,
-    AuthoredStackReorderModeV1, AuthoredStackReorderTransitionV1, AuthoredStackV1,
-    AuthoredTableStoryRangesV1, CreateLineRuntimeValidationError,
-    CreateShapeRuntimeValidationError, CreateTablePlanV1, CreateTableRuntimeV1,
-    CreateTableRuntimeValidationError, LineGeometryV1, PAGE_ORDER_PROTOCOL_V1, PageOrderErrorV1,
-    PageOrderTransitionV1, PointEmuV1, Srgb8V1, apply_authored_stack_reorder_forward_v1,
-    apply_authored_stack_reorder_inverse_v1, apply_authored_stack_transition_forward_v1,
-    apply_authored_stack_transition_inverse_v1, apply_create_table_forward_v1,
-    apply_create_table_inverse_v1, apply_page_order_transition_forward_v1,
-    apply_page_order_transition_inverse_v1, authored_stack_state_id_v1, build_create_table_plan_v1,
-    line_bounds_v1, page_order_state_id_v1, plan_create_line_append_v1,
-    plan_create_shape_append_v1, plan_create_table_append_v1, plan_delete_shape_remove_v1,
-    plan_page_order_transition_v1, plan_reorder_authored_stack_v1, qualified_page_order_v1,
-    rebuild_authored_table_story_v1, validate_authored_line_runtime_v1,
+    AuthoredPageIdentityV1, AuthoredPageIdentityValidationErrorV1, AuthoredShapeKindV1,
+    AuthoredShapePaintV1, AuthoredShapeRuntimeV1, AuthoredShapeTransformV1, AuthoredSolidFillV1,
+    AuthoredSolidStrokeV1, AuthoredStackLifecycleErrorV1, AuthoredStackLifecycleKindV1,
+    AuthoredStackLifecycleTransitionV1, AuthoredStackReorderErrorV1, AuthoredStackReorderModeV1,
+    AuthoredStackReorderTransitionV1, AuthoredStackV1, AuthoredTableStoryRangesV1,
+    CreateLineRuntimeValidationError, CreateShapeRuntimeValidationError, CreateTablePlanV1,
+    CreateTableRuntimeV1, CreateTableRuntimeValidationError, LineGeometryV1,
+    PAGE_ORDER_PROTOCOL_V1, PageOrderErrorV1, PageOrderTransitionV1, PointEmuV1, Srgb8V1,
+    apply_authored_stack_reorder_forward_v1, apply_authored_stack_reorder_inverse_v1,
+    apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
+    apply_create_table_forward_v1, apply_create_table_inverse_v1,
+    apply_page_order_transition_forward_v1, apply_page_order_transition_inverse_v1,
+    authored_stack_state_id_v1, build_create_table_plan_v1, line_bounds_v1, page_order_state_id_v1,
+    plan_create_line_append_v1, plan_create_shape_append_v1, plan_create_table_append_v1,
+    plan_delete_shape_remove_v1, plan_page_order_transition_v1, plan_reorder_authored_stack_v1,
+    qualified_page_order_v1, rebuild_authored_table_story_v1, validate_authored_line_runtime_v1,
     validate_authored_page_identity_v1, validate_authored_shape_runtime_v1,
-    validate_authored_stack_v1,
-    validate_create_table_runtime_v1,
+    validate_authored_stack_v1, validate_create_table_runtime_v1,
 };
 
 pub use duplicate_authored_rectangle_v1::{
