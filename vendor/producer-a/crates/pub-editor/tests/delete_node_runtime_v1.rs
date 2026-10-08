@@ -1,3 +1,4 @@
+// CI routing sacrificial control after #2253; DeleteNode test semantics unchanged.
 use std::collections::BTreeMap;
 
 use pub_editor::{
