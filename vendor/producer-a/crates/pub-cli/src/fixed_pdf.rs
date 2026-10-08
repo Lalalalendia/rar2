@@ -182,6 +182,32 @@ fn build_pdf_artifact(
             ))
         })
         .collect::<BTreeMap<_, _>>();
+    let table_fill_authority_by_node = bundle
+        .resolved_graph
+        .nodes
+        .values()
+        .filter_map(|node| {
+            let source = node.payload.table.as_ref()?;
+            let mut direct_literal = 0usize;
+            let mut native_autoformat = 0usize;
+            let mut other = 0usize;
+            for paint in source.cells.iter().filter_map(|cell| cell.paint.as_ref()) {
+                let direct = paint.source_refs.iter().any(|source_ref| {
+                    source_ref.path.as_deref() == Some("SpContainer/FOPT/table-cell-fill")
+                });
+                let autoformat = paint.source_refs.iter().any(|source_ref| {
+                    source_ref.path.as_deref()
+                        == Some("SpContainer/FOPT/table-autoformat-cell-fill")
+                });
+                match (direct, autoformat) {
+                    (true, false) => direct_literal += 1,
+                    (false, true) => native_autoformat += 1,
+                    _ => other += 1,
+                }
+            }
+            Some((node.header.id, (direct_literal, native_autoformat, other)))
+        })
+        .collect::<BTreeMap<_, _>>();
     let visual = bundle.geometry;
     let viewer_scene = visual.scene.clone();
 
@@ -494,6 +520,16 @@ fn build_pdf_artifact(
                 .unwrap_or(0)
         })
         .sum::<usize>();
+    let (table_direct_literal_fill_cell_count, table_native_autoformat_fill_cell_count, table_other_fill_authority_cell_count) =
+        visual.tables.iter().fold((0usize, 0usize, 0usize), |mut acc, table| {
+            if let Some((direct, autoformat, other)) = table_fill_authority_by_node.get(&table.node_id)
+            {
+                acc.0 += *direct;
+                acc.1 += *autoformat;
+                acc.2 += *other;
+            }
+            acc
+        });
     let table_nonempty_cell_count = visual
         .tables
         .iter()
@@ -717,6 +753,9 @@ fn build_pdf_artifact(
                     "table_max_columns": table_max_columns,
                     "table_spanning_cell_count": table_spanning_cell_count,
                     "table_missing_exact_geometry_cell_count": table_missing_exact_geometry_cell_count,
+                    "table_direct_literal_fill_cell_count": table_direct_literal_fill_cell_count,
+                    "table_native_autoformat_fill_cell_count": table_native_autoformat_fill_cell_count,
+                    "table_other_fill_authority_cell_count": table_other_fill_authority_cell_count,
                     "table_nonempty_cell_count": table_nonempty_cell_count,
                     "table_story_range_cell_count": table_story_range_cell_count,
                     "table_hidden_fill_cell_count": table_hidden_fill_cell_count,
