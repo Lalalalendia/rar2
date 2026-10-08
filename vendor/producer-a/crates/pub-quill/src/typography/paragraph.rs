@@ -1,5 +1,6 @@
 //! Bounded paragraph semantics projected from mature Quill typography.
 //!
+//! Fast-path control: exact paragraph leaf keeps bounded Tier A source-free tests.
 //! This owner contains paragraph alignment, line-spacing and flow DTOs plus
 //! their run-building laws. Shared FDPP/STSH framing, paragraph-range
 //! materialization and effective font/size/color inheritance remain in the
