@@ -482,12 +482,17 @@ pub(super) fn resolve_mixed_size_text_layout_v1(
     fingerprint: &str,
     vertical_alignment: Option<ViewerTextVerticalAlignment>,
 ) -> RenderTextLayoutV1 {
-    let baseline =
-        match evaluate_mixed_size_text_layout_v1(fragment, font, node_id, bounds, fingerprint, false)
-        {
-            Ok(value) => value,
-            Err(reason) => return fallback_layout(reason),
-        };
+    let baseline = match evaluate_mixed_size_text_layout_v1(
+        fragment,
+        font,
+        node_id,
+        bounds,
+        fingerprint,
+        false,
+    ) {
+        Ok(value) => value,
+        Err(reason) => return fallback_layout(reason),
+    };
 
     let evaluation = if baseline.cursor == fragment.scalar_end {
         baseline
