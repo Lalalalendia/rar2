@@ -1,0 +1,5 @@
+# Research Wave 68 — terminal/superseded evidence refs
+research/carlton-libreoffice-alignment-discriminator-01 a2dc9d24639f012876d30ed450ff9fbbdcda5fd1
+research/vba-native-positive-01 880b539444121c71a98e699b1932dcff07180fce
+research/pub-vba-estate-core86-04 23670a116164be832dd642574f5f9a78f9efd00f
+research/pub-vba-estate-1050-01 d963b395b2cdb4490878d9f2491e82425e88c06f
