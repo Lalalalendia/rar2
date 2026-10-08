@@ -151,8 +151,7 @@ fn current_story_line_offsets_v1(
             story_id,
             line.scalar_start,
             line.consumed_scalar_end,
-        )
-        else {
+        ) else {
             continue;
         };
         let frame = shaped_flow
