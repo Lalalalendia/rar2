@@ -65,7 +65,8 @@ jobs:
       # These cover committed-vs-rejected rebind classification and guard
       # against a duplicate direct Viewer refresh in the canvas text shell.
       - name: Test canvas text commit finalization and refresh-route guards
-        run: cargo test -p chaptera-desktop text_session_shell::tests:: -- --nocapture
+        run: >-
+          cargo test -p chaptera-desktop text_session_shell::tests:: -- --nocapture
 
       - name: Acquire pinned Apache POI SampleNewsletter
         shell: bash
