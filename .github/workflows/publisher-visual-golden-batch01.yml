@@ -66,9 +66,10 @@ jobs:
           test -n "$MANIFEST_HASH"
           echo "key=publisher-visual-batch01-rust-v1-${RUNNER_OS}-rust-1.94.1-${MANIFEST_HASH}" >> "$GITHUB_OUTPUT"
 
-      - name: Restore/save Batch01 Cargo build cache
+      # PRs restore trusted-main Cargo artifacts; no implicit post-job save.
+      - name: Restore Batch01 Cargo build cache
         id: batch01-cargo-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: target/publisher-visual-batch01-rust
           key: ${{ steps.batch01-cargo-cache-key.outputs.key }}
@@ -417,6 +418,15 @@ jobs:
                   "largest_improvements": delta["largest_improvements"][:10],
               }, indent=2, sort_keys=True))
           PY
+
+      # Seed a reusable cache only from a passing trusted-main visual run.
+      # The PR path has no Cargo save action, independent of cache-mode reporting.
+      - name: Save trusted main Batch01 Cargo cache
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.batch01-cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: target/publisher-visual-batch01-rust
+          key: ${{ steps.batch01-cargo-cache-key.outputs.key }}
 
       - name: Upload source-free Batch 01 visual receipt
         uses: actions/upload-artifact@v4

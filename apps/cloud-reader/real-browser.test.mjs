@@ -252,7 +252,34 @@ try {
       ]);
       const sizeSources = new Set(["shared_resolved_plan", "source_uniform_preview", "generic_9pt"]);
       const byKind = {}, byReason = {}, bySizeSource = {}, byPage = {}, byPageCause = {};
+      const paintBoundsEmu = [];
       const pages = [...document.querySelectorAll("#pages svg.page")];
+      const pagePaintBoundsEmu = (element) => {
+        const svg = element.closest("svg.page");
+        const pageBounds = svg?.getBoundingClientRect() ?? null;
+        const paintBounds = element.getBoundingClientRect();
+        const viewBox = svg?.viewBox?.baseVal ?? null;
+        if (!svg || !pageBounds || !viewBox || pageBounds.width <= 0 || pageBounds.height <= 0
+            || viewBox.width <= 0 || viewBox.height <= 0) {
+          throw new Error("browser preview census cannot resolve canonical page geometry");
+        }
+        const scaleX = viewBox.width / pageBounds.width;
+        const scaleY = viewBox.height / pageBounds.height;
+        const x = viewBox.x + (paintBounds.left - pageBounds.left) * scaleX;
+        const y = viewBox.y + (paintBounds.top - pageBounds.top) * scaleY;
+        const width = paintBounds.width * scaleX;
+        const height = paintBounds.height * scaleY;
+        if (![x, y, width, height, scaleX, scaleY].every(Number.isFinite)
+            || width <= 0 || height <= 0 || scaleX <= 0 || scaleY <= 0) {
+          throw new Error("browser preview census produced invalid canonical paint bounds");
+        }
+        return {
+          x_emu: Math.round(x),
+          y_emu: Math.round(y),
+          width_emu: Math.round(width),
+          height_emu: Math.round(height)
+        };
+      };
       for (const element of elements) {
         const kind = element.getAttribute("data-preview-kind");
         const reason = element.getAttribute("data-preview-reason");
@@ -266,15 +293,35 @@ try {
           [byKind, kind], [byReason, reason], [bySizeSource, sizeSource],
           [byPage, String(page)], [byPageCause, page + "|" + kind + "|" + reason + "|" + sizeSource]
         ]) counts[key] = (counts[key] ?? 0) + 1;
+        paintBoundsEmu.push({
+          page,
+          kind,
+          reason,
+          size_source: sizeSource,
+          ...pagePaintBoundsEmu(element)
+        });
       }
       return { total: elements.length, by_kind: byKind, by_reason: byReason,
-        by_size_source: bySizeSource, by_page: byPage, by_page_cause: byPageCause };
+        by_size_source: bySizeSource, by_page: byPage, by_page_cause: byPageCause,
+        paint_bounds_emu: paintBoundsEmu };
     });
     assert.equal(
       Object.values(browserPreviewCensus.by_kind).reduce((sum, count) => sum + count, 0),
       browserPreviewCensus.total,
       "browser preview census must count only actually painted preview elements"
     );
+    assert.equal(
+      browserPreviewCensus.paint_bounds_emu.length,
+      browserPreviewCensus.total,
+      "browser preview census must locate every actually painted preview element"
+    );
+    for (const bounds of browserPreviewCensus.paint_bounds_emu) {
+      assert.ok(Number.isSafeInteger(bounds.page) && bounds.page > 0);
+      for (const key of ["x_emu", "y_emu", "width_emu", "height_emu"]) {
+        assert.ok(Number.isSafeInteger(bounds[key]), "browser preview canonical bounds must be integer EMU");
+      }
+      assert.ok(bounds.width_emu > 0 && bounds.height_emu > 0);
+    }
     const expectedLines = scene.nodes.flatMap((node) => node.text_layout?.disposition === "shared_resolved"
       ? node.text_layout.lines.map((line) => ({ node_id: node.node_id, index: line.line_index, text: line.text, font_size: node.text_layout.font_size_emu / 9525 })) : []);
     const painted = await page.locator('[data-text-authority="server-shared-resolved"]').evaluateAll((lines) => lines.map((line) => {
