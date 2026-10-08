@@ -1,0 +1,6 @@
+# 2026-10-08 — control refresh batch 18
+# Never merge. Completed sacrificial control + completed GC carrier only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+ci/pub-editor-delete-test-path-control-2204 78273041ebf89efcd818c2e35f3f02f1beb7ca3f # #2208 sacrificial DeleteNode routing control complete; no semantic change
+ops/branch-gc-20261008-terminal-refresh-batch-17 8e64931242518f4033c4799f301963142720e237 # completed #2216 clean 6/6 receipt
