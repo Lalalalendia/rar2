@@ -1,3 +1,4 @@
+// Steady-state fast-loop control; no table semantics changed.
 use pub_model::{EffectiveTableGridV1, LengthEmu, RectEmu, TableColumnId, TableRowId};
 use serde::{Deserialize, Serialize};
 
