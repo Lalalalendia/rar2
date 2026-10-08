@@ -4115,10 +4115,9 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesCreateTableOperation { index });
             }
         }
-        if let Some(index) = ruler_guide_v1::legacy_operation_index_v1(
-            &project.schema_version,
-            &project.operations,
-        ) {
+        if let Some(index) =
+            ruler_guide_v1::legacy_operation_index_v1(&project.schema_version, &project.operations)
+        {
             return Err(EditorProjectError::LegacyProjectCarriesRulerGuideOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_23
