@@ -1074,6 +1074,20 @@ mod tests {
         ) = candidate
             .expect("Carlton must expose one editable paragraph line with horizontal slack");
 
+        let source_batch = editor
+            .effective_story_paragraph_alignments_v1(story_id)
+            .expect("batch current Carlton paragraph alignment");
+        assert!(!source_batch.is_empty());
+        for row in &source_batch {
+            assert_eq!(
+                *row,
+                editor
+                    .effective_paragraph_alignment_v1(row.paragraph_id)
+                    .expect("single-ParagraphId source alignment oracle"),
+                "batch source authority must equal existing single-ParagraphId oracle"
+            );
+        }
+
         assert_caret_flow_shift_v1(
             &raw,
             &baseline.caret_map,
@@ -1119,6 +1133,19 @@ mod tests {
                 paragraph_history_active = true;
             }
 
+            let batch_row = editor
+                .effective_story_paragraph_alignments_v1(story_id)
+                .expect("batch paragraph alignment after override")
+                .into_iter()
+                .find(|row| row.paragraph_id == paragraph_id)
+                .expect("batch keeps edited ParagraphId");
+            assert_eq!(
+                batch_row,
+                editor
+                    .effective_paragraph_alignment_v1(paragraph_id)
+                    .expect("single-ParagraphId override oracle")
+            );
+
             assert!(editor.can_enter_story_text_session(story_id).is_ok());
             if paragraph_history_active {
                 assert_eq!(
@@ -1156,6 +1183,18 @@ mod tests {
         editor
             .clear_paragraph_alignment_override_v1(vec![paragraph_id])
             .expect("Clear paragraph alignment override");
+        let cleared_batch_row = editor
+            .effective_story_paragraph_alignments_v1(story_id)
+            .expect("batch paragraph alignment after Clear")
+            .into_iter()
+            .find(|row| row.paragraph_id == paragraph_id)
+            .expect("batch keeps cleared ParagraphId");
+        assert_eq!(
+            cleared_batch_row,
+            editor
+                .effective_paragraph_alignment_v1(paragraph_id)
+                .expect("single-ParagraphId Clear oracle")
+        );
         assert!(editor.can_enter_story_text_session(story_id).is_ok());
         assert_eq!(
             editor
