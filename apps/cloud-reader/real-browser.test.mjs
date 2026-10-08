@@ -218,6 +218,35 @@ try {
     }
     const scene = receipt.scene;
     assert.equal(scene.protocol_version, "chaptera.reader-scene.v1");
+    if (corpusDiagnosticMode && fixture.name === "06-modern2c-image-heavy") {
+      const firstPage = [...scene.pages].sort((left, right) => left.order - right.order)[0];
+      const classifySpatialNode = (node) => {
+        if (node.kind === "picture_frame") return "picture";
+        if (node.kind === "text_frame") return "text";
+        if (node.paint?.preset_shape === "ellipse") return "ellipse";
+        if (node.paint) return "other_painted";
+        return "empty_emf";
+      };
+      await writeFile(
+        join(output, fixture.name + "-page-1-shadow-correlation-geometry.json"),
+        JSON.stringify({
+          schema: "chaptera.shadow-candidate-spatial-geometry.v1",
+          fixture: fixture.name,
+          page: 1,
+          page_id: firstPage.page_id,
+          width_emu: firstPage.width_emu,
+          height_emu: firstPage.height_emu,
+          nodes: scene.nodes
+            .filter((node) => node.page_id === firstPage.page_id)
+            .map((node) => ({
+              node_id: node.node_id,
+              class: classifySpatialNode(node),
+              bounds: node.bounds,
+              transform: node.transform
+            }))
+        }, null, 2) + "\n"
+      );
+    }
     if (fixture.pages != null) assert.equal(scene.pages.length, fixture.pages);
     const fixturePages = scene.pages.length;
     active = { fixture, receipt };
