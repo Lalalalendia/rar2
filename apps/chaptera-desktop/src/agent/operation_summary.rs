@@ -271,6 +271,33 @@ pub(super) fn operation_summary(operation: &EditOperation) -> Value {
             "before_state_id": transition.before_state_id.as_str(),
             "after_state_id": transition.after_state_id.as_str(),
         }),
+        EditOperation::RulerGuideV1 { transition } => match transition {
+            pub_editor::RulerGuideTransitionV1::Add { after } => json!({
+                "kind": "ruler_guide_v1",
+                "transition": "add",
+                "guide_id": &after.guide_id,
+                "page_id": after.page_id.as_canonical().to_string(),
+                "axis": after.guide.axis,
+                "position_emu": after.guide.position.get(),
+            }),
+            pub_editor::RulerGuideTransitionV1::Move { before, after } => json!({
+                "kind": "ruler_guide_v1",
+                "transition": "move",
+                "guide_id": &after.guide_id,
+                "page_id": after.page_id.as_canonical().to_string(),
+                "axis": after.guide.axis,
+                "before_position_emu": before.guide.position.get(),
+                "after_position_emu": after.guide.position.get(),
+            }),
+            pub_editor::RulerGuideTransitionV1::Delete { before } => json!({
+                "kind": "ruler_guide_v1",
+                "transition": "delete",
+                "guide_id": &before.guide_id,
+                "page_id": before.page_id.as_canonical().to_string(),
+                "axis": before.guide.axis,
+                "position_emu": before.guide.position.get(),
+            }),
+        },
         EditOperation::SetTextFormatProperty {
             story_id,
             start_scalar,

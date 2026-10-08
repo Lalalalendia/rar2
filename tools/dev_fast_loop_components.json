@@ -87,6 +87,8 @@
       "name": "pub-editor facade/core",
       "paths": [
         "vendor/producer-a/crates/pub-editor/src/lib.rs",
+        "vendor/producer-a/crates/pub-editor/src/editor_asset_v1.rs",
+        "vendor/producer-a/crates/pub-editor/src/project_schema_v1.rs",
         "vendor/producer-a/crates/pub-editor/Cargo.toml"
       ],
       "commands": [

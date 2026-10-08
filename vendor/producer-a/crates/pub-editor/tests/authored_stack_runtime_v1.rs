@@ -4,8 +4,8 @@ use pub_editor::{
     AuthoredEntityProvenanceV1, AuthoredShapePaintV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
     AuthoredStackReorderModeV1, EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_10,
     EDITOR_PROJECT_VERSION_V0_12, EDITOR_PROJECT_VERSION_V0_13, EDITOR_PROJECT_VERSION_V0_17,
-    EDITOR_PROJECT_VERSION_V0_22, EDITOR_PROJECT_VERSION_V0_23, EditOperation,
-    EditorEditableTarget, EditorError, EditorProjectError, EditorSession, LengthEmu,
+    EDITOR_PROJECT_VERSION_V0_22, EDITOR_PROJECT_VERSION_V0_23, EDITOR_PROJECT_VERSION_V0_24,
+    EditOperation, EditorEditableTarget, EditorError, EditorProjectError, EditorSession, LengthEmu,
     LineGeometryV1, PointEmuV1, RectEmu, Srgb8V1,
 };
 use pub_model::{
@@ -275,7 +275,7 @@ fn identity_less_legacy_session_cannot_emit_v0_17_create_line_project() {
 
 #[test]
 fn create_delete_history_remains_v0_12_while_current_schema_advances() {
-    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_23);
+    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_24);
 
     let mut session = EditorSession::new(graph()).expect("session");
     create_two(&mut session);

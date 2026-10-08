@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - "vendor/producer-a/crates/pub-editor/**"
+      - "!vendor/producer-a/crates/pub-editor/src/ruler_guide_v1.rs"
+      - "!vendor/producer-a/crates/pub-editor/tests/ruler_guide_v1.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/project_schema_v1.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/editor_asset_v1.rs"
       - "!vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs"
       - "!vendor/producer-a/crates/pub-editor/src/session_geometry.rs"
       - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"

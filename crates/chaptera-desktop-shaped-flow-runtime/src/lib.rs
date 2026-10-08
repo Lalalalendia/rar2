@@ -5,9 +5,11 @@ mod font_resource;
 
 use chaptera_caret_layout_feed::build_caret_map_from_shaped_flow_v1;
 use chaptera_text_caret_map_adapter::ResolvedTextCaretMapV1;
-use fixed_pdf_pages::bounded_authoring_slice_for_pages_v1;
 #[cfg(test)]
 use fixed_pdf_pages::qualified_page_set_error_v1;
+use fixed_pdf_pages::{
+    append_current_authored_ruler_guides_v1, bounded_authoring_slice_for_pages_v1,
+};
 use pub_editor::{
     EditorSession, EffectiveParagraphAlignmentValueV1, ImportedParagraphFlowConstraintV1,
 };
@@ -376,12 +378,14 @@ fn build_current_story_layout_core_v1(
             } else {
                 pub_viewer::bounded_authoring_slice_from_resolved(editor.graph())
             };
-            projected.map_err(|error| {
+            let mut authoring = projected.map_err(|error| {
                 DesktopShapedFlowRuntimeError::new(
                     "authoring_projection_failed",
                     format!("resolved graph could not enter bounded layout projection: {error}"),
                 )
-            })?
+            })?;
+            append_current_authored_ruler_guides_v1(editor, &mut authoring)?;
+            authoring
         }
     };
     let mut projection = project_bounded(authoring);
@@ -449,7 +453,8 @@ mod tests {
     use pub_layout::font_fingerprint_sha256;
     use pub_model::{
         Affine2D, CanonicalId, Document, DocumentId, EMU_PER_POINT, LengthEmu, NodeId, Page,
-        RectEmu, ResolvedGraph, Size2D, SourceDescriptor, Story, StoryFrame,
+        PublisherGuideRole, RectEmu, ResolvedGraph, RulerGuideAxis, Size2D, SourceDescriptor,
+        Story, StoryFrame,
     };
     use sha2::{Digest, Sha256};
     use std::{env, fs};
@@ -702,6 +707,25 @@ mod tests {
                 .collect::<Vec<_>>(),
             reordered
         );
+    }
+
+    #[test]
+    fn fixed_pdf_page_projection_consumes_current_authored_ruler_guides() {
+        let (mut editor, admitted, _) = page_order_editor_fixture();
+        let page_id = admitted[0];
+        editor
+            .add_ruler_guide_v1(page_id, RulerGuideAxis::Vertical, LengthEmu::new(914_400))
+            .expect("add authored page ruler guide");
+
+        let authoring = bounded_authoring_slice_for_pages_v1(&editor, &[page_id])
+            .expect("fixed-PDF guide projection");
+        let projection = project_bounded(authoring);
+        assert_eq!(projection.guides.len(), 1);
+        let guide = &projection.guides[0];
+        assert_eq!(guide.page_origin, page_id);
+        assert_eq!(guide.axis, RulerGuideAxis::Vertical);
+        assert_eq!(guide.position, LengthEmu::new(914_400));
+        assert_eq!(guide.provenance, PublisherGuideRole::PageRulerGuide);
     }
 
     #[test]
