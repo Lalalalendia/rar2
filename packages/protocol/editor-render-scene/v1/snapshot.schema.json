@@ -261,7 +261,8 @@
         "text_layout",
         "image_source_window",
         "image_content_rotation_degrees",
-        "image_recolor"
+        "image_recolor",
+        "table"
       ],
       "properties": {
         "node_id": {
@@ -410,6 +411,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/imageRecolor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "table": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/table"
             },
             {
               "type": "null"
@@ -990,6 +1001,118 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/textLine"
+          }
+        }
+      }
+    },
+    "tableCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cell_id",
+        "row",
+        "column",
+        "text"
+      ],
+      "properties": {
+        "cell_id": {
+          "$ref": "#/$defs/opaqueSceneId"
+        },
+        "row": {
+          "$ref": "#/$defs/nonNegativeJsSafeInteger"
+        },
+        "column": {
+          "$ref": "#/$defs/nonNegativeJsSafeInteger"
+        },
+        "row_span": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "column_span": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "text": {
+          "type": "string"
+        },
+        "bounds": {
+          "$ref": "#/$defs/rect"
+        },
+        "fill_rgb": {
+          "$ref": "#/$defs/rgb24"
+        },
+        "fill_visible": {
+          "type": "boolean"
+        }
+      }
+    },
+    "tableBorderSegment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x1_emu",
+        "y1_emu",
+        "x2_emu",
+        "y2_emu",
+        "rgb",
+        "width_emu"
+      ],
+      "properties": {
+        "x1_emu": {
+          "$ref": "#/$defs/emu"
+        },
+        "y1_emu": {
+          "$ref": "#/$defs/emu"
+        },
+        "x2_emu": {
+          "$ref": "#/$defs/emu"
+        },
+        "y2_emu": {
+          "$ref": "#/$defs/emu"
+        },
+        "rgb": {
+          "$ref": "#/$defs/rgb24"
+        },
+        "width_emu": {
+          "$ref": "#/$defs/nonNegativeEmu"
+        }
+      }
+    },
+    "table": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "story_id",
+        "rows",
+        "columns",
+        "cells"
+      ],
+      "properties": {
+        "story_id": {
+          "$ref": "#/$defs/opaqueSceneId"
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "columns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tableCell"
+          }
+        },
+        "borders": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tableBorderSegment"
           }
         }
       }

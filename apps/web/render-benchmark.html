@@ -357,6 +357,116 @@
     return { crop: cropReceipt, rotation: rotationReceipt, generic: genericReceipt };
   };
 
+  window.runReaderTableContractProbe = async function runReaderTableContractProbe() {
+    const scene = {
+      protocol_version: "chaptera.editor-render-scene.v1",
+      document_id: "28888888-8888-4888-8888-888888888888",
+      source_hash: "1".repeat(64),
+      revision_id: "sha256:" + "2".repeat(64),
+      snapshot_id: "sha256:" + "3".repeat(64),
+      layout_environment: {
+        environment_id: "sha256:" + "4".repeat(64),
+        engine_revision: "reader-table-dom-probe",
+        font_set_fingerprint: "sha256:" + "5".repeat(64),
+        resource_fingerprint: "sha256:" + "6".repeat(64),
+      },
+      stacking_fidelity: "exact",
+      pages: [{
+        page_id: "27777777-7777-4777-8777-777777777777",
+        order: 0,
+        width_emu: 7772400,
+        height_emu: 10058400,
+      }],
+      nodes: [{
+        node_id: "26666666-6666-4666-8666-666666666666",
+        page_id: "27777777-7777-4777-8777-777777777777",
+        parent_node_id: null,
+        kind: "table",
+        bounds: { x: 95250, y: 190500, width: 952500, height: 476250 },
+        z_order: 0,
+        paint_order: 0,
+        paint_id: null,
+        resource_id: null,
+        image_source_window: null,
+        image_content_rotation_degrees: null,
+        image_recolor: null,
+        transform: { a: "1", b: "0", c: "0", d: "1", tx: 0, ty: 0 },
+        editable: true,
+        origin_node_id: null,
+        preview_text_style: null,
+        text_bounds: null,
+        text_layout: null,
+        visual_authority: "reader_scene",
+        table: {
+          story_id: "story:table",
+          rows: 1,
+          columns: 1,
+          cells: [{
+            cell_id: "cell:0:0",
+            row: 0,
+            column: 0,
+            row_span: 1,
+            column_span: 1,
+            text: "Cell",
+            bounds: { x: 95250, y: 190500, width: 952500, height: 476250 },
+            fill_rgb: [12, 34, 56],
+            fill_visible: true,
+          }],
+          borders: [{
+            x1_emu: 95250,
+            y1_emu: 190500,
+            x2_emu: 1047750,
+            y2_emu: 190500,
+            rgb: [1, 2, 3],
+            width_emu: 12700,
+          }],
+        },
+      }],
+      stories: [],
+      story_frames: [],
+      paints: [],
+      resources: [],
+      diagnostics: [],
+      capabilities: [{ key: "render.table", state: "supported", note: null }],
+      fidelity: { state: "supported", reasons: [] },
+    };
+
+    host.replaceChildren();
+    const renderer = createRenderer("svg", host, scene, BASE_VIEW);
+    await raf2();
+    const fill = host.querySelector('[data-table-cell-paint-authority="source-t595"]');
+    const border = host.querySelector('[data-table-border-authority="source-t840"]');
+    const text = host.querySelector('[data-preview-reason="table_cell_preview"]');
+    const receipt = {
+      fill_x: Number(fill?.getAttribute("x")),
+      fill_y: Number(fill?.getAttribute("y")),
+      fill_width: Number(fill?.getAttribute("width")),
+      fill_color: fill?.getAttribute("fill") ?? null,
+      border_width: Number(border?.getAttribute("stroke-width")),
+      border_color: border?.getAttribute("stroke") ?? null,
+      text_authority: text?.getAttribute("data-text-authority") ?? null,
+      cell_text: text?.textContent ?? null,
+    };
+    renderer.destroy();
+
+    if (!fill || !border || !text) {
+      throw new Error("Reader table fill/border/preview DOM contract missing");
+    }
+    if (receipt.fill_x !== 34 || receipt.fill_y !== 44 || receipt.fill_width !== 100) {
+      throw new Error("Reader table CSS geometry changed: " + JSON.stringify(receipt));
+    }
+    if (receipt.fill_color !== "rgb(12 34 56)") {
+      throw new Error("Reader table fill authority changed");
+    }
+    if (Math.abs(receipt.border_width - (12700 / 9525)) > 1e-9 || receipt.border_color !== "rgb(1 2 3)") {
+      throw new Error("Reader table border authority changed");
+    }
+    if (receipt.text_authority !== "browser-preview-only" || receipt.cell_text !== "Cell") {
+      throw new Error("Reader table text preview authority changed");
+    }
+    return receipt;
+  };
+
   window.renderForScreenshot = async function renderForScreenshot(payloadText, kind, options = {}) {
     const snapshot = JSON.parse(payloadText);
     host.replaceChildren();

@@ -152,3 +152,34 @@ test("adapter preserves Reader picture crop rotation and recolor semantics verba
   assert.equal(scene.nodes[0].image_content_rotation_degrees, null);
   assert.deepEqual(scene.nodes[0].image_recolor, payload.nodes[0].image_recolor);
 });
+
+test("Reader table semantics pass through without browser grid inference", async () => {
+  const payload = readerScene();
+  payload.nodes[0].table = {
+    story_id: "story:table",
+    rows: 2,
+    columns: 2,
+    cells: [{
+      cell_id: "cell:0:0",
+      row: 0,
+      column: 0,
+      row_span: 1,
+      column_span: 2,
+      text: "Header",
+      bounds: { x: 100, y: 200, width: 600, height: 300 },
+      fill_rgb: [12, 34, 56],
+      fill_visible: true,
+    }],
+    borders: [{
+      x1_emu: 100,
+      y1_emu: 200,
+      x2_emu: 700,
+      y2_emu: 200,
+      rgb: [1, 2, 3],
+      width_emu: 12700,
+    }],
+  };
+  const scene = await adaptReaderSceneToEditorScene(payload);
+  assert.deepEqual(scene.nodes[0].table, payload.nodes[0].table);
+  assert.equal(scene.nodes[0].visual_authority, "reader_scene");
+});

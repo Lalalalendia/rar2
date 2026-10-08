@@ -237,6 +237,101 @@ function textColorCss(value) {
     : "rgba(0,0,0,0.9)";
 }
 
+function tableRgb(value) {
+  if (!Array.isArray(value) || value.length !== 3) return null;
+  const channels = value.map(Number);
+  if (channels.some((channel) => !Number.isInteger(channel) || channel < 0 || channel > 255)) {
+    return null;
+  }
+  return "rgb(" + channels.join(" ") + ")";
+}
+
+export function tableCellPaintGeometry(cell) {
+  const bounds = cell?.bounds;
+  if (!bounds) return null;
+  const x = safeInteger(bounds.x, "table.cell.bounds.x");
+  const y = safeInteger(bounds.y, "table.cell.bounds.y");
+  const width = safeInteger(bounds.width, "table.cell.bounds.width");
+  const height = safeInteger(bounds.height, "table.cell.bounds.height");
+  if (width <= 0 || height <= 0) return null;
+  return Object.freeze({ x, y, width, height });
+}
+
+export function tableCellFillPaintPlan(cell) {
+  const geometry = tableCellPaintGeometry(cell);
+  const fill = tableRgb(cell?.fill_rgb);
+  if (!geometry || cell?.fill_visible !== true || !fill) return null;
+  return Object.freeze({ geometry, fill });
+}
+
+export function tableBorderPaintPlan(border) {
+  const x1 = safeInteger(border?.x1_emu, "table.border.x1_emu");
+  const y1 = safeInteger(border?.y1_emu, "table.border.y1_emu");
+  const x2 = safeInteger(border?.x2_emu, "table.border.x2_emu");
+  const y2 = safeInteger(border?.y2_emu, "table.border.y2_emu");
+  const width = safeInteger(border?.width_emu, "table.border.width_emu");
+  const stroke = tableRgb(border?.rgb);
+  if (!stroke || width <= 0 || (x1 === x2 && y1 === y2)) return null;
+  return Object.freeze({ x1, y1, x2, y2, stroke, width });
+}
+
+export function resolvedEditorTablePlan(node, page, view) {
+  const table = node?.table;
+  if (node?.visual_authority !== "reader_scene" || !table) return null;
+  const rows = safeInteger(table.rows, "table.rows");
+  const columns = safeInteger(table.columns, "table.columns");
+  if (rows <= 0 || columns <= 0) return null;
+
+  const cells = [];
+  for (const cell of table.cells ?? []) {
+    const geometry = tableCellPaintGeometry(cell);
+    if (!geometry) continue;
+    const row = safeInteger(cell.row, "table.cell.row");
+    const column = safeInteger(cell.column, "table.cell.column");
+    const rowSpan = safeInteger(cell.row_span ?? 1, "table.cell.row_span");
+    const columnSpan = safeInteger(cell.column_span ?? 1, "table.cell.column_span");
+    if (row < 0 || column < 0 || rowSpan <= 0 || columnSpan <= 0) continue;
+    const fill = tableCellFillPaintPlan(cell);
+    cells.push(Object.freeze({
+      cell_id: String(cell.cell_id ?? ""),
+      row,
+      column,
+      row_span: rowSpan,
+      column_span: columnSpan,
+      text: String(cell.text ?? ""),
+      text_authority: "browser-preview-only",
+      x: page.x + emuToCss(geometry.x, view),
+      y: page.y + emuToCss(geometry.y, view),
+      width: emuToCss(geometry.width, view),
+      height: emuToCss(geometry.height, view),
+      fill: fill?.fill ?? null,
+    }));
+  }
+
+  const borders = [];
+  for (const border of table.borders ?? []) {
+    const plan = tableBorderPaintPlan(border);
+    if (!plan) continue;
+    borders.push(Object.freeze({
+      x1: page.x + emuToCss(plan.x1, view),
+      y1: page.y + emuToCss(plan.y1, view),
+      x2: page.x + emuToCss(plan.x2, view),
+      y2: page.y + emuToCss(plan.y2, view),
+      stroke: plan.stroke,
+      width_css_px: emuToCss(plan.width, view),
+    }));
+  }
+
+  return Object.freeze({
+    authority: "reader-table-resolved",
+    story_id: typeof table.story_id === "string" ? table.story_id : null,
+    rows,
+    columns,
+    cells: Object.freeze(cells),
+    borders: Object.freeze(borders),
+  });
+}
+
 export function resolvedEditorTextPlan(node, resources, page, view) {
   const layout = node?.text_layout;
   if (node?.visual_authority !== "reader_scene" || layout?.disposition !== "shared_resolved") {
@@ -411,6 +506,7 @@ export function buildRenderPlan(snapshot, rawView = {}) {
       const resolvedText = story
         ? resolvedEditorTextPlan(node, resources, { x: pageX, y: pageY }, view)
         : null;
+      const resolvedTable = resolvedEditorTablePlan(node, { x: pageX, y: pageY }, view);
       const plan = Object.freeze({
         node_id: node.node_id,
         page_id: node.page_id,
@@ -425,6 +521,7 @@ export function buildRenderPlan(snapshot, rawView = {}) {
           stroke: rgbaCss(paint?.stroke?.color ?? null),
           stroke_width_css_px: emuToCss(paint?.stroke?.width_emu ?? 0, view)
         }),
+        table: resolvedTable,
         story: story ? Object.freeze({
           text: story.text,
           text_fidelity: story.text_fidelity,
@@ -518,6 +615,56 @@ function svgNode(tag, attrs) {
   const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
   for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
   return node;
+}
+
+function appendResolvedSvgTable(root, table) {
+  if (!table) return false;
+  let painted = false;
+  for (const cell of table.cells) {
+    if (cell.fill) {
+      root.appendChild(svgNode("rect", {
+        x: cell.x,
+        y: cell.y,
+        width: cell.width,
+        height: cell.height,
+        fill: cell.fill,
+        "data-table-cell-id": cell.cell_id,
+        "data-table-cell-paint-authority": "source-t595"
+      }));
+      painted = true;
+    }
+  }
+  for (const border of table.borders) {
+    root.appendChild(svgNode("line", {
+      x1: border.x1,
+      y1: border.y1,
+      x2: border.x2,
+      y2: border.y2,
+      stroke: border.stroke,
+      "stroke-width": border.width_css_px,
+      "data-table-border-authority": "source-t840"
+    }));
+    painted = true;
+  }
+  for (const cell of table.cells) {
+    if (!cell.text) continue;
+    const label = svgNode("text", {
+      x: cell.x + 2,
+      y: cell.y + 12,
+      "font-size": 10,
+      "data-table-cell-id": cell.cell_id,
+      "data-table-row": cell.row,
+      "data-table-column": cell.column,
+      "data-table-row-span": cell.row_span,
+      "data-table-column-span": cell.column_span,
+      "data-text-authority": cell.text_authority,
+      "data-preview-reason": "table_cell_preview"
+    });
+    label.textContent = cell.text.slice(0, 120);
+    root.appendChild(label);
+    painted = true;
+  }
+  return painted;
 }
 
 function appendResolvedSvgImage(root, defs, resource, imageId) {
@@ -663,6 +810,7 @@ class SvgRenderer {
           "stroke-width": Math.max(0.5, node.paint.stroke_width_css_px || 0.5),
           "data-node-id": node.node_id
         }));
+        appendResolvedSvgTable(this.root, node.table);
         const paintedResolvedImage = node.resource
           ? appendResolvedSvgImage(
               this.root,
