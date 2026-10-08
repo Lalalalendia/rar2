@@ -61,6 +61,7 @@ SCOPES = (
     "android",
     "web",
     "local_portable",
+    "local_portable_full",
     "installer",
     "path_identity",
     "update_accept",
@@ -456,6 +457,7 @@ LOCAL_PORTABLE = (
     "tools/run_local_real_editor.py",
     "tools/run_cloud_config_receipt.py",
     "tools/package_local_portable.py",
+    "tools/test_package_local_portable.py",
     "tools/adapt_viewer_scene_v1.py",
     "tools/resolved_graph_scene_bridge_v1.py",
     "tools/sample_newsletter_move_producer.py",
@@ -480,6 +482,20 @@ LOCAL_PORTABLE = (
     "deploy/config/chaptera.prod.example.toml",
     ".github/workflows/chaptera-local-portable-windows.yml",
 )
+
+# These files are shipped bytes, but they cannot change either Rust executable
+# or the embedded Python/runtime closure. They still need a package-staging
+# proof; they do not need a fresh Windows native build.
+LOCAL_PORTABLE_ASSET_ONLY_PATHS = {
+    "tools/test_package_local_portable.py",
+    "apps/web/local-editor.html",
+    "apps/web/editor-shell-v1.mjs",
+    "apps/web/editor-service-client-v1.mjs",
+    "apps/web/observability-v1.mjs",
+    "apps/web/render-v1.mjs",
+    "apps/web/interaction-v1.mjs",
+    "apps/web/export-preview-v1.schema.json",
+}
 
 INSTALLER = (
     "packages/product/reader-portable/**",
@@ -671,8 +687,13 @@ def classify(
     local_portable_paths = [
         path for path in product_paths if path not in LOCAL_PORTABLE_NEUTRAL_PATHS
     ]
-    result["local_portable"] = any(
-        matches(path, LOCAL_PORTABLE) for path in local_portable_paths
+    selected_local_portable_paths = [
+        path for path in local_portable_paths if matches(path, LOCAL_PORTABLE)
+    ]
+    result["local_portable"] = bool(selected_local_portable_paths)
+    result["local_portable_full"] = any(
+        path not in LOCAL_PORTABLE_ASSET_ONLY_PATHS
+        for path in selected_local_portable_paths
     )
     # Golden tests still call ViewerApp and paint helpers owned by main.rs.
     # A path alone cannot prove those dependencies unchanged. Only an exact

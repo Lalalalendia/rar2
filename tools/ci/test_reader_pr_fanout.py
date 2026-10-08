@@ -230,10 +230,12 @@ fn main() -> eframe::Result<()> {
     assert_scope(
         ["apps/chaptera-server/src/serve.rs"],
         local_portable=True,
+        local_portable_full=True,
     )
     assert_scope(
         ["apps/chaptera-server/src/guest_reader_runtime.rs", "tools/package_local_portable.py"],
         local_portable=True,
+        local_portable_full=True,
     )
 
     assert_scope(
@@ -512,12 +514,40 @@ fn main() -> eframe::Result<()> {
         tier_a=False,
         web=False,
         local_portable=True,
+        local_portable_full=False,
+    )
+    assert_scope(
+        ["apps/web/render-v1.mjs"],
+        tier_a=False,
+        web=False,
+        local_portable=True,
+        local_portable_full=False,
+    )
+    assert_scope(
+        ["apps/web/interaction-v1.mjs"],
+        tier_a=False,
+        web=False,
+        local_portable=True,
+        local_portable_full=False,
+    )
+    assert_scope(
+        ["tools/test_package_local_portable.py"],
+        tier_a=False,
+        web=False,
+        local_portable=True,
+        local_portable_full=False,
+    )
+    assert_scope(
+        ["apps/web/render-v1.mjs", "apps/chaptera-server/src/serve.rs"],
+        local_portable=True,
+        local_portable_full=True,
     )
     assert_scope(
         ["apps/web/acceptance/receipts/browser-editor-v1.json"],
         tier_a=False,
         web=False,
         local_portable=True,
+        local_portable_full=True,
     )
 
     assert_scope(
