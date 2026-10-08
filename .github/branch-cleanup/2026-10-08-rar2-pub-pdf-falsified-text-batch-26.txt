@@ -1,0 +1,9 @@
+# 2026-10-08 — PUB-PDF falsified text batch 26
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+validation/pub-pdf-viewer-text-layout-census-01 a07f7aa4e0653139bbc88499d639b2f08c012f89 # #2217 terminal broad Viewer-text A/B; 20 regressions, evidence assimilated
+fix/pub-pdf-viewer-text-layout-restack-01 2428490f7ab9260d5c5c323eff1f4e63716c1164 # #2211 closed falsified/evidence-consumed after broad/hybrid/uniform source-kind boundary failed
+validation/pub-pdf-viewer-text-hybrid-census-01 cf8a8e01a4470e39a18949c42da37f8a9aad1012 # #2222 terminal hybrid A/B; corpus mean regressed
+measure/pub-pdf-viewer-uniform-line-only-01 300c12bda5b3bb19a51b582e0b57c5eb3b308655 # #2232 terminal uniform/source-safe census; no independent authority, successor must use source-backed semantics
+ops/branch-gc-20261008-merged-successor-predecessors-batch-25 f43d00f856207042be1b174ac19c14d808b70bce # completed #2277 clean receipt: 4/4 deleted
