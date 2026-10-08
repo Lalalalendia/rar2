@@ -8,8 +8,7 @@ use pub_escher::{OfficeArtBody, OfficeArtRecord, parse_officeart_stream};
 use serde::Serialize;
 use std::{fs, path::Path};
 
-pub const OFFICEART_ATTRIBUTION_SCHEMA_V1: &str =
-    "chaptera.pub-re-officeart-attribution.v1";
+pub const OFFICEART_ATTRIBUTION_SCHEMA_V1: &str = "chaptera.pub-re-officeart-attribution.v1";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct OfficeArtAttributionReceiptV1 {
@@ -105,8 +104,7 @@ fn attribute_officeart(
     let after_bytes = stream_bytes(&after, stream_path)
         .with_context(|| format!("read after OfficeArt stream {stream_path}"))?;
 
-    let before_parsed =
-        parse_officeart_stream(StreamPath(stream_path.to_owned()), &before_bytes);
+    let before_parsed = parse_officeart_stream(StreamPath(stream_path.to_owned()), &before_bytes);
     let after_parsed = parse_officeart_stream(StreamPath(stream_path.to_owned()), &after_bytes);
 
     let before_parse = parse_status(&before_parsed);
@@ -414,8 +412,10 @@ mod tests {
             .expect("synthetic FOPT should parse");
 
         let candidates = candidates_for_range(&parsed.records, 9, 0);
-        assert!(candidates
-            .iter()
-            .any(|candidate| candidate.kind == "fopt_property"));
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.kind == "fopt_property")
+        );
     }
 }
