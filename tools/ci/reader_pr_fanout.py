@@ -501,6 +501,9 @@ SHARED_DESKTOP_FILES = {
     # Exact text-session shell changes keep Tier A plus dedicated Linux/Windows
     # Text Session/TextBox GUI owners; they do not require the broad Editor package gate.
     "apps/chaptera-desktop/src/text_session_shell.rs",
+    # Selection keyboard shell has its own Windows GUI owner and is also
+    # covered by TextBox Restore; do not add the broad Editor package gate.
+    "apps/chaptera-desktop/src/selection_keyboard_shell.rs",
 }
 
 
