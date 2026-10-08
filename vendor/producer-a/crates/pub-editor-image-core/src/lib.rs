@@ -1,6 +1,7 @@
 //! Compile-isolated image replacement/crop overlay transition laws.
 //!
 //! This crate is session-neutral by design. It must not depend on pub-editor,
+//! Leaf-control note: compile-boundary steady-state measurement only.
 //! pub-reader, export code, or EditorSession.
 
 use pub_model::{NodeId, Sha256Digest};
