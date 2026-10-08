@@ -1,6 +1,6 @@
 # Branch GC 2026-10-08 — manual-only SHA-pinned reviewed archive batch
  # DO NOT MERGE: dispatch workflow only on THIS BRANCH after review.
-# 20 closed-unmerged PR refs; runtime must skip open heads/bases, mismatched SHA, protected refs.
+# 41 closed-unmerged PR refs; runtime must skip open heads/bases, mismatched SHA, protected refs.
 
 # CI: completed sacrificial controls (Playwright adopted via merged #1948)
 ci/batch01-playwright-cache-smoke-01 dcc31d8f20a646d0f634579696ab7d96e43d8223 # closed PR 1944
@@ -25,3 +25,26 @@ ops/branch-gc-20261008-research-wave62 0c39cf1a252f3cbd0cedbb8c642599b00bad5412 
 ops/branch-gc-20261008-research-wave90 0cf0b5fc12e9ed07870839d807390ece72ddfdc3 # closed PR 2056
 ops/branch-gc-20261008-validation-wave54 97316ee30d67dbbc97683d3aee01632f43a6bb06 # closed PR 1914
 ops/branch-gc-20261008-validation-wave56 0304c72f8bb14cf661ef913e3c635de6fa303ccf # closed PR 1923
+
+# CI expansion: terminal one-file measurement/positive/negative controls
+ci/pub-quill-paragraph-fastpath-proof-01 d21fca9af8ab634f7013e39d9b96b05667aa89d8 # PR 1969
+ci/pub-quill-paragraph-leaf-control-01 93b4bd43b665099d5ad68141f9e1bad55120a90f # PR 1961
+ci/pub-quill-paragraph-leaf-proof-01 2e2d58c90d75f49cd74206bf902cbbe150672cec # PR 1960
+ci/pub-quill-text-color-fastpath-proof-01 ee7481af42c2f7a24b0d1044c24cda6c6cc224eb # PR 2006
+ci/pub-quill-text-color-leaf-control-01 69af2eb740f48d0febce09c99d55c0e84de195fe # PR 1996
+ci/reader-mainrs-parallel-measurement-01 b15fe92fc81d31ff594ead038e5e68b56a81ca22 # PR 1327
+ci/reader-mainrs-shared-core-measure-01 21e9440fe751e88dbe2f2b92b9ab4ae3e7840300 # PR 1313
+ci/reader-mainrs-shared-core-measurement b54cda7cf6c1979a72a1137ccd63ed571d8df50a # PR 1312
+ci/reader-visual-comment-negative-01 4df31f375dd0e5336e3a828152b0b08478bee7b9 # PR 1415
+ci/rectangle-shell-positive-control d864053a8c069f68432546a005a3c5b23c0a3ba5 # PR 1289
+ci/typography-projection-base-control-01 af8362847fb7dde3e761016ec6c0070711fb733a # PR 1804
+ci/final-mainrs-pressure-measurement 2b1a1287e2ab8b0efc377786c198886965360c41 # PR 1301
+ci/authored-stack-runtime-core-positive-02 28dac47fd46e5aa281e9f85f61d869429cbe8895 # PR 1438
+ci/authored-stack-runtime-safe-negative-02 fe118d7bad07d30ee2af8ae8ad966db6b81f1a7e # PR 1437
+ci/fixed-pdf-core-positive-01 5059e128f411e06199f59dc06634951969f0197c # PR 1381
+ci/fixed-pdf-core-positive-02 da457f66bd9bb08bbb908095ae83e55cf3ef2efb # PR 1383
+ci/fixed-pdf-core-positive-03 7112f8429fea978128e278d5aefe784ad373316b # PR 1394
+ci/fixed-pdf-safe-negative-01 4952c9b80f9d2623c0e66acabfd46e784ba7bc1a # PR 1380
+ci/textbox-selective-core-positive-01 66ece8c782f3fd942dfd167829e192da39f19f2a # PR 1375
+ci/textbox-selective-safe-negative-01 d3559d46cdc17187d70700197bacbc7fb679f960 # PR 1373
+ci/continuity-v2-mainrs-negative-control b876f35a8496851966738de3dad42a0af872b639 # PR 1222
