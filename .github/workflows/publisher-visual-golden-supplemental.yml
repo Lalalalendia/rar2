@@ -192,6 +192,14 @@ jobs:
           mkdir -p "$RUNNER_TEMP/publisher-visual-supplemental"
           python tools/cloud_reader_visual_supplemental_v1.py prepare             tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv             out/pinned1050/materialized/native             "$RUNNER_TEMP/publisher-visual-supplemental/fixtures"             "$RUNNER_TEMP/publisher-visual-supplemental/manifest.json"
 
+      - name: Measure exact099 shared-layout-incomplete cause
+        env:
+          CHAPTERA_READER_SCENE_PROBE_PUB: ${{ runner.temp }}/publisher-visual-supplemental/fixtures/099_00092479c94bf5ac.pub
+          CHAPTERA_READER_SCENE_PROBE_SHA256: 00092479c94bf5ac1bb107173d60fb788b91e2c148453468456f98d0bb300597
+        run: |
+          set -euo pipefail
+          cargo test -p chaptera-server real_reference_text_layout_fallback_census_probe -- --ignored --nocapture
+
       - name: Build canonical Cloud Reader worker
         env:
           SUPPLEMENTAL_CARGO_CACHE_HIT: ${{ steps.supplemental-cargo-cache.outputs.cache-hit }}
