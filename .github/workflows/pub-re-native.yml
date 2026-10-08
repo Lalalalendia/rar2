@@ -32,6 +32,9 @@ jobs:
       command_mode: ${{ steps.command.outputs.command_mode }}
       manifest_name: ${{ steps.command.outputs.manifest_name }}
       fixture_alias: ${{ steps.command.outputs.fixture_alias }}
+      page_id: ${{ steps.command.outputs.page_id }}
+      shape_id: ${{ steps.command.outputs.shape_id }}
+      delta_degrees: ${{ steps.command.outputs.delta_degrees }}
     steps:
       - name: Resolve trusted native command
         id: command
@@ -51,6 +54,9 @@ jobs:
           command_mode = ""
           manifest_name = ""
           fixture_alias = ""
+          page_id = ""
+          shape_id = ""
+          delta_degrees = ""
 
           if event_name == "workflow_dispatch":
               manifest_name = os.environ.get("INPUT_MANIFEST_NAME", "")
@@ -67,22 +73,43 @@ jobs:
                   r"/pub-re-native snapshot ([a-z0-9][a-z0-9._-]{0,63})",
                   body,
               )
+              rotation_match = re.fullmatch(
+                  r"/pub-re-native rotate ([a-z0-9][a-z0-9._-]{0,63}) ([1-9][0-9]{0,9}) ([1-9][0-9]{0,9}) (-?[0-9]+(?:\.[0-9]{1,6})?)",
+                  body,
+              )
               if manifest_match is not None:
                   command_mode = "manifest"
                   manifest_name = manifest_match.group(1)
               elif snapshot_match is not None:
                   command_mode = "snapshot_alias"
                   fixture_alias = snapshot_match.group(1)
+              elif rotation_match is not None:
+                  command_mode = "rotation_alias"
+                  fixture_alias = rotation_match.group(1)
+                  page_id = rotation_match.group(2)
+                  shape_id = rotation_match.group(3)
+                  delta_degrees = rotation_match.group(4)
+
+                  page_value = int(page_id)
+                  shape_value = int(shape_id)
+                  delta_value = float(delta_degrees)
+                  if page_value > 2147483647 or shape_value > 2147483647:
+                      raise SystemExit("Publisher selector is outside signed 32-bit bounds")
+                  if not 0.000001 <= abs(delta_value) <= 45.0:
+                      raise SystemExit("rotation delta must be nonzero and within 45 degrees")
               else:
                   raise SystemExit("invalid PUB RE native control command")
 
-          if command_mode == "snapshot_alias" and alias_re.fullmatch(fixture_alias) is None:
+          if command_mode in {"snapshot_alias", "rotation_alias"} and alias_re.fullmatch(fixture_alias) is None:
               raise SystemExit("fixture alias is invalid")
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"command_mode={command_mode}\n")
               output.write(f"manifest_name={manifest_name}\n")
               output.write(f"fixture_alias={fixture_alias}\n")
+              output.write(f"page_id={page_id}\n")
+              output.write(f"shape_id={shape_id}\n")
+              output.write(f"delta_degrees={delta_degrees}\n")
           PY
 
   native:
@@ -116,6 +143,9 @@ jobs:
           PUB_RE_COMMAND_MODE: ${{ needs.gate.outputs.command_mode }}
           PUB_RE_MANIFEST_NAME: ${{ needs.gate.outputs.manifest_name }}
           PUB_RE_FIXTURE_ALIAS: ${{ needs.gate.outputs.fixture_alias }}
+          PUB_RE_PAGE_ID: ${{ needs.gate.outputs.page_id }}
+          PUB_RE_SHAPE_ID: ${{ needs.gate.outputs.shape_id }}
+          PUB_RE_DELTA_DEGREES: ${{ needs.gate.outputs.delta_degrees }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
@@ -137,7 +167,7 @@ jobs:
               throw "requested native experiment manifest is not present"
             }
           }
-          elseif ($env:PUB_RE_COMMAND_MODE -eq "snapshot_alias") {
+          elseif ($env:PUB_RE_COMMAND_MODE -eq "snapshot_alias" -or $env:PUB_RE_COMMAND_MODE -eq "rotation_alias") {
             if ($env:PUB_RE_FIXTURE_ALIAS -notmatch '^[a-z0-9][a-z0-9._-]{0,63}$') {
               throw "fixture alias is invalid"
             }
@@ -177,16 +207,312 @@ jobs:
               throw "downloaded native fixture does not match the pinned registry entry"
             }
 
+            if ($env:PUB_RE_COMMAND_MODE -eq "snapshot_alias") {
+              $experimentPrefix = "snapshot"
+              $operation = [ordered]@{
+                kind = "snapshot_only"
+              }
+            }
+            else {
+              if ($env:PUB_RE_PAGE_ID -notmatch '^[1-9][0-9]{0,9}
+            $manifest = Join-Path $output "generated-manifest.json"
+            $generated | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifest -Encoding utf8
+          }
+          else {
+            throw "unsupported PUB RE native command mode"
+          }
+
+          "PUB_RE_NATIVE_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build standalone PUB RE
+        shell: powershell
+        run: cargo build --release --manifest-path tools/pub-re/Cargo.toml --bin pub-re
+
+      - name: Run bounded native Publisher transaction
+        shell: powershell
+        run: |
+          & tools/pub-re/windows/Invoke-PubReNativeExperiment.ps1 `
+            -ManifestPath $env:PUB_RE_NATIVE_MANIFEST `
+            -OutputRoot $env:PUB_RE_NATIVE_OUTPUT
+
+      - name: Join native output to CFB and OfficeArt provenance
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "private"
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $controlPath = Join-Path $private "control.json"
+          $control = Get-Content -LiteralPath $controlPath -Raw | ConvertFrom-Json
+
+          if ([bool]$control.has_diff) {
+            $diffManifest = Join-Path $private "diff-manifest.json"
+            $cfbReceipt = Join-Path $evidence "cfb-receipt.json"
+            & tools/pub-re/target/release/pub-re.exe analyze `
+              --manifest $diffManifest `
+              --output $cfbReceipt
+
+            if (-not [string]::IsNullOrWhiteSpace([string]$control.officeart_stream)) {
+              & tools/pub-re/target/release/pub-re.exe attribute-officeart `
+                --manifest $diffManifest `
+                --stream ([string]$control.officeart_stream) `
+                --output (Join-Path $evidence "officeart-receipt.json")
+            }
+          }
+
+      - name: Enforce source-safe evidence boundary
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $files = @(Get-ChildItem -LiteralPath $evidence -Filter *.json -File)
+          if ($files.Count -lt 1) {
+            throw "native experiment emitted no JSON evidence"
+          }
+
+          foreach ($file in $files) {
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "source-safe evidence contains an absolute filesystem path"
+            }
+            if ($text -match '(?i)"raw_document_bytes_emitted"\s*:\s*true') {
+              throw "source-safe evidence claims raw document bytes were emitted"
+            }
+            if ($text -match '(?i)"raw_stream_bytes_emitted"\s*:\s*true') {
+              throw "source-safe evidence claims raw stream bytes were emitted"
+            }
+            [void](Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json)
+          }
+
+      - name: Upload source-safe receipts only
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove private native inputs and outputs
+        if: always()
+        shell: powershell
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:PUB_RE_NATIVE_OUTPUT) -and (Test-Path -LiteralPath $env:PUB_RE_NATIVE_OUTPUT)) {
+            Remove-Item -LiteralPath $env:PUB_RE_NATIVE_OUTPUT -Recurse -Force
+          }
+ -or
+                  $env:PUB_RE_SHAPE_ID -notmatch '^[1-9][0-9]{0,9}
+            $manifest = Join-Path $output "generated-manifest.json"
+            $generated | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifest -Encoding utf8
+          }
+          else {
+            throw "unsupported PUB RE native command mode"
+          }
+
+          "PUB_RE_NATIVE_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build standalone PUB RE
+        shell: powershell
+        run: cargo build --release --manifest-path tools/pub-re/Cargo.toml --bin pub-re
+
+      - name: Run bounded native Publisher transaction
+        shell: powershell
+        run: |
+          & tools/pub-re/windows/Invoke-PubReNativeExperiment.ps1 `
+            -ManifestPath $env:PUB_RE_NATIVE_MANIFEST `
+            -OutputRoot $env:PUB_RE_NATIVE_OUTPUT
+
+      - name: Join native output to CFB and OfficeArt provenance
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "private"
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $controlPath = Join-Path $private "control.json"
+          $control = Get-Content -LiteralPath $controlPath -Raw | ConvertFrom-Json
+
+          if ([bool]$control.has_diff) {
+            $diffManifest = Join-Path $private "diff-manifest.json"
+            $cfbReceipt = Join-Path $evidence "cfb-receipt.json"
+            & tools/pub-re/target/release/pub-re.exe analyze `
+              --manifest $diffManifest `
+              --output $cfbReceipt
+
+            if (-not [string]::IsNullOrWhiteSpace([string]$control.officeart_stream)) {
+              & tools/pub-re/target/release/pub-re.exe attribute-officeart `
+                --manifest $diffManifest `
+                --stream ([string]$control.officeart_stream) `
+                --output (Join-Path $evidence "officeart-receipt.json")
+            }
+          }
+
+      - name: Enforce source-safe evidence boundary
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $files = @(Get-ChildItem -LiteralPath $evidence -Filter *.json -File)
+          if ($files.Count -lt 1) {
+            throw "native experiment emitted no JSON evidence"
+          }
+
+          foreach ($file in $files) {
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "source-safe evidence contains an absolute filesystem path"
+            }
+            if ($text -match '(?i)"raw_document_bytes_emitted"\s*:\s*true') {
+              throw "source-safe evidence claims raw document bytes were emitted"
+            }
+            if ($text -match '(?i)"raw_stream_bytes_emitted"\s*:\s*true') {
+              throw "source-safe evidence claims raw stream bytes were emitted"
+            }
+            [void](Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json)
+          }
+
+      - name: Upload source-safe receipts only
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove private native inputs and outputs
+        if: always()
+        shell: powershell
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:PUB_RE_NATIVE_OUTPUT) -and (Test-Path -LiteralPath $env:PUB_RE_NATIVE_OUTPUT)) {
+            Remove-Item -LiteralPath $env:PUB_RE_NATIVE_OUTPUT -Recurse -Force
+          }
+ -or
+                  $env:PUB_RE_DELTA_DEGREES -notmatch '^-?[0-9]+(?:\.[0-9]{1,6})?
+            $manifest = Join-Path $output "generated-manifest.json"
+            $generated | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifest -Encoding utf8
+          }
+          else {
+            throw "unsupported PUB RE native command mode"
+          }
+
+          "PUB_RE_NATIVE_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build standalone PUB RE
+        shell: powershell
+        run: cargo build --release --manifest-path tools/pub-re/Cargo.toml --bin pub-re
+
+      - name: Run bounded native Publisher transaction
+        shell: powershell
+        run: |
+          & tools/pub-re/windows/Invoke-PubReNativeExperiment.ps1 `
+            -ManifestPath $env:PUB_RE_NATIVE_MANIFEST `
+            -OutputRoot $env:PUB_RE_NATIVE_OUTPUT
+
+      - name: Join native output to CFB and OfficeArt provenance
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "private"
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $controlPath = Join-Path $private "control.json"
+          $control = Get-Content -LiteralPath $controlPath -Raw | ConvertFrom-Json
+
+          if ([bool]$control.has_diff) {
+            $diffManifest = Join-Path $private "diff-manifest.json"
+            $cfbReceipt = Join-Path $evidence "cfb-receipt.json"
+            & tools/pub-re/target/release/pub-re.exe analyze `
+              --manifest $diffManifest `
+              --output $cfbReceipt
+
+            if (-not [string]::IsNullOrWhiteSpace([string]$control.officeart_stream)) {
+              & tools/pub-re/target/release/pub-re.exe attribute-officeart `
+                --manifest $diffManifest `
+                --stream ([string]$control.officeart_stream) `
+                --output (Join-Path $evidence "officeart-receipt.json")
+            }
+          }
+
+      - name: Enforce source-safe evidence boundary
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $files = @(Get-ChildItem -LiteralPath $evidence -Filter *.json -File)
+          if ($files.Count -lt 1) {
+            throw "native experiment emitted no JSON evidence"
+          }
+
+          foreach ($file in $files) {
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "source-safe evidence contains an absolute filesystem path"
+            }
+            if ($text -match '(?i)"raw_document_bytes_emitted"\s*:\s*true') {
+              throw "source-safe evidence claims raw document bytes were emitted"
+            }
+            if ($text -match '(?i)"raw_stream_bytes_emitted"\s*:\s*true') {
+              throw "source-safe evidence claims raw stream bytes were emitted"
+            }
+            [void](Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json)
+          }
+
+      - name: Upload source-safe receipts only
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove private native inputs and outputs
+        if: always()
+        shell: powershell
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:PUB_RE_NATIVE_OUTPUT) -and (Test-Path -LiteralPath $env:PUB_RE_NATIVE_OUTPUT)) {
+            Remove-Item -LiteralPath $env:PUB_RE_NATIVE_OUTPUT -Recurse -Force
+          }
+) {
+                throw "rotation selector or delta is invalid"
+              }
+
+              $pageId64 = [int64]$env:PUB_RE_PAGE_ID
+              $shapeId64 = [int64]$env:PUB_RE_SHAPE_ID
+              $delta = [double]$env:PUB_RE_DELTA_DEGREES
+              if ($pageId64 -gt [int]::MaxValue -or $shapeId64 -gt [int]::MaxValue) {
+                throw "Publisher selector is outside signed 32-bit bounds"
+              }
+              if ([math]::Abs($delta) -lt 0.000001 -or [math]::Abs($delta) -gt 45.0) {
+                throw "rotation delta must be nonzero and within 45 degrees"
+              }
+
+              $experimentPrefix = "rotate"
+              $operation = [ordered]@{
+                kind = "shape_rotation_delta"
+                selector = [ordered]@{
+                  page_id = [int]$pageId64
+                  shape_id = [int]$shapeId64
+                }
+                delta_degrees = $delta
+              }
+            }
+
             $generated = [ordered]@{
               schema = "chaptera.pub-re-native-experiment.v1"
-              experiment_id = ("snapshot-{0}-{1}" -f $env:PUB_RE_FIXTURE_ALIAS, $env:GITHUB_RUN_ID)
+              experiment_id = ("{0}-{1}-{2}" -f $experimentPrefix, $env:PUB_RE_FIXTURE_ALIAS, $env:GITHUB_RUN_ID)
               source = [ordered]@{
                 path = $download
                 expected_sha256 = $expectedSha
               }
-              operation = [ordered]@{
-                kind = "snapshot_only"
-              }
+              operation = $operation
               policy = [ordered]@{
                 writer = "current"
                 visible = $false
