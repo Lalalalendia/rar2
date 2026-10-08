@@ -2804,28 +2804,46 @@ fn resolve_text_layout_v1(
     let Ok(story_scalar_len) = u32::try_from(story.text.chars().count()) else {
         return fallback_layout(RenderTextLayoutFallbackReasonV1::StoryExtentMismatch);
     };
-    if fragment.scalar_start != 0
-        || fragment.scalar_end != story_scalar_len
-        || !render_text_is_story_equivalent_for_layout_v1(
+    let full_story_equivalent = fragment.scalar_start == 0
+        && fragment.scalar_end == story_scalar_len
+        && render_text_is_story_equivalent_for_layout_v1(
             visual,
             page_id,
             node_id,
             projected_target_frame_node_id,
             &fragment.text,
             &story.text,
-        )
-    {
+        );
+    let exact_slice_scalar_base = (!full_story_equivalent)
+        .then(|| {
+            exact_direct_story_slice_scalar_base_v1(
+                visual,
+                page_id,
+                node_id,
+                projected_target_frame_node_id,
+                fragment,
+                &story.text,
+            )
+        })
+        .flatten();
+    if !full_story_equivalent && exact_slice_scalar_base.is_none() {
         return fallback_layout(RenderTextLayoutFallbackReasonV1::StoryExtentMismatch);
     }
+    let layout_scalar_base = exact_slice_scalar_base.unwrap_or(0);
+    let layout_expected_scalar_end = fragment.scalar_end;
 
-    let frame_ordinal = match admitted_layout_frame_ordinal(
-        visual,
-        fragment.story_id,
-        node_id,
-        projected_target_frame_node_id,
-    ) {
-        Ok(ordinal) => ordinal,
-        Err(reason) => return fallback_layout(reason),
+    let frame_ordinal = if exact_slice_scalar_base.is_some() {
+        0
+    } else {
+        match admitted_layout_frame_ordinal(
+            visual,
+            fragment.story_id,
+            node_id,
+            projected_target_frame_node_id,
+        ) {
+            Ok(ordinal) => ordinal,
+            Err(reason) => return fallback_layout(reason),
+        }
     };
 
     if bounds.width.get() <= 0 || bounds.height.get() <= 0 {
