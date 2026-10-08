@@ -28,7 +28,10 @@ enum Command {
 }
 
 fn write_receipt(path: &Path, receipt: &pub_re::PubReReceiptV1) -> Result<()> {
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent)
             .with_context(|| format!("create receipt directory {}", parent.display()))?;
     }
