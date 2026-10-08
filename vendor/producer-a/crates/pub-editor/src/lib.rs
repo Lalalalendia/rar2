@@ -197,7 +197,7 @@ pub const EDITOR_PROJECT_VERSION_V0_21: &str = "pub-editor-v0.21";
 pub const EDITOR_PROJECT_VERSION_V0_22: &str = "pub-editor-v0.22";
 pub const EDITOR_PROJECT_VERSION_V0_23: &str = "pub-editor-v0.23";
 pub const EDITOR_PROJECT_VERSION_V0_24: &str = "pub-editor-v0.24";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_24;
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_23;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
 pub const PUB_MATURE_0X2C_SCHEMA_FENCE: &str = "pub-family-0x2c";
 
