@@ -7,6 +7,8 @@ on:
         description: "Manifest filename under PUB_RE_MANIFEST_ROOT on the dedicated Windows runner"
         required: true
         type: string
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
@@ -16,7 +18,300 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  gate:
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.number == 2193 &&
+          github.actor == 'Lalalalendia' &&
+          github.event.comment.user.login == 'Lalalalendia' &&
+          github.event.comment.author_association == 'OWNER'
+        )
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      manifest_name: ${{ steps.command.outputs.manifest_name }}
+    steps:
+      - name: Resolve trusted native command
+        id: command
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_MANIFEST_NAME: ${{ inputs.manifest_name }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            candidate="$INPUT_MANIFEST_NAME"
+          else
+            if [[ "$COMMENT_BODY" == *    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prefer Git Bash on the interactive Windows runner
+        shell: powershell
+        run: |
+          $gitBashDir = "C:\Program Files\Git\bin"
+          $gitBash = Join-Path $gitBashDir "bash.exe"
+          if (-not (Test-Path -LiteralPath $gitBash -PathType Leaf)) {
+            throw "Git Bash is required at $gitBash"
+          }
+          $gitBashDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Resolve local manifest safely
+        shell: powershell
+        env:
+          PUB_RE_MANIFEST_NAME: ${{ needs.gate.outputs.manifest_name }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          if ([string]::IsNullOrWhiteSpace($env:PUB_RE_MANIFEST_ROOT)) {
+            throw "PUB_RE_MANIFEST_ROOT is not configured on the dedicated runner"
+          }
+          if ($env:PUB_RE_MANIFEST_NAME -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json$') {
+            throw "manifest_name must be a simple .json filename"
+          }
+
+          $manifest = Join-Path $env:PUB_RE_MANIFEST_ROOT $env:PUB_RE_MANIFEST_NAME
+          if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
+            throw "requested native experiment manifest is not present"
+          }
+
+          $output = Join-Path $env:RUNNER_TEMP ("pub-re-native-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+
+          "PUB_RE_NATIVE_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PUB_RE_NATIVE_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build standalone PUB RE
+        shell: powershell
+        run: cargo build --release --manifest-path tools/pub-re/Cargo.toml --bin pub-re
+
+      - name: Run bounded native Publisher transaction
+        shell: powershell
+        run: |
+          & tools/pub-re/windows/Invoke-PubReNativeExperiment.ps1 `
+            -ManifestPath $env:PUB_RE_NATIVE_MANIFEST `
+            -OutputRoot $env:PUB_RE_NATIVE_OUTPUT
+
+      - name: Join native output to CFB and OfficeArt provenance
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "private"
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $controlPath = Join-Path $private "control.json"
+          $control = Get-Content -LiteralPath $controlPath -Raw | ConvertFrom-Json
+
+          if ([bool]$control.has_diff) {
+            $diffManifest = Join-Path $private "diff-manifest.json"
+            $cfbReceipt = Join-Path $evidence "cfb-receipt.json"
+            & tools/pub-re/target/release/pub-re.exe analyze `
+              --manifest $diffManifest `
+              --output $cfbReceipt
+
+            if (-not [string]::IsNullOrWhiteSpace([string]$control.officeart_stream)) {
+              & tools/pub-re/target/release/pub-re.exe attribute-officeart `
+                --manifest $diffManifest `
+                --stream ([string]$control.officeart_stream) `
+                --output (Join-Path $evidence "officeart-receipt.json")
+            }
+          }
+
+      - name: Enforce source-safe evidence boundary
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $files = @(Get-ChildItem -LiteralPath $evidence -Filter *.json -File)
+          if ($files.Count -lt 1) {
+            throw "native experiment emitted no JSON evidence"
+          }
+
+          foreach ($file in $files) {
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "source-safe evidence contains an absolute filesystem path"
+            }
+            if ($text -match '(?i)"raw_document_bytes_emitted"\s*:\s*true') {
+              throw "source-safe evidence claims raw document bytes were emitted"
+            }
+            if ($text -match '(?i)"raw_stream_bytes_emitted"\s*:\s*true') {
+              throw "source-safe evidence claims raw stream bytes were emitted"
+            }
+            [void](Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json)
+          }
+
+      - name: Upload source-safe receipts only
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove private native inputs and outputs
+        if: always()
+        shell: powershell
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:PUB_RE_NATIVE_OUTPUT) -and (Test-Path -LiteralPath $env:PUB_RE_NATIVE_OUTPUT)) {
+            Remove-Item -LiteralPath $env:PUB_RE_NATIVE_OUTPUT -Recurse -Force
+          }
+\n'* || "$COMMENT_BODY" == *    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prefer Git Bash on the interactive Windows runner
+        shell: powershell
+        run: |
+          $gitBashDir = "C:\Program Files\Git\bin"
+          $gitBash = Join-Path $gitBashDir "bash.exe"
+          if (-not (Test-Path -LiteralPath $gitBash -PathType Leaf)) {
+            throw "Git Bash is required at $gitBash"
+          }
+          $gitBashDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Resolve local manifest safely
+        shell: powershell
+        env:
+          PUB_RE_MANIFEST_NAME: ${{ inputs.manifest_name }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          if ([string]::IsNullOrWhiteSpace($env:PUB_RE_MANIFEST_ROOT)) {
+            throw "PUB_RE_MANIFEST_ROOT is not configured on the dedicated runner"
+          }
+          if ($env:PUB_RE_MANIFEST_NAME -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json$') {
+            throw "manifest_name must be a simple .json filename"
+          }
+
+          $manifest = Join-Path $env:PUB_RE_MANIFEST_ROOT $env:PUB_RE_MANIFEST_NAME
+          if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
+            throw "requested native experiment manifest is not present"
+          }
+
+          $output = Join-Path $env:RUNNER_TEMP ("pub-re-native-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+
+          "PUB_RE_NATIVE_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PUB_RE_NATIVE_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build standalone PUB RE
+        shell: powershell
+        run: cargo build --release --manifest-path tools/pub-re/Cargo.toml --bin pub-re
+
+      - name: Run bounded native Publisher transaction
+        shell: powershell
+        run: |
+          & tools/pub-re/windows/Invoke-PubReNativeExperiment.ps1 `
+            -ManifestPath $env:PUB_RE_NATIVE_MANIFEST `
+            -OutputRoot $env:PUB_RE_NATIVE_OUTPUT
+
+      - name: Join native output to CFB and OfficeArt provenance
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "private"
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $controlPath = Join-Path $private "control.json"
+          $control = Get-Content -LiteralPath $controlPath -Raw | ConvertFrom-Json
+
+          if ([bool]$control.has_diff) {
+            $diffManifest = Join-Path $private "diff-manifest.json"
+            $cfbReceipt = Join-Path $evidence "cfb-receipt.json"
+            & tools/pub-re/target/release/pub-re.exe analyze `
+              --manifest $diffManifest `
+              --output $cfbReceipt
+
+            if (-not [string]::IsNullOrWhiteSpace([string]$control.officeart_stream)) {
+              & tools/pub-re/target/release/pub-re.exe attribute-officeart `
+                --manifest $diffManifest `
+                --stream ([string]$control.officeart_stream) `
+                --output (Join-Path $evidence "officeart-receipt.json")
+            }
+          }
+
+      - name: Enforce source-safe evidence boundary
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $files = @(Get-ChildItem -LiteralPath $evidence -Filter *.json -File)
+          if ($files.Count -lt 1) {
+            throw "native experiment emitted no JSON evidence"
+          }
+
+          foreach ($file in $files) {
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "source-safe evidence contains an absolute filesystem path"
+            }
+            if ($text -match '(?i)"raw_document_bytes_emitted"\s*:\s*true') {
+              throw "source-safe evidence claims raw document bytes were emitted"
+            }
+            if ($text -match '(?i)"raw_stream_bytes_emitted"\s*:\s*true') {
+              throw "source-safe evidence claims raw stream bytes were emitted"
+            }
+            [void](Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json)
+          }
+
+      - name: Upload source-safe receipts only
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove private native inputs and outputs
+        if: always()
+        shell: powershell
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:PUB_RE_NATIVE_OUTPUT) -and (Test-Path -LiteralPath $env:PUB_RE_NATIVE_OUTPUT)) {
+            Remove-Item -LiteralPath $env:PUB_RE_NATIVE_OUTPUT -Recurse -Force
+          }
+\r'* ]]; then
+              echo "control command must be exactly one line" >&2
+              exit 1
+            fi
+            if [[ "$COMMENT_BODY" =~ ^/pub-re-native[[:space:]]+([A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json)[[:space:]]*$ ]]; then
+              candidate="${BASH_REMATCH[1]}"
+            else
+              echo "invalid PUB RE native control command" >&2
+              exit 1
+            fi
+          fi
+
+          if [[ ! "$candidate" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json$ ]]; then
+            echo "manifest_name must be a simple .json filename" >&2
+            exit 1
+          fi
+
+          echo "manifest_name=$candidate" >> "$GITHUB_OUTPUT"
+
   native:
+    needs: gate
+    if: ${{ needs.gate.result == 'success' }}
     runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
     timeout-minutes: 30
     steps:
