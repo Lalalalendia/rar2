@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use pub_reader::{build_legacy_0x22_noquill_source_graph, PubBridgeDiagnostic};
+use pub_reader::{PubBridgeDiagnostic, build_legacy_0x22_noquill_source_graph};
 use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, env, fs, io::Cursor, path::PathBuf};
 
@@ -9,7 +9,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
-
 
 fn legacy_object_residual_census(
     bytes: &[u8],
