@@ -1129,6 +1129,21 @@ impl EditorSession {
         .map_err(delete_blank_authored_page_error_to_editor_v1)
     }
 
+    /// Read-only admission for an AuthorCreated customer Page containing
+    /// exactly one independent AuthorCreated Rectangle.
+    /// No revision or history is consumed by this query.
+    pub fn can_delete_authored_rectangle_page_v1(
+        &self,
+        source_qualified_page_ids: &[PageId],
+        page_id: PageId,
+    ) -> bool {
+        self.plan_delete_authored_rectangle_page_from_session_v1(
+            source_qualified_page_ids,
+            page_id,
+        )
+        .is_ok()
+    }
+
     /// Admission-only seam for the next versioned EditorSession operation.
     ///
     /// An authored Rectangle is an overlay, not a Page.children entry. The
@@ -2088,6 +2103,7 @@ mod authored_page_append_tests {
             .expect("one authored Rectangle");
         let original_operations = session.operations().len();
         let original_graph_pages = session.graph().document.pages.clone();
+        assert!(session.can_delete_authored_rectangle_page_v1(&[source], identity.page_id));
         let planned = session
             .plan_delete_authored_rectangle_page_from_session_v1(&[source], identity.page_id)
             .expect("admitted authored Rectangle page");
