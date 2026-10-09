@@ -84,6 +84,10 @@ jobs:
           $ErrorActionPreference = "Stop"
           python -m unittest -v tools.test_t891_evidence_classifier
 
+      - name: Guard M1 native trust and evidence wiring
+        shell: pwsh
+        run: python tools/research-runner/tests/test_text_width_m1_contract.py
+
       - name: Exercise Structured Storage deletion helper
         shell: pwsh
         run: |
