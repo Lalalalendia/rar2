@@ -416,3 +416,119 @@ impl EditorSession {
         Ok(operation)
     }
 }
+
+pub(super) fn snapshot_table_ranges(table: &pub_reader::PubTableSource) -> Vec<TableCellRangeSnapshot> {
+    table
+        .cells
+        .iter()
+        .map(|cell| TableCellRangeSnapshot {
+            cell_id: cell.id,
+            utf16_start: cell.utf16_start,
+            utf16_end: cell.utf16_end,
+        })
+        .collect()
+}
+
+pub(super) fn rebuild_simple_table_story(
+    table: &pub_reader::PubTableSource,
+    cells: &[pub_reader::PubMaterializedTableCell],
+) -> Result<(String, Vec<TableCellRangeSnapshot>), ()> {
+    let simple = table.simple_table.as_ref().ok_or(())?;
+    let mut ordered = simple.cells.clone();
+    ordered.sort_by_key(|cell| (cell.address.row, cell.address.column, cell.id));
+
+    if table.text_id == AUTHORED_TABLE_SENTINEL_TEXT_ID_V1 && table.source_refs.is_empty() {
+        let ordered_cells = ordered
+            .iter()
+            .map(|semantic| {
+                let materialized = cells.iter().find(|cell| cell.id == semantic.id).ok_or(())?;
+                Ok((semantic.id, materialized.text.clone()))
+            })
+            .collect::<Result<Vec<_>, ()>>()?;
+        let (text, by_id) = rebuild_authored_table_story_v1(&ordered_cells).map_err(|_| ())?;
+        let ranges = ordered
+            .iter()
+            .map(|semantic| {
+                let (utf16_start, utf16_end) = by_id[&semantic.id];
+                TableCellRangeSnapshot {
+                    cell_id: semantic.id,
+                    utf16_start,
+                    utf16_end,
+                }
+            })
+            .collect();
+        return Ok((text, ranges));
+    }
+
+    let mut utf16 = Vec::<u16>::new();
+    let mut ranges = Vec::with_capacity(ordered.len());
+
+    for (index, semantic) in ordered.iter().enumerate() {
+        let materialized = cells.iter().find(|cell| cell.id == semantic.id).ok_or(())?;
+        let start = u32::try_from(utf16.len()).map_err(|_| ())?;
+        if index > 0 {
+            utf16.push(0x000D);
+        }
+        utf16.extend(materialized.text.encode_utf16());
+        if index + 1 == ordered.len() {
+            utf16.push(0x000D);
+        }
+        let end = u32::try_from(utf16.len()).map_err(|_| ())?;
+        ranges.push(TableCellRangeSnapshot {
+            cell_id: semantic.id,
+            utf16_start: start,
+            utf16_end: end,
+        });
+    }
+
+    let text = String::from_utf16(&utf16).map_err(|_| ())?;
+    Ok((text, ranges))
+}
+
+pub(super) fn apply_table_cell_state(
+    graph: &mut PubResolvedGraph,
+    node_id: NodeId,
+    story_id: StoryId,
+    expected_story: &str,
+    replacement_story: &str,
+    expected_ranges: &[TableCellRangeSnapshot],
+    replacement_ranges: &[TableCellRangeSnapshot],
+) -> Result<(), EditorError> {
+    let story = graph
+        .stories
+        .get_mut(&story_id)
+        .ok_or(EditorError::MissingStory { story_id })?;
+    if story.text != expected_story {
+        return Err(EditorError::StaleOperation { story_id });
+    }
+
+    let node = graph
+        .nodes
+        .get_mut(&node_id)
+        .ok_or(EditorError::TableEditUnsupported { node_id })?;
+    let table = node
+        .payload
+        .table
+        .as_mut()
+        .ok_or(EditorError::TableEditUnsupported { node_id })?;
+    if table.story_id != Some(story_id) {
+        return Err(EditorError::StaleOperation { story_id });
+    }
+
+    if snapshot_table_ranges(table) != expected_ranges {
+        return Err(EditorError::StaleOperation { story_id });
+    }
+
+    for range in replacement_ranges {
+        let cell = table
+            .cells
+            .iter_mut()
+            .find(|cell| cell.id == range.cell_id)
+            .ok_or(EditorError::TableEditUnsupported { node_id })?;
+        cell.utf16_start = range.utf16_start;
+        cell.utf16_end = range.utf16_end;
+    }
+    story.text.clear();
+    story.text.push_str(replacement_story);
+    Ok(())
+}
