@@ -36,6 +36,8 @@ The command never schedules visual goldens, full corpora, native Publisher, inst
 
 The initial rules cover pub-editor paragraph alignment, table row/column history, and scoped text-format property history using bounded \`--lib\` tests already owned by their existing workflows. The registry is schema-validated and malformed entries fail closed.
 
+Repo-wide bounded micro-test owners now include Quill script font parsing (the exact `pub-quill` font test module) and the Cloud Reader UI shell (the existing read-only `apps/cloud-reader/check_contract.py`). HTML/CSS/reader-app changes gain a source-free semantic contract in addition to language-level syntax checks. Browser/Playwright and full-PUB fidelity acceptance remain outside the edit loop; the Quill microtest may need an initial Rust compile before warm-cache measurements are meaningful. These owners are examples, not an Editor-only scope or a substitute for the complete product acceptance graph.
+
 ## Feature loop
 
 Before publishing a coherent feature slice, add package unit tests:
