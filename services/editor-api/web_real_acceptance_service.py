@@ -470,15 +470,11 @@ class RealAcceptanceState:
         else:
             raise ValueError("unsupported history transition")
         project["operations"] = operations
-        project["schema_version"] = (
-            "pub-editor-v0.4"
-            if any(
-                isinstance(operation, dict)
-                and operation.get("kind") == "move_node"
-                for operation in operations
-            )
-            else "pub-editor-v0.2"
-        )
+        # Undo/Redo change the operation log, not the versioned project's
+        # persisted identity contract. Downgrading to v0.2 after Story Undo
+        # loses the v0.11+ admission for EditorProject.identity and makes the
+        # unchanged source-backed project fail Rust apply_project replay.
+        # Retain the admitted schema of the existing canonical project.
         return project, [{"key": "history." + transition_kind, "state": "supported", "note": None}]
 
     def commit(self, request: dict, principal_id: str) -> dict:
