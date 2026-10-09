@@ -825,12 +825,28 @@ jobs:
             throw "native experiment emitted no JSON evidence"
           }
 
+          # Receipt filenames can carry private metadata. Never log arbitrary
+          # producer basenames even when they contain only ASCII characters.
+          $trustedReceiptNames = @(
+            'cfb-receipt.json',
+            'control-native-receipt.json',
+            'control-native-stage-receipt.json',
+            'mutation-native-receipt.json',
+            'mutation-native-stage-receipt.json',
+            'native-receipt.json',
+            'native-stage-receipt.json',
+            'officeart-receipt.json',
+            'rotation-pair-blast-radius.json',
+            'rotation-pair-cfb-receipt.json',
+            'rotation-pair-officeart-receipt.json',
+            'rotation-pair-summary.json'
+          )
+
           foreach ($file in $files) {
             $text = Get-Content -LiteralPath $file.FullName -Raw
             if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
-              # Never print a matched path or its contents; report only a safe
-              # checked-in receipt basename so a failed native run is actionable.
-              $receiptName = if ($file.Name -match "^[A-Za-z0-9_.-]{1,120}$") { $file.Name } else { "untrusted-name" }
+              # Only explicit checked-in receipt names may reach public logs.
+              $receiptName = if ($trustedReceiptNames -ccontains $file.Name) { $file.Name } else { "untrusted-name" }
               throw "source-safe evidence contains an absolute filesystem path in receipt: $receiptName"
             }
             if ($text -match '(?i)"raw_document_bytes_emitted"\s*:\s*true') {
