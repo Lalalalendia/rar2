@@ -11,7 +11,7 @@ import unittest
 import fitz
 
 sys.path.insert(0, str(Path(__file__).parent))
-from pub_pdf_cli_publisher_oracle_v1 import classify_cli_failure, compare_pdf, load_references, run
+from pub_pdf_cli_publisher_oracle_v1 import classify_cli_failure, compare_pdf, load_references, run, safe_loss_summary
 
 ROOT = Path(__file__).resolve().parents[1]
 BATCH = ROOT / "tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json"
@@ -74,6 +74,36 @@ class OracleContractTests(unittest.TestCase):
                 self.assertNotIn("/", status)
                 self.assertNotIn("secret", status)
                 self.assertNotIn(".pub", status)
+
+    def test_unsupported_image_mime_histogram_is_bounded(self):
+        receipt = {
+            "typography": {},
+            "pdf": {
+                "nodes": [],
+                "diagnostics": [
+                    {
+                        "code": "pdf.image.mime_unsupported",
+                        "message": 'exact image MIME "image/svg+xml" is outside the bounded PNG/JPEG PDF slice',
+                    },
+                    {
+                        "code": "pdf.image.mime_unsupported",
+                        "message": 'exact image MIME "../../secret" is outside the bounded PNG/JPEG PDF slice',
+                    },
+                    {
+                        "code": "other",
+                        "message": 'exact image MIME "image/tiff" is outside the bounded PNG/JPEG PDF slice',
+                    },
+                ],
+            },
+        }
+        summary = safe_loss_summary(receipt)
+        self.assertEqual(
+            summary["unsupported_image_mime_counts"],
+            {"image/svg+xml": 1, "unclassified": 1},
+        )
+        rendered = json.dumps(summary)
+        self.assertNotIn("secret", rendered)
+        self.assertNotIn("image/tiff", rendered)
 
     def test_absent_private_inputs_and_hosted_source_are_not_claimed_as_compared(self):
         pairs = load_references(BATCH, SUPPLEMENTAL)
