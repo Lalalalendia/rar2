@@ -2210,6 +2210,143 @@ mod authored_page_append_tests {
     }
 
     #[test]
+    fn delete_authored_rectangle_page_v029_is_one_reversible_project_operation() {
+        let source = page_id("22222222-2222-4222-8222-222222222222");
+        let identity = authored_identity();
+        let base = source_graph(vec![source]);
+        let mut session = EditorSession::new(base.clone()).expect("session");
+        let original_hash = session.source_hash();
+        session
+            .append_blank_page_v1(
+                vec![source],
+                identity,
+                Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                None,
+                None,
+            )
+            .expect("append authored page");
+        let node_id = NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        session
+            .create_shape(
+                node_id,
+                identity.page_id,
+                RectEmu::new(
+                    LengthEmu::new(100_000),
+                    LengthEmu::new(100_000),
+                    LengthEmu::new(200_000),
+                    LengthEmu::new(300_000),
+                ),
+                crate::AuthoredShapePaintV1 {
+                    fill: crate::AuthoredSolidFillV1 {
+                        visible: true,
+                        color: crate::Srgb8V1 { r: 255, g: 255, b: 255 },
+                    },
+                    stroke: crate::AuthoredSolidStrokeV1 {
+                        visible: true,
+                        color: crate::Srgb8V1 { r: 0, g: 0, b: 0 },
+                        width_emu: 12_700,
+                    },
+                    provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+                },
+            )
+            .expect("create one authored rectangle");
+        let with_shape = session.graph().clone();
+        let shape_before = session.authored_shapes[&node_id].clone();
+        let stack_before = session.current_authored_stack_v1(identity.page_id);
+        let history_before = session.operations().len();
+        assert!(session.can_delete_authored_rectangle_page_v1(&[source], identity.page_id));
+
+        let operation = session
+            .delete_authored_rectangle_page_v1(vec![source], identity.page_id)
+            .expect("single canonical delete");
+        assert!(matches!(operation, EditOperation::DeleteAuthoredRectanglePageV1 { .. }));
+        assert_eq!(session.operations().len(), history_before + 1);
+        assert_eq!(session.graph().document.pages, vec![source]);
+        assert!(!session.graph().pages.contains_key(&identity.page_id));
+        assert!(!session.authored_shapes.contains_key(&node_id));
+        assert!(!session.authored_stacks.contains_key(&identity.page_id));
+        assert_eq!(session.source_hash(), original_hash);
+
+        let deleted_graph = session.graph().clone();
+        let project = session.project();
+        assert_eq!(project.schema_version, crate::EDITOR_PROJECT_VERSION_V0_29);
+        let encoded = serde_json::to_vec(&project).expect("encode v0.29");
+        let decoded: EditorProject = serde_json::from_slice(&encoded).expect("decode v0.29");
+        let mut reopened = EditorSession::new(base.clone()).expect("fresh");
+        reopened.apply_project(&decoded).expect("exact project replay");
+        assert_eq!(reopened.graph(), &deleted_graph);
+        assert!(!reopened.authored_shapes.contains_key(&node_id));
+        assert_eq!(reopened.operations(), decoded.operations.as_slice());
+        assert_eq!(reopened.source_hash(), original_hash);
+
+        session.undo().expect("single undo");
+        assert_eq!(session.graph(), &with_shape);
+        assert_eq!(session.authored_shapes.get(&node_id), Some(&shape_before));
+        assert_eq!(session.current_authored_stack_v1(identity.page_id), stack_before);
+        assert_eq!(session.operations().len(), history_before);
+        session.redo().expect("single redo");
+        assert_eq!(session.graph(), &deleted_graph);
+        assert!(!session.authored_shapes.contains_key(&node_id));
+
+        let mut forged_legacy = decoded.clone();
+        forged_legacy.schema_version = crate::EDITOR_PROJECT_VERSION_V0_28.into();
+        let mut legacy_reopen = EditorSession::new(base).expect("legacy fresh");
+        assert!(matches!(
+            legacy_reopen.apply_project(&forged_legacy),
+            Err(crate::EditorProjectError::LegacyProjectCarriesDeleteAuthoredRectanglePageOperation { .. })
+        ));
+    }
+
+    #[test]
+    fn rectangle_page_delete_rejects_tampered_runtime_without_history() {
+        let source = page_id("22222222-2222-4222-8222-222222222222");
+        let identity = authored_identity();
+        let mut session = EditorSession::new(source_graph(vec![source])).expect("session");
+        session
+            .append_blank_page_v1(
+                vec![source], identity,
+                Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                None, None,
+            )
+            .expect("append");
+        let node_id = NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        session
+            .create_shape(
+                node_id, identity.page_id,
+                RectEmu::new(
+                    LengthEmu::new(100_000), LengthEmu::new(100_000),
+                    LengthEmu::new(200_000), LengthEmu::new(300_000),
+                ),
+                crate::AuthoredShapePaintV1 {
+                    fill: crate::AuthoredSolidFillV1 {
+                        visible: true,
+                        color: crate::Srgb8V1 { r: 0, g: 0, b: 0 },
+                    },
+                    stroke: crate::AuthoredSolidStrokeV1 {
+                        visible: true,
+                        color: crate::Srgb8V1 { r: 0, g: 0, b: 0 },
+                        width_emu: 12_700,
+                    },
+                    provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+                },
+            )
+            .expect("create shape");
+        let before = session.operations().len();
+        // Two contents cannot be silently reduced to one candidate; a second
+        // AuthorCreated rectangle is an unsupported cascade.
+        let second = NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        let mut extra = session.authored_shapes[&node_id].clone();
+        extra.node_id = second;
+        session.authored_shapes.insert(second, extra);
+        assert!(!session.can_delete_authored_rectangle_page_v1(&[source], identity.page_id));
+        assert!(session
+            .delete_authored_rectangle_page_v1(vec![source], identity.page_id)
+            .is_err());
+        assert_eq!(session.operations().len(), before);
+        assert!(session.graph().pages.contains_key(&identity.page_id));
+    }
+
+    #[test]
     fn duplicate_blank_capability_uses_canonical_source_admission_without_revision() {
         let source = page_id("22222222-2222-4222-8222-222222222222");
         let mut session = EditorSession::new(source_graph(vec![source])).expect("session");
