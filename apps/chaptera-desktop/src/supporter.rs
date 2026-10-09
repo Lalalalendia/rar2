@@ -70,6 +70,10 @@ impl MarketProfile {
             Self::NeutralEnglish => "NeutralEnglish",
         }
     }
+
+    pub(crate) fn is_active_target(self) -> bool {
+        !matches!(self, Self::NeutralEnglish)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,6 +249,14 @@ impl SupporterState {
         self.meaningful_successes_since_prompt >= REQUIRED_SUCCESSES_AFTER_PROMPT
     }
 
+    pub(crate) fn current_prompt_impression_index(&self, now_unix: i64) -> Option<u8> {
+        self.last_prompt_at_unix?;
+
+        u8::try_from(self.recent_prompt_count(now_unix))
+            .ok()
+            .filter(|index| (1..=MAX_PROMPTS_PER_WINDOW as u8).contains(index))
+    }
+
     pub(crate) fn record_prompt_shown(&mut self, now_unix: i64) {
         let now_unix = now_unix.max(0);
         self.recent_prompt_unix
@@ -370,6 +382,41 @@ mod tests {
             text_searchable: true,
             initial_page: 0,
         }
+    }
+
+    #[test]
+    fn locale_routing_is_exact_and_fail_closed() {
+        assert_eq!(MarketProfile::from_locale(Some("en-US")), MarketProfile::Us);
+        assert_eq!(MarketProfile::from_locale(Some("en_GB")), MarketProfile::Uk);
+        assert_eq!(MarketProfile::from_locale(Some("ru-RU")), MarketProfile::Ru);
+        assert_eq!(
+            MarketProfile::from_locale(Some("en_US.UTF-8")),
+            MarketProfile::Us
+        );
+        assert_eq!(
+            MarketProfile::from_locale(Some("en_GB.UTF-8@euro")),
+            MarketProfile::Uk
+        );
+        assert_eq!(
+            MarketProfile::from_locale(Some("ru_RU.UTF-8")),
+            MarketProfile::Ru
+        );
+        assert_eq!(
+            MarketProfile::from_locale(Some("en-CA")),
+            MarketProfile::NeutralEnglish
+        );
+        assert_eq!(
+            MarketProfile::from_locale(Some("ru-KZ")),
+            MarketProfile::NeutralEnglish
+        );
+    }
+
+    #[test]
+    fn neutral_locale_is_not_an_active_country_experiment() {
+        assert!(MarketProfile::Us.is_active_target());
+        assert!(MarketProfile::Uk.is_active_target());
+        assert!(MarketProfile::Ru.is_active_target());
+        assert!(!MarketProfile::NeutralEnglish.is_active_target());
     }
 
     #[test]
