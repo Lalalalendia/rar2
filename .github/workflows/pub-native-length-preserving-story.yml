@@ -1,0 +1,158 @@
+name: PUB native length-preserving Story control
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-native-length-preserving-story.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/pub-native-length-preserving-story.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pub-native-length-preserving-story-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  prepare-matched-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Generate pinned original Sample3 from established writer handoff
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- generate \
+            --output-dir out/native-length-only/generated
+      - name: Materialize exact one-byte UTF16 substitution with no metadata edits
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("out/native-length-only")
+          generated = root / "generated"
+          source = (generated / "source.pub").read_bytes()
+          manifest = json.loads((generated / "handoff.json").read_text())
+          expected_source = "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc"
+          expected_variant = "fff1ba20aced00b7da6aa22e9d48321281cbbeefbda3cba1fdfa876c67d41083"
+          digest = lambda b: hashlib.sha256(b).hexdigest()
+          if manifest.get("schema") != "chaptera.pub-native-story-handoff.v1":
+              raise SystemExit("unexpected handoff schema")
+          if len(source) != 72192 or digest(source) != expected_source:
+              raise SystemExit("Sample3 source fingerprint changed")
+          if manifest.get("source_sha256") != expected_source:
+              raise SystemExit("handoff source identity changed")
+          marker = "345678".encode("utf-16le")
+          replacement = "34567X".encode("utf-16le")
+          if source.count(marker) != 1 or source.index(marker) != 65442:
+              raise SystemExit("source Story marker not unique or moved")
+          candidate = bytearray(source)
+          start = source.index(marker)
+          candidate[start:start + len(marker)] = replacement
+          variant = bytes(candidate)
+          changed_offsets = [i for i, (a, b) in enumerate(zip(source, variant)) if a != b]
+          if len(source) != len(variant) or changed_offsets != [65452]:
+              raise SystemExit("unexpected mutation outside one UTF16 code unit")
+          if digest(variant) != expected_variant:
+              raise SystemExit("length-preserving variant identity mismatch")
+          for label, data, source_sha in (
+              ("original", source, expected_source),
+              ("text-only", variant, expected_variant),
+          ):
+              destination = root / label
+              destination.mkdir(parents=True, exist_ok=True)
+              (destination / "source.pub").write_bytes(data)
+              (destination / "handoff.json").write_text(
+                  json.dumps({
+                      "schema": "chaptera.pub-native-story-handoff.v1",
+                      "source_sha256": source_sha,
+                      "original_source_sha256": expected_source,
+                      "research_variant": label,
+                      "source_safe_metadata_only": True,
+                  }, indent=2), encoding="utf-8"
+              )
+          print("PASS pinned Sample3 original/one-byte UTF16 variant; no CFB or Quill metadata changed")
+          PY
+      - name: Upload exact inputs for this run only
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-native-length-only-input-${{ github.run_id }}
+          path: |
+            out/native-length-only/original/source.pub
+            out/native-length-only/original/handoff.json
+            out/native-length-only/text-only/source.pub
+            out/native-length-only/text-only/handoff.json
+          if-no-files-found: error
+          retention-days: 14
+
+  native-matched-length:
+    needs: prepare-matched-source
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Lalalalendia/rar2' }}
+    runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
+    concurrency:
+      group: pub-re-native-publisher-oracle
+      cancel-in-progress: false
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download SHA-pinned original and 1-byte variant from same run
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-native-length-only-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/chaptera-native-length-only/input
+      - name: Execute Publisher Open SaveAs Reopen for unmodified source
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/windows/pub-runtime/Invoke-StoryNativeSourceControl.ps1 `
+            -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-native-length-only/input/original') `
+            -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-native-length-only/private/original')
+          if (-not $?) { throw 'original_source_native_control_failed' }
+      - name: Execute same-length single-code-unit variant on same native runner
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/windows/pub-runtime/Invoke-StoryNativeSourceControl.ps1 `
+            -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-native-length-only/input/text-only') `
+            -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-native-length-only/private/text-only')
+          if (-not $?) { throw 'length_preserving_text_native_control_failed' }
+      - name: Upload original source-safe status only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-native-length-original-status-${{ github.run_id }}
+          path: ${{ runner.temp }}/chaptera-native-length-only/private/original/source-control-status.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Upload modified text source-safe status only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-native-length-text-status-${{ github.run_id }}
+          path: ${{ runner.temp }}/chaptera-native-length-only/private/text-only/source-control-status.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Remove all private Publisher inputs and outputs
+        if: always()
+        shell: powershell
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'chaptera-native-length-only'
+          if (Test-Path -LiteralPath $root) {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
+          }
