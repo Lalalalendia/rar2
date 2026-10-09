@@ -1,3 +1,4 @@
+// Second independent A/B control at same proof code: only this comment differs.
 // Sacrificial CI A/B control: same font-environment test semantics, one-runner topology comparison.
 import test from "node:test";
 import assert from "node:assert/strict";
