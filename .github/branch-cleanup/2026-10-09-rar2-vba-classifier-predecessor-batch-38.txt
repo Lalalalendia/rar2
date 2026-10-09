@@ -1,0 +1,6 @@
+# 2026-10-09 — VBA classifier predecessor batch 38
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+research/pub-vba-classifier-v22-realworld-r2 18f7459a43ff937645f5b9c4f901b0ebae3cacc3 # #1085 stale classifier owner; fresh-current-main successor #2366 merged with bounded v2.2 semantics
+ops/branch-gc-20261009-vba-planner-predecessor-batch-37 5a926ec31e870c172079c0a6c9580d08d054cc5f # completed #2365 clean receipt: 2/2 deleted
