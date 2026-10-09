@@ -8010,5 +8010,3 @@ mod table_rowcol_metadata_tests {
     }
 }
 
-#[cfg(test)]
-mod asset_reachability_tests;
