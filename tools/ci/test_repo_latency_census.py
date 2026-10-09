@@ -3,7 +3,7 @@
 import unittest
 
 from tools.ci.repo_latency_census import (
-    GitHub, analyze_pr, census, distribution, domains, seconds, summarize, timestamp,
+    GitHub, analyze_pr, census, distribution, domains, primary_class, seconds, summarize, timestamp,
 )
 
 
@@ -73,6 +73,17 @@ class TimeTests(unittest.TestCase):
             domains(["apps/web/foo.mjs", "apps/chaptera-server/src/lib.rs"]),
             ["cloud-server", "web"],
         )
+
+    def test_substantive_owner_beats_incidental_ci_and_schema_paths(self):
+        self.assertEqual(domains(["apps/cloud-reader/real-browser.test.mjs"]), ["cloud-reader"])
+        self.assertEqual(domains(["tools/perf/rust_perf_contract_router.py"]), ["performance-infra"])
+        self.assertEqual(domains([".github/workflows/pub-re-native.yml"]), ["research"])
+        self.assertEqual(domains(["packages/protocol/editor-render-scene/v1/snapshot.schema.json"]), ["web"])
+        self.assertEqual(primary_class(domains(["apps/web/render-v1.mjs", ".github/workflows/web-render-real-scene.yml", "docs/web.md", "tools/validate_renderer.py"])), "web")
+        self.assertEqual(primary_class(domains(["tools/research-runner/analysis/x.py", ".github/workflows/pub-re-native.yml", "tools/windows/run_paragraph_probe.ps1"])), "research")
+        self.assertEqual(primary_class(domains(["apps/web/render-v1.mjs", "apps/chaptera-server/src/lib.rs"])), "mixed")
+        self.assertEqual(primary_class(["ci-infra", "shared-or-other"]), "ci-infra")
+        self.assertEqual(primary_class(["shared-or-other"]), "shared-or-other")
 
     def test_actual_font_env_queue_tail_vs_nine_second_computation(self):
         workflows = [

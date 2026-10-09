@@ -64,7 +64,9 @@ def domains(paths: list[str]) -> list[str]:
         low = path.lower()
         if "android" in low or "/jni/" in low:
             result.add("android")
-        elif low.startswith(("apps/web/", "packages/web/")) or "web-" in low:
+        elif low.startswith(("apps/cloud-reader/", "tools/cloud_reader_")):
+            result.add("cloud-reader")
+        elif low.startswith(("apps/web/", "packages/web/", "packages/protocol/editor-render-scene/", "tools/run_web_")) or "web-" in low:
             result.add("web")
         elif low.startswith(("apps/chaptera-server/", "crates/chaptera-cloud-")):
             result.add("cloud-server")
@@ -80,13 +82,24 @@ def domains(paths: list[str]) -> list[str]:
             or low.startswith("crates/chaptera-editor-")
         ):
             result.add("editor")
-        elif low.startswith(("tools/research-", "fixtures/", "research/")):
+        elif low.startswith("tools/perf/"):
+            result.add("performance-infra")
+        elif low.startswith(("tools/research-", "fixtures/", "research/", "tools/windows/run_paragraph_", ".github/workflows/pub-re-", ".github/workflows/publisher-direct-research-")):
             result.add("research")
         elif low.startswith((".github/", "tools/ci/", "tools/dev_fast_loop")):
             result.add("ci-infra")
         else:
             result.add("shared-or-other")
     return sorted(result) or ["unknown"]
+
+
+def primary_class(groups: list[str]) -> str:
+    substantive = [name for name in groups if name not in ("ci-infra", "shared-or-other")]
+    if len(substantive) > 1:
+        return "mixed"
+    if len(substantive) == 1:
+        return substantive[0]
+    return "ci-infra" if "ci-infra" in groups else groups[0]
 
 
 def analyze_pr(pr: dict, runs: list[dict], jobs_by_run: dict, paths: list[str]) -> dict:
@@ -161,7 +174,7 @@ def analyze_pr(pr: dict, runs: list[dict], jobs_by_run: dict, paths: list[str]) 
         "title": pr.get("title"),
         "head_sha": head,
         "domains": groups,
-        "class": groups[0] if len(groups) == 1 else "mixed",
+        "class": primary_class(groups),
         "changed_file_count": len(paths),
         "workflow_count": len(applicable),
         "job_count": len(jobs),
