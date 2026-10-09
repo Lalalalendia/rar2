@@ -4054,9 +4054,9 @@ impl EditorSession {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::InsertBlankPageAfterV1 { .. })
             }) {
-                return Err(EditorProjectError::LegacyProjectCarriesInsertBlankPageOperation {
-                    index,
-                });
+                return Err(
+                    EditorProjectError::LegacyProjectCarriesInsertBlankPageOperation { index },
+                );
             }
         }
         if project.source_hash != self.source_hash {

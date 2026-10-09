@@ -789,7 +789,10 @@ pub(super) fn display_page_insert_error_v1(
 ) -> fmt::Result {
     match error {
         EditorError::PageInsertUnsupported { message } => {
-            write!(formatter, "insert blank page after is unsupported: {message}")
+            write!(
+                formatter,
+                "insert blank page after is unsupported: {message}"
+            )
         }
         EditorError::StalePageInsert => formatter.write_str(
             "current document/page membership no longer matches insert-page preconditions",
@@ -1278,7 +1281,9 @@ impl EditorSession {
             });
         }
         if self.graph.pages.contains_key(&identity.page_id)
-            || self.authored_page_identities_v1().contains_key(&identity.page_id)
+            || self
+                .authored_page_identities_v1()
+                .contains_key(&identity.page_id)
             || self.has_page_lifecycle_history_v1(identity.page_id)
         {
             return Err(EditorError::AuthoredPageIdentityConflict {
@@ -1319,7 +1324,9 @@ impl EditorSession {
             });
         }
         if self.graph.pages.contains_key(&expected.identity.page_id)
-            || self.authored_page_identities_v1().contains_key(&expected.identity.page_id)
+            || self
+                .authored_page_identities_v1()
+                .contains_key(&expected.identity.page_id)
             || self.has_page_lifecycle_history_v1(expected.identity.page_id)
         {
             return Err(EditorError::AuthoredPageIdentityConflict {
@@ -2057,7 +2064,11 @@ mod authored_page_append_tests {
                 crate::AuthoredShapePaintV1 {
                     fill: crate::AuthoredSolidFillV1 {
                         visible: true,
-                        color: crate::Srgb8V1 { r: 255, g: 255, b: 255 },
+                        color: crate::Srgb8V1 {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                        },
                     },
                     stroke: crate::AuthoredSolidStrokeV1 {
                         visible: true,
@@ -2082,13 +2093,19 @@ mod authored_page_append_tests {
         let ordered = vec![master, a, identity.page_id, service, b, carrier];
         assert_eq!(session.graph().document.pages, ordered);
         assert_eq!(
-            session.effective_customer_page_order_v1(&[a, b]).expect("membership"),
+            session
+                .effective_customer_page_order_v1(&[a, b])
+                .expect("membership"),
             vec![a, identity.page_id, b]
         );
         assert_eq!(session.operations().len(), 2);
         assert_eq!(session.graph().nodes[&shape_id], original_content);
         assert!(session.graph().pages[&identity.page_id].children.is_empty());
-        assert!(session.graph().pages[&identity.page_id].extensions.is_empty());
+        assert!(
+            session.graph().pages[&identity.page_id]
+                .extensions
+                .is_empty()
+        );
         assert_eq!(session.source_hash(), source_hash);
 
         session.undo().expect("undo insert");
@@ -2113,10 +2130,11 @@ mod authored_page_append_tests {
         let project = session.project();
         assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_28);
         let serialized = serde_json::to_vec(&project).expect("encode v0.28");
-        let decoded: EditorProject =
-            serde_json::from_slice(&serialized).expect("decode v0.28");
+        let decoded: EditorProject = serde_json::from_slice(&serialized).expect("decode v0.28");
         let mut reopened = EditorSession::new(graph.clone()).expect("fresh session");
-        reopened.apply_project(&decoded).expect("canonical insert replay");
+        reopened
+            .apply_project(&decoded)
+            .expect("canonical insert replay");
         assert_eq!(reopened.operations(), decoded.operations.as_slice());
         assert_eq!(reopened.graph().document.pages, ordered);
         assert_eq!(reopened.graph().nodes[&shape_id], original_content);

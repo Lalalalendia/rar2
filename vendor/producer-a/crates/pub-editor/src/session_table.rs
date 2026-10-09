@@ -417,7 +417,9 @@ impl EditorSession {
     }
 }
 
-pub(super) fn snapshot_table_ranges(table: &pub_reader::PubTableSource) -> Vec<TableCellRangeSnapshot> {
+pub(super) fn snapshot_table_ranges(
+    table: &pub_reader::PubTableSource,
+) -> Vec<TableCellRangeSnapshot> {
     table
         .cells
         .iter()
