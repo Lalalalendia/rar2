@@ -96,7 +96,11 @@ pub(super) fn unique_table_column_boundary(
     boundary
 }
 
-pub(super) fn unique_table_row_boundary(cells: &[ViewerTableCell], row: u32, rows: u32) -> Option<i64> {
+pub(super) fn unique_table_row_boundary(
+    cells: &[ViewerTableCell],
+    row: u32,
+    rows: u32,
+) -> Option<i64> {
     if rows == 0 || row > rows {
         return None;
     }
@@ -304,4 +308,3 @@ pub(super) fn viewer_tables_from_resolved(
     tables.sort_by_key(|table| table.node_id);
     (tables, diagnostics)
 }
-
