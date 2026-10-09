@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use pub_re::{
-    analyze_manifest_file, attribute_contents_manifest_file,
-    attribute_officeart_manifest_file,
+    analyze_manifest_file, attribute_contents_manifest_file, attribute_officeart_manifest_file,
 };
 use std::{
     fs,
@@ -80,7 +79,9 @@ fn main() -> Result<()> {
             write_json(&output, &receipt)?;
             println!(
                 "pub-re contents status={} chunks={} changed={} receipt={}",
-                receipt.status, receipt.compared_chunks, receipt.changed_chunks,
+                receipt.status,
+                receipt.compared_chunks,
+                receipt.changed_chunks,
                 output.display()
             );
             Ok(())

@@ -1,9 +1,12 @@
 use cfb::CompoundFile;
 use pub_re::{
-    attribute_contents_manifest, ExperimentInputV1, ExperimentManifestV1,
-    ExperimentPolicyV1, EXPERIMENT_SCHEMA_V1,
+    EXPERIMENT_SCHEMA_V1, ExperimentInputV1, ExperimentManifestV1, ExperimentPolicyV1,
+    attribute_contents_manifest,
 };
-use std::{fs, io::{Cursor, Write}};
+use std::{
+    fs,
+    io::{Cursor, Write},
+};
 use tempfile::TempDir;
 
 fn contents(path: &str, width: u32, parent: u32, broken_offset: bool) -> Vec<u8> {
@@ -22,7 +25,12 @@ fn contents(path: &str, width: u32, parent: u32, broken_offset: bool) -> Vec<u8>
     let mut reference = vec![2, 0x18, 1, 0];
     reference.extend_from_slice(&[4, 0xb8]);
     reference.extend_from_slice(
-        &if broken_offset { trailer_offset } else { chunk_offset }.to_le_bytes()
+        &if broken_offset {
+            trailer_offset
+        } else {
+            chunk_offset
+        }
+        .to_le_bytes(),
     );
     reference.extend_from_slice(&[5, 0x68]);
     reference.extend_from_slice(&parent.to_le_bytes());
@@ -46,27 +54,47 @@ fn contents(path: &str, width: u32, parent: u32, broken_offset: bool) -> Vec<u8>
 
 fn compound(contents: &[u8]) -> Vec<u8> {
     let mut file = CompoundFile::create(Cursor::new(Vec::new())).unwrap();
-    file.create_stream("/Contents").unwrap().write_all(contents).unwrap();
-    file.create_stream("/Stable").unwrap().write_all(b"stable").unwrap();
+    file.create_stream("/Contents")
+        .unwrap()
+        .write_all(contents)
+        .unwrap();
+    file.create_stream("/Stable")
+        .unwrap()
+        .write_all(b"stable")
+        .unwrap();
     file.flush().unwrap();
     file.into_inner().into_inner()
 }
 
-fn pair(path_a: &str, path_b: &str, a: u32, b: u32,
-        parent_a: u32, parent_b: u32, corrupt_b: bool,
+fn pair(
+    path_a: &str,
+    path_b: &str,
+    a: u32,
+    b: u32,
+    parent_a: u32,
+    parent_b: u32,
+    corrupt_b: bool,
 ) -> anyhow::Result<pub_re::ContentsDiffReceipt> {
     let dir = TempDir::new()?;
-    fs::write(dir.path().join("a.pub"), compound(&contents(path_a, a, parent_a, false)))?;
-    fs::write(dir.path().join("b.pub"), compound(&contents(path_b, b, parent_b, corrupt_b)))?;
+    fs::write(
+        dir.path().join("a.pub"),
+        compound(&contents(path_a, a, parent_a, false)),
+    )?;
+    fs::write(
+        dir.path().join("b.pub"),
+        compound(&contents(path_b, b, parent_b, corrupt_b)),
+    )?;
     let m = ExperimentManifestV1 {
         schema: EXPERIMENT_SCHEMA_V1.into(),
         experiment_id: "synthetic-path-join".into(),
         question: "are referenced chunks actually changed?".into(),
         before: ExperimentInputV1 {
-            path: "a.pub".into(), expected_sha256: None,
+            path: "a.pub".into(),
+            expected_sha256: None,
         },
         after: ExperimentInputV1 {
-            path: "b.pub".into(), expected_sha256: None,
+            path: "b.pub".into(),
+            expected_sha256: None,
         },
         policy: ExperimentPolicyV1::default(),
     };

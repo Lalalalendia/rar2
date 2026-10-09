@@ -10,7 +10,11 @@ use pub_contents::{
 };
 use pub_core::{RawSpan, StreamPath};
 use serde::Serialize;
-use std::{collections::{BTreeMap, BTreeSet}, fs, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+};
 
 pub const CONTENTS_DIFF_SCHEMA: &str = "chaptera.pub-re-contents-diff.v1";
 const CONTENTS: &str = "/Contents";
@@ -63,16 +67,17 @@ struct Snapshot {
 fn bytes_at<'a>(bytes: &'a [u8], span: &RawSpan) -> Result<&'a [u8]> {
     let start = usize::try_from(span.offset)?;
     let len = usize::try_from(span.len)?;
-    bytes.get(start..start.checked_add(len).context("span overflow")?)
+    bytes
+        .get(start..start.checked_add(len).context("span overflow")?)
         .context("span out of range")
 }
 
 fn parse_snapshot(input: &LoadedInput) -> Result<Snapshot> {
     let bytes = stream_bytes(input, CONTENTS)?;
-    let head = parse_0x2c_header(StreamPath(CONTENTS.into()), &bytes)
-        .context("require mature 0x2C")?;
-    let root = parse_confirmed_0x2c_trailer_root(&bytes, &head)
-        .context("require confirmed trailer")?;
+    let head =
+        parse_0x2c_header(StreamPath(CONTENTS.into()), &bytes).context("require mature 0x2C")?;
+    let root =
+        parse_confirmed_0x2c_trailer_root(&bytes, &head).context("require confirmed trailer")?;
     if root.directory.slots.len() > MAX_SLOTS
         || !root.observed_slot_count_matches_directory()
         || !root.observed_max_ordinal_matches_directory()
@@ -98,9 +103,7 @@ fn parse_snapshot(input: &LoadedInput) -> Result<Snapshot> {
             if field.id == CHUNK_REFERENCE_OFFSET_ID
                 && field.block_type == CHUNK_REFERENCE_WIRE_OFFSET
             {
-                if raw.len() != 6
-                    || !matches!(field.body, RawContentsBlockBody::U32 { .. })
-                {
+                if raw.len() != 6 || !matches!(field.body, RawContentsBlockBody::U32 { .. }) {
                     bail!("invalid confirmed 0x04/B8 pointer shape");
                 }
                 raw[2..6].fill(0);
@@ -124,9 +127,9 @@ fn parse_snapshot(input: &LoadedInput) -> Result<Snapshot> {
             if !starts.insert(start) {
                 bail!("duplicate chunk source offset");
             }
-            let parsed = parse_confirmed_0x2c_chunk(
-                StreamPath(CONTENTS.into()), &bytes, field.value
-            ).context("invalid confirmed chunk")?;
+            let parsed =
+                parse_confirmed_0x2c_chunk(StreamPath(CONTENTS.into()), &bytes, field.value)
+                    .context("invalid confirmed chunk")?;
             let raw = bytes_at(&bytes, &parsed.source)?;
             let end = start.checked_add(raw.len()).context("chunk end overflow")?;
             if end > usize::try_from(head.trailer_offset)? {
@@ -136,7 +139,11 @@ fn parse_snapshot(input: &LoadedInput) -> Result<Snapshot> {
             offsets.push(start);
             chunks.push(raw.to_vec());
         }
-        slots.push(Some(Slot { metadata, offsets, chunks }));
+        slots.push(Some(Slot {
+            metadata,
+            offsets,
+            chunks,
+        }));
     }
     ranges.sort_unstable();
     if ranges.windows(2).any(|pair| pair[0].1 > pair[1].0) {
@@ -152,9 +159,8 @@ fn parse_snapshot(input: &LoadedInput) -> Result<Snapshot> {
 
 pub fn attribute_contents_manifest_file(path: &Path) -> Result<ContentsDiffReceipt> {
     let raw = fs::read(path)?;
-    let manifest: ExperimentManifestV1 = serde_json::from_slice(
-        raw.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&raw)
-    )?;
+    let manifest: ExperimentManifestV1 =
+        serde_json::from_slice(raw.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&raw))?;
     attribute_contents_manifest(&manifest, path.parent().unwrap_or(Path::new(".")))
 }
 
@@ -188,21 +194,29 @@ pub fn attribute_contents_manifest(
                     same_metadata = false;
                     if ref_ordinals.len() < MAX_ORDINALS {
                         ref_ordinals.push(index);
-                    } else { truncated = true; }
+                    } else {
+                        truncated = true;
+                    }
                 }
                 unmatched += x.chunks.len().abs_diff(y.chunks.len());
-                for ((bx, by), (ox, oy)) in x.chunks.iter().zip(&y.chunks)
+                for ((bx, by), (ox, oy)) in x
+                    .chunks
+                    .iter()
+                    .zip(&y.chunks)
                     .zip(x.offsets.iter().zip(&y.offsets))
                 {
                     *histogram.entry(*oy as i64 - *ox as i64).or_insert(0) += 1;
                     compared += 1;
-                    if bx == by { unchanged += 1; }
-                    else {
+                    if bx == by {
+                        unchanged += 1;
+                    } else {
                         changed += 1;
                         if chunk_ordinals.last().copied() != Some(index) {
                             if chunk_ordinals.len() < MAX_ORDINALS {
                                 chunk_ordinals.push(index);
-                            } else { truncated = true; }
+                            } else {
+                                truncated = true;
+                            }
                         }
                     }
                 }
@@ -212,14 +226,18 @@ pub fn attribute_contents_manifest(
                 unmatched += x.chunks.len();
                 if ref_ordinals.len() < MAX_ORDINALS {
                     ref_ordinals.push(index);
-                } else { truncated = true; }
+                } else {
+                    truncated = true;
+                }
             }
             (None, Some(y)) => {
                 same_metadata = false;
                 unmatched += y.chunks.len();
                 if ref_ordinals.len() < MAX_ORDINALS {
                     ref_ordinals.push(index);
-                } else { truncated = true; }
+                } else {
+                    truncated = true;
+                }
             }
         }
     }
