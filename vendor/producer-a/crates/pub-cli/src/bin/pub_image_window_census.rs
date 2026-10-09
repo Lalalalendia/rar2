@@ -17,11 +17,9 @@ fn main() -> Result<()> {
     let path = Path::new(&path);
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let source_sha256 = format!("{:x}", Sha256::digest(&bytes));
-    let bundle = pub_viewer::open_pub_bundle(
-        &bytes,
-        pub_viewer::viewer_geometry_environment_v0_1(),
-    )
-    .context("open PUB through Viewer")?;
+    let bundle =
+        pub_viewer::open_pub_bundle(&bytes, pub_viewer::viewer_geometry_environment_v0_1())
+            .context("open PUB through Viewer")?;
     let visual = bundle.geometry;
     let nodes = visual
         .scene
