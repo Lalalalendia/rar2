@@ -1,0 +1,60 @@
+name: Reader classifier runner dispatch A/B
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/reader-classifier-dispatch-ab.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  classify-control:
+    name: Same Reader classifier on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref || github.ref }}
+          fetch-depth: 0
+      - name: Fetch exact PR head
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: git fetch --no-tags origin "$HEAD_SHA"
+      - name: Verify base-authority classifier contracts
+        run: python tools/ci/test_reader_pr_fanout.py
+      - name: Classify the exact same PR diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mkdir -p target/reader-classifier-ab
+          python tools/ci/reader_pr_fanout.py \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --receipt target/reader-classifier-ab/fanout.json
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          p=Path("target/reader-classifier-ab/fanout.json")
+          r=json.loads(p.read_text())
+          assert r["schema"] == "chaptera.reader-pr-fanout.v1"
+          print("RECEIPT_SHA256", hashlib.sha256(p.read_bytes()).hexdigest())
+          print("SCOPES", json.dumps(r["scopes"], sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reader-classifier-ab-${{ matrix.os }}
+          path: target/reader-classifier-ab/fanout.json
+          if-no-files-found: error
+          retention-days: 14
