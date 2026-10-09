@@ -3992,6 +3992,41 @@ mod tests {
                 .as_ref()
                 .is_some_and(|shaping| shaping.units_per_em > 0 && !shaping.glyphs.is_empty())
         }));
+
+        // #2339: whole-fragment family authority and one terminal-line
+        // family authority are distinct, even with two exact font resources.
+        assert_eq!(complete_scalar_source_font_family_v1(&fragment), None);
+        let terminal_start = 2_u32;
+        let terminal_end = 4_u32;
+        let terminal_runs = fragment
+            .typography
+            .iter()
+            .filter(|run| run.scalar_start < terminal_end && run.scalar_end > terminal_start)
+            .collect::<Vec<_>>();
+        assert_eq!(terminal_runs.len(), 1);
+        assert!(terminal_runs[0].scalar_start <= terminal_start);
+        assert!(terminal_runs[0].scalar_end >= terminal_end);
+        assert_eq!(terminal_runs[0].source_font_name, "Family B");
+
+        // One unavailable face must reject the entire per-span admission,
+        // rather than silently painting the missing span with Family A.
+        let mut only_first_face =
+            |_: &RenderTextFragmentV1, run: &RenderTypographyRunV1| {
+                (run.source_font_name == "Family A").then_some(
+                    ExplicitRenderTextFontResourceV1 {
+                        resource_id: "font-family-a",
+                        expected_sha256: &first_sha,
+                        face_index: 0,
+                        default_font_size_emu: 152_400,
+                        default_line_height_emu: 190_500,
+                        bytes: first_bytes,
+                    },
+                )
+            };
+        assert!(admitted_mixed_family_typography_runs_v1(
+            &fragment,
+            &mut only_first_face,
+        ).is_none());
     }
 
     #[test]
