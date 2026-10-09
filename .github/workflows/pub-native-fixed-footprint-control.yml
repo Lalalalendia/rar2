@@ -1,0 +1,204 @@
+name: PUB native fixed-footprint Story shrink discriminator
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-native-fixed-footprint-control.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/pub-native-fixed-footprint-control.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pub-native-fixed-footprint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  prepare-fixed-footprint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Generate baseline length-changing writer candidate
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- generate \
+            --output-dir out/native-fixed-footprint
+      - name: Construct pinned shrink-without-global-relocation control
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import struct
+
+          root = Path("out/native-fixed-footprint")
+          original = (root / "source.pub").read_bytes()
+          baseline = (root / "candidate.pub").read_bytes()
+          manifest_path = root / "handoff.json"
+          manifest = json.loads(manifest_path.read_text())
+          sha = lambda data: hashlib.sha256(data).hexdigest()
+          original_sha = "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc"
+          baseline_sha = "a92543b6f2b6ac3a8ae2481e15a2188a338ddc2a92832580f8987079fa4f70f8"
+          variant_sha = "c2b3270c32c7facce31a778e1f0523177aa77b9947b0e76dfcd1ae959471bf52"
+          if manifest.get("schema") != "chaptera.pub-native-story-handoff.v1":
+              raise SystemExit("handoff schema mismatch")
+          if len(original) != 72192 or len(baseline) != 72192:
+              raise SystemExit("pinned Sample3 file size changed")
+          if sha(original) != original_sha or sha(baseline) != baseline_sha:
+              raise SystemExit("source or baseline six-unit writer candidate changed")
+          if manifest.get("source_sha256") != original_sha:
+              raise SystemExit("manifest/source SHA mismatch")
+          # These physical offsets are valid ONLY for this exact pinned source SHA.
+          # Quill/QuillSub/CONTENTS starts at physical offset 64512.
+          story_start = 65392
+          marker_start = 65442
+          story_end = 65532
+          story_length_field = 69658
+          source_story = "This is the second page12345678\r\rIt is also times new roman, 10 point\r"
+          expected_shorter = source_story.replace("345678", "", 1)
+          if original[story_start:story_end].decode("utf-16le") != source_story:
+              raise SystemExit("source Story physical span changed")
+          if original[marker_start:marker_start + 12] != "345678".encode("utf-16le"):
+              raise SystemExit("unique marker moved")
+          if struct.unpack_from("<I", original, story_length_field)[0] != 70:
+              raise SystemExit("source Story length field moved")
+          if struct.unpack_from("<I", original, 64512 + 52)[0] != 992:
+              raise SystemExit("source TEXT descriptor changed")
+          variant = bytearray(original)
+          variant[marker_start:story_end - 12] = original[marker_start + 12:story_end]
+          variant[story_end - 12:story_end] = bytes(12)
+          struct.pack_into("<I", variant, story_length_field, 64)
+          variant = bytes(variant)
+          if variant[story_start:story_start + 128].decode("utf-16le") != expected_shorter:
+              raise SystemExit("shortened Story content failed fixed-footprint replay")
+          if variant[story_end - 12:story_end] != bytes(12):
+              raise SystemExit("expected bounded trailing empty space absent")
+          changed = [i for i, (a, b) in enumerate(zip(original, variant)) if a != b]
+          if not changed or any(
+              not (marker_start <= i < story_end or story_length_field <= i < story_length_field + 4)
+              for i in changed
+          ):
+              raise SystemExit("unexpected edit outside Story local bytes and Story length field")
+          if sha(variant) != variant_sha:
+              raise SystemExit("fixed-footprint candidate SHA mismatch")
+          # Deliberately preserve original TEXT size, STSH/FDPP locations and all
+          # BTE/FDPP/FDPC/SYID bytes, unlike the canonical relocation writer.
+          assert variant[64512:story_start] == original[64512:story_start]
+          assert variant[story_end:story_length_field] == original[story_end:story_length_field]
+          assert variant[story_length_field + 4:] == original[story_length_field + 4:]
+          assert struct.unpack_from("<I", variant, 64512 + 52)[0] == 992
+          assert struct.unpack_from("<I", variant, 64512 + 72)[0] == 1504
+          (root / "candidate.pub").write_bytes(variant)
+          manifest["candidate_sha256"] = variant_sha
+          manifest["research_variant"] = "story_shrink_in_fixed_text_footprint"
+          manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+          print("PASS fixed-footprint Story shrink, unchanged Quill descriptor and service offsets")
+          print("Fixed-footprint candidate SHA256:", variant_sha)
+          PY
+      - name: Prove fixed-footprint shortened Story under current Reader
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- verify \
+            --pub out/native-fixed-footprint/candidate.pub \
+            --manifest out/native-fixed-footprint/handoff.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pub-native-fixed-footprint-input-${{ github.run_id }}
+          path: |
+            out/native-fixed-footprint/source.pub
+            out/native-fixed-footprint/candidate.pub
+            out/native-fixed-footprint/handoff.json
+          if-no-files-found: error
+          retention-days: 14
+
+  native-fixed-footprint:
+    needs: prepare-fixed-footprint
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Lalalalendia/rar2' }}
+    runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
+    concurrency:
+      group: pub-re-native-publisher-oracle
+      cancel-in-progress: false
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Supply Git Bash for pinned Rust verifier
+        shell: powershell
+        run: |
+          $gitBashDir = 'C:\Program Files\Git\bin'
+          if (-not (Test-Path -LiteralPath (Join-Path $gitBashDir 'bash.exe') -PathType Leaf)) {
+            throw 'git_bash_unavailable'
+          }
+          $gitBashDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Download verified original and fixed-footprint candidate from this run
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-native-fixed-footprint-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/chaptera-native-fixed-footprint/input
+      - name: Build current source-safe Reader verifier
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-writer --bin pub_story_native_handoff
+          if ($LASTEXITCODE -ne 0) { throw 'fixed_footprint_reader_verifier_build_failed' }
+      - name: Matched unmodified Sample3 Publisher Open SaveAs Reopen control
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/windows/pub-runtime/Invoke-StoryNativeSourceControl.ps1 `
+            -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-native-fixed-footprint/input') `
+            -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-native-fixed-footprint/private-original')
+          if (-not $?) { throw 'original_source_control_failed' }
+      - name: Guarded native SaveAs of fixed-footprint writer candidate
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1 `
+            -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-native-fixed-footprint/input') `
+            -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-native-fixed-footprint/private-candidate')
+          if (-not $?) { throw 'fixed_footprint_saveas_failed' }
+      - name: Upload original source-safe status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-native-fixed-footprint-original-receipt-${{ github.run_id }}
+          path: ${{ runner.temp }}/chaptera-native-fixed-footprint/private-original/source-control-status.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Upload candidate source-safe status and native receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-native-fixed-footprint-candidate-receipt-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/chaptera-native-fixed-footprint/private-candidate/native-roundtrip-status.json
+            ${{ runner.temp }}/chaptera-native-fixed-footprint/private-candidate/native-roundtrip-stage.json
+            ${{ runner.temp }}/chaptera-native-fixed-footprint/private-candidate/native-roundtrip-receipt.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Clear all private original/candidate native files and logs
+        if: always()
+        shell: powershell
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'chaptera-native-fixed-footprint'
+          if (Test-Path -LiteralPath $root) {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
+          }
