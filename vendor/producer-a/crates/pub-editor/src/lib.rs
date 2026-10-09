@@ -15,7 +15,7 @@ mod link_text_frame_tail_v1;
 mod session_geometry;
 mod session_image;
 mod session_table;
-use session_table::{apply_table_cell_state, rebuild_simple_table_story, snapshot_table_ranges};
+use session_table::apply_table_cell_state;
 mod session_text;
 use session_geometry::{
     append_blank_page_error_to_editor_v1, apply_authored_stack_history_forward_v1,
