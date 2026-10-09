@@ -1291,4 +1291,88 @@ mod authored_page_append_tests {
         );
         assert!(session.operations().is_empty());
     }
+
+    fn page_hex(page_id: PageId) -> String {
+        page_id.as_canonical().to_string().replace('-', "")
+    }
+
+    fn read_zip_text(bytes: &[u8], path: &str) -> String {
+        use std::io::Read as _;
+
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("open exported ZIP");
+        let mut entry = archive.by_name(path).expect("expected exported package part");
+        let mut text = String::new();
+        entry
+            .read_to_string(&mut text)
+            .expect("read exported XML part");
+        text
+    }
+
+    #[test]
+    fn appended_blank_page_reaches_idml_and_odg_with_order_and_geometry() {
+        let source = page_id("22222222-2222-4222-8222-222222222222");
+        let identity = authored_identity();
+        let mut session = EditorSession::new(source_graph(vec![source])).expect("session");
+        let appended_size = Size2D::new(
+            LengthEmu::new(200 * pub_model::EMU_PER_POINT),
+            LengthEmu::new(300 * pub_model::EMU_PER_POINT),
+        );
+
+        session
+            .append_blank_page_v1(vec![source], identity, appended_size, None, None)
+            .expect("append blank page");
+
+        let source_hex = page_hex(source);
+        let appended_hex = page_hex(identity.page_id);
+
+        let idml = session
+            .export_editable(
+                crate::EditorEditableTarget::Idml,
+                "append-blank-page-idml",
+            )
+            .expect("export appended page to IDML");
+        let designmap = read_zip_text(&idml.bytes, "designmap.xml");
+        let source_spread = format!("Spreads/Spread_usp{source_hex}.xml");
+        let appended_spread = format!("Spreads/Spread_usp{appended_hex}.xml");
+        assert!(
+            designmap.find(&source_spread).expect("source spread in designmap")
+                < designmap
+                    .find(&appended_spread)
+                    .expect("appended spread in designmap"),
+            "IDML designmap must preserve canonical page order"
+        );
+        let appended_spread_xml = read_zip_text(&idml.bytes, &appended_spread);
+        assert!(appended_spread_xml.contains(&format!(
+            "<Page Self=\"up{appended_hex}\" GeometricBounds=\"0 0 300 200\""
+        )));
+
+        let odg = session
+            .export_editable(crate::EditorEditableTarget::Odg, "append-blank-page-odg")
+            .expect("export appended page to ODG");
+        let content = read_zip_text(&odg.bytes, "content.xml");
+        let source_page = format!("draw:name=\"Page_{source_hex}\"");
+        let appended_page = format!("draw:name=\"Page_{appended_hex}\"");
+        assert_eq!(content.matches("<draw:page ").count(), 2);
+        assert!(
+            content.find(&source_page).expect("source ODG page")
+                < content.find(&appended_page).expect("appended ODG page"),
+            "ODG content.xml must preserve canonical page order"
+        );
+
+        let styles = read_zip_text(&odg.bytes, "styles.xml");
+        let appended_layout = format!("<style:page-layout style:name=\"PM_{appended_hex}\">");
+        let start = styles
+            .find(&appended_layout)
+            .expect("appended ODG page layout");
+        let tail = &styles[start..];
+        let end = tail
+            .find("</style:page-layout>")
+            .expect("appended ODG page layout end");
+        let layout = &tail[..end];
+        assert!(layout.contains(
+            "fo:page-width=\"200pt\" fo:page-height=\"300pt\""
+        ));
+    }
+
 }
