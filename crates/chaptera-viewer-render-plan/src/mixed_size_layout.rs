@@ -805,13 +805,13 @@ where
                 return None;
             }
             let terminal = rejected_terminal?;
-            // The configured Cloud family resource alone does not assert
-            // Bold/Italic face identity. Never treat a Regular container as
-            // exact for a styled source run in this new retry.
+            // Regular-only font packets authorize only explicitly proven
+            // effective Regular source runs. Unknown style is not false.
+            // Never substitute Regular for Bold, Italic, or missing authority.
             if fragment
                 .typography
                 .iter()
-                .any(|run| run.bold == Some(true) || run.italic == Some(true))
+                .any(|run| run.bold != Some(false) || run.italic != Some(false))
             {
                 return None;
             }
@@ -943,8 +943,8 @@ mod tests {
                 size_inherited: false,
                 color_rgb: None,
                 color_inherited: false,
-                bold: None,
-                italic: None,
+                bold: Some(false),
+                italic: Some(false),
             },
             RenderTypographyRunV1 {
                 scalar_start: 3,
@@ -955,8 +955,8 @@ mod tests {
                 size_inherited: false,
                 color_rgb: None,
                 color_inherited: false,
-                bold: None,
-                italic: None,
+                bold: Some(false),
+                italic: Some(false),
             },
         ];
         let fragment = render_fragment(story_id, text, typography);
@@ -1105,9 +1105,42 @@ mod tests {
         let mut styled_fragment = fragment.clone();
         styled_fragment.typography[1].bold = Some(true);
         assert!(
-            resolve_mixed_family_text_layout_v1(&visual, target, &styled_fragment, &mut resolve,)
-                .is_none(),
+            resolve_mixed_family_text_layout_v1(
+                &visual,
+                target.clone(),
+                &styled_fragment,
+                &mut resolve,
+            )
+            .is_none(),
             "Regular family packet cannot authorize Bold source-face retry"
+        );
+
+        // Unknown effective Bold/Italic is not proof of Regular. The
+        // Regular-only font packet must fail closed on either missing boolean.
+        let mut unknown_bold = fragment.clone();
+        unknown_bold.typography[0].bold = None;
+        assert!(
+            resolve_mixed_family_text_layout_v1(
+                &visual,
+                target.clone(),
+                &unknown_bold,
+                &mut resolve,
+            )
+            .is_none(),
+            "unknown Bold cannot silently become effective Regular"
+        );
+
+        let mut unknown_italic = fragment.clone();
+        unknown_italic.typography[1].italic = None;
+        assert!(
+            resolve_mixed_family_text_layout_v1(
+                &visual,
+                target,
+                &unknown_italic,
+                &mut resolve,
+            )
+            .is_none(),
+            "unknown Italic cannot silently become effective Regular"
         );
     }
 
