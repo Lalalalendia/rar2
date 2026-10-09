@@ -12,6 +12,7 @@ fn source_hash(bytes: &[u8]) -> Sha256Digest {
 }
 
 #[test]
+#[ignore = "requires exact Carlton March PUB via CHAPTERA_TABLE_CELL_PAINT_FIXTURE"]
 fn exact_carlton_merged_table_autoformat_consumer() {
     let fixture = PathBuf::from(
         std::env::var_os("CHAPTERA_TABLE_CELL_PAINT_FIXTURE")
