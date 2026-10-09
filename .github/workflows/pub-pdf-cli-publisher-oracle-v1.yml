@@ -33,7 +33,8 @@ jobs:
           python tools/test_pub_pdf_cli_publisher_oracle_v1.py
 
   compare-publisher:
-    if: github.event_name == 'workflow_dispatch'
+    # One bounded exact-head narrow GIF A/B; measurement branch closes unmerged.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'measure/pub-pdf-gif-narrow-fence-ab-01'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
