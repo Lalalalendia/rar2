@@ -33,7 +33,8 @@ jobs:
           python tools/test_pub_pdf_cli_publisher_oracle_v1.py
 
   compare-publisher:
-    if: github.event_name == 'workflow_dispatch'
+    # Exact-base diagnostic baseline for TABLE A/B.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'validation/pub-pdf-baseline-43a982'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
