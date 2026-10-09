@@ -210,7 +210,9 @@ if ($receipt.schema -ne "chaptera.modern-structural-base/v1" -or
 
 $patchManifest = Join-Path $RepoRoot "tools/pub-re/Cargo.toml"
 RunCargo -argv @("build","--release","--manifest-path",$patchManifest,"--bin","val_xproj_patch")
-$patcher = Join-Path $RepoRoot "tools/pub-re/target/release/val_xproj_patch.exe"
+$patcherMetadata = cargo metadata --no-deps --format-version 1 --manifest-path $patchManifest | ConvertFrom-Json
+$patcher = Join-Path ([string]$patcherMetadata.target_directory) "release\val_xproj_patch.exe"
+if (-not (Test-Path -LiteralPath $patcher -PathType Leaf)) { throw "T352 patcher executable missing from Cargo target directory" }
 $arms = Join-Path $private "arms"
 RunExe -file $patcher -argv @("prepare",$base,$structural,$arms)
 Copy-Item -LiteralPath (Join-Path $arms "t352-patch-receipt.json") -Destination (Join-Path $analysis "t352-patch-receipt.json")
