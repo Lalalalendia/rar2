@@ -44,6 +44,16 @@ jobs:
             }
           }
 
+      - name: Assert fail-closed portable runner gate without COM
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $wrapper = Get-Content tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1 -Raw
+          if (-not $wrapper.Contains('pwsh7_portable_path_not_allowlisted') -or
+              -not $wrapper.Contains('pwsh7_portable_version_or_arch_mismatch') -or
+              -not $wrapper.Contains("7.6.5")) {
+            throw 'portable_pwsh7_guard_missing'
+          }
       - name: Verify existing native stage writer without Publisher
         shell: powershell
         run: |
@@ -139,6 +149,32 @@ jobs:
           $ErrorActionPreference = 'Stop'
           cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-writer --bin pub_story_native_handoff
           if ($LASTEXITCODE -ne 0) { throw 'matched_candidate_verifier_build_failed' }
+      - name: Stage verified PowerShell 7.6.5 x64 ZIP without system installation
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          $root = Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7'
+          $portable = Join-Path $root 'portable'
+          $zip = Join-Path $root 'PowerShell-7.6.5-win-x64.zip'
+          if (Test-Path -LiteralPath $portable) { throw 'portable_pwsh7_destination_already_exists' }
+          $url = 'https://github.com/PowerShell/PowerShell/releases/download/v7.6.5/PowerShell-7.6.5-win-x64.zip'
+          $expected = '32eb8f6cdce08f86e987d625a2733e54ac3e289ae7e1621b14c0b5bcec2434ea'
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -ErrorAction Stop
+          $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -cne $expected) { throw 'portable_pwsh7_archive_sha256_mismatch' }
+          New-Item -ItemType Directory -Force -Path $portable | Out-Null
+          Expand-Archive -LiteralPath $zip -DestinationPath $portable -Force
+          $exe = Join-Path $portable 'pwsh.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw 'portable_pwsh7_executable_missing_from_verified_archive'
+          }
+          $version = @(& $exe -NoLogo -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.ToString()')
+          if ($LASTEXITCODE -ne 0 -or $version.Count -ne 1 -or [string]$version[0] -ne '7.6.5') {
+            throw 'portable_pwsh7_version_preflight_failed'
+          }
+          Remove-Item -LiteralPath $zip -Force
+          Write-Host 'Pinned portable PowerShell 7.6.5 x64 is ready (source: official SHA-256 release)'
       - name: Execute isolated original Publisher SaveAs control
         shell: powershell
         run: |
@@ -154,7 +190,8 @@ jobs:
           & tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1 `
             -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7/input') `
             -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7/private-candidate') `
-            -ChildPowerShell PowerShell7
+            -ChildPowerShell PowerShell7 `
+            -PinnedPwsh7Executable (Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7/portable/pwsh.exe')
           if (-not $?) { throw 'matched_writer_candidate_roundtrip_failed' }
       - name: Upload source-safe control receipt only
         if: always()
