@@ -46,7 +46,10 @@ The receipt preserves all true overlapping record/property candidates. It does n
 The first bounded operations are:
 
 - `snapshot_only`: source-safe page/shape geometry inventory, no text and no save;
-- `shape_rotation_delta`: select one exact `PageID + Shape.ID`, change only `Shape.Rotation`, save to a disposable output, close Publisher, reopen in a fresh process and snapshot the same exact selector when it remains stable.
+- `save_as_noop`: open the disposable copy writable, make no semantic mutation, SaveAs to a separate PUB, then fresh-reopen and inventory it. This is a matched SaveAs/runtime control, not a product write capability;
+- `save_in_place_noop`: copy the verified source into a second private disposable PUB, make no semantic mutation, call `Document.Save()` on that private working copy, then fresh-reopen and diff it against the immutable private baseline;
+- `shape_rotation_delta`: select one exact `PageID + Shape.ID`, change only `Shape.Rotation`, SaveAs to a disposable output, close Publisher, reopen in a fresh process and snapshot the same exact selector when it remains stable;
+- `shape_rotation_delta_in_place_save`: the same bounded rotation mutation, but on a separate disposable working copy persisted with `Document.Save()` so SaveAs transport can be removed from the causal path.
 
 Safety and provenance rules:
 
@@ -75,12 +78,17 @@ The owner-only control issue also supports repository-pinned public fixture alia
 
 ```text
 /pub-re-native snapshot sample-newsletter
+/pub-re-native saveas sample-newsletter
+/pub-re-native save sample-newsletter
 /pub-re-native rotate sample-newsletter 33554698 292 1
+/pub-re-native rotate-save sample-newsletter 33554698 292 1
 ```
 
 Aliases live in `tools/pub-re/native-fixtures.json`. For these modes the hosted gate passes only validated source-safe fields. The Windows job then reads the protected-main registry, downloads the exact HTTPS fixture into `RUNNER_TEMP`, verifies both pinned SHA-256 and byte length, generates an ephemeral native manifest, runs Publisher, and deletes the downloaded source with the normal `always()` cleanup. No runner-local manifest or persistent fixture is required.
 
-The rotation command is deliberately bounded: `PageID` and `Shape.ID` must be positive signed-32-bit integers, and the delta must be nonzero with absolute value at most 45 degrees. The generated manifest uses `shape_rotation_delta`, so the normal save/reopen receipt and CFB differential join run automatically.
+The `saveas` command is deliberately a no-mutation SaveAs control. The `save` command is its in-place persistence discriminator: it mutates only a private working copy and preserves a second immutable private baseline for diffing. Both use the same pinned fixture resolution and bounded Publisher watchdog.
+
+The rotation commands are deliberately bounded: `PageID` and `Shape.ID` must be positive signed-32-bit integers, and the delta must be nonzero with absolute value at most 45 degrees. `rotate` preserves the original SaveAs transport; `rotate-save` persists the same mutation with `Document.Save()` on a private disposable working copy. Both use the normal fresh-reopen receipt and CFB differential join.
 
 A trusted owner can cancel a queued or running PUB RE native workflow without touching the Windows machine:
 

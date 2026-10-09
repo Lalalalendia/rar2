@@ -82,11 +82,15 @@ function Assert-NativeManifest {
         throw "manifest_missing_operation"
     }
     $kind = [string](Get-OptionalProperty $operation "kind" "")
-    if ($kind -ne "snapshot_only" -and $kind -ne "shape_rotation_delta") {
+    if ($kind -ne "snapshot_only" -and
+        $kind -ne "save_as_noop" -and
+        $kind -ne "save_in_place_noop" -and
+        $kind -ne "shape_rotation_delta" -and
+        $kind -ne "shape_rotation_delta_in_place_save") {
         throw "manifest_unsupported_operation"
     }
 
-    if ($kind -eq "shape_rotation_delta") {
+    if ($kind -eq "shape_rotation_delta" -or $kind -eq "shape_rotation_delta_in_place_save") {
         $selector = Get-OptionalProperty $operation "selector"
         if ($null -eq $selector) {
             throw "manifest_missing_selector"
@@ -539,6 +543,21 @@ $visible = [bool](Get-OptionalProperty $policy "visible" $false)
 $graceSeconds = [int](Get-OptionalProperty $policy "process_exit_grace_seconds" 60)
 $operation = $manifest.operation
 $operationKind = [string]$operation.kind
+$persistenceMethod = if ($operationKind -eq "save_in_place_noop" -or $operationKind -eq "shape_rotation_delta_in_place_save") {
+    "save_in_place"
+}
+elseif ($operationKind -eq "snapshot_only") {
+    "none"
+}
+else {
+    "save_as"
+}
+$saveAsFormat = if ($operationKind -eq "save_as_noop" -or $operationKind -eq "shape_rotation_delta") {
+    $PbFilePublication
+}
+else {
+    $null
+}
 $attribution = Get-OptionalProperty $manifest "attribution"
 $officeArtStream = [string](Get-OptionalProperty $attribution "officeart_stream" "")
 
@@ -553,7 +572,8 @@ $receipt = [ordered]@{
     }
     writer = [ordered]@{
         name = "current"
-        save_as_format = $PbFilePublication
+        persistence_method = $persistenceMethod
+        save_as_format = $saveAsFormat
     }
     operation = [ordered]@{
         kind = $operationKind
@@ -598,6 +618,7 @@ $document = $null
 $securityBefore = $null
 $target = $null
 $mutatedPath = Join-Path $privateDir "mutated.pub"
+$inPlaceSaveCompleted = $false
 
 try {
     Set-NativeStage "primary_application_create_begin"
@@ -622,6 +643,48 @@ try {
         Set-NativeStage "primary_inventory_complete"
         $receipt.status = "complete"
     }
+    elseif ($operationKind -eq "save_as_noop") {
+        Set-NativeStage "primary_open_begin"
+        $document = $application.Open($inputCopy, $false, $false)
+        Set-NativeStage "primary_open_complete"
+
+        Set-NativeStage "primary_inventory_begin"
+        $receipt.before = Get-DocumentInventory $document
+        Set-NativeStage "primary_inventory_complete"
+
+        Set-NativeStage "primary_save_as_begin"
+        $document.SaveAs($mutatedPath, $PbFilePublication, $false)
+        Set-NativeStage "primary_save_as_complete"
+        $saved = Get-FileFingerprint $mutatedPath
+        $receipt.save = [ordered]@{
+            state = "ok"
+            sha256 = $saved.sha256
+            byte_len = $saved.byte_len
+        }
+        $receipt.status = "saved"
+    }
+    elseif ($operationKind -eq "save_in_place_noop") {
+        Copy-Item -LiteralPath $inputCopy -Destination $mutatedPath -Force
+
+        Set-NativeStage "primary_open_begin"
+        $document = $application.Open($mutatedPath, $false, $false)
+        Set-NativeStage "primary_open_complete"
+
+        Set-NativeStage "primary_inventory_begin"
+        $receipt.before = Get-DocumentInventory $document
+        Set-NativeStage "primary_inventory_complete"
+
+        Set-NativeStage "primary_save_begin"
+        $document.Save()
+        Set-NativeStage "primary_save_complete"
+        $inPlaceSaveCompleted = $true
+        $receipt.save = [ordered]@{
+            state = "pending_process_exit"
+            sha256 = $null
+            byte_len = $null
+        }
+        $receipt.status = "saved_pending_process_exit"
+    }
     else {
         $selector = $operation.selector
         $wantedPageId = [int]$selector.page_id
@@ -633,8 +696,16 @@ try {
         }
         $receipt.operation.delta_degrees = $delta
 
+        if ($operationKind -eq "shape_rotation_delta_in_place_save") {
+            Copy-Item -LiteralPath $inputCopy -Destination $mutatedPath -Force
+            $rotationWorkingPath = $mutatedPath
+        }
+        else {
+            $rotationWorkingPath = $inputCopy
+        }
+
         Set-NativeStage "primary_open_begin"
-        $document = $application.Open($inputCopy, $false, $false)
+        $document = $application.Open($rotationWorkingPath, $false, $false)
         Set-NativeStage "primary_open_complete"
 
         Set-NativeStage "primary_selector_begin"
@@ -662,16 +733,30 @@ try {
         }
         $receipt.after = Get-ShapeSnapshot -Shape $target.shape -PageId $wantedPageId -TraversalPath ([string]$target.traversal_path)
 
-        Set-NativeStage "primary_save_as_begin"
-        $document.SaveAs($mutatedPath, $PbFilePublication, $false)
-        Set-NativeStage "primary_save_as_complete"
-        $saved = Get-FileFingerprint $mutatedPath
-        $receipt.save = [ordered]@{
-            state = "ok"
-            sha256 = $saved.sha256
-            byte_len = $saved.byte_len
+        if ($operationKind -eq "shape_rotation_delta_in_place_save") {
+            Set-NativeStage "primary_save_begin"
+            $document.Save()
+            Set-NativeStage "primary_save_complete"
+            $inPlaceSaveCompleted = $true
+            $receipt.save = [ordered]@{
+                state = "pending_process_exit"
+                sha256 = $null
+                byte_len = $null
+            }
+            $receipt.status = "saved_pending_process_exit"
         }
-        $receipt.status = "saved"
+        else {
+            Set-NativeStage "primary_save_as_begin"
+            $document.SaveAs($mutatedPath, $PbFilePublication, $false)
+            Set-NativeStage "primary_save_as_complete"
+            $saved = Get-FileFingerprint $mutatedPath
+            $receipt.save = [ordered]@{
+                state = "ok"
+                sha256 = $saved.sha256
+                byte_len = $saved.byte_len
+            }
+            $receipt.status = "saved"
+        }
     }
 }
 catch {
@@ -711,7 +796,89 @@ if (-not $primaryExited) {
     $receipt.status = "process_exit_timeout"
 }
 
-if ($operationKind -eq "shape_rotation_delta" -and $receipt.save.state -eq "ok" -and $primaryExited) {
+if ($inPlaceSaveCompleted -and $primaryExited) {
+    try {
+        Set-NativeStage "primary_saved_file_fingerprint_begin"
+        $saved = Get-FileFingerprint $mutatedPath
+        Set-NativeStage "primary_saved_file_fingerprint_complete"
+        $receipt.save = [ordered]@{
+            state = "ok"
+            sha256 = $saved.sha256
+            byte_len = $saved.byte_len
+        }
+        $receipt.status = "saved"
+    }
+    catch {
+        $script:NativeFailureStage = [string]$script:NativeCurrentStage
+        Write-Host ("PUB_RE_NATIVE_FAILURE_STAGE stage={0}" -f $script:NativeFailureStage)
+        Set-NativeStage "primary_saved_file_fingerprint_error"
+        throw
+    }
+}
+
+if (($operationKind -eq "save_as_noop" -or $operationKind -eq "save_in_place_noop") -and $receipt.save.state -eq "ok" -and $primaryExited) {
+    Assert-PublisherIdle
+    $reopenApplication = $null
+    $reopenDocument = $null
+    $reopenSecurityBefore = $null
+
+    try {
+        Set-NativeStage "reopen_application_create_begin"
+        $reopenState = New-SafePublisherApplication -Visible:$visible
+        $reopenApplication = $reopenState.application
+        Set-NativeStage "reopen_application_create_complete"
+
+        $reopenSecurityBefore = $reopenState.automation_security_before
+
+        Set-NativeStage "reopen_open_begin"
+        $reopenDocument = $reopenApplication.Open($mutatedPath, $true, $false)
+        Set-NativeStage "reopen_open_complete"
+
+        Set-NativeStage "reopen_inventory_begin"
+        $reopenInventory = Get-DocumentInventory $reopenDocument
+        Set-NativeStage "reopen_inventory_complete"
+
+        $receipt.reopen = [ordered]@{
+            state = "ok"
+            inventory = $reopenInventory
+        }
+        $receipt.status = "complete"
+    }
+    catch {
+        $script:NativeFailureStage = [string]$script:NativeCurrentStage
+        Write-Host ("PUB_RE_NATIVE_FAILURE_STAGE stage={0}" -f $script:NativeFailureStage)
+        Set-NativeStage "reopen_exception_observed"
+        throw
+    }
+    finally {
+        if ($null -ne $reopenDocument) {
+            Set-NativeStage "reopen_document_close_begin"
+            try {
+                $reopenDocument.Close()
+                Set-NativeStage "reopen_document_close_complete"
+            }
+            catch {
+                Set-NativeStage "reopen_document_close_error"
+            }
+            Release-ComObject $reopenDocument
+        }
+        if ($null -ne $reopenApplication) {
+            Set-NativeStage "reopen_application_quit_begin"
+            [void](Close-SafePublisherApplication -Application $reopenApplication -AutomationSecurityBefore $reopenSecurityBefore)
+            Set-NativeStage "reopen_application_quit_complete"
+        }
+    }
+
+    Set-NativeStage "reopen_process_exit_wait_begin"
+    $reopenExited = Wait-PublisherExit -GraceSeconds $graceSeconds
+    Set-NativeStage "reopen_process_exit_wait_complete"
+    $receipt.process_exit.reopen = if ($reopenExited) { "ok" } else { "timeout" }
+    if (-not $reopenExited) {
+        $receipt.status = "process_exit_timeout"
+    }
+}
+
+if (($operationKind -eq "shape_rotation_delta" -or $operationKind -eq "shape_rotation_delta_in_place_save") -and $receipt.save.state -eq "ok" -and $primaryExited) {
     Assert-PublisherIdle
     $reopenApplication = $null
     $reopenDocument = $null
@@ -792,7 +959,11 @@ $control = [ordered]@{
     officeart_stream = $officeArtStream
     evidence_dir = "evidence"
 }
-if ($operationKind -eq "shape_rotation_delta" -and $receipt.save.state -eq "ok") {
+if (($operationKind -eq "shape_rotation_delta" -or
+        $operationKind -eq "shape_rotation_delta_in_place_save" -or
+        $operationKind -eq "save_as_noop" -or
+        $operationKind -eq "save_in_place_noop") -and
+    $receipt.save.state -eq "ok") {
     $diffManifest = [ordered]@{
         schema = $DiffSchema
         experiment_id = ([string]$manifest.experiment_id) + "--native-diff"

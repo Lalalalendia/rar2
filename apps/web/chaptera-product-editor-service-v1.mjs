@@ -133,6 +133,36 @@ export class ChapteraProductEditorServiceV1 {
     return adaptReaderSceneToEditorScene(await this.#currentReaderScene());
   }
 
+  async currentVisualScene() {
+    const [current, visualResult] = await Promise.all([
+      this.currentDocument(),
+      this.#fetchJson(
+        "/v1/reader/documents/" + encodeURIComponent(this.documentId) + "/scene",
+        { method: "GET" },
+        this.#context("visual_scene"),
+      ),
+    ]);
+    this.#throwUnlessOk(visualResult, "current visual scene");
+    const visual = ensureProtocol(
+      visualResult.value,
+      "chaptera.reader-scene.v1",
+      "current visual scene",
+    );
+    if (visual.document_id !== current.document_id) {
+      throw new Error("visual Scene document identity mismatch");
+    }
+    if (visual.source_hash !== current.source_hash) {
+      throw new Error("visual Scene source identity mismatch");
+    }
+    if (visual.revision_id !== current.revision_id) {
+      throw new Error("visual Scene revision differs from canonical current document");
+    }
+    return {
+      current_document: clone(current),
+      visual_scene: clone(visual),
+    };
+  }
+
   async sceneForRevision(revisionId) {
     ident(revisionId, "revisionId");
     const readerScene = await this.#currentReaderScene();

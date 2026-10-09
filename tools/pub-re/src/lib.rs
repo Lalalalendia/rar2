@@ -147,7 +147,10 @@ struct LoadedInput {
 
 pub fn analyze_manifest_file(path: &Path) -> Result<PubReReceiptV1> {
     let source = fs::read(path).with_context(|| format!("read manifest {}", path.display()))?;
-    let manifest: ExperimentManifestV1 = serde_json::from_slice(&source)
+    let json = source
+        .strip_prefix(&[0xEF, 0xBB, 0xBF])
+        .unwrap_or(source.as_slice());
+    let manifest: ExperimentManifestV1 = serde_json::from_slice(json)
         .with_context(|| format!("parse manifest {}", path.display()))?;
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
     analyze_manifest(&manifest, base_dir)
@@ -615,6 +618,32 @@ mod tests {
 
         let error = analyze_manifest(&input, dir.path()).expect_err("hash mismatch must fail");
         assert!(error.to_string().contains("before SHA-256 mismatch"));
+    }
+
+    #[test]
+    fn manifest_file_accepts_utf8_bom_from_windows_powershell() {
+        let dir = TempDir::new().expect("temp dir");
+        let before = write_fixture(&dir, "before.pub", &synthetic_cfb(b"same", 1));
+        let after = write_fixture(&dir, "after.pub", &synthetic_cfb(b"changed", 1));
+        let manifest_path = dir.path().join("manifest.json");
+        let value = serde_json::json!({
+            "schema": EXPERIMENT_SCHEMA_V1,
+            "experiment_id": "bom-manifest",
+            "question": "does a Windows PowerShell UTF-8 BOM parse?",
+            "before": {"path": before, "expected_sha256": null},
+            "after": {"path": after, "expected_sha256": null}
+        });
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(
+            serde_json::to_vec(&value)
+                .expect("serialize BOM manifest")
+                .as_slice(),
+        );
+        fs::write(&manifest_path, bytes).expect("write BOM manifest");
+
+        let receipt = analyze_manifest_file(&manifest_path).expect("analyze BOM manifest");
+        assert_eq!(receipt.experiment_id, "bom-manifest");
+        assert!(receipt.cfb.logical_change_detected);
     }
 
     #[test]
