@@ -723,7 +723,10 @@ pub(super) fn display_page_delete_error_v1(
 ) -> fmt::Result {
     match error {
         EditorError::PageDeleteUnsupported { message } => {
-            write!(formatter, "delete blank authored page is unsupported: {message}")
+            write!(
+                formatter,
+                "delete blank authored page is unsupported: {message}"
+            )
         }
         EditorError::StalePageDelete => formatter.write_str(
             "current document/page membership no longer matches the delete-page precondition",
@@ -766,15 +769,18 @@ impl EditorSession {
     }
 
     fn has_page_lifecycle_history_v1(&self, page_id: PageId) -> bool {
-        self.undo.iter().chain(self.redo.iter()).any(|operation| match operation {
-            EditOperation::AppendBlankPageV1 { transition } => {
-                transition.identity.page_id == page_id
-            }
-            EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
-                transition.identity.page_id == page_id
-            }
-            _ => false,
-        })
+        self.undo
+            .iter()
+            .chain(self.redo.iter())
+            .any(|operation| match operation {
+                EditOperation::AppendBlankPageV1 { transition } => {
+                    transition.identity.page_id == page_id
+                }
+                EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
+                    transition.identity.page_id == page_id
+                }
+                _ => false,
+            })
     }
 
     fn page_has_resolved_node_membership_v1(&self, page_id: PageId) -> bool {

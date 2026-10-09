@@ -18,9 +18,9 @@ mod session_table;
 mod session_text;
 use session_geometry::{
     append_blank_page_error_to_editor_v1, apply_authored_stack_history_forward_v1,
-    delete_blank_authored_page_error_to_editor_v1,
-    authored_stack_operation_page_id_v1, derive_authored_stacks_from_operations_v1,
-    display_page_append_error_v1, page_order_error_to_editor_v1, validate_move_nodes_transition,
+    authored_stack_operation_page_id_v1, delete_blank_authored_page_error_to_editor_v1,
+    derive_authored_stacks_from_operations_v1, display_page_append_error_v1,
+    page_order_error_to_editor_v1, validate_move_nodes_transition,
     validate_resize_nodes_transition,
 };
 use session_image::{
@@ -62,10 +62,8 @@ pub use imported_paragraphs_v1::{ImportedParagraphProjectionErrorV1, ImportedPar
 pub use link_text_frame_tail_v1::TextFrameLinkTransitionV1;
 pub use pub_editor_authoring_core::{
     APPEND_BLANK_PAGE_PROTOCOL_V1, AUTHORED_STACK_PROTOCOL_V1,
-    DELETE_BLANK_AUTHORED_PAGE_PROTOCOL_V1,
     AUTHORED_TABLE_SENTINEL_CONTENTS_SEQ_NUM_V1, AUTHORED_TABLE_SENTINEL_TEXT_ID_V1,
     AppendBlankPageErrorV1, AppendBlankPageTransitionV1, AuthoredEntityProvenanceV1,
-    DeleteBlankAuthoredPageErrorV1, DeleteBlankAuthoredPageTransitionV1,
     AuthoredLineRuntimeV1, AuthoredPageIdentityV1, AuthoredPageIdentityValidationErrorV1,
     AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1, AuthoredShapeTransformV1,
     AuthoredSolidFillV1, AuthoredSolidStrokeV1, AuthoredStackLifecycleErrorV1,
@@ -73,17 +71,18 @@ pub use pub_editor_authoring_core::{
     AuthoredStackReorderModeV1, AuthoredStackReorderTransitionV1, AuthoredStackV1,
     AuthoredTableStoryRangesV1, CreateLineRuntimeValidationError,
     CreateShapeRuntimeValidationError, CreateTablePlanV1, CreateTableRuntimeV1,
-    CreateTableRuntimeValidationError, LineGeometryV1, PAGE_ORDER_PROTOCOL_V1, PageOrderErrorV1,
-    PageOrderTransitionV1, PointEmuV1, Srgb8V1, apply_append_blank_page_forward_v1,
-    apply_append_blank_page_inverse_v1, apply_authored_stack_reorder_forward_v1,
+    CreateTableRuntimeValidationError, DELETE_BLANK_AUTHORED_PAGE_PROTOCOL_V1,
+    DeleteBlankAuthoredPageErrorV1, DeleteBlankAuthoredPageTransitionV1, LineGeometryV1,
+    PAGE_ORDER_PROTOCOL_V1, PageOrderErrorV1, PageOrderTransitionV1, PointEmuV1, Srgb8V1,
+    apply_append_blank_page_forward_v1, apply_append_blank_page_inverse_v1,
+    apply_authored_stack_reorder_forward_v1, apply_authored_stack_reorder_inverse_v1,
+    apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
+    apply_create_table_forward_v1, apply_create_table_inverse_v1,
     apply_delete_blank_authored_page_forward_v1, apply_delete_blank_authored_page_inverse_v1,
-    apply_authored_stack_reorder_inverse_v1, apply_authored_stack_transition_forward_v1,
-    apply_authored_stack_transition_inverse_v1, apply_create_table_forward_v1,
-    apply_create_table_inverse_v1, apply_page_order_transition_forward_v1,
-    apply_page_order_transition_inverse_v1, authored_stack_state_id_v1, build_create_table_plan_v1,
-    line_bounds_v1, page_order_state_id_v1, plan_append_blank_page_v1,
-    plan_delete_blank_authored_page_v1, plan_create_line_append_v1,
-    plan_create_shape_append_v1, plan_create_table_append_v1, plan_delete_shape_remove_v1,
+    apply_page_order_transition_forward_v1, apply_page_order_transition_inverse_v1,
+    authored_stack_state_id_v1, build_create_table_plan_v1, line_bounds_v1, page_order_state_id_v1,
+    plan_append_blank_page_v1, plan_create_line_append_v1, plan_create_shape_append_v1,
+    plan_create_table_append_v1, plan_delete_blank_authored_page_v1, plan_delete_shape_remove_v1,
     plan_page_order_transition_v1, plan_reorder_authored_stack_v1, qualified_page_order_v1,
     rebuild_authored_table_story_v1, validate_authored_line_runtime_v1,
     validate_authored_page_identity_v1, validate_authored_shape_runtime_v1,
@@ -4260,9 +4259,9 @@ impl EditorSession {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::DeleteBlankAuthoredPageV1 { .. })
             }) {
-                return Err(EditorProjectError::LegacyProjectCarriesDeleteBlankPageOperation {
-                    index,
-                });
+                return Err(
+                    EditorProjectError::LegacyProjectCarriesDeleteBlankPageOperation { index },
+                );
             }
         }
         if project.source_hash != self.source_hash {
