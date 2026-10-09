@@ -494,6 +494,7 @@ fn build_pdf_artifact(
         .collect();
 
     let resources = FixedPdfResources {
+        page_order: visual.document.pages.iter().map(|page| page.id).collect(),
         node_paints,
         images,
         font_plan,
