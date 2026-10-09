@@ -1,0 +1,119 @@
+name: PUB PDF TABLE paint discriminator
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-pdf-table-paint-discriminator-v1.yml"
+      - "tools/measure_pub_pdf_table_paint_discriminator.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: pub-pdf-table-paint-discriminator-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'measure/pub-pdf-table-paint-discriminator-01'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Acquire pinned exact-1050 source corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify exact source bundle
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(s + "\n" for s in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          print("source corpus pinned", digest)
+          PY
+
+      - name: Build measurement-only TABLE classifier
+        run: |
+          set -euo pipefail
+          mkdir -p vendor/producer-a/crates/pub-viewer/src/bin
+          cp tools/measure_pub_pdf_table_paint_discriminator.rs             vendor/producer-a/crates/pub-viewer/src/bin/table-paint-discriminator.rs
+          cargo build --manifest-path vendor/producer-a/Cargo.toml             -p pub-viewer --bin table-paint-discriminator
+
+      - name: Measure exact TABLE witnesses and controls
+        run: |
+          set -euo pipefail
+          out="target/pub-pdf-table-paint-discriminator-v1"
+          mkdir -p "$out/rows"
+          bin="vendor/producer-a/target/debug/table-paint-discriminator"
+          root="out/pinned1050/materialized/native"
+          while IFS='|' read -r fixture sha role; do
+            src="$root/$sha.pub"
+            test -s "$src"
+            test "$(sha256sum "$src" | awk '{print $1}')" = "$sha"
+            "$bin" "$src" "$out/rows/$fixture.json"
+            FIXTURE="$fixture" ROLE="$role" ROW="$out/rows/$fixture.json" python - <<'PY'
+          import json, os
+          from pathlib import Path
+          path = Path(os.environ["ROW"])
+          data = json.loads(path.read_text())
+          data["fixture"] = os.environ["FIXTURE"]
+          data["role"] = os.environ["ROLE"]
+          path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+          PY
+          done <<'EOF'
+          037_427fb797a07fd1a5|427fb797a07fd1a598ce1eadae72d021446eb3ddeea9fc68ec1200dff786ab8c|positive
+          044_c39a76257106881b|c39a76257106881bd07fe94560d9b4c8c756de05746941816806c75aaf4e728b|positive
+          050_4247a4776b7ce1eb|4247a4776b7ce1ebe1799ab19e05e16019507980e354222f24e813849cbe94f6|negative
+          051_69a42c98d92d6811|69a42c98d92d6811b53a7d1114d4f7d8edc649ff388e1b5873537b523e9c48ba|negative
+          043_e635d3b0320073b6|e635d3b0320073b6d08402945a90e14e13d0294c02262d854b106b9f0088904b|unchanged
+          024_05369e47043d6125|05369e47043d612556c0458186e8b4d1a2ab19e90ea79284770b6a5b755dec14|unchanged
+          028_79f4cf541d9c891c|79f4cf541d9c891cbe14f4338fc9c8d64fe0fb9247a64b91f93c5fe72e670acb|unchanged
+          064_fb2927045c232927|fb2927045c23292717df0a67ccb1e879d526a4ad8a6bb3c1046c72119fba3910|unchanged
+          073_b3a254fd4ac111cb|b3a254fd4ac111cb4588d36c31c0ef447c0e83602fb520b9718a14e4fc252d41|unchanged
+          066_d8ac6507d86e35c0|d8ac6507d86e35c0f43e293760627a01b00a29586a76f8bf05b5fae702a19d13|unchanged
+          EOF
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          rows = [json.loads(p.read_text()) for p in sorted(Path("target/pub-pdf-table-paint-discriminator-v1/rows").glob("*.json"))]
+          payload = {
+              "schema": "chaptera.pub-pdf-table-paint-discriminator-corpus.v1",
+              "witness_count": len(rows),
+              "rows": rows,
+              "source_text_emitted": False,
+              "source_ids_emitted": False,
+          }
+          Path("target/pub-pdf-table-paint-discriminator-v1/receipt.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-safe TABLE receipt only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-pdf-table-paint-discriminator-v1
+          path: target/pub-pdf-table-paint-discriminator-v1/receipt.json
+          if-no-files-found: warn
+          retention-days: 30
