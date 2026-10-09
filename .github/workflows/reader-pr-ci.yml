@@ -131,6 +131,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tier_a: ${{ steps.scope.outputs.tier_a }}
+      free_pub_asset_cli: ${{ steps.scope.outputs.free_pub_asset_cli }}
       desktop_rustfmt: ${{ steps.scope.outputs.desktop_rustfmt }}
       reader_windows_smoke: ${{ steps.scope.outputs.reader_windows_smoke }}
       reader_windows: ${{ steps.scope.outputs.reader_windows }}
@@ -309,6 +310,12 @@ jobs:
     needs: classify
     if: needs.classify.outputs.tier_a == 'true'
     uses: ./.github/workflows/reader-consumer-preflight.yml
+
+  free-pub-asset-cli:
+    name: Free PUB exact asset CLI
+    needs: classify
+    if: ${{ !cancelled() && always() && needs.classify.outputs.free_pub_asset_cli == 'true' }}
+    uses: ./.github/workflows/free-pub-asset-cli-v1.yml
 
   desktop-rustfmt:
     name: Desktop rustfmt

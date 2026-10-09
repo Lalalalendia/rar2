@@ -35,6 +35,8 @@ READER_PUBLICATION_DOCUMENT = "vendor/producer-a/crates/pub-reader/src/publicati
 READER_CONTENTS_ACCESS = "vendor/producer-a/crates/pub-reader/src/contents_access.rs"
 READER_SOURCE_IDENTITY = "vendor/producer-a/crates/pub-reader/src/source_identity.rs"
 READER_NODE_MATERIALIZATION = "vendor/producer-a/crates/pub-reader/src/node_materialization.rs"
+READER_ASSET_EXPORT = "vendor/producer-a/crates/pub-reader/src/asset_export.rs"
+READER_ASSETS = "vendor/producer-a/crates/pub-reader/src/assets.rs"
 
 
 TEST_REGION_EVIDENCE_CANDIDATES = {
@@ -48,6 +50,7 @@ HUNK_HEADER = re.compile(
 
 SCOPES = (
     "tier_a",
+    "free_pub_asset_cli",
     "desktop_rustfmt",
     "reader_windows_smoke",
     "reader_windows",
@@ -257,6 +260,11 @@ def test_region_evidence_only_paths(
             evidence_only.add(path)
     return evidence_only
 
+
+FREE_PUB_ASSET_CLI = (
+    READER_ASSET_EXPORT,
+    READER_ASSETS,
+)
 
 READER_SHARED = (
     "Cargo.toml",
@@ -659,6 +667,7 @@ def classify(
     ]
     mapping = {
         "tier_a": TIER_A,
+        "free_pub_asset_cli": FREE_PUB_ASSET_CLI,
         "desktop_rustfmt": DESKTOP_RUSTFMT,
         "reader_windows_smoke": READER_WINDOWS_SMOKE,
         "reader_windows": READER_WINDOWS,
