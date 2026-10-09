@@ -19,11 +19,9 @@ fn main() -> Result<()> {
         .iter()
         .map(|byte| format!("{:02x}", *byte))
         .collect::<String>();
-    let bundle = pub_viewer::open_pub_bundle(
-        &bytes,
-        pub_viewer::viewer_geometry_environment_v0_1(),
-    )
-    .context("open PUB through Viewer")?;
+    let bundle =
+        pub_viewer::open_pub_bundle(&bytes, pub_viewer::viewer_geometry_environment_v0_1())
+            .context("open PUB through Viewer")?;
     let visual = bundle.geometry;
     let nodes = visual
         .scene
@@ -33,7 +31,11 @@ fn main() -> Result<()> {
         .collect::<BTreeMap<_, _>>();
 
     let mut resources = Vec::new();
-    for image in visual.images.iter().filter(|image| image.mime == "image/gif") {
+    for image in visual
+        .images
+        .iter()
+        .filter(|image| image.mime == "image/gif")
+    {
         let decoder = GifDecoder::new(Cursor::new(image.bytes.as_slice()))
             .context("decode exact Viewer GIF")?;
         let (width, height) = decoder.dimensions();
@@ -83,10 +85,7 @@ fn main() -> Result<()> {
                 if node.transform != Affine2D::identity() {
                     transformed_use_count += 1;
                 }
-                use_bounds_emu.push([
-                    node.bounds.width.get(),
-                    node.bounds.height.get(),
-                ]);
+                use_bounds_emu.push([node.bounds.width.get(), node.bounds.height.get()]);
             }
         }
         use_bounds_emu.sort();
