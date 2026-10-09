@@ -175,15 +175,96 @@ fn main() -> Result<()> {
         }
     }
 
+    let page_parents = bundle
+        .resolved_graph
+        .document
+        .pages
+        .iter()
+        .map(|page| page.into_canonical())
+        .collect::<BTreeSet<_>>();
+    let source_orders = bundle
+        .source_page_paint_orders
+        .iter()
+        .map(|order| (order.page_id.into_canonical(), order.node_ids.as_slice()))
+        .collect::<BTreeMap<_, _>>();
+
     let mut classes = BTreeMap::<String, usize>::new();
     let mut shape_types = BTreeMap::<String, usize>::new();
     let mut joins = BTreeMap::<String, usize>::new();
+    let mut topology = BTreeMap::<String, usize>::new();
+    let mut overlap_family = BTreeMap::<String, usize>::new();
+    let mut earlier_overlap_count = 0_usize;
+    let mut later_overlap_count = 0_usize;
 
     for node_id in window_nodes.iter().copied() {
         let Some(node) = bundle.resolved_graph.nodes.get(&node_id) else {
             *joins.entry("resolved_node_missing".into()).or_default() += 1;
             continue;
         };
+        *topology
+            .entry(
+                if page_parents.contains(&node.header.parent_id) {
+                    "direct_page_parent"
+                } else {
+                    "non_page_parent"
+                }
+                .to_owned(),
+            )
+            .or_default() += 1;
+        if node.header.source_refs.iter().any(|source| {
+            source
+                .object_key
+                .as_deref()
+                .is_some_and(|key| key.starts_with("escher/group-ancestor/"))
+        }) {
+            *topology.entry("group_ancestor_ref".to_owned()).or_default() += 1;
+        }
+
+        if let Some(order) = source_orders.get(&node.header.parent_id) {
+            if let Some(rank) = order.iter().position(|id| *id == node.header.id) {
+                *topology.entry("source_order_member".to_owned()).or_default() += 1;
+                let node_right = node.header.bounds.right().map(|v| v.get());
+                let node_bottom = node.header.bounds.bottom().map(|v| v.get());
+                if let (Some(node_right), Some(node_bottom)) = (node_right, node_bottom) {
+                    for (other_rank, other_id) in order.iter().enumerate() {
+                        if other_rank == rank {
+                            continue;
+                        }
+                        let Some(other) = bundle.resolved_graph.nodes.get(other_id) else {
+                            continue;
+                        };
+                        let (Some(other_right), Some(other_bottom)) =
+                            (other.header.bounds.right(), other.header.bounds.bottom())
+                        else {
+                            continue;
+                        };
+                        let overlaps = node.header.bounds.x.get() < other_right.get()
+                            && other.header.bounds.x.get() < node_right
+                            && node.header.bounds.y.get() < other_bottom.get()
+                            && other.header.bounds.y.get() < node_bottom;
+                        if !overlaps {
+                            continue;
+                        }
+                        if other_rank < rank {
+                            earlier_overlap_count += 1;
+                        } else {
+                            later_overlap_count += 1;
+                        }
+                        let family = if other.payload.table.is_some() {
+                            "table"
+                        } else if other.payload.image_slot.is_some() {
+                            "image"
+                        } else if other.payload.story_frame.is_some() {
+                            "story"
+                        } else {
+                            "other_shape"
+                        };
+                        *overlap_family.entry(family.to_owned()).or_default() += 1;
+                    }
+                }
+            }
+        }
+
         let matches = shapes_by_seq
             .get(&node.payload.contents_seq_num)
             .map(Vec::as_slice)
@@ -223,6 +304,10 @@ fn main() -> Result<()> {
         "geometry_class_counts": classes,
         "shape_type_counts": shape_types,
         "join_counts": joins,
+        "topology_counts": topology,
+        "earlier_overlap_count": earlier_overlap_count,
+        "later_overlap_count": later_overlap_count,
+        "overlap_family_counts": overlap_family,
         "claims": {
             "source_only": true,
             "publisher_pdf_used_as_authority": false,
