@@ -5,11 +5,90 @@
 //! table rendering, typography diagnostics, image recolor, or product-open
 //! policy.
 
-use anyhow::{Context, Result};
-use pub_layout::{BoundedAuthoringSlice, BoundedNodeGeometryInput, BoundedTableInput};
+use crate::{ViewerGeometryDocument, ViewerPage};
+use anyhow::{Context, Result, anyhow};
+use pub_layout::{
+    BoundedAuthoringSlice, BoundedNodeGeometryInput, BoundedTableInput, ResolvedSurface,
+};
 use pub_model::{Affine2D, Node, NodeId, NodeKind, PageId, Story, StoryFrame, StoryId};
 use pub_reader::{PubResolvedGraph, PubResolvedNodePayload};
 use std::collections::BTreeSet;
+
+/// Transactionally refreshes only Viewer customer-page membership and surfaces
+/// from an already-mutated resolved graph.
+///
+/// Page-role qualification remains external. The caller supplies the exact
+/// admitted customer PageIds; this seam neither classifies raw Publisher pages
+/// nor invents a second durable page list.
+impl ViewerGeometryDocument {
+    pub fn refresh_page_membership_from_resolved(
+        &mut self,
+        graph: &PubResolvedGraph,
+        page_ids: &[PageId],
+    ) -> Result<()> {
+        if graph.source.source_hash != self.document.source.source_hash
+            || graph.document.source_hash != self.document.source.source_hash
+        {
+            return Err(anyhow!(
+                "Viewer page-membership refresh rejected a resolved graph with different source identity"
+            ));
+        }
+
+        let (pages, surfaces) = viewer_page_membership_from_resolved(graph, page_ids)?;
+        self.document.pages = pages;
+        self.scene.surfaces = surfaces;
+        Ok(())
+    }
+}
+
+fn viewer_page_membership_from_resolved(
+    graph: &PubResolvedGraph,
+    page_ids: &[PageId],
+) -> Result<(Vec<ViewerPage>, Vec<ResolvedSurface>)> {
+    let document_membership = graph
+        .document
+        .pages
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    let mut pages = Vec::with_capacity(page_ids.len());
+    let mut surfaces = Vec::with_capacity(page_ids.len());
+
+    for (zero_based, page_id) in page_ids.iter().copied().enumerate() {
+        if !seen.insert(page_id) {
+            return Err(anyhow!(
+                "Viewer page-membership refresh received duplicate PageId {page_id:?}"
+            ));
+        }
+        if !document_membership.contains(&page_id) {
+            return Err(anyhow!(
+                "Viewer page-membership refresh received PageId outside current document membership: {page_id:?}"
+            ));
+        }
+        let page = graph
+            .pages
+            .get(&page_id)
+            .with_context(|| format!("Viewer page-membership refresh missing page {page_id:?}"))?;
+        let index = u32::try_from(zero_based + 1).context("Viewer page index exceeds u32")?;
+
+        pages.push(ViewerPage {
+            index,
+            id: page_id,
+            width_emu: page.size.width.get(),
+            height_emu: page.size.height.get(),
+        });
+        surfaces.push(ResolvedSurface {
+            origin: page_id,
+            size: page.size,
+            bleed: page.bleed,
+            margins: page.margins,
+        });
+    }
+
+    surfaces.sort_by_key(|surface| surface.origin);
+    Ok((pages, surfaces))
+}
 
 /// Creates only the grounded semantic subset already accepted by pub-layout.
 ///
@@ -221,4 +300,115 @@ fn bounded_authoring_slice_from_resolved_pages_with_story_payload_scope(
         guides: Vec::new(),
         unknown_layout_state: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod page_membership_tests {
+    use super::*;
+    use pub_model::{
+        CanonicalId, Document, LengthEmu, Page, Sha256Digest, Size2D, SourceDescriptor,
+    };
+    use std::collections::BTreeMap;
+
+    fn page_id(byte: u8) -> PageId {
+        PageId::from_canonical(CanonicalId::from_bytes([byte; 16]))
+    }
+
+    fn page(id: PageId, width: i64, height: i64) -> Page {
+        Page {
+            id,
+            size: Size2D::new(LengthEmu::new(width), LengthEmu::new(height)),
+            bleed: None,
+            margins: None,
+            children: Vec::new(),
+            extensions: Vec::new(),
+        }
+    }
+
+    fn graph(raw_pages: Vec<PageId>) -> PubResolvedGraph {
+        let source_hash = Sha256Digest::from_bytes([0x7a; 32]);
+        let pages = raw_pages
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, page_id)| {
+                (
+                    page_id,
+                    page(
+                        page_id,
+                        1_000_000 + i64::try_from(index).unwrap() * 100_000,
+                        2_000_000 + i64::try_from(index).unwrap() * 100_000,
+                    ),
+                )
+            })
+            .collect();
+
+        PubResolvedGraph {
+            cdm_version: "0.1".into(),
+            resolver_version: pub_reader::PUB_RESOLVER_VERSION_V1.into(),
+            source: SourceDescriptor {
+                format: "pub".into(),
+                format_version: Some("0x2c".into()),
+                adapter_version: "pub-viewer/test".into(),
+                source_hash,
+            },
+            document: Document {
+                id: pub_model::DocumentId::from_canonical(CanonicalId::from_bytes([0x55; 16])),
+                format_origin: "pub".into(),
+                source_hash,
+                pages: raw_pages,
+                resources: Vec::new(),
+                styles: Vec::new(),
+            },
+            pages,
+            nodes: BTreeMap::new(),
+            stories: BTreeMap::new(),
+            paragraphs: BTreeMap::new(),
+            text_runs: BTreeMap::new(),
+            resources: BTreeMap::new(),
+            styles: BTreeMap::new(),
+            extensions: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn page_membership_projection_preserves_requested_order_and_exact_surface_geometry() {
+        let first = page_id(1);
+        let second = page_id(2);
+        let graph = graph(vec![first, second]);
+
+        let (pages, surfaces) =
+            viewer_page_membership_from_resolved(&graph, &[second, first]).expect("projection");
+
+        assert_eq!(
+            pages.iter().map(|page| page.id).collect::<Vec<_>>(),
+            vec![second, first]
+        );
+        assert_eq!(
+            pages.iter().map(|page| page.index).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(pages[0].width_emu, graph.pages[&second].size.width.get());
+        assert_eq!(pages[0].height_emu, graph.pages[&second].size.height.get());
+
+        assert_eq!(
+            surfaces
+                .iter()
+                .map(|surface| surface.origin)
+                .collect::<Vec<_>>(),
+            vec![first, second]
+        );
+        assert_eq!(surfaces[0].size, graph.pages[&first].size);
+        assert_eq!(surfaces[1].size, graph.pages[&second].size);
+    }
+
+    #[test]
+    fn page_membership_projection_rejects_duplicates_and_nonmembers() {
+        let first = page_id(1);
+        let unknown = page_id(3);
+        let graph = graph(vec![first]);
+
+        assert!(viewer_page_membership_from_resolved(&graph, &[first, first]).is_err());
+        assert!(viewer_page_membership_from_resolved(&graph, &[first, unknown]).is_err());
+    }
 }

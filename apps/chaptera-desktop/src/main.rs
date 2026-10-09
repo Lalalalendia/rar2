@@ -675,6 +675,7 @@ struct ViewerApp {
     source_revalidate_after: Option<Instant>,
     source_exact_revalidate_after: Option<Instant>,
     visual: Option<ViewerGeometryDocument>,
+    source_customer_page_ids: Vec<pub_editor::PageId>,
     salvage: Option<ReaderPartialSourceGraph>,
     source_fonts: source_font::DesktopSourceFontRegistry,
     source_fonts_install_attempted: bool,
@@ -741,6 +742,7 @@ impl ViewerApp {
             source_revalidate_after: None,
             source_exact_revalidate_after: None,
             visual: None,
+            source_customer_page_ids: Vec::new(),
             salvage: None,
             source_fonts: source_font::DesktopSourceFontRegistry::new(),
             source_fonts_install_attempted: false,
@@ -1184,6 +1186,7 @@ impl ViewerApp {
         self.source_fonts_install_attempted = false;
         self.source_fonts_active = false;
         self.visual = Some(visual);
+        self.capture_source_customer_page_ids_from_visual();
         self.salvage = None;
         self.selected_page = 0;
         self.page_frame_cache.clear();
@@ -1227,17 +1230,7 @@ impl ViewerApp {
                 initial_page: 0,
             });
 
-        if let Err(error) = self.sync_visual_stories_from_editor() {
-            self.edit_status = Some(format!(
-                "Viewer text projection refresh failed closed: {error}"
-            ));
-        }
-        if let Err(error) = self.sync_visual_created_text_boxes_from_editor() {
-            self.edit_status = Some(format!(
-                "Viewer created TextBox scene sync failed closed: {error}"
-            ));
-        }
-        self.sync_visual_geometry_from_editor();
+        self.finish_open_authoring_projection();
     }
 
     fn commit_prepared_salvage_open(
@@ -1259,6 +1252,7 @@ impl ViewerApp {
         self.source_fonts = source_font::DesktopSourceFontRegistry::new();
         self.source_fonts_install_attempted = false;
         self.source_fonts_active = false;
+        self.source_customer_page_ids.clear();
         self.visual = None;
         self.salvage = Some(prepared.salvage);
         self.selected_page = 0;
@@ -3090,30 +3084,6 @@ impl ViewerApp {
             self.selected_table_cell_index = None;
             self.table_cell_buffer.clear();
         }
-    }
-
-    fn finish_authoring_change(&mut self, status: &str) {
-        self.canvas_drag = None;
-        self.canvas_resize = None;
-        self.page_frame_cache.clear();
-        let text_projection_refresh = self.sync_visual_stories_from_editor();
-        let created_node_scene_sync = self.sync_visual_created_text_boxes_from_editor();
-        self.sync_visual_geometry_from_editor();
-        self.refresh_search();
-        self.export_preview = None;
-        self.project_status = Some("Editor project has unsaved changes.".to_owned());
-        self.edit_status = Some(match (text_projection_refresh, created_node_scene_sync) {
-            (Ok(()), Ok(())) => status.to_owned(),
-            (Err(text_error), Ok(())) => {
-                format!("{status} Viewer text projection refresh failed closed: {text_error}")
-            }
-            (Ok(()), Err(scene_error)) => {
-                format!("{status} Viewer created TextBox scene sync failed closed: {scene_error}")
-            }
-            (Err(text_error), Err(scene_error)) => format!(
-                "{status} Viewer text projection refresh failed closed: {text_error}; created TextBox scene sync failed closed: {scene_error}"
-            ),
-        });
     }
 
     fn saved_project_operation_count(&self) -> Result<Option<usize>, String> {
@@ -6028,28 +5998,6 @@ mod tests {
     #[test]
     fn unsupported_open_failure_has_unsupported_fidelity_state() {
         let app = ViewerApp {
-            source_path: None,
-            open_state: OpenStateAuthority::default(),
-            committed_source: None,
-            source_revalidate_after: None,
-            source_exact_revalidate_after: None,
-            visual: None,
-            salvage: None,
-            source_fonts: source_font::DesktopSourceFontRegistry::new(),
-            source_fonts_install_attempted: false,
-            source_fonts_active: false,
-            selected_page: 0,
-            page_frame_cache: BTreeMap::new(),
-            page_frame_cache_builds: 0,
-            canvas_selection: SceneSelectionState::default(),
-            canvas_drag: None,
-            canvas_resize: None,
-            rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
-            text_box_creation: text_box_creation::TextBoxCreateSessionV1::default(),
-            created_text_box_scene_nodes: BTreeSet::new(),
-            text_mode: None,
-            zoom: 1.0,
-            zoom_mode: CanvasZoomMode::FitPage,
             load_error: Some(ViewerLoadFailure {
                 kind: ViewerLoadFailureKind::Unsupported,
                 attempted_path: None,
@@ -6057,36 +6005,7 @@ mod tests {
                 classification: Some(classify_failure_candidate(b"<html>not pub</html>")),
                 diagnostic_json: None,
             }),
-            search_query: String::new(),
-            search_results: Vec::new(),
-            salvage_search_results: Vec::new(),
-            selected_search_result: None,
-            image_textures: BTreeMap::new(),
-            image_decode_diagnostics: BTreeMap::new(),
-            editor: None,
-            editor_load_error: None,
-            edit_buffer: String::new(),
-            edit_status: None,
-            selected_table_cell_index: None,
-            table_cell_buffer: String::new(),
-            export_preview: None,
-            project_status: None,
-            preview_clipped_frames: 0,
-            preview_clipped_story_keys: BTreeSet::new(),
-            preview_text_diagnostics: Vec::new(),
-            diagnostic_save_path: String::new(),
-            diagnostic_status: None,
-            diagnostic_sweep: None,
-            diagnostic_sweep_progress: diagnostic_sweep::FolderSweepProgress::default(),
-            diagnostic_sweep_report: None,
-            diagnostic_sweep_open: false,
-            diagnostic_sweep_status: None,
-            supporter_value: supporter::ValueTracker::default(),
-            supporter_state: supporter::SupporterState::default(),
-            exact_file_consent_open: false,
-            exact_file_consent_status: None,
-            show_diagnostics: false,
-            reader_inspector_tab: reader_product_ui::InspectorTab::Document,
+            ..ViewerApp::new(None)
         };
 
         assert_eq!(
@@ -6098,28 +6017,6 @@ mod tests {
     #[test]
     fn file_access_failure_does_not_claim_document_is_unsupported() {
         let app = ViewerApp {
-            source_path: None,
-            open_state: OpenStateAuthority::default(),
-            committed_source: None,
-            source_revalidate_after: None,
-            source_exact_revalidate_after: None,
-            visual: None,
-            salvage: None,
-            source_fonts: source_font::DesktopSourceFontRegistry::new(),
-            source_fonts_install_attempted: false,
-            source_fonts_active: false,
-            selected_page: 0,
-            page_frame_cache: BTreeMap::new(),
-            page_frame_cache_builds: 0,
-            canvas_selection: SceneSelectionState::default(),
-            canvas_drag: None,
-            canvas_resize: None,
-            rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
-            text_box_creation: text_box_creation::TextBoxCreateSessionV1::default(),
-            created_text_box_scene_nodes: BTreeSet::new(),
-            text_mode: None,
-            zoom: 1.0,
-            zoom_mode: CanvasZoomMode::FitPage,
             load_error: Some(ViewerLoadFailure {
                 kind: ViewerLoadFailureKind::FileAccess,
                 attempted_path: None,
@@ -6127,36 +6024,7 @@ mod tests {
                 classification: None,
                 diagnostic_json: None,
             }),
-            search_query: String::new(),
-            search_results: Vec::new(),
-            salvage_search_results: Vec::new(),
-            selected_search_result: None,
-            image_textures: BTreeMap::new(),
-            image_decode_diagnostics: BTreeMap::new(),
-            editor: None,
-            editor_load_error: None,
-            edit_buffer: String::new(),
-            edit_status: None,
-            selected_table_cell_index: None,
-            table_cell_buffer: String::new(),
-            export_preview: None,
-            project_status: None,
-            preview_clipped_frames: 0,
-            preview_clipped_story_keys: BTreeSet::new(),
-            preview_text_diagnostics: Vec::new(),
-            diagnostic_save_path: String::new(),
-            diagnostic_status: None,
-            diagnostic_sweep: None,
-            diagnostic_sweep_progress: diagnostic_sweep::FolderSweepProgress::default(),
-            diagnostic_sweep_report: None,
-            diagnostic_sweep_open: false,
-            diagnostic_sweep_status: None,
-            supporter_value: supporter::ValueTracker::default(),
-            supporter_state: supporter::SupporterState::default(),
-            exact_file_consent_open: false,
-            exact_file_consent_status: None,
-            show_diagnostics: false,
-            reader_inspector_tab: reader_product_ui::InspectorTab::Document,
+            ..ViewerApp::new(None)
         };
 
         assert_eq!(app.fidelity_status(), None);
@@ -6382,61 +6250,18 @@ mod tests {
             .clone();
         let replacement = format!("{before} [desktop edit]");
 
-        let mut app = ViewerApp {
-            source_path: Some(PathBuf::from("SampleNewsletter.pub")),
-            open_state: OpenStateAuthority::default(),
-            committed_source: None,
-            source_revalidate_after: None,
-            source_exact_revalidate_after: None,
-            visual: Some(visual),
-            salvage: None,
-            source_fonts: source_font::DesktopSourceFontRegistry::new(),
-            source_fonts_install_attempted: false,
-            source_fonts_active: false,
-            selected_page: 0,
-            page_frame_cache: BTreeMap::new(),
-            page_frame_cache_builds: 0,
-            canvas_selection: SceneSelectionState::default(),
-            canvas_drag: None,
-            canvas_resize: None,
-            rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
-            text_box_creation: text_box_creation::TextBoxCreateSessionV1::default(),
-            created_text_box_scene_nodes: BTreeSet::new(),
-            text_mode: None,
-            zoom: 1.0,
-            zoom_mode: CanvasZoomMode::FitPage,
-            load_error: None,
-            search_query: String::new(),
-            search_results: Vec::new(),
-            salvage_search_results: Vec::new(),
-            selected_search_result: None,
-            image_textures: BTreeMap::new(),
-            image_decode_diagnostics: BTreeMap::new(),
-            editor: Some(editor),
-            editor_load_error: None,
-            edit_buffer: replacement.clone(),
-            edit_status: None,
-            selected_table_cell_index: None,
-            table_cell_buffer: String::new(),
-            export_preview: None,
-            project_status: None,
-            preview_clipped_frames: 0,
-            preview_clipped_story_keys: BTreeSet::new(),
-            preview_text_diagnostics: Vec::new(),
-            diagnostic_save_path: String::new(),
-            diagnostic_status: None,
-            diagnostic_sweep: None,
-            diagnostic_sweep_progress: diagnostic_sweep::FolderSweepProgress::default(),
-            diagnostic_sweep_report: None,
-            diagnostic_sweep_open: false,
-            diagnostic_sweep_status: None,
-            supporter_value: supporter::ValueTracker::default(),
-            supporter_state: supporter::SupporterState::default(),
-            exact_file_consent_open: false,
-            exact_file_consent_status: None,
-            show_diagnostics: false,
-            reader_inspector_tab: reader_product_ui::InspectorTab::Document,
-        };
+        let source_customer_page_ids = visual
+            .document
+            .pages
+            .iter()
+            .map(|page| page.id)
+            .collect::<Vec<_>>();
+        let mut app = ViewerApp::new(None);
+        app.source_path = Some(PathBuf::from("SampleNewsletter.pub"));
+        app.source_customer_page_ids = source_customer_page_ids;
+        app.visual = Some(visual);
+        app.editor = Some(editor);
+        app.edit_buffer = replacement.clone();
 
         app.editor
             .as_mut()
