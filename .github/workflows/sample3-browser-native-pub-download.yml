@@ -8,6 +8,8 @@ on:
       - "tools/test_sample3_browser_pub_download_service.py"
       - "tools/test_sample3_browser_pub_download.mjs"
       - "tools/test_sample3_editor_ui_acceptance.mjs"
+      - "apps/web/story-line-endings-v1.mjs"
+      - "tools/test_story_line_endings_v1.mjs"
   workflow_dispatch:
 
 permissions:
@@ -77,6 +79,9 @@ jobs:
             .sample3-positive/source.pub \
             .sample3-positive/baseline.json \
             .sample3-positive/edited.json
+
+      - name: Prove source Story separator roundtrip is byte-exact
+        run: node tools/test_story_line_endings_v1.mjs
 
       - name: Install Chromium
         run: |
