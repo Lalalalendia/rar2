@@ -117,6 +117,8 @@ jobs:
             Remove-Item -LiteralPath $fixture -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $output -Force -Recurse -ErrorAction SilentlyContinue
           }
+          Write-Host "Wrong-source control rejected before Publisher activation; no output created."
+          exit 0
 
       - name: Emit local execution handoff
         shell: pwsh
