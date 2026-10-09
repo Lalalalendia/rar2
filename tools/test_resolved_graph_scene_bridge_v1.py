@@ -282,6 +282,59 @@ class ResolvedGraphSceneBridgeTests(unittest.TestCase):
             accepted_state["scene_snapshot_id"],
         )
 
+    def test_story_range_project_updates_canonical_story_without_geometry_drift(self):
+        before_text = graph()["stories"][STORY_ID]["text"]
+        replacement = "EDITED STORY TEXT"
+        before_state = "sha256:" + hashlib.sha256(
+            json.dumps(
+                {
+                    "protocol_version": "chaptera.story-state.v1",
+                    "story_id": STORY_ID,
+                    "text": before_text,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        after_state = "sha256:" + hashlib.sha256(
+            json.dumps(
+                {
+                    "protocol_version": "chaptera.story-state.v1",
+                    "story_id": STORY_ID,
+                    "text": replacement,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        project = {
+            "schema_version": "pub-editor-v0.2",
+            "source_hash": SOURCE_HASH,
+            "operations": [{
+                "kind": "replace_story_range",
+                "story_id": STORY_ID,
+                "start_scalar": 0,
+                "end_scalar": len(before_text),
+                "expected_before": before_text,
+                "replacement_text": replacement,
+                "before_story_state_id": before_state,
+                "after_story_state_id": after_state,
+            }],
+        }
+
+        baseline_scene = project_resolved_graph_scene(graph())
+        current = apply_project_to_resolved_graph(graph(), project)
+        accepted_scene = project_resolved_graph_scene(current)
+
+        self.assertEqual(replacement, current["stories"][STORY_ID]["text"])
+        self.assertEqual(
+            baseline_scene,
+            accepted_scene,
+            "Story replay must not invent a second geometry/layout path",
+        )
+
     def test_task_local_engine_baseline_commit_undo_redo_replay(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
