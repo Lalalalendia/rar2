@@ -1555,10 +1555,8 @@ fn gui_insert_blank_after_content_bearing_customer_preserves_source_and_replays(
         .map(PathBuf::from)
         .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to pinned Apache POI fixture");
     let original = fs::read(&fixture_source).expect("read pinned source PUB");
-    let root = std::env::temp_dir().join(format!(
-        "chaptera-gui-insert-after-{}",
-        std::process::id()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("chaptera-gui-insert-after-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).expect("create insert-after GUI directory");
     let fixture = root.join("SampleNewsletter.pub");
@@ -1586,7 +1584,10 @@ fn gui_insert_blank_after_content_bearing_customer_preserves_source_and_replays(
             .iter()
             .map(|page| page.id)
             .collect::<Vec<_>>();
-        assert!(source_order.len() >= 2, "must prove insertion is not append");
+        assert!(
+            source_order.len() >= 2,
+            "must prove insertion is not append"
+        );
         assert_eq!(app.source_customer_page_ids, source_order);
         assert_eq!(app.selected_page, 0);
         let anchor = source_order[0];
@@ -1599,7 +1600,9 @@ fn gui_insert_blank_after_content_bearing_customer_preserves_source_and_replays(
         )
     };
     assert!(
-        !harness.get_by_label("Insert Blank After Selected").is_disabled(),
+        !harness
+            .get_by_label("Insert Blank After Selected")
+            .is_disabled(),
         "admitted source-backed customer page must enable InsertAfter"
     );
 
@@ -1637,7 +1640,10 @@ fn gui_insert_blank_after_content_bearing_customer_preserves_source_and_replays(
         .expect("authored shape operation")
         .clone();
     assert!(
-        matches!(shape_operation, pub_editor::EditOperation::CreateShape { .. }),
+        matches!(
+            shape_operation,
+            pub_editor::EditOperation::CreateShape { .. }
+        ),
         "real authored content is tracked by canonical Editor history"
     );
     assert!(
@@ -1645,7 +1651,9 @@ fn gui_insert_blank_after_content_bearing_customer_preserves_source_and_replays(
         "content-bearing source cannot be duplicated through blank-only command"
     );
     assert!(
-        !harness.get_by_label("Insert Blank After Selected").is_disabled(),
+        !harness
+            .get_by_label("Insert Blank After Selected")
+            .is_disabled(),
         "content-bearing source is a valid insertion anchor"
     );
 
@@ -1723,7 +1731,10 @@ fn gui_insert_blank_after_content_bearing_customer_preserves_source_and_replays(
             Some(pub_editor::EditOperation::InsertBlankPageAfterV1 { transition }) => {
                 assert_eq!(transition.anchor_page_id, anchor);
                 assert_eq!(transition.before_customer_page_ids, source_order);
-                assert_eq!(transition.after_customer_page_ids.len(), source_order.len() + 1);
+                assert_eq!(
+                    transition.after_customer_page_ids.len(),
+                    source_order.len() + 1
+                );
                 assert_ne!(transition.identity.page_id, anchor);
                 transition.identity.page_id
             }
@@ -1738,18 +1749,29 @@ fn gui_insert_blank_after_content_bearing_customer_preserves_source_and_replays(
         let mut expected = source_order.clone();
         expected.insert(1, inserted);
         assert_eq!(
-            editor.effective_customer_page_order_v1(&source_order).expect("order"),
+            editor
+                .effective_customer_page_order_v1(&source_order)
+                .expect("order"),
             expected
         );
         let visual = app.visual.as_ref().expect("Viewer after insertion");
         assert_eq!(
-            visual.document.pages.iter().map(|page| page.id).collect::<Vec<_>>(),
+            visual
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
             expected
         );
         assert_eq!(app.selected_page, 1);
         assert_eq!(visual.document.pages[app.selected_page].id, inserted);
         assert!(
-            visual.scene.surfaces.iter().any(|surface| surface.origin == inserted),
+            visual
+                .scene
+                .surfaces
+                .iter()
+                .any(|surface| surface.origin == inserted),
             "new blank customer page gets a real Viewer scene surface"
         );
         inserted
@@ -1759,7 +1781,11 @@ fn gui_insert_blank_after_content_bearing_customer_preserves_source_and_replays(
         "inserted blank page must admit lifecycle Delete"
     );
 
-    harness.get_all_by_label("Undo").next().expect("Undo insert").click();
+    harness
+        .get_all_by_label("Undo")
+        .next()
+        .expect("Undo insert")
+        .click();
     harness.step();
     harness.step();
     {
@@ -1770,14 +1796,29 @@ fn gui_insert_blank_after_content_bearing_customer_preserves_source_and_replays(
         assert_eq!(editor.graph().pages[&anchor], anchor_page);
         let visual = app.visual.as_ref().expect("Viewer after undo");
         assert_eq!(
-            visual.document.pages.iter().map(|page| page.id).collect::<Vec<_>>(),
+            visual
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
             source_order,
             "Undo must restore original customer order"
         );
-        assert!(visual.scene.surfaces.iter().all(|surface| surface.origin != inserted));
+        assert!(
+            visual
+                .scene
+                .surfaces
+                .iter()
+                .all(|surface| surface.origin != inserted)
+        );
     }
 
-    harness.get_all_by_label("Redo").next().expect("Redo insert").click();
+    harness
+        .get_all_by_label("Redo")
+        .next()
+        .expect("Redo insert")
+        .click();
     harness.step();
     harness.step();
     {
@@ -1786,7 +1827,12 @@ fn gui_insert_blank_after_content_bearing_customer_preserves_source_and_replays(
         let mut expected = source_order.clone();
         expected.insert(1, inserted);
         assert_eq!(
-            visual.document.pages.iter().map(|page| page.id).collect::<Vec<_>>(),
+            visual
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
             expected,
             "Redo restores exactly the same inserted PageId and order"
         );
@@ -1829,11 +1875,22 @@ fn gui_insert_blank_after_content_bearing_customer_preserves_source_and_replays(
         expected.insert(1, inserted);
         let visual = app.visual.as_ref().expect("reopened Viewer");
         assert_eq!(
-            visual.document.pages.iter().map(|page| page.id).collect::<Vec<_>>(),
+            visual
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
             expected,
             "reopen restores inserted PageId before previous second page"
         );
-        assert!(visual.scene.surfaces.iter().any(|surface| surface.origin == inserted));
+        assert!(
+            visual
+                .scene
+                .surfaces
+                .iter()
+                .any(|surface| surface.origin == inserted)
+        );
     }
 
     assert_eq!(

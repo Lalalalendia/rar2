@@ -99,3 +99,9 @@ jobs:
           cargo test -p chaptera-desktop
           gui_duplicate_blank_page_projects_membership_and_replays_on_real_pub
           -- --ignored --nocapture
+
+      - name: Prove real GUI blank insert after content-bearing customer
+        run: >-
+          cargo test -p chaptera-desktop
+          gui_insert_blank_after_content_bearing_customer_preserves_source_and_replays
+          -- --ignored --nocapture
