@@ -110,7 +110,7 @@ jobs:
       - name: Supply Git Bash to current Rust verifier
         shell: powershell
         run: |
-          $gitBashDir = 'C:\\Program Files\\Git\\bin'
+          $gitBashDir = 'C:\Program Files\Git\bin'
           if (-not (Test-Path -LiteralPath (Join-Path $gitBashDir 'bash.exe') -PathType Leaf)) {
             throw 'git_bash_unavailable'
           }
