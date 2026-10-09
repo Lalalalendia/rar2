@@ -76,7 +76,7 @@ sudo() {
     if [[ "$FAKE_APT_MODE" == all-fail ]]; then
       return 124
     fi
-    if [[ "$FAKE_APT_MODE" == primary-fail ]] && grep -Fq "azure.archive.ubuntu.com" "$FAKE_MIRROR_FILE"; then
+    if [[ "$FAKE_APT_MODE" == primary-fail ]] && ! grep -Fq "sed -i " "$FAKE_APT_TRACE"; then
       return 124
     fi
     return 0
