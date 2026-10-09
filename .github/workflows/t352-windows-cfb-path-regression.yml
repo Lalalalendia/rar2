@@ -5,6 +5,7 @@ on:
     paths:
       - "tools/pub-re/src/bin/val_xproj_patch.rs"
       - "tools/pub-re/Cargo.toml"
+      - "tools/windows/run_t352_independent_native.ps1"
       - ".github/workflows/t352-windows-cfb-path-regression.yml"
   workflow_dispatch:
 
@@ -26,6 +27,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
+          components: rustfmt
+      - name: Enforce committed independent patcher rustfmt
+        shell: pwsh
+        run: rustfmt --edition 2024 --check tools/pub-re/src/bin/val_xproj_patch.rs
+
+      - name: Parse independent Publisher-native PowerShell controller
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          $path = (Resolve-Path tools/windows/run_t352_independent_native.ps1).Path
+          [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if (@($errors).Count -gt 0) {
+            throw "Native T352 PowerShell syntax error: $($errors | Out-String)"
+          }
+
       - name: Verify Windows stream-path normalization and exact four-arm patches
         shell: pwsh
         run: |
