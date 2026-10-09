@@ -2,7 +2,9 @@ param(
     [Parameter(Mandatory=$true)][ValidateSet("seed","arm")][string]$Mode,
     [Parameter(Mandatory=$true)][string]$SourcePath,
     [Parameter(Mandatory=$true)][string]$OutputRoot,
-    [ValidateSet("none","control-before","narrow","wide","control-after")][string]$ArmId = "none",
+    [ValidateSet("none","control-before","narrow","wide","control-after",
+        "m2-mid-1","m2-mid-2","m2-mid-3","m2-mid-4",
+        "m2-mid-5","m2-mid-6","m2-mid-7")][string]$ArmId = "none",
     [double]$WidthPt = 160,
     [string]$ExpectedSourceSha = ""
 )
@@ -272,7 +274,14 @@ try {
             "wide" = 172.0
             "control-after" = 160.0
         }
-        if (-not $expectedWidths.ContainsKey($ArmId) -or
+        if ($ArmId -match '^m2-mid-[1-7]$') {
+            # M2 bisection is a bounded, quantized subset of the proven M1
+            # 160..172pt bracket; no arbitrary widths or arm identifiers.
+            if ($WidthPt -le 160.0 -or $WidthPt -ge 172.0 -or
+                [math]::Abs(($WidthPt * 128.0) - [math]::Round($WidthPt * 128.0)) -gt 0.000001) {
+                throw "m2_width_not_bounded_or_quantized"
+            }
+        } elseif (-not $expectedWidths.ContainsKey($ArmId) -or
             [math]::Abs($WidthPt - [double]$expectedWidths[$ArmId]) -gt 0.00001) {
             throw "m1_arm_not_allowlisted"
         }
