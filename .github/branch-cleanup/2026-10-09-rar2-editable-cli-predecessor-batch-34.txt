@@ -1,0 +1,6 @@
+# 2026-10-09 — editable CLI predecessor batch 34
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+product/free-pub-editable-cli-01 d8c6ca0657f5cc1224bb5989fe1bdcb804286aaf # #881 fully assimilated; product code in main and acceptance restored/merged by #2344
+ops/branch-gc-20261009-pub-pdf-complete-order-batch-33 56b3f88bbc975117bcb77f6c91c544e362af02f7 # completed #2346 clean receipt: 2/2 deleted
