@@ -10,10 +10,15 @@ use std::io::Cursor;
 use std::path::Path;
 
 fn main() -> Result<()> {
-    let path = env::args().nth(1).context("usage: pub-gif-census INPUT.pub")?;
+    let path = env::args()
+        .nth(1)
+        .context("usage: pub-gif-census INPUT.pub")?;
     let path = Path::new(&path);
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let source_sha256 = format!("{:x}", Sha256::digest(&bytes));
+    let source_sha256 = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{:02x}", *byte))
+        .collect::<String>();
     let bundle = pub_viewer::open_pub_bundle(
         &bytes,
         pub_viewer::viewer_geometry_environment_v0_1(),
