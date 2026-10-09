@@ -828,7 +828,10 @@ jobs:
           foreach ($file in $files) {
             $text = Get-Content -LiteralPath $file.FullName -Raw
             if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
-              throw "source-safe evidence contains an absolute filesystem path"
+              # Never print a matched path or its contents; report only a safe
+              # checked-in receipt basename so a failed native run is actionable.
+              $receiptName = if ($file.Name -match "^[A-Za-z0-9_.-]{1,120}$") { $file.Name } else { "untrusted-name" }
+              throw "source-safe evidence contains an absolute filesystem path in receipt: $receiptName"
             }
             if ($text -match '(?i)"raw_document_bytes_emitted"\s*:\s*true') {
               throw "source-safe evidence claims raw document bytes were emitted"
