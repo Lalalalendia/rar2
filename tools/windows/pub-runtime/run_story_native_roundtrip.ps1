@@ -65,7 +65,12 @@ function Write-PubNativeStage {
     $stagePath = Join-Path $output 'native-roundtrip-stage.json'
     $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporaryPath -Encoding utf8
     if ([System.IO.File]::Exists($stagePath)) {
-        [System.IO.File]::Replace($temporaryPath, $stagePath, $null)
+        # Windows PowerShell 5.1 / .NET Framework rejects a null backup path
+        # with "The path is not of a legal form." Supply a bounded private
+        # backup, then remove it after the atomic same-volume replacement.
+        $backupPath = Join-Path $output 'native-roundtrip-stage.previous.json'
+        [System.IO.File]::Replace($temporaryPath, $stagePath, $backupPath)
+        Remove-Item -LiteralPath $backupPath -Force -ErrorAction Stop
     }
     else {
         [System.IO.File]::Move($temporaryPath, $stagePath)

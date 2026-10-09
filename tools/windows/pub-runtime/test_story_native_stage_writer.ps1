@@ -71,6 +71,9 @@ try {
         if (Test-Path -LiteralPath (Join-Path $output 'native-roundtrip-stage.next.json')) {
             throw "native_stage_temporary_file_leaked: $phase"
         }
+        if (Test-Path -LiteralPath (Join-Path $output 'native-roundtrip-stage.previous.json')) {
+            throw "native_stage_backup_file_leaked: $phase"
+        }
     }
     # Invalid phases must fail closed and leave the last valid durable stage.
     $invalidRejected = $false
