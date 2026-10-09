@@ -87,7 +87,7 @@ class DeltaContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "count and fraction disagree"):
             compare(before, after)
         after = copy.deepcopy(before)
-        after["pairs"][0]["loss_summary"]["pdf_diagnostic_code_counts"] = {"secret /home/user/source.pub": 1}
+        after["pairs"][0]["loss_summary"]["pdf_diagnostic_code_counts"] = {"unsafe diagnostic code with spaces": 1}
         with self.assertRaisesRegex(ValueError, "unsafe diagnostic code"):
             compare(before, after)
 
