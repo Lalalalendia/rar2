@@ -1211,7 +1211,7 @@ jobs:
     permissions:
       contents: read
     env:
-      PUB_M1_OUTPUT: ${{ runner.temp }}\pub-m1-${{ github.run_id }}-${{ github.run_attempt }}
+      PUB_M1_OUTPUT: ${{ github.workspace }}\pub-m1-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v5
         with:
