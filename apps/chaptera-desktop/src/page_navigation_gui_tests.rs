@@ -1074,13 +1074,23 @@ fn gui_delete_empty_authored_page_projects_membership_and_replays_on_real_pub() 
             "Undo restores exactly the same authored PageId"
         );
     }
-    let appended_label = format!("Page {}", source_order.len() + 1);
-    harness.get_by_label(&appended_label).click();
+    // The restored Page thumbnail can be clipped by the scrollable sidebar.
+    // Navigate with an actual supported keyboard shortcut instead of clicking
+    // an off-viewport label and accidentally retaining the source-page focus.
+    assert_eq!(
+        harness.state().selected_page,
+        source_order.len() - 1,
+        "Undo should keep the preceding surviving customer Page selected"
+    );
+    harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::PageDown);
     harness.step();
     harness.step();
     {
         let app = harness.state();
-        let visual = app.visual.as_ref().expect("Viewer after selecting restored Page");
+        let visual = app
+            .visual
+            .as_ref()
+            .expect("Viewer after selecting restored Page");
         let selected_page_id = visual
             .document
             .pages
@@ -1091,7 +1101,10 @@ fn gui_delete_empty_authored_page_projects_membership_and_replays_on_real_pub() 
             Some(appended_page_id),
             "real Pages sidebar click must select the restored PageId"
         );
-        let editor = app.editor.as_ref().expect("Editor after selecting restored Page");
+        let editor = app
+            .editor
+            .as_ref()
+            .expect("Editor after selecting restored Page");
         let mut debug_candidate = editor.clone();
         let rejection = debug_candidate
             .delete_authored_rectangle_page_v1(
