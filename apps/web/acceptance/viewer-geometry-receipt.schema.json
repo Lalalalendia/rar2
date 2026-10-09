@@ -60,6 +60,12 @@
       "items": {
         "$ref": "#/$defs/scriptFontMap"
       }
+    },
+    "paragraph_line_spacings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/paragraphLineSpacingRun"
+      }
     }
   },
   "$defs": {
@@ -600,7 +606,8 @@
       "required": [
         "resource_id",
         "mime",
-        "node_ids"
+        "node_ids",
+        "source_exact"
       ],
       "properties": {
         "resource_id": {
@@ -615,6 +622,9 @@
           "items": {
             "$ref": "#/$defs/uuid"
           }
+        },
+        "source_exact": {
+          "type": "boolean"
         }
       }
     },
@@ -629,7 +639,8 @@
         "text_size_emu",
         "font_inherited",
         "size_inherited",
-        "source_story_text_sha256"
+        "source_story_text_sha256",
+        "color_inherited"
       ],
       "properties": {
         "story_id": {
@@ -658,6 +669,18 @@
         },
         "source_story_text_sha256": {
           "$ref": "#/$defs/sha256"
+        },
+        "color_rgb": {
+          "$ref": "#/$defs/rgb"
+        },
+        "color_inherited": {
+          "type": "boolean"
+        },
+        "bold": {
+          "$ref": "#/$defs/typographyBoolean"
+        },
+        "italic": {
+          "$ref": "#/$defs/typographyBoolean"
         }
       }
     },
@@ -761,6 +784,103 @@
           "items": {
             "$ref": "#/$defs/scriptFontEntry"
           }
+        },
+        "source_story_text_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "typographyBoolean": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "local_toggle",
+        "inherited_value",
+        "effective_value"
+      ],
+      "properties": {
+        "local_toggle": {
+          "type": "boolean"
+        },
+        "inherited_value": {
+          "type": "boolean"
+        },
+        "effective_value": {
+          "type": "boolean"
+        }
+      }
+    },
+    "paragraphLineSpacing": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "point_equivalent_emu"
+          ],
+          "properties": {
+            "kind": {
+              "const": "proportional"
+            },
+            "point_equivalent_emu": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "spacing_emu"
+          ],
+          "properties": {
+            "kind": {
+              "const": "absolute"
+            },
+            "spacing_emu": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      ]
+    },
+    "paragraphLineSpacingRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "story_id",
+        "scalar_start",
+        "scalar_end",
+        "line_spacing",
+        "source_value",
+        "source_story_text_sha256"
+      ],
+      "properties": {
+        "story_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "scalar_start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scalar_end": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "line_spacing": {
+          "$ref": "#/$defs/paragraphLineSpacing"
+        },
+        "source_value": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "source_story_text_sha256": {
           "$ref": "#/$defs/sha256"
