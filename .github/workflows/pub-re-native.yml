@@ -87,7 +87,7 @@ jobs:
                   body,
               )
               research_match = re.fullmatch(
-                  r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?|val-xproj-01)",
+                  r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?|val-xproj-(?:setter-)?01)",
                   body,
               )
               cancel_match = re.fullmatch(
@@ -130,7 +130,7 @@ jobs:
                       raise SystemExit("rotation delta must be nonzero and within 45 degrees")
               elif research_match is not None:
                   research_id = research_match.group(1)
-                  command_mode = "research_t352" if research_id == "val-xproj-01" else "research_0p75"
+                  command_mode = "research_t352" if research_id in ("val-xproj-01", "val-xproj-setter-01") else "research_0p75"
               elif cancel_match is not None:
                   command_mode = "cancel_run"
                   target_run_id = cancel_match.group(1)
@@ -275,7 +275,7 @@ jobs:
           "PUB_RE_NATIVE_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
           if ($env:PUB_RE_COMMAND_MODE -in @("research_0p75", "research_t352")) {
-            if ($env:PUB_RE_RESEARCH_ID -notin @("paragraph-line-spacing-0p75", "paragraph-line-spacing-0p75-mixed", "val-xproj-01")) {
+            if ($env:PUB_RE_RESEARCH_ID -notin @("paragraph-line-spacing-0p75", "paragraph-line-spacing-0p75-mixed", "val-xproj-01", "val-xproj-setter-01")) {
               throw "unsupported bounded research id"
             }
             $researchOutput = Join-Path $output "research-output"
@@ -978,7 +978,8 @@ jobs:
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
-          & tools/windows/run_t352_native.ps1 -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT
+          $setterFollowup = '{{ needs.gate.outputs.research_id }}' -eq 'val-xproj-setter-01'
+          & tools/windows/run_t352_native.ps1 -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT -SetterFollowup:$setterFollowup
           if (-not $?) { throw "T352 native experiment failed" }
           $result = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\t352-native-observations.json"
           if (-not (Test-Path -LiteralPath $result -PathType Leaf)) {
@@ -988,6 +989,16 @@ jobs:
           if ($obj.schema -ne "chaptera.t352-native-observations.v1" -or
               [int]$obj.observed_arm_count -ne 4) {
             throw "T352 native result is incomplete"
+          }
+          if ($setterFollowup) {
+            $setterResult = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\t352-setter-observations.json"
+            if (-not (Test-Path -LiteralPath $setterResult -PathType Leaf)) {
+              throw "T352 setter followup is missing its evidence receipt"
+            }
+            $set = Get-Content -LiteralPath $setterResult -Raw | ConvertFrom-Json
+            if ($set.schema -ne "chaptera.t352-setter-transitions.v1" -or [int]$set.count -ne 4) {
+              throw "T352 setter followup did not record all four arms"
+            }
           }
 
       - name: Stage source-safe T352 evidence even on partial failure
