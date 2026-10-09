@@ -441,7 +441,10 @@ fn build_current_story_layout_core_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pub_editor::{FormatPropertyV1, FormatValueV1, Sha256Digest, open_mature_0x2c_editor};
+    use pub_editor::{
+        AuthoredEntityProvenanceV1, AuthoredPageIdentityV1, FormatPropertyV1, FormatValueV1,
+        Sha256Digest, open_mature_0x2c_editor,
+    };
     use pub_layout::font_fingerprint_sha256;
     use pub_model::{
         Affine2D, CanonicalId, Document, DocumentId, EMU_PER_POINT, LengthEmu, NodeId, Page,
@@ -697,6 +700,44 @@ mod tests {
                 .map(|page| page.id)
                 .collect::<Vec<_>>(),
             reordered
+        );
+    }
+
+    #[test]
+    fn fixed_pdf_page_projection_consumes_appended_lifecycle_membership() {
+        let (mut editor, admitted, _) = page_order_editor_fixture();
+        let appended: PageId =
+            canonical_id("01890f4f-1234-7abc-8def-0123456789ab");
+        let identity = AuthoredPageIdentityV1 {
+            page_id: appended,
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        editor
+            .append_blank_page_v1(
+                admitted.clone(),
+                identity,
+                Size2D::new(LengthEmu::new(8_000_000), LengthEmu::new(10_000_000)),
+                None,
+                None,
+            )
+            .expect("append blank customer page");
+
+        let effective = editor
+            .effective_customer_page_order_v1(&admitted)
+            .expect("effective customer membership after append");
+        let mut expected = admitted.clone();
+        expected.push(appended);
+        assert_eq!(effective, expected);
+
+        let authoring = bounded_authoring_slice_for_pages_v1(&editor, &effective)
+            .expect("fixed-PDF page projection after append");
+        assert_eq!(
+            authoring
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
+            expected
         );
     }
 
