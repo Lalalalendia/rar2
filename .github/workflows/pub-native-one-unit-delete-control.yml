@@ -1,0 +1,166 @@
+name: PUB native one-unit text deletion discriminator
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-native-one-unit-delete-control.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/pub-native-one-unit-delete-control.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pub-native-one-unit-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  prepare-one-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Generate baseline length-changing writer candidate
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- generate-one-unit \
+            --output-dir out/native-one-unit
+      - name: Verify exact source and one UTF16 unit deletion
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("out/native-one-unit")
+          original = (root / "source.pub").read_bytes()
+          candidate = (root / "candidate.pub").read_bytes()
+          manifest = json.loads((root / "handoff.json").read_text())
+          sha = lambda data: hashlib.sha256(data).hexdigest()
+          source_hash = "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc"
+          baseline_deletion = "a92543b6f2b6ac3a8ae2481e15a2188a338ddc2a92832580f8987079fa4f70f8"
+          if manifest.get("schema") != "chaptera.pub-native-story-handoff.v1":
+              raise SystemExit("handoff schema mismatch")
+          if len(original) != 72192 or len(candidate) != 72192 or sha(original) != source_hash:
+              raise SystemExit("pinned Sample3 source/CFB changed")
+          if manifest.get("source_sha256") != source_hash:
+              raise SystemExit("handoff source SHA mismatch")
+          one_unit_hash = "b9b789f35a34e016faceb27acf50bf0621273a7d612762ecc17c56ca450fe715"
+          if sha(candidate) != one_unit_hash or manifest.get("candidate_sha256") != one_unit_hash:
+              raise SystemExit("one-unit variant differs from exact hosted candidate SHA")
+          if sha(candidate) == baseline_deletion:
+              raise SystemExit("unexpected reuse of six-unit writer candidate")
+          if manifest.get("research_variant") != "one_utf16_unit_delete":
+              raise SystemExit("one-unit experiment identity missing")
+          if manifest.get("mutation", {}).get("removed_utf16_units") != 1:
+              raise SystemExit("one-unit mutation metadata mismatch")
+          if manifest.get("before_utf16_len") != 70 or manifest.get("after_utf16_len") != 69:
+              raise SystemExit("one-unit Story length change not confirmed")
+          print("One-unit candidate SHA256:", sha(candidate))
+          print("PASS pinned original and one-unit writer candidate")
+          PY
+      - name: Prove one-unit deletion under current Reader
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- verify \
+            --pub out/native-one-unit/candidate.pub \
+            --manifest out/native-one-unit/handoff.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pub-native-one-unit-input-${{ github.run_id }}
+          path: |
+            out/native-one-unit/source.pub
+            out/native-one-unit/candidate.pub
+            out/native-one-unit/handoff.json
+          if-no-files-found: error
+          retention-days: 14
+
+  native-one-unit:
+    needs: prepare-one-unit
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Lalalalendia/rar2' }}
+    runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
+    concurrency:
+      group: pub-re-native-publisher-oracle
+      cancel-in-progress: false
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Supply Git Bash for pinned Rust verifier
+        shell: powershell
+        run: |
+          $gitBashDir = 'C:\Program Files\Git\bin'
+          if (-not (Test-Path -LiteralPath (Join-Path $gitBashDir 'bash.exe') -PathType Leaf)) {
+            throw 'git_bash_unavailable'
+          }
+          $gitBashDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Download verified original and one-unit-delete candidate from this run
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-native-one-unit-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/chaptera-native-one-unit/input
+      - name: Build current source-safe Reader verifier
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-writer --bin pub_story_native_handoff
+          if ($LASTEXITCODE -ne 0) { throw 'one_unit_reader_verifier_build_failed' }
+      - name: Matched unmodified Sample3 Publisher Open SaveAs Reopen control
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/windows/pub-runtime/Invoke-StoryNativeSourceControl.ps1 `
+            -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-native-one-unit/input') `
+            -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-native-one-unit/private-original')
+          if (-not $?) { throw 'original_source_control_failed' }
+      - name: Guarded native SaveAs of one-unit-delete writer candidate
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1 `
+            -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-native-one-unit/input') `
+            -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-native-one-unit/private-candidate')
+          if (-not $?) { throw 'one_unit_delete_native_saveas_failed' }
+      - name: Upload original source-safe status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-native-one-unit-original-receipt-${{ github.run_id }}
+          path: ${{ runner.temp }}/chaptera-native-one-unit/private-original/source-control-status.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Upload candidate source-safe status and native receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-native-one-unit-candidate-receipt-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/chaptera-native-one-unit/private-candidate/native-roundtrip-status.json
+            ${{ runner.temp }}/chaptera-native-one-unit/private-candidate/native-roundtrip-stage.json
+            ${{ runner.temp }}/chaptera-native-one-unit/private-candidate/native-roundtrip-receipt.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Clear all private original/candidate native files and logs
+        if: always()
+        shell: powershell
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'chaptera-native-one-unit'
+          if (Test-Path -LiteralPath $root) {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
+          }
