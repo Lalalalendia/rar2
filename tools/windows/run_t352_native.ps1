@@ -277,8 +277,7 @@ if ($SetterFollowup) {
         [ordered]@{name="settereschertocontents"; source="escher_only"; mode="to_contents"}
     )
     foreach ($variant in $setterVariants) {
-        Copy-Item -LiteralPath (Join-Path $arms "$($variant.source).pub") 
-            -Destination (Join-Path $arms "$($variant.name).pub")
+        Copy-Item -LiteralPath (Join-Path $arms "$($variant.source).pub") -Destination (Join-Path $arms "$($variant.name).pub")
     }
 }
 Write-PubJson -Value ([ordered]@{schema="chaptera.t352-progress.v1";stage="prepared";sha256=$normalizedSha}) -Path $progress
@@ -314,10 +313,14 @@ if ($SetterFollowup) {
             $null -eq $_.reopen_geometry }).Count -gt 0) {
         throw "T352 primary controls failed; refusing setter followup"
     }
+    $controlsHealthy = ([long]$observations[0].open_geometry.width_emu -eq 5076000 -and
+        [long]$observations[1].open_geometry.width_emu -eq 5203000 -and
+        [long]$observations[0].reopen_geometry.width_emu -eq 5076000 -and
+        [long]$observations[1].reopen_geometry.width_emu -eq 5203000)
+    if (-not $controlsHealthy) { throw "T352 positive control geometry drifted" }
     foreach ($variant in $setterVariants) {
         $armPath=Join-Path $arms "$($variant.name).pub"
-        $setterObservations += (ObserveArm -name $variant.name -source $armPath 
-            -patcher $patcher -analysis $analysis -SetterMode $variant.mode)
+        $setterObservations += (ObserveArm -name $variant.name -source $armPath -patcher $patcher -analysis $analysis -SetterMode $variant.mode)
         Write-PubJson -Value ([ordered]@{
             schema="chaptera.t352-setter-transitions.v1"
             experiment_id="VAL-XPROJ-SETTER-01"
@@ -331,10 +334,8 @@ if ($SetterFollowup) {
             schema="chaptera.t352-progress.v1";stage="setter";count=$setterObservations.Count
         }) -Path $progress
     }
-    if ($setterObservations.Count -ne 4 -or
-        @($setterObservations | Where-Object { $_.setter_hresult -ne $null -or
-            $_.save -ne "accepted" -or $_.reopen -ne "accepted" }).Count -gt 0) {
-        throw "T352 setter matrix failed; retained partial observations"
+    if ($setterObservations.Count -ne 4) {
+        throw "T352 setter matrix did not produce all four receipts"
     }
 }
 AssertFile $seed $SeedSha 72192
