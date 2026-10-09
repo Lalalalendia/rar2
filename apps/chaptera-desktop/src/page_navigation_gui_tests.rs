@@ -1263,10 +1263,7 @@ fn gui_delete_empty_authored_page_projects_membership_and_replays_on_real_pub() 
         let editor = app.editor.as_ref().expect("editor");
         let mut candidate = editor.clone();
         let rejection = candidate
-            .delete_blank_authored_page_v1(
-                app.source_customer_page_ids.clone(),
-                appended_page_id,
-            )
+            .delete_blank_authored_page_v1(app.source_customer_page_ids.clone(), appended_page_id)
             .err();
         assert!(
             editor.can_delete_blank_authored_page_v1(
