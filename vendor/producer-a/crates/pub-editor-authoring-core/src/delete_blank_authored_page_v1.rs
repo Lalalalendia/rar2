@@ -10,8 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const DELETE_BLANK_AUTHORED_PAGE_PROTOCOL_V1: &str =
-    "chaptera.delete-blank-authored-page.v1";
+pub const DELETE_BLANK_AUTHORED_PAGE_PROTOCOL_V1: &str = "chaptera.delete-blank-authored-page.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeleteBlankAuthoredPageTransitionV1 {
@@ -97,9 +96,7 @@ fn current_customer_order_v1(
             continue;
         }
         if !seen.insert(*page_id) {
-            return Err(DeleteBlankAuthoredPageErrorV1::CustomerPageRepeated {
-                page_id: *page_id,
-            });
+            return Err(DeleteBlankAuthoredPageErrorV1::CustomerPageRepeated { page_id: *page_id });
         }
         ordered.push(*page_id);
     }
@@ -139,8 +136,7 @@ fn validate_transition_v1(
     validate_page_v1(transition.identity, &transition.page)?;
     let before = customer_set_v1(&transition.before_customer_page_ids)?;
     if !before.contains(&transition.identity.page_id)
-        || transition.after_customer_page_ids.len() + 1
-            != transition.before_customer_page_ids.len()
+        || transition.after_customer_page_ids.len() + 1 != transition.before_customer_page_ids.len()
     {
         return Err(DeleteBlankAuthoredPageErrorV1::InvalidTransition);
     }
@@ -166,12 +162,11 @@ pub fn plan_delete_blank_authored_page_v1(
     if validate_authored_page_identity_v1(&identity).is_err() {
         return Err(DeleteBlankAuthoredPageErrorV1::IdentityInvalid);
     }
-    let page = pages
-        .get(&identity.page_id)
-        .cloned()
-        .ok_or(DeleteBlankAuthoredPageErrorV1::PageMissing {
+    let page = pages.get(&identity.page_id).cloned().ok_or(
+        DeleteBlankAuthoredPageErrorV1::PageMissing {
             page_id: identity.page_id,
-        })?;
+        },
+    )?;
     validate_page_v1(identity, &page)?;
 
     let current = current_customer_order_v1(document_pages, current_customer_page_ids)?;
@@ -239,9 +234,7 @@ pub fn apply_delete_blank_authored_page_forward_v1(
     {
         return Err(DeleteBlankAuthoredPageErrorV1::BeforeStateMismatch);
     }
-    if document_pages.get(transition.removal_index).copied()
-        != Some(transition.identity.page_id)
-    {
+    if document_pages.get(transition.removal_index).copied() != Some(transition.identity.page_id) {
         return Err(DeleteBlankAuthoredPageErrorV1::RemovalSlotMismatch);
     }
     if pages.get(&transition.identity.page_id) != Some(&transition.page) {
@@ -256,11 +249,11 @@ pub fn apply_delete_blank_authored_page_forward_v1(
         return Err(DeleteBlankAuthoredPageErrorV1::AfterStateMismatch);
     }
 
-    let removed = pages
-        .remove(&transition.identity.page_id)
-        .ok_or(DeleteBlankAuthoredPageErrorV1::PageMissing {
+    let removed = pages.remove(&transition.identity.page_id).ok_or(
+        DeleteBlankAuthoredPageErrorV1::PageMissing {
             page_id: transition.identity.page_id,
-        })?;
+        },
+    )?;
     if removed != transition.page {
         pages.insert(transition.identity.page_id, removed);
         return Err(DeleteBlankAuthoredPageErrorV1::PageStateMismatch);
@@ -412,7 +405,10 @@ mod tests {
         let source = page_id(1);
         let authored = authored_page_id();
         let mut page = blank_page(authored);
-        page.children.push(crate::NodeId::from_canonical(CanonicalId::from_bytes([0x55; 16])));
+        page.children
+            .push(crate::NodeId::from_canonical(CanonicalId::from_bytes(
+                [0x55; 16],
+            )));
         let pages = BTreeMap::from([(source, blank_page(source)), (authored, page)]);
         assert_eq!(
             plan_delete_blank_authored_page_v1(
