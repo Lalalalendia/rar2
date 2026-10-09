@@ -6,6 +6,7 @@ on:
       - "tools/windows/run_master_projection_stack_auth_direct.ps1"
       - "tools/windows/run_paragraph_metrics_auth_direct.ps1"
       - "tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1"
+      - "tools/windows/run_t352_native.ps1"
       - "tools/research-runner/experiments/paragraph-line-spacing-0p75-native-01.packet.json"
       - "tools/research-runner/operations/paragraph_line_spacing_0p75_native_01.ps1"
       - "tools/research-runner/analysis/paragraph_line_spacing_0p75_structural.py"
@@ -35,6 +36,7 @@ jobs:
             "tools/windows/run_master_projection_stack_auth_direct.ps1",
             "tools/windows/run_paragraph_metrics_auth_direct.ps1",
             "tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1",
+            "tools/windows/run_t352_native.ps1",
             "tools/research-runner/operations/paragraph_line_spacing_0p75_native_01.ps1"
           )) {
             $tokens = $null
