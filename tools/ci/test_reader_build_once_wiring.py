@@ -11,5 +11,30 @@ def main():
     if "if: inputs.reader_binary_artifact_name == ''" not in reader: raise SystemExit("reader fallback not conditional")
     if "if: inputs.reader_binary_artifact_name == ''" not in smoke: raise SystemExit("smoke fallback not conditional")
     if "inputs.run_windows_shared_core_smoke && inputs.reader_binary_artifact_name == ''" not in visual: raise SystemExit("visual fallback not conditional")
+    def job(name, next_name):
+        return pr.split("\n  " + name + ":\n", 1)[1].split(
+            "\n  " + next_name + ":\n", 1
+        )[0]
+    prebuild = job("reader-windows-binary", "reader-windows-smoke")
+    req(prebuild, (
+        "needs: classify",
+        "needs.classify.outputs.reader_windows == 'true'",
+        "needs.classify.outputs.reader_windows_smoke == 'true'",
+        "artifact_name: chaptera-reader-windows-binary-",
+    ), "parallel Reader prebuild")
+    if "needs.tier-a.result" in prebuild or "needs: [classify, tier-a]" in prebuild:
+        raise SystemExit("Reader prebuild still serial after Tier A")
+    for name, next_name in (
+        ("reader-windows-smoke", "reader-windows"),
+        ("reader-windows", "editor-windows"),
+        ("visual-oracle", "cloud-reference"),
+    ):
+        part = job(name, next_name)
+        req(part, (
+            "needs: [classify, tier-a, reader-windows-binary]",
+            "(needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped')",
+            "needs.reader-windows-binary.result == 'success'",
+            "reader_binary_artifact_name: chaptera-reader-windows-binary-",
+        ), name + " Tier A and exact binary product gate")
     print("Reader build-once wiring guard: ok"); return 0
 if __name__=="__main__": raise SystemExit(main())
