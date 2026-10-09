@@ -202,8 +202,25 @@ jobs:
           b = {item["origin_node_id"]: (item["disposition"], item["code"]) for item in baseline["node_reports"]}
           a = {item["origin_node_id"]: (item["disposition"], item["code"]) for item in alpha["node_reports"]}
           mapping = baseline_mapping["mapping"]
-          if mapping.get("input_node_count") != 108 or mapping.get("semantic_duplicate_node_id_count") != 2:
+          if mapping.get("input_node_count") != 109 or mapping.get("mapped_paint_node_count") != 34 or mapping.get("mapped_resource_node_count") != 88 or mapping.get("semantic_duplicate_node_id_count") != 2:
               raise SystemExit(f"current inherited-master Carlton census drift: {mapping!r}")
+          # Pinned #2051 legacy reports, plus exactly one #2236 solid rectangle.
+          import hashlib
+          expected_rectangle = {"origin_node_id": "3c554c3f-de20-511a-b442-30d11a2b45d0", "disposition": "painted", "code": "pdf.node.painted_explicit_rectangle"}
+          def verify_rectangle_reports(reports, label):
+              exact = [r for r in reports if r.get("origin_node_id") == expected_rectangle["origin_node_id"]]
+              if exact != [expected_rectangle] or len(reports) != 146:
+                  raise SystemExit(f"{label} expected exactly one source-backed Carlton rectangle")
+              legacy = [r for r in reports if r["origin_node_id"] != expected_rectangle["origin_node_id"]]
+              digest = hashlib.sha256(json.dumps(legacy, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+              expected_digest = {
+                  "baseline": "d2ff9166c73d84ab0be4b29dfee0b30bb092f9df35f5f31c6103cd232b3ba550",
+                  "alpha": "43766b7dbc41aeaa6735e56f2ef84f389a26bb2e4815342e12d6287990b9fd79",
+              }[label]
+              if len(legacy) != 145 or digest != expected_digest:
+                  raise SystemExit(f"{label} non-rectangle node identities/order/dispositions drift: {digest}")
+          verify_rectangle_reports(baseline["node_reports"], "baseline")
+          verify_rectangle_reports(alpha["node_reports"], "alpha")
           if b.keys() != a.keys():
               raise SystemExit("baseline/alpha node report identity set drift")
           expected_report_count = (

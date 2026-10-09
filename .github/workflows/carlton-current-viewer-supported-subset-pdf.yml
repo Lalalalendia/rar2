@@ -299,6 +299,24 @@ jobs:
           sys.path.insert(0, str(root / "tools"))
           from pdf_reference_diff_v1 import compare_pdfs
 
+          mapping = json.loads(pathlib.Path(os.environ["CHAPTERA_SUPPORTED_MAPPING"]).read_text())["mapping"]
+          renderer = json.loads(pathlib.Path(os.environ["CHAPTERA_SUPPORTED_RENDERER"]).read_text())["renderer_result"]
+          if (mapping.get("input_node_count"), mapping.get("mapped_paint_node_count"), mapping.get("mapped_resource_node_count"), mapping.get("semantic_duplicate_node_id_count")) != (109, 34, 88, 2):
+              raise SystemExit("Carlton grouped solid rectangle input census drift")
+          # Pinned #2051 legacy reports, plus exactly one #2236 solid rectangle.
+          import hashlib
+          expected_rectangle = {"origin_node_id": "3c554c3f-de20-511a-b442-30d11a2b45d0", "disposition": "painted", "code": "pdf.node.painted_explicit_rectangle"}
+          def verify_rectangle_reports(reports, label):
+              exact = [r for r in reports if r.get("origin_node_id") == expected_rectangle["origin_node_id"]]
+              if exact != [expected_rectangle] or len(reports) != 146:
+                  raise SystemExit(f"{label} expected exactly one source-backed Carlton rectangle")
+              legacy = [r for r in reports if r["origin_node_id"] != expected_rectangle["origin_node_id"]]
+              digest = hashlib.sha256(json.dumps(legacy, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+              if len(legacy) != 145 or digest != "43766b7dbc41aeaa6735e56f2ef84f389a26bb2e4815342e12d6287990b9fd79":
+                  raise SystemExit(f"{label} non-rectangle node identities/order/dispositions drift: {digest}")
+          verify_rectangle_reports(renderer["node_reports"], "PDF")
+          if renderer["summary"].get("node_painted") != 125 or renderer["summary"].get("node_partial") != 0 or renderer["summary"].get("node_unsupported") != 21:
+              raise SystemExit("Carlton exact rectangle renderer disposition drift")
           result = compare_pdfs(
               os.environ["CHAPTERA_SUPPORTED_PDF"],
               os.environ["CHAPTERA_CARLTON_REFERENCE"],
@@ -314,10 +332,13 @@ jobs:
           expected = [
               0.11573040878640477,
               0.10663657159495903,
-              0.1103166863112297,
+              0.07641834742357069,
           ]
           if len(fractions) != 3:
               raise SystemExit(f"Carlton raster page count drift: {fractions!r}")
+          expected_candidate_rasters = ["e7052d03646146f7054880e66cada18008b1905274037126a88c3f972b93399c", "cf2138b28bd20f3e8f4435e9dcb1b7173e7aba9b56a2ff3375a3300d4e1839ef", "f9f4f2273572ac495ad5e1496c8f2937e29f5e6aee8887300c19f89a5cef6f6f"]
+          if [p["candidate_raster_sha256"] for p in result["pages"]] != expected_candidate_rasters:
+              raise SystemExit("Carlton exact candidate page raster identities drift")
           for index, (actual, wanted) in enumerate(zip(fractions, expected), 1):
               if abs(actual - wanted) > 1e-12:
                   raise SystemExit(
@@ -441,7 +462,7 @@ jobs:
               raise SystemExit("TABLE derived paint primitive census is not a complete partition")
           if mapping["derived_table_paint_node_count"] <= mapping["derived_table_border_node_count"]:
               raise SystemExit("Carlton TABLE did not materialize any visible cell-fill primitives")
-          if mapping["input_page_count"] != 3 or mapping["input_node_count"] != 108:
+          if mapping["input_page_count"] != 3 or mapping["input_node_count"] != 109 or mapping["mapped_paint_node_count"] != 34 or mapping["mapped_resource_node_count"] != 88:
               raise SystemExit("Carlton supported-subset input census drift")
           if mapping.get("semantic_duplicate_node_id_count") != 2:
               raise SystemExit("Carlton semantic duplicate-node census drift")
@@ -449,7 +470,7 @@ jobs:
           summary = renderer_receipt["renderer_result"]["summary"]
           if summary["page_count"] != 3:
               raise SystemExit("Yab renderer did not produce three customer pages")
-          if summary["node_painted"] != 124 or summary["node_partial"] != 0 or summary["node_unsupported"] != 21:
+          if summary["node_painted"] != 125 or summary["node_partial"] != 0 or summary["node_unsupported"] != 21:
               raise SystemExit(f"exact-alpha renderer disposition drift: {summary!r}")
           if "pdf.image.alpha_unsupported" in summary.get("diagnostic_codes", []):
               raise SystemExit("ordinary fixed-output still rejects non-opaque image alpha")
