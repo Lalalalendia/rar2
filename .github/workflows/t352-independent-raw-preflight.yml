@@ -1,0 +1,112 @@
+name: T352 identity-first independent fixture crosswalk preflight
+
+on:
+  pull_request:
+    paths:
+      - "tools/pub-re/src/bin/t352_crosswalk_census.rs"
+      - ".github/workflows/t352-independent-raw-preflight.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: t352-independent-raw-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  independent-raw-census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Enforce committed Rust formatting
+        shell: bash
+        run: rustfmt --edition 2024 --check tools/pub-re/src/bin/t352_crosswalk_census.rs
+
+      - name: Obtain two immutable Apache POI sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/t352-source" "$RUNNER_TEMP/t352-evidence"
+          rev=942d95d85b15d0dfdb3bc9ba1b4f273f277757c8
+          curl --fail --location --silent --show-error --retry 3 \
+            "https://raw.githubusercontent.com/apache/poi/$rev/test-data/publisher/SampleBrochure.pub" \
+            -o "$RUNNER_TEMP/t352-source/SampleBrochure.pub"
+          curl --fail --location --silent --show-error --retry 3 \
+            "https://raw.githubusercontent.com/apache/poi/$rev/test-data/publisher/SampleNewsletter.pub" \
+            -o "$RUNNER_TEMP/t352-source/SampleNewsletter.pub"
+          printf "%s  %s\n" \
+            ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87 \
+            "$RUNNER_TEMP/t352-source/SampleBrochure.pub" | sha256sum --check
+          printf "%s  %s\n" \
+            6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf \
+            "$RUNNER_TEMP/t352-source/SampleNewsletter.pub" | sha256sum --check
+          test "$(wc -c < "$RUNNER_TEMP/t352-source/SampleBrochure.pub")" -eq 161792
+          test "$(wc -c < "$RUNNER_TEMP/t352-source/SampleNewsletter.pub")" -eq 291840
+
+      - name: Compile existing pub-re structural census
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --manifest-path tools/pub-re/Cargo.toml \
+            --bin t352_crosswalk_census
+
+      - name: Produce identity-first crosswalk census (not native Publisher proof)
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool=tools/pub-re/target/release/t352_crosswalk_census
+          for name in SampleBrochure SampleNewsletter; do
+            if "$tool" "$RUNNER_TEMP/t352-source/$name.pub" \
+              "$RUNNER_TEMP/t352-evidence/$name-census.json"; then
+              echo "$name: raw crosswalk analysis completed"
+            else
+              # Deliberately leave zero-claim not-evaluable evidence; raw
+              # originals may differ from Publisher-normalized files.
+              printf '{"schema":"chaptera.t352-independent-preflight.v1","fixture":"%s","verdict":"raw_analysis_not_evaluable","native_publisher_result":"not_executed","format_law_credit":"none"}\n' \
+                "$name" > "$RUNNER_TEMP/t352-evidence/$name-census.json"
+              echo "$name: raw analyzer returned not_evaluable"
+            fi
+          done
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "t352-evidence"
+          for p in sorted(root.glob("*-census.json")):
+              row = json.loads(p.read_text(encoding="utf-8"))
+              print(
+                  p.name,
+                  "verdict=", row["verdict"],
+                  "contents_shapes=", row.get("contents_shape_with_dimensions_count"),
+                  "joined=", row.get("identity_joined_pair_count"),
+                  "admitted=", row.get("admitted_independent_target_count"),
+              )
+              for c in (x for x in row.get("rows", [])
+                        if x.get("admitted_independent_target")):
+                  print("selected candidate:", c["contents_seq"],
+                        c["spid"], c["shape_type"], c["contents_width_emu"])
+                  break
+          PY
+
+      - name: Upload numeric-only candidate census
+        uses: actions/upload-artifact@v4
+        with:
+          name: t352-independent-identity-first-preflight
+          path: ${{ runner.temp }}/t352-evidence/*-census.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Delete fixture copies
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/t352-source"
