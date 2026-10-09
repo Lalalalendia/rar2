@@ -34,7 +34,7 @@ jobs:
 
   compare-publisher:
     # One bounded current-main A/B for TABLE paint; diagnostic branch only.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'validation/pub-pdf-table-paint-current-main-ab'
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'measure/pub-pdf-viewer-scene-order-01'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
