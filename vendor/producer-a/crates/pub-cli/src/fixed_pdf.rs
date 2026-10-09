@@ -69,11 +69,12 @@ fn report_path_label(path: &Path, fallback: &str) -> String {
 }
 
 fn fixed_image_placement_has_output_semantics(
+    mime: &str,
     placement: &pub_viewer::ViewerImagePlacementV1,
 ) -> bool {
     placement.content_rotation_degrees.is_some()
-        || placement.source_window.is_some()
-        || placement.recolor.is_some()
+        || (mime == "image/gif"
+            && (placement.source_window.is_some() || placement.recolor.is_some()))
 }
 
 fn retain_scene_node_ids(
@@ -472,7 +473,7 @@ fn build_pdf_artifact(
                 .iter()
                 .filter(|placement| {
                     node_ids.contains(&placement.node_id)
-                        && fixed_image_placement_has_output_semantics(placement)
+                        && fixed_image_placement_has_output_semantics(&image.mime, placement)
                 })
                 .map(|placement| FixedImagePlacement {
                     node_id: placement.node_id,
@@ -647,11 +648,12 @@ mod tests {
             content_rotation_degrees: None,
             recolor: None,
         };
-        assert!(!fixed_image_placement_has_output_semantics(&empty));
+        assert!(!fixed_image_placement_has_output_semantics("image/png", &empty));
+        assert!(!fixed_image_placement_has_output_semantics("image/gif", &empty));
 
         let mut rotation = empty.clone();
         rotation.content_rotation_degrees = Some(90);
-        assert!(fixed_image_placement_has_output_semantics(&rotation));
+        assert!(fixed_image_placement_has_output_semantics("image/png", &rotation));
 
         let mut crop = empty.clone();
         crop.source_window = Some(ViewerImageSourceWindowV1 {
@@ -660,14 +662,16 @@ mod tests {
             right_q16: 1 << 15,
             bottom_q16: 1 << 16,
         });
-        assert!(fixed_image_placement_has_output_semantics(&crop));
+        assert!(!fixed_image_placement_has_output_semantics("image/png", &crop));
+        assert!(fixed_image_placement_has_output_semantics("image/gif", &crop));
 
         let mut recolor = empty;
         recolor.recolor = Some(ViewerImageRecolorV1 {
             target_rgb: [1, 2, 3],
             preserve_grays: true,
         });
-        assert!(fixed_image_placement_has_output_semantics(&recolor));
+        assert!(!fixed_image_placement_has_output_semantics("image/jpeg", &recolor));
+        assert!(fixed_image_placement_has_output_semantics("image/gif", &recolor));
     }
 
     #[test]
