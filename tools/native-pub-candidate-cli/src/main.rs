@@ -231,6 +231,20 @@ mod native_candidate_cli_tests {
         )
         .expect("bounded EditorProject candidate");
         let candidate = fs::read(&candidate_file).expect("materialized PUB candidate");
+        // This exact EditorProject output is independently Publisher-accepted:
+        // native PWSh7 SaveAs receipt: rar2 Actions 37982376097 / 11641486612.
+        // A fixture or Writer byte change requires fresh native evidence.
+        assert_eq!(
+            source_hash.to_string(),
+            "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc",
+            "source fixture changed; Publisher proof cannot be reused"
+        );
+        assert_eq!(candidate.len(), 72_192, "unexpected candidate CFB length");
+        assert_eq!(
+            source_sha256(&candidate).to_string(),
+            "a92543b6f2b6ac3a8ae2481e15a2188a338ddc2a92832580f8987079fa4f70f8",
+            "EditorProject result diverges from Publisher-accepted exact writer PUB"
+        );
         let receipt: serde_json::Value =
             serde_json::from_slice(&fs::read(&accepted_report).expect("report"))
                 .expect("source-safe receipt");
