@@ -11,6 +11,12 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fmt;
 
+mod font_resource_authoring_v1;
+pub use font_resource_authoring_v1::{
+    FontAuthoringScopeV1, FontReplacementCandidateV1, FontResourceIdentityV1, ServerFontResourceV1,
+    set_admitted_font_resource_v1,
+};
+
 pub const OVERLAY_PROTOCOL_V1: &str = "chaptera.text-format-overlay.v1";
 pub const OPERATION_PROTOCOL_V1: &str = "chaptera.text-format-operation.v1";
 pub const RECEIPT_PROTOCOL_V1: &str = "chaptera.text-format-operation-receipt.v1";
@@ -47,14 +53,16 @@ pub enum FormatPropertyV1 {
     FontSizeEmu,
     Italic,
     TextColorRgb,
+    FontResource,
 }
 
 impl FormatPropertyV1 {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Bold,
         Self::FontSizeEmu,
         Self::Italic,
         Self::TextColorRgb,
+        Self::FontResource,
     ];
 }
 
@@ -67,6 +75,7 @@ impl TryFrom<&str> for FormatPropertyV1 {
             "font_size_emu" => Ok(Self::FontSizeEmu),
             "italic" => Ok(Self::Italic),
             "text_color_rgb" => Ok(Self::TextColorRgb),
+            "font_resource" => Ok(Self::FontResource),
             _ => Err(TextFormatOverlayError::new(
                 "unsupported character-format property",
             )),
@@ -80,6 +89,7 @@ pub enum FormatValueV1 {
     Bool(bool),
     Integer(u64),
     String(String),
+    FontResource(FontResourceIdentityV1),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -202,6 +212,13 @@ fn validate_property_value(
         (FormatPropertyV1::TextColorRgb, _) => Err(TextFormatOverlayError::new(
             "text_color_rgb must be #RRGGBB",
         )),
+        (FormatPropertyV1::FontResource, FormatValueV1::FontResource(value)) => {
+            font_resource_authoring_v1::validate_font_resource_identity_v1(value)?;
+            Ok(FormatValueV1::FontResource(value.clone()))
+        }
+        (FormatPropertyV1::FontResource, _) => Err(TextFormatOverlayError::new(
+            "font_resource requires fingerprinted physical resource identity",
+        )),
     }
 }
 
@@ -296,6 +313,11 @@ fn base_value_at(
         FormatPropertyV1::FontSizeEmu => FormatValueV1::Integer(run.format.font_size_emu),
         FormatPropertyV1::Italic => FormatValueV1::Bool(run.format.italic),
         FormatPropertyV1::TextColorRgb => FormatValueV1::String(run.format.text_color_rgb.clone()),
+        // Historical source/base font identity is not guaranteed to have exact
+        // physical bytes. Never fabricate a fingerprint from its display/id.
+        FormatPropertyV1::FontResource => {
+            FormatValueV1::String(run.format.font_resource_id.clone())
+        }
     })
 }
 
@@ -653,6 +675,11 @@ pub fn set_text_format_property_v1(
     value: FormatValueV1,
     expected_state_hash: &str,
 ) -> Result<TextFormatOperationReceiptV1> {
+    if property == FormatPropertyV1::FontResource {
+        return Err(TextFormatOverlayError::new(
+            "font_resource authoring requires independent server resource admission",
+        ));
+    }
     apply_format_operation_v1(
         state,
         TextFormatOperationKindV1::SetTextFormatProperty,
@@ -691,28 +718,46 @@ pub fn undo_text_format_operation_v1(
 pub fn replay_text_format_operation_v1(
     receipt: &TextFormatOperationReceiptV1,
 ) -> Result<TextFormatOverlayStateV1> {
-    let replay =
-        match receipt.command.kind {
-            TextFormatOperationKindV1::SetTextFormatProperty => set_text_format_property_v1(
-                &receipt.before_state,
-                receipt.command.start_scalar,
-                receipt.command.end_scalar,
-                receipt.command.property,
+    let replay = match receipt.command.kind {
+        TextFormatOperationKindV1::SetTextFormatProperty => {
+            let value =
                 receipt.command.value.clone().ok_or_else(|| {
                     TextFormatOverlayError::new("replay set operation has no value")
-                })?,
-                &receipt.command.expected_state_hash,
-            )?,
-            TextFormatOperationKindV1::ClearTextFormatPropertyOverride => {
-                clear_text_format_property_override_v1(
+                })?;
+            // This verifies a recorded receipt, not a new authorization.
+            // The EditorProject replay boundary must separately re-admit
+            // exact font bytes before a font command can be applied.
+            if receipt.command.property == FormatPropertyV1::FontResource {
+                apply_format_operation_v1(
+                    &receipt.before_state,
+                    TextFormatOperationKindV1::SetTextFormatProperty,
+                    receipt.command.start_scalar,
+                    receipt.command.end_scalar,
+                    receipt.command.property,
+                    Some(value),
+                    &receipt.command.expected_state_hash,
+                )?
+            } else {
+                set_text_format_property_v1(
                     &receipt.before_state,
                     receipt.command.start_scalar,
                     receipt.command.end_scalar,
                     receipt.command.property,
+                    value,
                     &receipt.command.expected_state_hash,
                 )?
             }
-        };
+        }
+        TextFormatOperationKindV1::ClearTextFormatPropertyOverride => {
+            clear_text_format_property_override_v1(
+                &receipt.before_state,
+                receipt.command.start_scalar,
+                receipt.command.end_scalar,
+                receipt.command.property,
+                &receipt.command.expected_state_hash,
+            )?
+        }
+    };
     if replay.after_state != receipt.after_state {
         return Err(TextFormatOverlayError::new(
             "format operation replay did not reproduce canonical state",
