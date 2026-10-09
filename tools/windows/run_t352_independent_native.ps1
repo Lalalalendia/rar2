@@ -205,25 +205,72 @@ if ([string]$receipt.schema -ne "chaptera.t352-independent-identity-first-prefli
 $eligible = @($receipt.rows | Where-Object {
     $_.admitted_independent_target -eq $true -and [int]$_.shape_type -eq 1
 } | Sort-Object { [long]$_.contents_seq })
-if ($eligible.Count -lt 1) { throw "No unique type1 crosswalk on native-normalized independent fixture" }
-$chosen = $eligible[0]
-$targetId = [long]$chosen.contents_seq
-$targetSpid = [long]$chosen.spid
-$originalWidth = [long]$chosen.contents_width_emu
-$changedWidth = $originalWidth + 127000
+$candidateAttempts = @()
+$chosen = $null
+$baselineCom = $null
 $checkApp=$null; $checkDoc=$null
+if ($eligible.Count -eq 0) {
+    Write-PubJson -Value ([ordered]@{
+        schema="chaptera.t352-independent-target-selection.v1"
+        state="not_evaluable"; reason="no_type1_raw_candidate"
+        normalized_sha256=$normalizedSha; candidates=@()
+    }) -Path (Join-Path $analysis "t352-independent-selection.json")
+    throw "No unique type1 crosswalk on native-normalized independent fixture"
+}
 try {
     $checkApp = New-PubPublisherApplication
     $checkDoc = $checkApp.Open($base,$true,$false)
-    $baselineCom = TargetShape $checkDoc $targetId
-    if ([math]::Abs([double]$baselineCom.width_emu - $originalWidth) -gt 5) {
-        throw "Independent normalized COM baseline disagrees with exact raw width"
+    foreach ($candidate in $eligible) {
+        $idToTest = [long]$candidate.contents_seq
+        $widthToTest = [long]$candidate.contents_width_emu
+        $candidateCom = $null
+        try {
+            $candidateCom = TargetShape $checkDoc $idToTest
+        }
+        catch {
+            $candidateAttempts += [ordered]@{
+                shape_id=$idToTest;spid=[long]$candidate.spid
+                status="no_unique_visible_com_match";hresult=(Hr $_.Exception)
+            }
+            continue
+        }
+        $delta = [math]::Abs([double]$candidateCom.width_emu - $widthToTest)
+        if ($delta -gt 5) {
+            $candidateAttempts += [ordered]@{
+                shape_id=$idToTest;spid=[long]$candidate.spid
+                status="native_baseline_geometry_mismatch"
+                contents_width_emu=$widthToTest;com_width_emu=[long]$candidateCom.width_emu
+            }
+            continue
+        }
+        $chosen = $candidate
+        $baselineCom = $candidateCom
+        $candidateAttempts += [ordered]@{
+            shape_id=$idToTest;spid=[long]$candidate.spid
+            status="selected_exact_identity_and_com_geometry"
+            contents_width_emu=$widthToTest;com_width_emu=[long]$candidateCom.width_emu
+        }
+        break
     }
 }
 finally {
     CloseDoc $checkDoc
     Close-PubPublisherApplication $checkApp
 }
+Write-PubJson -Value ([ordered]@{
+    schema="chaptera.t352-independent-target-selection.v1"
+    state=if ($null -eq $chosen) { "not_evaluable" } else { "selected" }
+    normalized_sha256=$normalizedSha
+    evaluated_candidate_count=$candidateAttempts.Count
+    candidates=$candidateAttempts
+}) -Path (Join-Path $analysis "t352-independent-selection.json")
+if ($null -eq $chosen -or $null -eq $baselineCom) {
+    throw "No identity-joined type1 shape has an unambiguous Publisher COM width baseline"
+}
+$targetId = [long]$chosen.contents_seq
+$targetSpid = [long]$chosen.spid
+$originalWidth = [long]$chosen.contents_width_emu
+$changedWidth = $originalWidth + 127000
 AssertFile $base $normalizedSha
 Copy-Item -LiteralPath $census -Destination (Join-Path $analysis "t352-independent-census.json")
 Write-PubJson -Value ([ordered]@{
