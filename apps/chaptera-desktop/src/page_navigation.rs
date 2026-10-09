@@ -543,8 +543,8 @@ impl ViewerApp {
                 anchor_page_id,
                 identity,
                 anchor_page.size,
-                anchor_page.bleed.clone(),
-                anchor_page.margins.clone(),
+                anchor_page.bleed,
+                anchor_page.margins,
             )
             .map_err(|error| format!("Page insert rejected: {} ({})", error, error.code()))?;
         if candidate.operations().len() != operations_before + 1
