@@ -334,7 +334,7 @@ jobs:
     # Trade-off: on Tier A failure, the prebuild can spend runner time before
     # the mandatory failure blocks consumers and protected merge.
     needs: classify
-    if: ${{ !cancelled() && always() && (needs.classify.outputs.reader_windows == 'true' || needs.classify.outputs.reader_windows_smoke == 'true') }}
+    if: ${{ !cancelled() && always() && needs.classify.result == 'success' && (needs.classify.outputs.reader_windows == 'true' || needs.classify.outputs.reader_windows_smoke == 'true') }}
     uses: ./.github/workflows/chaptera-reader-windows-binary.yml
     with:
       artifact_name: chaptera-reader-windows-binary-${{ github.sha }}
