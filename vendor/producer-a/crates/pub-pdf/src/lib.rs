@@ -494,8 +494,8 @@ pub fn render_bounded_pdf(
                                     code: "pdf.image.source_window_invalid".into(),
                                     severity: PdfDiagnosticSeverity::FidelityWarning,
                                     origin: node.origin.into_canonical(),
-                                    message:
-                                        "fixed image source window has non-positive extent".into(),
+                                    message: "fixed image source window has non-positive extent"
+                                        .into(),
                                 });
                                 image_partial = true;
                             }
@@ -789,16 +789,8 @@ fn append_image_source_window(
     let top_q16 = i128::from(window.top_q16);
     let emu_per_point = i128::from(EMU_PER_POINT);
 
-    let scale_x = format_ratio(
-        width_emu * Q16_ONE,
-        source_width_q16 * emu_per_point,
-        9,
-    );
-    let scale_y = format_ratio(
-        height_emu * Q16_ONE,
-        source_height_q16 * emu_per_point,
-        9,
-    );
+    let scale_x = format_ratio(width_emu * Q16_ONE, source_width_q16 * emu_per_point, 9);
+    let scale_y = format_ratio(height_emu * Q16_ONE, source_height_q16 * emu_per_point, 9);
     let translate_x = format_ratio(
         x_emu * source_width_q16 - width_emu * left_q16,
         source_width_q16 * emu_per_point,
