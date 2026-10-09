@@ -23,7 +23,12 @@ const BASE_WIDTH_EMU: i64 = 5_076_000;
 const BASE_XE_EMU: i64 = 2_376_000;
 
 fn sha(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    hex
 }
 
 fn require_i64<'a>(value: &'a Value, name: &str) -> Result<i64> {
