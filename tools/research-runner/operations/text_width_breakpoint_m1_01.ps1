@@ -219,9 +219,8 @@ try {
         Set-Content -LiteralPath (Join-Path $LogDir "text-width-breakpoint-m1-01.txt") -Encoding ASCII
 
     $CurrentPhase = "finalize"
-    Write-Stage "running" $CurrentPhase $CurrentArm
-    & (Join-Path $RepoRoot "tools/research-runner/finalize_native_run.ps1") -PacketPath $PacketFull -OutputRoot $OutputRoot
     Write-Stage "complete" "complete" "none"
+    & (Join-Path $RepoRoot "tools/research-runner/finalize_native_run.ps1") -PacketPath $PacketFull -OutputRoot $OutputRoot
 } catch {
     Write-Stage "invalid" $CurrentPhase $CurrentArm
     throw
