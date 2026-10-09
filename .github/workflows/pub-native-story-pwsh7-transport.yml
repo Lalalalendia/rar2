@@ -1,0 +1,186 @@
+name: PUB native Story PowerShell 7 transport discriminator
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-native-story-pwsh7-transport.yml"
+      - "tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/pub-native-story-pwsh7-transport.yml"
+permissions:
+  contents: read
+
+concurrency:
+  group: pub-native-story-pwsh7-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate-transport:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Parse guarded native scripts under PowerShell 5.1 (no COM)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($relative in @(
+            'tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1',
+            'tools/windows/pub-runtime/run_story_native_roundtrip.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $relative).Path, [ref]$tokens, [ref]$errors
+            )
+            if ($errors.Count -ne 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              throw 'pwsh7_transport_parse_failed'
+            }
+          }
+
+      - name: Verify existing native stage writer without Publisher
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/windows/pub-runtime/test_story_native_stage_writer.ps1
+          if (-not $?) { throw 'native_stage_smoke_failed' }
+
+  prepare-original:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Materialize exact original Sample3 from existing writer handoff
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- generate \
+            --output-dir out/native-story-pwsh7
+      - name: Verify original source and manifest before handoff
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root = Path("out/native-story-pwsh7")
+          manifest = json.loads((root / "handoff.json").read_text())
+          assert manifest["schema"] == "chaptera.pub-native-story-handoff.v1"
+          assert hashlib.sha256((root / "source.pub").read_bytes()).hexdigest() == manifest["source_sha256"]
+          assert hashlib.sha256((root / "candidate.pub").read_bytes()).hexdigest() == manifest["candidate_sha256"]
+          if manifest["source_sha256"] != "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc":
+              raise SystemExit("wrong pinned Sample3 source")
+          if manifest["candidate_sha256"] != "a92543b6f2b6ac3a8ae2481e15a2188a338ddc2a92832580f8987079fa4f70f8":
+              raise SystemExit("wrong pinned six-unit candidate")
+          if len((root / "source.pub").read_bytes()) != 72192 or len((root / "candidate.pub").read_bytes()) != 72192:
+              raise SystemExit("unexpected CFB byte length")
+          print("PASS exact Sep/Oct matched candidate SHA and pinned source")
+          PY
+      - name: Verify exact deleted Story under current Reader
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- verify \
+            --pub out/native-story-pwsh7/candidate.pub \
+            --manifest out/native-story-pwsh7/handoff.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pub-story-pwsh7-${{ github.run_id }}
+          path: |
+            out/native-story-pwsh7/source.pub
+            out/native-story-pwsh7/candidate.pub
+            out/native-story-pwsh7/handoff.json
+          if-no-files-found: error
+          retention-days: 14
+
+  native-pwsh7:
+    needs: [prepare-original, validate-transport]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Lalalalendia/rar2' }}
+    runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
+    timeout-minutes: 20
+    concurrency:
+      group: pub-re-native-publisher-oracle
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download matched source and candidate from this exact run
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-story-pwsh7-${{ github.run_id }}
+          path: ${{ runner.temp }}/chaptera-story-pwsh7/input
+      - name: Supply Git Bash to current Rust verifier
+        shell: powershell
+        run: |
+          $gitBashDir = 'C:\Program Files\Git\bin'
+          if (-not (Test-Path -LiteralPath (Join-Path $gitBashDir 'bash.exe') -PathType Leaf)) {
+            throw 'git_bash_unavailable'
+          }
+          $gitBashDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Prebuild matched candidate Reader verifier
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-writer --bin pub_story_native_handoff
+          if ($LASTEXITCODE -ne 0) { throw 'matched_candidate_verifier_build_failed' }
+      - name: Execute isolated original Publisher SaveAs control
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/windows/pub-runtime/Invoke-StoryNativeSourceControl.ps1 `
+            -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7/input') `
+            -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7/private')
+          if (-not $?) { throw 'source_control_script_failed' }
+      - name: Run exact writer candidate SaveAs in PowerShell 7 guarded child
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1 `
+            -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7/input') `
+            -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7/private-candidate') `
+            -ChildPowerShell PowerShell7
+          if (-not $?) { throw 'matched_writer_candidate_roundtrip_failed' }
+      - name: Upload source-safe control receipt only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-story-pwsh7-receipt-${{ github.run_id }}
+          path: ${{ runner.temp }}/chaptera-story-pwsh7/private/source-control-status.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Upload source-safe writer candidate receipt only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-matched-writer-candidate-receipt-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/chaptera-story-pwsh7/private-candidate/native-roundtrip-status.json
+            ${{ runner.temp }}/chaptera-story-pwsh7/private-candidate/native-roundtrip-stage.json
+            ${{ runner.temp }}/chaptera-story-pwsh7/private-candidate/native-roundtrip-receipt.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Remove private original, SaveAs output and logs
+        if: always()
+        shell: powershell
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7'
+          if (Test-Path -LiteralPath $root) {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
+          }
