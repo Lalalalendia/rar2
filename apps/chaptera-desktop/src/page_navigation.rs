@@ -294,6 +294,162 @@ impl ViewerApp {
         Ok(identity.page_id)
     }
 
+    fn page_duplicate_blank_capability_v1(&self) -> bool {
+        let Some(editor) = self.editor.as_ref() else {
+            return false;
+        };
+        let Some(visual) = self.visual.as_ref() else {
+            return false;
+        };
+        let Some(source_page_id) = visual
+            .document
+            .pages
+            .get(self.selected_page)
+            .map(|page| page.id)
+        else {
+            return false;
+        };
+        editor.can_duplicate_blank_page_v1(&self.source_customer_page_ids, source_page_id)
+    }
+
+    fn duplicate_selected_blank_page_v1(&mut self) -> Result<PageId, String> {
+        let (operations_before, source_page_id, before_page_ids, source_index) = {
+            let editor = self
+                .editor
+                .as_ref()
+                .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+            let visual = self
+                .visual
+                .as_ref()
+                .ok_or_else(|| "Document page projection is unavailable.".to_owned())?;
+            let source_page_id = visual
+                .document
+                .pages
+                .get(self.selected_page)
+                .map(|page| page.id)
+                .ok_or_else(|| "Selected source PageId is unavailable.".to_owned())?;
+            let before_page_ids = editor
+                .effective_customer_page_order_v1(&self.source_customer_page_ids)
+                .map_err(|error| {
+                    format!(
+                        "Page duplicate is unavailable: {} ({})",
+                        error,
+                        error.code()
+                    )
+                })?;
+            let source_index = before_page_ids
+                .iter()
+                .position(|page_id| *page_id == source_page_id)
+                .ok_or_else(|| {
+                    "Selected source PageId is absent from customer membership.".to_owned()
+                })?;
+            (
+                editor.operations().len(),
+                source_page_id,
+                before_page_ids,
+                source_index,
+            )
+        };
+
+        let uuid = uuid::Uuid::now_v7();
+        let identity = AuthoredPageIdentityV1 {
+            page_id: PageId::from_canonical(pub_model::CanonicalId::from_bytes(*uuid.as_bytes())),
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        let mut candidate = self
+            .editor
+            .as_ref()
+            .expect("Editor presence validated before page duplicate")
+            .clone();
+        candidate
+            .duplicate_blank_page_v1(
+                self.source_customer_page_ids.clone(),
+                source_page_id,
+                identity,
+            )
+            .map_err(|error| format!("Page duplicate rejected: {} ({})", error, error.code()))?;
+        if candidate.operations().len() != operations_before + 1
+            || !matches!(
+                candidate.operations().last(),
+                Some(pub_editor::EditOperation::DuplicateBlankPageV1 { transition })
+                    if transition.source_page_id == source_page_id
+                        && transition.destination_identity == identity
+            )
+        {
+            return Err(
+                "Duplicate Blank Page must append exactly one canonical lifecycle operation."
+                    .to_owned(),
+            );
+        }
+
+        let after_page_ids = candidate
+            .effective_customer_page_order_v1(&self.source_customer_page_ids)
+            .map_err(|error| {
+                format!(
+                    "Page duplicate membership is unavailable before commit: {} ({})",
+                    error,
+                    error.code()
+                )
+            })?;
+        let mut expected_page_ids = before_page_ids;
+        expected_page_ids.insert(source_index + 1, identity.page_id);
+        if after_page_ids != expected_page_ids {
+            return Err(
+                "Page duplicate did not insert the new PageId immediately after source.".to_owned(),
+            );
+        }
+
+        let mut visual_candidate = self
+            .visual
+            .as_ref()
+            .ok_or_else(|| "Document page projection is unavailable.".to_owned())?
+            .clone();
+        visual_candidate
+            .refresh_page_membership_from_resolved(candidate.graph(), &after_page_ids)
+            .map_err(|error| {
+                format!("Page duplicate projection rejected before commit: {error}")
+            })?;
+        if visual_candidate
+            .document
+            .pages
+            .iter()
+            .map(|page| page.id)
+            .collect::<Vec<_>>()
+            != after_page_ids
+            || !visual_candidate
+                .scene
+                .surfaces
+                .iter()
+                .any(|surface| surface.origin == identity.page_id)
+        {
+            return Err(
+                "Page duplicate Viewer projection did not contain the exact canonical membership."
+                    .to_owned(),
+            );
+        }
+        let destination_index = source_index + 1;
+        if visual_candidate
+            .document
+            .pages
+            .get(destination_index)
+            .map(|page| page.id)
+            != Some(identity.page_id)
+        {
+            return Err("Page duplicate destination selection is unavailable.".to_owned());
+        }
+
+        self.editor = Some(candidate);
+        self.visual = Some(visual_candidate);
+        self.selected_page = destination_index;
+        self.canvas_selection.clear();
+        self.canvas_drag = None;
+        self.canvas_resize = None;
+        self.finish_authoring_change(
+            "Duplicated one blank customer page with independent PageId. Source PUB bytes were not written.",
+        );
+        Ok(identity.page_id)
+    }
+
     fn page_delete_blank_capability_v1(&self) -> bool {
         let Some(editor) = self.editor.as_ref() else {
             return false;
@@ -561,6 +717,20 @@ impl ViewerApp {
         if !can_delete {
             delete_response.on_disabled_hover_text(
                 "Select an active Chaptera-created customer page. Content-bearing and source-backed pages fail closed.",
+            );
+        }
+
+        let can_duplicate = self.page_duplicate_blank_capability_v1();
+        let duplicate_response =
+            ui.add_enabled(can_duplicate, egui::Button::new("Duplicate Blank Page"));
+        if duplicate_response.clicked()
+            && let Err(error) = self.duplicate_selected_blank_page_v1()
+        {
+            self.edit_status = Some(error);
+        }
+        if !can_duplicate {
+            duplicate_response.on_disabled_hover_text(
+                "Select an admitted, truly empty customer page. Content-bearing pages fail closed.",
             );
         }
 
