@@ -1,0 +1,110 @@
+name: PUB PDF document-page-order raster A/B
+
+on:
+  pull_request:
+    paths:
+      - "tools/pub_pdf_page_order_ab.py"
+      - "tools/test_pub_pdf_page_order_ab.py"
+      - ".github/workflows/pub-pdf-page-order-ab.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: pub-pdf-page-order-ab-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  offline-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned read-only raster dependencies
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "PyMuPDF==1.26.7" "Pillow==12.3.0"
+      - name: Synthetic permutation, regression and authority controls
+        run: |
+          python -m py_compile tools/pub_pdf_page_order_ab.py tools/test_pub_pdf_page_order_ab.py
+          python tools/test_pub_pdf_page_order_ab.py
+
+  source-derived-page-order-arm:
+    if: github.event.pull_request.head.ref == 'measure/pub-pdf-page-order-ab-01'
+    needs: offline-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Install pinned visual comparator
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "PyMuPDF==1.26.7" "Pillow==12.3.0"
+      - name: Download preexisting read-only document-order census
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-pdf-page-order-census
+          repository: Lalalalendia/rar2
+          run-id: 37924104309
+          github-token: ${{ github.token }}
+          path: target/pub-pdf-page-order-ab/census
+      - name: Pin exact document-order receipt identity
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' \
+            '57f53bcb7c607718bf473dd13378eff2b78108d4961a7a46301791430c3aebd5' \
+            'target/pub-pdf-page-order-ab/census/receipt.json' | sha256sum -c -
+      - name: Acquire existing source corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+      - name: Verify pinned corpus identity
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path('out/pinned1050/materialized/native').glob('*.pub'))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256(''.join(s + '\n' for s in shas).encode('ascii')).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == '21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43', digest
+          print('pinned source registry validated')
+          PY
+      - name: Build unmodified public CLI
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-cli --bin pub
+      - name: Materialize existing explicit fallback font
+        run: |
+          cargo run -q -p chaptera-desktop-fallback-font-resource --bin materialize-fallback-font -- "$RUNNER_TEMP/chaptera-fallback.ttf"
+          test -s "$RUNNER_TEMP/chaptera-fallback.ttf"
+      - name: Screen page order only on same PDF bytes and reference
+        run: |
+          set -euo pipefail
+          python tools/pub_pdf_page_order_ab.py \
+            --order-receipt target/pub-pdf-page-order-ab/census/receipt.json \
+            --batch01 tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json \
+            --supplemental tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json \
+            --source-root out/pinned1050/materialized/native \
+            --cli vendor/producer-a/target/debug/pub \
+            --fallback-font "$RUNNER_TEMP/chaptera-fallback.ttf" \
+            --timeout 120 \
+            --out target/pub-pdf-page-order-ab/receipt.json
+      - name: Upload aggregate-only source-safe A/B receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-pdf-page-order-ab-v1
+          path: target/pub-pdf-page-order-ab/receipt.json
+          if-no-files-found: warn
+          retention-days: 30
