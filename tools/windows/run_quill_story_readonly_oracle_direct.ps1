@@ -15,7 +15,7 @@ $resolver = Join-Path $repoRoot "vendor/producer-a/crates/pub-reader/src/bin/qui
 
 $expectedBlobs = @(
     [pscustomobject]@{ Path = $packet; Sha = "41ec1b1b34bc277c7f3ac5cb9829569ca189053a" }
-    [pscustomobject]@{ Path = $operation; Sha = "cea8a459fd72befa9bbe27f140b3827b2c0934e3" }
+    [pscustomobject]@{ Path = $operation; Sha = "c54144769f54b386e1b7ef07e17b6a5606380e79" }
     [pscustomobject]@{ Path = $prepare; Sha = "0848e8e147dff5dab68065c37d2d73f72f09eb45" }
     [pscustomobject]@{ Path = $finalize; Sha = "2a97d6f2c8be1265010a744c015ce8d288eb7e75" }
     [pscustomobject]@{ Path = $resolver; Sha = "b92f85e133eede4096156202226f6961d15cab3c" }

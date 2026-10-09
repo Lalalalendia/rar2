@@ -76,7 +76,7 @@ function Write-NativeStage {
         [Parameter(Mandatory = $true)][int]$WitnessIndex
     )
     if ($State -notin @("running", "invalid", "complete") -or
-        $Phase -notin @("fixture_acquisition", "publisher_identity", "publisher_open", "story_read", "source_integrity", "receipt_write", "complete") -or
+        $Phase -notin @("fixture_acquisition", "publisher_identity", "application_create", "document_open", "stories_collection", "story_read", "source_integrity", "receipt_write", "complete") -or
         $WitnessIndex -lt 0 -or $WitnessIndex -gt 4) {
         throw "Invalid Quill native stage contract"
     }
@@ -136,7 +136,7 @@ try {
     foreach ($item in $paths) {
         $witnessOrdinal += 1
         $script:NativeWitnessIndex = $witnessOrdinal
-        $script:NativePhase = "publisher_open"
+        $script:NativePhase = "application_create"
         Write-NativeStage -State "running" -Phase $script:NativePhase -WitnessIndex $witnessOrdinal
         $before = Get-PubFileRecord $item.FullName
         $application = $null
@@ -146,7 +146,11 @@ try {
 
         try {
             $application = New-PubPublisherApplication
+            $script:NativePhase = "document_open"
+            Write-NativeStage -State "running" -Phase $script:NativePhase -WitnessIndex $witnessOrdinal
             $document = $application.Open($before.path, $true, $false)
+            $script:NativePhase = "stories_collection"
+            Write-NativeStage -State "running" -Phase $script:NativePhase -WitnessIndex $witnessOrdinal
             $storiesCollection = $document.Stories
             $storyCount = [int]$storiesCollection.Count
             $script:NativePhase = "story_read"
