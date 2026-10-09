@@ -8,9 +8,9 @@
 //! binary on this *same exact* Publisher-normalized base. No semantic
 //! classification is inferred here: this tool creates controls for the real
 //! Publisher Open -> Save -> fresh Reopen experiment.
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::env;
@@ -27,17 +27,23 @@ fn sha(bytes: &[u8]) -> String {
 }
 
 fn require_i64<'a>(value: &'a Value, name: &str) -> Result<i64> {
-    value.get(name).and_then(Value::as_i64)
+    value
+        .get(name)
+        .and_then(Value::as_i64)
         .with_context(|| format!("missing signed integer {name}"))
 }
 
 fn require_str<'a>(value: &'a Value, name: &str) -> Result<&'a str> {
-    value.get(name).and_then(Value::as_str)
+    value
+        .get(name)
+        .and_then(Value::as_str)
         .with_context(|| format!("missing string {name}"))
 }
 
 fn uint32_bytes(value: i64) -> Result<[u8; 4]> {
-    Ok(u32::try_from(value).context("U32 value outside bounds")?.to_le_bytes())
+    Ok(u32::try_from(value)
+        .context("U32 value outside bounds")?
+        .to_le_bytes())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,19 +55,27 @@ struct Span {
 
 fn span(value: &Value) -> Result<Span> {
     let stream = require_str(value, "stream")?.to_owned();
-    let offset = value.get("offset").and_then(Value::as_u64)
+    let offset = value
+        .get("offset")
+        .and_then(Value::as_u64)
         .context("span missing offset")?;
-    let len = value.get("len").and_then(Value::as_u64)
+    let len = value
+        .get("len")
+        .and_then(Value::as_u64)
         .context("span missing len")?;
     if !stream.starts_with('/') || stream.contains("..") {
         bail!("span stream must be an absolute CFB logical path");
     }
-    Ok(Span { stream, offset, len })
+    Ok(Span {
+        stream,
+        offset,
+        len,
+    })
 }
 
 #[derive(Debug)]
 struct Patch {
-    span: Span,  // the exact 4-byte value, not the surrounding tag
+    span: Span, // the exact 4-byte value, not the surrounding tag
     expected: [u8; 4],
     replacement: [u8; 4],
 }
@@ -70,11 +84,13 @@ fn plan(receipt: &Value) -> Result<(Patch, Patch)> {
     if require_str(receipt, "schema")? != "chaptera.modern-structural-base/v1" {
         bail!("unsupported structural receipt schema");
     }
-    if require_i64(receipt, "stream_count")? != 10
-        || require_i64(receipt, "candidate_count")? != 6 {
+    if require_i64(receipt, "stream_count")? != 10 || require_i64(receipt, "candidate_count")? != 6
+    {
         bail!("T370 semantic contract: unexpected stream/candidate counts");
     }
-    let target = receipt.get("selected_target").context("missing selected_target")?;
+    let target = receipt
+        .get("selected_target")
+        .context("missing selected_target")?;
     for (name, expected) in [
         ("contents_seq_num", 293),
         ("publisher_shape_id", 293),
@@ -91,7 +107,11 @@ fn plan(receipt: &Value) -> Result<(Patch, Patch)> {
             bail!("T370 target semantic contract mismatch: {name}");
         }
     }
-    if target.get("contents_anchor_extent_exact").and_then(Value::as_bool) != Some(true) {
+    if target
+        .get("contents_anchor_extent_exact")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
         bail!("T370 Contents/Escher invariant absent");
     }
     if require_i64(target, "contents_width_wire_type")? != 0x20 {
@@ -100,26 +120,37 @@ fn plan(receipt: &Value) -> Result<(Patch, Patch)> {
         bail!("Contents width is not a known U32 wire type");
     }
 
-    let cw = span(target.get("contents_width_source").context("missing Contents width span")?)?;
+    let cw = span(
+        target
+            .get("contents_width_source")
+            .context("missing Contents width span")?,
+    )?;
     if cw.stream != "/Contents" || cw.len != 4 {
         bail!("Contents width must be an exact four-byte /Contents value");
     }
-    let candidates = receipt.pointer("/manifest/candidates")
-        .and_then(Value::as_array).context("missing structural candidates")?;
-    let matched: Vec<_> = candidates.iter().filter(|v| {
-        v.get("contents_seq_num").and_then(Value::as_i64) == Some(293)
-            && v.get("officeart_spid").and_then(Value::as_i64) == Some(1025)
-    }).collect();
+    let candidates = receipt
+        .pointer("/manifest/candidates")
+        .and_then(Value::as_array)
+        .context("missing structural candidates")?;
+    let matched: Vec<_> = candidates
+        .iter()
+        .filter(|v| {
+            v.get("contents_seq_num").and_then(Value::as_i64) == Some(293)
+                && v.get("officeart_spid").and_then(Value::as_i64) == Some(1025)
+        })
+        .collect();
     if matched.len() != 1 {
         bail!("selected shape must have exactly one Contents/Escher joined candidate");
     }
-    let fields = matched[0].pointer("/escher_shape/client_anchor/fields")
-        .and_then(Value::as_array).context("missing selected ClientAnchor fields")?;
-    let xe: Vec<_> = fields.iter().filter(|v| {
-        v.get("id").and_then(Value::as_u64) == Some(0x2003)
-    }).collect();
-    if xe.len() != 1 || xe[0].get("value").and_then(Value::as_u64)
-        != Some(BASE_XE_EMU as u64) {
+    let fields = matched[0]
+        .pointer("/escher_shape/client_anchor/fields")
+        .and_then(Value::as_array)
+        .context("missing selected ClientAnchor fields")?;
+    let xe: Vec<_> = fields
+        .iter()
+        .filter(|v| v.get("id").and_then(Value::as_u64) == Some(0x2003))
+        .collect();
+    if xe.len() != 1 || xe[0].get("value").and_then(Value::as_u64) != Some(BASE_XE_EMU as u64) {
         bail!("Escher ClientAnchor XE must be present exactly once with expected value");
     }
     let tagged = span(xe[0].get("source").context("missing XE source")?)?;
@@ -127,23 +158,36 @@ fn plan(receipt: &Value) -> Result<(Patch, Patch)> {
         bail!("Escher PublisherField must be exactly 2-byte ID + 4-byte value");
     }
     let value_offset = tagged.offset.checked_add(2).context("XE offset overflow")?;
-    let ex = Span { stream: tagged.stream, offset: value_offset, len: 4 };
+    let ex = Span {
+        stream: tagged.stream,
+        offset: value_offset,
+        len: 4,
+    };
     if ex.stream == cw.stream {
         bail!("Contents and Escher patch streams unexpectedly coincide");
     }
 
     Ok((
-        Patch { span: cw, expected: uint32_bytes(BASE_WIDTH_EMU)?,
-                replacement: uint32_bytes(BASE_WIDTH_EMU + DELTA_EMU)? },
-        Patch { span: ex, expected: uint32_bytes(BASE_XE_EMU)?,
-                replacement: uint32_bytes(BASE_XE_EMU + DELTA_EMU)? },
+        Patch {
+            span: cw,
+            expected: uint32_bytes(BASE_WIDTH_EMU)?,
+            replacement: uint32_bytes(BASE_WIDTH_EMU + DELTA_EMU)?,
+        },
+        Patch {
+            span: ex,
+            expected: uint32_bytes(BASE_XE_EMU)?,
+            replacement: uint32_bytes(BASE_XE_EMU + DELTA_EMU)?,
+        },
     ))
 }
 
 fn all_streams(path: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut comp = cfb::open(path).with_context(|| format!("open CFB {}", path.display()))?;
-    let names: Vec<String> = comp.walk().filter(|e| e.is_stream())
-        .map(|e| e.path().to_string_lossy().into_owned()).collect();
+    let names: Vec<String> = comp
+        .walk()
+        .filter(|e| e.is_stream())
+        .map(|e| e.path().to_string_lossy().into_owned())
+        .collect();
     let mut streams = BTreeMap::new();
     for name in names {
         let mut stream = comp.open_stream(&name)?;
@@ -158,9 +202,16 @@ fn all_streams(path: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
 
 fn patch_one(path: &Path, plan: &Patch) -> Result<()> {
     let mut comp = cfb::open_rw(path).context("open copied PUB for exact-range patch")?;
-    let mut stream = comp.open_stream(&plan.span.stream)
+    let mut stream = comp
+        .open_stream(&plan.span.stream)
         .with_context(|| format!("missing planned stream {}", plan.span.stream))?;
-    if plan.span.len != 4 || plan.span.offset.checked_add(4).is_none_or(|n| n > stream.len()) {
+    if plan.span.len != 4
+        || plan
+            .span
+            .offset
+            .checked_add(4)
+            .is_none_or(|n| n > stream.len())
+    {
         bail!("planned four-byte patch lies outside logical CFB stream");
     }
     stream.seek(SeekFrom::Start(plan.span.offset))?;
@@ -179,8 +230,12 @@ fn changed_offsets(before: &[u8], after: &[u8]) -> Result<Vec<usize>> {
     if before.len() != after.len() {
         bail!("CFB logical stream size changed under four-byte patch");
     }
-    Ok(before.iter().zip(after).enumerate()
-        .filter_map(|(i, (a, b))| (a != b).then_some(i)).collect())
+    Ok(before
+        .iter()
+        .zip(after)
+        .enumerate()
+        .filter_map(|(i, (a, b))| (a != b).then_some(i))
+        .collect())
 }
 
 #[derive(Serialize)]
@@ -200,14 +255,19 @@ struct FileFingerprint {
 
 fn fingerprint(path: &Path) -> Result<FileFingerprint> {
     let raw = fs::read(path)?;
-    let streams = all_streams(path)?.into_iter().map(|(path, data)| StreamFingerprint {
-        path, len: data.len(), sha256: sha(&data)
-    }).collect();
+    let streams = all_streams(path)?
+        .into_iter()
+        .map(|(path, data)| StreamFingerprint {
+            path,
+            len: data.len(),
+            sha256: sha(&data),
+        })
+        .collect();
     Ok(FileFingerprint {
         schema: "chaptera.t352-cfb-fingerprint.v1",
         whole_file_sha256: sha(&raw),
         whole_file_len: raw.len(),
-        streams
+        streams,
     })
 }
 
@@ -234,7 +294,9 @@ fn prepare(base: &Path, receipt_path: &Path, output: &Path) -> Result<()> {
     let (contents, escher) = plan(&manifest)?;
     let baseline_streams = all_streams(base)?;
     for patch in [&contents, &escher] {
-        let bytes = baseline_streams.get(&patch.span.stream).context("planned stream absent")?;
+        let bytes = baseline_streams
+            .get(&patch.span.stream)
+            .context("planned stream absent")?;
         let start = usize::try_from(patch.span.offset)?;
         if bytes.get(start..start + 4) != Some(patch.expected.as_slice()) {
             bail!("planned original range failed stream-byte check");
@@ -252,8 +314,12 @@ fn prepare(base: &Path, receipt_path: &Path, output: &Path) -> Result<()> {
         let filename = format!("{arm}.pub");
         let target = output.join(&filename);
         fs::copy(base, &target)?;
-        if use_contents { patch_one(&target, &contents)?; }
-        if use_escher { patch_one(&target, &escher)?; }
+        if use_contents {
+            patch_one(&target, &contents)?;
+        }
+        if use_escher {
+            patch_one(&target, &escher)?;
+        }
 
         let after = all_streams(&target)?;
         if after.keys().collect::<Vec<_>>() != baseline_streams.keys().collect::<Vec<_>>() {
@@ -268,7 +334,9 @@ fn prepare(base: &Path, receipt_path: &Path, output: &Path) -> Result<()> {
                     Some(&contents.span)
                 } else if use_escher && *path == escher.span.stream {
                     Some(&escher.span)
-                } else { None };
+                } else {
+                    None
+                };
                 let allowed = expected_span.context("unplanned CFB stream was changed")?;
                 let start = usize::try_from(allowed.offset)?;
                 if offsets.iter().any(|i| *i < start || *i >= start + 4) {
@@ -295,30 +363,40 @@ fn prepare(base: &Path, receipt_path: &Path, output: &Path) -> Result<()> {
     if sha(&fs::read(base)?) != base_sha {
         bail!("immutable source base changed during patch preparation");
     }
-    write_json(&output.join("t352-patch-receipt.json"), &json!({
-        "schema": "chaptera.t352-exact-four-arm-patch.v1",
-        "base_sha256": base_sha,
-        "base_file_len": base_raw.len(),
-        "selected_contents_seq_num": 293,
-        "selected_spid": 1025,
-        "width_before_emu": BASE_WIDTH_EMU,
-        "width_after_emu": BASE_WIDTH_EMU + DELTA_EMU,
-        "delta_emu": DELTA_EMU,
-        "source_mutated": false,
-        "arms": summaries
-    }))?;
+    write_json(
+        &output.join("t352-patch-receipt.json"),
+        &json!({
+            "schema": "chaptera.t352-exact-four-arm-patch.v1",
+            "base_sha256": base_sha,
+            "base_file_len": base_raw.len(),
+            "selected_contents_seq_num": 293,
+            "selected_spid": 1025,
+            "width_before_emu": BASE_WIDTH_EMU,
+            "width_after_emu": BASE_WIDTH_EMU + DELTA_EMU,
+            "delta_emu": DELTA_EMU,
+            "source_mutated": false,
+            "arms": summaries
+        }),
+    )?;
     Ok(())
 }
 
 fn main() -> Result<()> {
     let args: Vec<_> = env::args_os().skip(1).collect();
-    let words: Vec<String> = args.iter().map(|s| s.to_string_lossy().into_owned()).collect();
+    let words: Vec<String> = args
+        .iter()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
     match words.as_slice() {
-        [command, base, receipt, output] if command == "prepare" =>
-            prepare(Path::new(base), Path::new(receipt), Path::new(output)),
-        [command, source, output] if command == "fingerprint" =>
-            write_json(Path::new(output), &fingerprint(Path::new(source))?),
-        _ => bail!("usage: val_xproj_patch prepare BASE.pub STRUCTURAL.json NEW_DIR | fingerprint FILE.pub OUT.json"),
+        [command, base, receipt, output] if command == "prepare" => {
+            prepare(Path::new(base), Path::new(receipt), Path::new(output))
+        }
+        [command, source, output] if command == "fingerprint" => {
+            write_json(Path::new(output), &fingerprint(Path::new(source))?)
+        }
+        _ => bail!(
+            "usage: val_xproj_patch prepare BASE.pub STRUCTURAL.json NEW_DIR | fingerprint FILE.pub OUT.json"
+        ),
     }
 }
 
@@ -329,7 +407,10 @@ mod tests {
     fn canonical_width_and_anchor_delta() {
         assert_eq!(BASE_WIDTH_EMU + DELTA_EMU, 5_203_000);
         assert_eq!(BASE_XE_EMU + DELTA_EMU, 2_503_000);
-        assert_eq!(uint32_bytes(BASE_WIDTH_EMU).unwrap(), 5_076_000u32.to_le_bytes());
+        assert_eq!(
+            uint32_bytes(BASE_WIDTH_EMU).unwrap(),
+            5_076_000u32.to_le_bytes()
+        );
     }
     #[test]
     fn tampered_structural_contract_fails_closed() {
