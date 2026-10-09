@@ -1,0 +1,59 @@
+name: PUB RE real Apache POI 0x2C pair contract
+
+on:
+  pull_request:
+    paths:
+      - "tools/pub-re/run_public_realpair_contract.py"
+      - "tools/pub-re/src/contents.rs"
+      - "tools/pub-re/src/main.rs"
+      - "tools/pub-re/src/lib.rs"
+      - ".github/workflows/pub-re-realpair.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  realpair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Build existing pub-re CLI
+        run: cargo build --manifest-path tools/pub-re/Cargo.toml --bin pub-re
+
+      - name: Check Python real-pair driver syntax
+        run: python3 -m py_compile tools/pub-re/run_public_realpair_contract.py
+
+      - name: Run five SHA-pinned real document comparisons
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/pub-re/run_public_realpair_contract.py \
+            --tool tools/pub-re/target/debug/pub-re \
+            --work-root "$RUNNER_TEMP/pub-re-realpair-private" \
+            --evidence-dir "$RUNNER_TEMP/pub-re-realpair-evidence"
+
+      - name: Upload numerical evidence only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-realpair-source-safe
+          path: ${{ runner.temp }}/pub-re-realpair-evidence/realpair-*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove downloaded PUB files and local manifests
+        if: always()
+        shell: bash
+        run: |
+          rm -rf -- "$RUNNER_TEMP/pub-re-realpair-private"
