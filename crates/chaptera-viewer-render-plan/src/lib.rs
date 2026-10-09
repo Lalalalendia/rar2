@@ -34,6 +34,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 mod mixed_size_layout;
+mod mixed_family_terminal;
 mod shared_layout_diagnostics;
 mod story_slice_layout;
 #[cfg(test)]
@@ -44,6 +45,10 @@ use mixed_size_layout::{
 use mixed_size_layout::{
     MixedLineCandidateV1, admitted_font_size_emu, resolve_mixed_size_text_layout_v1,
     scalar_text_range_v1,
+};
+use mixed_family_terminal::{
+    mixed_family_frozen_prefix_height_emu_v1,
+    mixed_family_terminal_source_advance_emu_v1,
 };
 pub use shared_layout_diagnostics::{
     SharedLayoutIncompleteCauseV1, classify_shared_layout_incomplete_cause_v1,
@@ -2818,6 +2823,10 @@ where
 
     while cursor < fragment.scalar_end {
         let mut chosen = None;
+        // Retain only an unambiguous candidate selected by the existing
+        // bounded break policy, never an invented terminal text range.
+        let mut rejected_terminal = None;
+        let mut ambiguous_terminal = false;
         for candidate in policy
             .candidates
             .iter()
@@ -2837,13 +2846,61 @@ where
                 .is_some_and(|height| height <= target.bounds.height.get());
             if fits_width && fits_height {
                 chosen = Some(evaluated);
+            } else if fits_width
+                && evaluated.scalar_end > cursor
+                && evaluated.consumed_scalar_end == fragment.scalar_end
+                && !evaluated.text.is_empty()
+                && !evaluated.spans.is_empty()
+            {
+                if rejected_terminal.is_some() {
+                    ambiguous_terminal = true;
+                } else {
+                    rejected_terminal = Some(evaluated);
+                }
             }
             if candidate.kind == BoundedBreakKind::Mandatory {
                 break;
             }
         }
 
-        let chosen = chosen?;
+        let Some(chosen) = chosen else {
+            if ambiguous_terminal {
+                return None;
+            }
+            let terminal = rejected_terminal?;
+            let prefix_height = mixed_family_frozen_prefix_height_emu_v1(&lines, &runs)?;
+            let terminal_advance = mixed_family_terminal_source_advance_emu_v1(
+                visual, fragment.story_id, cursor, fragment.scalar_end, &terminal, &runs,
+            )?;
+            let completed = prefix_height.checked_add(terminal_advance)?;
+            if completed > target.bounds.height.get() {
+                return None;
+            }
+            let x_offset_emu = resolved_line_x_offset_emu_v1(
+                fragment,
+                target.node_id,
+                &target.bounds,
+                line_index,
+                cursor..terminal.scalar_end,
+                terminal.measured_width_emu,
+                &layout_fingerprint,
+            );
+            lines.push(RenderResolvedTextLineV1 {
+                line_index,
+                scalar_start: cursor,
+                scalar_end: terminal.scalar_end,
+                consumed_scalar_end: terminal.consumed_scalar_end,
+                text: terminal.text,
+                measured_width_emu: terminal.measured_width_emu,
+                line_height_emu: terminal_advance,
+                x_offset_emu,
+                spans: terminal.spans,
+                shaping: None,
+            });
+            cursor = terminal.consumed_scalar_end;
+            used_height_emu = completed;
+            break;
+        };
         used_height_emu = used_height_emu.checked_add(chosen.line_height_emu)?;
         let x_offset_emu = resolved_line_x_offset_emu_v1(
             fragment,
