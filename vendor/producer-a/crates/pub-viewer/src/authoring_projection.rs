@@ -70,8 +70,7 @@ fn viewer_page_membership_from_resolved(
             .pages
             .get(&page_id)
             .with_context(|| format!("Viewer page-membership refresh missing page {page_id:?}"))?;
-        let index =
-            u32::try_from(zero_based + 1).context("Viewer page index exceeds u32")?;
+        let index = u32::try_from(zero_based + 1).context("Viewer page index exceeds u32")?;
 
         pages.push(ViewerPage {
             index,
@@ -302,7 +301,6 @@ fn bounded_authoring_slice_from_resolved_pages_with_story_payload_scope(
         unknown_layout_state: Vec::new(),
     })
 }
-
 
 #[cfg(test)]
 mod page_membership_tests {
