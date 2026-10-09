@@ -87,7 +87,7 @@ jobs:
                   body,
               )
               research_match = re.fullmatch(
-                  r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?|val-xproj-01|quill-story-readonly-oracle-02|text-width-breakpoint-m1-01)",
+                  r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?|val-xproj-01|val-xproj-independent-01|quill-story-readonly-oracle-02|text-width-breakpoint-m1-01)",
                   body,
               )
               cancel_match = re.fullmatch(
@@ -135,7 +135,7 @@ jobs:
                   elif research_id == "quill-story-readonly-oracle-02":
                       command_mode = "research_quill_readonly"
                   else:
-                      command_mode = "research_t352" if research_id == "val-xproj-01" else "research_0p75"
+                      command_mode = "research_t352" if research_id in {"val-xproj-01", "val-xproj-independent-01"} else "research_0p75"
               elif cancel_match is not None:
                   command_mode = "cancel_run"
                   target_run_id = cancel_match.group(1)
@@ -280,7 +280,7 @@ jobs:
           "PUB_RE_NATIVE_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
           if ($env:PUB_RE_COMMAND_MODE -in @("research_0p75", "research_t352", "research_quill_readonly")) {
-            if ($env:PUB_RE_RESEARCH_ID -notin @("paragraph-line-spacing-0p75", "paragraph-line-spacing-0p75-mixed", "val-xproj-01", "quill-story-readonly-oracle-02")) {
+            if ($env:PUB_RE_RESEARCH_ID -notin @("paragraph-line-spacing-0p75", "paragraph-line-spacing-0p75-mixed", "val-xproj-01", "val-xproj-independent-01", "quill-story-readonly-oracle-02")) {
               throw "unsupported bounded research id"
             }
             $researchOutput = Join-Path $output "research-output"
@@ -1148,7 +1148,11 @@ jobs:
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
-          & tools/windows/run_t352_native.ps1 -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT
+          if ($env:PUB_RE_RESEARCH_ID -eq "val-xproj-independent-01") {
+            & tools/windows/run_t352_independent_native.ps1 -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT
+          } else {
+            & tools/windows/run_t352_native.ps1 -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT
+          }
           if (-not $?) { throw "T352 native experiment failed" }
           $result = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\t352-native-observations.json"
           if (-not (Test-Path -LiteralPath $result -PathType Leaf)) {

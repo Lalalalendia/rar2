@@ -526,6 +526,203 @@ fn inspect_projections(path: &Path) -> Result<Value> {
     }))
 }
 
+fn prepare_independent(
+    base: &Path,
+    census_path: &Path,
+    shape_id: u32,
+    output: &Path,
+) -> Result<()> {
+    if output.exists() {
+        bail!("independent T352 output directory already exists");
+    }
+    let source_bytes = fs::read(base).context("read independent normalized base")?;
+    if !(50_000..=10_000_000).contains(&source_bytes.len()) {
+        bail!("independent normalized PUB size is outside bounded policy");
+    }
+    let source_sha = sha(&source_bytes);
+    let census: Value = serde_json::from_slice(&fs::read(census_path)?)?;
+    if require_str(&census, "schema")? != "chaptera.t352-independent-identity-first-preflight.v1"
+        || require_str(&census, "source_sha256")? != source_sha
+    {
+        bail!("independent census schema or exact source SHA does not match");
+    }
+    let rows = census
+        .get("rows")
+        .and_then(Value::as_array)
+        .context("missing census rows")?;
+    let matching = rows
+        .iter()
+        .filter(|row| row.get("contents_seq").and_then(Value::as_u64) == Some(u64::from(shape_id)))
+        .collect::<Vec<_>>();
+    let [row] = matching.as_slice() else {
+        bail!("requested independently joined shape does not have exactly one census row");
+    };
+    for flag in [
+        "admitted_independent_target",
+        "unique_join",
+        "both_geometries_consistent",
+        "identity_joined_even_if_extents_differ",
+        "numeric_patchable",
+        "different_from_original_t352_width",
+    ] {
+        if row.get(flag).and_then(Value::as_bool) != Some(true) {
+            bail!("independent shape fails the bounded {flag} condition");
+        }
+    }
+    if require_i64(row, "shape_type")? != 1 {
+        bail!("independent falsifier requires a non-T352 rectangle shape class 1");
+    }
+    let spid = require_i64(row, "spid")?;
+    let width = require_i64(row, "contents_width_emu")?;
+    let anchor_width = require_i64(row, "anchor_width_emu")?;
+    let anchor_xe = require_i64(row, "anchor_xe_emu")?;
+    if width <= 0 || width != anchor_width || width == BASE_WIDTH_EMU {
+        bail!("independent width fails baseline equality/novelty gate");
+    }
+    let new_width = width
+        .checked_add(DELTA_EMU)
+        .context("width delta overflow")?;
+    let new_xe = anchor_xe
+        .checked_add(DELTA_EMU)
+        .context("XE delta overflow")?;
+    let xe_old = i32::try_from(anchor_xe).context("XE not signed i32")?;
+    let xe_new = i32::try_from(new_xe).context("XE + delta not signed i32")?;
+    let cw_offset = u64::try_from(require_i64(row, "width_value_offset_in_contents")?)?;
+    let xe_tag_offset = u64::try_from(require_i64(row, "xe_tagged_field_offset_in_escher")?)?;
+    let xe_offset = xe_tag_offset
+        .checked_add(2)
+        .context("XE value offset overflow")?;
+    let cw = Patch {
+        span: Span {
+            stream: "/Contents".to_owned(),
+            offset: cw_offset,
+            len: 4,
+        },
+        expected: uint32_bytes(width)?,
+        replacement: uint32_bytes(new_width)?,
+    };
+    let ex = Patch {
+        span: Span {
+            stream: "/Escher/EscherStm".to_owned(),
+            offset: xe_offset,
+            len: 4,
+        },
+        expected: xe_old.to_le_bytes(),
+        replacement: xe_new.to_le_bytes(),
+    };
+    if cw.expected == cw.replacement || ex.expected == ex.replacement {
+        bail!("independent exact-range patch would be a no-op");
+    }
+    let baseline = all_streams(base)?;
+    if baseline.len() < 2 {
+        bail!("independent PUB lacks the required complete CFB inventory");
+    }
+    for patch in [&cw, &ex] {
+        let bytes = baseline
+            .get(&patch.span.stream)
+            .context("patch stream missing")?;
+        let start = usize::try_from(patch.span.offset)?;
+        if bytes.get(start..start.saturating_add(4)) != Some(patch.expected.as_slice()) {
+            bail!("census scalar span is not bound to current normalized CFB bytes");
+        }
+    }
+    // Prove the exact wire ID tag, not just a plausible signed XE value.
+    let escher = baseline
+        .get("/Escher/EscherStm")
+        .context("Escher not found")?;
+    let tag_start = usize::try_from(xe_tag_offset)?;
+    if escher.get(tag_start..tag_start.saturating_add(2))
+        != Some(0x2003u16.to_le_bytes().as_slice())
+    {
+        bail!("selected Escher field tag is not XE 0x2003");
+    }
+
+    fs::create_dir_all(output)?;
+    let mut arms = Vec::new();
+    for (name, contents_change, escher_change) in [
+        ("control", false, false),
+        ("both_consistent", true, true),
+        ("contents_only", true, false),
+        ("escher_only", false, true),
+    ] {
+        let arm = output.join(format!("{name}.pub"));
+        fs::copy(base, &arm)?;
+        if contents_change {
+            patch_one(&arm, &cw)?;
+        }
+        if escher_change {
+            patch_one(&arm, &ex)?;
+        }
+        let next = all_streams(&arm)?;
+        if baseline.keys().collect::<Vec<_>>() != next.keys().collect::<Vec<_>>() {
+            bail!("independent patch unexpectedly changed logical CFB stream topology");
+        }
+        let mut changed = Vec::new();
+        for (path, bytes) in &baseline {
+            let next_bytes = next
+                .get(path)
+                .context("missing stream after exact-range mutation")?;
+            let offsets = changed_offsets(bytes, next_bytes)?;
+            if offsets.is_empty() {
+                continue;
+            }
+            let planned = if contents_change && path == "/Contents" {
+                Some(&cw)
+            } else if escher_change && path == "/Escher/EscherStm" {
+                Some(&ex)
+            } else {
+                None
+            }
+            .context("unplanned stream mutated by independent patch")?;
+            let start = usize::try_from(planned.span.offset)?;
+            if offsets
+                .iter()
+                .any(|offset| *offset < start || *offset >= start + 4)
+            {
+                bail!("independent patch changed bytes outside exact planned scalar range");
+            }
+            changed.push(json!({
+                "stream": path,
+                "sha256_before": sha(bytes),
+                "sha256_after": sha(next_bytes),
+                "value_offset": start,
+                "changed_byte_count": offsets.len()
+            }));
+        }
+        if changed.len() != usize::from(contents_change) + usize::from(escher_change) {
+            bail!("independent arm does not have precisely the intended changed streams");
+        }
+        arms.push(json!({
+            "arm": name,
+            "file_sha256": sha(&fs::read(&arm)?),
+            "changed_streams": changed
+        }));
+    }
+    if sha(&fs::read(base)?) != source_sha {
+        bail!("immutable independent normalized input was changed during experiment");
+    }
+    write_json(
+        &output.join("t352-independent-patch-receipt.json"),
+        &json!({
+            "schema": "chaptera.t352-independent-four-arm-patch.v1",
+            "source_sha256": source_sha,
+            "source_length": source_bytes.len(),
+            "contents_shape_id": shape_id,
+            "spid": spid,
+            "shape_type": 1,
+            "width_before_emu": width,
+            "width_after_emu": new_width,
+            "xe_before_emu": anchor_xe,
+            "xe_after_emu": new_xe,
+            "delta_emu": DELTA_EMU,
+            "source_mutated": false,
+            "arms": arms,
+            "native_result": "not_executed"
+        }),
+    )?;
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args: Vec<_> = env::args_os().skip(1).collect();
     let words: Vec<String> = args
@@ -533,6 +730,12 @@ fn main() -> Result<()> {
         .map(|s| s.to_string_lossy().into_owned())
         .collect();
     match words.as_slice() {
+        [command, base, census, id, output] if command == "prepare-independent" => {
+            let id = id
+                .parse::<u32>()
+                .context("independent Contents shape id must be u32")?;
+            prepare_independent(Path::new(base), Path::new(census), id, Path::new(output))
+        }
         [command, base, receipt, output] if command == "prepare" => {
             prepare(Path::new(base), Path::new(receipt), Path::new(output))
         }
@@ -543,7 +746,7 @@ fn main() -> Result<()> {
             write_json(Path::new(output), &inspect_projections(Path::new(source))?)
         }
         _ => bail!(
-            "usage: val_xproj_patch prepare BASE.pub STRUCTURAL.json NEW_DIR | fingerprint FILE.pub OUT.json | inspect FILE.pub OUT.json"
+            "usage: val_xproj_patch prepare BASE.pub STRUCTURAL.json NEW_DIR | fingerprint FILE.pub OUT.json | inspect FILE.pub OUT.json | prepare-independent BASE.pub CENSUS.json SHAPE_ID NEW_DIR"
         ),
     }
 }
@@ -683,6 +886,102 @@ mod tests {
         assert_eq!(
             sha(&fs::read(&source).unwrap()),
             receipt["source_sha256"].as_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn independent_type1_arms_are_bound_to_unique_census_and_exact_stream_spans() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("normalized.pub");
+        let census_path = tmp.path().join("census.json");
+        let arms = tmp.path().join("arms");
+        let width = 2_289_185i64;
+        let xe = 3_144_900i64;
+        let mut cfb = cfb::create(&source).unwrap();
+        cfb.create_storage("/Escher").unwrap();
+        let mut contents = vec![0x12u8; 60_000];
+        contents[16..20].copy_from_slice(&uint32_bytes(width).unwrap());
+        cfb.create_stream("/Contents")
+            .unwrap()
+            .write_all(&contents)
+            .unwrap();
+        let mut escher = vec![0x48u8; 2048];
+        escher[8..10].copy_from_slice(&0x2003u16.to_le_bytes());
+        escher[10..14].copy_from_slice(&(xe as i32).to_le_bytes());
+        cfb.create_stream("/Escher/EscherStm")
+            .unwrap()
+            .write_all(&escher)
+            .unwrap();
+        drop(cfb);
+
+        let original_sha = sha(&fs::read(&source).unwrap());
+        let census = json!({
+            "schema":"chaptera.t352-independent-identity-first-preflight.v1",
+            "source_sha256": original_sha,
+            "rows":[{
+                "contents_seq": 305,
+                "spid": 1035,
+                "shape_type": 1,
+                "admitted_independent_target": true,
+                "unique_join": true,
+                "both_geometries_consistent": true,
+                "identity_joined_even_if_extents_differ": true,
+                "numeric_patchable": true,
+                "different_from_original_t352_width": true,
+                "contents_width_emu": width,
+                "anchor_width_emu": width,
+                "anchor_xe_emu": xe,
+                "width_value_offset_in_contents": 16,
+                "xe_tagged_field_offset_in_escher": 8
+            }]
+        });
+        write_json(&census_path, &census).unwrap();
+        prepare_independent(&source, &census_path, 305, &arms).unwrap();
+        assert_eq!(sha(&fs::read(&source).unwrap()), original_sha);
+        let before = all_streams(&source).unwrap();
+        for (name, contents_change, escher_change) in [
+            ("control", false, false),
+            ("both_consistent", true, true),
+            ("contents_only", true, false),
+            ("escher_only", false, true),
+        ] {
+            let changed = all_streams(&arms.join(format!("{name}.pub"))).unwrap();
+            assert_eq!(
+                before.keys().collect::<Vec<_>>(),
+                changed.keys().collect::<Vec<_>>()
+            );
+            for (stream_name, bytes) in &before {
+                let offsets = changed_offsets(bytes, &changed[stream_name]).unwrap();
+                let expected = if stream_name == "/Contents" && contents_change {
+                    changed_offsets(
+                        &uint32_bytes(width).unwrap(),
+                        &uint32_bytes(width + DELTA_EMU).unwrap(),
+                    )
+                    .unwrap()
+                    .iter()
+                    .map(|i| i + 16)
+                    .collect::<Vec<_>>()
+                } else if stream_name == "/Escher/EscherStm" && escher_change {
+                    changed_offsets(
+                        &(xe as i32).to_le_bytes(),
+                        &((xe + DELTA_EMU) as i32).to_le_bytes(),
+                    )
+                    .unwrap()
+                    .iter()
+                    .map(|i| i + 10)
+                    .collect::<Vec<_>>()
+                } else {
+                    vec![]
+                };
+                assert_eq!(
+                    offsets, expected,
+                    "unplanned source-stream mutation in {name}"
+                );
+            }
+        }
+        assert!(
+            prepare_independent(&source, &census_path, 306, &tmp.path().join("wrong-id")).is_err()
         );
     }
 }
