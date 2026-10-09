@@ -1136,12 +1136,31 @@ impl EditorSession {
 
     /// Duplicate one externally admitted blank page without object/Story cloning.
     /// Customer membership comes only from the source-qualified caller and active history.
-    pub fn duplicate_blank_page_v1(
-        &mut self,
-        source_qualified_page_ids: Vec<PageId>,
+    /// Read-only admission for the exact canonical DuplicateBlank source contract.
+    /// A temporary identity validates the planner without creating a revision.
+    pub fn can_duplicate_blank_page_v1(
+        &self,
+        source_qualified_page_ids: &[PageId],
+        source_page_id: PageId,
+    ) -> bool {
+        let identity = AuthoredPageIdentityV1 {
+            page_id: PageId::from_canonical(pub_model::new_editor_canonical_id()),
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        self.plan_duplicate_blank_page_from_session_v1(
+            source_qualified_page_ids,
+            source_page_id,
+            identity,
+        )
+        .is_ok()
+    }
+
+    fn plan_duplicate_blank_page_from_session_v1(
+        &self,
+        source_qualified_page_ids: &[PageId],
         source_page_id: PageId,
         destination_identity: AuthoredPageIdentityV1,
-    ) -> Result<EditOperation, EditorError> {
+    ) -> Result<DuplicateBlankPageTransitionV1, EditorError> {
         self.validate_source_identity()?;
         if self.project_identity.is_none() {
             return Err(EditorError::PageDuplicateUnsupported {
@@ -1173,9 +1192,8 @@ impl EditorSession {
                 message: "source page owns resolved or authored content".to_owned(),
             });
         }
-        let customer_page_ids =
-            self.effective_customer_page_order_v1(&source_qualified_page_ids)?;
-        let transition = plan_duplicate_blank_page_v1(
+        let customer_page_ids = self.effective_customer_page_order_v1(source_qualified_page_ids)?;
+        plan_duplicate_blank_page_v1(
             self.graph.document.id,
             &self.graph.document.pages,
             &self.graph.pages,
@@ -1183,7 +1201,20 @@ impl EditorSession {
             source_page_id,
             destination_identity,
         )
-        .map_err(duplicate_blank_page_error_to_editor_v1)?;
+        .map_err(duplicate_blank_page_error_to_editor_v1)
+    }
+
+    pub fn duplicate_blank_page_v1(
+        &mut self,
+        source_qualified_page_ids: Vec<PageId>,
+        source_page_id: PageId,
+        destination_identity: AuthoredPageIdentityV1,
+    ) -> Result<EditOperation, EditorError> {
+        let transition = self.plan_duplicate_blank_page_from_session_v1(
+            &source_qualified_page_ids,
+            source_page_id,
+            destination_identity,
+        )?;
         self.consume_canonical_duplicate_blank_page_v1(transition)
     }
 
@@ -1782,6 +1813,91 @@ mod authored_page_append_tests {
             .delete_blank_authored_page_v1(vec![source], identity.page_id)
             .expect("delete after content removed");
         assert!(!session.can_delete_blank_authored_page_v1(&[source], identity.page_id));
+    }
+
+    #[test]
+    fn duplicate_blank_capability_uses_canonical_source_admission_without_revision() {
+        let source = page_id("22222222-2222-4222-8222-222222222222");
+        let mut session = EditorSession::new(source_graph(vec![source])).expect("session");
+        let original_pages = session.graph().document.pages.clone();
+        let operations_before = session.operations().len();
+
+        assert!(session.can_duplicate_blank_page_v1(&[source], source));
+        assert!(!session.can_duplicate_blank_page_v1(&[], source));
+        assert_eq!(session.operations().len(), operations_before);
+        assert_eq!(session.graph().document.pages, original_pages);
+
+        let child = NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        session
+            .graph
+            .pages
+            .get_mut(&source)
+            .expect("blank source Page")
+            .children
+            .push(child);
+        assert!(
+            !session.can_duplicate_blank_page_v1(&[source], source),
+            "nonblank source Page must fail before UI exposure"
+        );
+        session
+            .graph
+            .pages
+            .get_mut(&source)
+            .expect("source Page")
+            .children
+            .clear();
+        assert!(session.can_duplicate_blank_page_v1(&[source], source));
+        assert_eq!(session.operations().len(), operations_before);
+        assert_eq!(session.graph().document.pages, original_pages);
+    }
+
+    #[test]
+    fn append_then_duplicate_reopen_allows_exact_delete_blank() {
+        let source = page_id("22222222-2222-4222-8222-222222222222");
+        let appended = authored_identity();
+        let duplicated = AuthoredPageIdentityV1 {
+            page_id: page_id("01890f4f-1234-7abc-8def-0123456789ac"),
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        let graph = source_graph(vec![source]);
+        let mut session = EditorSession::new(graph.clone()).expect("session");
+        session
+            .append_blank_page_v1(
+                vec![source],
+                appended,
+                Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                None,
+                None,
+            )
+            .expect("append blank source");
+        session
+            .duplicate_blank_page_v1(vec![source], appended.page_id, duplicated)
+            .expect("duplicate appended blank customer page");
+        session.undo().expect("undo duplicate");
+        session.redo().expect("redo same PageId");
+        let project = session.project();
+        let mut reopened = EditorSession::new(graph).expect("fresh Editor");
+        reopened
+            .apply_project(&project)
+            .expect("replay two lifecycle operations");
+        assert_eq!(reopened.operations().len(), 2);
+        assert_eq!(
+            reopened
+                .effective_customer_page_order_v1(&[source])
+                .expect("canonical customer order"),
+            vec![source, appended.page_id, duplicated.page_id]
+        );
+        assert!(
+            reopened.can_delete_blank_authored_page_v1(&[source], duplicated.page_id),
+            "duplicate of appended blank page must remain DeleteBlank-admissible after project replay"
+        );
+        reopened
+            .delete_blank_authored_page_v1(vec![source], duplicated.page_id)
+            .expect("delete exact duplicate after replay");
+        assert_eq!(
+            reopened.graph().document.pages,
+            vec![source, appended.page_id]
+        );
     }
 
     #[test]

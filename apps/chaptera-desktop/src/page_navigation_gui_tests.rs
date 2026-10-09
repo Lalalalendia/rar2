@@ -1118,3 +1118,429 @@ fn gui_delete_empty_authored_page_projects_membership_and_replays_on_real_pub() 
     );
     let _ = fs::remove_dir_all(root);
 }
+
+#[cfg(not(feature = "reader-only"))]
+#[test]
+#[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
+fn gui_duplicate_blank_page_projects_membership_and_replays_on_real_pub() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let fixture_source = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
+        .map(PathBuf::from)
+        .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
+    let original = fs::read(&fixture_source).expect("read pinned SampleNewsletter fixture");
+    let root = std::env::temp_dir().join(format!(
+        "chaptera-gui-page-duplicate-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create page-duplicate GUI temp directory");
+    let fixture = root.join("SampleNewsletter.pub");
+    fs::write(&fixture, &original).expect("write page-duplicate GUI PUB fixture");
+
+    let fixture_for_app = fixture.clone();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 820.0))
+        .with_pixels_per_point(1.0)
+        .with_max_steps(120)
+        .build_eframe(move |cc| {
+            fallback_font::install(&cc.egui_ctx)
+                .expect("pinned Chaptera fallback font resource must validate");
+            ViewerApp::new_with_storage(Some(fixture_for_app), cc.storage)
+        });
+    harness.step();
+    harness.step();
+
+    let (source_order, operations_before) = {
+        let app = harness.state();
+        let visual = app.visual.as_ref().expect("visual loaded");
+        let source_order = visual
+            .document
+            .pages
+            .iter()
+            .map(|page| page.id)
+            .collect::<Vec<_>>();
+        assert!(!source_order.is_empty(), "fixture must have customer pages");
+        assert_eq!(app.source_customer_page_ids, source_order);
+        (
+            source_order,
+            app.editor
+                .as_ref()
+                .expect("editor loaded")
+                .operations()
+                .len(),
+        )
+    };
+
+    harness.get_by_label("Add Page at End").click();
+    harness.step();
+    harness.step();
+    let (source_page_id, source_page_before) = {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("editor after Add Page");
+        let source_id = match editor.operations().last() {
+            Some(pub_editor::EditOperation::AppendBlankPageV1 { transition }) => {
+                transition.identity.page_id
+            }
+            other => panic!("expected canonical AppendBlankPageV1, got {other:?}"),
+        };
+        let page = editor.graph().pages[&source_id].clone();
+        (source_id, page)
+    };
+    assert!(
+        !harness.get_by_label("Duplicate Blank Page").is_disabled(),
+        "new authored blank page must admit duplication"
+    );
+
+    // Seed real authored content; empty-page capability must reject before click.
+    {
+        let app = harness.state_mut();
+        let size = source_page_before.size;
+        let node_id = pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        app.editor
+            .as_mut()
+            .expect("editor")
+            .create_shape(
+                node_id,
+                source_page_id,
+                pub_editor::RectEmu::new(
+                    pub_editor::LengthEmu::new(size.width.get() / 5),
+                    pub_editor::LengthEmu::new(size.height.get() / 5),
+                    pub_editor::LengthEmu::new(size.width.get() / 4),
+                    pub_editor::LengthEmu::new(size.height.get() / 4),
+                ),
+                rectangle_creation::chaptera_rectangle_paint_v1(),
+            )
+            .expect("create canonical Rectangle");
+        app.finish_authoring_change("Seeded authored content for DuplicateBlank negative.");
+    }
+    harness.step();
+    assert!(
+        harness.get_by_label("Duplicate Blank Page").is_disabled(),
+        "content-bearing Page must not advertise Duplicate Blank Page"
+    );
+    assert_eq!(
+        harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len(),
+        operations_before + 2
+    );
+
+    harness
+        .get_all_by_label("Undo")
+        .next()
+        .expect("Undo canonical Rectangle")
+        .click();
+    harness.step();
+    harness.step();
+    assert!(
+        !harness.get_by_label("Duplicate Blank Page").is_disabled(),
+        "Undo of authored content restores DuplicateBlank admission"
+    );
+
+    let source_hash_before = harness
+        .state()
+        .visual
+        .as_ref()
+        .expect("visual loaded")
+        .document
+        .source
+        .source_hash;
+    let mismatched_source_hash =
+        if source_hash_before == pub_editor::Sha256Digest::from_bytes([0x5a; 32]) {
+            pub_editor::Sha256Digest::from_bytes([0xa5; 32])
+        } else {
+            pub_editor::Sha256Digest::from_bytes([0x5a; 32])
+        };
+    harness
+        .state_mut()
+        .visual
+        .as_mut()
+        .expect("visual")
+        .document
+        .source
+        .source_hash = mismatched_source_hash;
+    harness.get_by_label("Duplicate Blank Page").click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        let visual = app
+            .visual
+            .as_ref()
+            .expect("visual after rejected DuplicateBlank");
+        assert_eq!(
+            app.editor.as_ref().expect("editor").operations().len(),
+            operations_before + 1,
+            "failed Viewer preflight must consume zero Duplicate revisions"
+        );
+        let mut expected_order = source_order.clone();
+        expected_order.push(source_page_id);
+        assert_eq!(
+            visual
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
+            expected_order,
+            "failed preflight must not alter Viewer membership"
+        );
+        assert!(
+            app.edit_status
+                .as_deref()
+                .is_some_and(|status| status.contains("before commit")),
+            "failed projection must report a transaction rejection"
+        );
+    }
+    harness
+        .state_mut()
+        .visual
+        .as_mut()
+        .expect("visual")
+        .document
+        .source
+        .source_hash = source_hash_before;
+    harness.step();
+
+    harness.get_by_label("Duplicate Blank Page").click();
+    harness.step();
+    harness.step();
+    let duplicate_id = {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("editor after duplicate");
+        assert_eq!(editor.operations().len(), operations_before + 2);
+        let duplicate_id = match editor.operations().last() {
+            Some(pub_editor::EditOperation::DuplicateBlankPageV1 { transition }) => {
+                assert_eq!(transition.source_page_id, source_page_id);
+                assert_ne!(transition.destination_identity.page_id, source_page_id);
+                transition.destination_identity.page_id
+            }
+            other => panic!("expected exactly one DuplicateBlankPageV1, got {other:?}"),
+        };
+        let source = editor
+            .graph()
+            .pages
+            .get(&source_page_id)
+            .expect("source page");
+        let duplicate = editor
+            .graph()
+            .pages
+            .get(&duplicate_id)
+            .expect("duplicate page");
+        assert_eq!(
+            source, &source_page_before,
+            "source Page state must remain exact"
+        );
+        assert_eq!(duplicate.size, source.size);
+        assert_eq!(duplicate.bleed, source.bleed);
+        assert_eq!(duplicate.margins, source.margins);
+        assert!(duplicate.children.is_empty() && duplicate.extensions.is_empty());
+        let mut expected_order = source_order.clone();
+        expected_order.push(source_page_id);
+        expected_order.push(duplicate_id);
+        assert_eq!(
+            editor
+                .effective_customer_page_order_v1(&source_order)
+                .expect("canonical customer order"),
+            expected_order
+        );
+        let visual = app.visual.as_ref().expect("visual after duplicate");
+        assert_eq!(
+            visual
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
+            expected_order
+        );
+        assert_eq!(
+            visual.document.pages[app.selected_page].id, duplicate_id,
+            "accepted duplicate must select exact new PageId"
+        );
+        assert!(
+            visual
+                .scene
+                .surfaces
+                .iter()
+                .any(|surface| surface.origin == duplicate_id),
+            "new blank page must have a Viewer surface"
+        );
+        duplicate_id
+    };
+    assert!(
+        !harness.get_by_label("Delete Empty Page").is_disabled(),
+        "newly duplicated blank page must be deletable"
+    );
+
+    harness
+        .get_all_by_label("Undo")
+        .next()
+        .expect("Undo duplicate")
+        .click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        assert_eq!(
+            app.editor.as_ref().expect("editor").operations().len(),
+            operations_before + 1
+        );
+        assert!(
+            app.visual
+                .as_ref()
+                .expect("visual")
+                .document
+                .pages
+                .iter()
+                .all(|page| page.id != duplicate_id),
+            "Undo removes exactly the duplicated membership"
+        );
+    }
+    harness
+        .get_all_by_label("Redo")
+        .next()
+        .expect("Redo duplicate")
+        .click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        assert_eq!(
+            app.editor.as_ref().expect("editor").operations().len(),
+            operations_before + 2
+        );
+        assert!(
+            app.visual
+                .as_ref()
+                .expect("visual")
+                .document
+                .pages
+                .iter()
+                .any(|page| page.id == duplicate_id),
+            "Redo restores the same PageId"
+        );
+    }
+
+    harness.get_by_label("Save Project").click();
+    harness.step();
+    harness.step();
+    harness.step();
+    harness.get_by_label("Reopen Project").click();
+    harness.step();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("fresh reopened editor");
+        assert_eq!(app.source_customer_page_ids, source_order);
+        assert_eq!(editor.operations().len(), operations_before + 2);
+        assert!(matches!(
+            editor.operations().last(),
+            Some(pub_editor::EditOperation::DuplicateBlankPageV1 { transition })
+                if transition.destination_identity.page_id == duplicate_id
+        ));
+        let mut expected_order = source_order.clone();
+        expected_order.push(source_page_id);
+        expected_order.push(duplicate_id);
+        assert_eq!(
+            app.visual
+                .as_ref()
+                .expect("fresh reopened Viewer")
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
+            expected_order
+        );
+    }
+    // Page thumbnails beyond the visible sidebar viewport are not a reliable
+    // pointer target in a headless GUI. Navigate through real page shortcuts,
+    // then assert the exact canonical PageId before testing Delete.
+    {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("reopened Editor");
+        let source_customer_page_ids = &app.source_customer_page_ids;
+        let mut delete_candidate = editor.clone();
+        let delete_rejection = delete_candidate
+            .delete_blank_authored_page_v1(source_customer_page_ids.clone(), duplicate_id)
+            .err();
+        assert!(
+            editor.can_delete_blank_authored_page_v1(source_customer_page_ids, duplicate_id),
+            "core DeleteBlank admission rejects replayed duplicate: {delete_rejection:?}"
+        );
+    }
+    let (current_index, target_index) = {
+        let app = harness.state();
+        let pages = &app.visual.as_ref().expect("reopened Viewer").document.pages;
+        let target = pages
+            .iter()
+            .position(|page| page.id == duplicate_id)
+            .expect("replayed destination remains in Viewer membership");
+        (app.selected_page, target)
+    };
+    if current_index < target_index {
+        for _ in current_index..target_index {
+            harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::PageDown);
+            harness.step();
+        }
+    } else {
+        for _ in target_index..current_index {
+            harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::PageUp);
+            harness.step();
+        }
+    }
+    assert_eq!(
+        harness
+            .state()
+            .visual
+            .as_ref()
+            .expect("visual after Page navigation")
+            .document
+            .pages[harness.state().selected_page]
+            .id,
+        duplicate_id,
+        "GUI must focus duplicated PageId before DeleteBlank command"
+    );
+    assert!(
+        !harness.get_by_label("Delete Empty Page").is_disabled(),
+        "duplicate must participate in merged DeleteBlank lifecycle"
+    );
+    harness.get_by_label("Delete Empty Page").click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        let editor = app
+            .editor
+            .as_ref()
+            .expect("editor after deleting duplicate");
+        assert_eq!(editor.operations().len(), operations_before + 3);
+        assert!(matches!(
+            editor.operations().last(),
+            Some(pub_editor::EditOperation::DeleteBlankAuthoredPageV1 { transition })
+                if transition.identity.page_id == duplicate_id
+        ));
+        assert!(
+            app.visual
+                .as_ref()
+                .expect("visual after deleting duplicate")
+                .document
+                .pages
+                .iter()
+                .all(|page| page.id != duplicate_id)
+        );
+    }
+    assert_eq!(
+        fs::read(&fixture).expect("re-read source PUB"),
+        original,
+        "bounded Desktop DuplicateBlank/DeleteBlank never mutates source PUB bytes"
+    );
+    let _ = fs::remove_dir_all(root);
+}
