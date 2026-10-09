@@ -160,9 +160,18 @@ mod tests {
 
     #[test]
     fn market_specific_baseline_copy_is_preserved() {
-        assert_eq!(control_copy(MarketProfile::Us).primary, "Support development");
-        assert_eq!(control_copy(MarketProfile::Uk).primary, "Support development");
-        assert_eq!(control_copy(MarketProfile::Ru).primary, "Поддержать разработку");
+        assert_eq!(
+            control_copy(MarketProfile::Us).primary,
+            "Support development"
+        );
+        assert_eq!(
+            control_copy(MarketProfile::Uk).primary,
+            "Support development"
+        );
+        assert_eq!(
+            control_copy(MarketProfile::Ru).primary,
+            "Поддержать разработку"
+        );
         assert!(!control_copy(MarketProfile::Ru).body.contains("пожертв"));
         assert!(!control_copy(MarketProfile::Ru).body.contains("донат"));
     }
