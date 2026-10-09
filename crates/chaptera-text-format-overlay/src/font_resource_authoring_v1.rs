@@ -194,7 +194,6 @@ mod tests {
 
     const DOC: &str = "11111111-1111-4111-8111-111111111111";
     const RESOURCE: &str = "82222222-2222-4222-8222-222222222222";
-    const SHA: &str = "c0396b6bad1e5e631a9d2f1a05e821849a3099851f01788a5fd05c0cb53d6ae23";
 
     fn fixture_state() -> TextFormatOverlayStateV1 {
         build_text_format_overlay_state_v1(
@@ -236,7 +235,10 @@ mod tests {
         }
     }
 
-    fn candidate(scope: &FontAuthoringScopeV1, id: &FontResourceIdentityV1) -> FontReplacementCandidateV1 {
+    fn candidate(
+        scope: &FontAuthoringScopeV1,
+        id: &FontResourceIdentityV1,
+    ) -> FontReplacementCandidateV1 {
         FontReplacementCandidateV1 {
             protocol_version: FONT_CANDIDATE_PROTOCOL_V1.to_owned(),
             document_id: scope.document_id.clone(),
@@ -259,36 +261,66 @@ mod tests {
         let context = scope();
         let request = candidate(&context, &id);
         let trusted = ServerFontResourceV1 {
-            identity: &id, full_font_bytes: bytes, face_count: 1,
-            is_full_resource: true, authoring_admitted: true,
+            identity: &id,
+            full_font_bytes: bytes,
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: true,
         };
         let source = fixture_state();
         let original_hash = state_hash_v1(&source).unwrap();
         let receipt = set_admitted_font_resource_v1(
-            &source, 1, 5, &request, &context, &trusted, &original_hash,
-        ).unwrap();
+            &source,
+            1,
+            5,
+            &request,
+            &context,
+            &trusted,
+            &original_hash,
+        )
+        .unwrap();
         assert_eq!(receipt.after_state.overrides.len(), 1);
-        assert_eq!(receipt.after_state.overrides[0].property, FormatPropertyV1::FontResource);
+        assert_eq!(
+            receipt.after_state.overrides[0].property,
+            FormatPropertyV1::FontResource
+        );
         assert_eq!(
             receipt.after_state.overrides[0].value,
             FormatValueV1::FontResource(id),
         );
         assert!(receipt.requires_authoritative_relayout);
         assert_eq!(undo_text_format_operation_v1(&receipt), source);
-        assert_eq!(replay_text_format_operation_v1(&receipt).unwrap(), receipt.after_state);
+        assert_eq!(
+            replay_text_format_operation_v1(&receipt).unwrap(),
+            receipt.after_state
+        );
         let after = receipt.after_state;
-        let effective = effective_property_segments_v1(
-            &after, FormatPropertyV1::FontResource, 1, 5
-        ).unwrap();
-        assert_eq!(effective[0].source, EffectivePropertySourceV1::ChapteraOverride);
+        let effective =
+            effective_property_segments_v1(&after, FormatPropertyV1::FontResource, 1, 5).unwrap();
+        assert_eq!(
+            effective[0].source,
+            EffectivePropertySourceV1::ChapteraOverride
+        );
         let cleared = clear_text_format_property_override_v1(
-            &after, 1, 5, FormatPropertyV1::FontResource, &state_hash_v1(&after).unwrap()
-        ).unwrap();
+            &after,
+            1,
+            5,
+            FormatPropertyV1::FontResource,
+            &state_hash_v1(&after).unwrap(),
+        )
+        .unwrap();
         assert_eq!(cleared.after_state, source);
         let revealed = effective_property_segments_v1(
-            &cleared.after_state, FormatPropertyV1::FontResource, 1, 5
-        ).unwrap();
-        assert_eq!(revealed[0].value, FormatValueV1::String("font:source-unavailable".to_owned()));
+            &cleared.after_state,
+            FormatPropertyV1::FontResource,
+            1,
+            5,
+        )
+        .unwrap();
+        assert_eq!(
+            revealed[0].value,
+            FormatValueV1::String("font:source-unavailable".to_owned())
+        );
         assert_eq!(revealed[0].source, EffectivePropertySourceV1::Base);
     }
 
@@ -298,10 +330,19 @@ mod tests {
         let id = identity(bytes);
         let source = fixture_state();
         let result = set_text_format_property_v1(
-            &source, 0, 6, FormatPropertyV1::FontResource,
-            FormatValueV1::FontResource(id), &state_hash_v1(&source).unwrap(),
-        ).unwrap_err();
-        assert!(result.to_string().contains("independent server resource admission"));
+            &source,
+            0,
+            6,
+            FormatPropertyV1::FontResource,
+            FormatValueV1::FontResource(id),
+            &state_hash_v1(&source).unwrap(),
+        )
+        .unwrap_err();
+        assert!(
+            result
+                .to_string()
+                .contains("independent server resource admission")
+        );
     }
 
     #[test]
@@ -310,22 +351,39 @@ mod tests {
         let id = identity(bytes);
         let context = scope();
         let trusted = ServerFontResourceV1 {
-            identity: &id, full_font_bytes: bytes, face_count: 1,
-            is_full_resource: true, authoring_admitted: true,
+            identity: &id,
+            full_font_bytes: bytes,
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: true,
         };
         let source = fixture_state();
         let mut request = candidate(&context, &id);
         request.expected_revision_id = "sha256:".to_owned() + &"9".repeat(64);
         let e = set_admitted_font_resource_v1(
-            &source, 0, 6, &request, &context, &trusted, &state_hash_v1(&source).unwrap(),
-        ).unwrap_err();
+            &source,
+            0,
+            6,
+            &request,
+            &context,
+            &trusted,
+            &state_hash_v1(&source).unwrap(),
+        )
+        .unwrap_err();
         assert!(e.to_string().contains("stale"));
 
         let mut request = candidate(&context, &id);
         request.font_fingerprint = "sha256:".to_owned() + &"a".repeat(64);
         let e = set_admitted_font_resource_v1(
-            &source, 0, 6, &request, &context, &trusted, &state_hash_v1(&source).unwrap(),
-        ).unwrap_err();
+            &source,
+            0,
+            6,
+            &request,
+            &context,
+            &trusted,
+            &state_hash_v1(&source).unwrap(),
+        )
+        .unwrap_err();
         assert!(e.to_string().contains("differs"));
     }
 
@@ -339,20 +397,46 @@ mod tests {
         let original_hash = state_hash_v1(&source).unwrap();
         for (permitted, full_file) in [(false, true), (true, false)] {
             let trusted = ServerFontResourceV1 {
-                identity: &id, full_font_bytes: bytes, face_count: 1,
-                is_full_resource: full_file, authoring_admitted: permitted,
+                identity: &id,
+                full_font_bytes: bytes,
+                face_count: 1,
+                is_full_resource: full_file,
+                authoring_admitted: permitted,
             };
-            assert!(set_admitted_font_resource_v1(
-                &source, 0, 6, &request, &context, &trusted, &original_hash,
-            ).is_err());
+            assert!(
+                set_admitted_font_resource_v1(
+                    &source,
+                    0,
+                    6,
+                    &request,
+                    &context,
+                    &trusted,
+                    &original_hash,
+                )
+                .is_err()
+            );
         }
         let corrupted = ServerFontResourceV1 {
-            identity: &id, full_font_bytes: b"other font", face_count: 1,
-            is_full_resource: true, authoring_admitted: true,
+            identity: &id,
+            full_font_bytes: b"other font",
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: true,
         };
-        assert!(set_admitted_font_resource_v1(
-            &source, 0, 6, &request, &context, &corrupted, &original_hash,
-        ).unwrap_err().to_string().contains("content SHA-256"));
+        assert!(
+            set_admitted_font_resource_v1(
+                &source,
+                0,
+                6,
+                &request,
+                &context,
+                &corrupted,
+                &original_hash,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("content SHA-256")
+        );
     }
 
     #[test]
@@ -362,27 +446,51 @@ mod tests {
         let context = scope();
         let mut request = candidate(&context, &id);
         let trusted = ServerFontResourceV1 {
-            identity: &id, full_font_bytes: bytes, face_count: 1,
-            is_full_resource: true, authoring_admitted: true,
+            identity: &id,
+            full_font_bytes: bytes,
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: true,
         };
         let source = fixture_state();
         let hash = state_hash_v1(&source).unwrap();
         request.face_index = 1;
-        assert!(set_admitted_font_resource_v1(
-            &source, 0, 6, &request, &context, &trusted, &hash,
-        ).is_err());
+        assert!(
+            set_admitted_font_resource_v1(&source, 0, 6, &request, &context, &trusted, &hash,)
+                .is_err()
+        );
 
         let mut request = candidate(&context, &id);
         request.resource_id = "same font name".to_owned();
-        assert!(set_admitted_font_resource_v1(
-            &source, 0, 6, &request, &context, &trusted, &hash,
-        ).is_err());
-        assert!(set_admitted_font_resource_v1(
-            &source, 0, 6, &candidate(&context, &id), &context, &trusted, "stale",
-        ).unwrap_err().to_string().contains("stale"));
-        assert!(crate::set_text_format_property_v1(
-            &source, 1, 5, FormatPropertyV1::Bold, FormatValueV1::FontResource(id), &hash,
-        ).is_err());
+        assert!(
+            set_admitted_font_resource_v1(&source, 0, 6, &request, &context, &trusted, &hash,)
+                .is_err()
+        );
+        assert!(
+            set_admitted_font_resource_v1(
+                &source,
+                0,
+                6,
+                &candidate(&context, &id),
+                &context,
+                &trusted,
+                "stale",
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("stale")
+        );
+        assert!(
+            crate::set_text_format_property_v1(
+                &source,
+                1,
+                5,
+                FormatPropertyV1::Bold,
+                FormatValueV1::FontResource(id),
+                &hash,
+            )
+            .is_err()
+        );
     }
 
     #[test]
