@@ -10,6 +10,7 @@ mod authored_stack_runtime_v1;
 mod create_line_runtime_v1;
 mod create_shape_runtime_v1;
 mod create_table_runtime_v1;
+mod delete_blank_authored_page_v1;
 
 pub use append_blank_page_v1::{
     APPEND_BLANK_PAGE_PROTOCOL_V1, AppendBlankPageErrorV1, AppendBlankPageTransitionV1,
@@ -51,6 +52,13 @@ pub use create_table_runtime_v1::{
     CreateTableRuntimeValidationError, apply_create_table_forward_v1,
     apply_create_table_inverse_v1, build_create_table_plan_v1, rebuild_authored_table_story_v1,
     validate_create_table_runtime_v1,
+};
+
+pub use delete_blank_authored_page_v1::{
+    DELETE_BLANK_AUTHORED_PAGE_PROTOCOL_V1, DeleteBlankAuthoredPageErrorV1,
+    DeleteBlankAuthoredPageTransitionV1, apply_delete_blank_authored_page_forward_v1,
+    apply_delete_blank_authored_page_inverse_v1,
+    delete_blank_authored_page_document_state_id_v1, plan_delete_blank_authored_page_v1,
 };
 
 // Private compatibility for internal module imports only.
