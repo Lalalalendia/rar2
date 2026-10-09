@@ -759,6 +759,25 @@ fn table_border_rect(border: &FixedTableBorder) -> Option<RectEmu> {
     None
 }
 
+fn clip_rect_to_bounds(rect: RectEmu, owner: RectEmu) -> Option<RectEmu> {
+    let rect_right = rect.x.get().checked_add(rect.width.get())?;
+    let rect_bottom = rect.y.get().checked_add(rect.height.get())?;
+    let owner_right = owner.x.get().checked_add(owner.width.get())?;
+    let owner_bottom = owner.y.get().checked_add(owner.height.get())?;
+    let left = rect.x.get().max(owner.x.get());
+    let top = rect.y.get().max(owner.y.get());
+    let right = rect_right.min(owner_right);
+    let bottom = rect_bottom.min(owner_bottom);
+    (right > left && bottom > top).then(|| {
+        RectEmu::new(
+            LengthEmu::new(left),
+            LengthEmu::new(top),
+            LengthEmu::new(right - left),
+            LengthEmu::new(bottom - top),
+        )
+    })
+}
+
 fn append_table_paint(
     content: &mut String,
     node: &ResolvedPhysicalNode,
@@ -790,6 +809,16 @@ fn append_table_paint(
                 severity: PdfDiagnosticSeverity::FidelityWarning,
                 origin: node.origin.into_canonical(),
                 message: "TABLE border must be positive-width axis-aligned geometry".into(),
+            });
+            partial = true;
+            continue;
+        };
+        let Some(bounds) = clip_rect_to_bounds(bounds, node.bounds) else {
+            diagnostics.push(PdfDiagnostic {
+                code: "pdf.table.border_outside_owner".into(),
+                severity: PdfDiagnosticSeverity::FidelityWarning,
+                origin: node.origin.into_canonical(),
+                message: "TABLE border rectangle lies outside TABLE owner bounds".into(),
             });
             partial = true;
             continue;
