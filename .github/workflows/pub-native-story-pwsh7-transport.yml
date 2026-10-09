@@ -191,7 +191,7 @@ jobs:
             -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7/input') `
             -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7/private-candidate') `
             -ChildPowerShell PowerShell7 `
-            -PinnedPwsh7Executable (Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7/portable/pwsh.exe')
+            -PinnedPwsh7Executable (Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7\portable\pwsh.exe')
           if (-not $?) { throw 'matched_writer_candidate_roundtrip_failed' }
       - name: Upload source-safe control receipt only
         if: always()
