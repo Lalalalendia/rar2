@@ -1246,7 +1246,6 @@ impl EditorSession {
         })
     }
 
-
     /// Commit the Page, one Rectangle, and its authored stack as a single
     /// persistent EditOperation. Native Publisher bytes are never rewritten.
     pub fn delete_authored_rectangle_page_v1(
@@ -1268,7 +1267,10 @@ impl EditorSession {
         &mut self,
         expected: DeleteAuthoredRectanglePageTransitionV1,
     ) -> Result<EditOperation, EditorError> {
-        let authored = self.authored_customer_page_ids_v1().into_iter().collect::<BTreeSet<_>>();
+        let authored = self
+            .authored_customer_page_ids_v1()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
         let sources = expected
             .page
             .before_customer_page_ids
@@ -2239,7 +2241,11 @@ mod authored_page_append_tests {
                 crate::AuthoredShapePaintV1 {
                     fill: crate::AuthoredSolidFillV1 {
                         visible: true,
-                        color: crate::Srgb8V1 { r: 255, g: 255, b: 255 },
+                        color: crate::Srgb8V1 {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                        },
                     },
                     stroke: crate::AuthoredSolidStrokeV1 {
                         visible: true,
@@ -2259,7 +2265,10 @@ mod authored_page_append_tests {
         let operation = session
             .delete_authored_rectangle_page_v1(vec![source], identity.page_id)
             .expect("single canonical delete");
-        assert!(matches!(operation, EditOperation::DeleteAuthoredRectanglePageV1 { .. }));
+        assert!(matches!(
+            operation,
+            EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+        ));
         assert_eq!(session.operations().len(), history_before + 1);
         assert_eq!(session.graph().document.pages, vec![source]);
         assert!(!session.graph().pages.contains_key(&identity.page_id));
@@ -2273,7 +2282,9 @@ mod authored_page_append_tests {
         let encoded = serde_json::to_vec(&project).expect("encode v0.29");
         let decoded: EditorProject = serde_json::from_slice(&encoded).expect("decode v0.29");
         let mut reopened = EditorSession::new(base.clone()).expect("fresh");
-        reopened.apply_project(&decoded).expect("exact project replay");
+        reopened
+            .apply_project(&decoded)
+            .expect("exact project replay");
         assert_eq!(reopened.graph(), &deleted_graph);
         assert!(!reopened.authored_shapes.contains_key(&node_id));
         assert_eq!(reopened.operations(), decoded.operations.as_slice());
@@ -2282,7 +2293,10 @@ mod authored_page_append_tests {
         session.undo().expect("single undo");
         assert_eq!(session.graph(), &with_shape);
         assert_eq!(session.authored_shapes.get(&node_id), Some(&shape_before));
-        assert_eq!(session.current_authored_stack_v1(identity.page_id), stack_before);
+        assert_eq!(
+            session.current_authored_stack_v1(identity.page_id),
+            stack_before
+        );
         assert_eq!(session.operations().len(), history_before);
         session.redo().expect("single redo");
         assert_eq!(session.graph(), &deleted_graph);
@@ -2304,18 +2318,23 @@ mod authored_page_append_tests {
         let mut session = EditorSession::new(source_graph(vec![source])).expect("session");
         session
             .append_blank_page_v1(
-                vec![source], identity,
+                vec![source],
+                identity,
                 Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
-                None, None,
+                None,
+                None,
             )
             .expect("append");
         let node_id = NodeId::from_canonical(pub_model::new_editor_canonical_id());
         session
             .create_shape(
-                node_id, identity.page_id,
+                node_id,
+                identity.page_id,
                 RectEmu::new(
-                    LengthEmu::new(100_000), LengthEmu::new(100_000),
-                    LengthEmu::new(200_000), LengthEmu::new(300_000),
+                    LengthEmu::new(100_000),
+                    LengthEmu::new(100_000),
+                    LengthEmu::new(200_000),
+                    LengthEmu::new(300_000),
                 ),
                 crate::AuthoredShapePaintV1 {
                     fill: crate::AuthoredSolidFillV1 {
@@ -2339,9 +2358,11 @@ mod authored_page_append_tests {
         extra.node_id = second;
         session.authored_shapes.insert(second, extra);
         assert!(!session.can_delete_authored_rectangle_page_v1(&[source], identity.page_id));
-        assert!(session
-            .delete_authored_rectangle_page_v1(vec![source], identity.page_id)
-            .is_err());
+        assert!(
+            session
+                .delete_authored_rectangle_page_v1(vec![source], identity.page_id)
+                .is_err()
+        );
         assert_eq!(session.operations().len(), before);
         assert!(session.graph().pages.contains_key(&identity.page_id));
     }
@@ -2870,7 +2891,6 @@ mod authored_page_append_tests {
     }
 }
 
-
 /// Atomically update the three candidate authorities. Forward requires the
 /// caller's fresh live EditorSession admission; the pure planner's external
 /// membership flag is false only after that proof. Inverse checks exact state.
@@ -2911,7 +2931,6 @@ pub(super) fn apply_authored_rectangle_page_history_candidate_v1(
     *shapes = candidate.authored_shapes;
     Ok(())
 }
-
 
 // Canonical authored overlay replay helpers, extracted unchanged from lib.rs.
 pub(super) fn authored_shape_from_operation(

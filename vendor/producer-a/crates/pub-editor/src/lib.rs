@@ -18,14 +18,14 @@ mod session_table;
 use session_table::apply_table_cell_state;
 mod session_text;
 use session_geometry::{
-    append_blank_page_error_to_editor_v1, apply_authored_stack_history_forward_v1,
-    authored_stack_operation_page_id_v1, delete_blank_authored_page_error_to_editor_v1,
-    derive_authored_stacks_from_operations_v1, display_page_append_error_v1,
-    display_page_delete_error_v1, page_order_error_to_editor_v1, validate_move_nodes_transition,
-    validate_resize_nodes_transition, authored_shape_from_operation,
-    authored_line_from_operation, apply_authored_line_inverse,
-    apply_authored_shape_inverse, apply_authored_shape_delete_forward,
-    apply_authored_shape_delete_inverse, apply_authored_rectangle_page_history_candidate_v1,
+    append_blank_page_error_to_editor_v1, apply_authored_line_inverse,
+    apply_authored_rectangle_page_history_candidate_v1, apply_authored_shape_delete_forward,
+    apply_authored_shape_delete_inverse, apply_authored_shape_inverse,
+    apply_authored_stack_history_forward_v1, authored_line_from_operation,
+    authored_shape_from_operation, authored_stack_operation_page_id_v1,
+    delete_blank_authored_page_error_to_editor_v1, derive_authored_stacks_from_operations_v1,
+    display_page_append_error_v1, display_page_delete_error_v1, page_order_error_to_editor_v1,
+    validate_move_nodes_transition, validate_resize_nodes_transition,
 };
 use session_geometry::{
     display_page_duplicate_error_v1, display_page_insert_error_v1,
@@ -77,20 +77,19 @@ pub use pub_editor_authoring_core::{
     AuthoredTableStoryRangesV1, CreateLineRuntimeValidationError,
     CreateShapeRuntimeValidationError, CreateTablePlanV1, CreateTableRuntimeV1,
     CreateTableRuntimeValidationError, DELETE_BLANK_AUTHORED_PAGE_PROTOCOL_V1,
-    DeleteBlankAuthoredPageErrorV1, DeleteBlankAuthoredPageTransitionV1,
-    DeleteAuthoredRectanglePageTransitionV1, LineGeometryV1,
-    PAGE_ORDER_PROTOCOL_V1, PageOrderErrorV1, PageOrderTransitionV1, PointEmuV1, Srgb8V1,
-    apply_append_blank_page_forward_v1, apply_append_blank_page_inverse_v1,
-    apply_authored_stack_reorder_forward_v1, apply_authored_stack_reorder_inverse_v1,
-    apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
-    apply_create_table_forward_v1, apply_create_table_inverse_v1,
-    apply_delete_blank_authored_page_forward_v1, apply_delete_blank_authored_page_inverse_v1,
-    apply_page_order_transition_forward_v1, apply_page_order_transition_inverse_v1,
-    authored_stack_state_id_v1, build_create_table_plan_v1, line_bounds_v1, page_order_state_id_v1,
-    plan_append_blank_page_v1, plan_create_line_append_v1, plan_create_shape_append_v1,
-    plan_create_table_append_v1, plan_delete_blank_authored_page_v1, plan_delete_shape_remove_v1,
-    plan_page_order_transition_v1, plan_reorder_authored_stack_v1, qualified_page_order_v1,
-    rebuild_authored_table_story_v1, validate_authored_line_runtime_v1,
+    DeleteAuthoredRectanglePageTransitionV1, DeleteBlankAuthoredPageErrorV1,
+    DeleteBlankAuthoredPageTransitionV1, LineGeometryV1, PAGE_ORDER_PROTOCOL_V1, PageOrderErrorV1,
+    PageOrderTransitionV1, PointEmuV1, Srgb8V1, apply_append_blank_page_forward_v1,
+    apply_append_blank_page_inverse_v1, apply_authored_stack_reorder_forward_v1,
+    apply_authored_stack_reorder_inverse_v1, apply_authored_stack_transition_forward_v1,
+    apply_authored_stack_transition_inverse_v1, apply_create_table_forward_v1,
+    apply_create_table_inverse_v1, apply_delete_blank_authored_page_forward_v1,
+    apply_delete_blank_authored_page_inverse_v1, apply_page_order_transition_forward_v1,
+    apply_page_order_transition_inverse_v1, authored_stack_state_id_v1, build_create_table_plan_v1,
+    line_bounds_v1, page_order_state_id_v1, plan_append_blank_page_v1, plan_create_line_append_v1,
+    plan_create_shape_append_v1, plan_create_table_append_v1, plan_delete_blank_authored_page_v1,
+    plan_delete_shape_remove_v1, plan_page_order_transition_v1, plan_reorder_authored_stack_v1,
+    qualified_page_order_v1, rebuild_authored_table_story_v1, validate_authored_line_runtime_v1,
     validate_authored_page_identity_v1, validate_authored_shape_runtime_v1,
     validate_authored_stack_v1, validate_create_table_runtime_v1,
 };
@@ -3464,14 +3463,14 @@ impl EditorSession {
             .map_err(EditorProjectError::Session)?;
 
         // v0.28/v0.29 preserve v0.27 admissions; each adds a fenced operation.
-        let legacy_compatible_schema: &str =
-            if project.schema_version == EDITOR_PROJECT_VERSION_V0_28
-                || project.schema_version == EDITOR_PROJECT_VERSION_V0_29
-            {
-                EDITOR_PROJECT_VERSION_V0_27
-            } else {
-                &project.schema_version
-            };
+        let legacy_compatible_schema: &str = if project.schema_version
+            == EDITOR_PROJECT_VERSION_V0_28
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_29
+        {
+            EDITOR_PROJECT_VERSION_V0_27
+        } else {
+            &project.schema_version
+        };
 
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
@@ -4083,7 +4082,10 @@ impl EditorSession {
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_29 {
             if let Some(index) = project.operations.iter().position(|operation| {
-                matches!(operation, EditOperation::DeleteAuthoredRectanglePageV1 { .. })
+                matches!(
+                    operation,
+                    EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+                )
             }) {
                 return Err(
                     EditorProjectError::LegacyProjectCarriesDeleteAuthoredRectanglePageOperation {
@@ -5799,9 +5801,11 @@ impl EditorSession {
                     }
                     EditOperation::DeleteAuthoredRectanglePageV1 { transition } => {
                         apply_authored_rectangle_page_history_candidate_v1(
-                            &mut candidate_graph, &mut candidate_shapes,
+                            &mut candidate_graph,
+                            &mut candidate_shapes,
                             self.current_authored_stack_v1(transition.page.identity.page_id),
-                            transition, false,
+                            transition,
+                            false,
                         )?;
                     }
                     EditOperation::ReorderAuthoredStack { .. } => {}
@@ -5944,20 +5948,30 @@ impl EditorSession {
                     EditOperation::DeleteAuthoredRectanglePageV1 { transition } => {
                         // Undo history excludes the redo operation. Recompute the
                         // exact live admission before applying its persisted transition.
-                        let authored = self.authored_customer_page_ids_v1()
-                            .into_iter().collect::<BTreeSet<_>>();
-                        let sources = transition.page.before_customer_page_ids.iter()
-                            .copied().filter(|id| !authored.contains(id)).collect::<Vec<_>>();
+                        let authored = self
+                            .authored_customer_page_ids_v1()
+                            .into_iter()
+                            .collect::<BTreeSet<_>>();
+                        let sources = transition
+                            .page
+                            .before_customer_page_ids
+                            .iter()
+                            .copied()
+                            .filter(|id| !authored.contains(id))
+                            .collect::<Vec<_>>();
                         let fresh = self.plan_delete_authored_rectangle_page_from_session_v1(
-                            &sources, transition.page.identity.page_id,
+                            &sources,
+                            transition.page.identity.page_id,
                         )?;
                         if fresh != *transition {
                             return Err(EditorError::StalePageDelete);
                         }
                         apply_authored_rectangle_page_history_candidate_v1(
-                            &mut candidate_graph, &mut candidate_shapes,
+                            &mut candidate_graph,
+                            &mut candidate_shapes,
                             self.current_authored_stack_v1(transition.page.identity.page_id),
-                            transition, true,
+                            transition,
+                            true,
                         )?;
                     }
                     EditOperation::ReorderAuthoredStack { .. } => {}
@@ -7821,4 +7835,3 @@ fn apply_inverse(
     }
     Ok(())
 }
-

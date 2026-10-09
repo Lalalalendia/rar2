@@ -26,10 +26,12 @@ use std::fmt;
 pub const EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1: &str = "0.1";
 
 pub(super) fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
-    if operations
-        .iter()
-        .any(|operation| matches!(operation, EditOperation::DeleteAuthoredRectanglePageV1 { .. }))
-    {
+    if operations.iter().any(|operation| {
+        matches!(
+            operation,
+            EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+        )
+    }) {
         super::EDITOR_PROJECT_VERSION_V0_29
     } else if operations
         .iter()
