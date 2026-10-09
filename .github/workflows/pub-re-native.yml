@@ -592,6 +592,39 @@ jobs:
             throw "rotation_pair_child_failed_exit_$exitCode"
           }
 
+      - name: Stage partial rotation pair evidence after failure
+        if: ${{ failure() && needs.gate.outputs.command_mode == 'rotation_pair' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          foreach ($arm in @("pair-control", "pair-mutation")) {
+            $armEvidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "$arm\evidence"
+            if (-not (Test-Path -LiteralPath $armEvidence -PathType Container)) { continue }
+            foreach ($name in @("native-stage-receipt.json", "native-receipt.json")) {
+              $candidate = Join-Path $armEvidence $name
+              if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+              $text = Get-Content -LiteralPath $candidate -Raw
+              if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+                throw "partial rotation-pair receipt contains an absolute filesystem path"
+              }
+              [void]($text | ConvertFrom-Json)
+              $prefix = if ($arm -eq "pair-control") { "control" } else { "mutation" }
+              Copy-Item -LiteralPath $candidate -Destination (Join-Path $evidence "$prefix-$name") -Force
+            }
+          }
+
+      - name: Upload partial rotation pair evidence after failure
+        if: ${{ failure() && needs.gate.outputs.command_mode == 'rotation_pair' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-rotation-pair-partial
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Validate failed native stage receipt
         if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'rotation_pair' }}
         shell: powershell
