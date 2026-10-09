@@ -15,6 +15,7 @@ on:
       - "vendor/producer-a/crates/pub-quill/tests/fixtures/Sample3.pub.b64"
       - "tools/windows/pub-runtime/run_story_native_roundtrip.ps1"
       - "tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1"
+      - "tools/windows/pub-runtime/test_story_native_stage_writer.ps1"
       - "tools/windows/pub-runtime/PubRuntime.psm1"
 
 permissions:
@@ -133,6 +134,15 @@ jobs:
             }
           }
           Write-Host 'Publisher native roundtrip PowerShell 5.1 parse PASS'
+
+      - name: Exercise actual native phase-writer transitions without Publisher
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # This is a PowerShell script, not a native executable. LASTEXITCODE
+          # may still reflect an unrelated prior git/process command.
+          # ErrorActionPreference=Stop plus the script's own throw is the gate.
+          & tools/windows/pub-runtime/test_story_native_stage_writer.ps1
 
   native-roundtrip:
     needs: prepare-handoff
