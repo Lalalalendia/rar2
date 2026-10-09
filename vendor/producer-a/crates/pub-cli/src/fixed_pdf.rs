@@ -2,9 +2,9 @@ use anyhow::{Context, Result, bail};
 use pub_export::{ConversionProfile, EnvironmentFence, TargetProfile};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedText, BoundedShapingRuntime,
-    font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
+    ResolvedPhysicalNode, font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
 };
-use pub_model::{EMU_PER_POINT, LengthEmu, NodeId};
+use pub_model::{Affine2D, CanonicalId, EMU_PER_POINT, LengthEmu, NodeId, RectEmu};
 use pub_output::{
     ExplicitFontResource, FixedOutputFontProfile, FontIdentity, OutputFontRequest,
     PreferredEmbedding, plan_output_fonts, read_opentype_embedding_flags,
@@ -66,6 +66,47 @@ fn report_path_label(path: &Path, fallback: &str) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or(fallback)
         .to_owned()
+}
+
+fn derived_table_border_node_id(
+    owner: NodeId,
+    ordinal: usize,
+) -> Result<NodeId> {
+    let ordinal = u64::try_from(ordinal).context("TABLE border ordinal does not fit u64")?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"chaptera.pub-pdf.table-border-derived.v1");
+    hasher.update(owner.as_canonical().as_bytes());
+    hasher.update(ordinal.to_be_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Ok(NodeId::from_canonical(CanonicalId::from_bytes(bytes)))
+}
+
+fn table_border_rect(border: &pub_viewer::ViewerTableBorderSegment) -> Option<RectEmu> {
+    if border.width_emu <= 0 {
+        return None;
+    }
+    let half = border.width_emu / 2;
+    if border.y1_emu == border.y2_emu && border.x1_emu < border.x2_emu {
+        return Some(RectEmu::new(
+            LengthEmu::new(border.x1_emu),
+            LengthEmu::new(border.y1_emu.checked_sub(half)?),
+            LengthEmu::new(border.x2_emu.checked_sub(border.x1_emu)?),
+            LengthEmu::new(border.width_emu),
+        ));
+    }
+    if border.x1_emu == border.x2_emu && border.y1_emu < border.y2_emu {
+        return Some(RectEmu::new(
+            LengthEmu::new(border.x1_emu.checked_sub(half)?),
+            LengthEmu::new(border.y1_emu),
+            LengthEmu::new(border.width_emu),
+            LengthEmu::new(border.y2_emu.checked_sub(border.y1_emu)?),
+        ));
+    }
+    None
 }
 
 fn retain_scene_node_ids(
