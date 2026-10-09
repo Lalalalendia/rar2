@@ -251,6 +251,11 @@ jobs:
         with:
           toolchain: "1.94.1"
 
+      - uses: actions/setup-python@v5
+        if: ${{ needs.gate.outputs.command_mode == 'rotation_pair' }}
+        with:
+          python-version: "3.13"
+
       - name: Resolve native input safely
         shell: powershell
         env:
@@ -291,7 +296,7 @@ jobs:
               throw "requested native experiment manifest is not present"
             }
           }
-          elseif ($env:PUB_RE_COMMAND_MODE -eq "snapshot_alias" -or $env:PUB_RE_COMMAND_MODE -eq "rotation_alias") {
+          elseif ($env:PUB_RE_COMMAND_MODE -in @("snapshot_alias", "rotation_alias", "rotation_pair")) {
             if ($env:PUB_RE_FIXTURE_ALIAS -notmatch '^[a-z0-9][a-z0-9._-]{0,63}$') {
               throw "fixture alias is invalid"
             }
@@ -331,7 +336,36 @@ jobs:
               throw "downloaded native fixture does not match the pinned registry entry"
             }
 
-            if ($env:PUB_RE_COMMAND_MODE -eq "snapshot_alias") {
+            if ($env:PUB_RE_COMMAND_MODE -eq "rotation_pair") {
+              if ($env:PUB_RE_PAGE_ID -notmatch '^[1-9][0-9]{0,9}$' -or
+                  $env:PUB_RE_SHAPE_ID -notmatch '^[1-9][0-9]{0,9}$' -or
+                  $env:PUB_RE_DELTA_DEGREES -notmatch '^-?[0-9]+([.][0-9]{1,6})?$') {
+                throw "rotation-pair selector or delta is invalid"
+              }
+
+              $pageId64 = [int64]$env:PUB_RE_PAGE_ID
+              $shapeId64 = [int64]$env:PUB_RE_SHAPE_ID
+              $delta = [double]::Parse(
+                $env:PUB_RE_DELTA_DEGREES,
+                [System.Globalization.CultureInfo]::InvariantCulture
+              )
+              if ($pageId64 -gt [int]::MaxValue -or $shapeId64 -gt [int]::MaxValue) {
+                throw "Publisher selector is outside signed 32-bit bounds"
+              }
+              if ([math]::Abs($delta) -lt 0.000001 -or [math]::Abs($delta) -gt 45.0) {
+                throw "rotation delta must be nonzero and within 45 degrees"
+              }
+
+              "PUB_RE_ROTATION_PAIR_SOURCE=$download" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+              "PUB_RE_ROTATION_PAIR_SHA=$expectedSha" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+              # The generic manifest is not executed in rotation-pair mode,
+              # but keep it syntactically valid so input resolution stays
+              # fail-closed and shares the same pinned source contract.
+              $experimentPrefix = "rotation-pair-preflight"
+              $operation = [ordered]@{ kind = "snapshot_only" }
+            }
+            elseif ($env:PUB_RE_COMMAND_MODE -eq "snapshot_alias") {
               $experimentPrefix = "snapshot"
               $operation = [ordered]@{
                 kind = "snapshot_only"
