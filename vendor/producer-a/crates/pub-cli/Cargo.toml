@@ -9,12 +9,19 @@ license.workspace = true
 name = "pub"
 path = "src/main.rs"
 
+[[bin]]
+name = "pub-crop-geometry-census"
+path = "src/bin/pub_crop_geometry_census.rs"
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+pub-cfb = { path = "../pub-cfb" }
+pub-core = { path = "../pub-core" }
 pub-editor = { path = "../pub-editor" }
+pub-escher = { path = "../pub-escher" }
 pub-export = { path = "../pub-export" }
 pub-layout = { path = "../pub-layout" }
 pub-model = { path = "../pub-model" }
