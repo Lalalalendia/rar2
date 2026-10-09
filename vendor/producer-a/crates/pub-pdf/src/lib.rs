@@ -57,6 +57,17 @@ pub struct FixedNodePaint {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FixedImagePlacement {
+    pub node_id: NodeId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_rotation_degrees: Option<i16>,
+    #[serde(default)]
+    pub source_window_present: bool,
+    #[serde(default)]
+    pub recolor_present: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FixedImageResource {
     pub resource_id: ResourceId,
     pub mime: String,
@@ -65,6 +76,8 @@ pub struct FixedImageResource {
     #[serde(default)]
     pub source_exact: bool,
     pub node_ids: Vec<NodeId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub placements: Vec<FixedImagePlacement>,
     pub bytes: Vec<u8>,
 }
 
@@ -166,6 +179,13 @@ pub enum PdfRenderError {
     DuplicateImageUse {
         node_id: NodeId,
     },
+    DuplicateImagePlacement {
+        node_id: NodeId,
+    },
+    ImagePlacementReferencesMissingUse {
+        resource_id: ResourceId,
+        node_id: NodeId,
+    },
     ImageReferencesMissingNode {
         resource_id: ResourceId,
         node_id: NodeId,
@@ -206,6 +226,16 @@ impl fmt::Display for PdfRenderError {
                     "more than one fixed image resource references node {node_id:?}"
                 )
             }
+            Self::DuplicateImagePlacement { node_id } => {
+                write!(f, "duplicate fixed image placement for node {node_id:?}")
+            }
+            Self::ImagePlacementReferencesMissingUse {
+                resource_id,
+                node_id,
+            } => write!(
+                f,
+                "fixed image placement for resource {resource_id:?} references non-image-use node {node_id:?}"
+            ),
             Self::ImageReferencesMissingNode {
                 resource_id,
                 node_id,
@@ -281,6 +311,7 @@ pub fn render_bounded_pdf(
 
     let mut prepared_images = BTreeMap::<ResourceId, PreparedImage>::new();
     let mut image_by_node = BTreeMap::<NodeId, ResourceId>::new();
+    let mut image_placement_by_node = BTreeMap::<NodeId, &FixedImagePlacement>::new();
     for image in &resources.images {
         if prepared_images.contains_key(&image.resource_id) {
             return Err(PdfRenderError::DuplicateImageResource {
@@ -294,15 +325,32 @@ pub fn render_bounded_pdf(
         let mut uses = image.node_ids.clone();
         uses.sort();
         uses.dedup();
-        for node_id in uses {
-            if !node_ids.contains(&node_id) {
+        for node_id in &uses {
+            if !node_ids.contains(node_id) {
                 return Err(PdfRenderError::ImageReferencesMissingNode {
                     resource_id: image.resource_id,
-                    node_id,
+                    node_id: *node_id,
                 });
             }
-            if image_by_node.insert(node_id, image.resource_id).is_some() {
-                return Err(PdfRenderError::DuplicateImageUse { node_id });
+            if image_by_node.insert(*node_id, image.resource_id).is_some() {
+                return Err(PdfRenderError::DuplicateImageUse { node_id: *node_id });
+            }
+        }
+        let use_ids = uses.into_iter().collect::<BTreeSet<_>>();
+        for placement in &image.placements {
+            if !use_ids.contains(&placement.node_id) {
+                return Err(PdfRenderError::ImagePlacementReferencesMissingUse {
+                    resource_id: image.resource_id,
+                    node_id: placement.node_id,
+                });
+            }
+            if image_placement_by_node
+                .insert(placement.node_id, placement)
+                .is_some()
+            {
+                return Err(PdfRenderError::DuplicateImagePlacement {
+                    node_id: placement.node_id,
+                });
             }
         }
     }
@@ -361,6 +409,7 @@ pub fn render_bounded_pdf(
 
         let paint = paint_by_node.get(&node.origin).copied();
         let image_resource_id = image_by_node.get(&node.origin).copied();
+        let image_placement = image_placement_by_node.get(&node.origin).copied();
 
         let valid_paint = paint.filter(|paint| {
             paint.fill_rgb.is_some()
@@ -395,12 +444,48 @@ pub fn render_bounded_pdf(
                 .expect("validated image resource must exist");
             match prepared {
                 PreparedImage::Rgb { .. } => {
-                    append_image(content, node, resource_id);
-                    image_resources_by_page
-                        .get_mut(&surface.origin)
-                        .expect("page image resource set must exist")
-                        .insert(resource_id);
-                    image_painted = true;
+                    match image_placement {
+                        Some(placement)
+                            if placement.source_window_present || placement.recolor_present =>
+                        {
+                            diagnostics.push(PdfDiagnostic {
+                                code: "pdf.image.placement_combination_unsupported".into(),
+                                severity: PdfDiagnosticSeverity::FidelityWarning,
+                                origin: node.origin.into_canonical(),
+                                message: "cardinal image-content rotation combined with crop or recolor is outside the bounded fixed-PDF slice".into(),
+                            });
+                            image_partial = true;
+                        }
+                        Some(placement) => match placement.content_rotation_degrees.unwrap_or(0) {
+                            0 => {
+                                append_image(content, node, resource_id);
+                                image_painted = true;
+                            }
+                            rotation @ (90 | 180 | 270) => {
+                                append_image_cardinal(content, node, resource_id, rotation);
+                                image_painted = true;
+                            }
+                            _ => {
+                                diagnostics.push(PdfDiagnostic {
+                                    code: "pdf.image.content_rotation_unsupported".into(),
+                                    severity: PdfDiagnosticSeverity::FidelityWarning,
+                                    origin: node.origin.into_canonical(),
+                                    message: "image content rotation is not one of the bounded cardinal angles".into(),
+                                });
+                                image_partial = true;
+                            }
+                        },
+                        None => {
+                            append_image(content, node, resource_id);
+                            image_painted = true;
+                        }
+                    }
+                    if image_painted {
+                        image_resources_by_page
+                            .get_mut(&surface.origin)
+                            .expect("page image resource set must exist")
+                            .insert(resource_id);
+                    }
                 }
                 PreparedImage::Unsupported { code, message } => {
                     diagnostics.push(PdfDiagnostic {
@@ -596,6 +681,29 @@ fn append_image(content: &mut String, node: &ResolvedPhysicalNode, resource_id: 
         "{width} 0 0 -{height} {x} {y_plus_height} cm\n/{} Do\n",
         image_name(resource_id)
     ));
+    content.push_str("Q\n");
+}
+
+fn append_image_cardinal(
+    content: &mut String,
+    node: &ResolvedPhysicalNode,
+    resource_id: ResourceId,
+    rotation_degrees: i16,
+) {
+    let x = format_points(node.bounds.x.get());
+    let y = format_points(node.bounds.y.get());
+    let width = format_points(node.bounds.width.get());
+    let height = format_points(node.bounds.height.get());
+    let x_plus_width = format_points(node.bounds.x.get() + node.bounds.width.get());
+    let y_plus_height = format_points(node.bounds.y.get() + node.bounds.height.get());
+    let matrix = match rotation_degrees {
+        90 => format!("0 {height} {width} 0 {x} {y}"),
+        180 => format!("-{width} 0 0 {height} {x_plus_width} {y}"),
+        270 => format!("0 -{height} -{width} 0 {x_plus_width} {y_plus_height}"),
+        _ => unreachable!("cardinal image rotation validated before emission"),
+    };
+    content.push_str("q\n");
+    content.push_str(&format!("{matrix} cm\n/{} Do\n", image_name(resource_id)));
     content.push_str("Q\n");
 }
 
@@ -1166,6 +1274,7 @@ mod tests {
                 mime: "image/png".into(),
                 source_exact: true,
                 node_ids: vec![node_id(10), node_id(11)],
+                placements: Vec::new(),
                 bytes: png,
             }],
             ..FixedPdfResources::default()
@@ -1194,6 +1303,52 @@ mod tests {
     }
 
     #[test]
+    fn cardinal_image_content_rotation_uses_fixed_frame_matrix() {
+        let png = vec![
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x7b, 0x40, 0xe8, 0xdd, 0x00, 0x00, 0x00, 0x0f, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xc0, 0xf0, 0x9f, 0x01, 0x00, 0x07, 0xff, 0x01, 0xff,
+            0x01, 0x7f, 0x89, 0xa7, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42,
+            0x60, 0x82,
+        ];
+        let resources = FixedPdfResources {
+            images: vec![FixedImageResource {
+                resource_id: resource_id(42),
+                mime: "image/png".into(),
+                source_exact: true,
+                node_ids: vec![node_id(10)],
+                placements: vec![FixedImagePlacement {
+                    node_id: node_id(10),
+                    content_rotation_degrees: Some(90),
+                    source_window_present: false,
+                    recolor_present: false,
+                }],
+                bytes: png,
+            }],
+            ..FixedPdfResources::default()
+        };
+
+        let output = render_bounded_pdf(
+            &scene(),
+            &resources,
+            &PdfTargetProfile::basic_geometry_v0_1(),
+        )
+        .unwrap();
+        let text = String::from_utf8_lossy(&output.bytes);
+        assert!(text.contains("0 50 100 0 10 20 cm"));
+        assert_eq!(
+            output
+                .report
+                .nodes
+                .iter()
+                .filter(|node| node.code == "pdf.node.painted_exact_image")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn exact_rgba_png_uses_soft_mask_and_remains_painted() {
         use std::io::Cursor;
 
@@ -1211,6 +1366,7 @@ mod tests {
                 mime: "image/png".into(),
                 source_exact: true,
                 node_ids: vec![node_id(10)],
+                placements: Vec::new(),
                 bytes: encoded.into_inner(),
             }],
             ..FixedPdfResources::default()
@@ -1262,6 +1418,7 @@ mod tests {
                 mime: "image/png".into(),
                 source_exact: false,
                 node_ids: vec![node_id(10)],
+                placements: Vec::new(),
                 bytes: encoded.into_inner(),
             }],
             ..FixedPdfResources::default()

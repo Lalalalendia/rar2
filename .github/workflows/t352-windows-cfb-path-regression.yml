@@ -1,0 +1,32 @@
+name: T352 Windows CFB path regression
+
+on:
+  pull_request:
+    paths:
+      - "tools/pub-re/src/bin/val_xproj_patch.rs"
+      - "tools/pub-re/Cargo.toml"
+      - ".github/workflows/t352-windows-cfb-path-regression.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: t352-cfb-win-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  canonical-stream-paths:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Verify Windows stream-path normalization and exact four-arm patches
+        shell: pwsh
+        run: |
+          cargo test --manifest-path tools/pub-re/Cargo.toml --bin val_xproj_patch -- --nocapture
