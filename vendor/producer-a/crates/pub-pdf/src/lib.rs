@@ -649,13 +649,12 @@ fn prepare_image(image: &FixedImageResource) -> Result<PreparedImage, PdfRenderE
                 resource_id: image.resource_id,
                 message: error.to_string(),
             })?;
-        let frames = decoder
-            .into_frames()
-            .collect_frames()
-            .map_err(|error| PdfRenderError::ImageDecodeFailed {
+        let frames = decoder.into_frames().collect_frames().map_err(|error| {
+            PdfRenderError::ImageDecodeFailed {
                 resource_id: image.resource_id,
                 message: error.to_string(),
-            })?;
+            }
+        })?;
         if frames.len() != 1 {
             return Ok(PreparedImage::Unsupported {
                 code: "pdf.image.gif_animation_unsupported".into(),
