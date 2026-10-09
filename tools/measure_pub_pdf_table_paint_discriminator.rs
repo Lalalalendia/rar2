@@ -47,6 +47,11 @@ fn main() -> Result<()> {
             .as_ref()
             .context("Viewer TABLE node missing source TABLE payload")?;
         let owner = visual.scene.nodes.iter().find(|node| node.origin == table.node_id);
+        let viewer_owner_paint = visual.paints.iter().find(|paint| paint.node_id == table.node_id);
+        let source_explicit_fill = &source_node.payload.explicit_paint.fill;
+        let source_explicit_line = &source_node.payload.explicit_paint.line;
+        let source_effective_fill = source_node.payload.effective_paint.as_ref().map(|paint| &paint.fill);
+        let source_effective_line = source_node.payload.effective_paint.as_ref().map(|paint| &paint.line);
 
         let merged_cell_count = table
             .cells
@@ -261,6 +266,25 @@ fn main() -> Result<()> {
             "owner_transform_identity": owner_transform_identity,
             "cell_union_matches_owner": cell_union_matches_owner,
             "visible_fill_area_ppm_of_owner": visible_fill_area_ppm,
+            "owner_officeart_shape_type": source_node.payload.officeart_shape_type,
+            "viewer_owner_paint_present": viewer_owner_paint.is_some(),
+            "viewer_owner_fill_present": viewer_owner_paint.and_then(|paint| paint.solid_fill_rgb).is_some(),
+            "viewer_owner_line_present": viewer_owner_paint.and_then(|paint| paint.solid_line.as_ref()).is_some(),
+            "viewer_owner_preset_shape_present": viewer_owner_paint.and_then(|paint| paint.preset_shape).is_some(),
+            "source_owner_explicit_fill_solid": source_explicit_fill.solid,
+            "source_owner_explicit_fill_color_present": source_explicit_fill.color_rgb.is_some(),
+            "source_owner_explicit_fill_visible": source_explicit_fill.visible,
+            "source_owner_explicit_line_color_present": source_explicit_line.color_rgb.is_some(),
+            "source_owner_explicit_line_width_present": source_explicit_line.width_emu.is_some(),
+            "source_owner_explicit_line_visible": source_explicit_line.visible,
+            "source_owner_effective_fill_solid": source_effective_fill.and_then(|fill| fill.solid.as_ref()).map(|value| value.value),
+            "source_owner_effective_fill_visible": source_effective_fill.and_then(|fill| fill.visible.as_ref()).map(|value| value.value),
+            "source_owner_effective_fill_color_present": source_effective_fill.and_then(|fill| fill.color_rgb.as_ref()).is_some(),
+            "source_owner_effective_fill_authority": source_effective_fill.and_then(|fill| fill.visible.as_ref()).map(|value| format!("{:?}", value.authority)),
+            "source_owner_effective_line_visible": source_effective_line.and_then(|line| line.visible.as_ref()).map(|value| value.value),
+            "source_owner_effective_line_color_present": source_effective_line.and_then(|line| line.color_rgb.as_ref()).is_some(),
+            "source_owner_effective_line_width_present": source_effective_line.and_then(|line| line.width_emu.as_ref()).is_some(),
+            "source_owner_effective_line_authority": source_effective_line.and_then(|line| line.visible.as_ref()).map(|value| format!("{:?}", value.authority)),
             "source": {
                 "rows": source_table.rows,
                 "columns": source_table.columns,
@@ -295,7 +319,7 @@ fn main() -> Result<()> {
     }
 
     let payload = json!({
-        "schema": "chaptera.pub-pdf-table-paint-discriminator.v2",
+        "schema": "chaptera.pub-pdf-table-paint-discriminator.v3",
         "source_sha256": source_sha256,
         "table_count": rows.len(),
         "tables": rows,
