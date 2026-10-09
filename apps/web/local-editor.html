@@ -113,11 +113,13 @@ async function disclosure(){
     (preview.can_serialize?"ready":"blocked")+" · blocking="+preview.counts.blocking+
     " · losses="+losses.length;
   const pub=document.querySelector("#pubsave");
-  pub.className=pubPreview.can_serialize?"ok":"warn";
-  pub.textContent="PUB: "+(pubPreview.can_serialize
-    ?"round-trip ready"
-    :"Project-only · "+(pubPreview.blocker_code??"writer blocked"));
-  savePubButton.disabled=!pubPreview.can_serialize;
+  pub.className=pubPreview.can_download===true?"ok":"warn";
+  pub.textContent="PUB: "+(pubPreview.can_download===true
+    ?"Exact-byte Publisher verified"
+    :pubPreview.can_serialize
+      ?"Writer candidate only · Publisher not verified"
+      :"Project-only · "+(pubPreview.blocker_code??"writer blocked"));
+  savePubButton.disabled=pubPreview.can_download!==true;
 }
 
 function openTextEditor(){
@@ -177,7 +179,7 @@ async function applyTextEdit(){
 }
 async function downloadNativePub(){
   const preview=await service.nativePubPreview();
-  if(!preview.can_serialize) throw new Error("Native PUB save is blocked");
+  if(preview.can_download!==true) throw new Error("Publisher-native approval missing for exact PUB bytes");
   const result=await service.nativePubDownload();
   const url=URL.createObjectURL(result.blob);
   try{
