@@ -82,6 +82,10 @@ jobs:
                   r"/pub-re-native rotate ([a-z0-9][a-z0-9._-]{0,63}) ([1-9][0-9]{0,9}) ([1-9][0-9]{0,9}) (-?[0-9]+(?:[.][0-9]{1,6})?)",
                   body,
               )
+              rotation_pair_match = re.fullmatch(
+                  r"/pub-re-native rotation-pair ([a-z0-9][a-z0-9._-]{0,63}) ([1-9][0-9]{0,9}) ([1-9][0-9]{0,9}) (-?[0-9]+(?:[.][0-9]{1,6})?)",
+                  body,
+              )
               research_match = re.fullmatch(
                   r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?|val-xproj-01)",
                   body,
@@ -110,6 +114,20 @@ jobs:
                       raise SystemExit("Publisher selector is outside signed 32-bit bounds")
                   if not 0.000001 <= abs(delta_value) <= 45.0:
                       raise SystemExit("rotation delta must be nonzero and within 45 degrees")
+              elif rotation_pair_match is not None:
+                  command_mode = "rotation_pair"
+                  fixture_alias = rotation_pair_match.group(1)
+                  page_id = rotation_pair_match.group(2)
+                  shape_id = rotation_pair_match.group(3)
+                  delta_degrees = rotation_pair_match.group(4)
+
+                  page_value = int(page_id)
+                  shape_value = int(shape_id)
+                  delta_value = float(delta_degrees)
+                  if page_value > 2147483647 or shape_value > 2147483647:
+                      raise SystemExit("Publisher selector is outside signed 32-bit bounds")
+                  if not 0.000001 <= abs(delta_value) <= 45.0:
+                      raise SystemExit("rotation delta must be nonzero and within 45 degrees")
               elif research_match is not None:
                   research_id = research_match.group(1)
                   command_mode = "research_t352" if research_id == "val-xproj-01" else "research_0p75"
@@ -121,10 +139,10 @@ jobs:
               else:
                   raise SystemExit("invalid PUB RE native control command")
 
-          if command_mode in {"snapshot_alias", "rotation_alias"} and alias_re.fullmatch(fixture_alias) is None:
+          if command_mode in {"snapshot_alias", "rotation_alias", "rotation_pair"} and alias_re.fullmatch(fixture_alias) is None:
               raise SystemExit("fixture alias is invalid")
 
-          native_timeout_minutes = "30" if command_mode in {"research_0p75", "research_t352"} else "5"
+          native_timeout_minutes = "30" if command_mode in {"research_0p75", "research_t352"} else "10" if command_mode == "rotation_pair" else "5"
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"command_mode={command_mode}\n")
@@ -273,7 +291,7 @@ jobs:
               throw "requested native experiment manifest is not present"
             }
           }
-          elseif ($env:PUB_RE_COMMAND_MODE -eq "snapshot_alias" -or $env:PUB_RE_COMMAND_MODE -eq "rotation_alias") {
+          elseif ($env:PUB_RE_COMMAND_MODE -in @("snapshot_alias", "rotation_alias", "rotation_pair")) {
             if ($env:PUB_RE_FIXTURE_ALIAS -notmatch '^[a-z0-9][a-z0-9._-]{0,63}$') {
               throw "fixture alias is invalid"
             }
@@ -313,7 +331,1351 @@ jobs:
               throw "downloaded native fixture does not match the pinned registry entry"
             }
 
-            if ($env:PUB_RE_COMMAND_MODE -eq "snapshot_alias") {
+            if ($env:PUB_RE_COMMAND_MODE -eq "rotation_pair") {
+              if ($env:PUB_RE_PAGE_ID -notmatch '^[1-9][0-9]{0,9}              if ($env:PUB_RE_PAGE_ID -notmatch '^[1-9][0-9]{0,9}$' -or
+                  $env:PUB_RE_SHAPE_ID -notmatch '^[1-9][0-9]{0,9}$' -or
+                  $env:PUB_RE_DELTA_DEGREES -notmatch '^-?[0-9]+([.][0-9]{1,6})?$') {
+                throw "rotation selector or delta is invalid"
+              }
+
+              $pageId64 = [int64]$env:PUB_RE_PAGE_ID
+              $shapeId64 = [int64]$env:PUB_RE_SHAPE_ID
+              $delta = [double]::Parse(
+                $env:PUB_RE_DELTA_DEGREES,
+                [System.Globalization.CultureInfo]::InvariantCulture
+              )
+              if ($pageId64 -gt [int]::MaxValue -or $shapeId64 -gt [int]::MaxValue) {
+                throw "Publisher selector is outside signed 32-bit bounds"
+              }
+              if ([math]::Abs($delta) -lt 0.000001 -or [math]::Abs($delta) -gt 45.0) {
+                throw "rotation delta must be nonzero and within 45 degrees"
+              }
+
+              $experimentPrefix = "rotate"
+              $operation = [ordered]@{
+                kind = "shape_rotation_delta"
+                selector = [ordered]@{
+                  page_id = [int]$pageId64
+                  shape_id = [int]$shapeId64
+                }
+                delta_degrees = $delta
+              }
+            }
+
+            if ($env:PUB_RE_COMMAND_MODE -ne "rotation_pair") {
+              $generated = [ordered]@{
+                schema = "chaptera.pub-re-native-experiment.v1"
+                experiment_id = ("{0}-{1}-{2}" -f $experimentPrefix, $env:PUB_RE_FIXTURE_ALIAS, $env:GITHUB_RUN_ID)
+                source = [ordered]@{
+                  path = $download
+                  expected_sha256 = $expectedSha
+                }
+                operation = $operation
+                policy = [ordered]@{
+                  writer = "current"
+                  visible = $false
+                  process_exit_grace_seconds = 60
+                }
+              }
+
+              $manifest = Join-Path $output "generated-manifest.json"
+              $generated | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifest -Encoding utf8
+            }
+          }
+          else {
+            throw "unsupported PUB RE native command mode"
+          }
+
+          if ($env:PUB_RE_COMMAND_MODE -notin @("research_0p75", "research_t352", "rotation_pair")) {
+            "PUB_RE_NATIVE_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
+      - name: Build standalone PUB RE
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        shell: powershell
+        run: cargo build --release --manifest-path tools/pub-re/Cargo.toml --bin pub-re
+
+      - name: Run bounded native Publisher transaction
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $preexistingPublisher = @(Get-Process -Name MSPUB -ErrorAction SilentlyContinue)
+          if ($preexistingPublisher.Count -ne 0) {
+            throw "publisher_busy_before_bounded_wrapper"
+          }
+
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "private"
+          New-Item -ItemType Directory -Force -Path $private | Out-Null
+          $stdout = Join-Path $private "native-child.stdout.txt"
+          $stderr = Join-Path $private "native-child.stderr.txt"
+          $script = Join-Path $env:GITHUB_WORKSPACE "tools\pub-re\windows\Invoke-PubReNativeExperiment.ps1"
+          $env:PUB_RE_NATIVE_CHILD_SCRIPT = $script
+          $startedUtc = [DateTime]::UtcNow
+
+          $childCommand = @'
+          $ErrorActionPreference = "Stop"
+          & $env:PUB_RE_NATIVE_CHILD_SCRIPT -ManifestPath $env:PUB_RE_NATIVE_MANIFEST -OutputRoot $env:PUB_RE_NATIVE_OUTPUT
+          if (-not $?) { exit 1 }
+          '@
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
+          $powershellExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          $process = Start-Process `
+            -FilePath $powershellExe `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encoded) `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr `
+            -PassThru
+
+          $finished = $process.WaitForExit(180000)
+          if (-not $finished) {
+            Write-Host "PUB_RE_NATIVE_WATCHDOG timeout_seconds=180 child_pid=$($process.Id)"
+
+            if (-not $process.HasExited) {
+              try { Stop-Process -Id $process.Id -Force -ErrorAction Stop } catch {}
+              try { [void]$process.WaitForExit(10000) } catch {}
+            }
+
+            $ownedPublisher = @(
+              Get-Process -Name MSPUB -ErrorAction SilentlyContinue | Where-Object {
+                try {
+                  $_.StartTime.ToUniversalTime() -ge $startedUtc.AddSeconds(-2)
+                } catch {
+                  $false
+                }
+              }
+            )
+            foreach ($publisherProcess in $ownedPublisher) {
+              Write-Host "PUB_RE_NATIVE_WATCHDOG terminating_mspub_pid=$($publisherProcess.Id)"
+              try { Stop-Process -Id $publisherProcess.Id -Force -ErrorAction Stop } catch {}
+            }
+
+            Start-Sleep -Seconds 2
+            throw "native_transaction_timeout"
+          }
+
+          $process.WaitForExit()
+          $process.Refresh()
+          if (-not $process.HasExited) {
+            throw "native_transaction_child_exit_state_unavailable"
+          }
+
+          if (Test-Path -LiteralPath $stdout -PathType Leaf) {
+            Get-Content -LiteralPath $stdout
+          }
+          if (Test-Path -LiteralPath $stderr -PathType Leaf) {
+            Get-Content -LiteralPath $stderr
+          }
+          $exitCode = [int]$process.ExitCode
+          if ($exitCode -ne 0) {
+            throw "native_transaction_child_failed_exit_$exitCode"
+          }
+
+      - name: Validate failed native stage receipt
+        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $stage = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence\native-stage-receipt.json"
+          if (-not (Test-Path -LiteralPath $stage -PathType Leaf)) {
+            Write-Host "No native stage receipt was produced before failure."
+            exit 0
+          }
+
+          $text = Get-Content -LiteralPath $stage -Raw
+          if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+            throw "native stage receipt contains an absolute filesystem path"
+          }
+
+          $receipt = $text | ConvertFrom-Json
+          if ([string]$receipt.schema -ne "chaptera.pub-re-native-stage.v1") {
+            throw "unexpected native stage receipt schema"
+          }
+          if ([string]::IsNullOrWhiteSpace([string]$receipt.experiment_id)) {
+            throw "native stage receipt is missing experiment_id"
+          }
+          if ([string]::IsNullOrWhiteSpace([string]$receipt.stage)) {
+            throw "native stage receipt is missing stage"
+          }
+
+      - name: Upload failed native stage receipt
+        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-failure-stage
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\native-stage-receipt.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Join native output to CFB and OfficeArt provenance
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "private"
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $controlPath = Join-Path $private "control.json"
+          $control = Get-Content -LiteralPath $controlPath -Raw | ConvertFrom-Json
+
+          if ([bool]$control.has_diff) {
+            $metadata = cargo metadata --no-deps --format-version 1 --manifest-path tools/pub-re/Cargo.toml | ConvertFrom-Json
+            $pubRe = Join-Path ([string]$metadata.target_directory) "release\pub-re.exe"
+            if (-not (Test-Path -LiteralPath $pubRe -PathType Leaf)) {
+              throw "built pub-re.exe was not found in Cargo target directory"
+            }
+
+            $diffManifest = Join-Path $private "diff-manifest.json"
+            $cfbReceipt = Join-Path $evidence "cfb-receipt.json"
+            & $pubRe analyze `
+              --manifest $diffManifest `
+              --output $cfbReceipt
+
+            if (-not [string]::IsNullOrWhiteSpace([string]$control.officeart_stream)) {
+              & $pubRe attribute-officeart `
+                --manifest $diffManifest `
+                --stream ([string]$control.officeart_stream) `
+                --output (Join-Path $evidence "officeart-receipt.json")
+            }
+          }
+
+      - name: Enforce source-safe evidence boundary
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $files = @(Get-ChildItem -LiteralPath $evidence -Filter *.json -File)
+          if ($files.Count -lt 1) {
+            throw "native experiment emitted no JSON evidence"
+          }
+
+          foreach ($file in $files) {
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "source-safe evidence contains an absolute filesystem path"
+            }
+            if ($text -match '(?i)"raw_document_bytes_emitted"\s*:\s*true') {
+              throw "source-safe evidence claims raw document bytes were emitted"
+            }
+            if ($text -match '(?i)"raw_stream_bytes_emitted"\s*:\s*true') {
+              throw "source-safe evidence claims raw stream bytes were emitted"
+            }
+            [void](Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json)
+          }
+
+      - name: Upload source-safe receipts only
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Run bounded 0.75 paragraph research
+        if: ${{ needs.gate.outputs.command_mode == 'research_0p75' }}
+        shell: powershell
+        env:
+          PUB_RE_RESEARCH_ID: ${{ needs.gate.outputs.research_id }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          # Explicitly bind the switch in Windows PowerShell 5.1; splatting
+          # a trailing hashtable previously produced a green uniform-12 run
+          # for an owner-approved mixed command (run 37858450713).
+          if ($env:PUB_RE_RESEARCH_ID -eq "paragraph-line-spacing-0p75-mixed") {
+            & tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1 `
+              -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT `
+              -ReturnZip $env:PUB_RE_RESEARCH_RETURN_ZIP `
+              -MixedSize
+            if (-not $?) { throw "bounded mixed 0.75 paragraph research failed" }
+          }
+          elseif ($env:PUB_RE_RESEARCH_ID -eq "paragraph-line-spacing-0p75") {
+            & tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1 `
+              -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT `
+              -ReturnZip $env:PUB_RE_RESEARCH_RETURN_ZIP
+            if (-not $?) { throw "bounded uniform 0.75 paragraph research failed" }
+          }
+          else {
+            throw "unsupported bounded paragraph research profile"
+          }
+
+          # Never accept a successful PowerShell invocation as proof the
+          # requested profile ran. Check *both* source-safe receipts before
+          # the workflow is allowed to mark the native job green.
+          $nativePath = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\paragraph-line-spacing-0p75-native-01.json"
+          $structuralPath = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\paragraph-line-spacing-0p75-structural.json"
+          if (-not (Test-Path -LiteralPath $nativePath -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $structuralPath -PathType Leaf)) {
+            throw "publisher research receipt missing for requested profile"
+          }
+          $nativeReceipt = Get-Content -LiteralPath $nativePath -Raw | ConvertFrom-Json
+          $structuralReceipt = Get-Content -LiteralPath $structuralPath -Raw | ConvertFrom-Json
+          $expectedProfile = if ($env:PUB_RE_RESEARCH_ID -eq "paragraph-line-spacing-0p75-mixed") { "mixed-12-18-12" } else { "uniform-12" }
+          if ([string]$nativeReceipt.composition_profile -ne $expectedProfile -or
+              [string]$structuralReceipt.composition_profile -ne $expectedProfile) {
+            throw "Publisher research profile mismatch: expected $expectedProfile"
+          }
+          if ($expectedProfile -eq "mixed-12-18-12" -and
+              ($null -eq $structuralReceipt.mixed_size_research -or
+               [bool]$structuralReceipt.mixed_size_research.mixed_size_product_authority_granted)) {
+            throw "native mixed-size witness missing or wrongly grants product authority"
+          }
+
+      - name: Stage partial source-safe 0.75 receipt after failure
+        if: ${{ failure() && needs.gate.outputs.command_mode == 'research_0p75' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+
+          $analysis = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis"
+          $candidates = @(
+            (Join-Path $analysis "paragraph-line-spacing-0p75-native-01.json"),
+            (Join-Path $analysis "paragraph-line-spacing-0p75-structural.json")
+          )
+
+          $copied = 0
+          foreach ($path in $candidates) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              continue
+            }
+
+            $text = Get-Content -LiteralPath $path -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "partial 0.75 receipt contains an absolute filesystem path"
+            }
+            [void]($text | ConvertFrom-Json)
+            Copy-Item -LiteralPath $path -Destination $evidence -Force
+            $copied += 1
+          }
+
+          Write-Host ("PUB_RE_0P75_PARTIAL_EVIDENCE copied={0}" -f $copied)
+
+      - name: Upload partial source-safe 0.75 receipt after failure
+        if: ${{ failure() && needs.gate.outputs.command_mode == 'research_0p75' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-paragraph-line-spacing-0p75-partial-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Stage source-safe 0.75 research receipts
+        if: ${{ needs.gate.outputs.command_mode == 'research_0p75' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          $native = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\paragraph-line-spacing-0p75-native-01.json"
+          $structural = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\paragraph-line-spacing-0p75-structural.json"
+          foreach ($path in @($native, $structural)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "required source-safe 0.75 receipt missing"
+            }
+            $text = Get-Content -LiteralPath $path -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "source-safe 0.75 receipt contains an absolute filesystem path"
+            }
+            [void]($text | ConvertFrom-Json)
+            Copy-Item -LiteralPath $path -Destination $evidence -Force
+          }
+
+          $receipt = Get-Content -LiteralPath $structural -Raw | ConvertFrom-Json
+          if ($receipt.schema -ne "chaptera.paragraph-line-spacing-0p75-structural.v1") {
+            throw "unexpected 0.75 structural receipt schema"
+          }
+          if ($receipt.experiment_id -ne "PARAGRAPH-LINE-SPACING-0P75-NATIVE-01") {
+            throw "unexpected 0.75 structural experiment id"
+          }
+          if ($receipt.native_114300_authority_candidate -isnot [bool]) {
+            throw "0.75 structural receipt must carry a boolean authority candidate"
+          }
+
+      - name: Upload source-safe 0.75 research receipts only
+        if: ${{ needs.gate.outputs.command_mode == 'research_0p75' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-paragraph-line-spacing-0p75-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: error
+          retention-days: 14
+
+
+      - name: Execute T352 Publisher geometry matrix
+        if: ${{ needs.gate.outputs.command_mode == 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          & tools/windows/run_t352_native.ps1 -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT
+          if (-not $?) { throw "T352 native experiment failed" }
+          $result = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\t352-native-observations.json"
+          if (-not (Test-Path -LiteralPath $result -PathType Leaf)) {
+            throw "T352 is missing the required native evidence receipt"
+          }
+          $obj = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
+          if ($obj.schema -ne "chaptera.t352-native-observations.v1" -or
+              [int]$obj.observed_arm_count -ne 4) {
+            throw "T352 native result is incomplete"
+          }
+
+      - name: Stage source-safe T352 evidence even on partial failure
+        if: ${{ always() && needs.gate.outputs.command_mode == 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $from = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis"
+          $to = Join-Path $env:PUB_RE_NATIVE_OUTPUT "t352-evidence"
+          New-Item -ItemType Directory -Force -Path $to | Out-Null
+          if (-not (Test-Path -LiteralPath $from -PathType Container)) { exit 0 }
+          foreach ($file in @(Get-ChildItem -LiteralPath $from -File -Filter "*.json")) {
+            if ($file.Name -notmatch '^t352-[a-z0-9-]+\.json$' -and
+                $file.Name -notmatch '^(control|both_consistent|contents_only|escher_only)-(before|after)-(cfb|projections)\.json$') {
+              throw "T352 evidence filename violates the allowlist"
+            }
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "T352 source-safe receipt contains an absolute path"
+            }
+            [void]($text | ConvertFrom-Json)
+            Copy-Item -LiteralPath $file.FullName -Destination $to
+          }
+
+      - name: Upload source-safe T352 evidence
+        if: ${{ always() && needs.gate.outputs.command_mode == 'research_t352' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-t352-projection-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\t352-evidence\*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Remove private native inputs and outputs
+        if: always()
+        shell: powershell
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:PUB_RE_NATIVE_OUTPUT) -and (Test-Path -LiteralPath $env:PUB_RE_NATIVE_OUTPUT)) {
+            Remove-Item -LiteralPath $env:PUB_RE_NATIVE_OUTPUT -Recurse -Force
+          }
+ -or
+                  $env:PUB_RE_SHAPE_ID -notmatch '^[1-9][0-9]{0,9}              if ($env:PUB_RE_PAGE_ID -notmatch '^[1-9][0-9]{0,9}$' -or
+                  $env:PUB_RE_SHAPE_ID -notmatch '^[1-9][0-9]{0,9}$' -or
+                  $env:PUB_RE_DELTA_DEGREES -notmatch '^-?[0-9]+([.][0-9]{1,6})?$') {
+                throw "rotation selector or delta is invalid"
+              }
+
+              $pageId64 = [int64]$env:PUB_RE_PAGE_ID
+              $shapeId64 = [int64]$env:PUB_RE_SHAPE_ID
+              $delta = [double]::Parse(
+                $env:PUB_RE_DELTA_DEGREES,
+                [System.Globalization.CultureInfo]::InvariantCulture
+              )
+              if ($pageId64 -gt [int]::MaxValue -or $shapeId64 -gt [int]::MaxValue) {
+                throw "Publisher selector is outside signed 32-bit bounds"
+              }
+              if ([math]::Abs($delta) -lt 0.000001 -or [math]::Abs($delta) -gt 45.0) {
+                throw "rotation delta must be nonzero and within 45 degrees"
+              }
+
+              $experimentPrefix = "rotate"
+              $operation = [ordered]@{
+                kind = "shape_rotation_delta"
+                selector = [ordered]@{
+                  page_id = [int]$pageId64
+                  shape_id = [int]$shapeId64
+                }
+                delta_degrees = $delta
+              }
+            }
+
+            $generated = [ordered]@{
+              schema = "chaptera.pub-re-native-experiment.v1"
+              experiment_id = ("{0}-{1}-{2}" -f $experimentPrefix, $env:PUB_RE_FIXTURE_ALIAS, $env:GITHUB_RUN_ID)
+              source = [ordered]@{
+                path = $download
+                expected_sha256 = $expectedSha
+              }
+              operation = $operation
+              policy = [ordered]@{
+                writer = "current"
+                visible = $false
+                process_exit_grace_seconds = 60
+              }
+            }
+
+            $manifest = Join-Path $output "generated-manifest.json"
+            $generated | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifest -Encoding utf8
+          }
+          else {
+            throw "unsupported PUB RE native command mode"
+          }
+
+          if ($env:PUB_RE_COMMAND_MODE -notin @("research_0p75", "research_t352")) {
+            "PUB_RE_NATIVE_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
+      - name: Build standalone PUB RE
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        shell: powershell
+        run: cargo build --release --manifest-path tools/pub-re/Cargo.toml --bin pub-re
+
+      - name: Run bounded native Publisher transaction
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $preexistingPublisher = @(Get-Process -Name MSPUB -ErrorAction SilentlyContinue)
+          if ($preexistingPublisher.Count -ne 0) {
+            throw "publisher_busy_before_bounded_wrapper"
+          }
+
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "private"
+          New-Item -ItemType Directory -Force -Path $private | Out-Null
+          $stdout = Join-Path $private "native-child.stdout.txt"
+          $stderr = Join-Path $private "native-child.stderr.txt"
+          $script = Join-Path $env:GITHUB_WORKSPACE "tools\pub-re\windows\Invoke-PubReNativeExperiment.ps1"
+          $env:PUB_RE_NATIVE_CHILD_SCRIPT = $script
+          $startedUtc = [DateTime]::UtcNow
+
+          $childCommand = @'
+          $ErrorActionPreference = "Stop"
+          & $env:PUB_RE_NATIVE_CHILD_SCRIPT -ManifestPath $env:PUB_RE_NATIVE_MANIFEST -OutputRoot $env:PUB_RE_NATIVE_OUTPUT
+          if (-not $?) { exit 1 }
+          '@
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
+          $powershellExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          $process = Start-Process `
+            -FilePath $powershellExe `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encoded) `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr `
+            -PassThru
+
+          $finished = $process.WaitForExit(180000)
+          if (-not $finished) {
+            Write-Host "PUB_RE_NATIVE_WATCHDOG timeout_seconds=180 child_pid=$($process.Id)"
+
+            if (-not $process.HasExited) {
+              try { Stop-Process -Id $process.Id -Force -ErrorAction Stop } catch {}
+              try { [void]$process.WaitForExit(10000) } catch {}
+            }
+
+            $ownedPublisher = @(
+              Get-Process -Name MSPUB -ErrorAction SilentlyContinue | Where-Object {
+                try {
+                  $_.StartTime.ToUniversalTime() -ge $startedUtc.AddSeconds(-2)
+                } catch {
+                  $false
+                }
+              }
+            )
+            foreach ($publisherProcess in $ownedPublisher) {
+              Write-Host "PUB_RE_NATIVE_WATCHDOG terminating_mspub_pid=$($publisherProcess.Id)"
+              try { Stop-Process -Id $publisherProcess.Id -Force -ErrorAction Stop } catch {}
+            }
+
+            Start-Sleep -Seconds 2
+            throw "native_transaction_timeout"
+          }
+
+          $process.WaitForExit()
+          $process.Refresh()
+          if (-not $process.HasExited) {
+            throw "native_transaction_child_exit_state_unavailable"
+          }
+
+          if (Test-Path -LiteralPath $stdout -PathType Leaf) {
+            Get-Content -LiteralPath $stdout
+          }
+          if (Test-Path -LiteralPath $stderr -PathType Leaf) {
+            Get-Content -LiteralPath $stderr
+          }
+          $exitCode = [int]$process.ExitCode
+          if ($exitCode -ne 0) {
+            throw "native_transaction_child_failed_exit_$exitCode"
+          }
+
+      - name: Validate failed native stage receipt
+        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $stage = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence\native-stage-receipt.json"
+          if (-not (Test-Path -LiteralPath $stage -PathType Leaf)) {
+            Write-Host "No native stage receipt was produced before failure."
+            exit 0
+          }
+
+          $text = Get-Content -LiteralPath $stage -Raw
+          if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+            throw "native stage receipt contains an absolute filesystem path"
+          }
+
+          $receipt = $text | ConvertFrom-Json
+          if ([string]$receipt.schema -ne "chaptera.pub-re-native-stage.v1") {
+            throw "unexpected native stage receipt schema"
+          }
+          if ([string]::IsNullOrWhiteSpace([string]$receipt.experiment_id)) {
+            throw "native stage receipt is missing experiment_id"
+          }
+          if ([string]::IsNullOrWhiteSpace([string]$receipt.stage)) {
+            throw "native stage receipt is missing stage"
+          }
+
+      - name: Upload failed native stage receipt
+        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-failure-stage
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\native-stage-receipt.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Join native output to CFB and OfficeArt provenance
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "private"
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $controlPath = Join-Path $private "control.json"
+          $control = Get-Content -LiteralPath $controlPath -Raw | ConvertFrom-Json
+
+          if ([bool]$control.has_diff) {
+            $metadata = cargo metadata --no-deps --format-version 1 --manifest-path tools/pub-re/Cargo.toml | ConvertFrom-Json
+            $pubRe = Join-Path ([string]$metadata.target_directory) "release\pub-re.exe"
+            if (-not (Test-Path -LiteralPath $pubRe -PathType Leaf)) {
+              throw "built pub-re.exe was not found in Cargo target directory"
+            }
+
+            $diffManifest = Join-Path $private "diff-manifest.json"
+            $cfbReceipt = Join-Path $evidence "cfb-receipt.json"
+            & $pubRe analyze `
+              --manifest $diffManifest `
+              --output $cfbReceipt
+
+            if (-not [string]::IsNullOrWhiteSpace([string]$control.officeart_stream)) {
+              & $pubRe attribute-officeart `
+                --manifest $diffManifest `
+                --stream ([string]$control.officeart_stream) `
+                --output (Join-Path $evidence "officeart-receipt.json")
+            }
+          }
+
+      - name: Enforce source-safe evidence boundary
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $files = @(Get-ChildItem -LiteralPath $evidence -Filter *.json -File)
+          if ($files.Count -lt 1) {
+            throw "native experiment emitted no JSON evidence"
+          }
+
+          foreach ($file in $files) {
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "source-safe evidence contains an absolute filesystem path"
+            }
+            if ($text -match '(?i)"raw_document_bytes_emitted"\s*:\s*true') {
+              throw "source-safe evidence claims raw document bytes were emitted"
+            }
+            if ($text -match '(?i)"raw_stream_bytes_emitted"\s*:\s*true') {
+              throw "source-safe evidence claims raw stream bytes were emitted"
+            }
+            [void](Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json)
+          }
+
+      - name: Upload source-safe receipts only
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Run bounded 0.75 paragraph research
+        if: ${{ needs.gate.outputs.command_mode == 'research_0p75' }}
+        shell: powershell
+        env:
+          PUB_RE_RESEARCH_ID: ${{ needs.gate.outputs.research_id }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          # Explicitly bind the switch in Windows PowerShell 5.1; splatting
+          # a trailing hashtable previously produced a green uniform-12 run
+          # for an owner-approved mixed command (run 37858450713).
+          if ($env:PUB_RE_RESEARCH_ID -eq "paragraph-line-spacing-0p75-mixed") {
+            & tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1 `
+              -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT `
+              -ReturnZip $env:PUB_RE_RESEARCH_RETURN_ZIP `
+              -MixedSize
+            if (-not $?) { throw "bounded mixed 0.75 paragraph research failed" }
+          }
+          elseif ($env:PUB_RE_RESEARCH_ID -eq "paragraph-line-spacing-0p75") {
+            & tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1 `
+              -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT `
+              -ReturnZip $env:PUB_RE_RESEARCH_RETURN_ZIP
+            if (-not $?) { throw "bounded uniform 0.75 paragraph research failed" }
+          }
+          else {
+            throw "unsupported bounded paragraph research profile"
+          }
+
+          # Never accept a successful PowerShell invocation as proof the
+          # requested profile ran. Check *both* source-safe receipts before
+          # the workflow is allowed to mark the native job green.
+          $nativePath = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\paragraph-line-spacing-0p75-native-01.json"
+          $structuralPath = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\paragraph-line-spacing-0p75-structural.json"
+          if (-not (Test-Path -LiteralPath $nativePath -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $structuralPath -PathType Leaf)) {
+            throw "publisher research receipt missing for requested profile"
+          }
+          $nativeReceipt = Get-Content -LiteralPath $nativePath -Raw | ConvertFrom-Json
+          $structuralReceipt = Get-Content -LiteralPath $structuralPath -Raw | ConvertFrom-Json
+          $expectedProfile = if ($env:PUB_RE_RESEARCH_ID -eq "paragraph-line-spacing-0p75-mixed") { "mixed-12-18-12" } else { "uniform-12" }
+          if ([string]$nativeReceipt.composition_profile -ne $expectedProfile -or
+              [string]$structuralReceipt.composition_profile -ne $expectedProfile) {
+            throw "Publisher research profile mismatch: expected $expectedProfile"
+          }
+          if ($expectedProfile -eq "mixed-12-18-12" -and
+              ($null -eq $structuralReceipt.mixed_size_research -or
+               [bool]$structuralReceipt.mixed_size_research.mixed_size_product_authority_granted)) {
+            throw "native mixed-size witness missing or wrongly grants product authority"
+          }
+
+      - name: Stage partial source-safe 0.75 receipt after failure
+        if: ${{ failure() && needs.gate.outputs.command_mode == 'research_0p75' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+
+          $analysis = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis"
+          $candidates = @(
+            (Join-Path $analysis "paragraph-line-spacing-0p75-native-01.json"),
+            (Join-Path $analysis "paragraph-line-spacing-0p75-structural.json")
+          )
+
+          $copied = 0
+          foreach ($path in $candidates) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              continue
+            }
+
+            $text = Get-Content -LiteralPath $path -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "partial 0.75 receipt contains an absolute filesystem path"
+            }
+            [void]($text | ConvertFrom-Json)
+            Copy-Item -LiteralPath $path -Destination $evidence -Force
+            $copied += 1
+          }
+
+          Write-Host ("PUB_RE_0P75_PARTIAL_EVIDENCE copied={0}" -f $copied)
+
+      - name: Upload partial source-safe 0.75 receipt after failure
+        if: ${{ failure() && needs.gate.outputs.command_mode == 'research_0p75' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-paragraph-line-spacing-0p75-partial-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Stage source-safe 0.75 research receipts
+        if: ${{ needs.gate.outputs.command_mode == 'research_0p75' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          $native = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\paragraph-line-spacing-0p75-native-01.json"
+          $structural = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\paragraph-line-spacing-0p75-structural.json"
+          foreach ($path in @($native, $structural)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "required source-safe 0.75 receipt missing"
+            }
+            $text = Get-Content -LiteralPath $path -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "source-safe 0.75 receipt contains an absolute filesystem path"
+            }
+            [void]($text | ConvertFrom-Json)
+            Copy-Item -LiteralPath $path -Destination $evidence -Force
+          }
+
+          $receipt = Get-Content -LiteralPath $structural -Raw | ConvertFrom-Json
+          if ($receipt.schema -ne "chaptera.paragraph-line-spacing-0p75-structural.v1") {
+            throw "unexpected 0.75 structural receipt schema"
+          }
+          if ($receipt.experiment_id -ne "PARAGRAPH-LINE-SPACING-0P75-NATIVE-01") {
+            throw "unexpected 0.75 structural experiment id"
+          }
+          if ($receipt.native_114300_authority_candidate -isnot [bool]) {
+            throw "0.75 structural receipt must carry a boolean authority candidate"
+          }
+
+      - name: Upload source-safe 0.75 research receipts only
+        if: ${{ needs.gate.outputs.command_mode == 'research_0p75' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-paragraph-line-spacing-0p75-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: error
+          retention-days: 14
+
+
+      - name: Execute T352 Publisher geometry matrix
+        if: ${{ needs.gate.outputs.command_mode == 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          & tools/windows/run_t352_native.ps1 -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT
+          if (-not $?) { throw "T352 native experiment failed" }
+          $result = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\t352-native-observations.json"
+          if (-not (Test-Path -LiteralPath $result -PathType Leaf)) {
+            throw "T352 is missing the required native evidence receipt"
+          }
+          $obj = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
+          if ($obj.schema -ne "chaptera.t352-native-observations.v1" -or
+              [int]$obj.observed_arm_count -ne 4) {
+            throw "T352 native result is incomplete"
+          }
+
+      - name: Stage source-safe T352 evidence even on partial failure
+        if: ${{ always() && needs.gate.outputs.command_mode == 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $from = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis"
+          $to = Join-Path $env:PUB_RE_NATIVE_OUTPUT "t352-evidence"
+          New-Item -ItemType Directory -Force -Path $to | Out-Null
+          if (-not (Test-Path -LiteralPath $from -PathType Container)) { exit 0 }
+          foreach ($file in @(Get-ChildItem -LiteralPath $from -File -Filter "*.json")) {
+            if ($file.Name -notmatch '^t352-[a-z0-9-]+\.json$' -and
+                $file.Name -notmatch '^(control|both_consistent|contents_only|escher_only)-(before|after)-(cfb|projections)\.json$') {
+              throw "T352 evidence filename violates the allowlist"
+            }
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "T352 source-safe receipt contains an absolute path"
+            }
+            [void]($text | ConvertFrom-Json)
+            Copy-Item -LiteralPath $file.FullName -Destination $to
+          }
+
+      - name: Upload source-safe T352 evidence
+        if: ${{ always() && needs.gate.outputs.command_mode == 'research_t352' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-t352-projection-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\t352-evidence\*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Remove private native inputs and outputs
+        if: always()
+        shell: powershell
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:PUB_RE_NATIVE_OUTPUT) -and (Test-Path -LiteralPath $env:PUB_RE_NATIVE_OUTPUT)) {
+            Remove-Item -LiteralPath $env:PUB_RE_NATIVE_OUTPUT -Recurse -Force
+          }
+ -or
+                  $env:PUB_RE_DELTA_DEGREES -notmatch '^-?[0-9]+([.][0-9]{1,6})?              if ($env:PUB_RE_PAGE_ID -notmatch '^[1-9][0-9]{0,9}$' -or
+                  $env:PUB_RE_SHAPE_ID -notmatch '^[1-9][0-9]{0,9}$' -or
+                  $env:PUB_RE_DELTA_DEGREES -notmatch '^-?[0-9]+([.][0-9]{1,6})?$') {
+                throw "rotation selector or delta is invalid"
+              }
+
+              $pageId64 = [int64]$env:PUB_RE_PAGE_ID
+              $shapeId64 = [int64]$env:PUB_RE_SHAPE_ID
+              $delta = [double]::Parse(
+                $env:PUB_RE_DELTA_DEGREES,
+                [System.Globalization.CultureInfo]::InvariantCulture
+              )
+              if ($pageId64 -gt [int]::MaxValue -or $shapeId64 -gt [int]::MaxValue) {
+                throw "Publisher selector is outside signed 32-bit bounds"
+              }
+              if ([math]::Abs($delta) -lt 0.000001 -or [math]::Abs($delta) -gt 45.0) {
+                throw "rotation delta must be nonzero and within 45 degrees"
+              }
+
+              $experimentPrefix = "rotate"
+              $operation = [ordered]@{
+                kind = "shape_rotation_delta"
+                selector = [ordered]@{
+                  page_id = [int]$pageId64
+                  shape_id = [int]$shapeId64
+                }
+                delta_degrees = $delta
+              }
+            }
+
+            $generated = [ordered]@{
+              schema = "chaptera.pub-re-native-experiment.v1"
+              experiment_id = ("{0}-{1}-{2}" -f $experimentPrefix, $env:PUB_RE_FIXTURE_ALIAS, $env:GITHUB_RUN_ID)
+              source = [ordered]@{
+                path = $download
+                expected_sha256 = $expectedSha
+              }
+              operation = $operation
+              policy = [ordered]@{
+                writer = "current"
+                visible = $false
+                process_exit_grace_seconds = 60
+              }
+            }
+
+            $manifest = Join-Path $output "generated-manifest.json"
+            $generated | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifest -Encoding utf8
+          }
+          else {
+            throw "unsupported PUB RE native command mode"
+          }
+
+          if ($env:PUB_RE_COMMAND_MODE -notin @("research_0p75", "research_t352")) {
+            "PUB_RE_NATIVE_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
+      - name: Build standalone PUB RE
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        shell: powershell
+        run: cargo build --release --manifest-path tools/pub-re/Cargo.toml --bin pub-re
+
+      - name: Run bounded native Publisher transaction
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $preexistingPublisher = @(Get-Process -Name MSPUB -ErrorAction SilentlyContinue)
+          if ($preexistingPublisher.Count -ne 0) {
+            throw "publisher_busy_before_bounded_wrapper"
+          }
+
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "private"
+          New-Item -ItemType Directory -Force -Path $private | Out-Null
+          $stdout = Join-Path $private "native-child.stdout.txt"
+          $stderr = Join-Path $private "native-child.stderr.txt"
+          $script = Join-Path $env:GITHUB_WORKSPACE "tools\pub-re\windows\Invoke-PubReNativeExperiment.ps1"
+          $env:PUB_RE_NATIVE_CHILD_SCRIPT = $script
+          $startedUtc = [DateTime]::UtcNow
+
+          $childCommand = @'
+          $ErrorActionPreference = "Stop"
+          & $env:PUB_RE_NATIVE_CHILD_SCRIPT -ManifestPath $env:PUB_RE_NATIVE_MANIFEST -OutputRoot $env:PUB_RE_NATIVE_OUTPUT
+          if (-not $?) { exit 1 }
+          '@
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
+          $powershellExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          $process = Start-Process `
+            -FilePath $powershellExe `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encoded) `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr `
+            -PassThru
+
+          $finished = $process.WaitForExit(180000)
+          if (-not $finished) {
+            Write-Host "PUB_RE_NATIVE_WATCHDOG timeout_seconds=180 child_pid=$($process.Id)"
+
+            if (-not $process.HasExited) {
+              try { Stop-Process -Id $process.Id -Force -ErrorAction Stop } catch {}
+              try { [void]$process.WaitForExit(10000) } catch {}
+            }
+
+            $ownedPublisher = @(
+              Get-Process -Name MSPUB -ErrorAction SilentlyContinue | Where-Object {
+                try {
+                  $_.StartTime.ToUniversalTime() -ge $startedUtc.AddSeconds(-2)
+                } catch {
+                  $false
+                }
+              }
+            )
+            foreach ($publisherProcess in $ownedPublisher) {
+              Write-Host "PUB_RE_NATIVE_WATCHDOG terminating_mspub_pid=$($publisherProcess.Id)"
+              try { Stop-Process -Id $publisherProcess.Id -Force -ErrorAction Stop } catch {}
+            }
+
+            Start-Sleep -Seconds 2
+            throw "native_transaction_timeout"
+          }
+
+          $process.WaitForExit()
+          $process.Refresh()
+          if (-not $process.HasExited) {
+            throw "native_transaction_child_exit_state_unavailable"
+          }
+
+          if (Test-Path -LiteralPath $stdout -PathType Leaf) {
+            Get-Content -LiteralPath $stdout
+          }
+          if (Test-Path -LiteralPath $stderr -PathType Leaf) {
+            Get-Content -LiteralPath $stderr
+          }
+          $exitCode = [int]$process.ExitCode
+          if ($exitCode -ne 0) {
+            throw "native_transaction_child_failed_exit_$exitCode"
+          }
+
+      - name: Validate failed native stage receipt
+        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $stage = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence\native-stage-receipt.json"
+          if (-not (Test-Path -LiteralPath $stage -PathType Leaf)) {
+            Write-Host "No native stage receipt was produced before failure."
+            exit 0
+          }
+
+          $text = Get-Content -LiteralPath $stage -Raw
+          if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+            throw "native stage receipt contains an absolute filesystem path"
+          }
+
+          $receipt = $text | ConvertFrom-Json
+          if ([string]$receipt.schema -ne "chaptera.pub-re-native-stage.v1") {
+            throw "unexpected native stage receipt schema"
+          }
+          if ([string]::IsNullOrWhiteSpace([string]$receipt.experiment_id)) {
+            throw "native stage receipt is missing experiment_id"
+          }
+          if ([string]::IsNullOrWhiteSpace([string]$receipt.stage)) {
+            throw "native stage receipt is missing stage"
+          }
+
+      - name: Upload failed native stage receipt
+        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-failure-stage
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\native-stage-receipt.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Join native output to CFB and OfficeArt provenance
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "private"
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $controlPath = Join-Path $private "control.json"
+          $control = Get-Content -LiteralPath $controlPath -Raw | ConvertFrom-Json
+
+          if ([bool]$control.has_diff) {
+            $metadata = cargo metadata --no-deps --format-version 1 --manifest-path tools/pub-re/Cargo.toml | ConvertFrom-Json
+            $pubRe = Join-Path ([string]$metadata.target_directory) "release\pub-re.exe"
+            if (-not (Test-Path -LiteralPath $pubRe -PathType Leaf)) {
+              throw "built pub-re.exe was not found in Cargo target directory"
+            }
+
+            $diffManifest = Join-Path $private "diff-manifest.json"
+            $cfbReceipt = Join-Path $evidence "cfb-receipt.json"
+            & $pubRe analyze `
+              --manifest $diffManifest `
+              --output $cfbReceipt
+
+            if (-not [string]::IsNullOrWhiteSpace([string]$control.officeart_stream)) {
+              & $pubRe attribute-officeart `
+                --manifest $diffManifest `
+                --stream ([string]$control.officeart_stream) `
+                --output (Join-Path $evidence "officeart-receipt.json")
+            }
+          }
+
+      - name: Enforce source-safe evidence boundary
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $files = @(Get-ChildItem -LiteralPath $evidence -Filter *.json -File)
+          if ($files.Count -lt 1) {
+            throw "native experiment emitted no JSON evidence"
+          }
+
+          foreach ($file in $files) {
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "source-safe evidence contains an absolute filesystem path"
+            }
+            if ($text -match '(?i)"raw_document_bytes_emitted"\s*:\s*true') {
+              throw "source-safe evidence claims raw document bytes were emitted"
+            }
+            if ($text -match '(?i)"raw_stream_bytes_emitted"\s*:\s*true') {
+              throw "source-safe evidence claims raw stream bytes were emitted"
+            }
+            [void](Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json)
+          }
+
+      - name: Upload source-safe receipts only
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Run bounded 0.75 paragraph research
+        if: ${{ needs.gate.outputs.command_mode == 'research_0p75' }}
+        shell: powershell
+        env:
+          PUB_RE_RESEARCH_ID: ${{ needs.gate.outputs.research_id }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          # Explicitly bind the switch in Windows PowerShell 5.1; splatting
+          # a trailing hashtable previously produced a green uniform-12 run
+          # for an owner-approved mixed command (run 37858450713).
+          if ($env:PUB_RE_RESEARCH_ID -eq "paragraph-line-spacing-0p75-mixed") {
+            & tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1 `
+              -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT `
+              -ReturnZip $env:PUB_RE_RESEARCH_RETURN_ZIP `
+              -MixedSize
+            if (-not $?) { throw "bounded mixed 0.75 paragraph research failed" }
+          }
+          elseif ($env:PUB_RE_RESEARCH_ID -eq "paragraph-line-spacing-0p75") {
+            & tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1 `
+              -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT `
+              -ReturnZip $env:PUB_RE_RESEARCH_RETURN_ZIP
+            if (-not $?) { throw "bounded uniform 0.75 paragraph research failed" }
+          }
+          else {
+            throw "unsupported bounded paragraph research profile"
+          }
+
+          # Never accept a successful PowerShell invocation as proof the
+          # requested profile ran. Check *both* source-safe receipts before
+          # the workflow is allowed to mark the native job green.
+          $nativePath = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\paragraph-line-spacing-0p75-native-01.json"
+          $structuralPath = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\paragraph-line-spacing-0p75-structural.json"
+          if (-not (Test-Path -LiteralPath $nativePath -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $structuralPath -PathType Leaf)) {
+            throw "publisher research receipt missing for requested profile"
+          }
+          $nativeReceipt = Get-Content -LiteralPath $nativePath -Raw | ConvertFrom-Json
+          $structuralReceipt = Get-Content -LiteralPath $structuralPath -Raw | ConvertFrom-Json
+          $expectedProfile = if ($env:PUB_RE_RESEARCH_ID -eq "paragraph-line-spacing-0p75-mixed") { "mixed-12-18-12" } else { "uniform-12" }
+          if ([string]$nativeReceipt.composition_profile -ne $expectedProfile -or
+              [string]$structuralReceipt.composition_profile -ne $expectedProfile) {
+            throw "Publisher research profile mismatch: expected $expectedProfile"
+          }
+          if ($expectedProfile -eq "mixed-12-18-12" -and
+              ($null -eq $structuralReceipt.mixed_size_research -or
+               [bool]$structuralReceipt.mixed_size_research.mixed_size_product_authority_granted)) {
+            throw "native mixed-size witness missing or wrongly grants product authority"
+          }
+
+      - name: Stage partial source-safe 0.75 receipt after failure
+        if: ${{ failure() && needs.gate.outputs.command_mode == 'research_0p75' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+
+          $analysis = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis"
+          $candidates = @(
+            (Join-Path $analysis "paragraph-line-spacing-0p75-native-01.json"),
+            (Join-Path $analysis "paragraph-line-spacing-0p75-structural.json")
+          )
+
+          $copied = 0
+          foreach ($path in $candidates) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              continue
+            }
+
+            $text = Get-Content -LiteralPath $path -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "partial 0.75 receipt contains an absolute filesystem path"
+            }
+            [void]($text | ConvertFrom-Json)
+            Copy-Item -LiteralPath $path -Destination $evidence -Force
+            $copied += 1
+          }
+
+          Write-Host ("PUB_RE_0P75_PARTIAL_EVIDENCE copied={0}" -f $copied)
+
+      - name: Upload partial source-safe 0.75 receipt after failure
+        if: ${{ failure() && needs.gate.outputs.command_mode == 'research_0p75' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-paragraph-line-spacing-0p75-partial-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Stage source-safe 0.75 research receipts
+        if: ${{ needs.gate.outputs.command_mode == 'research_0p75' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          $native = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\paragraph-line-spacing-0p75-native-01.json"
+          $structural = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\paragraph-line-spacing-0p75-structural.json"
+          foreach ($path in @($native, $structural)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "required source-safe 0.75 receipt missing"
+            }
+            $text = Get-Content -LiteralPath $path -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "source-safe 0.75 receipt contains an absolute filesystem path"
+            }
+            [void]($text | ConvertFrom-Json)
+            Copy-Item -LiteralPath $path -Destination $evidence -Force
+          }
+
+          $receipt = Get-Content -LiteralPath $structural -Raw | ConvertFrom-Json
+          if ($receipt.schema -ne "chaptera.paragraph-line-spacing-0p75-structural.v1") {
+            throw "unexpected 0.75 structural receipt schema"
+          }
+          if ($receipt.experiment_id -ne "PARAGRAPH-LINE-SPACING-0P75-NATIVE-01") {
+            throw "unexpected 0.75 structural experiment id"
+          }
+          if ($receipt.native_114300_authority_candidate -isnot [bool]) {
+            throw "0.75 structural receipt must carry a boolean authority candidate"
+          }
+
+      - name: Upload source-safe 0.75 research receipts only
+        if: ${{ needs.gate.outputs.command_mode == 'research_0p75' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-paragraph-line-spacing-0p75-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: error
+          retention-days: 14
+
+
+      - name: Execute T352 Publisher geometry matrix
+        if: ${{ needs.gate.outputs.command_mode == 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          & tools/windows/run_t352_native.ps1 -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT
+          if (-not $?) { throw "T352 native experiment failed" }
+          $result = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\t352-native-observations.json"
+          if (-not (Test-Path -LiteralPath $result -PathType Leaf)) {
+            throw "T352 is missing the required native evidence receipt"
+          }
+          $obj = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
+          if ($obj.schema -ne "chaptera.t352-native-observations.v1" -or
+              [int]$obj.observed_arm_count -ne 4) {
+            throw "T352 native result is incomplete"
+          }
+
+      - name: Stage source-safe T352 evidence even on partial failure
+        if: ${{ always() && needs.gate.outputs.command_mode == 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $from = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis"
+          $to = Join-Path $env:PUB_RE_NATIVE_OUTPUT "t352-evidence"
+          New-Item -ItemType Directory -Force -Path $to | Out-Null
+          if (-not (Test-Path -LiteralPath $from -PathType Container)) { exit 0 }
+          foreach ($file in @(Get-ChildItem -LiteralPath $from -File -Filter "*.json")) {
+            if ($file.Name -notmatch '^t352-[a-z0-9-]+\.json$' -and
+                $file.Name -notmatch '^(control|both_consistent|contents_only|escher_only)-(before|after)-(cfb|projections)\.json$') {
+              throw "T352 evidence filename violates the allowlist"
+            }
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "T352 source-safe receipt contains an absolute path"
+            }
+            [void]($text | ConvertFrom-Json)
+            Copy-Item -LiteralPath $file.FullName -Destination $to
+          }
+
+      - name: Upload source-safe T352 evidence
+        if: ${{ always() && needs.gate.outputs.command_mode == 'research_t352' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-t352-projection-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\t352-evidence\*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Remove private native inputs and outputs
+        if: always()
+        shell: powershell
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:PUB_RE_NATIVE_OUTPUT) -and (Test-Path -LiteralPath $env:PUB_RE_NATIVE_OUTPUT)) {
+            Remove-Item -LiteralPath $env:PUB_RE_NATIVE_OUTPUT -Recurse -Force
+          }
+) {
+                throw "rotation-pair selector or delta is invalid"
+              }
+              $pageId64 = [int64]$env:PUB_RE_PAGE_ID
+              $shapeId64 = [int64]$env:PUB_RE_SHAPE_ID
+              $delta = [double]::Parse(
+                $env:PUB_RE_DELTA_DEGREES,
+                [System.Globalization.CultureInfo]::InvariantCulture
+              )
+              if ($pageId64 -gt [int]::MaxValue -or $shapeId64 -gt [int]::MaxValue) {
+                throw "Publisher selector is outside signed 32-bit bounds"
+              }
+              if ([math]::Abs($delta) -lt 0.000001 -or [math]::Abs($delta) -gt 45.0) {
+                throw "rotation delta must be nonzero and within 45 degrees"
+              }
+
+              "PUB_RE_ROTATION_PAIR_SOURCE=$download" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+              "PUB_RE_ROTATION_PAIR_SHA=$expectedSha" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            }
+            elseif ($env:PUB_RE_COMMAND_MODE -eq "snapshot_alias") {
               $experimentPrefix = "snapshot"
               $operation = [ordered]@{
                 kind = "snapshot_only"
