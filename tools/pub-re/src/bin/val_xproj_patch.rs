@@ -575,7 +575,10 @@ fn prepare_independent(
         }
     }
     let axis_flags: &[&str] = if is_height {
-        &["height_numeric_patchable", "admitted_independent_height_target"]
+        &[
+            "height_numeric_patchable",
+            "admitted_independent_height_target",
+        ]
     } else {
         &[
             "numeric_patchable",
@@ -616,7 +619,10 @@ fn prepare_independent(
             "anchor_xe_emu"
         },
     )?;
-    if dimension <= 0 || dimension != anchor_dimension || (!is_height && dimension == BASE_WIDTH_EMU) {
+    if dimension <= 0
+        || dimension != anchor_dimension
+        || (!is_height && dimension == BASE_WIDTH_EMU)
+    {
         bail!("independent dimension violates baseline equality/novelty gate");
     }
     let changed_dimension = dimension
@@ -822,7 +828,13 @@ fn main() -> Result<()> {
             } else {
                 IndependentAxis::Width
             };
-            prepare_independent(Path::new(base), Path::new(census), id, Path::new(output), axis)
+            prepare_independent(
+                Path::new(base),
+                Path::new(census),
+                id,
+                Path::new(output),
+                axis,
+            )
         }
         [command, base, receipt, output] if command == "prepare" => {
             prepare(Path::new(base), Path::new(receipt), Path::new(output))
@@ -1069,7 +1081,14 @@ mod tests {
             }
         }
         assert!(
-            prepare_independent(&source, &census_path, 306, &tmp.path().join("wrong-id"), IndependentAxis::Width).is_err()
+            prepare_independent(
+                &source,
+                &census_path,
+                306,
+                &tmp.path().join("wrong-id"),
+                IndependentAxis::Width
+            )
+            .is_err()
         );
     }
 
@@ -1119,14 +1138,7 @@ mod tests {
             }]
         });
         write_json(&census_path, &census).unwrap();
-        prepare_independent(
-            &source,
-            &census_path,
-            305,
-            &arms,
-            IndependentAxis::Height,
-        )
-        .unwrap();
+        prepare_independent(&source, &census_path, 305, &arms, IndependentAxis::Height).unwrap();
         assert_eq!(sha(&fs::read(&source).unwrap()), original_sha);
         let before = all_streams(&source).unwrap();
         for (name, contents_change, escher_change) in [
@@ -1167,7 +1179,7 @@ mod tests {
             }
         }
         let report: Value = serde_json::from_slice(
-            &fs::read(arms.join("t352-independent-height-patch-receipt.json")).unwrap()
+            &fs::read(arms.join("t352-independent-height-patch-receipt.json")).unwrap(),
         )
         .unwrap();
         assert_eq!(
@@ -1204,5 +1216,4 @@ mod tests {
             .is_err()
         );
     }
-
 }
