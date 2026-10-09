@@ -1910,11 +1910,10 @@ mod tests {
 
     use super::{
         MAX_INLINE_IMAGE_RESOURCE_BYTES, MAX_INLINE_IMAGE_TOTAL_BYTES,
-        MAX_INLINE_JPEG_RESOURCE_BYTES,
-        ReaderConfiguredFontResourceV1, ReaderNodeV1, ReaderPageV1, ReaderPaintV1, ReaderRectV1,
-        ReaderTransformV1, SHARED_FALLBACK_FONT_MIME, base64_encode, bind_visible_paint,
-        from_viewer_geometry, from_viewer_geometry_with_fonts, inline_image_data_url,
-        inline_image_resource_byte_limit,
+        MAX_INLINE_JPEG_RESOURCE_BYTES, ReaderConfiguredFontResourceV1, ReaderNodeV1, ReaderPageV1,
+        ReaderPaintV1, ReaderRectV1, ReaderTransformV1, SHARED_FALLBACK_FONT_MIME, base64_encode,
+        bind_visible_paint, from_viewer_geometry, from_viewer_geometry_with_fonts,
+        inline_image_data_url, inline_image_resource_byte_limit,
         insert_inherited_master_nodes_before_page_locals, insert_projected_nodes_after_targets,
         reader_image_resource, shared_text_font_resource, take_direct_render_text,
     };
@@ -3263,11 +3262,7 @@ mod tests {
             ProbeImageInlineAdmission::Inline
         );
         assert_eq!(
-            classify_probe_image_inline_admission(
-                "image/jpeg",
-                byte_len,
-                byte_len - 1
-            ),
+            classify_probe_image_inline_admission("image/jpeg", byte_len, byte_len - 1),
             ProbeImageInlineAdmission::AggregateBudgetExhausted
         );
     }
