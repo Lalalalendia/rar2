@@ -127,7 +127,10 @@ fn main() -> Result<()> {
         .context("usage: pub-crop-geometry-census INPUT.pub")?;
     let path = Path::new(&input);
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let source_sha256 = format!("{:x}", Sha256::digest(&bytes));
+    let source_sha256 = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
 
     let bundle =
         pub_viewer::open_pub_bundle(&bytes, pub_viewer::viewer_geometry_environment_v0_1())
