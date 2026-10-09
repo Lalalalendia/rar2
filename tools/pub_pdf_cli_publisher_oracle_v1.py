@@ -164,6 +164,16 @@ def safe_loss_summary(receipt: dict) -> dict:
     node_dispositions = Counter(str(node.get("disposition", "unknown")) for node in pdf_report.get("nodes", []))
     node_codes = Counter(str(node.get("code", "unknown")) for node in pdf_report.get("nodes", []))
     pdf_diagnostics = Counter(str(item.get("code", "unknown")) for item in pdf_report.get("diagnostics", []))
+    unsupported_mimes = Counter()
+    for item in pdf_report.get("diagnostics", []):
+        if not isinstance(item, dict) or item.get("code") != "pdf.image.mime_unsupported":
+            continue
+        message = item.get("message")
+        match = re.fullmatch(
+            r'exact image MIME "([A-Za-z0-9][A-Za-z0-9.+-]{0,31}/[A-Za-z0-9][A-Za-z0-9.+-]{0,31})" is outside the bounded PNG/JPEG PDF slice',
+            message if isinstance(message, str) else "",
+        )
+        unsupported_mimes[match.group(1) if match else "unclassified"] += 1
     shaped_diagnostics = Counter(
         str(item.get("code", "unknown"))
         for item in typography.get("shaped_flow", {}).get("diagnostics", [])
@@ -181,6 +191,7 @@ def safe_loss_summary(receipt: dict) -> dict:
         "node_disposition_counts": dict(sorted(node_dispositions.items())),
         "node_code_counts": dict(sorted(node_codes.items())),
         "pdf_diagnostic_code_counts": dict(sorted(pdf_diagnostics.items())),
+        "unsupported_image_mime_counts": dict(sorted(unsupported_mimes.items())),
         "shaped_flow_diagnostic_code_counts": dict(sorted(shaped_diagnostics.items())),
         "skipped_text_code_counts": dict(sorted(skipped_codes.items())),
     }
