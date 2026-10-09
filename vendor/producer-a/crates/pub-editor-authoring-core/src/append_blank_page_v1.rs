@@ -500,5 +500,4 @@ mod tests {
         assert_eq!(document_pages, before);
         assert_eq!(pages, pages_before);
     }
-
 }
