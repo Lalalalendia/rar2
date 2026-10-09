@@ -219,7 +219,10 @@ impl fmt::Display for PdfRenderError {
                 write!(f, "duplicate explicit PDF page-order entry {page_id:?}")
             }
             Self::PageOrderReferencesMissingSurface { page_id } => {
-                write!(f, "explicit PDF page order references missing surface {page_id:?}")
+                write!(
+                    f,
+                    "explicit PDF page order references missing surface {page_id:?}"
+                )
             }
             Self::PageOrderIncomplete { expected, actual } => write!(
                 f,
@@ -311,7 +314,10 @@ pub fn render_bounded_pdf(
             if !seen.insert(*page_id) {
                 return Err(PdfRenderError::DuplicatePageOrder { page_id: *page_id });
             }
-            let Some(surface) = scene.surfaces.iter().find(|surface| surface.origin == *page_id)
+            let Some(surface) = scene
+                .surfaces
+                .iter()
+                .find(|surface| surface.origin == *page_id)
             else {
                 return Err(PdfRenderError::PageOrderReferencesMissingSurface {
                     page_id: *page_id,
@@ -1305,7 +1311,12 @@ mod tests {
         let output = render_bounded_pdf(&scene(), &resources, &target).unwrap();
 
         assert_eq!(
-            output.report.pages.iter().map(|page| page.origin).collect::<Vec<_>>(),
+            output
+                .report
+                .pages
+                .iter()
+                .map(|page| page.origin)
+                .collect::<Vec<_>>(),
             vec![page_id(2), page_id(1)]
         );
     }
