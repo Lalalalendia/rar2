@@ -131,7 +131,6 @@ pub(super) fn required_editor_asset_refs_v1(
         .collect()
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct EffectiveStoryTextMutation {
     pub story_id: StoryId,
