@@ -102,6 +102,24 @@
       ]
     },
     {
+      "name": "pub-editor asset reachability unit",
+      "paths": [
+        "vendor/producer-a/crates/pub-editor/src/asset_reachability_tests.rs"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor",
+          "--lib",
+          "asset_reachability_tests"
+        ]
+      ]
+    },
+    {
       "name": "pub-editor geometry core unit",
       "paths": [
         "vendor/producer-a/crates/pub-editor-geometry-core/src/*.rs"
