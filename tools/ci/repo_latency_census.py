@@ -114,6 +114,7 @@ def analyze_pr(pr: dict, runs: list[dict], jobs_by_run: dict, paths: list[str]) 
                 "job_id": job["id"],
                 "job": job.get("name", ""),
                 "conclusion": job.get("conclusion"),
+                "status": job.get("status"),
                 "created_at": job.get("created_at"),
                 "started_at": job.get("started_at"),
                 "completed_at": job.get("completed_at"),
@@ -140,7 +141,14 @@ def analyze_pr(pr: dict, runs: list[dict], jobs_by_run: dict, paths: list[str]) 
     first = min(relevant, key=lambda j: j["completed_at"], default=None)
     failures = [j for j in jobs if j["conclusion"] == "failure" and timestamp(j["completed_at"])]
     first_failure = min(failures, key=lambda j: j["completed_at"], default=None)
-    queued = [j for j in jobs if j["queue_s"] is not None]
+    # GitHub can stamp a skipped/never-started job with equal created/started.
+    # Those are not observed runner dispatches and must not dilute queue p50/p95.
+    queued = [
+        j for j in jobs
+        if j["status"] == "completed"
+        and j["conclusion"] not in (None, "skipped")
+        and j["queue_s"] is not None
+    ]
     longest = max(queued, key=lambda j: j["queue_s"], default=None)
     eligible_tail = [
         j for j in relevant
