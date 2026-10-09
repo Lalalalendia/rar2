@@ -588,6 +588,22 @@ pub(super) fn source_text_simple_ltr_v1(text: &str) -> bool {
         })
 }
 
+// Only exact physical glyphs can become a SharedResolved visible span.
+// HarfRust glyph_id=0 is .notdef; an exact face/SHA alone does not prove
+// the punctuation (or any other painted scalar) is present in that face.
+fn exact_visible_glyphs_proven_v1(glyphs: &[BoundedShapedGlyph]) -> bool {
+    !glyphs.is_empty() && glyphs.iter().all(|glyph| glyph.glyph_id != 0)
+}
+
+pub(super) fn shape_visible_v1(
+    text: &str,
+    scalar_start: u32,
+    runtime: &BoundedShapingRuntime<'_>,
+) -> Option<pub_layout::BoundedShapedText> {
+    let shaped = shape_bounded_ltr_segment(text, scalar_start, runtime).ok()?;
+    exact_visible_glyphs_proven_v1(&shaped.glyphs).then_some(shaped)
+}
+
 // Exact source-backed mixed-family terminal admission, preserving all earlier
 // bounded break choices and accepted physical shaping.
 const NATIVE_PROVEN_THREE_QUARTER_SPACING_EMU_V1: u32 = 9 * 12_700;
@@ -945,6 +961,42 @@ mod tests {
         assert!(!source_text_simple_ltr_v1("A\u{05D0}B"));
         assert!(!source_text_simple_ltr_v1("A\u{4E2D}B"));
         assert!(!source_text_simple_ltr_v1("A\u{200F}B"));
+    }
+
+    #[test]
+    fn mixed_family_exact_visible_spans_reject_notdef_and_empty_glyphs() {
+        let known = BoundedShapedGlyph {
+            glyph_id: 1,
+            cluster: 0,
+            x_advance: LengthEmu::new(1),
+            y_advance: LengthEmu::ZERO,
+            x_offset: LengthEmu::ZERO,
+            y_offset: LengthEmu::ZERO,
+            unsafe_to_break: false,
+        };
+        assert!(exact_visible_glyphs_proven_v1(&[known.clone()]));
+        assert!(!exact_visible_glyphs_proven_v1(&[]));
+        assert!(!exact_visible_glyphs_proven_v1(&[
+            known.clone(),
+            BoundedShapedGlyph {
+                glyph_id: 0,
+                ..known
+            },
+        ]));
+
+        // Existing AHEM positive controls exercise the actual wrapper too.
+        let bytes = font_test_data::AHEM;
+        let runtime = BoundedShapingRuntime {
+            layout: BoundedLayoutEnvironment {
+                engine_revision: SHARED_TEXT_LAYOUT_REVISION_V1.to_owned(),
+                font_set_fingerprint: font_fingerprint_sha256(bytes),
+                resource_fingerprint: "exact-ahem".to_owned(),
+            },
+            face_index: 0,
+            font_size_emu: LengthEmu::new(12 * 12_700),
+            font_bytes: bytes,
+        };
+        assert!(shape_visible_v1("AB", 0, &runtime).is_some());
     }
 
     #[test]

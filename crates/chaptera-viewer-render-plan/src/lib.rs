@@ -2709,8 +2709,8 @@ fn shape_mixed_family_line_candidate_v1(
             font_size_emu: LengthEmu::new(run.font_size_emu),
             font_bytes: run.font.bytes,
         };
-        let shaped = shape_bounded_ltr_segment(&span_text, span_start, &runtime)
-            .map_err(|_| RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+        let shaped = mixed_size_layout::shape_visible_v1(&span_text, span_start, &runtime)
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
         let span_width_emu = shaped.total_x_advance.get();
         spans.push(RenderResolvedTextSpanV1 {
             scalar_start: span_start,
