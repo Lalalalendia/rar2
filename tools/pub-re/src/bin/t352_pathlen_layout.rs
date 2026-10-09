@@ -77,7 +77,7 @@ fn snapshot(path: &Path) -> Result<Snapshot> {
 }
 
 fn utf16_hits(bytes: &[u8], name: &str) -> Result<Vec<usize>> {
-    if name.is_empty() || !name.is_ascii() || name.contains(['/', '\\']) {
+    if name.is_empty() || !name.is_ascii() || (name.contains('/') || name.contains('\\')) {
         bail!("filename must be a nonempty ASCII leaf name");
     }
     let needle: Vec<u8> = name.encode_utf16().flat_map(u16::to_le_bytes).collect();
