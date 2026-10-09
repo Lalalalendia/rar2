@@ -69,6 +69,23 @@ jobs:
             --pub .sample3-positive/handoff/candidate.pub \
             --manifest .sample3-positive/handoff/handoff.json
           cmp .sample3-positive/source.pub .sample3-positive/handoff/source.pub
+          # Second, separately Publisher-accepted native candidate; no new oracle run.
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- generate-one-unit \
+            --output-dir .sample3-positive/handoff-one-unit
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- verify \
+            --pub .sample3-positive/handoff-one-unit/candidate.pub \
+            --manifest .sample3-positive/handoff-one-unit/handoff.json
+          cmp .sample3-positive/source.pub .sample3-positive/handoff-one-unit/source.pub
+          python - <<'PY'
+          from hashlib import sha256
+          from pathlib import Path
+          candidate = Path(".sample3-positive/handoff-one-unit/candidate.pub").read_bytes()
+          assert len(candidate) == 72192
+          assert sha256(candidate).hexdigest() == "b9b789f35a34e016faceb27acf50bf0621273a7d612762ecc17c56ca450fe715"
+          print({"one_unit_writer": "exact_native_publisher_accepted_bytes"})
+          PY
 
       - name: Recreate exact accepted EditorProject without broad writer permissions
         shell: bash
@@ -79,6 +96,11 @@ jobs:
             .sample3-positive/source.pub \
             .sample3-positive/baseline.json \
             .sample3-positive/edited.json
+          cargo run --manifest-path tools/native-pub-candidate-cli/Cargo.toml \
+            --example accepted_sample3_project -- \
+            .sample3-positive/source.pub \
+            .sample3-positive/one-unit-baseline.json \
+            .sample3-positive/one-unit-edited.json --one-unit
 
       - name: Prove source Story separator roundtrip is byte-exact
         run: node tools/test_story_line_endings_v1.mjs
@@ -224,6 +246,49 @@ jobs:
           cmp .sample3-positive/runtime/ui-edited.pub \
             .sample3-positive/handoff/candidate.pub
 
+      - name: Prove one-unit Story through real Chromium editor and approved Publisher bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/test_sample3_editor_ui_acceptance.mjs \
+            .sample3-positive/source.pub \
+            .sample3-positive/one-unit-baseline.json \
+            .sample3-positive/resolved-graph.json \
+            .sample3-positive/viewer-geometry.json \
+            vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/runtime-one-unit --one-unit
+          cmp .sample3-positive/runtime-one-unit/ui-edited.pub \
+            .sample3-positive/handoff-one-unit/candidate.pub
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          receipt = json.loads(Path(".sample3-positive/runtime-one-unit/sample3-ui-pub-download.json").read_text())
+          assert receipt["variant"] == "one_unit"
+          assert receipt["pub_sha256"] == "b9b789f35a34e016faceb27acf50bf0621273a7d612762ecc17c56ca450fe715"
+          assert receipt["undo_revoked_download"] and receipt["redo_restored_exact_bytes"]
+          assert receipt["fresh_reopen"] and receipt["browser_reload_preserved_story"]
+          PY
+
+      - name: Reject adjacent unapproved two-unit Story on exact same source
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/test_sample3_editor_ui_acceptance.mjs \
+            .sample3-positive/source.pub \
+            .sample3-positive/baseline.json \
+            .sample3-positive/resolved-graph.json \
+            .sample3-positive/viewer-geometry.json \
+            vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/runtime-two-unit --two-unit-negative
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          receipt = json.loads(Path(".sample3-positive/runtime-two-unit/sample3-negative-pub-download.json").read_text())
+          assert receipt["result"] == "PASS_unapproved_sample3_two_unit_download_denied"
+          assert receipt["can_serialize"] and not receipt["can_download"]
+          assert receipt["http_download_status"] == 409
+          PY
+
       - name: Prove pinned Newsletter still rejects unauthorized native PUB download
         run: python tools/run_local_real_editor.py --smoke
 
@@ -246,6 +311,9 @@ jobs:
           path: |
             .sample3-positive/runtime/sample3-browser-pub-download.json
             .sample3-positive/runtime/sample3-ui-pub-download.json
+            .sample3-positive/runtime-one-unit/sample3-ui-pub-download.json
+            .sample3-positive/runtime-two-unit/sample3-negative-pub-download.json
+            .sample3-positive/handoff-one-unit/handoff.json
             .sample3-positive/runtime/accepted.json
             .sample3-positive/runtime/baseline.json
             .sample3-positive/sample3-table-dependency.json

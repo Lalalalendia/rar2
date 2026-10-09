@@ -55,13 +55,18 @@ PINNED_FIXTURE_PROFILES = {
 }
 
 # Native Publisher 2019 Open -> SaveAs -> fresh Reopen -> Reader evidence:
-# protected-main Actions #37982376097, receipt artifact #11641486612.
-# This is an exact-byte authorization, NEVER an approval for other Stories,
-# edits, source fixtures, or arbitrary Reader-green output.
+# six-unit Story deletion: protected-main #37982376097 (receipt 11641486612);
+# one-unit Story deletion: protected-main #37987117653 (receipt 11644202672).
+# Both apply to exact Sample3 input bytes; no other Story mutation is approved.
+# This is exact-byte authorization, NEVER arbitrary Reader-green PUB output.
 NATIVE_PUBLISHER_ACCEPTED_SHA_PAIRS_V1 = frozenset({
     (
         "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc",
         "a92543b6f2b6ac3a8ae2481e15a2188a338ddc2a92832580f8987079fa4f70f8",
+    ),
+    (
+        "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc",
+        "b9b789f35a34e016faceb27acf50bf0621273a7d612762ecc17c56ca450fe715",
     ),
 })
 
