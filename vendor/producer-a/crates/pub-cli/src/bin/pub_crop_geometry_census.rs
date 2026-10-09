@@ -218,6 +218,8 @@ fn main() -> Result<()> {
     let mut overlap_family = BTreeMap::<String, usize>::new();
     let mut earlier_overlap_geometry = BTreeMap::<String, usize>::new();
     let mut later_overlap_geometry = BTreeMap::<String, usize>::new();
+    let mut earlier_overlap_shape_types = BTreeMap::<String, usize>::new();
+    let mut later_overlap_shape_types = BTreeMap::<String, usize>::new();
     let mut earlier_overlap_count = 0_usize;
     let mut later_overlap_count = 0_usize;
 
@@ -292,19 +294,37 @@ fn main() -> Result<()> {
                                 .get(&other.payload.contents_seq_num)
                                 .map(Vec::as_slice)
                                 .unwrap_or(&[]);
-                            let geometry = match other_matches {
+                            let (geometry, shape_type) = match other_matches {
                                 [shape_index] => {
-                                    effective_geometry(&inventory.shapes[*shape_index], dgg)
+                                    let shape = &inventory.shapes[*shape_index];
+                                    (
+                                        effective_geometry(shape, dgg),
+                                        shape
+                                            .fsp
+                                            .as_ref()
+                                            .map(|fsp| format!("0x{:04X}", fsp.shape_type))
+                                            .unwrap_or_else(|| "none".to_owned()),
+                                    )
                                 }
-                                [] => "shape_join_missing".to_owned(),
-                                _ => "shape_join_ambiguous".to_owned(),
+                                [] => ("shape_join_missing".to_owned(), "shape_join_missing".to_owned()),
+                                _ => (
+                                    "shape_join_ambiguous".to_owned(),
+                                    "shape_join_ambiguous".to_owned(),
+                                ),
                             };
-                            let geometry_counts = if other_rank < rank {
-                                &mut earlier_overlap_geometry
+                            let (geometry_counts, type_counts) = if other_rank < rank {
+                                (
+                                    &mut earlier_overlap_geometry,
+                                    &mut earlier_overlap_shape_types,
+                                )
                             } else {
-                                &mut later_overlap_geometry
+                                (
+                                    &mut later_overlap_geometry,
+                                    &mut later_overlap_shape_types,
+                                )
                             };
                             *geometry_counts.entry(geometry).or_default() += 1;
+                            *type_counts.entry(shape_type).or_default() += 1;
                         }
                     }
                 }
@@ -357,6 +377,8 @@ fn main() -> Result<()> {
         "overlap_family_counts": overlap_family,
         "earlier_other_shape_geometry_counts": earlier_overlap_geometry,
         "later_other_shape_geometry_counts": later_overlap_geometry,
+        "earlier_other_shape_type_counts": earlier_overlap_shape_types,
+        "later_other_shape_type_counts": later_overlap_shape_types,
         "claims": {
             "source_only": true,
             "publisher_pdf_used_as_authority": false,
