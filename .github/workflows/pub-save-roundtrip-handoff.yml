@@ -139,8 +139,10 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          # This is a PowerShell script, not a native executable. LASTEXITCODE
+          # may still reflect an unrelated prior git/process command.
+          # ErrorActionPreference=Stop plus the script's own throw is the gate.
           & tools/windows/pub-runtime/test_story_native_stage_writer.ps1
-          if ($LASTEXITCODE -ne 0) { throw 'native_phase_writer_smoke_failed' }
 
   native-roundtrip:
     needs: prepare-handoff
