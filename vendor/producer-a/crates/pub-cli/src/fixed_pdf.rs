@@ -10,8 +10,8 @@ use pub_output::{
     PreferredEmbedding, plan_output_fonts, read_opentype_embedding_flags,
 };
 use pub_pdf::{
-    FixedFontResource, FixedImageResource, FixedNodePaint, FixedPdfResources, FixedStroke,
-    FixedTextRun, PdfTargetProfile, render_bounded_pdf,
+    FixedFontResource, FixedImagePlacement, FixedImageResource, FixedNodePaint, FixedPdfResources,
+    FixedStroke, FixedTextRun, PdfTargetProfile, render_bounded_pdf,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -459,11 +459,26 @@ fn build_pdf_artifact(
                 filtered_image_resource_count += 1;
                 return None;
             }
+            let placements = image
+                .placements
+                .iter()
+                .filter(|placement| {
+                    node_ids.contains(&placement.node_id)
+                        && placement.content_rotation_degrees.is_some()
+                })
+                .map(|placement| FixedImagePlacement {
+                    node_id: placement.node_id,
+                    content_rotation_degrees: placement.content_rotation_degrees,
+                    source_window_present: placement.source_window.is_some(),
+                    recolor_present: placement.recolor.is_some(),
+                })
+                .collect();
             Some(FixedImageResource {
                 resource_id: image.resource_id,
                 mime: image.mime.clone(),
                 source_exact: image.source_exact,
                 node_ids,
+                placements,
                 bytes: image.bytes.clone(),
             })
         })
