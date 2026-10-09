@@ -573,7 +573,6 @@ pub(super) fn resolve_mixed_size_text_layout_v1(
     }
 }
 
-
 // Exact source-backed mixed-family terminal admission, preserving all earlier
 // bounded break choices and accepted physical shaping.
 const NATIVE_PROVEN_THREE_QUARTER_SPACING_EMU_V1: u32 = 9 * 12_700;
@@ -592,7 +591,8 @@ fn physical_spans_extent_emu_v1(
     let mut cursor = scalar_start;
     let mut max_extent = 0_i64;
     for span in spans {
-        if span.scalar_start != cursor || span.scalar_end <= cursor || span.scalar_end > scalar_end {
+        if span.scalar_start != cursor || span.scalar_end <= cursor || span.scalar_end > scalar_end
+        {
             return None;
         }
         let mut covering = runs.iter().filter(|run| {
@@ -601,8 +601,7 @@ fn physical_spans_extent_emu_v1(
         let run = covering.next()?;
         if covering.next().is_some()
             || span.font_resource_id.as_deref() != Some(run.font.resource_id)
-            || span.font_fingerprint_sha256.as_deref()
-                != Some(run.font_fingerprint_sha256.as_str())
+            || span.font_fingerprint_sha256.as_deref() != Some(run.font_fingerprint_sha256.as_str())
             || span.font_size_emu != run.font_size_emu
             || span.shaping.is_none()
         {
@@ -630,9 +629,8 @@ pub(super) fn mixed_family_frozen_prefix_height_emu_v1(
     runs: &[ResolvedFamilyTypographyRunV1<'_>],
 ) -> Option<i64> {
     let (first, rest) = lines.split_first()?;
-    let physical = physical_spans_extent_emu_v1(
-        &first.spans, first.scalar_start, first.scalar_end, runs,
-    )?;
+    let physical =
+        physical_spans_extent_emu_v1(&first.spans, first.scalar_start, first.scalar_end, runs)?;
     let mut height = physical.min(first.line_height_emu);
     for line in rest {
         height = height.checked_add(line.line_height_emu)?;
@@ -656,7 +654,11 @@ pub(super) fn mixed_family_terminal_source_advance_emu_v1(
     {
         return None;
     }
-    let story = visual.document.stories.iter().find(|story| story.id == story_id)?;
+    let story = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == story_id)?;
     let mut intersecting = visual
         .paragraph_line_spacings
         .iter()
@@ -676,9 +678,8 @@ pub(super) fn mixed_family_terminal_source_advance_emu_v1(
     {
         return None;
     }
-    let natural = physical_spans_extent_emu_v1(
-        &terminal.spans, scalar_start, terminal.scalar_end, runs,
-    )?;
+    let natural =
+        physical_spans_extent_emu_v1(&terminal.spans, scalar_start, terminal.scalar_end, runs)?;
     let scaled = (i128::from(natural) * 3 + 2) / 4;
     let height = i64::try_from(scaled).ok()?;
     (height > 0).then_some(height)
@@ -807,14 +808,21 @@ where
             // The configured Cloud family resource alone does not assert
             // Bold/Italic face identity. Never treat a Regular container as
             // exact for a styled source run in this new retry.
-            if fragment.typography.iter().any(|run| {
-                run.bold == Some(true) || run.italic == Some(true)
-            }) {
+            if fragment
+                .typography
+                .iter()
+                .any(|run| run.bold == Some(true) || run.italic == Some(true))
+            {
                 return None;
             }
             let prefix_height = mixed_family_frozen_prefix_height_emu_v1(&lines, &runs)?;
             let terminal_advance = mixed_family_terminal_source_advance_emu_v1(
-                visual, fragment.story_id, cursor, fragment.scalar_end, &terminal, &runs,
+                visual,
+                fragment.story_id,
+                cursor,
+                fragment.scalar_end,
+                &terminal,
+                &runs,
             )?;
             let completed = prefix_height.checked_add(terminal_advance)?;
             if completed > target.bounds.height.get() {
@@ -903,11 +911,10 @@ where
     })
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::tests::{fixture, render_fragment};
+    use super::*;
     use pub_viewer::{ViewerParagraphLineSpacingRun, viewer_story_text_sha256};
 
     #[test]
@@ -928,18 +935,28 @@ mod tests {
 
         let typography = vec![
             RenderTypographyRunV1 {
-                scalar_start: 0, scalar_end: 3,
+                scalar_start: 0,
+                scalar_end: 3,
                 source_font_name: "Family A".to_owned(),
                 text_size_emu: 12 * 12_700,
-                font_inherited: false, size_inherited: false,
-                color_rgb: None, color_inherited: false, bold: None, italic: None,
+                font_inherited: false,
+                size_inherited: false,
+                color_rgb: None,
+                color_inherited: false,
+                bold: None,
+                italic: None,
             },
             RenderTypographyRunV1 {
-                scalar_start: 3, scalar_end: 5,
+                scalar_start: 3,
+                scalar_end: 5,
                 source_font_name: "Family B".to_owned(),
                 text_size_emu: 18 * 12_700,
-                font_inherited: false, size_inherited: false,
-                color_rgb: None, color_inherited: false, bold: None, italic: None,
+                font_inherited: false,
+                size_inherited: false,
+                color_rgb: None,
+                color_inherited: false,
+                bold: None,
+                italic: None,
             },
         ];
         let fragment = render_fragment(story_id, text, typography);
@@ -949,31 +966,42 @@ mod tests {
         let second_bytes: &[u8] = font_test_data::TINOS_SUBSET;
         let first_sha = font_fingerprint_sha256(first_bytes);
         let second_sha = font_fingerprint_sha256(second_bytes);
-        let mut resolve = |_: &RenderTextFragmentV1, run: &RenderTypographyRunV1| {
-            match run.source_font_name.as_str() {
-                "Family A" => Some(ExplicitRenderTextFontResourceV1 {
-                    resource_id: "exact-a", expected_sha256: &first_sha,
-                    face_index: 0, default_font_size_emu: 12 * 12_700,
-                    default_line_height_emu: 30 * 12_700, bytes: first_bytes,
-                }),
-                "Family B" => Some(ExplicitRenderTextFontResourceV1 {
-                    resource_id: "exact-b", expected_sha256: &second_sha,
-                    face_index: 0, default_font_size_emu: 12 * 12_700,
-                    default_line_height_emu: 30 * 12_700, bytes: second_bytes,
-                }),
-                _ => None,
-            }
+        let mut resolve = |_: &RenderTextFragmentV1, run: &RenderTypographyRunV1| match run
+            .source_font_name
+            .as_str()
+        {
+            "Family A" => Some(ExplicitRenderTextFontResourceV1 {
+                resource_id: "exact-a",
+                expected_sha256: &first_sha,
+                face_index: 0,
+                default_font_size_emu: 12 * 12_700,
+                default_line_height_emu: 30 * 12_700,
+                bytes: first_bytes,
+            }),
+            "Family B" => Some(ExplicitRenderTextFontResourceV1 {
+                resource_id: "exact-b",
+                expected_sha256: &second_sha,
+                face_index: 0,
+                default_font_size_emu: 12 * 12_700,
+                default_line_height_emu: 30 * 12_700,
+                bytes: second_bytes,
+            }),
+            _ => None,
         };
-        let first_extent = compatible_natural_line_height_emu_v1(
-            first_bytes, 0, LengthEmu::new(12 * 12_700),
-        ).map(LengthEmu::get).expect("exact first physical metric");
-        let terminal_extent = compatible_natural_line_height_emu_v1(
-            second_bytes, 0, LengthEmu::new(18 * 12_700),
-        ).map(LengthEmu::get).expect("exact terminal physical metric");
+        let first_extent =
+            compatible_natural_line_height_emu_v1(first_bytes, 0, LengthEmu::new(12 * 12_700))
+                .map(LengthEmu::get)
+                .expect("exact first physical metric");
+        let terminal_extent =
+            compatible_natural_line_height_emu_v1(second_bytes, 0, LengthEmu::new(18 * 12_700))
+                .map(LengthEmu::get)
+                .expect("exact terminal physical metric");
         let expected_terminal_advance = (terminal_extent * 3 + 2) / 4;
         let frame_height = first_extent.min(30 * 12_700) + expected_terminal_advance;
-        assert!(30 * 12_700 + 45 * 12_700 > frame_height,
-            "ordinary baseline must overflow the selected narrow frame");
+        assert!(
+            30 * 12_700 + 45 * 12_700 > frame_height,
+            "ordinary baseline must overflow the selected narrow frame"
+        );
         let target = RenderTextLayoutTargetV1 {
             page_id,
             page_size: Size2D::new(LengthEmu::new(10_000_000), LengthEmu::new(10_000_000)),
@@ -981,16 +1009,19 @@ mod tests {
             projected_target_frame_node_id: None,
             vertical_alignment: None,
             bounds: RectEmu::new(
-                LengthEmu::ZERO, LengthEmu::ZERO,
-                LengthEmu::new(10_000_000), LengthEmu::new(frame_height),
+                LengthEmu::ZERO,
+                LengthEmu::ZERO,
+                LengthEmu::new(10_000_000),
+                LengthEmu::new(frame_height),
             ),
             transform: Affine2D::identity(),
         };
 
         // Missing spacing is a negative even though both exact fonts exist.
-        assert!(resolve_mixed_family_text_layout_v1(
-            &visual, target.clone(), &fragment, &mut resolve,
-        ).is_none());
+        assert!(
+            resolve_mixed_family_text_layout_v1(&visual, target.clone(), &fragment, &mut resolve,)
+                .is_none()
+        );
 
         visual.paragraph_line_spacings = vec![ViewerParagraphLineSpacingRun {
             story_id,
@@ -1002,10 +1033,13 @@ mod tests {
             source_value: Some(914_402),
             source_story_text_sha256: viewer_story_text_sha256(text),
         }];
-        let layout = resolve_mixed_family_text_layout_v1(
-            &visual, target.clone(), &fragment, &mut resolve,
-        ).expect("one uniquely sourced mixed-family terminal line must fit");
-        assert!(matches!(layout.disposition, RenderTextLayoutDispositionV1::SharedResolved { .. }));
+        let layout =
+            resolve_mixed_family_text_layout_v1(&visual, target.clone(), &fragment, &mut resolve)
+                .expect("one uniquely sourced mixed-family terminal line must fit");
+        assert!(matches!(
+            layout.disposition,
+            RenderTextLayoutDispositionV1::SharedResolved { .. }
+        ));
         assert_eq!(layout.lines.len(), 2);
         assert_eq!(layout.lines[0].text, "AB");
         assert_eq!(layout.lines[1].text, "CD");
@@ -1013,51 +1047,66 @@ mod tests {
         assert_eq!(layout.lines[1].scalar_end, 5);
         assert_eq!(layout.lines[1].consumed_scalar_end, 5);
         assert_eq!(layout.lines[1].line_height_emu, expected_terminal_advance);
-        assert_eq!(layout.lines[1].spans[0].font_resource_id.as_deref(), Some("exact-b"));
+        assert_eq!(
+            layout.lines[1].spans[0].font_resource_id.as_deref(),
+            Some("exact-b")
+        );
         assert!(layout.lines[1].spans[0].shaping.is_some());
 
         // The source predicate is fail-closed, not a numeric/page heuristic.
         visual.paragraph_line_spacings[0].source_story_text_sha256 =
             viewer_story_text_sha256("stale");
-        assert!(resolve_mixed_family_text_layout_v1(
-            &visual, target.clone(), &fragment, &mut resolve,
-        ).is_none());
-        visual.paragraph_line_spacings[0].source_story_text_sha256 =
-            viewer_story_text_sha256(text);
-        visual.paragraph_line_spacings.push(visual.paragraph_line_spacings[0].clone());
-        assert!(resolve_mixed_family_text_layout_v1(
-            &visual, target.clone(), &fragment, &mut resolve,
-        ).is_none());
+        assert!(
+            resolve_mixed_family_text_layout_v1(&visual, target.clone(), &fragment, &mut resolve,)
+                .is_none()
+        );
+        visual.paragraph_line_spacings[0].source_story_text_sha256 = viewer_story_text_sha256(text);
+        visual
+            .paragraph_line_spacings
+            .push(visual.paragraph_line_spacings[0].clone());
+        assert!(
+            resolve_mixed_family_text_layout_v1(&visual, target.clone(), &fragment, &mut resolve,)
+                .is_none()
+        );
         visual.paragraph_line_spacings.truncate(1);
-        visual.paragraph_line_spacings[0].line_spacing =
-            ViewerParagraphLineSpacing::Proportional {
-                point_equivalent_emu: 12 * 12_700,
-            };
-        assert!(resolve_mixed_family_text_layout_v1(
-            &visual, target.clone(), &fragment, &mut resolve,
-        ).is_none());
-        visual.paragraph_line_spacings[0].line_spacing =
-            ViewerParagraphLineSpacing::Proportional {
-                point_equivalent_emu: 9 * 12_700,
-            };
+        visual.paragraph_line_spacings[0].line_spacing = ViewerParagraphLineSpacing::Proportional {
+            point_equivalent_emu: 12 * 12_700,
+        };
+        assert!(
+            resolve_mixed_family_text_layout_v1(&visual, target.clone(), &fragment, &mut resolve,)
+                .is_none()
+        );
+        visual.paragraph_line_spacings[0].line_spacing = ViewerParagraphLineSpacing::Proportional {
+            point_equivalent_emu: 9 * 12_700,
+        };
         let mut missing_face = |_: &RenderTextFragmentV1, run: &RenderTypographyRunV1| {
             (run.source_font_name == "Family A").then_some(ExplicitRenderTextFontResourceV1 {
-                resource_id: "exact-a", expected_sha256: &first_sha,
-                face_index: 0, default_font_size_emu: 12 * 12_700,
-                default_line_height_emu: 30 * 12_700, bytes: first_bytes,
+                resource_id: "exact-a",
+                expected_sha256: &first_sha,
+                face_index: 0,
+                default_font_size_emu: 12 * 12_700,
+                default_line_height_emu: 30 * 12_700,
+                bytes: first_bytes,
             })
         };
-        assert!(resolve_mixed_family_text_layout_v1(
-            &visual, target.clone(), &fragment, &mut missing_face,
-        ).is_none());
+        assert!(
+            resolve_mixed_family_text_layout_v1(
+                &visual,
+                target.clone(),
+                &fragment,
+                &mut missing_face,
+            )
+            .is_none()
+        );
 
         let mut styled_fragment = fragment.clone();
         styled_fragment.typography[1].bold = Some(true);
-        assert!(resolve_mixed_family_text_layout_v1(
-            &visual, target, &styled_fragment, &mut resolve,
-        ).is_none(), "Regular family packet cannot authorize Bold source-face retry");
+        assert!(
+            resolve_mixed_family_text_layout_v1(&visual, target, &styled_fragment, &mut resolve,)
+                .is_none(),
+            "Regular family packet cannot authorize Bold source-face retry"
+        );
     }
-
 
     fn mixed_fragment(text: &str) -> RenderTextFragmentV1 {
         let scalar_end = u32::try_from(text.chars().count()).expect("bounded fixture");
