@@ -82,7 +82,9 @@ def domains(paths: list[str]) -> list[str]:
             or low.startswith("crates/chaptera-editor-")
         ):
             result.add("editor")
-        elif low.startswith(("tools/research-", "fixtures/", "research/")):
+        elif low.startswith("tools/perf/"):
+            result.add("performance-infra")
+        elif low.startswith(("tools/research-", "fixtures/", "research/", "tools/windows/run_paragraph_", ".github/workflows/pub-re-", ".github/workflows/publisher-direct-research-")):
             result.add("research")
         elif low.startswith((".github/", "tools/ci/", "tools/dev_fast_loop")):
             result.add("ci-infra")
