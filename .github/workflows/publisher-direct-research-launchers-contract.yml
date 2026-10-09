@@ -60,6 +60,23 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $workflow = Get-Content -LiteralPath ".github/workflows/pub-re-native.yml" -Raw
+          # A preparatory step's env is NOT inherited by the native step.
+          # Inspect only the actual native research step, not the file globally.
+          $marker = '      - name: Run bounded 0.75 paragraph research'
+          $sections = $workflow.Split([string[]]@($marker), [System.StringSplitOptions]::None)
+          if ($sections.Count -ne 2) {
+            throw "Bounded research step must occur exactly once"
+          }
+          $boundedStep = ($sections[1] -split '(?m)^      - name: ', 2)[0]
+          $binding = '(?m)^        env:\r?\n          PUB_RE_RESEARCH_ID: \$\{\{ needs\.gate\.outputs\.research_id \}\}\r?$'
+          if ($boundedStep -notmatch $binding) {
+            throw "Bounded native research step must bind gate research_id in its own env"
+          }
+          # Mutation control: removing the binding must fail the exact match.
+          $withoutBinding = $boundedStep -replace $binding, ''
+          if ($withoutBinding -match $binding) {
+            throw "Missing env binding was not detected by the contract"
+          }
           $launcher = Get-Content -LiteralPath "tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1" -Raw
           if ($workflow.Contains("@mixedArgs") -or $launcher.Contains("@operationArgs")) {
             throw "Mixed native mode must use explicit switch binding at both PowerShell boundaries"
