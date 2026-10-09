@@ -9,6 +9,7 @@ on:
       - "tools/research-runner/experiments/paragraph-line-spacing-0p75-native-01.packet.json"
       - "tools/research-runner/operations/paragraph_line_spacing_0p75_native_01.ps1"
       - "tools/research-runner/analysis/paragraph_line_spacing_0p75_structural.py"
+      - ".github/workflows/pub-re-native.yml"
       - ".github/workflows/publisher-direct-research-launchers-contract.yml"
 
 permissions:
@@ -113,5 +114,19 @@ jobs:
                   throw "Missing 0.75-SP direct-return marker '$required' in $path"
                 }
               }
+            }
+          }
+
+          $nativeWorkflow = Get-Content -LiteralPath ".github/workflows/pub-re-native.yml" -Raw
+          if ($nativeWorkflow.Contains('$mixedArgs = @{}')) {
+            throw "Mixed-size research dispatch must not use dynamic hashtable splatting."
+          }
+          foreach ($required in @(
+            'PUB_RE_RESEARCH_ID -eq "paragraph-line-spacing-0p75-mixed"',
+            'run_paragraph_line_spacing_0p75_native_direct.ps1',
+            '-MixedSize'
+          )) {
+            if (-not $nativeWorkflow.Contains($required)) {
+              throw "Missing explicit mixed-size native dispatch marker '$required'."
             }
           }
