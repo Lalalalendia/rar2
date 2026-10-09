@@ -251,6 +251,11 @@ jobs:
         with:
           toolchain: "1.94.1"
 
+      - uses: actions/setup-python@v5
+        if: ${{ needs.gate.outputs.command_mode == 'rotation_pair' }}
+        with:
+          python-version: "3.13"
+
       - name: Resolve native input safely
         shell: powershell
         env:
@@ -396,7 +401,7 @@ jobs:
         run: cargo build --release --manifest-path tools/pub-re/Cargo.toml --bin pub-re
 
       - name: Run bounded native Publisher transaction
-        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'rotation_pair' }}
         shell: powershell
         run: |
           Set-StrictMode -Version Latest
@@ -473,8 +478,216 @@ jobs:
             throw "native_transaction_child_failed_exit_$exitCode"
           }
 
+      - name: Run matched rotation pair
+        if: ${{ needs.gate.outputs.command_mode == 'rotation_pair' }}
+        shell: powershell
+        env:
+          PUB_RE_PAIR_PAGE_ID: ${{ needs.gate.outputs.page_id }}
+          PUB_RE_PAIR_SHAPE_ID: ${{ needs.gate.outputs.shape_id }}
+          PUB_RE_PAIR_DELTA: ${{ needs.gate.outputs.delta_degrees }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $preexistingPublisher = @(Get-Process -Name MSPUB -ErrorAction SilentlyContinue)
+          if ($preexistingPublisher.Count -ne 0) {
+            throw "publisher_busy_before_rotation_pair_wrapper"
+          }
+
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "pair-wrapper"
+          New-Item -ItemType Directory -Force -Path $private | Out-Null
+          $stdout = Join-Path $private "rotation-pair.stdout.txt"
+          $stderr = Join-Path $private "rotation-pair.stderr.txt"
+          $script = Join-Path $env:GITHUB_WORKSPACE "tools\pub-re\windows\Invoke-PubReRotationPair.ps1"
+          $env:PUB_RE_ROTATION_PAIR_SCRIPT = $script
+          $startedUtc = [DateTime]::UtcNow
+
+          $childCommand = @'
+          $ErrorActionPreference = "Stop"
+          & $env:PUB_RE_ROTATION_PAIR_SCRIPT `
+            -SourcePath $env:PUB_RE_ROTATION_PAIR_SOURCE `
+            -ExpectedSha256 $env:PUB_RE_ROTATION_PAIR_SHA `
+            -OutputRoot $env:PUB_RE_NATIVE_OUTPUT `
+            -PageId ([int]$env:PUB_RE_PAIR_PAGE_ID) `
+            -ShapeId ([int]$env:PUB_RE_PAIR_SHAPE_ID) `
+            -DeltaDegrees ([double]::Parse($env:PUB_RE_PAIR_DELTA, [System.Globalization.CultureInfo]::InvariantCulture))
+          if (-not $?) { exit 1 }
+          '@
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
+          $powershellExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          $process = Start-Process `
+            -FilePath $powershellExe `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encoded) `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr `
+            -PassThru
+
+          $finished = $process.WaitForExit(360000)
+          if (-not $finished) {
+            Write-Host "PUB_RE_ROTATION_PAIR_WATCHDOG timeout_seconds=360 child_pid=$($process.Id)"
+            if (-not $process.HasExited) {
+              try { Stop-Process -Id $process.Id -Force -ErrorAction Stop } catch {}
+              try { [void]$process.WaitForExit(10000) } catch {}
+            }
+
+            $ownedPublisher = @(
+              Get-Process -Name MSPUB -ErrorAction SilentlyContinue | Where-Object {
+                try {
+                  $_.StartTime.ToUniversalTime() -ge $startedUtc.AddSeconds(-2)
+                } catch {
+                  $false
+                }
+              }
+            )
+            foreach ($publisherProcess in $ownedPublisher) {
+              Write-Host "PUB_RE_ROTATION_PAIR_WATCHDOG terminating_mspub_pid=$($publisherProcess.Id)"
+              try { Stop-Process -Id $publisherProcess.Id -Force -ErrorAction Stop } catch {}
+            }
+            Start-Sleep -Seconds 2
+            throw "rotation_pair_timeout"
+          }
+
+          $process.WaitForExit()
+          $process.Refresh()
+          if (-not $process.HasExited) {
+            throw "rotation_pair_child_exit_state_unavailable"
+          }
+          if (Test-Path -LiteralPath $stdout -PathType Leaf) { Get-Content -LiteralPath $stdout }
+          if (Test-Path -LiteralPath $stderr -PathType Leaf) { Get-Content -LiteralPath $stderr }
+          $exitCode = [int]$process.ExitCode
+          if ($exitCode -ne 0) {
+            throw "rotation_pair_child_failed_exit_$exitCode"
+          }
+
+      - name: Stage partial rotation pair evidence after failure
+        if: ${{ failure() && needs.gate.outputs.command_mode == 'rotation_pair' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          foreach ($arm in @("pair-control", "pair-mutation")) {
+            $armEvidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "$arm\evidence"
+            if (-not (Test-Path -LiteralPath $armEvidence -PathType Container)) { continue }
+            foreach ($name in @("native-stage-receipt.json", "native-receipt.json")) {
+              $candidate = Join-Path $armEvidence $name
+              if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+              $text = Get-Content -LiteralPath $candidate -Raw
+              if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+                throw "partial rotation-pair receipt contains an absolute filesystem path"
+              }
+              [void]($text | ConvertFrom-Json)
+              $prefix = if ($arm -eq "pair-control") { "control" } else { "mutation" }
+              Copy-Item -LiteralPath $candidate -Destination (Join-Path $evidence "$prefix-$name") -Force
+            }
+          }
+
+      - name: Upload partial rotation pair evidence after failure
+        if: ${{ failure() && needs.gate.outputs.command_mode == 'rotation_pair' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-rotation-pair-partial
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Build matched rotation pair attribution
+        if: ${{ needs.gate.outputs.command_mode == 'rotation_pair' }}
+        shell: powershell
+        env:
+          PUB_RE_PAIR_PAGE_ID: ${{ needs.gate.outputs.page_id }}
+          PUB_RE_PAIR_SHAPE_ID: ${{ needs.gate.outputs.shape_id }}
+          PUB_RE_PAIR_DELTA: ${{ needs.gate.outputs.delta_degrees }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "pair-private"
+          $evidence = Join-Path $env:PUB_RE_NATIVE_OUTPUT "evidence"
+          $pathsPath = Join-Path $private "pair-paths.json"
+          if (-not (Test-Path -LiteralPath $pathsPath -PathType Leaf)) {
+            throw "rotation_pair_private_paths_missing"
+          }
+          $paths = Get-Content -LiteralPath $pathsPath -Raw | ConvertFrom-Json
+
+          $mutationReceipt = Get-Content -LiteralPath (Join-Path $evidence "mutation-native-receipt.json") -Raw | ConvertFrom-Json
+          $producer = [ordered]@{
+            publisher_version = [string]$mutationReceipt.publisher.version.value
+            publisher_build = [string]$mutationReceipt.publisher.build.value
+          }
+          $blastEvidence = [ordered]@{
+            operation = [ordered]@{
+              kind = "shape_rotation_delta_in_place_save"
+              selector = [ordered]@{
+                page_id = [int]$env:PUB_RE_PAIR_PAGE_ID
+                shape_id = [int]$env:PUB_RE_PAIR_SHAPE_ID
+              }
+              delta_degrees = [double]::Parse($env:PUB_RE_PAIR_DELTA, [System.Globalization.CultureInfo]::InvariantCulture)
+            }
+            producer = $producer
+            requested_streams = @()
+            expected_derived_streams = @()
+            requested_records = @()
+            expected_derived_records = @()
+            requested_entities = @()
+            expected_derived_entities = @()
+            arms = [ordered]@{
+              source = [ordered]@{}
+              control = [ordered]@{}
+              mutation = [ordered]@{}
+            }
+          }
+          $blastEvidencePath = Join-Path $private "blast-evidence.json"
+          $blastEvidence | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $blastEvidencePath -Encoding utf8
+
+          python tools/operation_blast_radius_v1.py `
+            --source ([string]$paths.source_path) `
+            --control ([string]$paths.control_path) `
+            --mutation ([string]$paths.mutation_path) `
+            --evidence $blastEvidencePath `
+            --out (Join-Path $evidence "rotation-pair-blast-radius.json")
+          if (-not $?) { throw "rotation_pair_blast_radius_failed" }
+
+          $pairDiff = [ordered]@{
+            schema = "chaptera.pub-re-experiment.v1"
+            experiment_id = "rotation-pair-control-to-mutation"
+            question = "Which logical CFB ranges differ between matched no-op Save and +rotation Save?"
+            before = [ordered]@{
+              path = "pair-control/private/mutated.pub"
+              expected_sha256 = [string]$paths.control_sha256
+            }
+            after = [ordered]@{
+              path = "pair-mutation/private/mutated.pub"
+              expected_sha256 = [string]$paths.mutation_sha256
+            }
+            policy = [ordered]@{
+              max_stream_bytes = 67108864
+              max_changed_ranges_per_stream = 256
+            }
+          }
+          $pairManifest = Join-Path $env:PUB_RE_NATIVE_OUTPUT "rotation-pair-diff-manifest.json"
+          $pairDiff | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $pairManifest -Encoding utf8
+
+          $metadata = cargo metadata --no-deps --format-version 1 --manifest-path tools/pub-re/Cargo.toml | ConvertFrom-Json
+          $pubRe = Join-Path ([string]$metadata.target_directory) "release\pub-re.exe"
+          if (-not (Test-Path -LiteralPath $pubRe -PathType Leaf)) {
+            throw "built pub-re.exe was not found in Cargo target directory"
+          }
+
+          & $pubRe analyze `
+            --manifest $pairManifest `
+            --output (Join-Path $evidence "rotation-pair-cfb-receipt.json")
+          if (-not $?) { throw "rotation_pair_cfb_analysis_failed" }
+
+          & $pubRe attribute-officeart `
+            --manifest $pairManifest `
+            --stream "/Escher/EscherStm" `
+            --output (Join-Path $evidence "rotation-pair-officeart-receipt.json")
+          if (-not $?) { throw "rotation_pair_officeart_attribution_failed" }
+
       - name: Validate failed native stage receipt
-        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'rotation_pair' }}
         shell: powershell
         run: |
           Set-StrictMode -Version Latest
@@ -503,7 +716,7 @@ jobs:
           }
 
       - name: Upload failed native stage receipt
-        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'rotation_pair' }}
         uses: actions/upload-artifact@v4
         with:
           name: pub-re-native-failure-stage
@@ -512,7 +725,7 @@ jobs:
           retention-days: 14
 
       - name: Join native output to CFB and OfficeArt provenance
-        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'rotation_pair' }}
         shell: powershell
         run: |
           Set-StrictMode -Version Latest
