@@ -245,8 +245,20 @@ def interactive_smoke() -> None:
         or pub_preview.get("can_serialize") is not False
         or pub_preview.get("blocker_code") != "editor_pub_story_mutation_count"
         or pub_preview.get("chaptera_reopen_verified") is not False
+        or pub_preview.get("can_download") is not False
+        or pub_preview.get("native_publisher_authorized") is not False
     ):
         raise RuntimeError(f"invalid baseline native PUB preview: {pub_preview}")
+    # The HTTP server must enforce download admission independently of the UI.
+    # Even an export-capable principal cannot download a Reader-only candidate.
+    try:
+        json_request("/v1/pub-save/download")
+    except urllib.error.HTTPError as error:
+        body = json.load(error)
+        if error.code != 409 or body.get("error") != "native_pub_download_not_authorized":
+            raise RuntimeError(f"wrong native PUB download denial: {error.code} {body}")
+    else:
+        raise RuntimeError("unproven native PUB unexpectedly downloadable")
 
     print(json.dumps({
         "local_editor_text_capability_count": len(editable_story_ids),
