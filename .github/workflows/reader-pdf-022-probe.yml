@@ -110,7 +110,7 @@ jobs:
           assert digest == os.environ['CHAPTERA_READER_SCENE_PROBE_SHA256'], 'source digest mismatch'
           print('exact source admitted for read-only Rust probe, bytes=' + str(source.stat().st_size))
           PY
-          cargo test -p chaptera-server --bin chaptera real_reference_scene_projection_probe -- --ignored --nocapture > "$RUNNER_TEMP/022-admission-probe.log" 2>&1 || {
+          cargo test -p chaptera-server --lib real_reference_scene_projection_probe -- --ignored --nocapture > "$RUNNER_TEMP/022-admission-probe.log" 2>&1 || {
             tail -n 45 "$RUNNER_TEMP/022-admission-probe.log"
             exit 1
           }
