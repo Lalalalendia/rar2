@@ -1,0 +1,8 @@
+# 2026-10-09 — merged/assimilated repair predecessors batch 29
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+editor/rich-reader-scene-bridge-01 13a2be2546c2bb950835e978152bb544af5a7b26 # #2146 superseded by merged fresh-current-main #2313
+editor/cloud-visual-paint-01 d6272450a178c88639ca52e7f8d8f7eceaef0479 # #2145 superseded by merged fresh-current-main #2314
+reader/orphan-escherdelay-carrier-current-v2 0822bcd950c54e02d1f7ee0b080e8da0f12c947c # #1660 assimilated by stronger merged truncated-CFB substrate #1688
+ops/branch-gc-20261009-main-ancestor-router-batch-28 790f0386303415654c8911bfaa548c4c67e3a686 # completed #2304 clean receipt: 4/4 deleted
