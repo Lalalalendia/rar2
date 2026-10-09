@@ -14,6 +14,7 @@ $phaseOrder = @(
     'source_verified', 'publisher_identity_begin', 'publisher_identity_ok',
     'source_application_begin', 'source_application_ready',
     'source_open_begin', 'source_open_ok',
+    'source_snapshot_begin', 'source_snapshot_ok',
     'source_saveas_begin', 'source_saveas_ok',
     'source_application_closed', 'native_file_verified',
     'native_reopen_application_begin', 'native_reopen_begin', 'native_reopen_ok',
@@ -58,6 +59,20 @@ try {
     Write-ControlPhase 'source_open_begin'
     $document = $application.Open($SourcePath, $false, $false)
     Write-ControlPhase 'source_open_ok'
+    # Same read-only COM sequence that the candidate roundtrip performs in
+    # Get-SafeDocumentSnapshot before SaveAs. Keep parameters, Publisher
+    # process isolation and source PUB bytes unchanged; this is a falsifier
+    # for the preliminary Shapes/Pages observation as a SaveAs confound.
+    Write-ControlPhase 'source_snapshot_begin'
+    $sourceShapeCount = 0
+    for ($pageIndex = 1; $pageIndex -le [int]$document.Pages.Count; $pageIndex++) {
+        $sourceShapeCount += [int]$document.Pages.Item($pageIndex).Shapes.Count
+    }
+    $sourcePageCount = [int]$document.Pages.Count
+    if ($sourcePageCount -lt 1 -or $sourceShapeCount -lt 0) {
+        throw 'source_control_snapshot_invalid'
+    }
+    Write-ControlPhase 'source_snapshot_ok'
     Write-ControlPhase 'source_saveas_begin'
     $document.SaveAs($SavePath, 1, $false)
     Write-ControlPhase 'source_saveas_ok'
