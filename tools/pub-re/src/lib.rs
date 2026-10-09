@@ -1,4 +1,9 @@
+mod contents;
 mod officeart;
+pub use contents::{
+    CONTENTS_DIFF_SCHEMA, ContentsDiffReceipt, attribute_contents_manifest,
+    attribute_contents_manifest_file,
+};
 pub use officeart::{
     OFFICEART_ATTRIBUTION_SCHEMA_V1, OfficeArtAttributionReceiptV1,
     attribute_officeart_manifest_file,

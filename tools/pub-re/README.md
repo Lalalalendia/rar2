@@ -39,6 +39,29 @@ cargo run --manifest-path tools/pub-re/Cargo.toml -- \
 
 The receipt preserves all true overlapping record/property candidates. It does not guess by nearest offset.
 
+## v0.3 bounded Contents relocation attribution
+
+The CLI can also compare directory-addressed mature-0x2C chunks by their
+confirmed positional seqNum and reference fields, independently of raw byte
+offsets. Use the existing SHA-pinned `chaptera.pub-re-experiment.v1`
+manifest and policy limits:
+
+```bash
+cargo run --manifest-path tools/pub-re/Cargo.toml --   attribute-contents --manifest experiment.json --output contents-receipt.json
+```
+
+The `chaptera.pub-re-contents-diff.v1` receipt reports count and histogram
+of exact chunk-offset relocation, changed/unchanged raw chunk payload counts,
+changes to references or occupied slots, and capped changed seqNum lists.
+Only the confirmed 0x04/B8 pointer *value* is ignored when comparing reference
+field bytes; parent, type and every other field remain in the comparison.
+
+A status of `referenced_chunks_unchanged` **does not mean semantic equality**.
+The root saved-path region, unreferenced Contents bytes, Quill, Escher and
+other streams are not included. Unsupported/malformed 0x2C structures
+fail closed; references with no chunk offset cannot establish equivalence.
+This is not a Writer feature and does not require Publisher execution.
+
 ## v0.2 native Publisher transaction
 
 `tools/pub-re/windows/Invoke-PubReNativeExperiment.ps1` adds the native semantic side of the loop on a dedicated Windows machine with Microsoft Publisher installed.
