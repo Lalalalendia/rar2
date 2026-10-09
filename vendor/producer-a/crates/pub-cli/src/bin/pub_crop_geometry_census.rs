@@ -306,7 +306,10 @@ fn main() -> Result<()> {
                                             .unwrap_or_else(|| "none".to_owned()),
                                     )
                                 }
-                                [] => ("shape_join_missing".to_owned(), "shape_join_missing".to_owned()),
+                                [] => (
+                                    "shape_join_missing".to_owned(),
+                                    "shape_join_missing".to_owned(),
+                                ),
                                 _ => (
                                     "shape_join_ambiguous".to_owned(),
                                     "shape_join_ambiguous".to_owned(),
@@ -318,10 +321,7 @@ fn main() -> Result<()> {
                                     &mut earlier_overlap_shape_types,
                                 )
                             } else {
-                                (
-                                    &mut later_overlap_geometry,
-                                    &mut later_overlap_shape_types,
-                                )
+                                (&mut later_overlap_geometry, &mut later_overlap_shape_types)
                             };
                             *geometry_counts.entry(geometry).or_default() += 1;
                             *type_counts.entry(shape_type).or_default() += 1;

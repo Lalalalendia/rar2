@@ -11,6 +11,10 @@ permissions:
   contents: read
   actions: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   census:
     if: github.event.pull_request.head.ref == 'measure/pub-pdf-crop-shape-geometry-01'
