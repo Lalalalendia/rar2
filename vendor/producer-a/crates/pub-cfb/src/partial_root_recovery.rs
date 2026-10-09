@@ -1226,7 +1226,9 @@ mod tests {
     fn multi_sector_directory_fixture() -> Vec<u8> {
         let mut compound =
             cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("directory fixture CFB");
-        for index in 0..10u8 {
+        // 64 streams + root force more than one directory sector even
+        // when the fixture uses a 4096-byte CFB sector (32 directory entries).
+        for index in 0..64u8 {
             compound
                 .create_stream(format!("/Stream{index:02}"))
                 .expect("fixture stream")
