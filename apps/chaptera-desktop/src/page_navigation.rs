@@ -259,9 +259,7 @@ impl ViewerApp {
             .clone();
         visual_candidate
             .refresh_page_membership_from_resolved(candidate.graph(), &effective_page_ids)
-            .map_err(|error| {
-                format!("Page append projection rejected before commit: {error}")
-            })?;
+            .map_err(|error| format!("Page append projection rejected before commit: {error}"))?;
         if !visual_candidate
             .document
             .pages
