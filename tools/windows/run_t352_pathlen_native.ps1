@@ -206,9 +206,9 @@ Write-PubJson -Value ([ordered]@{
 
 $cases = @(
     [ordered]@{label="control";stem="aaaaa";expected=0},
-    [ordered]@{label="same_length";stem="zzzzz";expected=0},
-    [ordered]@{label="plus_two";stem="bbbbbb";expected=2},
-    [ordered]@{label="plus_ten";stem="cccccccccc";expected=10}
+    [ordered]@{label="same-length";stem="zzzzz";expected=0},
+    [ordered]@{label="plus-two";stem="bbbbbb";expected=2},
+    [ordered]@{label="plus-ten";stem="cccccccccc";expected=10}
 )
 $observations = @()
 foreach ($case in $cases) {
