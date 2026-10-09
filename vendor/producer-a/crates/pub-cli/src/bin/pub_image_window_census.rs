@@ -23,6 +23,7 @@ fn main() -> Result<()> {
     let bundle =
         pub_viewer::open_pub_bundle(&bytes, pub_viewer::viewer_geometry_environment_v0_1())
             .context("open PUB through Viewer")?;
+    let resolved_graph = bundle.resolved_graph;
     let visual = bundle.geometry;
     let nodes = visual
         .scene
@@ -41,6 +42,8 @@ fn main() -> Result<()> {
                 continue;
             };
             let node = nodes.get(&placement.node_id);
+            let resolved = resolved_graph.nodes.get(&placement.node_id);
+            let crop = resolved.and_then(|value| value.payload.explicit_image_crop.as_ref());
             let inside_unit = window.left_q16 >= 0
                 && window.top_q16 >= 0
                 && window.right_q16 <= Q16_ONE
@@ -51,6 +54,13 @@ fn main() -> Result<()> {
             windows.push(json!({
                 "mime": image.mime,
                 "source_exact": image.source_exact,
+                "node_kind": resolved.map(|value| format!("{:?}", value.header.kind)),
+                "officeart_shape_type": resolved.and_then(|value| value.payload.officeart_shape_type),
+                "crop_top_raw": crop.and_then(|value| value.top_raw),
+                "crop_bottom_raw": crop.and_then(|value| value.bottom_raw),
+                "crop_left_raw": crop.and_then(|value| value.left_raw),
+                "crop_right_raw": crop.and_then(|value| value.right_raw),
+                "crop_ambiguous": crop.map(|value| value.ambiguous),
                 "intrinsic_width_px": dimensions.map(|value| value.0),
                 "intrinsic_height_px": dimensions.map(|value| value.1),
                 "left_q16": window.left_q16,
