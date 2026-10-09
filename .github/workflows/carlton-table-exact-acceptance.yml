@@ -1,0 +1,82 @@
+name: Carlton TABLE exact Reader Viewer acceptance
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/carlton-table-exact-acceptance.yml"
+      - "tools/acquire_carlton_march_pair.py"
+      - "vendor/producer-a/Cargo.toml"
+      - "vendor/producer-a/Cargo.lock"
+      - "vendor/producer-a/crates/pub-cfb/**"
+      - "vendor/producer-a/crates/pub-contents/**"
+      - "vendor/producer-a/crates/pub-core/**"
+      - "vendor/producer-a/crates/pub-escher/**"
+      - "vendor/producer-a/crates/pub-model/**"
+      - "vendor/producer-a/crates/pub-quill/**"
+      - "vendor/producer-a/crates/pub-reader/**"
+      - "vendor/producer-a/crates/pub-viewer/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  exact-carlton-table:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install bounded public acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Acquire exact public Carlton March pair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/acquire_carlton_march_pair.py out/carlton/table-exact
+          test "$(stat -c %s out/carlton/table-exact/March-2026.pub)" = "9580032"
+          test "$(sha256sum out/carlton/table-exact/March-2026.pub | awk '{print $1}')" = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+
+      - name: Prove exact Carlton merged TABLE through Reader
+        shell: bash
+        env:
+          CHAPTERA_TABLE_CELL_PAINT_FIXTURE: out/carlton/table-exact/March-2026.pub
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader --test merged_table_autoformat_consumer -- \
+            --ignored --exact exact_carlton_merged_table_autoformat_consumer --nocapture
+
+      - name: Prove exact Carlton merged TABLE through Viewer
+        shell: bash
+        env:
+          CHAPTERA_TABLE_CELL_PAINT_FIXTURE: out/carlton/table-exact/March-2026.pub
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer --test merged_table_autoformat_viewer -- \
+            --ignored --exact exact_carlton_merged_table_reaches_viewer_surface --nocapture
+
+      - name: Upload source-safe acquisition identity
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: carlton-table-exact-acquisition-${{ github.run_id }}
+          path: out/carlton/table-exact/acquisition.json
+          if-no-files-found: warn
+          retention-days: 14
