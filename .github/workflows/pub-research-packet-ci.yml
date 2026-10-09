@@ -88,6 +88,10 @@ jobs:
         shell: pwsh
         run: python tools/research-runner/tests/test_text_width_m1_contract.py
 
+      - name: Guard bounded M2 Publisher breakpoint contract
+        shell: pwsh
+        run: python tools/research-runner/tests/test_text_width_m2_contract.py
+
       - name: Exercise Structured Storage deletion helper
         shell: pwsh
         run: |
