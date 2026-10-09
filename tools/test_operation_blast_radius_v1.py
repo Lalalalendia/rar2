@@ -14,7 +14,7 @@ for path in (TOOLS, CORPUS):
         sys.path.insert(0, str(path))
 
 from cfb_physical_diff import minimal  # noqa: E402
-from operation_blast_radius_v1 import BlastRadiusError, SCHEMA, build_receipt  # noqa: E402
+from operation_blast_radius_v1 import BlastRadiusError, SCHEMA, build_receipt, source_safe_cfb_receipt  # noqa: E402
 
 
 def mutate_directory_state(data: bytes, value: int) -> bytes:
@@ -124,6 +124,39 @@ class OperationBlastRadiusTests(unittest.TestCase):
         evidence["arms"]["mutation"]["records"] = [{"family": "Escher", "id": "shape-1"}]
         with self.assertRaises(BlastRadiusError):
             build_receipt(source, control, mutation, evidence=evidence)
+
+    def test_source_safe_redacts_only_untrusted_cfb_identifiers(self) -> None:
+        source = minimal(0)
+        control = mutate_directory_state(source, 1)
+        mutation = mutate_stream_payload(control, 99)
+        original = build_receipt(source, control, mutation, evidence=self.evidence())
+        slash = chr(92)
+        test_drive_path = "C:" + slash + slash.join(("Users", "PRIVATE", "Doc"))
+        original["cfb"]["control_mutation_stream_delta"][0]["stream_id"] = "dir:1:" + test_drive_path
+        original["cfb"]["control_mutation_byte_ranges"][0]["physical_label"] = (slash * 2) + slash.join(("server", "PRIVATE", "Doc"))
+        safe, count = source_safe_cfb_receipt(original)
+        self.assertEqual(count, 2)
+        self.assertEqual(safe["cfb"]["control_mutation_stream_delta"][0]["stream_id"], "redacted-cfb-label-1")
+        self.assertEqual(safe["cfb"]["control_mutation_byte_ranges"][0]["physical_label"], "redacted-cfb-label-2")
+        self.assertIn(test_drive_path, original["cfb"]["control_mutation_stream_delta"][0]["stream_id"])
+        self.assertNotIn("PRIVATE", json.dumps(safe))
+        self.assertEqual(safe["classification_counts"], original["classification_counts"])
+
+    def test_source_safe_preserves_clean_evidence(self) -> None:
+        source = minimal(0)
+        receipt = build_receipt(source, source, source, evidence=self.evidence())
+        safe, count = source_safe_cfb_receipt(receipt)
+        self.assertEqual(count, 0)
+        self.assertEqual(safe, receipt)
+
+    def test_source_safe_rejects_path_outside_cfb_metadata(self) -> None:
+        source = minimal(0)
+        receipt = build_receipt(source, source, source, evidence=self.evidence())
+        slash = chr(92)
+        test_drive_path = "C:" + slash + slash.join(("Users", "PRIVATE", "Doc"))
+        receipt["producer"] = {"private_source": test_drive_path}
+        with self.assertRaisesRegex(BlastRadiusError, "source_safe_path_remains"):
+            source_safe_cfb_receipt(receipt)
 
     def test_receipt_is_deterministic(self) -> None:
         source = minimal(0)
