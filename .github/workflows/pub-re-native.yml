@@ -78,6 +78,10 @@ jobs:
                   r"/pub-re-native snapshot ([a-z0-9][a-z0-9._-]{0,63})",
                   body,
               )
+              saveas_match = re.fullmatch(
+                  r"/pub-re-native saveas ([a-z0-9][a-z0-9._-]{0,63})",
+                  body,
+              )
               rotation_match = re.fullmatch(
                   r"/pub-re-native rotate ([a-z0-9][a-z0-9._-]{0,63}) ([1-9][0-9]{0,9}) ([1-9][0-9]{0,9}) (-?[0-9]+(?:[.][0-9]{1,6})?)",
                   body,
@@ -96,6 +100,9 @@ jobs:
               elif snapshot_match is not None:
                   command_mode = "snapshot_alias"
                   fixture_alias = snapshot_match.group(1)
+              elif saveas_match is not None:
+                  command_mode = "saveas_alias"
+                  fixture_alias = saveas_match.group(1)
               elif rotation_match is not None:
                   command_mode = "rotation_alias"
                   fixture_alias = rotation_match.group(1)
@@ -121,7 +128,7 @@ jobs:
               else:
                   raise SystemExit("invalid PUB RE native control command")
 
-          if command_mode in {"snapshot_alias", "rotation_alias"} and alias_re.fullmatch(fixture_alias) is None:
+          if command_mode in {"snapshot_alias", "saveas_alias", "rotation_alias"} and alias_re.fullmatch(fixture_alias) is None:
               raise SystemExit("fixture alias is invalid")
 
           native_timeout_minutes = "30" if command_mode == "research_0p75" else "5"
@@ -273,7 +280,7 @@ jobs:
               throw "requested native experiment manifest is not present"
             }
           }
-          elseif ($env:PUB_RE_COMMAND_MODE -eq "snapshot_alias" -or $env:PUB_RE_COMMAND_MODE -eq "rotation_alias") {
+          elseif ($env:PUB_RE_COMMAND_MODE -eq "snapshot_alias" -or $env:PUB_RE_COMMAND_MODE -eq "saveas_alias" -or $env:PUB_RE_COMMAND_MODE -eq "rotation_alias") {
             if ($env:PUB_RE_FIXTURE_ALIAS -notmatch '^[a-z0-9][a-z0-9._-]{0,63}$') {
               throw "fixture alias is invalid"
             }
@@ -317,6 +324,12 @@ jobs:
               $experimentPrefix = "snapshot"
               $operation = [ordered]@{
                 kind = "snapshot_only"
+              }
+            }
+            elseif ($env:PUB_RE_COMMAND_MODE -eq "saveas_alias") {
+              $experimentPrefix = "saveas"
+              $operation = [ordered]@{
+                kind = "save_as_noop"
               }
             }
             else {
