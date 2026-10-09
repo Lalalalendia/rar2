@@ -9,6 +9,7 @@ on:
       - "tools/ci/validate_reader_binary_artifact.py"
       - "tools/ci/test_validate_reader_binary_artifact.py"
       - "tools/ci/test_reader_build_once_wiring.py"
+      - "tools/ci/test_local_portable_windows_cache_wiring.py"
       - "tools/ci/validate_editor_binary_artifact.py"
       - "tools/ci/test_validate_editor_binary_artifact.py"
       - "tools/ci/test_editor_build_once_wiring.py"
@@ -63,6 +64,8 @@ jobs:
         run: python tools/ci/test_validate_reader_binary_artifact.py
       - name: Guard Reader build-once wiring
         run: python tools/ci/test_reader_build_once_wiring.py
+      - name: Guard Local portable Windows Cargo cache
+        run: python tools/ci/test_local_portable_windows_cache_wiring.py
       - name: Test Editor binary artifact validator
         run: python tools/ci/test_validate_editor_binary_artifact.py
       - name: Guard Editor build-once wiring
