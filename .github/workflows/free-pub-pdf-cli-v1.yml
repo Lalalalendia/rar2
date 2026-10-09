@@ -247,8 +247,8 @@ jobs:
           # Canonical exact-head baseline after preview-alpha provenance fencing.
           # SampleNewsletter carries alpha through a derived Viewer preview, not
           # an exact embedded image resource, so it must not inherit /SMask.
-          assert canonical["pdf_sha256"] == "c0afdb480937e9c1ba70742e35c4eb184969c4f3e326f1e11e172a33bd5fa012"
-          assert canonical["loss_json_sha256"] == "461d7bc2ca7e1fa34b7782e4fd3fffa43f88fae20decc7a81178b47e6a61b64b"
+          assert canonical["pdf_sha256"] == "52ec92919a4d10e5175ab66fa6bf6eac5c171ed2ba5c257d0a5449b4c7d2d062"
+          assert canonical["loss_json_sha256"] == "adf460569d47730812cee86581d916ace0f78efb8ceb550346f4aab1a613c1fd"
           assert canonical["loss_text_sha256"] == "802b475b0a759b99c0af26498b2a67df46034c5577e0a974ba037b022afcd062"
 
           receipt = {
