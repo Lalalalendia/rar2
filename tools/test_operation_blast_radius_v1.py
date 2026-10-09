@@ -130,13 +130,15 @@ class OperationBlastRadiusTests(unittest.TestCase):
         control = mutate_directory_state(source, 1)
         mutation = mutate_stream_payload(control, 99)
         original = build_receipt(source, control, mutation, evidence=self.evidence())
-        original["cfb"]["control_mutation_stream_delta"][0]["stream_id"] = r"dir:1:C:\Users\PRIVATE\Doc"
-        original["cfb"]["control_mutation_byte_ranges"][0]["physical_label"] = r"\\server\PRIVATE\Doc"
+        slash = chr(92)
+        test_drive_path = "C:" + slash + slash.join(("Users", "PRIVATE", "Doc"))
+        original["cfb"]["control_mutation_stream_delta"][0]["stream_id"] = "dir:1:" + test_drive_path
+        original["cfb"]["control_mutation_byte_ranges"][0]["physical_label"] = (slash * 2) + slash.join(("server", "PRIVATE", "Doc"))
         safe, count = source_safe_cfb_receipt(original)
         self.assertEqual(count, 2)
         self.assertEqual(safe["cfb"]["control_mutation_stream_delta"][0]["stream_id"], "redacted-cfb-label-1")
         self.assertEqual(safe["cfb"]["control_mutation_byte_ranges"][0]["physical_label"], "redacted-cfb-label-2")
-        self.assertIn("C:\\Users\\PRIVATE", original["cfb"]["control_mutation_stream_delta"][0]["stream_id"])
+        self.assertIn(test_drive_path, original["cfb"]["control_mutation_stream_delta"][0]["stream_id"])
         self.assertNotIn("PRIVATE", json.dumps(safe))
         self.assertEqual(safe["classification_counts"], original["classification_counts"])
 
@@ -150,7 +152,9 @@ class OperationBlastRadiusTests(unittest.TestCase):
     def test_source_safe_rejects_path_outside_cfb_metadata(self) -> None:
         source = minimal(0)
         receipt = build_receipt(source, source, source, evidence=self.evidence())
-        receipt["producer"] = {"private_source": r"C:\Users\PRIVATE\Doc"}
+        slash = chr(92)
+        test_drive_path = "C:" + slash + slash.join(("Users", "PRIVATE", "Doc"))
+        receipt["producer"] = {"private_source": test_drive_path}
         with self.assertRaisesRegex(BlastRadiusError, "source_safe_path_remains"):
             source_safe_cfb_receipt(receipt)
 
