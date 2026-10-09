@@ -670,9 +670,7 @@ pub(super) fn validate_resize_nodes_transition(
         .map_err(resize_transition_error_to_editor_v1)
 }
 
-pub(super) fn append_blank_page_error_to_editor_v1(
-    error: AppendBlankPageErrorV1,
-) -> EditorError {
+pub(super) fn append_blank_page_error_to_editor_v1(error: AppendBlankPageErrorV1) -> EditorError {
     match error {
         AppendBlankPageErrorV1::IdentityCollision { page_id } => {
             EditorError::AuthoredPageIdentityConflict { page_id }
@@ -708,7 +706,9 @@ impl EditorSession {
         self.undo
             .iter()
             .filter_map(|operation| match operation {
-                EditOperation::AppendBlankPageV1 { transition } => Some(transition.identity.page_id),
+                EditOperation::AppendBlankPageV1 { transition } => {
+                    Some(transition.identity.page_id)
+                }
                 _ => None,
             })
             .collect()
@@ -1046,7 +1046,6 @@ mod authored_page_identity_tests {
     }
 }
 
-
 #[cfg(test)]
 mod authored_page_append_tests {
     use super::*;
@@ -1126,8 +1125,8 @@ mod authored_page_append_tests {
         let b = page_id("44444444-4444-4444-8444-444444444444");
         let carrier = page_id("55555555-5555-4555-8555-555555555555");
         let identity = authored_identity();
-        let mut session =
-            EditorSession::new(source_graph(vec![master, a, service, b, carrier])).expect("session");
+        let mut session = EditorSession::new(source_graph(vec![master, a, service, b, carrier]))
+            .expect("session");
         let source_hash_before = session.source_hash();
 
         session
@@ -1146,7 +1145,9 @@ mod authored_page_append_tests {
         );
         assert!(session.graph().pages.contains_key(&identity.page_id));
         assert_eq!(
-            session.effective_customer_page_order_v1(&[a, b]).expect("effective"),
+            session
+                .effective_customer_page_order_v1(&[a, b])
+                .expect("effective"),
             vec![a, b, identity.page_id]
         );
         assert_eq!(session.source_hash(), source_hash_before);
@@ -1158,7 +1159,9 @@ mod authored_page_append_tests {
         );
         assert!(!session.graph().pages.contains_key(&identity.page_id));
         assert_eq!(
-            session.effective_customer_page_order_v1(&[a, b]).expect("effective"),
+            session
+                .effective_customer_page_order_v1(&[a, b])
+                .expect("effective"),
             vec![a, b]
         );
 
@@ -1180,7 +1183,9 @@ mod authored_page_append_tests {
             .register_authored_page_identity_v1(identity)
             .expect("register identity");
         assert_eq!(
-            session.effective_customer_page_order_v1(&[a]).expect("effective"),
+            session
+                .effective_customer_page_order_v1(&[a])
+                .expect("effective"),
             vec![a]
         );
 
@@ -1194,14 +1199,22 @@ mod authored_page_append_tests {
             )
             .expect("append using pre-registered identity");
         assert_eq!(
-            session.effective_customer_page_order_v1(&[a]).expect("effective"),
+            session
+                .effective_customer_page_order_v1(&[a])
+                .expect("effective"),
             vec![a, identity.page_id]
         );
 
         session.undo().expect("undo append only");
-        assert!(session.authored_page_identities_v1().contains_key(&identity.page_id));
+        assert!(
+            session
+                .authored_page_identities_v1()
+                .contains_key(&identity.page_id)
+        );
         assert_eq!(
-            session.effective_customer_page_order_v1(&[a]).expect("effective"),
+            session
+                .effective_customer_page_order_v1(&[a])
+                .expect("effective"),
             vec![a]
         );
     }
@@ -1230,13 +1243,18 @@ mod authored_page_append_tests {
         let mut reopened = EditorSession::new(graph).expect("fresh session");
         reopened.apply_project(&decoded).expect("replay");
         assert_eq!(reopened.operations(), decoded.operations.as_slice());
-        assert_eq!(reopened.graph().document.pages, session.graph().document.pages);
+        assert_eq!(
+            reopened.graph().document.pages,
+            session.graph().document.pages
+        );
         assert_eq!(
             reopened.graph().pages.get(&identity.page_id),
             session.graph().pages.get(&identity.page_id)
         );
         assert_eq!(
-            reopened.effective_customer_page_order_v1(&[a]).expect("effective"),
+            reopened
+                .effective_customer_page_order_v1(&[a])
+                .expect("effective"),
             vec![a, identity.page_id]
         );
     }
