@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Fail-closed wiring and negative controls for Cloud export's Ubuntu APT mirror fallback."""
+import os
+import shlex
 import subprocess
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -53,6 +56,88 @@ def enforce(source: str) -> None:
     require('    timeout-minutes: 45' in source, "Original job execution budget weakened")
 
 
+
+def prove_mocked_fallback(source: str) -> None:
+    """Exercise Bash branches with fake sudo/apt and a disposable mirrorlist.
+
+    This test never runs real apt, sudo or system sed against the runner image.
+    Only the in-memory script under test has its mirrorlist redirected to tmp.
+    """
+    extracted = textwrap.dedent(source.split(START, 1)[1].split(END, 1)[0])
+    shim = r"""
+sudo() {
+  printf '%s\n' "$*" >> "$FAKE_APT_TRACE"
+  if [[ "$1" == sed ]]; then
+    shift
+    command sed "$@"
+    return
+  fi
+  if [[ "$1" == timeout ]]; then
+    if [[ "$FAKE_APT_MODE" == all-fail ]]; then
+      return 124
+    fi
+    if [[ "$FAKE_APT_MODE" == primary-fail ]] && grep -Fq "azure.archive.ubuntu.com" "$FAKE_MIRROR_FILE"; then
+      return 124
+    fi
+    return 0
+  fi
+  if [[ "$1" == apt-get ]]; then
+    [[ "$*" == *--no-download* ]] || return 94
+    return 0
+  fi
+  return 95
+}
+"""
+    for mode, initial_mirror, expected_success, expected_fallback in (
+        ("primary-success", "http://azure.archive.ubuntu.com/ubuntu/\n", True, False),
+        ("primary-fail", "http://azure.archive.ubuntu.com/ubuntu/\n", True, True),
+        ("all-fail", "http://azure.archive.ubuntu.com/ubuntu/\n", False, True),
+        ("primary-fail", "http://unknown.example/ubuntu/\n", False, False),
+    ):
+        with tempfile.TemporaryDirectory(prefix="cloud-apt-mirror-test-") as directory:
+            root = Path(directory)
+            mirror = root / "apt-mirrors.txt"
+            trace = root / "calls.txt"
+            mock_bin = root / "bin"
+            mock_bin.mkdir()
+            mirror.write_text(initial_mirror, encoding="utf-8")
+            for executable in ("scribus", "libreoffice", "xvfb-run"):
+                stub = mock_bin / executable
+                stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                stub.chmod(0o755)
+            mocked = extracted.replace(
+                "mirror_file=/etc/apt/apt-mirrors.txt",
+                "mirror_file=" + shlex.quote(str(mirror)),
+                1,
+            )
+            env = os.environ.copy()
+            env.update({
+                "FAKE_APT_MODE": mode,
+                "FAKE_APT_TRACE": str(trace),
+                "FAKE_MIRROR_FILE": str(mirror),
+                "PATH": str(mock_bin) + os.pathsep + env.get("PATH", ""),
+            })
+            execution = subprocess.run(
+                ["bash", "-c", shim + "\n" + mocked],
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=15,
+                check=False,
+            )
+            label = f"{mode}/{initial_mirror.split('//')[1].split('/')[0]}"
+            require((execution.returncode == 0) == expected_success,
+                    f"{label} status={execution.returncode}: {execution.stderr}")
+            history = trace.read_text(encoding="utf-8") if trace.exists() else ""
+            require(("sed -i " in history) == expected_fallback,
+                    f"{label}: invalid mirror-fallback choice")
+            require(("--no-download" in history) == expected_success,
+                    f"{label}: offline verified-install proof mismatch")
+            if expected_fallback:
+                require("http://archive.ubuntu.com/ubuntu/" in mirror.read_text(encoding="utf-8"),
+                        f"{label}: official mirror not selected")
+
+
 def main() -> int:
     raw = WORKFLOW.read_text(encoding="utf-8")
     enforce(raw)
@@ -79,7 +164,8 @@ def main() -> int:
         except AssertionError:
             continue
         raise AssertionError(f"Unsafe change escaped guard: negative control {index}")
-    print(f"Cloud export Ubuntu mirror fallback: PASS, {len(negative)} negative controls")
+    prove_mocked_fallback(raw)
+    print(f"Cloud export Ubuntu mirror fallback: PASS, {len(negative)} negative controls, 4 mocked Bash paths")
     return 0
 
 
