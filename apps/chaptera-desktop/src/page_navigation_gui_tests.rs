@@ -718,3 +718,403 @@ fn gui_add_page_at_end_projects_membership_and_replays_on_real_pub() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+#[cfg(not(feature = "reader-only"))]
+#[test]
+#[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
+fn gui_delete_empty_authored_page_projects_membership_and_replays_on_real_pub() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let fixture_source = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
+        .map(PathBuf::from)
+        .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
+    let original = fs::read(&fixture_source).expect("read pinned SampleNewsletter fixture");
+    let root =
+        std::env::temp_dir().join(format!("chaptera-gui-page-delete-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create page-delete GUI temp directory");
+    let fixture = root.join("SampleNewsletter.pub");
+    fs::write(&fixture, &original).expect("write page-delete GUI PUB fixture");
+
+    let fixture_for_app = fixture.clone();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 820.0))
+        .with_pixels_per_point(1.0)
+        .with_max_steps(100)
+        .build_eframe(move |cc| {
+            fallback_font::install(&cc.egui_ctx)
+                .expect("pinned Chaptera fallback font resource must validate");
+            ViewerApp::new_with_storage(Some(fixture_for_app), cc.storage)
+        });
+    harness.step();
+    harness.step();
+
+    let (source_order, operations_before) = {
+        let app = harness.state();
+        let visual = app.visual.as_ref().expect("visual loaded");
+        let source_order = visual
+            .document
+            .pages
+            .iter()
+            .map(|page| page.id)
+            .collect::<Vec<_>>();
+        assert!(
+            !source_order.is_empty(),
+            "fixture must expose source-qualified customer pages"
+        );
+        assert_eq!(app.source_customer_page_ids, source_order);
+        (
+            source_order,
+            app.editor
+                .as_ref()
+                .expect("editor loaded")
+                .operations()
+                .len(),
+        )
+    };
+
+    assert!(
+        harness.get_by_label("Delete Empty Page").is_disabled(),
+        "source-backed selected page must not advertise authored-page deletion"
+    );
+
+    harness.get_by_label("Add Page at End").click();
+    harness.step();
+    harness.step();
+
+    let appended_page_id = {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("editor after append");
+        assert_eq!(editor.operations().len(), operations_before + 1);
+        match editor.operations().last() {
+            Some(pub_editor::EditOperation::AppendBlankPageV1 { transition }) => {
+                transition.identity.page_id
+            }
+            other => panic!("expected AppendBlankPageV1, got {other:?}"),
+        }
+    };
+    assert!(
+        !harness.get_by_label("Delete Empty Page").is_disabled(),
+        "selected authored blank page must expose bounded delete"
+    );
+
+    // A real canonical authored Rectangle makes the selected page nonblank.
+    // The button must be disabled before click, not only fail closed at commit.
+    {
+        let app = harness.state_mut();
+        let size = app
+            .editor
+            .as_ref()
+            .expect("editor")
+            .graph()
+            .pages
+            .get(&appended_page_id)
+            .expect("authored page")
+            .size;
+        let shape_id = pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        app.editor
+            .as_mut()
+            .expect("editor")
+            .create_shape(
+                shape_id,
+                appended_page_id,
+                pub_editor::RectEmu::new(
+                    pub_editor::LengthEmu::new(size.width.get() / 5),
+                    pub_editor::LengthEmu::new(size.height.get() / 5),
+                    pub_editor::LengthEmu::new(size.width.get() / 4),
+                    pub_editor::LengthEmu::new(size.height.get() / 4),
+                ),
+                rectangle_creation::chaptera_rectangle_paint_v1(),
+            )
+            .expect("seed content-bearing authored Rectangle");
+        app.finish_authoring_change("Seeded canonical Rectangle for Delete Empty Page negative.");
+    }
+    harness.step();
+    assert!(
+        harness.get_by_label("Delete Empty Page").is_disabled(),
+        "content-bearing authored page must not advertise Delete Empty Page"
+    );
+    assert_eq!(
+        harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len(),
+        operations_before + 2,
+        "disabled Delete Empty Page must not create any additional revision"
+    );
+
+    harness
+        .get_all_by_label("Undo")
+        .next()
+        .expect("Undo canonical Rectangle")
+        .click();
+    harness.step();
+    harness.step();
+    assert_eq!(
+        harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len(),
+        operations_before + 1,
+        "Undo of rectangle restores exactly the original blank authored page"
+    );
+    assert!(
+        !harness.get_by_label("Delete Empty Page").is_disabled(),
+        "deletion becomes available only after canonical authored content is removed"
+    );
+
+    let source_hash_before = harness
+        .state()
+        .visual
+        .as_ref()
+        .expect("visual loaded")
+        .document
+        .source
+        .source_hash;
+    let mismatched_source_hash =
+        if source_hash_before == pub_editor::Sha256Digest::from_bytes([0x5a; 32]) {
+            pub_editor::Sha256Digest::from_bytes([0xa5; 32])
+        } else {
+            pub_editor::Sha256Digest::from_bytes([0x5a; 32])
+        };
+    harness
+        .state_mut()
+        .visual
+        .as_mut()
+        .expect("visual loaded")
+        .document
+        .source
+        .source_hash = mismatched_source_hash;
+
+    harness.get_by_label("Delete Empty Page").click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        assert_eq!(
+            app.editor.as_ref().expect("editor").operations().len(),
+            operations_before + 1,
+            "failed Viewer preflight must not commit a Delete revision"
+        );
+        assert!(
+            app.visual
+                .as_ref()
+                .expect("visual")
+                .document
+                .pages
+                .iter()
+                .any(|page| page.id == appended_page_id),
+            "failed Viewer preflight must leave visible membership unchanged"
+        );
+        assert!(
+            app.edit_status
+                .as_deref()
+                .is_some_and(|status| status.contains("before commit")),
+            "failed preflight must report rejection before durable delete"
+        );
+    }
+
+    harness
+        .state_mut()
+        .visual
+        .as_mut()
+        .expect("visual loaded")
+        .document
+        .source
+        .source_hash = source_hash_before;
+    harness.step();
+
+    harness.get_by_label("Delete Empty Page").click();
+    harness.step();
+    harness.step();
+
+    {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("editor after delete");
+        assert_eq!(
+            editor.operations().len(),
+            operations_before + 2,
+            "one Delete Empty Page click must append exactly one lifecycle operation"
+        );
+        assert!(matches!(
+            editor.operations().last(),
+            Some(pub_editor::EditOperation::DeleteBlankAuthoredPageV1 { transition })
+                if transition.identity.page_id == appended_page_id
+        ));
+
+        let visual = app.visual.as_ref().expect("visual after delete");
+        assert_eq!(
+            visual
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
+            source_order,
+            "accepted Delete must restore exact source-visible membership"
+        );
+        assert!(
+            visual
+                .scene
+                .surfaces
+                .iter()
+                .all(|surface| surface.origin != appended_page_id),
+            "deleted page surface must disappear"
+        );
+        assert_eq!(
+            visual.document.pages[app.selected_page].id,
+            *source_order.last().expect("last surviving source page"),
+            "direct Delete must focus the previous surviving page"
+        );
+    }
+    assert!(
+        harness.get_by_label("Delete Empty Page").is_disabled(),
+        "source-backed fallback page must not expose authored-page deletion"
+    );
+
+    harness
+        .get_all_by_label("Undo")
+        .next()
+        .expect("Undo page delete")
+        .click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        let visual = app.visual.as_ref().expect("visual after undo");
+        assert_eq!(
+            app.editor.as_ref().expect("editor").operations().len(),
+            operations_before + 1
+        );
+        assert_eq!(
+            visual
+                .document
+                .pages
+                .last()
+                .expect("restored authored page")
+                .id,
+            appended_page_id,
+            "Undo restores exact authored PageId"
+        );
+        assert!(
+            visual
+                .scene
+                .surfaces
+                .iter()
+                .any(|surface| surface.origin == appended_page_id),
+            "Undo restores the authored page surface"
+        );
+    }
+
+    let appended_label = format!("Page {}", source_order.len() + 1);
+    harness.get_by_label(&appended_label).click();
+    harness.step();
+    assert_eq!(
+        harness
+            .state()
+            .visual
+            .as_ref()
+            .expect("visual")
+            .document
+            .pages[harness.state().selected_page]
+            .id,
+        appended_page_id
+    );
+
+    harness
+        .get_all_by_label("Redo")
+        .next()
+        .expect("Redo page delete")
+        .click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        let visual = app.visual.as_ref().expect("visual after redo");
+        assert_eq!(
+            app.editor.as_ref().expect("editor").operations().len(),
+            operations_before + 2
+        );
+        assert_eq!(
+            visual
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
+            source_order,
+            "Redo removes the same authored membership again"
+        );
+        assert!(
+            visual
+                .scene
+                .surfaces
+                .iter()
+                .all(|surface| surface.origin != appended_page_id)
+        );
+        assert_eq!(
+            visual.document.pages[app.selected_page].id,
+            *source_order.last().expect("last surviving source page")
+        );
+    }
+
+    harness.get_by_label("Save Project").click();
+    harness.step();
+    harness.step();
+    harness.step();
+    {
+        let reopen = harness.get_by_label("Reopen Project");
+        assert!(!reopen.is_disabled(), "saved DeletePage project can reopen");
+        reopen.click();
+    }
+    harness.step();
+    harness.step();
+    harness.step();
+
+    {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("fresh reopened editor");
+        assert_eq!(editor.operations().len(), operations_before + 2);
+        assert!(matches!(
+            editor.operations().last(),
+            Some(pub_editor::EditOperation::DeleteBlankAuthoredPageV1 { transition })
+                if transition.identity.page_id == appended_page_id
+        ));
+        assert_eq!(
+            app.source_customer_page_ids, source_order,
+            "fresh reopen must recover the source-qualified baseline independently"
+        );
+
+        let visual = app.visual.as_ref().expect("fresh reopened visual");
+        assert_eq!(
+            visual
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
+            source_order,
+            "fresh source open plus sidecar replay preserves deletion"
+        );
+        assert!(
+            visual
+                .scene
+                .surfaces
+                .iter()
+                .all(|surface| surface.origin != appended_page_id)
+        );
+    }
+
+    assert_eq!(
+        fs::read(&fixture).expect("re-read source PUB"),
+        original,
+        "Delete Empty Page sidecar lifecycle must not mutate source PUB bytes"
+    );
+    let _ = fs::remove_dir_all(root);
+}
