@@ -691,7 +691,27 @@ class RealAcceptanceState:
             check=False,
         )
         if completed.returncode != 0:
-            raise RuntimeError("native PUB save producer failed")
+            # The real service is reachable over HTTP. Never echo the Rust
+            # stderr here: it can include private source paths or document
+            # content. Classify only fixed, source-independent producer stages
+            # so hosted acceptance can diagnose a failure without leaking it.
+            signatures = (
+                ("native PUB save requires two distinct, unused output paths", "output_paths_occupied"),
+                ("read source PUB fixture", "source_read"),
+                ("parse canonical EditorProject", "project_parse"),
+                ("source SHA-256 does not match EditorProject", "source_hash_mismatch"),
+                ("open bounded native PUB editor", "editor_open"),
+                ("replay canonical EditorProject", "project_replay"),
+                ("write source-safe blocked native PUB save report", "blocked_receipt_write"),
+                ("write new native PUB candidate", "candidate_write"),
+                ("write source-safe native PUB save report", "candidate_receipt_write"),
+                ("unexpected extra arguments", "cli_args"),
+            )
+            failure_code = next(
+                (code for message, code in signatures if message in completed.stderr),
+                "unclassified_nonzero",
+            )
+            raise RuntimeError(f"native PUB save producer failed [{failure_code}]")
         report = load_json(report_path)
         if (
             report.get("protocol_version") != "chaptera.native-pub-save.v1"
