@@ -11,7 +11,10 @@ fn main() -> Result<()> {
         .context("usage: pub-page-order-census INPUT.pub")?;
     let path = Path::new(&path);
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let source_sha256 = Sha256::digest(&bytes)\n        .iter()\n        .map(|byte| format!("{byte:02x}"))\n        .collect::<String>();
+    let source_sha256 = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     let classification = pub_viewer::classify_pub_family(&bytes);
     let bundle =
         pub_viewer::open_pub_bundle(&bytes, pub_viewer::viewer_geometry_environment_v0_1())
