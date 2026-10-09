@@ -700,6 +700,38 @@ pub(super) fn display_page_append_error_v1(
     }
 }
 
+pub(super) fn delete_blank_authored_page_error_to_editor_v1(
+    error: DeleteBlankAuthoredPageErrorV1,
+) -> EditorError {
+    match error {
+        DeleteBlankAuthoredPageErrorV1::BeforeStateMismatch
+        | DeleteBlankAuthoredPageErrorV1::AfterStateMismatch
+        | DeleteBlankAuthoredPageErrorV1::PageStateMismatch
+        | DeleteBlankAuthoredPageErrorV1::RemovalSlotMismatch
+        | DeleteBlankAuthoredPageErrorV1::CurrentCustomerOrderMismatch => {
+            EditorError::StalePageDelete
+        }
+        other => EditorError::PageDeleteUnsupported {
+            message: format!("{other:?}"),
+        },
+    }
+}
+
+pub(super) fn display_page_delete_error_v1(
+    error: &EditorError,
+    formatter: &mut fmt::Formatter<'_>,
+) -> fmt::Result {
+    match error {
+        EditorError::PageDeleteUnsupported { message } => {
+            write!(formatter, "delete blank authored page is unsupported: {message}")
+        }
+        EditorError::StalePageDelete => formatter.write_str(
+            "current document/page membership no longer matches the delete-page precondition",
+        ),
+        _ => unreachable!("page-delete display helper receives only page-delete errors"),
+    }
+}
+
 // Authored Page identity is an ordering-adjacent durable history primitive.
 impl EditorSession {
     pub fn authored_page_identities_v1(&self) -> BTreeMap<PageId, AuthoredPageIdentityV1> {
@@ -718,15 +750,50 @@ impl EditorSession {
     }
 
     pub fn authored_customer_page_ids_v1(&self) -> Vec<PageId> {
-        self.undo
-            .iter()
-            .filter_map(|operation| match operation {
+        let mut active = Vec::<PageId>::new();
+        for operation in &self.undo {
+            match operation {
                 EditOperation::AppendBlankPageV1 { transition } => {
-                    Some(transition.identity.page_id)
+                    active.push(transition.identity.page_id);
                 }
-                _ => None,
-            })
-            .collect()
+                EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
+                    active.retain(|page_id| *page_id != transition.identity.page_id);
+                }
+                _ => {}
+            }
+        }
+        active
+    }
+
+    fn has_page_lifecycle_history_v1(&self, page_id: PageId) -> bool {
+        self.undo.iter().chain(self.redo.iter()).any(|operation| match operation {
+            EditOperation::AppendBlankPageV1 { transition }
+            | EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
+                transition.identity.page_id == page_id
+            }
+            _ => false,
+        })
+    }
+
+    fn page_has_resolved_node_membership_v1(&self, page_id: PageId) -> bool {
+        let target = page_id.into_canonical();
+        self.graph.nodes.values().any(|node| {
+            let mut current = node.header.parent_id;
+            let mut seen = BTreeSet::new();
+            loop {
+                if current == target {
+                    return true;
+                }
+                if !seen.insert(current) {
+                    return true;
+                }
+                let node_id = NodeId::from_canonical(current);
+                let Some(parent) = self.graph.nodes.get(&node_id) else {
+                    return false;
+                };
+                current = parent.header.parent_id;
+            }
+        })
     }
 
     pub fn effective_customer_page_order_v1(
@@ -817,6 +884,11 @@ impl EditorSession {
                 page_id: identity.page_id,
             });
         }
+        if self.has_page_lifecycle_history_v1(identity.page_id) {
+            return Err(EditorError::AuthoredPageIdentityConflict {
+                page_id: identity.page_id,
+            });
+        }
         if let Some(existing) = self.authored_page_identities_v1().get(&identity.page_id) {
             if *existing != identity {
                 return Err(EditorError::AuthoredPageIdentityConflict {
@@ -889,6 +961,99 @@ impl EditorSession {
         }
 
         let operation = EditOperation::AppendBlankPageV1 {
+            transition: expected,
+        };
+        apply_forward(&mut self.graph, &operation)?;
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    pub fn delete_blank_authored_page_v1(
+        &mut self,
+        source_qualified_page_ids: Vec<PageId>,
+        page_id: PageId,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        if self.project_identity.is_none() {
+            return Err(EditorError::PageDeleteUnsupported {
+                message: "durable project identity is required".to_owned(),
+            });
+        }
+        let identity = self
+            .authored_page_identities_v1()
+            .get(&page_id)
+            .copied()
+            .ok_or_else(|| EditorError::PageDeleteUnsupported {
+                message: format!(
+                    "target PageId {} has no authored identity history",
+                    page_id.as_canonical()
+                ),
+            })?;
+        if !self.authored_customer_page_ids_v1().contains(&page_id) {
+            return Err(EditorError::PageDeleteUnsupported {
+                message: format!(
+                    "target PageId {} is not active authored customer membership",
+                    page_id.as_canonical()
+                ),
+            });
+        }
+        if self.page_has_resolved_node_membership_v1(page_id)
+            || !self.current_authored_stack_v1(page_id).members.is_empty()
+        {
+            return Err(EditorError::PageDeleteUnsupported {
+                message: format!(
+                    "target PageId {} is not empty across resolved/authored membership",
+                    page_id.as_canonical()
+                ),
+            });
+        }
+        let current_customer_page_ids =
+            self.effective_customer_page_order_v1(&source_qualified_page_ids)?;
+        let transition = plan_delete_blank_authored_page_v1(
+            self.graph.document.id,
+            &self.graph.document.pages,
+            &self.graph.pages,
+            &current_customer_page_ids,
+            identity,
+        )
+        .map_err(delete_blank_authored_page_error_to_editor_v1)?;
+        self.consume_canonical_delete_blank_authored_page_v1(transition)
+    }
+
+    pub(super) fn consume_canonical_delete_blank_authored_page_v1(
+        &mut self,
+        expected: DeleteBlankAuthoredPageTransitionV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        if self.project_identity.is_none() {
+            return Err(EditorError::PageDeleteUnsupported {
+                message: "durable project identity is required".to_owned(),
+            });
+        }
+        if self.page_has_resolved_node_membership_v1(expected.identity.page_id)
+            || !self
+                .current_authored_stack_v1(expected.identity.page_id)
+                .members
+                .is_empty()
+        {
+            return Err(EditorError::PageDeleteUnsupported {
+                message: "target page is not empty across resolved/authored membership".to_owned(),
+            });
+        }
+        let planned = plan_delete_blank_authored_page_v1(
+            self.graph.document.id,
+            &self.graph.document.pages,
+            &self.graph.pages,
+            &expected.before_customer_page_ids,
+            expected.identity,
+        )
+        .map_err(delete_blank_authored_page_error_to_editor_v1)?;
+        if planned != expected {
+            return Err(EditorError::StalePageDelete);
+        }
+        let operation = EditOperation::DeleteBlankAuthoredPageV1 {
             transition: expected,
         };
         apply_forward(&mut self.graph, &operation)?;

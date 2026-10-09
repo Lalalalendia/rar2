@@ -18,6 +18,7 @@ mod session_table;
 mod session_text;
 use session_geometry::{
     append_blank_page_error_to_editor_v1, apply_authored_stack_history_forward_v1,
+    delete_blank_authored_page_error_to_editor_v1,
     authored_stack_operation_page_id_v1, derive_authored_stacks_from_operations_v1,
     display_page_append_error_v1, page_order_error_to_editor_v1, validate_move_nodes_transition,
     validate_resize_nodes_transition,
@@ -61,8 +62,10 @@ pub use imported_paragraphs_v1::{ImportedParagraphProjectionErrorV1, ImportedPar
 pub use link_text_frame_tail_v1::TextFrameLinkTransitionV1;
 pub use pub_editor_authoring_core::{
     APPEND_BLANK_PAGE_PROTOCOL_V1, AUTHORED_STACK_PROTOCOL_V1,
+    DELETE_BLANK_AUTHORED_PAGE_PROTOCOL_V1,
     AUTHORED_TABLE_SENTINEL_CONTENTS_SEQ_NUM_V1, AUTHORED_TABLE_SENTINEL_TEXT_ID_V1,
     AppendBlankPageErrorV1, AppendBlankPageTransitionV1, AuthoredEntityProvenanceV1,
+    DeleteBlankAuthoredPageErrorV1, DeleteBlankAuthoredPageTransitionV1,
     AuthoredLineRuntimeV1, AuthoredPageIdentityV1, AuthoredPageIdentityValidationErrorV1,
     AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1, AuthoredShapeTransformV1,
     AuthoredSolidFillV1, AuthoredSolidStrokeV1, AuthoredStackLifecycleErrorV1,
@@ -73,11 +76,13 @@ pub use pub_editor_authoring_core::{
     CreateTableRuntimeValidationError, LineGeometryV1, PAGE_ORDER_PROTOCOL_V1, PageOrderErrorV1,
     PageOrderTransitionV1, PointEmuV1, Srgb8V1, apply_append_blank_page_forward_v1,
     apply_append_blank_page_inverse_v1, apply_authored_stack_reorder_forward_v1,
+    apply_delete_blank_authored_page_forward_v1, apply_delete_blank_authored_page_inverse_v1,
     apply_authored_stack_reorder_inverse_v1, apply_authored_stack_transition_forward_v1,
     apply_authored_stack_transition_inverse_v1, apply_create_table_forward_v1,
     apply_create_table_inverse_v1, apply_page_order_transition_forward_v1,
     apply_page_order_transition_inverse_v1, authored_stack_state_id_v1, build_create_table_plan_v1,
-    line_bounds_v1, page_order_state_id_v1, plan_append_blank_page_v1, plan_create_line_append_v1,
+    line_bounds_v1, page_order_state_id_v1, plan_append_blank_page_v1,
+    plan_delete_blank_authored_page_v1, plan_create_line_append_v1,
     plan_create_shape_append_v1, plan_create_table_append_v1, plan_delete_shape_remove_v1,
     plan_page_order_transition_v1, plan_reorder_authored_stack_v1, qualified_page_order_v1,
     rebuild_authored_table_story_v1, validate_authored_line_runtime_v1,
@@ -394,6 +399,9 @@ pub enum EditOperation {
     AppendBlankPageV1 {
         transition: AppendBlankPageTransitionV1,
     },
+    DeleteBlankAuthoredPageV1 {
+        transition: DeleteBlankAuthoredPageTransitionV1,
+    },
     SetTextFormatProperty {
         story_id: StoryId,
         start_scalar: u32,
@@ -487,6 +495,7 @@ impl EditOperation {
             | Self::ReorderPagesV1 { .. }
             | Self::RegisterAuthoredPageIdentityV1 { .. }
             | Self::AppendBlankPageV1 { .. }
+            | Self::DeleteBlankAuthoredPageV1 { .. }
             | Self::SetTextFormatProperty { .. }
             | Self::ClearTextFormatPropertyOverride { .. }
             | Self::SetTextFormatPropertyScopedV1 { .. }
@@ -720,6 +729,18 @@ impl PersistenceRequirements for EditOperation {
             Self::AppendBlankPageV1 { transition } => {
                 append_blank_page_persistence_requirements_v1(transition)
             }
+            Self::DeleteBlankAuthoredPageV1 { transition } => vec![
+                PersistenceRequirement {
+                    feature: "page.created_identity".into(),
+                    origin: Some(transition.identity.page_id.into_canonical()),
+                    property_path: Some("page.identity".into()),
+                },
+                PersistenceRequirement {
+                    feature: "document.page_membership".into(),
+                    origin: Some(transition.document_id.into_canonical()),
+                    property_path: Some("document.pages".into()),
+                },
+            ],
             Self::SetTextFormatProperty { story_id, .. }
             | Self::ClearTextFormatPropertyOverride { story_id, .. }
             | Self::SetTextFormatPropertyScopedV1 { story_id, .. }
@@ -1325,6 +1346,10 @@ pub enum EditorError {
         message: String,
     },
     StalePageAppend,
+    PageDeleteUnsupported {
+        message: String,
+    },
+    StalePageDelete,
     NodeMoveUnsupported {
         node_id: NodeId,
     },
@@ -6356,6 +6381,9 @@ fn replay_canonical_operation(
         EditOperation::AppendBlankPageV1 { transition } => session
             .consume_canonical_append_blank_page_v1(transition.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::DeleteBlankAuthoredPageV1 { transition } => session
+            .consume_canonical_delete_blank_authored_page_v1(transition.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::SetTextFormatProperty {
             story_id,
             start_scalar,
@@ -7531,6 +7559,15 @@ fn apply_forward(
             )
             .map_err(append_blank_page_error_to_editor_v1)?;
         }
+        EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
+            apply_delete_blank_authored_page_forward_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(delete_blank_authored_page_error_to_editor_v1)?;
+        }
         EditOperation::ReorderPagesV1 { transition } => {
             apply_page_order_transition_forward_v1(
                 graph.document.id,
@@ -7805,6 +7842,15 @@ fn apply_inverse(
                 transition,
             )
             .map_err(append_blank_page_error_to_editor_v1)?;
+        }
+        EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
+            apply_delete_blank_authored_page_inverse_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(delete_blank_authored_page_error_to_editor_v1)?;
         }
         EditOperation::ReorderPagesV1 { transition } => {
             apply_page_order_transition_inverse_v1(
