@@ -6,6 +6,8 @@ on:
       - ".github/workflows/reader1050-hosted-frontier.yml"
       - "tools/research-runner/reader1050_frontier.py"
       - "tools/research-runner/reader1050_offline_discriminator.py"
+      - "tools/research-runner/reader1050_source_binding.py"
+      - "tools/research-runner/tests/test_reader1050_source_binding.py"
       - "vendor/producer-a/crates/pub-reader/data/reader-evidence-registry.json"
       - "vendor/producer-a/crates/pub-reader/src/salvage.rs"
       - "vendor/producer-a/crates/pub-reader/src/salvage_authority.rs"
@@ -68,7 +70,8 @@ jobs:
             tools/research-runner/reader1050_offline_discriminator.py
           python -m unittest \
             tools/research-runner/tests/test_reader1050_frontier.py \
-            tools/research-runner/tests/test_reader1050_offline_discriminator.py
+            tools/research-runner/tests/test_reader1050_offline_discriminator.py \
+            tools/research-runner/tests/test_reader1050_source_binding.py
 
       - name: Validate Reader salvage authority product seam
         run: |
@@ -125,30 +128,11 @@ jobs:
           run-id: ${{ env.READER_RUN_ID }}
 
       - name: Bind downloaded Reader receipt to checked-out exact source
-        shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import json
-          import os
-          import re
-          import subprocess
-          from pathlib import Path
-
-          expected = os.environ["READER_SOURCE_SHA"].lower()
-          actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip().lower()
-          if not re.fullmatch(r"[0-9a-f]{40}", expected) or actual != expected:
-              raise SystemExit(f"Reader 1050 source checkout mismatch: expected={expected}, actual={actual}")
-          receipts = sorted(Path("input/reader").rglob("acceptance.json"))
-          if len(receipts) != 1:
-              raise SystemExit(f"Reader 1050 expected exactly one acceptance.json, got {len(receipts)}")
-          receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
-          if receipt.get("schema") != "chaptera.reader-1050-corpus-baseline.v1":
-              raise SystemExit("Reader 1050 baseline receipt schema mismatch")
-          if receipt.get("rar_ref") != f"rar2:{expected}":
-              raise SystemExit("Reader 1050 baseline receipt SHA does not match checked-out code")
-          print(f"Reader 1050 baseline/code exact SHA matched: {actual}")
-          PY
+          python tools/research-runner/reader1050_source_binding.py \
+            --reader-root input/reader \
+            --source-sha "$READER_SOURCE_SHA"
 
       - name: Download pinned exact 1050 corpus materialization
         uses: actions/download-artifact@v4
