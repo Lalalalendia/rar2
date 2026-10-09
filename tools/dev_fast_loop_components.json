@@ -411,6 +411,41 @@
           "--lib"
         ]
       ]
+    },
+    {
+      "name": "pub-quill script font map micro unit",
+      "paths": [
+        "vendor/producer-a/crates/pub-quill/src/typography/font.rs"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-quill",
+          "--lib",
+          "typography::font::tests"
+        ]
+      ]
+    },
+    {
+      "name": "cloud-reader local read-only UI contract",
+      "paths": [
+        "apps/cloud-reader/index.html",
+        "apps/cloud-reader/reader.css",
+        "apps/cloud-reader/reader-app.mjs",
+        "apps/cloud-reader/reader-model.mjs",
+        "apps/cloud-reader/render-v1.mjs",
+        "apps/cloud-reader/check_contract.py"
+      ],
+      "commands": [
+        [
+          "python",
+          "apps/cloud-reader/check_contract.py"
+        ]
+      ]
     }
   ]
 }

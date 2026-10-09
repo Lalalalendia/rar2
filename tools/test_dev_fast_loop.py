@@ -692,12 +692,49 @@ def test_explicit_library_keeps_library_routing_without_default_path() -> None:
         assert mod.rust_unit_test_selectors(manifest) == ()
 
 
+def test_repo_wide_microowners_are_bounded_and_real() -> None:
+    root = MODULE.parent.parent
+    font_path = "vendor/producer-a/crates/pub-quill/src/typography/font.rs"
+    font_command = (
+        "cargo", "test", "--manifest-path", "vendor/producer-a/Cargo.toml",
+        "-p", "pub-quill", "--lib", "typography::font::tests",
+    )
+    selected_font = commands(mod.component_registry_checks(root, [font_path]))
+    assert selected_font == [font_command], selected_font
+    assert font_command in commands(mod.plan_for_paths(root, [font_path]))
+
+    cloud_command = ("python", "apps/cloud-reader/check_contract.py")
+    cloud_paths = [
+        "apps/cloud-reader/index.html",
+        "apps/cloud-reader/reader.css",
+        "apps/cloud-reader/reader-app.mjs",
+        "apps/cloud-reader/reader-model.mjs",
+        "apps/cloud-reader/render-v1.mjs",
+        "apps/cloud-reader/check_contract.py",
+    ]
+    cloud_selected = commands(mod.component_registry_checks(root, cloud_paths))
+    assert cloud_selected == [cloud_command], cloud_selected
+    assert cloud_command in commands(
+        mod.plan_for_paths(root, ["apps/cloud-reader/index.html", "apps/cloud-reader/reader.css"])
+    )
+    assert not commands(mod.component_registry_checks(root, ["apps/web/render-v1.mjs"]))
+    assert not commands(mod.component_registry_checks(root, ["apps/cloud-reader/real-browser.test.mjs"]))
+
+    # This is a pure, existing read-only contract: no Playwright or network fetch.
+    result = subprocess.run(
+        [sys.executable, "apps/cloud-reader/check_contract.py"],
+        cwd=root, text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+
+
 def main() -> None:
     test_discover_changed_paths()
     test_plan_routing_and_dedupe()
     test_same_stem_rust_source_discovers_exact_integration_test()
     test_component_registry_routes_aliases_dedupes_and_ignores_unrelated()
     test_component_registry_malformed_fails_closed()
+    test_repo_wide_microowners_are_bounded_and_real()
     test_rust_cache_auto_off_require_and_git_common_dir()
     test_run_receipt_records_timings_and_cache_state()
     test_workspace_manifest_edit_uses_metadata_not_full_workspace_compile()
