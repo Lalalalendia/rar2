@@ -432,6 +432,74 @@ fn gui_add_page_at_end_projects_membership_and_replays_on_real_pub() {
         )
     };
 
+    let source_hash_before = harness
+        .state()
+        .visual
+        .as_ref()
+        .expect("visual loaded")
+        .document
+        .source
+        .source_hash;
+    let mismatched_source_hash = if source_hash_before
+        == pub_editor::Sha256Digest::from_bytes([0x5a; 32])
+    {
+        pub_editor::Sha256Digest::from_bytes([0xa5; 32])
+    } else {
+        pub_editor::Sha256Digest::from_bytes([0x5a; 32])
+    };
+    harness
+        .state_mut()
+        .visual
+        .as_mut()
+        .expect("visual loaded")
+        .document
+        .source
+        .source_hash = mismatched_source_hash;
+
+    let rejected_add = harness.get_by_label("Add Page at End");
+    assert!(
+        !rejected_add.is_disabled(),
+        "source-identity mismatch is detected by transactional preflight, not capability gating"
+    );
+    rejected_add.click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        assert_eq!(
+            app.editor.as_ref().expect("editor").operations().len(),
+            operations_before,
+            "failed Viewer membership preflight must not commit an Append revision"
+        );
+        assert_eq!(
+            app.visual
+                .as_ref()
+                .expect("visual")
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
+            source_order,
+            "failed Viewer membership preflight must leave visible membership unchanged"
+        );
+        assert!(
+            app.edit_status
+                .as_deref()
+                .is_some_and(|status| status.contains("before commit")),
+            "failed preflight must report the rejection before any durable append"
+        );
+    }
+    harness
+        .state_mut()
+        .visual
+        .as_mut()
+        .expect("visual loaded")
+        .document
+        .source
+        .source_hash = source_hash_before;
+    harness.step();
+
     let add = harness.get_by_label("Add Page at End");
     assert!(
         !add.is_disabled(),
