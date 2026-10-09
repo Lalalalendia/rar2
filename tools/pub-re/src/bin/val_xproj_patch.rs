@@ -599,6 +599,10 @@ mod tests {
         drop(file);
 
         let baseline = all_streams(&source).unwrap();
+        for path in baseline.keys() {
+            assert!(path.starts_with('/'), "CFB stream path is not canonical: {path}");
+            assert!(!path.contains('\\'), "Windows separator leaked into CFB path");
+        }
         let stream_digests: Vec<_> = baseline
             .iter()
             .map(|(path, bytes)| json!({"path":path,"len":bytes.len(),"sha256":sha(bytes)}))
