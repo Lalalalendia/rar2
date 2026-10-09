@@ -101,6 +101,24 @@ class TextWidthM1Contract(unittest.TestCase):
         self.assertIn("Write-Stage \"invalid\" $Stage $hresult", self.worker)
         self.assertIn('if ($State -eq "running") { $script:Stage = $Phase }', self.worker)
 
+    def test_assertion_failure_exports_bounded_safe_diagnostic_only(self):
+        for field in (
+            "font_name_matches",
+            "font_size_matches",
+            "autofit_disabled",
+            "text_length_in_expected_band",
+            "observed_font_size_pt",
+            "observed_autofit_mode",
+            "observed_text_utf16_units",
+            "expected_text_utf16_units",
+        ):
+            self.assertIn(field, self.worker)
+        self.assertIn("fixed_source_checks = $script:LastFixedSourceChecks", self.worker)
+        self.assertIn('$script:LastFixedSourceChecks = $null', self.worker)
+        self.assertNotIn('observed_font_name =', self.worker)
+        self.assertNotIn('observed_text =', self.worker)
+        self.assertIn('throw "m1_font_or_text_or_autofit_drift"', self.worker)
+
     def test_fail_closed_evidence_and_no_claim_before_product_ab(self):
         self.assertIn("source_bytes_uploaded = $false", self.suite)
         self.assertIn("carrier_authority_granted = $false", self.suite)
