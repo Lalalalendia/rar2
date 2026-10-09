@@ -9,6 +9,15 @@
 //! classification is inferred here: this tool creates controls for the real
 //! Publisher Open -> Save -> fresh Reopen experiment.
 use anyhow::{Context, Result, bail};
+use pub_contents::{
+    RawContentsBlockBody, parse_0x2c_header, parse_confirmed_0x2c_chunk,
+    parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
+};
+use pub_core::StreamPath;
+use pub_escher::{
+    PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE,
+    PUBLISHER_FIELD_YS, PublisherFieldRecord, inspect_sp_containers,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -16,9 +25,6 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, File};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
-use pub_core::StreamPath;
-use pub_contents::{RawContentsBlockBody, parse_0x2c_header, parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference, parse_confirmed_0x2c_chunk};
-use pub_escher::{inspect_sp_containers, PublisherFieldRecord, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS};
 use std::path::Path;
 
 const DELTA_EMU: i64 = 127_000; // exactly +10 pt
@@ -419,7 +425,6 @@ fn prepare(base: &Path, receipt_path: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-
 fn singleton_signed_field(record: &PublisherFieldRecord, id: u16) -> Result<i64> {
     let values: Vec<u32> = record.values(id).collect();
     let [value] = values.as_slice() else {
@@ -439,14 +444,24 @@ fn inspect_projections(path: &Path) -> Result<Value> {
     let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header)?;
     let reference = parse_confirmed_chunk_reference(&contents, &trailer.directory, 293)?
         .context("Contents shape seq293 missing")?;
-    let offsets = reference.chunk_offsets.iter().map(|x| x.value).collect::<Vec<_>>();
+    let offsets = reference
+        .chunk_offsets
+        .iter()
+        .map(|x| x.value)
+        .collect::<Vec<_>>();
     let [chunk_offset] = offsets.as_slice() else {
         bail!("Contents seq293 must have exactly one chunk offset");
     };
     let chunk = parse_confirmed_0x2c_chunk(stream, &contents, *chunk_offset)?;
-    let widths = chunk.fields.iter().filter(|f| f.id == 0x00AA)
+    let widths = chunk
+        .fields
+        .iter()
+        .filter(|f| f.id == 0x00AA)
         .collect::<Vec<_>>();
-    let heights = chunk.fields.iter().filter(|f| f.id == 0x00AB)
+    let heights = chunk
+        .fields
+        .iter()
+        .filter(|f| f.id == 0x00AB)
         .collect::<Vec<_>>();
     let ([width], [height]) = (widths.as_slice(), heights.as_slice()) else {
         bail!("Contents width/height must each have one field");
@@ -462,17 +477,26 @@ fn inspect_projections(path: &Path) -> Result<Value> {
 
     let escher_bytes = pub_cfb::read_stream_reader(Cursor::new(&source), "/Escher/EscherStm")?;
     let shapes = inspect_sp_containers(StreamPath("/Escher/EscherStm".into()), &escher_bytes)?;
-    let matched = shapes.shapes.iter().filter(|s| {
-        s.fsp.as_ref().is_some_and(|f| f.spid == 1025 && f.shape_type == 202)
-            && s.client_data.as_ref().is_some_and(|d| {
-                let ids: Vec<u32> = d.values(PUBLISHER_FIELD_SHAPE_ID).collect();
-                ids.as_slice() == [293u32]
-            })
-    }).collect::<Vec<_>>();
+    let matched = shapes
+        .shapes
+        .iter()
+        .filter(|s| {
+            s.fsp
+                .as_ref()
+                .is_some_and(|f| f.spid == 1025 && f.shape_type == 202)
+                && s.client_data.as_ref().is_some_and(|d| {
+                    let ids: Vec<u32> = d.values(PUBLISHER_FIELD_SHAPE_ID).collect();
+                    ids.as_slice() == [293u32]
+                })
+        })
+        .collect::<Vec<_>>();
     let [shape] = matched.as_slice() else {
         bail!("identity-linked Escher seq293 / SPID1025 must occur exactly once");
     };
-    let anchor = shape.client_anchor.as_ref().context("Escher client anchor missing")?;
+    let anchor = shape
+        .client_anchor
+        .as_ref()
+        .context("Escher client anchor missing")?;
     let xs = singleton_signed_field(anchor, PUBLISHER_FIELD_XS)?;
     let ys = singleton_signed_field(anchor, PUBLISHER_FIELD_YS)?;
     let xe = singleton_signed_field(anchor, PUBLISHER_FIELD_XE)?;
