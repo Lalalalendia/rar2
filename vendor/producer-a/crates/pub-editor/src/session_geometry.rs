@@ -1851,7 +1851,10 @@ mod authored_page_append_tests {
             .duplicate_blank_page_v1(vec![source], source, identity)
             .expect("duplicate one source-admitted blank customer page");
 
-        assert_eq!(session.graph().document.pages, vec![source, identity.page_id]);
+        assert_eq!(
+            session.graph().document.pages,
+            vec![source, identity.page_id]
+        );
         assert_eq!(
             session.graph().pages[&identity.page_id].size,
             session.graph().pages[&source].size
@@ -1869,7 +1872,10 @@ mod authored_page_append_tests {
         let source_hex = page_hex(source);
         let duplicate_hex = page_hex(identity.page_id);
         let idml = session
-            .export_editable(crate::EditorEditableTarget::Idml, "duplicate-blank-page-idml")
+            .export_editable(
+                crate::EditorEditableTarget::Idml,
+                "duplicate-blank-page-idml",
+            )
             .expect("export duplicate to IDML");
         let designmap = read_zip_text(&idml.bytes, "designmap.xml");
         let source_spread = format!("Spreads/Spread_usp{source_hex}.xml");
@@ -1905,8 +1911,7 @@ mod authored_page_append_tests {
         );
 
         let styles = read_zip_text(&odg.bytes, "styles.xml");
-        let duplicate_layout =
-            format!(r#"<style:page-layout style:name="PM_{duplicate_hex}">"#);
+        let duplicate_layout = format!(r#"<style:page-layout style:name="PM_{duplicate_hex}">"#);
         let start = styles
             .find(&duplicate_layout)
             .expect("duplicate ODG page layout");
