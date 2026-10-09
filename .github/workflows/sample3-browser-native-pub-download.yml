@@ -1,0 +1,124 @@
+name: Sample3 Publisher-approved browser PUB byte acceptance
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/sample3-browser-native-pub-download.yml"
+      - "tools/native-pub-candidate-cli/examples/accepted_sample3_project.rs"
+      - "tools/test_sample3_browser_pub_download_service.py"
+      - "tools/test_sample3_browser_pub_download.mjs"
+      - "services/editor-api/web_real_acceptance_service.py"
+      - "vendor/producer-a/producer/src/main.rs"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-writer/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-publisher-pair-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Prove Python acceptance adapter syntax
+        run: python -m py_compile tools/test_sample3_browser_pub_download_service.py
+
+      - name: Build existing Rust Producer A
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p chaptera-producer-a
+
+      - name: Materialize exact existing Publisher-accepted fixture and candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .sample3-positive
+          python - <<'PY'
+          import base64, hashlib
+          from pathlib import Path
+          fixture = Path("vendor/producer-a/crates/pub-quill/tests/fixtures/Sample3.pub.b64")
+          source = base64.b64decode("".join(fixture.read_text().split()))
+          assert len(source) == 72192
+          assert hashlib.sha256(source).hexdigest() == "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc"
+          Path(".sample3-positive/source.pub").write_bytes(source)
+          PY
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- generate \
+            --output-dir .sample3-positive/handoff
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- verify \
+            --pub .sample3-positive/handoff/candidate.pub \
+            --manifest .sample3-positive/handoff/handoff.json
+          cmp .sample3-positive/source.pub .sample3-positive/handoff/source.pub
+
+      - name: Recreate exact accepted EditorProject without broad writer permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path tools/native-pub-candidate-cli/Cargo.toml \
+            --example accepted_sample3_project -- \
+            .sample3-positive/source.pub \
+            .sample3-positive/baseline.json \
+            .sample3-positive/edited.json
+
+      - name: Install Chromium
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Prove real Chromium HTTP response equals native-approved exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/test_sample3_browser_pub_download.mjs \
+            .sample3-positive/source.pub \
+            .sample3-positive/baseline.json \
+            .sample3-positive/edited.json \
+            vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/runtime
+          cmp .sample3-positive/runtime/accepted.pub .sample3-positive/handoff/candidate.pub
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root = Path(".sample3-positive")
+          report = json.loads((root / "runtime/sample3-browser-pub-download.json").read_text())
+          assert report["result"] == "PASS_browser_http_exact_sha_only"
+          assert report["unauthorized_http_status"] == 403
+          assert report["source_sha256"] == hashlib.sha256((root / "source.pub").read_bytes()).hexdigest()
+          assert report["output_sha256"] == hashlib.sha256((root / "handoff/candidate.pub").read_bytes()).hexdigest()
+          print({"http_browser_bytes": "exact_match", "publisher_acceptance": "existing_external_exact_pair_only"})
+          PY
+
+      - name: Keep legacy real-Newsletter browser denial gate
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path("tools/run_local_real_editor.py").read_text()
+          assert 'native_pub_download_not_authorized' in source
+          assert 'error.code != 409' in source
+          print("legacy Newsletter 409 negative smoke remains in existing real-browser workflow")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sample3-approved-browser-http-receipt
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            .sample3-positive/runtime/sample3-browser-pub-download.json
+            .sample3-positive/runtime/accepted.json
+            .sample3-positive/runtime/baseline.json
