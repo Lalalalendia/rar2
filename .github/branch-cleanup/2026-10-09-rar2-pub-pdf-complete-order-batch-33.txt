@@ -1,0 +1,6 @@
+# 2026-10-09 — PUB-PDF complete-order batch 33
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+measure/pub-pdf-complete-source-order-01 9d488a70f20ec9ff4d6800f4d3cd1de2a4123e31 # #2340 terminal measurement; complete source-order gate measured and closed
+ops/branch-gc-20261009-pub-pdf-measurements-batch-32 e610e7dbca087adab476f253ca751e946672d038 # completed #2341 clean receipt: 3/3 deleted
