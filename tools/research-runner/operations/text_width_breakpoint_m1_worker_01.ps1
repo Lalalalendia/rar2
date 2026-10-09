@@ -130,8 +130,7 @@ function Snapshot($Shape, [string]$PhaseTag = "") {
         if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_properties") }
         $hyphenation = $null
         if ($CaptureHyphenation) {
-            # Application-wide settings are observed only. The Publisher Story
-            # object does not expose a documented direct hyphenation flag.
+            # Observation only: application Options can differ from Story policy.
             if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_hyphenation_read") }
             $options = $frame.Application.Options
             try {
@@ -301,104 +300,7 @@ try {
             if (-not $CaptureHyphenation -or [math]::Abs($WidthPt - 162.53125) -gt 0.00001) {
                 throw "m3_readonly_arm_not_allowlisted"
             }
-        } elseif ($ArmId -match '^m2-mid-[1-7]
-            # M2 bisection is a bounded, quantized subset of the proven M1
-            # 160..172pt bracket; no arbitrary widths or arm identifiers.
-            if ($WidthPt -le 160.0 -or $WidthPt -ge 172.0 -or
-                [math]::Abs(($WidthPt * 128.0) - [math]::Round($WidthPt * 128.0)) -gt 0.000001) {
-                throw "m2_width_not_bounded_or_quantized"
-            }
-        } elseif (-not $expectedWidths.ContainsKey($ArmId) -or
-            [math]::Abs($WidthPt - [double]$expectedWidths[$ArmId]) -gt 0.00001) {
-            throw "m1_arm_not_allowlisted"
-        }
-        $seed = Get-Content -LiteralPath $SeedMetaPath -Raw | ConvertFrom-Json
-        if ($seed.schema -ne "chaptera.text-width-m1-seed.v1" -or
-            [string]$seed.seed_sha256 -ne $sourceSha) {
-            throw "m1_seed_identity_invalid"
-        }
-        $armDir = Join-Path $PrivateDir $ArmId
-        New-Item -ItemType Directory -Force -Path $armDir | Out-Null
-        $armPath = Join-Path $armDir "output.pub"
-        Copy-Item -LiteralPath $SourcePath -Destination $armPath -Force
-        $Stage = "arm_publisher_open"
-        Write-Stage "running" $Stage
-        $app = $null; $doc = $null; $shape = $null
-        try {
-            $app = New-PubPublisherApplication
-            $doc = $app.Open($armPath,$false,$false)
-            $shape = Get-ShapeByIdentity $doc $seed
-            $before = Snapshot $shape
-            Assert-FixedSource $before
-            if ($before.text_utf16le_sha256 -ne [string]$seed.snapshot_fresh_reopen.text_utf16le_sha256) {
-                throw "m1_seed_text_changed_before_arm"
-            }
-            $shape.Width = $WidthPt
-            $after = Snapshot $shape
-            Assert-FixedSource $after
-            if ($after.text_utf16le_sha256 -ne $before.text_utf16le_sha256) {
-                throw "m1_width_mutation_changed_text"
-            }
-            $Stage = "arm_save"
-            Write-Stage "running" $Stage
-            $doc.Save()
-        } finally {
-            Release-Com $shape
-            Close-Document $doc
-            Close-PubPublisherApplication $app
-        }
-        $Stage = "arm_fresh_reopen"
-        Write-Stage "running" $Stage
-        $app2 = $null; $doc2 = $null; $shape2 = $null
-        try {
-            $app2 = New-PubPublisherApplication
-            $doc2 = $app2.Open($armPath,$true,$false)
-            $shape2 = Get-ShapeByIdentity $doc2 $seed
-            $fresh = Snapshot $shape2
-            Assert-FixedSource $fresh
-            if ($fresh.text_utf16le_sha256 -ne $before.text_utf16le_sha256) {
-                throw "m1_save_reopen_changed_text"
-            }
-        } finally {
-            Release-Com $shape2
-            Close-Document $doc2
-            Close-PubPublisherApplication $app2
-        }
-        $Stage = "arm_receipt"
-        Write-Stage "running" $Stage
-        if ([math]::Abs([double]$fresh.width_pt - $WidthPt) -gt 0.001 -or
-            [math]::Abs([double]$after.width_pt - $WidthPt) -gt 0.001 -or
-            (File-Sha $SourcePath) -ne $sourceSha) {
-            throw "m1_width_or_seed_drift"
-        }
-        Write-PubJson -Path (Join-Path $AnalysisDir ("text-width-m1-" + $ArmId + ".json")) -Value ([ordered]@{
-            schema = "chaptera.text-width-m1-arm.v1"
-            experiment_id = "TEXT-WIDTH-BREAKPOINT-M1-01"
-            arm_id = $ArmId
-            requested_width_pt = $WidthPt
-            source_sha256 = [string]$seed.source_sha256
-            seed_sha256 = $sourceSha
-            output_sha256 = File-Sha $armPath
-            before = $before
-            after = $after
-            fresh_reopen = $fresh
-            original_seed_preserved = $true
-            raw_pub_uploaded = $false
-        })
-    }
-    $Status = "complete"
-    Write-Stage $Status "complete"
-} catch {
-    # Public diagnostics contain only the current phase and numeric HRESULT,
-    # never exception text, private paths, or user document contents.
-    $hresult = ""
-    if ($null -ne $_.Exception) {
-        $hresult = ('0x{0:X8}' -f (([long]$_.Exception.HResult) -band 4294967295L))
-    }
-    Write-Stage "invalid" $Stage $hresult
-    throw
-}
-) {
+        } elseif ($ArmId -match '^m2-mid-[1-7]$') {
             # M2 bisection is a bounded, quantized subset of the proven M1
             # 160..172pt bracket; no arbitrary widths or arm identifiers.
             if ($WidthPt -le 160.0 -or $WidthPt -ge 172.0 -or
