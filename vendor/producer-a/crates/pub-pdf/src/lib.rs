@@ -1550,7 +1550,7 @@ mod tests {
                 placements: vec![FixedImagePlacement {
                     node_id: node_id(10),
                     content_rotation_degrees: Some(90),
-                    source_window_present: false,
+                    source_window: None,
                     recolor_present: false,
                 }],
                 bytes: png,
@@ -1578,7 +1578,7 @@ mod tests {
     }
 
     #[test]
-    fn source_window_only_image_placement_remains_fail_closed() {
+    fn source_window_only_image_placement_clips_and_maps_exact_window() {
         let png = vec![
             0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
             0x44, 0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
@@ -1596,7 +1596,12 @@ mod tests {
                 placements: vec![FixedImagePlacement {
                     node_id: node_id(10),
                     content_rotation_degrees: None,
-                    source_window_present: true,
+                    source_window: Some(FixedImageSourceWindow {
+                        left_q16: 1 << 14,
+                        top_q16: 0,
+                        right_q16: 3 << 14,
+                        bottom_q16: 1 << 16,
+                    }),
                     recolor_present: false,
                 }],
                 bytes: png,
@@ -1612,21 +1617,44 @@ mod tests {
         .unwrap();
 
         let text = String::from_utf8_lossy(&output.bytes);
-        assert!(!text.contains(" Do\n"));
-        assert!(
-            output
-                .report
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == "pdf.image.placement_combination_unsupported")
-        );
+        assert!(text.contains("10 20 100 50 re\nW n\n"));
+        assert!(text.contains("200 0 0 -50 -40 70 cm"));
         assert!(
             output
                 .report
                 .nodes
                 .iter()
-                .any(|node| node.code == "pdf.node.resource_unsupported")
+                .any(|node| node.code == "pdf.node.painted_exact_image")
         );
+        assert!(
+            output
+                .report
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != "pdf.image.placement_combination_unsupported")
+        );
+    }
+
+    #[test]
+    fn source_window_fit_pan_outside_image_keeps_frame_clip_without_clamping() {
+        let node = &scene().nodes[0];
+        let window = FixedImageSourceWindow {
+            left_q16: -(1 << 14),
+            top_q16: 0,
+            right_q16: 5 << 14,
+            bottom_q16: 1 << 16,
+        };
+        let mut content = String::new();
+
+        assert!(append_image_source_window(
+            &mut content,
+            node,
+            resource_id(48),
+            &window,
+        ));
+
+        assert!(content.contains("10 20 100 50 re\nW n\n"));
+        assert!(content.contains("66.666666667 0 0 -50 26.666666667 70 cm"));
     }
 
     #[test]
