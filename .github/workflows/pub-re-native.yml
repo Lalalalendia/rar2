@@ -87,7 +87,7 @@ jobs:
                   body,
               )
               research_match = re.fullmatch(
-                  r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?|val-xproj-01|val-xproj-independent-01|quill-story-readonly-oracle-02)",
+                  r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?|val-xproj-01|val-xproj-independent-01|quill-story-readonly-oracle-02|text-width-breakpoint-m1-01)",
                   body,
               )
               cancel_match = re.fullmatch(
@@ -130,7 +130,9 @@ jobs:
                       raise SystemExit("rotation delta must be nonzero and within 45 degrees")
               elif research_match is not None:
                   research_id = research_match.group(1)
-                  if research_id == "quill-story-readonly-oracle-02":
+                  if research_id == "text-width-breakpoint-m1-01":
+                      command_mode = "research_width_m1"
+                  elif research_id == "quill-story-readonly-oracle-02":
                       command_mode = "research_quill_readonly"
                   else:
                       command_mode = "research_t352" if research_id in {"val-xproj-01", "val-xproj-independent-01"} else "research_0p75"
@@ -145,7 +147,7 @@ jobs:
           if command_mode in {"snapshot_alias", "rotation_alias", "rotation_pair"} and alias_re.fullmatch(fixture_alias) is None:
               raise SystemExit("fixture alias is invalid")
 
-          native_timeout_minutes = "30" if command_mode in {"research_0p75", "research_t352", "research_quill_readonly"} else "10" if command_mode == "rotation_pair" else "5"
+          native_timeout_minutes = "30" if command_mode in {"research_0p75", "research_t352", "research_quill_readonly", "research_width_m1"} else "10" if command_mode == "rotation_pair" else "5"
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"command_mode={command_mode}\n")
@@ -231,7 +233,7 @@ jobs:
 
   native:
     needs: gate
-    if: ${{ needs.gate.result == 'success' && needs.gate.outputs.command_mode != 'cancel_run' }}
+    if: ${{ needs.gate.result == 'success' && needs.gate.outputs.command_mode != 'cancel_run' && needs.gate.outputs.command_mode != 'research_width_m1' }}
     runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
     timeout-minutes: ${{ fromJSON(needs.gate.outputs.native_timeout_minutes) }}
     concurrency:
@@ -1107,7 +1109,7 @@ jobs:
           if (Test-Path -LiteralPath $nativeStagePath -PathType Leaf) {
             $nativeStage = Get-Content -LiteralPath $nativeStagePath -Raw | ConvertFrom-Json
             if ($nativeStage.schema -ne "chaptera.quill-readonly-native-stage.v1" -or
-                $nativeStage.phase -notin @("fixture_acquisition", "publisher_identity", "publisher_open", "story_read", "source_integrity", "receipt_write", "complete") -or
+                $nativeStage.phase -notin @("fixture_acquisition", "publisher_identity", "application_create", "document_open", "stories_collection", "story_read", "source_integrity", "receipt_write", "complete") -or
                 $nativeStage.status -notin @("running", "invalid", "complete") -or
                 [int]$nativeStage.witness_index -lt 0 -or [int]$nativeStage.witness_index -gt 4) {
               throw "quill_readonly_native_stage_invalid"
@@ -1200,4 +1202,97 @@ jobs:
         run: |
           if (-not [string]::IsNullOrWhiteSpace($env:PUB_RE_NATIVE_OUTPUT) -and (Test-Path -LiteralPath $env:PUB_RE_NATIVE_OUTPUT)) {
             Remove-Item -LiteralPath $env:PUB_RE_NATIVE_OUTPUT -Recurse -Force
+          }
+
+  text-width-m1:
+    needs: gate
+    if: ${{ needs.gate.result == 'success' && needs.gate.outputs.command_mode == 'research_width_m1' }}
+    runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
+    timeout-minutes: 30
+    concurrency:
+      group: pub-re-native-publisher-oracle
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    env:
+      PUB_M1_OUTPUT: ${{ github.workspace }}\pub-m1-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Run bounded Publisher text width experiment
+        id: m1_native
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path $env:PUB_M1_OUTPUT | Out-Null
+          & tools/research-runner/operations/text_width_breakpoint_m1_01.ps1 -PacketPath tools/research-runner/experiments/text-width-breakpoint-m1-01.packet.json -OutputRoot $env:PUB_M1_OUTPUT
+
+      - name: Stage source-safe text width evidence and partial failures
+        if: ${{ always() }}
+        shell: powershell
+        env:
+          M1_NATIVE_OUTCOME: ${{ steps.m1_native.outcome }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $safe = Join-Path $env:PUB_M1_OUTPUT "upload-safe"
+          New-Item -ItemType Directory -Force -Path $safe | Out-Null
+          $names = @(
+            "text-width-breakpoint-m1-01.json",
+            "text-width-m1-suite-stage.json",
+            "text-width-m1-seed.json",
+            "text-width-m1-seed-stage.json",
+            "text-width-m1-control-before.json",
+            "text-width-m1-control-before-stage.json",
+            "text-width-m1-narrow.json",
+            "text-width-m1-narrow-stage.json",
+            "text-width-m1-wide.json",
+            "text-width-m1-wide-stage.json",
+            "text-width-m1-control-after.json",
+            "text-width-m1-control-after-stage.json"
+          )
+          $copied = 0
+          foreach ($name in $names) {
+            $path = Join-Path $env:PUB_M1_OUTPUT ("analysis\" + $name)
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+            $file = Get-Item -LiteralPath $path
+            if ($file.Length -gt 131072) { throw "m1_source_safe_receipt_oversize" }
+            $raw = Get-Content -LiteralPath $path -Raw
+            if ($raw -match '(?i)[a-z]:\\' -or $raw -match '\\\\[^"\s]+\\') {
+              throw "m1_source_safe_receipt_contains_local_path"
+            }
+            $parsed = $raw | ConvertFrom-Json
+            if ([string]$parsed.schema -notmatch '^chaptera\.text-width-') {
+              throw "m1_source_safe_schema_mismatch"
+            }
+            Copy-Item -LiteralPath $path -Destination (Join-Path $safe $name) -Force
+            $copied++
+          }
+          if ($copied -eq 0) {
+            @{schema="chaptera.text-width-m1-suite-stage.v1";state="invalid";phase="preflight";arm_id="none"} |
+              ConvertTo-Json -Compress |
+              Set-Content -LiteralPath (Join-Path $safe "text-width-m1-suite-stage.json") -Encoding UTF8
+          }
+          if ($env:M1_NATIVE_OUTCOME -eq "success" -and $copied -ne $names.Count) {
+            throw "m1_success_incomplete_receipts"
+          }
+
+      - name: Upload M1 source-safe receipts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-text-width-m1-evidence
+          path: ${{ env.PUB_M1_OUTPUT }}\upload-safe\*.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Clear private M1 Publisher sources and outputs
+        if: ${{ always() }}
+        shell: powershell
+        run: |
+          if (Test-Path -LiteralPath $env:PUB_M1_OUTPUT) {
+            Remove-Item -LiteralPath $env:PUB_M1_OUTPUT -Recurse -Force
           }
