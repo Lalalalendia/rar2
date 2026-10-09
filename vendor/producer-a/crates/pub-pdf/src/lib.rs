@@ -287,8 +287,7 @@ pub fn render_bounded_pdf(
     resources: &FixedPdfResources,
     target: &PdfTargetProfile,
 ) -> Result<PdfRenderOutput, PdfRenderError> {
-    let mut surfaces = scene.surfaces.clone();
-    surfaces.sort_by_key(|surface| surface.origin);
+    let surfaces = scene.surfaces.clone();
 
     for surface in &surfaces {
         if surface.size.width.get() <= 0 || surface.size.height.get() <= 0 {
@@ -300,8 +299,7 @@ pub fn render_bounded_pdf(
         }
     }
 
-    let mut nodes = scene.nodes.clone();
-    nodes.sort_by_key(|node| node.origin);
+    let nodes = scene.nodes.clone();
 
     let node_ids = nodes
         .iter()
