@@ -588,11 +588,15 @@ pub(super) fn source_text_simple_ltr_v1(text: &str) -> bool {
         })
 }
 
-// Only exact physical glyphs can become a SharedResolved visible span.
-// HarfRust glyph_id=0 is .notdef; an exact face/SHA alone does not prove
-// the punctuation (or any other painted scalar) is present in that face.
-fn exact_visible_glyphs_proven_v1(glyphs: &[BoundedShapedGlyph]) -> bool {
-    !glyphs.is_empty() && glyphs.iter().all(|glyph| glyph.glyph_id != 0)
+// The new bounded Unicode-punctuation admission must not paint .notdef.
+// Preserve existing ASCII shaping semantics, including legacy test faces
+// with incomplete glyph coverage. No bidi or fallback is authorized.
+fn newly_admitted_unicode_glyphs_proven_v1(
+    visible_text: &str,
+    glyphs: &[BoundedShapedGlyph],
+) -> bool {
+    visible_text.is_ascii()
+        || (!glyphs.is_empty() && glyphs.iter().all(|glyph| glyph.glyph_id != 0))
 }
 
 pub(super) fn shape_visible_v1(
@@ -601,7 +605,7 @@ pub(super) fn shape_visible_v1(
     runtime: &BoundedShapingRuntime<'_>,
 ) -> Option<pub_layout::BoundedShapedText> {
     let shaped = shape_bounded_ltr_segment(text, scalar_start, runtime).ok()?;
-    exact_visible_glyphs_proven_v1(&shaped.glyphs).then_some(shaped)
+    newly_admitted_unicode_glyphs_proven_v1(text, &shaped.glyphs).then_some(shaped)
 }
 
 // Exact source-backed mixed-family terminal admission, preserving all earlier
@@ -964,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_family_exact_visible_spans_reject_notdef_and_empty_glyphs() {
+    fn mixed_family_new_unicode_requires_glyph_coverage_without_changing_ascii() {
         let known = BoundedShapedGlyph {
             glyph_id: 1,
             cluster: 0,
@@ -974,15 +978,18 @@ mod tests {
             y_offset: LengthEmu::ZERO,
             unsafe_to_break: false,
         };
-        assert!(exact_visible_glyphs_proven_v1(&[known.clone()]));
-        assert!(!exact_visible_glyphs_proven_v1(&[]));
-        assert!(!exact_visible_glyphs_proven_v1(&[
-            known.clone(),
-            BoundedShapedGlyph {
-                glyph_id: 0,
-                ..known
-            },
-        ]));
+        let missing = BoundedShapedGlyph {
+            glyph_id: 0,
+            ..known.clone()
+        };
+        // Historical ASCII shaping is not silently broadened by this fix.
+        assert!(newly_admitted_unicode_glyphs_proven_v1("AB", &[known.clone(), missing.clone()]));
+        assert!(!newly_admitted_unicode_glyphs_proven_v1("A\u{2019}B", &[]));
+        assert!(newly_admitted_unicode_glyphs_proven_v1(
+            "A\u{2019}B",
+            std::slice::from_ref(&known)
+        ));
+        assert!(!newly_admitted_unicode_glyphs_proven_v1("A\u{2019}B", &[known, missing]));
 
         // Existing AHEM positive controls exercise the actual wrapper too.
         let bytes = font_test_data::AHEM;
