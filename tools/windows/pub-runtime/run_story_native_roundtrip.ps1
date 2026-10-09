@@ -16,6 +16,7 @@ New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 $output = (Resolve-Path -LiteralPath $OutputRoot).Path
 
 Import-Module (Join-Path $repoRoot "tools\windows\pub-runtime\PubRuntime.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot 'NativeStoryPhase.psm1') -Force
 
 $manifestPath = Join-Path $bundle "handoff.json"
 $sourcePath = Join-Path $bundle "source.pub"
@@ -41,35 +42,10 @@ if ($candidateBefore.sha256 -ne ([string]$manifest.candidate_sha256).ToLowerInva
 }
 
 function Write-PubNativeStage {
-    param(
-        [Parameter(Mandatory = $true)]
-        [ValidateSet(
-            'inputs_verified', 'publisher_identity_begin', 'publisher_identity_verified',
-            'candidate_application_begin', 'candidate_application_ready',
-            'candidate_open_begin', 'candidate_open_ok',
-            'saveas_begin', 'saveas_ok', 'candidate_application_closed',
-            'reopen_application_begin', 'reopen_application_ready',
-            'native_reopen_begin', 'native_reopen_ok', 'native_application_closed',
-            'source_immutable', 'reader_verify_begin', 'reader_verify_ok',
-            'pass'
-        )]
-        [string]$Phase
-    )
-    $payload = [ordered]@{
-        schema = 'chaptera.pub-native-story-stage.v1'
-        phase = $Phase
-        source_sha256 = [string]$manifest.source_sha256
-        candidate_sha256 = [string]$manifest.candidate_sha256
-    }
-    $temporaryPath = Join-Path $output 'native-roundtrip-stage.next.json'
-    $stagePath = Join-Path $output 'native-roundtrip-stage.json'
-    $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporaryPath -Encoding utf8
-    if ([System.IO.File]::Exists($stagePath)) {
-        [System.IO.File]::Replace($temporaryPath, $stagePath, $null)
-    }
-    else {
-        [System.IO.File]::Move($temporaryPath, $stagePath)
-    }
+    param([Parameter(Mandatory = $true)][string]$Phase)
+    Write-PubNativePhase -OutputRoot $output -Phase $Phase `
+        -SourceSha256 ([string]$manifest.source_sha256) `
+        -CandidateSha256 ([string]$manifest.candidate_sha256)
 }
 
 Write-PubNativeStage 'inputs_verified'
