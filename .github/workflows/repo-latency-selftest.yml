@@ -20,7 +20,7 @@ permissions:
 jobs:
   offline-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,8 +35,27 @@ jobs:
         run: |
           python tools/ci/repo_latency_census.py \
             --repo "${{ github.repository }}" \
-            --limit 2 \
+            --limit 36 \
             --out target/ci-repo-latency/live-smoke.json
+      - name: Print repo-wide latency census findings to job logs
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path("target/ci-repo-latency/live-smoke.json").read_text())
+          rows=d["prs"]
+          print("SAMPLE_COUNT", len(rows))
+          for r in rows:
+              print("PR_ROW", json.dumps({
+                  "pr": r["pr_number"], "class": r["class"],
+                  "domains": r["domains"], "feedback_s": r["first_relevant_feedback_s"],
+                  "merge_ready_s": r["merge_ready_s"], "post_gate_to_merge_s": r["post_gate_to_merge_s"],
+                  "queue_p95_s": r["queue_wait"]["p95_s"],
+                  "longest_queue": r["longest_queue"], "critical_tail": r["critical_tail"]
+              },sort_keys=True))
+          print("BY_CLASS", json.dumps(d["by_class"],sort_keys=True))
+          PY
       - uses: actions/upload-artifact@v4
         if: ${{ github.event_name == 'pull_request' }}
         with:
