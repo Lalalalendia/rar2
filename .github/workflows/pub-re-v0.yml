@@ -59,7 +59,9 @@ jobs:
 
           foreach ($manifest in @(
             "tools/pub-re/tests/native-shape-rotation.example.json",
-            "tools/pub-re/tests/native-save-as-noop.example.json"
+            "tools/pub-re/tests/native-save-as-noop.example.json",
+            "tools/pub-re/tests/native-save-in-place-noop.example.json",
+            "tools/pub-re/tests/native-shape-rotation-in-place.example.json"
           )) {
             & $script `
               -ManifestPath $manifest `
