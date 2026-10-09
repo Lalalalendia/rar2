@@ -318,3 +318,29 @@ jobs:
           name: carlton-alpha-smask-ab
           path: target/carlton-alpha-smask-ab
           if-no-files-found: error
+      # Retain only the same source-neutral JSON already admitted by the
+      # successful receipt path. Never retain PUB, private packet, requests,
+      # raw fonts or PDF bytes on a failed acceptance.
+      - name: Preserve failed Carlton alpha structural evidence
+        if: failure()
+        shell: pwsh
+        run: |
+          $root = $env:CHAPTERA_CARLTON_AB_ROOT
+          if ($root -and (Test-Path -LiteralPath $root -PathType Container)) {
+            $out = "target/carlton-alpha-failure-structural"
+            New-Item -ItemType Directory -Force -Path $out | Out-Null
+            foreach ($name in @("baseline-mapping.json", "alpha-mapping.json", "baseline-renderer.json", "alpha-renderer.json")) {
+              $source = Join-Path $root $name
+              if (Test-Path -LiteralPath $source -PathType Leaf) {
+                Copy-Item -LiteralPath $source -Destination (Join-Path $out $name)
+              }
+            }
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: carlton-alpha-failed-structural-evidence
+          path: target/carlton-alpha-failure-structural
+          if-no-files-found: warn
+          retention-days: 14

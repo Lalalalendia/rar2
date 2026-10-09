@@ -516,3 +516,28 @@ jobs:
           name: carlton-current-viewer-supported-subset
           path: target/carlton-supported-subset
           if-no-files-found: error
+      # Save only already-public-safe JSON produced before a strict raster
+      # assertion aborts. A failure is still a failure; no check is waived.
+      - name: Preserve failed Carlton PDF structural evidence
+        if: failure()
+        shell: pwsh
+        run: |
+          $root = $env:CHAPTERA_CARLTON_SUPPORTED_ROOT
+          if ($root -and (Test-Path -LiteralPath $root -PathType Container)) {
+            $out = "target/carlton-supported-failure-structural"
+            New-Item -ItemType Directory -Force -Path $out | Out-Null
+            foreach ($name in @("supported-mapping.json", "supported-renderer.json", "supported-reference-diff.json")) {
+              $source = Join-Path $root $name
+              if (Test-Path -LiteralPath $source -PathType Leaf) {
+                Copy-Item -LiteralPath $source -Destination (Join-Path $out $name)
+              }
+            }
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: carlton-pdf-failed-structural-evidence
+          path: target/carlton-supported-failure-structural
+          if-no-files-found: warn
+          retention-days: 14
