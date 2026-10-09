@@ -24,7 +24,10 @@ use session_geometry::{
     display_page_delete_error_v1, page_order_error_to_editor_v1, validate_move_nodes_transition,
     validate_resize_nodes_transition,
 };
-use session_geometry::{display_page_duplicate_error_v1, duplicate_blank_page_error_to_editor_v1};
+use session_geometry::{
+    display_page_duplicate_error_v1, display_page_insert_error_v1,
+    duplicate_blank_page_error_to_editor_v1, insert_blank_page_after_error_to_editor_v1,
+};
 use session_image::{
     apply_crop_forward, apply_crop_inverse, apply_image_forward, apply_image_inverse,
 };
