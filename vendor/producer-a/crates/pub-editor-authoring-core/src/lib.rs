@@ -62,10 +62,9 @@ pub use delete_blank_authored_page_v1::{
     plan_delete_blank_authored_page_v1,
 };
 pub use duplicate_blank_page_v1::{
-    DUPLICATE_BLANK_PAGE_PROTOCOL_V1, DuplicateBlankPageErrorV1,
-    DuplicateBlankPageTransitionV1, apply_duplicate_blank_page_forward_v1,
-    apply_duplicate_blank_page_inverse_v1, duplicate_blank_page_document_state_id_v1,
-    plan_duplicate_blank_page_v1,
+    DUPLICATE_BLANK_PAGE_PROTOCOL_V1, DuplicateBlankPageErrorV1, DuplicateBlankPageTransitionV1,
+    apply_duplicate_blank_page_forward_v1, apply_duplicate_blank_page_inverse_v1,
+    duplicate_blank_page_document_state_id_v1, plan_duplicate_blank_page_v1,
 };
 
 // Private compatibility for internal module imports only.
