@@ -767,8 +767,10 @@ impl EditorSession {
 
     fn has_page_lifecycle_history_v1(&self, page_id: PageId) -> bool {
         self.undo.iter().chain(self.redo.iter()).any(|operation| match operation {
-            EditOperation::AppendBlankPageV1 { transition }
-            | EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
+            EditOperation::AppendBlankPageV1 { transition } => {
+                transition.identity.page_id == page_id
+            }
+            EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
                 transition.identity.page_id == page_id
             }
             _ => false,
