@@ -77,6 +77,26 @@ class TextWidthM1Contract(unittest.TestCase):
         self.assertIn('m1_save_reopen_changed_text', self.worker)
         self.assertIn('m1_bracketing_controls_disagree', self.suite)
 
+    def test_seed_com_microphases_are_source_safe_and_complete(self):
+        phases = (
+            "seed_application_create",
+            "seed_document_open",
+            "seed_page_lookup",
+            "seed_textbox_add",
+            "seed_frame_policy",
+            "seed_text_write",
+            "seed_font_apply",
+            "seed_layout_snapshot",
+            "seed_fixed_source_assert",
+            "seed_identity",
+            "seed_save",
+        )
+        for phase in phases:
+            self.assertIn('"' + phase + '"', self.worker)
+        self.assertNotIn("seed_publisher_open", self.worker)
+        self.assertIn('Write-Stage "invalid" $Stage', self.worker)
+        self.assertNotIn("$_.Exception.Message", self.worker)
+
     def test_fail_closed_evidence_and_no_claim_before_product_ab(self):
         self.assertIn("source_bytes_uploaded = $false", self.suite)
         self.assertIn("carrier_authority_granted = $false", self.suite)
