@@ -243,7 +243,38 @@ impl ViewerApp {
             );
         }
 
+        let effective_page_ids = candidate
+            .effective_customer_page_order_v1(&self.source_customer_page_ids)
+            .map_err(|error| {
+                format!(
+                    "Page append projection is unavailable before commit: {} ({})",
+                    error,
+                    error.code()
+                )
+            })?;
+        let mut visual_candidate = self
+            .visual
+            .as_ref()
+            .ok_or_else(|| "Document page projection is unavailable.".to_owned())?
+            .clone();
+        visual_candidate
+            .refresh_page_membership_from_resolved(candidate.graph(), &effective_page_ids)
+            .map_err(|error| {
+                format!("Page append projection rejected before commit: {error}")
+            })?;
+        if !visual_candidate
+            .document
+            .pages
+            .iter()
+            .any(|page| page.id == identity.page_id)
+        {
+            return Err(
+                "Page append projection did not contain the new canonical PageId.".to_owned(),
+            );
+        }
+
         self.editor = Some(candidate);
+        self.visual = Some(visual_candidate);
         self.finish_authoring_change(
             "Appended one blank customer page at publication end. Source PUB bytes were not written.",
         );
