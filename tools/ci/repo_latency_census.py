@@ -64,7 +64,9 @@ def domains(paths: list[str]) -> list[str]:
         low = path.lower()
         if "android" in low or "/jni/" in low:
             result.add("android")
-        elif low.startswith(("apps/web/", "packages/web/")) or "web-" in low:
+        elif low.startswith(("apps/cloud-reader/", "tools/cloud_reader_")):
+            result.add("cloud-reader")
+        elif low.startswith(("apps/web/", "packages/web/", "packages/protocol/editor-render-scene/", "tools/run_web_")) or "web-" in low:
             result.add("web")
         elif low.startswith(("apps/chaptera-server/", "crates/chaptera-cloud-")):
             result.add("cloud-server")
