@@ -49,13 +49,14 @@ function Close-Document($Document) {
     try { $Document.Close() } catch {}
     Release-Com $Document
 }
-function Write-Stage([string]$State, [string]$Phase) {
+function Write-Stage([string]$State, [string]$Phase, [string]$HresultHex = "") {
     Write-PubJson -Path $StagePath -Value ([ordered]@{
         schema = "chaptera.text-width-m1-stage.v1"
         experiment_id = "TEXT-WIDTH-BREAKPOINT-M1-01"
         case = $stageName
         state = $State
         phase = $Phase
+        hresult_hex = $HresultHex
     })
 }
 function Get-ShapeByIdentity($Document, $Meta) {
@@ -311,6 +312,12 @@ try {
     $Status = "complete"
     Write-Stage $Status "complete"
 } catch {
-    Write-Stage "invalid" $Stage
+    # Public diagnostics contain only the current phase and numeric HRESULT,
+    # never exception text, private paths, or user document contents.
+    $hresult = ""
+    if ($null -ne $_.Exception) {
+        $hresult = ('0x{0:X8}' -f (([long]$_.Exception.HResult) -band 4294967295L))
+    }
+    Write-Stage "invalid" $Stage $hresult
     throw
 }
