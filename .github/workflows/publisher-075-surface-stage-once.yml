@@ -70,7 +70,7 @@ jobs:
           foreach ($required in @(
             "082319ac283c99f1b2e5d05fe428bccfd4123ef498267b35b492bba991a3b6e0",
             "2202112",
-            "git -C $RepoRoot hash-object",
+            'git -C $RepoRoot hash-object',
             "Compress-Archive",
             "PUBLISHER_075_SURFACE_RETURN"
           )) {
