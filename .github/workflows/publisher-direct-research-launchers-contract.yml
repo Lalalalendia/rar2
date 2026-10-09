@@ -55,6 +55,45 @@ jobs:
             throw "Python parser rejected focused 0.75 structural analyzer."
           }
 
+      - name: Assert mixed research mode cannot silently run uniform profile
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $workflow = Get-Content -LiteralPath ".github/workflows/pub-re-native.yml" -Raw
+          $launcher = Get-Content -LiteralPath "tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1" -Raw
+          if ($workflow.Contains("@mixedArgs") -or $launcher.Contains("@operationArgs")) {
+            throw "Mixed native mode must use explicit switch binding at both PowerShell boundaries"
+          }
+          foreach ($required in @(
+            "paragraph-line-spacing-0p75-mixed",
+            "mixed-12-18-12",
+            "Publisher research profile mismatch",
+            "mixed-size witness missing",
+            "-MixedSize"
+          )) {
+            if (-not $workflow.Contains($required)) {
+              throw "Mixed native mode lacks fail-closed workflow marker: $required"
+            }
+          }
+          if (-not $launcher.Contains("PUB_RE_REQUESTED_COMPOSITION_PROFILE") -or
+              -not $launcher.Contains(" -MixedSize")) {
+            throw "Mixed native mode lacks explicit launcher switch forwarding"
+          }
+
+          # Runtime smoke uses Windows PowerShell 5.1 parameter binding and a
+          # synthetic script; no Publisher, fonts, or private fixture required.
+          $smoke = Join-Path $env:RUNNER_TEMP "mixed-research-flag-smoke.ps1"
+          'param([switch]$MixedSize); if ($MixedSize) { "mixed-12-18-12" } else { "uniform-12" }' |
+            Set-Content -LiteralPath $smoke -Encoding ASCII
+          $mixed = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $smoke -MixedSize) -join ""
+          if ($LASTEXITCODE -ne 0 -or $mixed -ne "mixed-12-18-12") {
+            throw "Windows PowerShell explicit -MixedSize switch did not bind"
+          }
+          $ordinary = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $smoke) -join ""
+          if ($LASTEXITCODE -ne 0 -or $ordinary -ne "uniform-12") {
+            throw "Windows PowerShell default uniform mode regressed"
+          }
+
       - name: Enforce offline bounded launcher contract
         shell: pwsh
         run: |
