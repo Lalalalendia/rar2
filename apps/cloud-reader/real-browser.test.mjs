@@ -17,6 +17,66 @@ const output = resolve(process.env.READER_REAL_OUTPUT ?? join(repo, "target/clou
 const worker = resolve(process.env.READER_WORKER_BINARY ?? join(repo, "target/debug/chaptera"));
 const run = promisify(execFile);
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+function pngDimensions(png) {
+  assert.ok(Buffer.isBuffer(png) && png.length >= 24, "PNG capture must contain IHDR");
+  assert.equal(png.subarray(0, 8).toString("hex"), "89504e470d0a1a0a", "PNG signature drift");
+  assert.equal(png.subarray(12, 16).toString("ascii"), "IHDR", "PNG IHDR drift");
+  const width = png.readUInt32BE(16);
+  const height = png.readUInt32BE(20);
+  assert.ok(width > 0 && height > 0, "PNG capture dimensions must be positive");
+  return { width, height };
+}
+
+async function captureSvgScreenshotState(pageSvg) {
+  return pageSvg.evaluate((svg) => {
+    const rect = svg.getBoundingClientRect();
+    const viewBox = svg.viewBox?.baseVal ?? null;
+    const screenCtm = typeof svg.getScreenCTM === "function" ? svg.getScreenCTM() : null;
+    const viewport = window.visualViewport;
+    const number = (value) => Number.isFinite(Number(value)) ? Number(value) : null;
+    return {
+      device_pixel_ratio: number(window.devicePixelRatio),
+      scroll_x: number(window.scrollX),
+      scroll_y: number(window.scrollY),
+      inner_width: number(window.innerWidth),
+      inner_height: number(window.innerHeight),
+      visual_viewport: viewport ? {
+        width: number(viewport.width),
+        height: number(viewport.height),
+        scale: number(viewport.scale),
+        offset_left: number(viewport.offsetLeft),
+        offset_top: number(viewport.offsetTop),
+        page_left: number(viewport.pageLeft),
+        page_top: number(viewport.pageTop)
+      } : null,
+      svg_rect: {
+        x: number(rect.x),
+        y: number(rect.y),
+        width: number(rect.width),
+        height: number(rect.height),
+        top: number(rect.top),
+        right: number(rect.right),
+        bottom: number(rect.bottom),
+        left: number(rect.left)
+      },
+      view_box: viewBox ? {
+        x: number(viewBox.x),
+        y: number(viewBox.y),
+        width: number(viewBox.width),
+        height: number(viewBox.height)
+      } : null,
+      screen_ctm: screenCtm ? {
+        a: number(screenCtm.a),
+        b: number(screenCtm.b),
+        c: number(screenCtm.c),
+        d: number(screenCtm.d),
+        e: number(screenCtm.e),
+        f: number(screenCtm.f)
+      } : null
+    };
+  });
+}
 const defaultFixtures = [
   { name: "SampleNewsletter", sha256: "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf", bytes: 291840, pages: 4, require_render: true, require_shared_text: true },
   { name: "SampleBrochure", sha256: "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87", bytes: 161792, pages: 2, require_render: true, require_shared_text: true }
@@ -459,7 +519,10 @@ try {
           svg.style.zIndex = "2147483647";
         });
       }
+      const captureStateBefore = await captureSvgScreenshotState(pageSvg);
       const png = await pageSvg.screenshot({ path: join(output, filename) });
+      const captureStateAfter = await captureSvgScreenshotState(pageSvg);
+      const dimensions = pngDimensions(png);
       if (referenceRasterDpi > 0) {
         await pageSvg.evaluate((svg) => {
           svg.style.removeProperty("position");
@@ -468,7 +531,14 @@ try {
           svg.style.removeProperty("z-index");
         });
       }
-      screenshots.push({ page: i + 1, filename, sha256: sha256(png) });
+      screenshots.push({
+        page: i + 1,
+        filename,
+        sha256: sha256(png),
+        png_dimensions: dimensions,
+        capture_state_before: captureStateBefore,
+        capture_state_after: captureStateAfter
+      });
     }
     const nonempty = painted.filter((line) => line.text.trim());
     const fidelityReasons = [...(scene.fidelity?.reasons ?? [])].sort();
