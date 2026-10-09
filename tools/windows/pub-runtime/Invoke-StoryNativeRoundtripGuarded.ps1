@@ -95,7 +95,12 @@ catch {
             throw 'pwsh7_executable_absent'
         }
         # Source-safe metadata only: no executable paths, user/profile names or raw COM logs.
-        $probe = @(& $powershellExe -NoLogo -NoProfile -NonInteractive -Command '$v=$PSVersionTable.PSVersion.ToString();$e=[string]$PSVersionTable.PSEdition;$a=[System.Threading.Thread]::CurrentThread.GetApartmentState().ToString();$b=[int][Environment]::Is64BitProcess;Write-Output "$v|$e|$a|$b"')
+        # Keep inner quotes and literal pipe delimiters intact across the
+        # WinPS5 -> pwsh7 process boundary. -Command lost quoting in native run
+        # 37979751896 and turned the four-field probe into an invalid pipeline.
+        $probeCommand = '$v=$PSVersionTable.PSVersion.ToString();$e=[string]$PSVersionTable.PSEdition;$a=[System.Threading.Thread]::CurrentThread.GetApartmentState().ToString();$b=[int][Environment]::Is64BitProcess;Write-Output "$v|$e|$a|$b"'
+        $probeEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probeCommand))
+        $probe = @(& $powershellExe -NoLogo -NoProfile -NonInteractive -EncodedCommand $probeEncoded)
         if ($LASTEXITCODE -ne 0 -or $probe.Count -ne 1) {
             $status.failure_code = 'pwsh7_preflight_failed'
             throw 'pwsh7_preflight_failed'
