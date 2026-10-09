@@ -84,6 +84,10 @@ pub struct FixedImageResource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct FixedPdfResources {
+    /// Explicit consumer-owned output page order. Empty preserves the legacy
+    /// deterministic canonical PageId order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub page_order: Vec<PageId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub node_paints: Vec<FixedNodePaint>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -163,6 +167,16 @@ pub struct PdfRenderOutput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PdfRenderError {
+    DuplicatePageOrder {
+        page_id: PageId,
+    },
+    PageOrderReferencesMissingSurface {
+        page_id: PageId,
+    },
+    PageOrderIncomplete {
+        expected: usize,
+        actual: usize,
+    },
     NonPositivePageSize {
         origin: PageId,
         width_emu: i64,
@@ -201,6 +215,19 @@ pub enum PdfRenderError {
 impl fmt::Display for PdfRenderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DuplicatePageOrder { page_id } => {
+                write!(f, "duplicate explicit PDF page-order entry {page_id:?}")
+            }
+            Self::PageOrderReferencesMissingSurface { page_id } => {
+                write!(
+                    f,
+                    "explicit PDF page order references missing surface {page_id:?}"
+                )
+            }
+            Self::PageOrderIncomplete { expected, actual } => write!(
+                f,
+                "explicit PDF page order covers {actual} surfaces; expected {expected}"
+            ),
             Self::NonPositivePageSize {
                 origin,
                 width_emu,
@@ -276,8 +303,36 @@ pub fn render_bounded_pdf(
     resources: &FixedPdfResources,
     target: &PdfTargetProfile,
 ) -> Result<PdfRenderOutput, PdfRenderError> {
-    let mut surfaces = scene.surfaces.clone();
-    surfaces.sort_by_key(|surface| surface.origin);
+    let mut surfaces = if resources.page_order.is_empty() {
+        let mut surfaces = scene.surfaces.clone();
+        surfaces.sort_by_key(|surface| surface.origin);
+        surfaces
+    } else {
+        let mut seen = BTreeSet::new();
+        let mut ordered = Vec::with_capacity(resources.page_order.len());
+        for page_id in &resources.page_order {
+            if !seen.insert(*page_id) {
+                return Err(PdfRenderError::DuplicatePageOrder { page_id: *page_id });
+            }
+            let Some(surface) = scene
+                .surfaces
+                .iter()
+                .find(|surface| surface.origin == *page_id)
+            else {
+                return Err(PdfRenderError::PageOrderReferencesMissingSurface {
+                    page_id: *page_id,
+                });
+            };
+            ordered.push(surface.clone());
+        }
+        if ordered.len() != scene.surfaces.len() {
+            return Err(PdfRenderError::PageOrderIncomplete {
+                expected: scene.surfaces.len(),
+                actual: ordered.len(),
+            });
+        }
+        ordered
+    };
 
     for surface in &surfaces {
         if surface.size.width.get() <= 0 || surface.size.height.get() <= 0 {
@@ -1245,6 +1300,46 @@ mod tests {
             images: Vec::new(),
             ..FixedPdfResources::default()
         }
+    }
+
+    #[test]
+    fn explicit_page_order_overrides_canonical_surface_sort() {
+        let target = PdfTargetProfile::basic_geometry_v0_1();
+        let mut resources = resources();
+        resources.page_order = vec![page_id(2), page_id(1)];
+
+        let output = render_bounded_pdf(&scene(), &resources, &target).unwrap();
+
+        assert_eq!(
+            output
+                .report
+                .pages
+                .iter()
+                .map(|page| page.origin)
+                .collect::<Vec<_>>(),
+            vec![page_id(2), page_id(1)]
+        );
+    }
+
+    #[test]
+    fn explicit_page_order_must_cover_each_surface_once() {
+        let target = PdfTargetProfile::basic_geometry_v0_1();
+        let mut resources = resources();
+        resources.page_order = vec![page_id(1)];
+
+        assert!(matches!(
+            render_bounded_pdf(&scene(), &resources, &target),
+            Err(PdfRenderError::PageOrderIncomplete {
+                expected: 2,
+                actual: 1
+            })
+        ));
+
+        resources.page_order = vec![page_id(1), page_id(1)];
+        assert!(matches!(
+            render_bounded_pdf(&scene(), &resources, &target),
+            Err(PdfRenderError::DuplicatePageOrder { .. })
+        ));
     }
 
     #[test]
