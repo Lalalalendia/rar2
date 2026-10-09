@@ -21,6 +21,27 @@ const P_VERTICES: u16 = 0x0145;
 const P_SEGMENT_INFO: u16 = 0x0146;
 const SHAPE_PATH_LINES_CLOSED: u32 = 0x0000_0001;
 
+fn edge_profile(value: i64, baseline: i64, lower_edge: bool) -> &'static str {
+    if value == baseline {
+        "default"
+    } else if (lower_edge && value > baseline) || (!lower_edge && value < baseline) {
+        "crop_inward"
+    } else {
+        "extend_outward"
+    }
+}
+
+fn source_window_profile(window: &pub_viewer::ViewerImageSourceWindowV1) -> String {
+    let one = pub_viewer::VIEWER_IMAGE_SOURCE_Q16_ONE;
+    format!(
+        "l:{}|t:{}|r:{}|b:{}",
+        edge_profile(window.left_q16, 0, true),
+        edge_profile(window.top_q16, 0, true),
+        edge_profile(window.right_q16, one, false),
+        edge_profile(window.bottom_q16, one, false),
+    )
+}
+
 #[derive(Clone, Copy)]
 enum ScalarLayer {
     Absent,
@@ -136,16 +157,18 @@ fn main() -> Result<()> {
         pub_viewer::open_pub_bundle(&bytes, pub_viewer::viewer_geometry_environment_v0_1())
             .context("open source through Viewer")?;
 
+    let mut source_window_profiles = BTreeMap::<String, usize>::new();
     let window_nodes = bundle
         .geometry
         .images
         .iter()
-        .flat_map(|image| {
-            image
-                .placements
-                .iter()
-                .filter(|placement| placement.source_window.is_some())
-                .map(|placement| placement.node_id)
+        .flat_map(|image| image.placements.iter())
+        .filter_map(|placement| {
+            let window = placement.source_window.as_ref()?;
+            *source_window_profiles
+                .entry(source_window_profile(window))
+                .or_default() += 1;
+            Some(placement.node_id)
         })
         .collect::<BTreeSet<_>>();
 
@@ -324,6 +347,7 @@ fn main() -> Result<()> {
         "fixture": path.file_stem().and_then(|value| value.to_str()).unwrap_or("input"),
         "source_sha256": source_sha256,
         "source_window_node_count": window_nodes.len(),
+        "source_window_profile_counts": source_window_profiles,
         "geometry_class_counts": classes,
         "shape_type_counts": shape_types,
         "join_counts": joins,
