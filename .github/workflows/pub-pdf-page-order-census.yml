@@ -1,0 +1,94 @@
+name: PUB PDF page-order census
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-pdf-page-order-census.yml"
+      - "vendor/producer-a/crates/pub-cli/Cargo.toml"
+      - "vendor/producer-a/crates/pub-cli/src/bin/pub_page_order_census.rs"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  census:
+    if: github.event.pull_request.head.ref == 'measure/pub-pdf-page-order-census-01'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Format and compile measurement binary
+        run: |
+          rustfmt --edition 2024 --check vendor/producer-a/crates/pub-cli/src/bin/pub_page_order_census.rs
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-cli --bin pub-page-order-census
+      - name: Acquire pinned exact-1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+      - name: Build hosted Publisher-oracle input list
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          paths = [
+              Path("tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json"),
+              Path("tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json"),
+          ]
+          rows = []
+          for path in paths:
+              data = json.loads(path.read_text())
+              for pair in data["pairs"]:
+                  if pair.get("family") == "manual-reduction-family":
+                      continue
+                  rows.append((pair["basename"], pair["pub_sha256"]))
+          assert len(rows) == 79, len(rows)
+          out = Path("target/pub-pdf-page-order-census")
+          out.mkdir(parents=True, exist_ok=True)
+          (out / "inputs.tsv").write_text("".join(f"{name}\t{sha}\n" for name, sha in rows))
+          PY
+      - name: Measure Viewer order versus current canonical PDF order
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="target/pub-pdf-page-order-census"
+          while IFS=$'	' read -r fixture sha; do
+            src="out/pinned1050/materialized/native/$sha.pub"
+            test -s "$src"
+            test "$(sha256sum "$src" | awk '{print $1}')" = "$sha"
+            vendor/producer-a/target/debug/pub-page-order-census "$src" > "$out/$fixture.json"
+          done < "$out/inputs.tsv"
+          python - <<'PY'
+          import json
+          from collections import Counter
+          from pathlib import Path
+          root = Path("target/pub-pdf-page-order-census")
+          rows = [json.loads(path.read_text()) for path in sorted(root.glob("*.json"))]
+          changed = [row for row in rows if row["order_changed"]]
+          receipt = {
+              "schema": "chaptera.pub-pdf-page-order-corpus.v1",
+              "hosted_pair_count": len(rows),
+              "order_changed_pair_count": len(changed),
+              "order_changed_position_count": sum(row["changed_position_count"] for row in changed),
+              "route_counts": dict(sorted(Counter(row["route"] for row in rows).items())),
+              "changed_route_counts": dict(sorted(Counter(row["route"] for row in changed).items())),
+              "permutation_histogram": dict(sorted(Counter(str(row["canonical_pdf_order_as_viewer_ordinals"]) for row in changed).items())),
+              "pairs": rows,
+          }
+          (root / "receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+          PY
+      - name: Upload source-safe page-order receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-pdf-page-order-census
+          path: target/pub-pdf-page-order-census/receipt.json
+          retention-days: 30
