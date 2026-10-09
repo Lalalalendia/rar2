@@ -8,6 +8,7 @@ on:
       - ".github/workflows/pub-save-roundtrip-handoff.yml"
       - "tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1"
       - "tools/windows/pub-runtime/run_story_native_roundtrip.ps1"
+      - "tools/windows/pub-runtime/NativeStoryPhase.psm1"
   pull_request:
     paths:
       - ".github/workflows/pub-save-roundtrip-handoff.yml"
@@ -15,6 +16,7 @@ on:
       - "vendor/producer-a/crates/pub-quill/tests/fixtures/Sample3.pub.b64"
       - "tools/windows/pub-runtime/run_story_native_roundtrip.ps1"
       - "tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1"
+      - "tools/windows/pub-runtime/NativeStoryPhase.psm1"
       - "tools/windows/pub-runtime/PubRuntime.psm1"
 
 permissions:
@@ -120,7 +122,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           foreach ($relative in @(
             'tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1',
-            'tools/windows/pub-runtime/run_story_native_roundtrip.ps1'
+            'tools/windows/pub-runtime/run_story_native_roundtrip.ps1',
+            'tools/windows/pub-runtime/NativeStoryPhase.psm1'
           )) {
             $tokens = $null
             $errors = $null
@@ -133,6 +136,38 @@ jobs:
             }
           }
           Write-Host 'Publisher native roundtrip PowerShell 5.1 parse PASS'
+
+      - name: Prove source-safe phase ledger without Publisher
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module tools/windows/pub-runtime/NativeStoryPhase.psm1 -Force
+          $root = Join-Path $env:RUNNER_TEMP 'chaptera-phase-test'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          try {
+            $src = 'a' * 64
+            $candidate = 'b' * 64
+            Write-PubNativePhase -OutputRoot $root -Phase 'inputs_verified' -SourceSha256 $src -CandidateSha256 $candidate
+            Write-PubNativePhase -OutputRoot $root -Phase 'publisher_identity_begin' -SourceSha256 $src -CandidateSha256 $candidate
+            $last = Get-PubNativeLastPhase -OutputRoot $root
+            if ($last.phase -ne 'publisher_identity_begin' -or $last.candidate_sha256 -ne $candidate) {
+              throw 'native_phase_order_or_identity_mismatch'
+            }
+            if (@(Get-ChildItem -LiteralPath $root -Filter 'native-roundtrip-stage-*.json' -File).Count -ne 2) {
+              throw 'native_phase_file_count_mismatch'
+            }
+            $duplicateRejected = $false
+            try { Write-PubNativePhase -OutputRoot $root -Phase 'inputs_verified' -SourceSha256 $src -CandidateSha256 $candidate }
+            catch { $duplicateRejected = $true }
+            if (-not $duplicateRejected) { throw 'native_phase_duplicate_not_rejected' }
+            $badShaRejected = $false
+            try { Write-PubNativePhase -OutputRoot $root -Phase 'candidate_open_begin' -SourceSha256 'INVALID' -CandidateSha256 $candidate }
+            catch { $badShaRejected = $true }
+            if (-not $badShaRejected) { throw 'native_phase_bad_sha_not_rejected' }
+          }
+          finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+          }
 
   native-roundtrip:
     needs: prepare-handoff
@@ -190,7 +225,7 @@ jobs:
           name: pub-story-native-acceptance-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/chaptera-native-story/private/native-roundtrip-status.json
-            ${{ runner.temp }}/chaptera-native-story/private/native-roundtrip-stage.json
+            ${{ runner.temp }}/chaptera-native-story/private/native-roundtrip-stage-*.json
             ${{ runner.temp }}/chaptera-native-story/private/native-roundtrip-receipt.json
           if-no-files-found: warn
           retention-days: 30
