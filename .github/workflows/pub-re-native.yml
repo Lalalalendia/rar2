@@ -676,7 +676,12 @@ jobs:
             }
           }
           $blastEvidencePath = Join-Path $private "blast-evidence.json"
-          $blastEvidence | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $blastEvidencePath -Encoding utf8
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText(
+            $blastEvidencePath,
+            ($blastEvidence | ConvertTo-Json -Depth 20),
+            $utf8NoBom
+          )
 
           python tools/operation_blast_radius_v1.py `
             --source ([string]$paths.source_path) `
