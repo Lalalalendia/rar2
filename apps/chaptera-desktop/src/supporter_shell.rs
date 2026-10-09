@@ -1,5 +1,7 @@
 use crate::locale;
-use crate::supporter::{MarketProfile, SupporterAction, SupporterState, ValueReceipt, ValueTracker};
+use crate::supporter::{
+    MarketProfile, SupporterAction, SupporterState, ValueReceipt, ValueTracker,
+};
 use crate::supporter_attribution::SupportClickAttribution;
 use crate::supporter_routes::{SupporterRouteEffect, SupporterRoutes};
 use crate::supporter_ui;
@@ -123,16 +125,17 @@ impl SupporterShell {
                 self.action_status = None;
             }
             SupporterAction::Support => {
-                let attribution = state
-                    .current_prompt_impression_index(now)
-                    .and_then(|impression_index| {
-                        SupportClickAttribution::for_action(
-                            SupporterAction::Support,
-                            self.market,
-                            receipt,
-                            impression_index,
-                        )
-                    });
+                let attribution =
+                    state
+                        .current_prompt_impression_index(now)
+                        .and_then(|impression_index| {
+                            SupportClickAttribution::for_action(
+                                SupporterAction::Support,
+                                self.market,
+                                receipt,
+                                impression_index,
+                            )
+                        });
                 let effect = attribution.and_then(|value| self.routes.support_effect(value));
                 if dispatch_effect(ctx, effect) {
                     state.record_support_clicked(now);
@@ -142,9 +145,7 @@ impl SupporterShell {
                     self.action_status = Some(route_unavailable_copy(self.market).to_owned());
                 }
             }
-            SupporterAction::Share
-            | SupporterAction::Report
-            | SupporterAction::ArchiveHelp => {
+            SupporterAction::Share | SupporterAction::Report | SupporterAction::ArchiveHelp => {
                 if dispatch_effect(ctx, self.routes.effect(action)) {
                     self.action_status = success_copy(action, self.market).map(str::to_owned);
                 } else {
