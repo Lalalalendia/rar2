@@ -2015,9 +2015,8 @@ mod tests {
             .iter()
             .filter(|run| run.scalar_start < 716 && run.scalar_end > 712)
             .collect::<Vec<_>>();
-        let terminal_single_complete = terminal.len() == 1
-            && terminal[0].scalar_start <= 712
-            && terminal[0].scalar_end >= 716;
+        let terminal_single_complete =
+            terminal.len() == 1 && terminal[0].scalar_start <= 712 && terminal[0].scalar_end >= 716;
         let story = bundle
             .geometry
             .document
@@ -2043,8 +2042,8 @@ mod tests {
                     point_equivalent_emu: 114_300,
                 }
             );
-        let explicit_regular = bold[0] == fragment.typography.len()
-            && italic[0] == fragment.typography.len();
+        let explicit_regular =
+            bold[0] == fragment.typography.len() && italic[0] == fragment.typography.len();
         println!(
             "EXACT082_SOURCE_STYLE_GATE source_sha256={} page=2 scalar_span=717 runs={} ascii={} complete_source_coverage={} family_count={} blank_families={} bold_false={} bold_true={} bold_unknown={} italic_false={} italic_true={} italic_unknown={} terminal_single_complete={} terminal_spacing_unique_fresh={} explicit_regular={}",
             SOURCE_SHA256,

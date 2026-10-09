@@ -1133,13 +1133,8 @@ mod tests {
         let mut unknown_italic = fragment.clone();
         unknown_italic.typography[1].italic = None;
         assert!(
-            resolve_mixed_family_text_layout_v1(
-                &visual,
-                target,
-                &unknown_italic,
-                &mut resolve,
-            )
-            .is_none(),
+            resolve_mixed_family_text_layout_v1(&visual, target, &unknown_italic, &mut resolve,)
+                .is_none(),
             "unknown Italic cannot silently become effective Regular"
         );
     }
