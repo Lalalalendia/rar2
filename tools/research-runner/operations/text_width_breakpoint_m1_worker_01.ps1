@@ -27,6 +27,7 @@ $Stage = "preflight"
 $Status = "invalid"
 $stageName = if ($Mode -eq "seed") { "seed" } else { $ArmId }
 $StagePath = Join-Path $AnalysisDir ("text-width-m1-" + $stageName + "-stage.json")
+$script:LastFixedSourceChecks = $null
 
 function File-Sha([string]$Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -52,14 +53,18 @@ function Close-Document($Document) {
 function Write-Stage([string]$State, [string]$Phase, [string]$HresultHex = "") {
     # Persist nested Snapshot subphases through the outer catch handler.
     if ($State -eq "running") { $script:Stage = $Phase }
-    Write-PubJson -Path $StagePath -Value ([ordered]@{
+    $receipt = [ordered]@{
         schema = "chaptera.text-width-m1-stage.v1"
         experiment_id = "TEXT-WIDTH-BREAKPOINT-M1-01"
         case = $stageName
         state = $State
         phase = $Phase
         hresult_hex = $HresultHex
-    })
+    }
+    if ($null -ne $script:LastFixedSourceChecks) {
+        $receipt.fixed_source_checks = $script:LastFixedSourceChecks
+    }
+    Write-PubJson -Path $StagePath -Value $receipt
 }
 function Get-ShapeByIdentity($Document, $Meta) {
     $page = $Document.Pages.Item(1)
@@ -130,11 +135,24 @@ function Snapshot($Shape, [string]$PhaseTag = "") {
     }
 }
 function Assert-FixedSource($Snapshot) {
-    if ([string]$Snapshot.font_name -ne $FontName -or
-        [math]::Abs([double]$Snapshot.font_size_pt - $FontSize) -gt 0.001 -or
-        [int]$Snapshot.auto_fit_mode -ne 0 -or
-        [int]$Snapshot.text_utf16_units -lt $ExpectedText.Length -or
-        [int]$Snapshot.text_utf16_units -gt ($ExpectedText.Length + 2)) {
+    # The only source is a fixed synthetic text box created by this operation.
+    # Report booleans and bounded metrics, never font strings or text content.
+    $fontNameMatches = ([string]$Snapshot.font_name -eq $FontName)
+    $fontSizeMatches = ([math]::Abs([double]$Snapshot.font_size_pt - $FontSize) -le 0.001)
+    $autoFitDisabled = ([int]$Snapshot.auto_fit_mode -eq 0)
+    $textLengthInBand = ([int]$Snapshot.text_utf16_units -ge $ExpectedText.Length -and
+        [int]$Snapshot.text_utf16_units -le ($ExpectedText.Length + 2))
+    $script:LastFixedSourceChecks = [ordered]@{
+        font_name_matches = $fontNameMatches
+        font_size_matches = $fontSizeMatches
+        autofit_disabled = $autoFitDisabled
+        text_length_in_expected_band = $textLengthInBand
+        observed_font_size_pt = [double]$Snapshot.font_size_pt
+        observed_autofit_mode = [int]$Snapshot.auto_fit_mode
+        observed_text_utf16_units = [int]$Snapshot.text_utf16_units
+        expected_text_utf16_units = [int]$ExpectedText.Length
+    }
+    if (-not ($fontNameMatches -and $fontSizeMatches -and $autoFitDisabled -and $textLengthInBand)) {
         throw "m1_font_or_text_or_autofit_drift"
     }
 }
