@@ -557,6 +557,8 @@ jobs:
       - name: Run bounded 0.75 paragraph research
         if: ${{ needs.gate.outputs.command_mode == 'research_0p75' }}
         shell: powershell
+        env:
+          PUB_RE_RESEARCH_ID: ${{ needs.gate.outputs.research_id }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
