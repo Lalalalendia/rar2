@@ -1164,7 +1164,10 @@ impl EditorSession {
             });
         }
         if self.page_has_resolved_node_membership_v1(source_page_id)
-            || !self.current_authored_stack_v1(source_page_id).members.is_empty()
+            || !self
+                .current_authored_stack_v1(source_page_id)
+                .members
+                .is_empty()
         {
             return Err(EditorError::PageDuplicateUnsupported {
                 message: "source page owns resolved or authored content".to_owned(),
@@ -1403,8 +1406,7 @@ mod authored_page_append_tests {
     use super::*;
     use crate::{
         AuthoredEntityProvenanceV1, EDITOR_PROJECT_VERSION_V0_25, EDITOR_PROJECT_VERSION_V0_26,
-        EDITOR_PROJECT_VERSION_V0_27,
-        EditorProject, PubResolvedGraph,
+        EDITOR_PROJECT_VERSION_V0_27, EditorProject, PubResolvedGraph,
     };
     use pub_model::{Document, Sha256Digest, SourceDescriptor};
 
@@ -1833,9 +1835,11 @@ mod authored_page_append_tests {
             vec![master, source, service, later, carrier]
         );
         assert_eq!(reopened.source_hash(), source_hash);
-        assert!(reopened
-            .duplicate_blank_page_v1(vec![source, later], source, identity)
-            .is_err());
+        assert!(
+            reopened
+                .duplicate_blank_page_v1(vec![source, later], source, identity)
+                .is_err()
+        );
     }
 
     #[test]
