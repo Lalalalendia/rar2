@@ -9,7 +9,12 @@ license.workspace = true
 name = "pub"
 path = "src/main.rs"
 
+[[bin]]
+name = "pub-gif-census"
+path = "src/bin/pub_gif_census.rs"
+
 [dependencies]
+image = { version = "=0.25.8", default-features = false, features = ["gif"] }
 anyhow.workspace = true
 clap.workspace = true
 serde_json.workspace = true
