@@ -139,22 +139,40 @@ try {
     if ($Mode -eq "seed") {
         if ($ArmId -ne "none") { throw "m1_seed_arm_id_invalid" }
         Copy-Item -LiteralPath $SourcePath -Destination $SeedPath -Force
-        $Stage = "seed_publisher_open"
-        Write-Stage "running" $Stage
         $app = $null; $doc = $null; $shape = $null; $frame = $null; $range = $null
         try {
+            $Stage = "seed_application_create"
+            Write-Stage "running" $Stage
             $app = New-PubPublisherApplication
+            $Stage = "seed_document_open"
+            Write-Stage "running" $Stage
             $doc = $app.Open($SeedPath,$false,$false)
+            $Stage = "seed_page_lookup"
+            Write-Stage "running" $Stage
             $page = $doc.Pages.Item(1)
+            $Stage = "seed_textbox_add"
+            Write-Stage "running" $Stage
             $shape = $page.Shapes.AddTextbox(1,72,72,$InitialWidth,$Height)
+            $Stage = "seed_frame_policy"
+            Write-Stage "running" $Stage
             $frame = $shape.TextFrame
             $frame.AutoFitText = 0
+            $Stage = "seed_text_write"
+            Write-Stage "running" $Stage
             $range = $frame.TextRange
             $range.Text = $ExpectedText
+            $Stage = "seed_font_apply"
+            Write-Stage "running" $Stage
             $range.Font.Name = $FontName
             $range.Font.Size = $FontSize
+            $Stage = "seed_layout_snapshot"
+            Write-Stage "running" $Stage
             $snapshot = Snapshot $shape
+            $Stage = "seed_fixed_source_assert"
+            Write-Stage "running" $Stage
             Assert-FixedSource $snapshot
+            $Stage = "seed_identity"
+            Write-Stage "running" $Stage
             $shapeId = [int64]$shape.ID
             $pageId = [int64]$page.PageID
             $index = [int]$page.Shapes.Count
