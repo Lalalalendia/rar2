@@ -1548,7 +1548,6 @@ mod authored_page_append_tests {
         assert!(layout.contains("fo:page-width=\"200pt\" fo:page-height=\"300pt\""));
     }
 
-
     #[test]
     fn delete_blank_authored_page_roundtrips_undo_redo_and_project_replay() {
         let source = page_id("22222222-2222-4222-8222-222222222222");
@@ -1611,7 +1610,9 @@ mod authored_page_append_tests {
         let decoded: EditorProject = serde_json::from_slice(&bytes).expect("deserialize project");
 
         let mut reopened = EditorSession::new(graph).expect("fresh session");
-        reopened.apply_project(&decoded).expect("replay delete project");
+        reopened
+            .apply_project(&decoded)
+            .expect("replay delete project");
         assert_eq!(reopened.operations(), decoded.operations.as_slice());
         assert_eq!(reopened.graph().document.pages, vec![source]);
         assert!(!reopened.graph().pages.contains_key(&identity.page_id));
