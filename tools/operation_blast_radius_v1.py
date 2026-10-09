@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
+import copy
 import sys
 from pathlib import Path
 from typing import Any
@@ -31,6 +33,45 @@ class BlastRadiusError(RuntimeError):
 
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+
+# Mirror pub-re-native.yml's path predicate against serialized evidence.
+# CFB-derived stream names are untrusted document metadata, not file paths.
+_SERIALIZED_PRIVATE_PATH = re.compile(r'(?i)[A-Z]:\\|\\\\[^"\s]+\\')
+_CFB_DELTA_ARRAYS = (
+    "source_control_topology_delta",
+    "control_mutation_topology_delta",
+    "source_control_stream_delta",
+    "control_mutation_stream_delta",
+    "control_mutation_byte_ranges",
+)
+
+
+def source_safe_cfb_receipt(receipt: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Redact path-like CFB names; fail closed on paths in other fields."""
+    safe = copy.deepcopy(receipt)
+    redactions = 0
+    cfb = safe.get("cfb", {})
+    if not isinstance(cfb, dict):
+        raise BlastRadiusError("source_safe_cfb_invalid")
+    for group in _CFB_DELTA_ARRAYS:
+        entries = cfb.get(group, [])
+        if not isinstance(entries, list):
+            raise BlastRadiusError("source_safe_cfb_delta_invalid")
+        for item in entries:
+            if not isinstance(item, dict):
+                raise BlastRadiusError("source_safe_cfb_entry_invalid")
+            for field in ("stream_id", "physical_label"):
+                value = item.get(field)
+                if isinstance(value, str) and _SERIALIZED_PRIVATE_PATH.search(json.dumps(value)):
+                    redactions += 1
+                    item[field] = f"redacted-cfb-label-{redactions}"
+    # Compare the *serialized* result to the same rejection syntax in CI.
+    # Never release merely best-effort sanitization.
+    if _SERIALIZED_PRIVATE_PATH.search(json.dumps(safe, indent=2, sort_keys=True)):
+        raise BlastRadiusError("source_safe_path_remains_outside_cfb_identifiers")
+    return safe, redactions
 
 
 def artifact_identity(data: bytes, producer: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -409,6 +450,7 @@ def main() -> int:
             evidence=load_json(args.evidence),
             second_save=args.second_save.read_bytes() if args.second_save else None,
         )
+        receipt, source_safe_redactions = source_safe_cfb_receipt(receipt)
     except (OSError, ValueError, json.JSONDecodeError, BlastRadiusError) as error:
         print(f"operation-blast-radius: {error}", file=sys.stderr)
         return 2
@@ -417,6 +459,7 @@ def main() -> int:
     print(json.dumps({
         "schema_version": receipt["schema_version"],
         "classification_counts": receipt["classification_counts"],
+        "source_safe_cfb_label_redactions": source_safe_redactions,
         "second_save_convergence": receipt["second_save_convergence"]["status"],
     }, sort_keys=True))
     return 0
