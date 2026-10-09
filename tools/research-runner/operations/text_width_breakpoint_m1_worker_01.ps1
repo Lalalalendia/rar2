@@ -50,6 +50,8 @@ function Close-Document($Document) {
     Release-Com $Document
 }
 function Write-Stage([string]$State, [string]$Phase, [string]$HresultHex = "") {
+    # Persist nested Snapshot subphases through the outer catch handler.
+    if ($State -eq "running") { $script:Stage = $Phase }
     Write-PubJson -Path $StagePath -Value ([ordered]@{
         schema = "chaptera.text-width-m1-stage.v1"
         experiment_id = "TEXT-WIDTH-BREAKPOINT-M1-01"
