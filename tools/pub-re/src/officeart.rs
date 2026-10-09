@@ -484,9 +484,11 @@ mod tests {
             .find(|candidate| candidate.kind == "fopt_property")
             .expect("orphan FOPT candidate");
         assert_eq!(property.shape_spid, None);
-        assert!(!serde_json::to_string(property)
-            .expect("serialize")
-            .contains("shape_spid"));
+        assert!(
+            !serde_json::to_string(property)
+                .expect("serialize")
+                .contains("shape_spid")
+        );
     }
 
     #[test]
