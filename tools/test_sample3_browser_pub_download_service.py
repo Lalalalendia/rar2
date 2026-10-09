@@ -10,6 +10,7 @@ import importlib.util
 import json
 import pathlib
 import subprocess
+import sys
 import threading
 from http.server import ThreadingHTTPServer
 
@@ -32,6 +33,8 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
     source = args.source.read_bytes()
     assert len(source) == 72192 and sha(source) == SAMPLE3
+    # Import the real service with the same module search root it receives as a script.
+    sys.path.insert(0, str(SERVICE.parent))
     spec = importlib.util.spec_from_file_location("chaptera_real_service", SERVICE)
     service = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(service)
