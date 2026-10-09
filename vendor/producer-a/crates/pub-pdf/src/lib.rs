@@ -453,7 +453,9 @@ pub fn render_bounded_pdf(
                                 code: "pdf.image.placement_combination_unsupported".into(),
                                 severity: PdfDiagnosticSeverity::FidelityWarning,
                                 origin: node.origin.into_canonical(),
-                                message: "image crop or recolor is outside the bounded fixed-PDF slice".into(),
+                                message:
+                                    "image crop or recolor is outside the bounded fixed-PDF slice"
+                                        .into(),
                             });
                             image_partial = true;
                         }
