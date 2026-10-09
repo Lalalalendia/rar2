@@ -84,105 +84,15 @@ catch {
             throw 'pwsh7_preflight_failed'
         }
         $probeText = [string]$probe[0]
-        if ($probeText -notmatch '^7\.[0-9]+\.[0-9]+(\.[0-9]+)?\|Core\|(STA|MTA|Unknown)\|[01] -FilePath $powershellExe `
-        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded) `
-        -RedirectStandardOutput $stdoutPath `
-        -RedirectStandardError $stderrPath -PassThru
-
-    if (-not $child.WaitForExit($TimeoutSeconds * 1000)) {
-        $status.failure_code = 'native_child_timeout'
-        if (-not $child.HasExited) {
-            try { Stop-Process -Id $child.Id -Force -ErrorAction Stop } catch {}
-            try { [void]$child.WaitForExit(10000) } catch {}
-        }
-        # No Publisher existed before launch. Only clean instances started by this job.
-        $owned = @(
-            Get-Process -Name MSPUB -ErrorAction SilentlyContinue | Where-Object {
-                try { $_.StartTime.ToUniversalTime() -ge $startedUtc.AddSeconds(-2) }
-                catch { $false }
-            }
-        )
-        foreach ($process in $owned) {
-            try { Stop-Process -Id $process.Id -Force -ErrorAction Stop } catch {}
-        }
-        throw 'native_child_timeout'
-    }
-    $child.Refresh()
-    if ([int]$child.ExitCode -ne 0) {
-        $status.result = 'fail'
-        $status.failure_code = 'native_roundtrip_script_failed'
-        throw 'native_roundtrip_script_failed'
-    }
-    if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf)) {
-        $status.result = 'fail'
-        $status.failure_code = 'missing_native_roundtrip_receipt'
-        throw 'missing_native_roundtrip_receipt'
-    }
-
-    $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
-    $checks = @(
-        ([string]$receipt.schema -eq 'chaptera.pub-native-story-roundtrip-receipt.v1'),
-        ($receipt.lifecycle.candidate_open -eq $true),
-        ($receipt.lifecycle.save_as -eq $true),
-        ($receipt.lifecycle.fresh_reopen -eq $true),
-        ($receipt.preservation.source_pub_unchanged -eq $true),
-        ($receipt.preservation.candidate_pub_unchanged -eq $true),
-        ($receipt.semantic.verified_by_current_rar -eq $true),
-        ([string]$receipt.handoff.candidate_sha256 -eq [string]$manifest.candidate_sha256),
-        ([string]$receipt.semantic.story_text_sha256 -eq [string]$manifest.after_text_sha256),
-        ([int]$receipt.semantic.story_utf16_len -eq [int]$manifest.after_utf16_len)
-    )
-    if ($checks -contains $false) {
-        $status.result = 'fail'
-        $status.failure_code = 'native_roundtrip_receipt_contract_failed'
-        throw 'native_roundtrip_receipt_contract_failed'
-    }
-
-    $status.result = 'pass'
-    $status.native_publisher_acceptance = $true
-    $status.publisher_version = [string]$receipt.publisher.version
-    $status.publisher_build = [string]$receipt.publisher.build
-    $status.native_saved_sha256 = [string]$receipt.preservation.native_saved_sha256
-}
-catch {
-    if ($null -eq $status.failure_code) { $status.failure_code = 'native_environment_or_script_error' }
-    Write-Warning ("Publisher native Story experiment did not pass: {0}" -f $status.failure_code)
-}
-finally {
-    $stagePath = Join-Path $root 'native-roundtrip-stage.json'
-    if (Test-Path -LiteralPath $stagePath -PathType Leaf) {
-        try {
-            $stage = Get-Content -LiteralPath $stagePath -Raw | ConvertFrom-Json
-            if ([string]$stage.schema -eq 'chaptera.pub-native-story-stage.v1' -and
-                [string]$stage.phase -match '^[a-z][a-z0-9_]{0,63}$' -and
-                [string]$stage.candidate_sha256 -match '^[0-9a-f]{64}$') {
-                $status.last_native_phase = [string]$stage.phase
-                $status.candidate_sha256 = [string]$stage.candidate_sha256
-            }
-            else {
-                $status.stage_receipt_valid = $false
-            }
-        }
-        catch { $status.stage_receipt_valid = $false }
-    }
-    $status | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $statusPath -Encoding utf8
-    foreach ($path in @($stdoutPath, $stderrPath)) {
-        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-    }
-}
-if ($status.result -ne 'pass') {
-    throw ("publisher_native_story_not_passed: {0}" -f $status.failure_code)
-}
-Write-Host ("Publisher Story Open-SaveAs-Reopen and Reader verification PASS: {0}" -f $status.native_saved_sha256)
-) {
+        if ($probeText -notmatch '^7\.[0-9]+\.[0-9]+(\.[0-9]+)?\|Core\|(STA|MTA|Unknown)\|[01]$') {
             $status.failure_code = 'pwsh7_identity_mismatch'
             throw 'pwsh7_identity_mismatch'
         }
         $parts = $probeText.Split('|')
-        $status.child_shell_mode = 'PowerShell7'
-        $status.child_powershell_version = $parts[0]
-        $status.child_apartment = $parts[2]
-        $status.child_is_64_bit_process = ($parts[3] -eq '1')
+        $status['child_shell_mode'] = 'PowerShell7'
+        $status['child_powershell_version'] = $parts[0]
+        $status['child_apartment'] = $parts[2]
+        $status['child_is_64_bit_process'] = ($parts[3] -eq '1')
     }
     $child = Start-Process -FilePath $powershellExe `
         -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded) `
