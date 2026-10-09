@@ -1,0 +1,131 @@
+name: PUB native source SaveAs control
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-native-saveas-source-control.yml"
+      - "tools/windows/pub-runtime/Invoke-StoryNativeSourceControl.ps1"
+      - "tools/windows/pub-runtime/Test-StoryNativeSourceSaveAs.ps1"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/pub-native-saveas-source-control.yml"
+      - "tools/windows/pub-runtime/Invoke-StoryNativeSourceControl.ps1"
+      - "tools/windows/pub-runtime/Test-StoryNativeSourceSaveAs.ps1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pub-native-source-saveas-control-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate-control:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Parse PowerShell 5.1 control and watchdog
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($relative in @(
+            'tools/windows/pub-runtime/Invoke-StoryNativeSourceControl.ps1',
+            'tools/windows/pub-runtime/Test-StoryNativeSourceSaveAs.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $relative).Path, [ref]$tokens, [ref]$errors
+            )
+            if ($errors.Count -ne 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              throw 'source_control_powershell_parse_failed'
+            }
+          }
+
+  prepare-original:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Materialize exact original Sample3 from existing writer handoff
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- generate \
+            --output-dir out/native-saveas-source-control
+      - name: Verify original source and manifest before handoff
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root = Path("out/native-saveas-source-control")
+          manifest = json.loads((root / "handoff.json").read_text())
+          assert manifest["schema"] == "chaptera.pub-native-story-handoff.v1"
+          assert hashlib.sha256((root / "source.pub").read_bytes()).hexdigest() == manifest["source_sha256"]
+          print("original Sample3 source SHA matched")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pub-source-saveas-control-${{ github.run_id }}
+          path: |
+            out/native-saveas-source-control/source.pub
+            out/native-saveas-source-control/handoff.json
+          if-no-files-found: error
+          retention-days: 14
+
+  native-source-control:
+    needs: prepare-original
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Lalalalendia/rar2' }}
+    runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
+    timeout-minutes: 15
+    concurrency:
+      group: pub-re-native-publisher-oracle
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download verified original from this exact run
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-source-saveas-control-${{ github.run_id }}
+          path: ${{ runner.temp }}/chaptera-saveas-source-control/input
+      - name: Execute isolated original Publisher SaveAs control
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/windows/pub-runtime/Invoke-StoryNativeSourceControl.ps1 `
+            -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-saveas-source-control/input') `
+            -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-saveas-source-control/private')
+          if (-not $?) { throw 'source_control_script_failed' }
+      - name: Upload source-safe control receipt only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-source-saveas-control-receipt-${{ github.run_id }}
+          path: ${{ runner.temp }}/chaptera-saveas-source-control/private/source-control-status.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Remove private original, SaveAs output and logs
+        if: always()
+        shell: powershell
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'chaptera-saveas-source-control'
+          if (Test-Path -LiteralPath $root) {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
+          }
