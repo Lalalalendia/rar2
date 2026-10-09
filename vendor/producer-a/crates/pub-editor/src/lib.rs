@@ -12,19 +12,14 @@ mod imported_paragraph_alignment_v1;
 mod imported_paragraph_flow_v1;
 mod imported_paragraphs_v1;
 mod link_text_frame_tail_v1;
-mod project_schema;
 mod session_geometry;
 mod session_image;
 mod session_table;
 mod session_text;
-use project_schema::{
-    append_blank_page_persistence_requirements_v1, display_page_append_error_v1,
-    minimum_identity_project_schema_v1, required_editor_asset_refs_v1,
-};
 use session_geometry::{
     append_blank_page_error_to_editor_v1, apply_authored_stack_history_forward_v1,
     authored_stack_operation_page_id_v1, derive_authored_stacks_from_operations_v1,
-    page_order_error_to_editor_v1, validate_move_nodes_transition,
+    display_page_append_error_v1, page_order_error_to_editor_v1, validate_move_nodes_transition,
     validate_resize_nodes_transition,
 };
 use session_image::{
@@ -39,6 +34,10 @@ mod table_rowcol_graph_v1;
 mod table_rowcol_history_v1;
 mod text_format_property_base_v1;
 mod writer_assessment;
+use writer_assessment::{
+    append_blank_page_persistence_requirements_v1, minimum_identity_project_schema_v1,
+    required_editor_asset_refs_v1,
+};
 
 pub use authored_paragraph_alignment_v1::{
     AuthoredParagraphAlignmentValueV1, EffectiveParagraphAlignmentV1,

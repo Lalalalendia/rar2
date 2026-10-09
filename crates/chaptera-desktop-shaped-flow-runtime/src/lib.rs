@@ -706,8 +706,7 @@ mod tests {
     #[test]
     fn fixed_pdf_page_projection_consumes_appended_lifecycle_membership() {
         let (mut editor, admitted, _) = page_order_editor_fixture();
-        let appended: PageId =
-            canonical_id("01890f4f-1234-7abc-8def-0123456789ab");
+        let appended: PageId = canonical_id("01890f4f-1234-7abc-8def-0123456789ab");
         let identity = AuthoredPageIdentityV1 {
             page_id: appended,
             provenance: AuthoredEntityProvenanceV1::AuthorCreated,

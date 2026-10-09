@@ -685,6 +685,21 @@ pub(super) fn append_blank_page_error_to_editor_v1(error: AppendBlankPageErrorV1
     }
 }
 
+pub(super) fn display_page_append_error_v1(
+    error: &EditorError,
+    formatter: &mut fmt::Formatter<'_>,
+) -> fmt::Result {
+    match error {
+        EditorError::PageAppendUnsupported { message } => {
+            write!(formatter, "append blank page is unsupported: {message}")
+        }
+        EditorError::StalePageAppend => formatter.write_str(
+            "current document/page membership no longer matches the append-page precondition",
+        ),
+        _ => unreachable!("page-append display helper receives only page-append errors"),
+    }
+}
+
 // Authored Page identity is an ordering-adjacent durable history primitive.
 impl EditorSession {
     pub fn authored_page_identities_v1(&self) -> BTreeMap<PageId, AuthoredPageIdentityV1> {
