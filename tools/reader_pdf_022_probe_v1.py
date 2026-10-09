@@ -27,7 +27,7 @@ EXPECTED = {
     "022_7079ad60fd810979": "7079ad60fd8109796b84286d294cb490051a1517d8e52ac61e7c416dbd04428c",
     "023_6bbfbf7b4c9b2400": "6bbfbf7b4c9b240026399fcc114ee0eb78fbc954c8f258f5baf3a388d3f188c8",
 }
-CODE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_.-]{0,119}$")
+CODE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_.:-]{0,119}$")
 DPI = 144
 CHANNEL_THRESHOLD = 12
 
@@ -201,7 +201,9 @@ def collect(browser_dir: Path, pdf_dir: Path, reference: Path, commit: str) -> d
                            "fidelity_reasons":source_safe_codes(item.get("fidelity_reasons",[])),
                            "diagnostic_codes":source_safe_codes(item.get("diagnostic_codes",[])),
                            "stacking_fidelity":item.get("stacking_fidelity"),
-                           "text_layout_fallback_counts":source_safe_counts(item.get("text_layout_fallback_counts",{}))},
+                           "text_layout_fallback_counts":source_safe_counts(item.get("text_layout_fallback_counts",{})),
+                           "node_kind_counts":source_safe_counts(item.get("node_kind_counts",{})),
+                           "text_layout_disposition_counts":source_safe_counts(item.get("text_layout_disposition_counts",{}))},
                   "pdf_resource_codes":source_safe_counts(dict(counts)),
                   "pdf_node_disposition_counts":source_safe_counts(dict(dispositions)),
                   "pdf_diagnostic_codes":source_safe_codes([str(x.get("code", "")) for x in pdf_data.get("diagnostics", [])])}
