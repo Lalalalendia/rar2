@@ -86,6 +86,12 @@ jobs:
           cargo run --manifest-path vendor/producer-a/Cargo.toml \
             -p pub-writer --bin pub_story_native_handoff -- generate \
             --output-dir out/native-story-pwsh7
+      - name: Materialize pinned one-unit Story candidate without Publisher
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- generate-one-unit \
+            --output-dir out/native-story-pwsh7-one-unit
       - name: Verify original source and manifest before handoff
         run: |
           set -euo pipefail
@@ -105,6 +111,29 @@ jobs:
               raise SystemExit("unexpected CFB byte length")
           print("PASS exact Sep/Oct matched candidate SHA and pinned source")
           PY
+      - name: Pin one-unit handoff bytes and Story identity before native admission
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root = Path("out/native-story-pwsh7-one-unit")
+          manifest = json.loads((root / "handoff.json").read_text())
+          assert manifest["schema"] == "chaptera.pub-native-story-handoff.v1"
+          assert manifest["research_variant"] == "one_utf16_unit_delete"
+          assert manifest["story_syid"] == 4
+          assert manifest["mutation"]["removed_utf16_units"] == 1
+          assert manifest["after_utf16_len"] == 69
+          assert hashlib.sha256((root / "source.pub").read_bytes()).hexdigest() == manifest["source_sha256"]
+          assert hashlib.sha256((root / "candidate.pub").read_bytes()).hexdigest() == manifest["candidate_sha256"]
+          if manifest["source_sha256"] != "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc":
+              raise SystemExit("one-unit source identity mismatch")
+          if manifest["candidate_sha256"] != "b9b789f35a34e016faceb27acf50bf0621273a7d612762ecc17c56ca450fe715":
+              raise SystemExit("one-unit candidate identity mismatch")
+          if len((root / "source.pub").read_bytes()) != 72192 or len((root / "candidate.pub").read_bytes()) != 72192:
+              raise SystemExit("one-unit CFB length mismatch")
+          print("PASS SHA-pinned one-unit Story candidate (offline only)")
+          PY
       - name: Verify exact deleted Story under current Reader
         run: |
           set -euo pipefail
@@ -112,6 +141,13 @@ jobs:
             -p pub-writer --bin pub_story_native_handoff -- verify \
             --pub out/native-story-pwsh7/candidate.pub \
             --manifest out/native-story-pwsh7/handoff.json
+      - name: Verify one-unit deleted Story through current Reader (no Publisher)
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- verify \
+            --pub out/native-story-pwsh7-one-unit/candidate.pub \
+            --manifest out/native-story-pwsh7-one-unit/handoff.json
       - uses: actions/upload-artifact@v4
         with:
           name: pub-story-pwsh7-${{ github.run_id }}
@@ -121,12 +157,21 @@ jobs:
             out/native-story-pwsh7/handoff.json
           if-no-files-found: error
           retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pub-story-pwsh7-one-unit-${{ github.run_id }}
+          path: |
+            out/native-story-pwsh7-one-unit/source.pub
+            out/native-story-pwsh7-one-unit/candidate.pub
+            out/native-story-pwsh7-one-unit/handoff.json
+          if-no-files-found: error
+          retention-days: 14
 
   native-pwsh7:
     needs: [prepare-original, validate-transport]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Lalalalendia/rar2' }}
     runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
-    timeout-minutes: 20
+    timeout-minutes: 27
     concurrency:
       group: pub-re-native-publisher-oracle
       queue: max
@@ -141,6 +186,11 @@ jobs:
         with:
           name: pub-story-pwsh7-${{ github.run_id }}
           path: ${{ runner.temp }}/chaptera-story-pwsh7/input
+      - name: Download independently pinned one-unit candidate from this exact run
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-story-pwsh7-one-unit-${{ github.run_id }}
+          path: ${{ runner.temp }}/chaptera-story-pwsh7/input-one-unit
       - name: Supply Git Bash to current Rust verifier
         shell: powershell
         run: |
@@ -202,6 +252,17 @@ jobs:
             -ChildPowerShell PowerShell7 `
             -PinnedPwsh7Executable (Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7\portable\pwsh.exe')
           if (-not $?) { throw 'matched_writer_candidate_roundtrip_failed' }
+      - name: Test one-unit Writer candidate under the same verified PowerShell 7 transport
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1 `
+            -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7/input-one-unit') `
+            -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7/private-one-unit') `
+            -TimeoutSeconds 360 `
+            -ChildPowerShell PowerShell7 `
+            -PinnedPwsh7Executable (Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7\portable\pwsh.exe')
+          if (-not $?) { throw 'one_unit_candidate_roundtrip_failed' }
       - name: Upload source-safe control receipt only
         if: always()
         uses: actions/upload-artifact@v4
@@ -219,6 +280,17 @@ jobs:
             ${{ runner.temp }}/chaptera-story-pwsh7/private-candidate/native-roundtrip-status.json
             ${{ runner.temp }}/chaptera-story-pwsh7/private-candidate/native-roundtrip-stage.json
             ${{ runner.temp }}/chaptera-story-pwsh7/private-candidate/native-roundtrip-receipt.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Upload source-safe one-unit Publisher receipt only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-one-unit-pwsh7-candidate-receipt-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/chaptera-story-pwsh7/private-one-unit/native-roundtrip-status.json
+            ${{ runner.temp }}/chaptera-story-pwsh7/private-one-unit/native-roundtrip-stage.json
+            ${{ runner.temp }}/chaptera-story-pwsh7/private-one-unit/native-roundtrip-receipt.json
           if-no-files-found: warn
           retention-days: 30
       - name: Remove private original, SaveAs output and logs
