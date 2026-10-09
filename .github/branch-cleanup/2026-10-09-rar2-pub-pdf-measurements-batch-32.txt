@@ -1,0 +1,7 @@
+# 2026-10-09 — PUB-PDF measurements batch 32
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+measure/pub-pdf-table-borders-clipped-01 1d32b67b16c3ccfd83252d1bf8b9aa2a24a53cec # #2333 terminal measurement; clipping borders worsened vs borders-only
+measure/pub-pdf-source-order-shaped-geometry-01 7a5db5e76d88a87d901757cde31c5ba686d6c005 # #2335 terminal measurement; corpus mean identical to pure Viewer-order arm
+ops/branch-gc-20261009-pub-pdf-measurements-batch-31 491fd94738fdb04f26f67ce49c924f299a5c3817 # completed #2338 clean receipt: 4/4 deleted
