@@ -1,0 +1,29 @@
+# 2026-10-09: branch hygiene evidence-complete batch 40.
+# Exact live SHA rechecked 2026-10-09; do not merge execution-only carrier.
+# Evidence retained in closed PR descriptions/linked artifacts/assimilated successors.
+# #2386: successful narrow GIF A/B, zero regressions
+measure/pub-pdf-gif-narrow-fence-ab-01 9a14b7a3cea47bca4d98d3552ae380dd414e9124
+# #2383: failed broad GIF crop experiment, quantitative negative receipt
+measure/pub-pdf-gif-crop-fence-ab-01 47159eb02997a68f34bab3b08d1852a6da937c43
+# #2376: completed exact GIF semantic discriminator
+measure/pub-pdf-gif-semantics-01 b8e542a1bbc1764e87edd5884deeb8ddfe905260
+# #2372: completed, rejected wide GIF A/B
+measure/pub-pdf-gif-publisher-ab-01 e5dc88e767224943b1b7255e8fb13302e872a469
+# #2238: completed pub-editor table-core steady-state timing control
+measure/pub-editor-table-core-steady-state-02 ecbea2415a060b1ed0f1035950d81e119bc026c0
+# #2234: completed pub-editor text-core timing control
+measure/pub-editor-text-core-steady-state-01 b5fe1e1a44cd5b377cdde9b4cd494333871af79e
+# #2213: SVG/PNG same-session discriminator measurement, issue #2186
+measure/cloud-reader-same-session-svg-png-01 4219c7b5a1b2e86470d25520887f5b98a14db46d
+# #2203: Legacy22Quill validation complete; product #2201 merged
+validation/pub-pdf-legacy22-quill-01 0aa19fa28ea97f1632749927342f4175ddbfaebc
+# #2191: rejected WMF alpha product change, regressive A/B
+fix/pub-pdf-wmf-preview-alpha-02 46432c924b18c445233a4e7d37527265e5b84244
+# #2177: WMF MOVETO A/B complete, assimilated into #2175
+validation/pub-wmf-moveto-publisher-ab-01 ddcbff08a429283eae6fec27f3b714319b3f9dcd
+# #2166: resource-missing causal census complete, assimilated into #2164
+measure/pub-pdf-image-missing-cause-01 0319c522e286628ab542545d3b6371b5bb75049d
+# #2159: resource-missing census complete, assimilated into #2134
+measure/pub-pdf-resource-missing-census-01 27830931a8e0a71b4ca20bea62041f70fd94e8a8
+# #2437: batch39 execution-only carrier; clean 10/10 deletion receipt
+ops/branch-gc-20261009-evidence-batch39 6422a12b73ee33216f3bf13209c81ac4c9965ba9
