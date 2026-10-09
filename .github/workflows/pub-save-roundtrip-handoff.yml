@@ -38,6 +38,9 @@ jobs:
         with:
           toolchain: "1.94.1"
 
+      - name: Prove logical CFB and sibling Story preservation
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-writer --lib
+
       - name: Generate deterministic PUB candidate handoff
         run: |
           set -euo pipefail
