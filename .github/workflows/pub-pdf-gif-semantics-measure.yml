@@ -1,0 +1,68 @@
+name: PUB PDF GIF semantics measure
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-pdf-gif-semantics-measure.yml"
+      - "vendor/producer-a/crates/pub-cli/Cargo.toml"
+      - "vendor/producer-a/crates/pub-cli/src/bin/pub_gif_census.rs"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  census:
+    if: github.event.pull_request.head.ref == 'measure/pub-pdf-gif-semantics-01'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Format and compile measurement binary
+        run: |
+          rustfmt --edition 2024 --check vendor/producer-a/crates/pub-cli/src/bin/pub_gif_census.rs
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-cli --bin pub-gif-census
+      - name: Acquire pinned exact-1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+      - name: Measure exact four GIF witnesses
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="target/pub-pdf-gif-semantics"
+          mkdir -p "$out"
+          while IFS='|' read -r fixture sha; do
+            src="out/pinned1050/materialized/native/$sha.pub"
+            test -s "$src"
+            test "$(sha256sum "$src" | awk '{print $1}')" = "$sha"
+            vendor/producer-a/target/debug/pub-gif-census "$src" > "$out/$fixture.json"
+          done <<'EOF'
+          044_c39a76257106881b|c39a76257106881bd07fe94560d9b4c8c756de05746941816806c75aaf4e728b
+          064_fb2927045c232927|fb2927045c23292717df0a67ccb1e879d526a4ad8a6bb3c1046c72119fba3910
+          094_bbaefcbdcdd2dbe5|bbaefcbdcdd2dbe51a636ed554c14d6f5353c98e795b5f88d26f79542e5d93ba
+          099_00092479c94bf5ac|00092479c94bf5ac1bb107173d60fb788b91e2c148453468456f98d0bb300597
+          EOF
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path("target/pub-pdf-gif-semantics")
+          rows = [json.loads(path.read_text()) for path in sorted(root.glob("*.json"))]
+          receipt = {"schema": "chaptera.pub-pdf-gif-semantics-receipt.v1", "fixtures": rows}
+          (root / "receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+          PY
+      - name: Upload source-safe GIF semantics receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-pdf-gif-semantics
+          path: target/pub-pdf-gif-semantics/receipt.json
+          retention-days: 30
