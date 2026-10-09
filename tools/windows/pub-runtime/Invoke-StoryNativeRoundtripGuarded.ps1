@@ -6,7 +6,8 @@ param(
     [ValidateRange(60, 600)]
     [int]$TimeoutSeconds = 360,
     [ValidateSet('WindowsPowerShell51', 'PowerShell7')]
-    [string]$ChildPowerShell = 'WindowsPowerShell51'
+    [string]$ChildPowerShell = 'WindowsPowerShell51',
+    [string]$PinnedPwsh7Executable = ''
 )
 
 Set-StrictMode -Version Latest
@@ -70,9 +71,25 @@ catch {
 '@
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if ($ChildPowerShell -ne 'PowerShell7' -and -not [string]::IsNullOrEmpty($PinnedPwsh7Executable)) {
+        $status.failure_code = 'pwsh7_override_not_applicable'
+        throw 'pwsh7_override_not_applicable'
+    }
     if ($ChildPowerShell -eq 'PowerShell7') {
         # Controlled historical-runtime discriminator. Never resolve a runner PATH alias.
         $powershellExe = Join-Path ${env:ProgramFiles} 'PowerShell\7\pwsh.exe'
+        if (-not [string]::IsNullOrEmpty($PinnedPwsh7Executable)) {
+            # Trusted-main-only historical transport experiment. No arbitrary
+            # executable paths; the ZIP must be SHA-pinned by its workflow.
+            $expectedPortable = Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7\portable\pwsh.exe'
+            if (-not [System.IO.Path]::IsPathRooted($PinnedPwsh7Executable) -or
+                -not [string]::Equals($PinnedPwsh7Executable, $expectedPortable,
+                    [System.StringComparison]::OrdinalIgnoreCase)) {
+                $status.failure_code = 'pwsh7_portable_path_not_allowlisted'
+                throw 'pwsh7_portable_path_not_allowlisted'
+            }
+            $powershellExe = $expectedPortable
+        }
         if (-not (Test-Path -LiteralPath $powershellExe -PathType Leaf)) {
             $status.failure_code = 'pwsh7_executable_absent'
             throw 'pwsh7_executable_absent'
@@ -89,6 +106,11 @@ catch {
             throw 'pwsh7_identity_mismatch'
         }
         $parts = $probeText.Split('|')
+        if (-not [string]::IsNullOrEmpty($PinnedPwsh7Executable) -and
+            ($parts[0] -ne '7.6.5' -or $parts[3] -ne '1')) {
+            $status.failure_code = 'pwsh7_portable_version_or_arch_mismatch'
+            throw 'pwsh7_portable_version_or_arch_mismatch'
+        }
         $status['child_shell_mode'] = 'PowerShell7'
         $status['child_powershell_version'] = $parts[0]
         $status['child_apartment'] = $parts[2]
