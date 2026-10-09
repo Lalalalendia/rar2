@@ -586,7 +586,11 @@ fn gui_resize_modifiers_toggle_mid_drag_and_commit_exact_constraint_plan() {
         }
     };
 
-    harness.get_by_label("Undo").click();
+    harness
+        .get_all_by_label("Undo")
+        .next()
+        .expect("Undo command")
+        .click();
     harness.step();
     assert_eq!(
         harness
@@ -601,7 +605,11 @@ fn gui_resize_modifiers_toggle_mid_drag_and_commit_exact_constraint_plan() {
         source_bounds,
         "Undo restores exact pre-modifier bounds"
     );
-    harness.get_by_label("Redo").click();
+    harness
+        .get_all_by_label("Redo")
+        .next()
+        .expect("Redo command")
+        .click();
     harness.step();
     assert_eq!(
         harness
