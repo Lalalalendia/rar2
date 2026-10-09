@@ -97,7 +97,7 @@ class TextWidthM1Contract(unittest.TestCase):
         self.assertIn('Write-Stage "invalid" $Stage', self.worker)
         self.assertNotIn("$_.Exception.Message", self.worker)
         self.assertIn("hresult_hex = $HresultHex", self.worker)
-        self.assertIn("seed_layout_lines_count", self.worker.replace('($PhaseTag + "_lines_count")', 'seed_layout_lines_count'))
+        self.assertIn('($PhaseTag + "_lines_count")', self.worker)
         self.assertIn("Write-Stage \"invalid\" $Stage $hresult", self.worker)
 
     def test_fail_closed_evidence_and_no_claim_before_product_ab(self):
