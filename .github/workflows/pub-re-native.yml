@@ -1075,6 +1075,7 @@ jobs:
           $names = @(
             "analysis\quill-story-readonly-oracle.json",
             "analysis\quill-story-readonly-oracle-resolution.json",
+            "analysis\quill-readonly-direct-stage.json",
             "environment.json"
           )
           $count = 0
@@ -1088,6 +1089,18 @@ jobs:
             [void]($body | ConvertFrom-Json)
             Copy-Item -LiteralPath $from -Destination $to -Force
             $count += 1
+          }
+          $directStagePath = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\quill-readonly-direct-stage.json"
+          if (Test-Path -LiteralPath $directStagePath -PathType Leaf) {
+            $directStage = Get-Content -LiteralPath $directStagePath -Raw | ConvertFrom-Json
+            if ($directStage.schema -ne "chaptera.quill-readonly-direct-stage.v1" -or
+                $directStage.phase -notin @("prepare", "native_observation", "finalize", "resolver_witness_acquisition", "resolver", "crosschecks", "complete") -or
+                $directStage.status -notin @("running", "invalid", "complete")) {
+              throw "quill_readonly_direct_stage_contract_invalid"
+            }
+            if ($env:QUILL_NATIVE_OUTCOME -eq "success" -and $directStage.status -ne "complete") {
+              throw "quill_readonly_direct_stage_not_complete"
+            }
           }
           $complete = $env:QUILL_NATIVE_OUTCOME -eq "success" -and $count -eq $names.Count
           $stage = [ordered]@{

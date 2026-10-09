@@ -60,6 +60,24 @@ if (-not (Test-Path -LiteralPath $researchPowerShell -PathType Leaf)) {
     throw "No supported PowerShell host executable found."
 }
 
+$script:stagePath = $null
+$phase = "pin_validation"
+function Write-ResearchStage {
+    param([string]$State, [string]$Phase)
+    if ([string]::IsNullOrWhiteSpace([string]$script:stagePath)) { return }
+    $dir = Split-Path -Parent $script:stagePath
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $receipt = [ordered]@{
+        schema = "chaptera.quill-readonly-direct-stage.v1"
+        experiment_id = "QUILL-STORY-READONLY-ORACLE-02"
+        status = $State
+        phase = $Phase
+        source_document_bytes_emitted = $false
+        local_filesystem_paths_emitted = $false
+    }
+    $receipt | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $script:stagePath -Encoding UTF8
+}
+
 $previousFixtureRoot = [string]$env:PUB_RESEARCH_FIXTURE_ROOT
 $tempRoot = $null
 try {
@@ -97,21 +115,28 @@ try {
         $OutputRoot = Join-Path $repoRoot $OutputRoot
     }
     New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
+    $script:stagePath = Join-Path $OutputRoot "analysis/quill-readonly-direct-stage.json"
 
     $env:PUB_RESEARCH_PROFILE_ID = "publisher-2019"
 
+    $phase = "prepare"
+    Write-ResearchStage -State "running" -Phase $phase
     Write-Host "Quill Story oracle direct host: prepare"
     & $researchPowerShell -NoProfile -ExecutionPolicy Bypass -File $prepare -PacketPath $packet -OutputRoot $OutputRoot
     if ($LASTEXITCODE -ne 0) {
         throw "prepare_native_run.ps1 failed with exit code $LASTEXITCODE"
     }
 
+    $phase = "native_observation"
+    Write-ResearchStage -State "running" -Phase $phase
     Write-Host "Quill Story oracle direct host: execute read-only Publisher observation"
     & $researchPowerShell -NoProfile -ExecutionPolicy Bypass -File $operation -PacketPath $packet -OutputRoot $OutputRoot
     if ($LASTEXITCODE -ne 0) {
         throw "quill_story_readonly_oracle_02.ps1 failed with exit code $LASTEXITCODE"
     }
 
+    $phase = "finalize"
+    Write-ResearchStage -State "running" -Phase $phase
     Write-Host "Quill Story oracle direct host: finalize"
     & $researchPowerShell -NoProfile -ExecutionPolicy Bypass -File $finalize -PacketPath $packet -OutputRoot $OutputRoot
     if ($LASTEXITCODE -ne 0) {
@@ -127,6 +152,8 @@ try {
         throw "Evidence manifest missing: $manifest"
     }
 
+    $phase = "resolver_witness_acquisition"
+    Write-ResearchStage -State "running" -Phase $phase
     $resolverWitnessRoot = $resolvedWitnessRoot
     if ($null -eq $resolverWitnessRoot) {
         $tempBase = if (-not [string]::IsNullOrWhiteSpace($env:TEMP)) {
@@ -149,6 +176,8 @@ try {
         }
     }
 
+    $phase = "resolver"
+    Write-ResearchStage -State "running" -Phase $phase
     $resolution = Join-Path $OutputRoot "analysis/quill-story-readonly-oracle-resolution.json"
     Write-Host "Quill Story oracle direct host: resolve against source TEXT + FDPP"
     & cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin quill-story-readonly-oracle-resolver -- $resolverWitnessRoot $oracle $resolution
@@ -161,6 +190,8 @@ try {
         throw "Resolver witness_count mismatch: $($report.witness_count)"
     }
 
+    $phase = "crosschecks"
+    Write-ResearchStage -State "running" -Phase $phase
     $crossChecks = [ordered]@{
         "6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a" = @(11, 12, 13, 25)
         "9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569" = @(0, 1, 45)
@@ -180,11 +211,17 @@ try {
     }
 
     Write-Host ""
+    $phase = "complete"
+    Write-ResearchStage -State "complete" -Phase $phase
     Write-Host "Quill Story read-only direct-host run completed."
     Write-Host "Oracle: $oracle"
     Write-Host "Resolution: $resolution"
     Write-Host "Manifest: $manifest"
     Get-Content -LiteralPath $resolution -Raw
+}
+catch {
+    Write-ResearchStage -State "invalid" -Phase $phase
+    throw
 }
 finally {
     if ($null -ne $tempRoot -and (Test-Path -LiteralPath $tempRoot)) {
