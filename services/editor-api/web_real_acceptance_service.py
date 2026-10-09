@@ -470,13 +470,11 @@ class RealAcceptanceState:
         else:
             raise ValueError("unsupported history transition")
         project["operations"] = operations
-        if self.strict_acceptance:
-            # The pinned Newsletter Producer B receipt deliberately uses
-            # v0.2 baseline and v0.4 after MoveNode; its public history
-            # state/revision hashes are an existing acceptance contract.
-            # This legacy receipt has no EditorProject.identity.
-            if project.get("identity") is not None:
-                raise RuntimeError("legacy Newsletter history unexpectedly has project identity")
+        if project.get("identity") is None:
+            # Legacy no-identity Projects (both pinned Newsletter Producer B
+            # and interactive Newsletter smoke) normalize to v0.2 with no
+            # MoveNode, and v0.4 when MoveNode survives. This is required for
+            # the existing immutable public Undo/Redo history state hashes.
             project["schema_version"] = (
                 "pub-editor-v0.4"
                 if any(
@@ -487,11 +485,12 @@ class RealAcceptanceState:
                 else "pub-editor-v0.2"
             )
         else:
-            # Real interactive Sample3 has a versioned, identity-bearing
-            # canonical Rust EditorProject. Its schema must not be downgraded
-            # by Undo/Redo: Rust rejects identity in pre-v0.11 projects.
-            if project.get("identity") is None:
-                raise RuntimeError("interactive Sample3 lost canonical project identity")
+            # Identity-bearing canonical Rust EditorProjects cannot be
+            # downgraded below v0.11. Preserve schema across history changes.
+            # In this fixture-constrained acceptance service these are the
+            # exact-source interactive Sample3 projects.
+            if self.fixture_profile == "newsletter":
+                raise RuntimeError("Newsletter unexpectedly gained a project identity")
         return project, [{"key": "history." + transition_kind, "state": "supported", "note": None}]
 
     def commit(self, request: dict, principal_id: str) -> dict:
