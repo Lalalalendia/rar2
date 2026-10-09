@@ -1,0 +1,6 @@
+# 2026-10-09 — recovery predecessor batch 30
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+recovery/partial-directory-prefix-01 04bb609c2a6423ea6b24cc49fd3ac5613599b254 # #1662 superseded by merged fresh-current-main #2321
+ops/branch-gc-20261009-merged-repair-predecessors-batch-29 b7d7c9e5ee7fd2cec95e18ff81568eed1e4ebb6f # completed #2322 clean receipt: 4/4 deleted
