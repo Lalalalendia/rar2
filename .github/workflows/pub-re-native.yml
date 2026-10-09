@@ -978,7 +978,7 @@ jobs:
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
-          $setterFollowup = '{{ needs.gate.outputs.research_id }}' -eq 'val-xproj-setter-01'
+          $setterFollowup = '${{ needs.gate.outputs.research_id }}' -eq 'val-xproj-setter-01'
           & tools/windows/run_t352_native.ps1 -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT -SetterFollowup:$setterFollowup
           if (-not $?) { throw "T352 native experiment failed" }
           $result = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\t352-native-observations.json"
