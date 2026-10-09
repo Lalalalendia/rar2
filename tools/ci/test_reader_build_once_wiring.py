@@ -21,6 +21,7 @@ def main():
         "needs.classify.outputs.reader_windows == 'true'",
         "needs.classify.outputs.reader_windows_smoke == 'true'",
         "!cancelled() && always()",
+        "needs.classify.result == 'success'",
         "artifact_name: chaptera-reader-windows-binary-",
     ), "parallel Reader prebuild")
     if "needs.tier-a.result" in prebuild or "needs: [classify, tier-a]" in prebuild:
