@@ -2,6 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 #[test]
+#[ignore = "requires exact Carlton March PUB via CHAPTERA_TABLE_CELL_PAINT_FIXTURE"]
 fn exact_carlton_merged_table_reaches_viewer_surface() {
     let fixture = PathBuf::from(
         std::env::var_os("CHAPTERA_TABLE_CELL_PAINT_FIXTURE")
