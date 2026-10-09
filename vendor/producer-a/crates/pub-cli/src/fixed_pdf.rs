@@ -4,14 +4,15 @@ use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedText, BoundedShapingRuntime,
     font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
 };
-use pub_model::{EMU_PER_POINT, LengthEmu, NodeId};
+use pub_model::{Affine2D, EMU_PER_POINT, LengthEmu, NodeId};
 use pub_output::{
     ExplicitFontResource, FixedOutputFontProfile, FontIdentity, OutputFontRequest,
     PreferredEmbedding, plan_output_fonts, read_opentype_embedding_flags,
 };
 use pub_pdf::{
     FixedFontResource, FixedImageResource, FixedNodePaint, FixedPdfResources, FixedStroke,
-    FixedTextRun, PdfTargetProfile, render_bounded_pdf,
+    FixedTableBorder, FixedTableFill, FixedTablePaintResource, FixedTextRun, PdfTargetProfile,
+    render_bounded_pdf,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -446,6 +447,80 @@ fn build_pdf_artifact(
         })
         .collect();
 
+    let mut table_paint_resource_count = 0usize;
+    let mut table_fill_primitive_count = 0usize;
+    let mut table_border_primitive_count = 0usize;
+    let mut table_paint_incomplete_count = 0usize;
+    let mut table_no_visible_paint_count = 0usize;
+    let table_paints = visual
+        .tables
+        .iter()
+        .filter_map(|table| {
+            let Some(owner) = pdf_scene
+                .nodes
+                .iter()
+                .find(|node| node.origin == table.node_id)
+            else {
+                table_paint_incomplete_count += 1;
+                return None;
+            };
+            if owner.transform != Affine2D::identity() {
+                table_paint_incomplete_count += 1;
+                return None;
+            }
+
+            let mut fills = Vec::new();
+            let mut complete = true;
+            for cell in &table.cells {
+                match (cell.bounds, cell.fill_visible, cell.fill_rgb) {
+                    (Some(bounds), Some(true), Some(rgb))
+                        if bounds.width.get() > 0 && bounds.height.get() > 0 =>
+                    {
+                        fills.push(FixedTableFill { bounds, rgb });
+                    }
+                    (Some(_), Some(false), Some(_)) => {}
+                    _ => complete = false,
+                }
+            }
+
+            let mut borders = Vec::new();
+            for border in &table.borders {
+                let horizontal = border.y1_emu == border.y2_emu && border.x1_emu < border.x2_emu;
+                let vertical = border.x1_emu == border.x2_emu && border.y1_emu < border.y2_emu;
+                if border.width_emu <= 0 || (!horizontal && !vertical) {
+                    complete = false;
+                    continue;
+                }
+                borders.push(FixedTableBorder {
+                    x1_emu: border.x1_emu,
+                    y1_emu: border.y1_emu,
+                    x2_emu: border.x2_emu,
+                    y2_emu: border.y2_emu,
+                    rgb: border.rgb,
+                    width_emu: border.width_emu,
+                });
+            }
+
+            if !complete {
+                table_paint_incomplete_count += 1;
+                return None;
+            }
+            if fills.is_empty() && borders.is_empty() {
+                table_no_visible_paint_count += 1;
+                return None;
+            }
+
+            table_paint_resource_count += 1;
+            table_fill_primitive_count += fills.len();
+            table_border_primitive_count += borders.len();
+            Some(FixedTablePaintResource {
+                node_id: table.node_id,
+                fills,
+                borders,
+            })
+        })
+        .collect();
+
     let mut filtered_image_use_count = 0usize;
     let mut filtered_image_resource_count = 0usize;
     let images = visual
@@ -471,6 +546,7 @@ fn build_pdf_artifact(
 
     let resources = FixedPdfResources {
         node_paints,
+        table_paints,
         images,
         font_plan,
         fonts,
@@ -529,6 +605,24 @@ fn build_pdf_artifact(
         },
         "pdf": &rendered.report,
     });
+
+    if !visual.tables.is_empty() {
+        report
+            .as_object_mut()
+            .expect("fixed-PDF loss report must be an object")
+            .insert(
+                "table_projection".into(),
+                serde_json::json!({
+                    "source_table_count": visual.tables.len(),
+                    "table_paint_resource_count": table_paint_resource_count,
+                    "table_fill_primitive_count": table_fill_primitive_count,
+                    "table_border_primitive_count": table_border_primitive_count,
+                    "table_paint_incomplete_count": table_paint_incomplete_count,
+                    "table_no_visible_paint_count": table_no_visible_paint_count,
+                    "table_text_disposition": "explicit_residual",
+                }),
+            );
+    }
 
     if filtered_paint_node_count > 0
         || filtered_image_use_count > 0
