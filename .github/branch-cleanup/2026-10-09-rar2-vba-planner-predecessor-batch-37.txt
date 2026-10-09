@@ -1,0 +1,6 @@
+# 2026-10-09 — VBA planner predecessor batch 37
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+product/pub-vba-migration-plan-v1-r2 87dedb7cff12033d29a1c051d8bdaa41fff57438 # #1086 stale planner owner; fresh-current-main successor #2361 merged with byte-identical planner files
+ops/branch-gc-20261009-terminal-product-predecessor-batch-36 c55c00d2d78e845f00170d45cc0e9c3674c60ec2 # completed #2362 clean receipt: 7/7 deleted
