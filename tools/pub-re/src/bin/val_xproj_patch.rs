@@ -200,25 +200,28 @@ fn all_streams(path: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
     Ok(streams)
 }
 
-fn check_structural_streams(
-    receipt: &Value,
-    actual: &BTreeMap<String, Vec<u8>>,
-) -> Result<()> {
-    let expected = receipt.pointer("/manifest/streams")
-        .and_then(Value::as_array).context("missing structural stream digests")?;
+fn check_structural_streams(receipt: &Value, actual: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+    let expected = receipt
+        .pointer("/manifest/streams")
+        .and_then(Value::as_array)
+        .context("missing structural stream digests")?;
     if expected.len() != 10 || actual.len() != 10 {
         bail!("T370 requires exactly ten named CFB streams");
     }
     let mut seen = std::collections::BTreeSet::new();
     for entry in expected {
         let path = require_str(entry, "path")?;
-        let expected_len = entry.get("len").and_then(Value::as_u64)
+        let expected_len = entry
+            .get("len")
+            .and_then(Value::as_u64)
             .context("missing stream length")?;
         let expected_sha = require_str(entry, "sha256")?;
         if !seen.insert(path) {
             bail!("duplicate structural stream path");
         }
-        let bytes = actual.get(path).context("structural stream absent from actual CFB")?;
+        let bytes = actual
+            .get(path)
+            .context("structural stream absent from actual CFB")?;
         if bytes.len() as u64 != expected_len || sha(bytes) != expected_sha {
             bail!("structural stream hash or length drift: {path}");
         }
@@ -457,21 +460,31 @@ mod tests {
         file.create_storage("/Escher").unwrap();
         let mut contents = vec![0x18u8; 60_000];
         contents[16..20].copy_from_slice(&uint32_bytes(BASE_WIDTH_EMU).unwrap());
-        file.create_stream("/Contents").unwrap().write_all(&contents).unwrap();
+        file.create_stream("/Contents")
+            .unwrap()
+            .write_all(&contents)
+            .unwrap();
         let mut escher = vec![0x27u8; 2048];
         escher[8..10].copy_from_slice(&0x2003u16.to_le_bytes());
         escher[10..14].copy_from_slice(&uint32_bytes(BASE_XE_EMU).unwrap());
-        file.create_stream("/Escher/EscherStm").unwrap().write_all(&escher).unwrap();
+        file.create_stream("/Escher/EscherStm")
+            .unwrap()
+            .write_all(&escher)
+            .unwrap();
         for i in 0u8..8u8 {
             let name = format!("/Ancillary{i}");
-            file.create_stream(&name).unwrap().write_all(&[i; 50]).unwrap();
+            file.create_stream(&name)
+                .unwrap()
+                .write_all(&[i; 50])
+                .unwrap();
         }
         drop(file);
 
         let baseline = all_streams(&source).unwrap();
-        let stream_digests: Vec<_> = baseline.iter().map(|(path, bytes)| {
-            json!({"path":path,"len":bytes.len(),"sha256":sha(bytes)})
-        }).collect();
+        let stream_digests: Vec<_> = baseline
+            .iter()
+            .map(|(path, bytes)| json!({"path":path,"len":bytes.len(),"sha256":sha(bytes)}))
+            .collect();
         let receipt = json!({
             "schema": "chaptera.modern-structural-base/v1",
             "source_sha256": sha(&fs::read(&source).unwrap()),
@@ -516,21 +529,32 @@ mod tests {
             for (path, original) in &baseline {
                 let offsets = changed_offsets(original, &current[path]).unwrap();
                 let expected: Vec<usize> = if path == "/Contents" && contents_changed {
-                    changed_offsets(&BASE_WIDTH_EMU.to_le_bytes(),
-                        &(BASE_WIDTH_EMU + DELTA_EMU).to_le_bytes()).unwrap()
-                        .iter().map(|x| x + 16).collect()
+                    changed_offsets(
+                        &BASE_WIDTH_EMU.to_le_bytes(),
+                        &(BASE_WIDTH_EMU + DELTA_EMU).to_le_bytes(),
+                    )
+                    .unwrap()
+                    .iter()
+                    .map(|x| x + 16)
+                    .collect()
                 } else if path == "/Escher/EscherStm" && escher_changed {
-                    changed_offsets(&BASE_XE_EMU.to_le_bytes(),
-                        &(BASE_XE_EMU + DELTA_EMU).to_le_bytes()).unwrap()
-                        .iter().map(|x| x + 10).collect()
+                    changed_offsets(
+                        &BASE_XE_EMU.to_le_bytes(),
+                        &(BASE_XE_EMU + DELTA_EMU).to_le_bytes(),
+                    )
+                    .unwrap()
+                    .iter()
+                    .map(|x| x + 10)
+                    .collect()
                 } else {
                     Vec::new()
                 };
                 assert_eq!(offsets, expected, "{name} unexpected changes to {path}");
             }
         }
-        assert_eq!(sha(&fs::read(&source).unwrap()),
-            receipt["source_sha256"].as_str().unwrap());
+        assert_eq!(
+            sha(&fs::read(&source).unwrap()),
+            receipt["source_sha256"].as_str().unwrap()
+        );
     }
-
 }
