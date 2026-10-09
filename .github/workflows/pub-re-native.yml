@@ -87,7 +87,7 @@ jobs:
                   body,
               )
               research_match = re.fullmatch(
-                  r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?|val-xproj-01|val-xproj-independent-01|quill-story-readonly-oracle-02|text-width-breakpoint-m1-01)",
+                  r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?|val-xproj-01|val-xproj-independent-01|quill-story-readonly-oracle-02|text-width-breakpoint-m1-01|text-width-breakpoint-m2-01)",
                   body,
               )
               cancel_match = re.fullmatch(
@@ -130,7 +130,9 @@ jobs:
                       raise SystemExit("rotation delta must be nonzero and within 45 degrees")
               elif research_match is not None:
                   research_id = research_match.group(1)
-                  if research_id == "text-width-breakpoint-m1-01":
+                  if research_id == "text-width-breakpoint-m2-01":
+                      command_mode = "research_width_m2"
+                  elif research_id == "text-width-breakpoint-m1-01":
                       command_mode = "research_width_m1"
                   elif research_id == "quill-story-readonly-oracle-02":
                       command_mode = "research_quill_readonly"
@@ -147,7 +149,7 @@ jobs:
           if command_mode in {"snapshot_alias", "rotation_alias", "rotation_pair"} and alias_re.fullmatch(fixture_alias) is None:
               raise SystemExit("fixture alias is invalid")
 
-          native_timeout_minutes = "30" if command_mode in {"research_0p75", "research_t352", "research_quill_readonly", "research_width_m1"} else "10" if command_mode == "rotation_pair" else "5"
+          native_timeout_minutes = "30" if command_mode in {"research_0p75", "research_t352", "research_quill_readonly", "research_width_m1", "research_width_m2"} else "10" if command_mode == "rotation_pair" else "5"
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"command_mode={command_mode}\n")
@@ -233,7 +235,7 @@ jobs:
 
   native:
     needs: gate
-    if: ${{ needs.gate.result == 'success' && needs.gate.outputs.command_mode != 'cancel_run' && needs.gate.outputs.command_mode != 'research_width_m1' }}
+    if: ${{ needs.gate.result == 'success' && needs.gate.outputs.command_mode != 'cancel_run' && needs.gate.outputs.command_mode != 'research_width_m1' && needs.gate.outputs.command_mode != 'research_width_m2' }}
     runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
     timeout-minutes: ${{ fromJSON(needs.gate.outputs.native_timeout_minutes) }}
     concurrency:
@@ -1210,7 +1212,7 @@ jobs:
 
   text-width-m1:
     needs: gate
-    if: ${{ needs.gate.result == 'success' && needs.gate.outputs.command_mode == 'research_width_m1' }}
+    if: ${{ needs.gate.result == 'success' && (needs.gate.outputs.command_mode == 'research_width_m1' || needs.gate.outputs.command_mode == 'research_width_m2') }}
     runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
     timeout-minutes: 30
     concurrency:
@@ -1228,17 +1230,26 @@ jobs:
       - name: Run bounded Publisher text width experiment
         id: m1_native
         shell: powershell
+        env:
+          M1_STUDY_MODE: ${{ needs.gate.outputs.command_mode }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path $env:PUB_M1_OUTPUT | Out-Null
-          & tools/research-runner/operations/text_width_breakpoint_m1_01.ps1 -PacketPath tools/research-runner/experiments/text-width-breakpoint-m1-01.packet.json -OutputRoot $env:PUB_M1_OUTPUT
+          if ($env:M1_STUDY_MODE -eq "research_width_m2") {
+            & tools/research-runner/operations/text_width_breakpoint_m2_01.ps1 -PacketPath tools/research-runner/experiments/text-width-breakpoint-m2-01.packet.json -OutputRoot $env:PUB_M1_OUTPUT
+          } elseif ($env:M1_STUDY_MODE -eq "research_width_m1") {
+            & tools/research-runner/operations/text_width_breakpoint_m1_01.ps1 -PacketPath tools/research-runner/experiments/text-width-breakpoint-m1-01.packet.json -OutputRoot $env:PUB_M1_OUTPUT
+          } else {
+            throw "text_width_mode_not_allowlisted"
+          }
 
       - name: Stage source-safe text width evidence and partial failures
         if: ${{ always() }}
         shell: powershell
         env:
           M1_NATIVE_OUTCOME: ${{ steps.m1_native.outcome }}
+          M1_STUDY_MODE: ${{ needs.gate.outputs.command_mode }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
@@ -1258,6 +1269,26 @@ jobs:
             "text-width-m1-control-after.json",
             "text-width-m1-control-after-stage.json"
           )
+          if ($env:M1_STUDY_MODE -eq "research_width_m2") {
+            $names = @(
+              "text-width-breakpoint-m2-01.json",
+              "text-width-m2-suite-stage.json",
+              "text-width-m1-seed.json",
+              "text-width-m1-seed-stage.json",
+              "text-width-m1-control-before.json",
+              "text-width-m1-control-before-stage.json",
+              "text-width-m1-wide.json",
+              "text-width-m1-wide-stage.json",
+              "text-width-m1-control-after.json",
+              "text-width-m1-control-after-stage.json"
+            )
+            foreach ($i in 1..7) {
+              $names += "text-width-m1-m2-mid-$i.json"
+              $names += "text-width-m1-m2-mid-$i-stage.json"
+            }
+          } elseif ($env:M1_STUDY_MODE -ne "research_width_m1") {
+            throw "text_width_evidence_mode_not_allowlisted"
+          }
           $copied = 0
           foreach ($name in $names) {
             $path = Join-Path $env:PUB_M1_OUTPUT ("analysis\" + $name)
@@ -1276,9 +1307,11 @@ jobs:
             $copied++
           }
           if ($copied -eq 0) {
-            @{schema="chaptera.text-width-m1-suite-stage.v1";state="invalid";phase="preflight";arm_id="none"} |
+            $stageName = if ($env:M1_STUDY_MODE -eq "research_width_m2") { "text-width-m2-suite-stage.json" } else { "text-width-m1-suite-stage.json" }
+            $stageSchema = if ($env:M1_STUDY_MODE -eq "research_width_m2") { "chaptera.text-width-m2-suite-stage.v1" } else { "chaptera.text-width-m1-suite-stage.v1" }
+            @{schema=$stageSchema;state="invalid";phase="preflight";arm_id="none"} |
               ConvertTo-Json -Compress |
-              Set-Content -LiteralPath (Join-Path $safe "text-width-m1-suite-stage.json") -Encoding UTF8
+              Set-Content -LiteralPath (Join-Path $safe $stageName) -Encoding UTF8
           }
           if ($env:M1_NATIVE_OUTCOME -eq "success" -and $copied -ne $names.Count) {
             throw "m1_success_incomplete_receipts"
