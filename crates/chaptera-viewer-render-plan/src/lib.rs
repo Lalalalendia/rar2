@@ -43,8 +43,7 @@ use mixed_size_layout::{
 };
 use mixed_size_layout::{
     MixedLineCandidateV1, admitted_font_size_emu, resolve_mixed_family_text_layout_v1,
-    resolve_mixed_size_text_layout_v1,
-    scalar_text_range_v1,
+    resolve_mixed_size_text_layout_v1, scalar_text_range_v1,
 };
 pub use shared_layout_diagnostics::{
     SharedLayoutIncompleteCauseV1, classify_shared_layout_incomplete_cause_v1,
