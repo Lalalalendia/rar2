@@ -450,6 +450,195 @@ impl ViewerApp {
         Ok(identity.page_id)
     }
 
+    /// Insert a new blank customer Page after the selected *stable* PageId.
+    ///
+    /// The selected page may already own content. Only its physical page
+    /// metrics are copied; Node, Story, resource and extension identities are not.
+    fn page_insert_after_capability_v1(&self) -> bool {
+        let Some(editor) = self.editor.as_ref() else {
+            return false;
+        };
+        let Some(visual) = self.visual.as_ref() else {
+            return false;
+        };
+        let Some(anchor_page_id) = visual
+            .document
+            .pages
+            .get(self.selected_page)
+            .map(|page| page.id)
+        else {
+            return false;
+        };
+        let Ok(customer_page_ids) =
+            editor.effective_customer_page_order_v1(&self.source_customer_page_ids)
+        else {
+            return false;
+        };
+        customer_page_ids.contains(&anchor_page_id)
+            && editor
+                .graph()
+                .pages
+                .get(&anchor_page_id)
+                .is_some_and(|page| page.size.is_positive())
+    }
+
+    fn insert_selected_blank_page_after_v1(&mut self) -> Result<PageId, String> {
+        let (operations_before, anchor_page_id, before_page_ids, anchor_index, anchor_page) = {
+            let editor = self
+                .editor
+                .as_ref()
+                .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+            let visual = self
+                .visual
+                .as_ref()
+                .ok_or_else(|| "Document page projection is unavailable.".to_owned())?;
+            let anchor_page_id = visual
+                .document
+                .pages
+                .get(self.selected_page)
+                .map(|page| page.id)
+                .ok_or_else(|| "Selected PageId is unavailable.".to_owned())?;
+            let before_page_ids = editor
+                .effective_customer_page_order_v1(&self.source_customer_page_ids)
+                .map_err(|error| {
+                    format!("Page insert is unavailable: {} ({})", error, error.code())
+                })?;
+            let anchor_index = before_page_ids
+                .iter()
+                .position(|page_id| *page_id == anchor_page_id)
+                .ok_or_else(|| {
+                    "Selected PageId is absent from admitted customer membership.".to_owned()
+                })?;
+            let anchor_page = editor
+                .graph()
+                .pages
+                .get(&anchor_page_id)
+                .ok_or_else(|| "Selected canonical Page is unavailable.".to_owned())?
+                .clone();
+            if !anchor_page.size.is_positive() {
+                return Err("Selected canonical Page has invalid dimensions.".to_owned());
+            }
+            (
+                editor.operations().len(),
+                anchor_page_id,
+                before_page_ids,
+                anchor_index,
+                anchor_page,
+            )
+        };
+
+        let uuid = uuid::Uuid::now_v7();
+        let identity = AuthoredPageIdentityV1 {
+            page_id: PageId::from_canonical(pub_model::CanonicalId::from_bytes(*uuid.as_bytes())),
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        let mut candidate = self
+            .editor
+            .as_ref()
+            .expect("Editor validated before page insert")
+            .clone();
+        candidate
+            .insert_blank_page_after_v1(
+                self.source_customer_page_ids.clone(),
+                anchor_page_id,
+                identity,
+                anchor_page.size,
+                anchor_page.bleed.clone(),
+                anchor_page.margins.clone(),
+            )
+            .map_err(|error| format!("Page insert rejected: {} ({})", error, error.code()))?;
+        if candidate.operations().len() != operations_before + 1
+            || !matches!(
+                candidate.operations().last(),
+                Some(pub_editor::EditOperation::InsertBlankPageAfterV1 { transition })
+                    if transition.anchor_page_id == anchor_page_id
+                        && transition.identity == identity
+                        && transition.before_customer_page_ids == before_page_ids
+            )
+        {
+            return Err(
+                "Insert Blank After Selected must append exactly one canonical lifecycle operation."
+                    .to_owned(),
+            );
+        }
+        if candidate.graph().pages.get(&anchor_page_id) != Some(&anchor_page) {
+            return Err("Page insert changed its content-bearing anchor before commit.".to_owned());
+        }
+        let destination_page = candidate
+            .graph()
+            .pages
+            .get(&identity.page_id)
+            .ok_or_else(|| "Page insert did not create a destination Page.".to_owned())?;
+        if destination_page.size != anchor_page.size
+            || destination_page.bleed != anchor_page.bleed
+            || destination_page.margins != anchor_page.margins
+            || !destination_page.children.is_empty()
+            || !destination_page.extensions.is_empty()
+        {
+            return Err("Page insert destination is not an independent blank Page.".to_owned());
+        }
+
+        let after_page_ids = candidate
+            .effective_customer_page_order_v1(&self.source_customer_page_ids)
+            .map_err(|error| {
+                format!(
+                    "Page insert membership is unavailable before commit: {} ({})",
+                    error,
+                    error.code()
+                )
+            })?;
+        let destination_index = anchor_index + 1;
+        let mut expected_page_ids = before_page_ids;
+        expected_page_ids.insert(destination_index, identity.page_id);
+        if after_page_ids != expected_page_ids {
+            return Err("Page insert produced unexpected canonical customer order.".to_owned());
+        }
+
+        let mut visual_candidate = self
+            .visual
+            .as_ref()
+            .ok_or_else(|| "Document page projection is unavailable.".to_owned())?
+            .clone();
+        visual_candidate
+            .refresh_page_membership_from_resolved(candidate.graph(), &after_page_ids)
+            .map_err(|error| format!("Page insert projection rejected before commit: {error}"))?;
+        if visual_candidate
+            .document
+            .pages
+            .iter()
+            .map(|page| page.id)
+            .collect::<Vec<_>>()
+            != after_page_ids
+            || visual_candidate
+                .document
+                .pages
+                .get(destination_index)
+                .map(|page| page.id)
+                != Some(identity.page_id)
+            || !visual_candidate
+                .scene
+                .surfaces
+                .iter()
+                .any(|surface| surface.origin == identity.page_id)
+        {
+            return Err(
+                "Page insert Viewer projection lacks exact destination membership or surface."
+                    .to_owned(),
+            );
+        }
+
+        self.editor = Some(candidate);
+        self.visual = Some(visual_candidate);
+        self.selected_page = destination_index;
+        self.canvas_selection.clear();
+        self.canvas_drag = None;
+        self.canvas_resize = None;
+        self.finish_authoring_change(
+            "Inserted one independent blank customer page immediately after selected PageId. Source PUB bytes were not written.",
+        );
+        Ok(identity.page_id)
+    }
+
     fn page_delete_blank_capability_v1(&self) -> bool {
         let Some(editor) = self.editor.as_ref() else {
             return false;
@@ -705,6 +894,20 @@ impl ViewerApp {
             && let Err(error) = self.append_blank_page_at_end_v1()
         {
             self.edit_status = Some(error);
+        }
+
+        let can_insert = self.page_insert_after_capability_v1();
+        let insert_response =
+            ui.add_enabled(can_insert, egui::Button::new("Insert Blank After Selected"));
+        if insert_response.clicked()
+            && let Err(error) = self.insert_selected_blank_page_after_v1()
+        {
+            self.edit_status = Some(error);
+        }
+        if !can_insert {
+            insert_response.on_disabled_hover_text(
+                "Select an admitted customer Page with valid dimensions. Existing content is preserved.",
+            );
         }
 
         let can_delete = self.page_delete_blank_capability_v1();

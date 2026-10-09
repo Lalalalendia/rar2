@@ -1544,3 +1544,302 @@ fn gui_duplicate_blank_page_projects_membership_and_replays_on_real_pub() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+#[cfg(not(feature = "reader-only"))]
+#[test]
+#[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
+fn gui_insert_blank_after_content_bearing_customer_preserves_source_and_replays() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let fixture_source = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
+        .map(PathBuf::from)
+        .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to pinned Apache POI fixture");
+    let original = fs::read(&fixture_source).expect("read pinned source PUB");
+    let root = std::env::temp_dir().join(format!(
+        "chaptera-gui-insert-after-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create insert-after GUI directory");
+    let fixture = root.join("SampleNewsletter.pub");
+    fs::write(&fixture, &original).expect("copy immutable source fixture");
+
+    let path = fixture.clone();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 820.0))
+        .with_pixels_per_point(1.0)
+        .with_max_steps(140)
+        .build_eframe(move |cc| {
+            fallback_font::install(&cc.egui_ctx)
+                .expect("pinned fallback font resource must validate");
+            ViewerApp::new_with_storage(Some(path), cc.storage)
+        });
+    harness.step();
+    harness.step();
+
+    let (source_order, anchor, anchor_page, operations_before) = {
+        let app = harness.state();
+        let visual = app.visual.as_ref().expect("real PUB visual loaded");
+        let source_order = visual
+            .document
+            .pages
+            .iter()
+            .map(|page| page.id)
+            .collect::<Vec<_>>();
+        assert!(source_order.len() >= 2, "must prove insertion is not append");
+        assert_eq!(app.source_customer_page_ids, source_order);
+        assert_eq!(app.selected_page, 0);
+        let anchor = source_order[0];
+        let editor = app.editor.as_ref().expect("real PUB editor loaded");
+        (
+            source_order,
+            anchor,
+            editor.graph().pages[&anchor].clone(),
+            editor.operations().len(),
+        )
+    };
+    assert!(
+        !harness.get_by_label("Insert Blank After Selected").is_disabled(),
+        "admitted source-backed customer page must enable InsertAfter"
+    );
+
+    // Add authored content to the selected real-PUB page. This intentionally
+    // distinguishes InsertAfter from DuplicateBlank's empty-source requirement.
+    let shape_id = pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
+    {
+        let app = harness.state_mut();
+        let size = anchor_page.size;
+        app.editor
+            .as_mut()
+            .expect("editor")
+            .create_shape(
+                shape_id,
+                anchor,
+                pub_editor::RectEmu::new(
+                    pub_editor::LengthEmu::new(size.width.get() / 5),
+                    pub_editor::LengthEmu::new(size.height.get() / 5),
+                    pub_editor::LengthEmu::new(size.width.get() / 4),
+                    pub_editor::LengthEmu::new(size.height.get() / 4),
+                ),
+                rectangle_creation::chaptera_rectangle_paint_v1(),
+            )
+            .expect("make selected source page content-bearing");
+        app.finish_authoring_change("Seeded canonical Rectangle for InsertAfter.");
+    }
+    harness.step();
+    let shape_operation = harness
+        .state()
+        .editor
+        .as_ref()
+        .expect("editor")
+        .operations()
+        .last()
+        .expect("authored shape operation")
+        .clone();
+    assert!(
+        matches!(shape_operation, pub_editor::EditOperation::CreateShape { .. }),
+        "real authored content is tracked by canonical Editor history"
+    );
+    assert!(
+        harness.get_by_label("Duplicate Blank Page").is_disabled(),
+        "content-bearing source cannot be duplicated through blank-only command"
+    );
+    assert!(
+        !harness.get_by_label("Insert Blank After Selected").is_disabled(),
+        "content-bearing source is a valid insertion anchor"
+    );
+
+    // Fail-closed UI projection: corrupt only candidate viewer identity.
+    // Durable EditorSession and visible membership must not be touched.
+    let source_hash = harness
+        .state()
+        .visual
+        .as_ref()
+        .expect("visual")
+        .document
+        .source
+        .source_hash;
+    let wrong_hash = if source_hash == pub_editor::Sha256Digest::from_bytes([0x37; 32]) {
+        pub_editor::Sha256Digest::from_bytes([0x73; 32])
+    } else {
+        pub_editor::Sha256Digest::from_bytes([0x37; 32])
+    };
+    harness
+        .state_mut()
+        .visual
+        .as_mut()
+        .expect("visual")
+        .document
+        .source
+        .source_hash = wrong_hash;
+    harness.get_by_label("Insert Blank After Selected").click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        assert_eq!(
+            app.editor.as_ref().expect("editor").operations().len(),
+            operations_before + 1,
+            "rejected Viewer preflight consumes zero InsertAfter revisions"
+        );
+        assert_eq!(
+            app.visual
+                .as_ref()
+                .expect("visual")
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
+            source_order,
+            "rejected candidate leaves visible customer membership unchanged"
+        );
+        assert!(
+            app.edit_status
+                .as_deref()
+                .is_some_and(|status| status.contains("before commit")),
+            "failure must report pre-commit rejection"
+        );
+    }
+    harness
+        .state_mut()
+        .visual
+        .as_mut()
+        .expect("visual")
+        .document
+        .source
+        .source_hash = source_hash;
+    harness.step();
+
+    harness.get_by_label("Insert Blank After Selected").click();
+    harness.step();
+    harness.step();
+    let inserted = {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("editor after InsertAfter");
+        assert_eq!(editor.operations().len(), operations_before + 2);
+        assert_eq!(editor.operations()[operations_before], shape_operation);
+        let inserted = match editor.operations().last() {
+            Some(pub_editor::EditOperation::InsertBlankPageAfterV1 { transition }) => {
+                assert_eq!(transition.anchor_page_id, anchor);
+                assert_eq!(transition.before_customer_page_ids, source_order);
+                assert_eq!(transition.after_customer_page_ids.len(), source_order.len() + 1);
+                assert_ne!(transition.identity.page_id, anchor);
+                transition.identity.page_id
+            }
+            other => panic!("one click must produce exactly one InsertAfter, got {other:?}"),
+        };
+        assert_eq!(editor.graph().pages[&anchor], anchor_page);
+        let dest = &editor.graph().pages[&inserted];
+        assert_eq!(dest.size, anchor_page.size);
+        assert_eq!(dest.bleed, anchor_page.bleed);
+        assert_eq!(dest.margins, anchor_page.margins);
+        assert!(dest.children.is_empty() && dest.extensions.is_empty());
+        let mut expected = source_order.clone();
+        expected.insert(1, inserted);
+        assert_eq!(
+            editor.effective_customer_page_order_v1(&source_order).expect("order"),
+            expected
+        );
+        let visual = app.visual.as_ref().expect("Viewer after insertion");
+        assert_eq!(
+            visual.document.pages.iter().map(|page| page.id).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(app.selected_page, 1);
+        assert_eq!(visual.document.pages[app.selected_page].id, inserted);
+        assert!(
+            visual.scene.surfaces.iter().any(|surface| surface.origin == inserted),
+            "new blank customer page gets a real Viewer scene surface"
+        );
+        inserted
+    };
+    assert!(
+        !harness.get_by_label("Delete Empty Page").is_disabled(),
+        "inserted blank page must admit lifecycle Delete"
+    );
+
+    harness.get_all_by_label("Undo").next().expect("Undo insert").click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("editor after undo");
+        assert_eq!(editor.operations().len(), operations_before + 1);
+        assert_eq!(editor.operations()[operations_before], shape_operation);
+        assert_eq!(editor.graph().pages[&anchor], anchor_page);
+        let visual = app.visual.as_ref().expect("Viewer after undo");
+        assert_eq!(
+            visual.document.pages.iter().map(|page| page.id).collect::<Vec<_>>(),
+            source_order,
+            "Undo must restore original customer order"
+        );
+        assert!(visual.scene.surfaces.iter().all(|surface| surface.origin != inserted));
+    }
+
+    harness.get_all_by_label("Redo").next().expect("Redo insert").click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        let visual = app.visual.as_ref().expect("Viewer after redo");
+        let mut expected = source_order.clone();
+        expected.insert(1, inserted);
+        assert_eq!(
+            visual.document.pages.iter().map(|page| page.id).collect::<Vec<_>>(),
+            expected,
+            "Redo restores exactly the same inserted PageId and order"
+        );
+        assert_eq!(
+            app.editor.as_ref().expect("editor").operations().len(),
+            operations_before + 2
+        );
+    }
+
+    harness.get_by_label("Save Project").click();
+    harness.step();
+    harness.step();
+    harness.step();
+    assert!(
+        !harness.get_by_label("Reopen Project").is_disabled(),
+        "saved v0.28 EditorProject must be reopenable"
+    );
+    harness.get_by_label("Reopen Project").click();
+    harness.step();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("fresh v0.28 editor");
+        assert_eq!(
+            editor.project().schema_version,
+            pub_editor::EDITOR_PROJECT_VERSION_V0_28
+        );
+        assert_eq!(editor.operations().len(), operations_before + 2);
+        assert_eq!(editor.operations()[operations_before], shape_operation);
+        assert!(matches!(
+            editor.operations().last(),
+            Some(pub_editor::EditOperation::InsertBlankPageAfterV1 { transition })
+                if transition.anchor_page_id == anchor
+                    && transition.identity.page_id == inserted
+        ));
+        assert_eq!(app.source_customer_page_ids, source_order);
+        assert_eq!(editor.graph().pages[&anchor], anchor_page);
+        let mut expected = source_order.clone();
+        expected.insert(1, inserted);
+        let visual = app.visual.as_ref().expect("reopened Viewer");
+        assert_eq!(
+            visual.document.pages.iter().map(|page| page.id).collect::<Vec<_>>(),
+            expected,
+            "reopen restores inserted PageId before previous second page"
+        );
+        assert!(visual.scene.surfaces.iter().any(|surface| surface.origin == inserted));
+    }
+
+    assert_eq!(
+        fs::read(&fixture).expect("source fixture remains available"),
+        original,
+        "InsertAfter and v0.28 project replay must not rewrite source PUB bytes"
+    );
+    let _ = fs::remove_dir_all(root);
+}
