@@ -115,7 +115,24 @@ jobs:
             > .sample3-positive/resolved-graph.json
           vendor/producer-a/target/debug/chaptera-producer-a \
             .sample3-positive/source.pub \
-            > .sample3-positive/viewer-geometry.json
+            > .sample3-positive/viewer-raw.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path(".sample3-positive")
+          raw = json.loads((root / "viewer-raw.json").read_text())
+          tables = raw.pop("tables", [])
+          if tables != []:
+              raise SystemExit(
+                  "Sample3 has nonempty Reader table semantics not admitted "
+                  "by source-neutral Viewer schema; no lossy test normalization"
+              )
+          (root / "viewer-geometry.json").write_text(
+              json.dumps(raw, ensure_ascii=False, separators=(",", ":")),
+              encoding="utf-8",
+          )
+          print({"viewer_extra_tables": "empty_only", "source_semantics_dropped": False})
+          PY
           python tools/validate_viewer_geometry_receipt.py \
             .sample3-positive/viewer-geometry.json
 
