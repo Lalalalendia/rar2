@@ -237,13 +237,59 @@ async function main() {
     fs.writeFileSync(path.join(output, "ui-edited.pub"), bytes);
 
     await page.locator("#undo").click();
-    await page.waitForFunction(() => document.getElementById("save-pub").disabled === true);
+    await page.waitForFunction((previousRevision) => {
+      const state = document.getElementById("state");
+      return state.classList.contains("bad") ||
+        (state.textContent.startsWith("revision ") &&
+         !state.textContent.includes(previousRevision));
+    }, approved.revision_id, { timeout: 15000 });
+    const undoState = await page.locator("#state").evaluate((el) => ({
+      text: el.textContent, error: el.classList.contains("bad"),
+    }));
+    if (undoState.error) throw new Error("Undo rejected before revision transition: " + undoState.text);
     const undo = await read("/v1/pub-save/preview");
-    if (undo.can_download) throw new Error("Undo must revoke native PUB download");
+    if (undo.revision_id === approved.revision_id || undo.can_download ||
+        undo.native_publisher_authorized) {
+      throw new Error("Undo must create a new revision and revoke native PUB download");
+    }
+    await page.waitForFunction(() => {
+      const state = document.getElementById("state");
+      return state.classList.contains("bad") ||
+        document.getElementById("save-pub").disabled === true;
+    }, null, { timeout: 15000 });
+    const postUndoError = await page.locator("#state").evaluate((el) =>
+      el.classList.contains("bad") ? el.textContent : null);
+    if (postUndoError) throw new Error("Undo UI disclosure rejected: " + postUndoError);
+
     await page.locator("#redo").click();
-    await page.waitForFunction(() => document.getElementById("save-pub").disabled === false);
+    await page.waitForFunction((previousRevision) => {
+      const state = document.getElementById("state");
+      return state.classList.contains("bad") ||
+        (state.textContent.startsWith("revision ") &&
+         !state.textContent.includes(previousRevision));
+    }, undo.revision_id, { timeout: 15000 });
+    const redoState = await page.locator("#state").evaluate((el) => ({
+      text: el.textContent, error: el.classList.contains("bad"),
+    }));
+    if (redoState.error) throw new Error("Redo rejected before revision transition: " + redoState.text);
     const redo = await read("/v1/pub-save/preview");
-    if (redo.output_hash !== OUTPUT_SHA) throw new Error("Redo exact Writer bytes changed");
+    if (redo.output_hash !== OUTPUT_SHA || redo.can_download !== true ||
+        redo.native_publisher_authorized !== true) {
+      throw new Error("Redo exact Writer bytes or Publisher authority changed: " +
+        JSON.stringify({
+          output_hash: redo.output_hash,
+          blocker: redo.download_blocker_code ?? redo.blocker_code,
+          can_download: redo.can_download,
+        }));
+    }
+    await page.waitForFunction(() => {
+      const state = document.getElementById("state");
+      return state.classList.contains("bad") ||
+        document.getElementById("save-pub").disabled === false;
+    }, null, { timeout: 15000 });
+    const postRedoError = await page.locator("#state").evaluate((el) =>
+      el.classList.contains("bad") ? el.textContent : null);
+    if (postRedoError) throw new Error("Redo UI disclosure rejected: " + postRedoError);
     await page.locator("#reopen").click();
     await page.waitForFunction(() => document.getElementById("save-pub").disabled === false);
     const reloaded = await read("/v1/harness/state");
