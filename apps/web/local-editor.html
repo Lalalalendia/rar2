@@ -95,6 +95,9 @@ function showState(state){
 
 async function disclosure(){
   const scene=shell.snapshot;
+  // A new revision may make previously authorized PUB bytes ineligible.
+  // Fail closed while recalculating capability, including on HTTP failure.
+  savePubButton.disabled=true;
   // Unsupported editable export must not suppress independent Story/PUB capability
   // facts or leave the editor without bound commands.
   const [exportResult,pubPreview,editorCaps]=await Promise.all([
@@ -103,6 +106,12 @@ async function disclosure(){
     service.nativePubPreview(),
     service.editorCapabilities(),
   ]);
+  // Never admit a preview fetched for a different (possibly older) revision.
+  if(shell.snapshot.revision_id!==scene.revision_id||
+     pubPreview.revision_id!==scene.revision_id||
+     editorCaps.revision_id!==scene.revision_id){
+    throw new Error("PUB capability refresh is stale relative to current Editor revision");
+  }
   editableStoryIds=new Set(editorCaps.editable_story_ids??[]);
   syncTextControls();
   const caps=scene.capabilities ?? [];
@@ -181,6 +190,7 @@ async function applyTextEdit(){
       replacement_text:replacement,
     },
   };
+  savePubButton.disabled=true;
   const accepted=await service.commit(request);
   if(accepted.protocol_version!=="chaptera.commit-accepted.v1"){
     throw new Error("Story edit rejected: "+JSON.stringify(accepted));
@@ -208,6 +218,8 @@ async function downloadNativePub(){
 }
 
 async function history(kind){
+  // Undo/Redo revoke any prior Download PUB UI admission immediately.
+  savePubButton.disabled=true;
   const snapshot=shell.snapshot;
   const accepted=await service.historyTransition({
     protocol_version:"chaptera.history-transition-intent.v1",
@@ -240,6 +252,7 @@ async function start(){
   document.querySelector("#redo").onclick=()=>history("redo").catch(showError);
   document.querySelector("#reopen").onclick=async()=>{
     try{
+      savePubButton.disabled=true;
       const response=await fetch(api+"/v1/harness/reopen",{method:"POST",headers:{"x-chaptera-principal-id":"synthetic-editor"}});
       const scene=await response.json();
       if(!response.ok) throw new Error(JSON.stringify(scene));
