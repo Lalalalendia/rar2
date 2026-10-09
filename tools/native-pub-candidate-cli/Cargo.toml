@@ -1,0 +1,16 @@
+[package]
+name = "chaptera-native-pub-candidate-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.1"
+publish = false
+
+# A separate tooling workspace keeps this internal probe outside broad
+# pub-editor/producer-a workflow fanout while reusing the real Editor library.
+[workspace]
+
+[dependencies]
+anyhow = "1"
+pub-editor = { path = "../../vendor/producer-a/crates/pub-editor" }
+serde_json = "1"
+sha2 = "0.10"
