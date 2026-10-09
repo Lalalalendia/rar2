@@ -230,16 +230,24 @@ pub fn apply_append_blank_page_forward_v1(
         .ok_or(AppendBlankPageErrorV1::CustomerPageMissing {
             page_id: transition.insertion_after_page_id,
         })?;
-    document_pages.insert(anchor_index + 1, transition.identity.page_id);
-    pages.insert(transition.identity.page_id, transition.page.clone());
 
-    if append_blank_page_document_state_id_v1(document_id, document_pages)
+    let mut candidate_document_pages = document_pages.clone();
+    let mut candidate_pages = pages.clone();
+    candidate_document_pages.insert(anchor_index + 1, transition.identity.page_id);
+    candidate_pages.insert(transition.identity.page_id, transition.page.clone());
+
+    if append_blank_page_document_state_id_v1(document_id, &candidate_document_pages)
         != transition.after_document_state_id
-        || current_customer_order_v1(document_pages, &transition.after_customer_page_ids)?
-            != transition.after_customer_page_ids
+        || current_customer_order_v1(
+            &candidate_document_pages,
+            &transition.after_customer_page_ids,
+        )? != transition.after_customer_page_ids
     {
         return Err(AppendBlankPageErrorV1::AfterStateMismatch);
     }
+
+    *document_pages = candidate_document_pages;
+    *pages = candidate_pages;
     Ok(())
 }
 
@@ -270,16 +278,24 @@ pub fn apply_append_blank_page_inverse_v1(
         .ok_or(AppendBlankPageErrorV1::CustomerPageMissing {
             page_id: transition.identity.page_id,
         })?;
-    document_pages.remove(page_index);
-    pages.remove(&transition.identity.page_id);
 
-    if append_blank_page_document_state_id_v1(document_id, document_pages)
+    let mut candidate_document_pages = document_pages.clone();
+    let mut candidate_pages = pages.clone();
+    candidate_document_pages.remove(page_index);
+    candidate_pages.remove(&transition.identity.page_id);
+
+    if append_blank_page_document_state_id_v1(document_id, &candidate_document_pages)
         != transition.before_document_state_id
-        || current_customer_order_v1(document_pages, &transition.before_customer_page_ids)?
-            != transition.before_customer_page_ids
+        || current_customer_order_v1(
+            &candidate_document_pages,
+            &transition.before_customer_page_ids,
+        )? != transition.before_customer_page_ids
     {
         return Err(AppendBlankPageErrorV1::BeforeStateMismatch);
     }
+
+    *document_pages = candidate_document_pages;
+    *pages = candidate_pages;
     Ok(())
 }
 
@@ -446,4 +462,43 @@ mod tests {
             Err(AppendBlankPageErrorV1::InvalidPage)
         );
     }
+    #[test]
+    fn tampered_after_state_fails_without_partial_mutation() {
+        let document_id = document_id("33000000-0000-4000-8000-000000000001");
+        let a = page_id("22222222-2222-4222-8222-222222222222");
+        let identity = authored_identity();
+        let before = vec![a];
+        let existing = before.iter().copied().collect::<BTreeSet<_>>();
+        let mut transition = plan_append_blank_page_v1(
+            document_id,
+            &before,
+            &existing,
+            &[a],
+            identity,
+            blank_page(identity.page_id),
+        )
+        .expect("plan append");
+        transition.after_document_state_id = "sha256:tampered".to_owned();
+
+        let mut document_pages = before.clone();
+        let mut pages = before
+            .iter()
+            .copied()
+            .map(|id| (id, blank_page(id)))
+            .collect::<BTreeMap<_, _>>();
+        let pages_before = pages.clone();
+
+        assert_eq!(
+            apply_append_blank_page_forward_v1(
+                document_id,
+                &mut document_pages,
+                &mut pages,
+                &transition,
+            ),
+            Err(AppendBlankPageErrorV1::AfterStateMismatch)
+        );
+        assert_eq!(document_pages, before);
+        assert_eq!(pages, pages_before);
+    }
+
 }
