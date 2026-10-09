@@ -68,6 +68,15 @@ fn report_path_label(path: &Path, fallback: &str) -> String {
         .to_owned()
 }
 
+fn fixed_image_placement_has_output_semantics(
+    mime: &str,
+    placement: &pub_viewer::ViewerImagePlacementV1,
+) -> bool {
+    placement.content_rotation_degrees.is_some()
+        || (mime == "image/gif"
+            && (placement.source_window.is_some() || placement.recolor.is_some()))
+}
+
 fn retain_scene_node_ids(
     node_ids: &[NodeId],
     scene_node_ids: &BTreeSet<NodeId>,
@@ -464,7 +473,7 @@ fn build_pdf_artifact(
                 .iter()
                 .filter(|placement| {
                     node_ids.contains(&placement.node_id)
-                        && placement.content_rotation_degrees.is_some()
+                        && fixed_image_placement_has_output_semantics(&image.mime, placement)
                 })
                 .map(|placement| FixedImagePlacement {
                     node_id: placement.node_id,
@@ -598,8 +607,11 @@ fn sidecar_path(output: &Path, suffix: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{report_path_label, retain_scene_node_ids};
+    use super::{
+        fixed_image_placement_has_output_semantics, report_path_label, retain_scene_node_ids,
+    };
     use pub_model::{CanonicalId, NodeId};
+    use pub_viewer::{ViewerImagePlacementV1, ViewerImageRecolorV1, ViewerImageSourceWindowV1};
     use std::collections::BTreeSet;
     use std::path::Path;
 
@@ -625,6 +637,62 @@ mod tests {
     #[test]
     fn report_label_falls_back_without_filename() {
         assert_eq!(report_path_label(Path::new(""), "input.pub"), "input.pub");
+    }
+
+    #[test]
+    fn fixed_image_placement_keeps_crop_recolor_and_rotation_semantics() {
+        let node_id = NodeId::from_canonical(CanonicalId::from_bytes([3; 16]));
+        let empty = ViewerImagePlacementV1 {
+            node_id,
+            source_window: None,
+            content_rotation_degrees: None,
+            recolor: None,
+        };
+        assert!(!fixed_image_placement_has_output_semantics(
+            "image/png",
+            &empty
+        ));
+        assert!(!fixed_image_placement_has_output_semantics(
+            "image/gif",
+            &empty
+        ));
+
+        let mut rotation = empty.clone();
+        rotation.content_rotation_degrees = Some(90);
+        assert!(fixed_image_placement_has_output_semantics(
+            "image/png",
+            &rotation
+        ));
+
+        let mut crop = empty.clone();
+        crop.source_window = Some(ViewerImageSourceWindowV1 {
+            left_q16: 0,
+            top_q16: 0,
+            right_q16: 1 << 15,
+            bottom_q16: 1 << 16,
+        });
+        assert!(!fixed_image_placement_has_output_semantics(
+            "image/png",
+            &crop
+        ));
+        assert!(fixed_image_placement_has_output_semantics(
+            "image/gif",
+            &crop
+        ));
+
+        let mut recolor = empty;
+        recolor.recolor = Some(ViewerImageRecolorV1 {
+            target_rgb: [1, 2, 3],
+            preserve_grays: true,
+        });
+        assert!(!fixed_image_placement_has_output_semantics(
+            "image/jpeg",
+            &recolor
+        ));
+        assert!(fixed_image_placement_has_output_semantics(
+            "image/gif",
+            &recolor
+        ));
     }
 
     #[test]

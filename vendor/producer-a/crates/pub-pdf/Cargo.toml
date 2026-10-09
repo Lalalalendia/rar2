@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-image = { version = "=0.25.8", default-features = false, features = ["jpeg", "png"] }
+image = { version = "=0.25.8", default-features = false, features = ["gif", "jpeg", "png"] }
 pub-layout = { path = "../pub-layout" }
 pub-model = { path = "../pub-model" }
 pub-output = { path = "../pub-output" }
