@@ -1235,9 +1235,50 @@ fn gui_delete_empty_authored_page_projects_membership_and_replays_on_real_pub() 
         operations_before + 1,
         "Undo of rectangle restores exactly the original blank authored page"
     );
+    // Fresh project reopen starts on a surviving imported Page. Undo restores
+    // the authored PageId without stealing focus from that selected source.
+    // Navigate to the now-empty authored Page explicitly before testing its
+    // separate Delete Empty Page capability and the original regression.
+    assert_eq!(
+        harness
+            .state()
+            .visual
+            .as_ref()
+            .expect("visual after two Undo")
+            .document
+            .pages[harness.state().selected_page]
+            .id,
+        *source_order.last().expect("surviving source Page")
+    );
+    harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::PageDown);
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        assert_eq!(
+            app.visual.as_ref().expect("visual").document.pages[app.selected_page].id,
+            appended_page_id,
+            "real keyboard navigation must reselect restored blank Page"
+        );
+        let editor = app.editor.as_ref().expect("editor");
+        let mut candidate = editor.clone();
+        let rejection = candidate
+            .delete_blank_authored_page_v1(
+                app.source_customer_page_ids.clone(),
+                appended_page_id,
+            )
+            .err();
+        assert!(
+            editor.can_delete_blank_authored_page_v1(
+                &app.source_customer_page_ids,
+                appended_page_id,
+            ),
+            "canonical Delete Empty admission must recover after v0.29 Undo: {rejection:?}"
+        );
+    }
     assert!(
         !harness.get_by_label("Delete Empty Page").is_disabled(),
-        "deletion becomes available only after canonical authored content is removed"
+        "deletion becomes available after restored empty Page is selected"
     );
 
     let source_hash_before = harness
