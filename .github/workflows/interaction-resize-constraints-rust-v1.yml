@@ -6,6 +6,7 @@ on:
       - "vendor/producer-a/crates/pub-interaction/src/lib.rs"
       - "vendor/producer-a/crates/pub-interaction/src/resize_constraints_v1.rs"
       - "vendor/producer-a/crates/pub-interaction/tests/resize_constraints_v1.rs"
+      - "vendor/producer-a/crates/pub-interaction/tests/resize_modifiers_transaction_v1.rs"
       - "services/editor-api/resize_constraints_v1.py"
       - "services/editor-api/test_resize_constraints_v1.py"
       - ".github/workflows/interaction-resize-constraints-rust-v1.yml"
@@ -45,6 +46,9 @@ jobs:
 
       - name: Prove Rust ResizeConstraint V1 vectors
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-interaction --test resize_constraints_v1
+
+      - name: Prove ResizeTransaction modifiers
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-interaction --test resize_modifiers_transaction_v1
 
       - name: Re-prove retained Python donor vectors
         working-directory: services/editor-api
