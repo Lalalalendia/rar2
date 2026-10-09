@@ -55,8 +55,11 @@ jobs:
               raise SystemExit("pinned Sample3 source/CFB changed")
           if manifest.get("source_sha256") != source_hash:
               raise SystemExit("handoff source SHA mismatch")
-          if sha(candidate) != manifest.get("candidate_sha256") or sha(candidate) == baseline_deletion:
-              raise SystemExit("invalid or old six-unit deletion candidate")
+          one_unit_hash = "b9b789f35a34e016faceb27acf50bf0621273a7d612762ecc17c56ca450fe715"
+          if sha(candidate) != one_unit_hash or manifest.get("candidate_sha256") != one_unit_hash:
+              raise SystemExit("one-unit variant differs from exact hosted candidate SHA")
+          if sha(candidate) == baseline_deletion:
+              raise SystemExit("unexpected reuse of six-unit writer candidate")
           if manifest.get("research_variant") != "one_utf16_unit_delete":
               raise SystemExit("one-unit experiment identity missing")
           if manifest.get("mutation", {}).get("removed_utf16_units") != 1:
