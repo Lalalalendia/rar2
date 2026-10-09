@@ -47,6 +47,9 @@ mod suite_handoff_cli;
 mod supporter;
 #[allow(dead_code)]
 mod supporter_attribution;
+mod supporter_routes;
+mod supporter_shell;
+mod supporter_ui;
 mod text_box_creation;
 #[cfg(all(test, not(feature = "reader-only")))]
 mod text_box_creation_gui_tests;
@@ -117,10 +120,6 @@ fn failure_mailto_recipient_configured() -> bool {
     false
 }
 
-fn resolve_supporter_market() -> supporter::MarketProfile {
-    let locale = locale::detect_user_locale();
-    supporter::MarketProfile::from_locale(locale.as_ref().map(locale::DetectedLocale::raw))
-}
 const SUPPORTER_STORAGE_KEY: &str = "chaptera.supporter.v1";
 const PAGE_MARGIN: f32 = 24.0;
 const SNAP_TOLERANCE_PX: f32 = 6.0;
@@ -718,6 +717,7 @@ struct ViewerApp {
     diagnostic_sweep_status: Option<String>,
     supporter_value: supporter::ValueTracker,
     supporter_state: supporter::SupporterState,
+    supporter_shell: supporter_shell::SupporterShell,
     exact_file_consent_open: bool,
     exact_file_consent_status: Option<String>,
     show_diagnostics: bool,
@@ -784,6 +784,7 @@ impl ViewerApp {
             diagnostic_sweep_status: None,
             supporter_value: supporter::ValueTracker::default(),
             supporter_state: restore_supporter_state(storage),
+            supporter_shell: supporter_shell::SupporterShell::from_environment(),
             exact_file_consent_open: false,
             exact_file_consent_status: None,
             show_diagnostics: false,
@@ -1301,6 +1302,7 @@ impl ViewerApp {
         self.text_box_creation = text_box_creation::TextBoxCreateSessionV1::default();
         self.supporter_value
             .observe(supporter::ValueEvent::WorkflowFailed);
+        self.supporter_shell.reset_for_workflow();
         let generation = self.open_state.begin_attempt();
 
         match Self::prepare_document_open(path) {
@@ -4875,6 +4877,9 @@ impl eframe::App for ViewerApp {
             });
         }
 
+        self.supporter_shell
+            .sync_and_show(ctx, &self.supporter_value, &mut self.supporter_state);
+
         egui::TopBottomPanel::bottom("workspace-status").show(ctx, |ui| {
             self.show_workspace_status(ui);
         });
@@ -6083,6 +6088,7 @@ mod tests {
             diagnostic_sweep_status: None,
             supporter_value: supporter::ValueTracker::default(),
             supporter_state: supporter::SupporterState::default(),
+            supporter_shell: supporter_shell::SupporterShell::default(),
             exact_file_consent_open: false,
             exact_file_consent_status: None,
             show_diagnostics: false,
@@ -6153,6 +6159,7 @@ mod tests {
             diagnostic_sweep_status: None,
             supporter_value: supporter::ValueTracker::default(),
             supporter_state: supporter::SupporterState::default(),
+            supporter_shell: supporter_shell::SupporterShell::default(),
             exact_file_consent_open: false,
             exact_file_consent_status: None,
             show_diagnostics: false,
@@ -6432,6 +6439,7 @@ mod tests {
             diagnostic_sweep_status: None,
             supporter_value: supporter::ValueTracker::default(),
             supporter_state: supporter::SupporterState::default(),
+            supporter_shell: supporter_shell::SupporterShell::default(),
             exact_file_consent_open: false,
             exact_file_consent_status: None,
             show_diagnostics: false,
