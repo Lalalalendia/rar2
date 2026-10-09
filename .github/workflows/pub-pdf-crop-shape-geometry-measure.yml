@@ -1,0 +1,70 @@
+name: PUB PDF crop shape geometry measure
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-pdf-crop-shape-geometry-measure.yml"
+      - "vendor/producer-a/crates/pub-cli/Cargo.toml"
+      - "vendor/producer-a/crates/pub-cli/src/bin/pub_crop_geometry_census.rs"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  census:
+    if: github.event.pull_request.head.ref == 'measure/pub-pdf-crop-shape-geometry-01'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Format and compile source-only census
+        run: |
+          rustfmt --edition 2024 --check vendor/producer-a/crates/pub-cli/src/bin/pub_crop_geometry_census.rs
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-cli --bin pub-crop-geometry-census
+      - name: Acquire pinned exact-1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+      - name: Classify exact crop witnesses from PUB source
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="target/pub-pdf-crop-shape-geometry"
+          mkdir -p "$out"
+          while IFS='|' read -r fixture sha; do
+            src="out/pinned1050/materialized/native/$sha.pub"
+            test -s "$src"
+            test "$(sha256sum "$src" | awk '{print $1}')" = "$sha"
+            vendor/producer-a/target/debug/pub-crop-geometry-census "$src" > "$out/$fixture.json"
+          done <<'EOF'
+          023_6bbfbf7b4c9b2400|6bbfbf7b4c9b240026399fcc114ee0eb78fbc954c8f258f5baf3a388d3f188c8
+          034_0d2278960a0101ce|0d2278960a0101ced0a1ba6d5922f5a26ea37b76b3ab00ef21e21873359d4a5a
+          048_e36966ede5f44ae1|e36966ede5f44ae11a633afccca29f7205993f7dbb13eff233897f3d41e0cb6d
+          053_70f21e6856945d09|70f21e6856945d091469fd79f815674128e1cbf7e160e352aa0e80968ae924f8
+          081_8ca766c139a8e011|8ca766c139a8e01149668aa57171ba17f69d67c5212401494205718e71f23b61
+          090_770daf58c214d6f8|770daf58c214d6f848af676b6a53c04934f7c1499e5674837a18a2f63875dc90
+          EOF
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path("target/pub-pdf-crop-shape-geometry")
+          rows=[json.loads(p.read_text()) for p in sorted(root.glob("*.json"))]
+          receipt={"schema":"chaptera.pub-pdf-crop-shape-geometry-receipt.v1","fixtures":rows}
+          (root/"receipt.json").write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n")
+          print(json.dumps(receipt,indent=2,sort_keys=True))
+          PY
+      - name: Upload source-safe geometry receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-pdf-crop-shape-geometry
+          path: target/pub-pdf-crop-shape-geometry/receipt.json
+          retention-days: 30
