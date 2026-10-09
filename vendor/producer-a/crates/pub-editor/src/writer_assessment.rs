@@ -885,8 +885,8 @@ mod asset_reachability_tests {
 
     #[test]
     fn current_image_resources_replace_source_bytes_without_fallback() {
-        let node_id: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"").expect("canonical NodeId");
+        let node_id: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+            .expect("canonical NodeId");
         let source_resource: ResourceId =
             serde_json::from_str("\"33000000-0000-4000-8000-000000000001\"")
                 .expect("canonical ResourceId");
@@ -926,14 +926,14 @@ mod asset_reachability_tests {
 
     #[test]
     fn current_image_resources_group_shared_source_and_replacement_assets() {
-        let node_a: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"").expect("canonical NodeId");
-        let node_b: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000002\"").expect("canonical NodeId");
-        let node_c: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000003\"").expect("canonical NodeId");
-        let node_d: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000004\"").expect("canonical NodeId");
+        let node_a: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+            .expect("canonical NodeId");
+        let node_b: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000002\"")
+            .expect("canonical NodeId");
+        let node_c: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000003\"")
+            .expect("canonical NodeId");
+        let node_d: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000004\"")
+            .expect("canonical NodeId");
         let source_resource: ResourceId =
             serde_json::from_str("\"33000000-0000-4000-8000-000000000001\"")
                 .expect("canonical ResourceId");
@@ -974,8 +974,8 @@ mod asset_reachability_tests {
 
     #[test]
     fn current_image_resources_fail_closed_when_replacement_bytes_are_missing() {
-        let node_id: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"").expect("canonical NodeId");
+        let node_id: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+            .expect("canonical NodeId");
         let replacement_sha = digest(0x77);
         let error = current_image_resources_v1(
             &BTreeMap::new(),
@@ -1094,7 +1094,8 @@ mod asset_reachability_tests {
 
     #[test]
     fn consumer_proven_typography_override_is_montserrat_only() {
-        let montserrat_story = StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x31; 16]));
+        let montserrat_story =
+            StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x31; 16]));
         let arial_story = StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x32; 16]));
         let typography = vec![
             FullStoryTypographyV1 {
@@ -1157,7 +1158,8 @@ mod asset_reachability_tests {
         assert!(legacy_json.get("state_domain").is_none());
         assert!(scoped_json.get("state_domain").is_none());
         assert_eq!(
-            serde_json::from_value::<EditOperation>(legacy_json).expect("legacy JSON remains readable"),
+            serde_json::from_value::<EditOperation>(legacy_json)
+                .expect("legacy JSON remains readable"),
             legacy
         );
         assert_eq!(

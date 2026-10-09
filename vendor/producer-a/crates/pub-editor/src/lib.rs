@@ -8009,4 +8009,3 @@ mod table_rowcol_metadata_tests {
         assert!(session.table_story_has_unremapped_range_metadata_v1(story_id));
     }
 }
-
