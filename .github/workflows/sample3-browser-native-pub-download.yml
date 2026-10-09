@@ -7,14 +7,14 @@ on:
       - "tools/native-pub-candidate-cli/examples/accepted_sample3_project.rs"
       - "tools/test_sample3_browser_pub_download_service.py"
       - "tools/test_sample3_browser_pub_download.mjs"
-      - "services/editor-api/web_real_acceptance_service.py"
-      - "vendor/producer-a/producer/src/main.rs"
-      - "vendor/producer-a/crates/pub-editor/**"
-      - "vendor/producer-a/crates/pub-writer/**"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: sample3-browser-pub-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   exact-publisher-pair-browser:
