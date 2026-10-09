@@ -36,5 +36,28 @@ def main():
             "needs.reader-windows-binary.result == 'success'",
             "reader_binary_artifact_name: chaptera-reader-windows-binary-",
         ), name + " Tier A and exact binary product gate")
+    # Negative controls: a removed prerequisite must make this guard fail.
+    reader = job("reader-windows", "editor-windows")
+    required = (
+        "needs: [classify, tier-a, reader-windows-binary]",
+        "(needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped')",
+        "needs.reader-windows-binary.result == 'success'",
+    )
+    mutations = [
+        reader.replace(required[0], "needs: [classify, reader-windows-binary]", 1),
+        reader.replace(required[1], "true", 1),
+        reader.replace(required[2], "true", 1),
+    ]
+    for mutated in mutations:
+        if mutated == reader:
+            raise SystemExit("Reader graph negative control was not applied")
+        try:
+            req(mutated, required, "Reader negative control")
+        except SystemExit:
+            continue
+        raise SystemExit("Reader consumer graph guard missed unsafe mutation")
+    serial = prebuild.replace("needs: classify", "needs: [classify, tier-a]", 1)
+    if serial == prebuild or "needs: classify" in serial:
+        raise SystemExit("Reader prebuild serial regression control invalid")
     print("Reader build-once wiring guard: ok"); return 0
 if __name__=="__main__": raise SystemExit(main())
