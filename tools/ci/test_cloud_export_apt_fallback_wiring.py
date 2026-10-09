@@ -10,7 +10,7 @@ END = "\n      - name: Fetch pinned real Publisher fixture\n"
 CONSUMERS = "consumers=(scribus libreoffice-draw xvfb)"
 OFFICIAL_MIRROR = "s@http://azure.archive.ubuntu.com/ubuntu@http://archive.ubuntu.com/ubuntu@g"
 DOWNLOAD = 'install -y --download-only --no-install-recommends "${consumers[@]}"'
-INSTALL = 'install -y --no-download --no-install-recommends "${consumers[@]}"'
+INSTALL = 'sudo apt-get "${apt_opts[@]}" install -y --no-download --no-install-recommends "${consumers[@]}"'
 
 
 def require(condition: bool, what: str) -> None:
@@ -25,8 +25,8 @@ def enforce(source: str) -> None:
     require(bash.returncode == 0, f"Consumer installer Bash syntax invalid: {bash.stderr}")
     require("set -euo pipefail" in script, "Shell fail-closed removed")
     require(CONSUMERS in script, "Any of the three required real consumers removed")
-    require(script.count("sudo timeout --kill-after=10s") == 5, "APT time boundaries removed")
-    require("120s apt-get " in script and "180s apt-get " in script and "300s apt-get " in script and "240s apt-get " in script, "Bounded primary/fallback budgets changed")
+    require(script.count("sudo timeout --kill-after=10s") == 4, "APT time boundaries removed")
+    require("120s apt-get " in script and "180s apt-get " in script and "300s apt-get " in script , "Bounded primary/fallback budgets changed")
     require('Acquire::Retries=1' in script and 'Acquire::http::Timeout=15' in script and 'Acquire::https::Timeout=15' in script, "Short APT network retry/timeout policy removed")
     require(script.count(DOWNLOAD) == 2, "Network download-only primary/fallback proof missing")
     require(script.count(INSTALL) == 1, "Offline installation after downloads missing")

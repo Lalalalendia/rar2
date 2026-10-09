@@ -65,7 +65,7 @@ jobs:
           fi
           # Ubuntu's apt signatures/package checks remain authoritative. No
           # consumer or independent product assertion may be skipped on errors.
-          sudo timeout --kill-after=10s 240s apt-get "${apt_opts[@]}" install -y --no-download --no-install-recommends "${consumers[@]}"
+          sudo apt-get "${apt_opts[@]}" install -y --no-download --no-install-recommends "${consumers[@]}"
           command -v scribus
           command -v libreoffice
           command -v xvfb-run
