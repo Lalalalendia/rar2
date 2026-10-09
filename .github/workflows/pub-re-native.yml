@@ -1076,6 +1076,7 @@ jobs:
             "analysis\quill-story-readonly-oracle.json",
             "analysis\quill-story-readonly-oracle-resolution.json",
             "analysis\quill-readonly-direct-stage.json",
+            "analysis\quill-story-readonly-native-stage.json",
             "environment.json"
           )
           $count = 0
@@ -1100,6 +1101,19 @@ jobs:
             }
             if ($env:QUILL_NATIVE_OUTCOME -eq "success" -and $directStage.status -ne "complete") {
               throw "quill_readonly_direct_stage_not_complete"
+            }
+          }
+          $nativeStagePath = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\quill-story-readonly-native-stage.json"
+          if (Test-Path -LiteralPath $nativeStagePath -PathType Leaf) {
+            $nativeStage = Get-Content -LiteralPath $nativeStagePath -Raw | ConvertFrom-Json
+            if ($nativeStage.schema -ne "chaptera.quill-readonly-native-stage.v1" -or
+                $nativeStage.phase -notin @("fixture_acquisition", "publisher_identity", "publisher_open", "story_read", "source_integrity", "receipt_write", "complete") -or
+                $nativeStage.status -notin @("running", "invalid", "complete") -or
+                [int]$nativeStage.witness_index -lt 0 -or [int]$nativeStage.witness_index -gt 4) {
+              throw "quill_readonly_native_stage_invalid"
+            }
+            if ($env:QUILL_NATIVE_OUTCOME -eq "success" -and $nativeStage.status -ne "complete") {
+              throw "quill_readonly_native_stage_not_complete"
             }
           }
           $complete = $env:QUILL_NATIVE_OUTCOME -eq "success" -and $count -eq $names.Count
