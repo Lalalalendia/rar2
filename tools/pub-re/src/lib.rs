@@ -621,6 +621,32 @@ mod tests {
     }
 
     #[test]
+    fn manifest_file_accepts_utf8_bom_from_windows_powershell() {
+        let dir = TempDir::new().expect("temp dir");
+        let before = write_fixture(&dir, "before.pub", &synthetic_cfb(b"same", 1));
+        let after = write_fixture(&dir, "after.pub", &synthetic_cfb(b"changed", 1));
+        let manifest_path = dir.path().join("manifest.json");
+        let value = serde_json::json!({
+            "schema": EXPERIMENT_SCHEMA_V1,
+            "experiment_id": "bom-manifest",
+            "question": "does a Windows PowerShell UTF-8 BOM parse?",
+            "before": {"path": before, "expected_sha256": null},
+            "after": {"path": after, "expected_sha256": null}
+        });
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(
+            serde_json::to_vec(&value)
+                .expect("serialize BOM manifest")
+                .as_slice(),
+        );
+        fs::write(&manifest_path, bytes).expect("write BOM manifest");
+
+        let receipt = analyze_manifest_file(&manifest_path).expect("analyze BOM manifest");
+        assert_eq!(receipt.experiment_id, "bom-manifest");
+        assert!(receipt.cfb.logical_change_detected);
+    }
+
+    #[test]
     fn unequal_length_delta_reports_prefix_and_suffix_without_guessing_byte_count() {
         let dir = TempDir::new().expect("temp dir");
         let before = write_fixture(&dir, "before.pub", &synthetic_cfb(b"abc123xyz", 1));
