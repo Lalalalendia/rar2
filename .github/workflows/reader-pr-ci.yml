@@ -6,6 +6,7 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - "apps/chaptera-pub-cli/**"
       - "apps/chaptera-desktop/**"
       - "apps/chaptera-mobile-android/**"
       - "apps/chaptera-rescue/**"
@@ -91,6 +92,7 @@ on:
       - "tools/package_local_portable.py"
       - "tools/scene_v1.py"
       - "tools/validate_export_preview.py"
+      - ".github/workflows/free-pub-asset-cli-v1.yml"
       - ".github/workflows/reader-pr-ci.yml"
       - ".github/workflows/reader-consumer-preflight.yml"
       - ".github/workflows/chaptera-reader-windows.yml"

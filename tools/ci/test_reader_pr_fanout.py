@@ -71,14 +71,16 @@ def assert_scope(
 
 def main():
     free_asset_workflow = repo_text(".github/workflows/free-pub-asset-cli-v1.yml")
-    free_asset_pr = pull_request_event_block(".github/workflows/free-pub-asset-cli-v1.yml")
     assert "  workflow_call:\n" in free_asset_workflow
-    assert '"apps/chaptera-pub-cli/**"' in free_asset_pr
-    assert mod.READER_ASSET_EXPORT not in free_asset_pr
-    assert mod.READER_ASSETS not in free_asset_pr
+    assert "  pull_request:\n" not in free_asset_workflow
+    reader_pr = pull_request_event_block(".github/workflows/reader-pr-ci.yml")
+    assert '"apps/chaptera-pub-cli/**"' in reader_pr
+    assert '".github/workflows/free-pub-asset-cli-v1.yml"' in reader_pr
 
     assert_scope([mod.READER_ASSET_EXPORT], free_pub_asset_cli=True)
     assert_scope([mod.READER_ASSETS], free_pub_asset_cli=True)
+    assert_scope(["apps/chaptera-pub-cli/src/main.rs"], free_pub_asset_cli=True)
+    assert_scope([".github/workflows/free-pub-asset-cli-v1.yml"], free_pub_asset_cli=True)
     assert_scope([mod.READER_SOURCE_IDENTITY], free_pub_asset_cli=False)
 
     assert_narrow_product_admission(

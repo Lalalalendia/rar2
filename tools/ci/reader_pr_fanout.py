@@ -264,6 +264,10 @@ def test_region_evidence_only_paths(
 FREE_PUB_ASSET_CLI = (
     READER_ASSET_EXPORT,
     READER_ASSETS,
+    "apps/chaptera-pub-cli/**",
+    ".github/workflows/free-pub-asset-cli-v1.yml",
+    "Cargo.toml",
+    "Cargo.lock",
 )
 
 READER_SHARED = (

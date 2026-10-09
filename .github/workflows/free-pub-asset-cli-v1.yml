@@ -1,12 +1,6 @@
 name: Free PUB exact asset CLI V1
 
 on:
-  pull_request:
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "apps/chaptera-pub-cli/**"
-      - ".github/workflows/free-pub-asset-cli-v1.yml"
   workflow_call:
   workflow_dispatch:
 
