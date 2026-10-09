@@ -1,0 +1,16 @@
+{
+  "schema": "chaptera.pub-re-native-experiment.v1",
+  "experiment_id": "example-save-as-noop",
+  "source": {
+    "path": "fixtures/example.pub",
+    "expected_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "operation": {
+    "kind": "save_as_noop"
+  },
+  "policy": {
+    "writer": "current",
+    "visible": false,
+    "process_exit_grace_seconds": 60
+  }
+}

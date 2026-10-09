@@ -46,6 +46,7 @@ The receipt preserves all true overlapping record/property candidates. It does n
 The first bounded operations are:
 
 - `snapshot_only`: source-safe page/shape geometry inventory, no text and no save;
+- `save_as_noop`: open the disposable copy writable, make no semantic mutation, SaveAs to a separate PUB, then fresh-reopen and inventory it. This is a matched SaveAs/runtime control, not a product write capability;
 - `shape_rotation_delta`: select one exact `PageID + Shape.ID`, change only `Shape.Rotation`, save to a disposable output, close Publisher, reopen in a fresh process and snapshot the same exact selector when it remains stable.
 
 Safety and provenance rules:
@@ -75,10 +76,13 @@ The owner-only control issue also supports repository-pinned public fixture alia
 
 ```text
 /pub-re-native snapshot sample-newsletter
+/pub-re-native saveas sample-newsletter
 /pub-re-native rotate sample-newsletter 33554698 292 1
 ```
 
 Aliases live in `tools/pub-re/native-fixtures.json`. For these modes the hosted gate passes only validated source-safe fields. The Windows job then reads the protected-main registry, downloads the exact HTTPS fixture into `RUNNER_TEMP`, verifies both pinned SHA-256 and byte length, generates an ephemeral native manifest, runs Publisher, and deletes the downloaded source with the normal `always()` cleanup. No runner-local manifest or persistent fixture is required.
+
+The `saveas` command is deliberately a no-mutation control. It uses the same pinned fixture resolution and the same bounded Publisher watchdog as mutation runs, so a SaveAs timeout can be classified separately from mutation semantics. On success it produces the normal fresh-reopen receipt and CFB differential join.
 
 The rotation command is deliberately bounded: `PageID` and `Shape.ID` must be positive signed-32-bit integers, and the delta must be nonzero with absolute value at most 45 degrees. The generated manifest uses `shape_rotation_delta`, so the normal save/reopen receipt and CFB differential join run automatically.
 
