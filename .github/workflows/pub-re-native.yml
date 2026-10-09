@@ -87,7 +87,7 @@ jobs:
                   body,
               )
               research_match = re.fullmatch(
-                  r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?|val-xproj-01)",
+                  r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?|val-xproj-01|quill-story-readonly-oracle-02)",
                   body,
               )
               cancel_match = re.fullmatch(
@@ -130,7 +130,10 @@ jobs:
                       raise SystemExit("rotation delta must be nonzero and within 45 degrees")
               elif research_match is not None:
                   research_id = research_match.group(1)
-                  command_mode = "research_t352" if research_id == "val-xproj-01" else "research_0p75"
+                  if research_id == "quill-story-readonly-oracle-02":
+                      command_mode = "research_quill_readonly"
+                  else:
+                      command_mode = "research_t352" if research_id == "val-xproj-01" else "research_0p75"
               elif cancel_match is not None:
                   command_mode = "cancel_run"
                   target_run_id = cancel_match.group(1)
@@ -142,7 +145,7 @@ jobs:
           if command_mode in {"snapshot_alias", "rotation_alias", "rotation_pair"} and alias_re.fullmatch(fixture_alias) is None:
               raise SystemExit("fixture alias is invalid")
 
-          native_timeout_minutes = "30" if command_mode in {"research_0p75", "research_t352"} else "10" if command_mode == "rotation_pair" else "5"
+          native_timeout_minutes = "30" if command_mode in {"research_0p75", "research_t352", "research_quill_readonly"} else "10" if command_mode == "rotation_pair" else "5"
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"command_mode={command_mode}\n")
@@ -274,8 +277,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $output | Out-Null
           "PUB_RE_NATIVE_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-          if ($env:PUB_RE_COMMAND_MODE -in @("research_0p75", "research_t352")) {
-            if ($env:PUB_RE_RESEARCH_ID -notin @("paragraph-line-spacing-0p75", "paragraph-line-spacing-0p75-mixed", "val-xproj-01")) {
+          if ($env:PUB_RE_COMMAND_MODE -in @("research_0p75", "research_t352", "research_quill_readonly")) {
+            if ($env:PUB_RE_RESEARCH_ID -notin @("paragraph-line-spacing-0p75", "paragraph-line-spacing-0p75-mixed", "val-xproj-01", "quill-story-readonly-oracle-02")) {
               throw "unsupported bounded research id"
             }
             $researchOutput = Join-Path $output "research-output"
@@ -424,17 +427,17 @@ jobs:
             throw "unsupported PUB RE native command mode"
           }
 
-          if ($env:PUB_RE_COMMAND_MODE -notin @("research_0p75", "research_t352")) {
+          if ($env:PUB_RE_COMMAND_MODE -notin @("research_0p75", "research_t352", "research_quill_readonly")) {
             "PUB_RE_NATIVE_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           }
 
       - name: Build standalone PUB RE
-        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'research_quill_readonly' }}
         shell: powershell
         run: cargo build --release --manifest-path tools/pub-re/Cargo.toml --bin pub-re
 
       - name: Run bounded native Publisher transaction
-        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'rotation_pair' }}
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'research_quill_readonly' && needs.gate.outputs.command_mode != 'rotation_pair' }}
         shell: powershell
         run: |
           Set-StrictMode -Version Latest
@@ -729,7 +732,7 @@ jobs:
           if (-not $?) { throw "rotation_pair_officeart_attribution_failed" }
 
       - name: Validate failed native stage receipt
-        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'rotation_pair' }}
+        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'research_quill_readonly' && needs.gate.outputs.command_mode != 'rotation_pair' }}
         shell: powershell
         run: |
           Set-StrictMode -Version Latest
@@ -758,7 +761,7 @@ jobs:
           }
 
       - name: Upload failed native stage receipt
-        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'rotation_pair' }}
+        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'research_quill_readonly' && needs.gate.outputs.command_mode != 'rotation_pair' }}
         uses: actions/upload-artifact@v4
         with:
           name: pub-re-native-failure-stage
@@ -767,7 +770,7 @@ jobs:
           retention-days: 14
 
       - name: Join native output to CFB and OfficeArt provenance
-        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'rotation_pair' }}
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'research_quill_readonly' && needs.gate.outputs.command_mode != 'rotation_pair' }}
         shell: powershell
         run: |
           Set-StrictMode -Version Latest
@@ -800,7 +803,7 @@ jobs:
           }
 
       - name: Enforce source-safe evidence boundary
-        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'research_quill_readonly' }}
         shell: powershell
         run: |
           Set-StrictMode -Version Latest
@@ -827,7 +830,7 @@ jobs:
           }
 
       - name: Upload source-safe receipts only
-        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'research_quill_readonly' }}
         uses: actions/upload-artifact@v4
         with:
           name: pub-re-native-evidence
@@ -971,6 +974,99 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+
+
+      # Reuse the existing byte-pinned direct launcher. It performs read-only
+      # Publisher observations on four SHA-addressed witnesses and verifies
+      # fixture immutability, without a new general PowerShell executor.
+      - name: Run pinned Quill Story read-only oracle
+        id: quill_readonly
+        if: ${{ needs.gate.outputs.command_mode == 'research_quill_readonly' }}
+        shell: powershell
+        timeout-minutes: 20
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          if (@(Get-Process -Name MSPUB -ErrorAction SilentlyContinue).Count -ne 0) {
+            throw "quill_readonly_publisher_busy_before_start"
+          }
+
+          & pwsh -NoProfile -File tools/windows/run_quill_story_readonly_oracle_direct.ps1 -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT
+          if ($LASTEXITCODE -ne 0) {
+            throw "quill_readonly_direct_launcher_failed"
+          }
+
+          if (@(Get-Process -Name MSPUB -ErrorAction SilentlyContinue).Count -ne 0) {
+            throw "quill_readonly_publisher_did_not_exit"
+          }
+
+          $nativePath = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\quill-story-readonly-oracle.json"
+          $resolutionPath = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\quill-story-readonly-oracle-resolution.json"
+          $native = Get-Content -LiteralPath $nativePath -Raw | ConvertFrom-Json
+          $resolution = Get-Content -LiteralPath $resolutionPath -Raw | ConvertFrom-Json
+
+          if ($native.schema -ne "chaptera.quill-story-readonly-oracle.v1" -or
+              [int]$native.witness_count -ne 4 -or
+              @($native.witnesses).Count -ne 4 -or
+              @($native.witnesses | Where-Object { $_.source_unchanged -ne $true }).Count -ne 0) {
+            throw "quill_readonly_native_receipt_invalid"
+          }
+          if ($resolution.schema -ne "chaptera.quill-story-fdpp-oracle-resolution.v1" -or
+              [int]$resolution.witness_count -ne 4 -or
+              @($resolution.rows).Count -ne 4) {
+            throw "quill_readonly_resolution_receipt_invalid"
+          }
+
+      - name: Stage source-safe Quill Story evidence
+        if: ${{ always() && needs.gate.outputs.command_mode == 'research_quill_readonly' }}
+        shell: powershell
+        env:
+          QUILL_NATIVE_OUTCOME: ${{ steps.quill_readonly.outcome }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $to = Join-Path $env:PUB_RE_NATIVE_OUTPUT "quill-evidence"
+          New-Item -ItemType Directory -Force -Path $to | Out-Null
+          $names = @(
+            "analysis\quill-story-readonly-oracle.json",
+            "analysis\quill-story-readonly-oracle-resolution.json",
+            "environment.json"
+          )
+          $count = 0
+          foreach ($relative in $names) {
+            $from = Join-Path $env:PUB_RE_RESEARCH_OUTPUT $relative
+            if (-not (Test-Path -LiteralPath $from -PathType Leaf)) { continue }
+            $body = Get-Content -LiteralPath $from -Raw
+            if ($body -match '(?i)[A-Z]:\\' -or $body -match '\\\\[^"\s]+\\') {
+              throw "quill_readonly_source_safe_path_violation"
+            }
+            [void]($body | ConvertFrom-Json)
+            Copy-Item -LiteralPath $from -Destination $to -Force
+            $count += 1
+          }
+          $complete = $env:QUILL_NATIVE_OUTCOME -eq "success" -and $count -eq $names.Count
+          $stage = [ordered]@{
+            schema = "chaptera.pub-re-quill-m0-stage.v1"
+            experiment_id = "QUILL-STORY-READONLY-ORACLE-02"
+            status = if ($complete) { "complete" } else { "invalid_or_incomplete" }
+            expected_source_safe_receipts = $names.Count
+            staged_source_safe_receipts = $count
+            publisher_native_step = [string]$env:QUILL_NATIVE_OUTCOME
+          }
+          $stage | ConvertTo-Json -Depth 3 |
+            Set-Content -LiteralPath (Join-Path $to "quill-m0-stage.json") -Encoding utf8
+          if ($env:QUILL_NATIVE_OUTCOME -eq "success" -and -not $complete) {
+            throw "quill_readonly_success_missing_required_receipt"
+          }
+
+      - name: Upload source-safe Quill Story receipts
+        if: ${{ always() && needs.gate.outputs.command_mode == 'research_quill_readonly' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-quill-story-readonly-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\quill-evidence\*.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Execute T352 Publisher geometry matrix
         if: ${{ needs.gate.outputs.command_mode == 'research_t352' }}
