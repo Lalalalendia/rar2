@@ -991,13 +991,54 @@ jobs:
             throw "quill_readonly_publisher_busy_before_start"
           }
 
-          & pwsh -NoProfile -File tools/windows/run_quill_story_readonly_oracle_direct.ps1 -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT
-          if ($LASTEXITCODE -ne 0) {
-            throw "quill_readonly_direct_launcher_failed"
-          }
+          $launcher = Join-Path $env:GITHUB_WORKSPACE "tools\windows\run_quill_story_readonly_oracle_direct.ps1"
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "private"
+          New-Item -ItemType Directory -Force -Path $private | Out-Null
+          $stdout = Join-Path $private "quill-readonly.stdout.txt"
+          $stderr = Join-Path $private "quill-readonly.stderr.txt"
+          $startedUtc = [DateTime]::UtcNow
+          $child = $null
+          $childClean = $false
+          try {
+            $quotedLauncher = '"' + $launcher + '"'
+            $quotedOutput = '"' + $env:PUB_RE_RESEARCH_OUTPUT + '"'
+            $child = Start-Process -FilePath (Get-Command -Name pwsh -CommandType Application).Source -ArgumentList @("-NoProfile", "-File", $quotedLauncher, "-OutputRoot", $quotedOutput) -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
 
-          if (@(Get-Process -Name MSPUB -ErrorAction SilentlyContinue).Count -ne 0) {
-            throw "quill_readonly_publisher_did_not_exit"
+            if (-not $child.WaitForExit(1080000)) {
+              throw "quill_readonly_watchdog_timeout_1080s"
+            }
+            $child.WaitForExit()
+            $child.Refresh()
+            if (-not $child.HasExited -or [int]$child.ExitCode -ne 0) {
+              throw "quill_readonly_direct_launcher_failed"
+            }
+            Start-Sleep -Seconds 2
+            if (@(Get-Process -Name MSPUB -ErrorAction SilentlyContinue).Count -ne 0) {
+              throw "quill_readonly_publisher_did_not_exit"
+            }
+            $childClean = $true
+          }
+          finally {
+            if ($null -ne $child -and -not $child.HasExited) {
+              try {
+                Stop-Process -Id $child.Id -Force -ErrorAction Stop
+                [void]$child.WaitForExit(10000)
+              }
+              catch { throw "quill_readonly_child_cleanup_failed" }
+            }
+            if (-not $childClean) {
+              $owned = @(Get-Process -Name MSPUB -ErrorAction SilentlyContinue | Where-Object {
+                try { $_.StartTime.ToUniversalTime() -ge $startedUtc.AddSeconds(-2) }
+                catch { $false }
+              })
+              if ($owned.Count -gt 1) {
+                throw "quill_readonly_ambiguous_publisher_cleanup"
+              }
+              if ($owned.Count -eq 1) {
+                try { Stop-Process -Id $owned[0].Id -Force -ErrorAction Stop }
+                catch { throw "quill_readonly_publisher_cleanup_failed" }
+              }
+            }
           }
 
           $nativePath = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\quill-story-readonly-oracle.json"
