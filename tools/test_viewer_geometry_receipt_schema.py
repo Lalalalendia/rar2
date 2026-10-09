@@ -69,13 +69,13 @@ class ViewerGeometryReceiptSchemaTests(unittest.TestCase):
 
     def test_unknown_top_level_private_field_fails_closed(self):
         receipt = minimal_receipt()
-        receipt["private_checkout_path"] = "/home/private/yab"
+        receipt["private_checkout_path"] = "synthetic-unreviewed-checkout"
         with self.assertRaises(AssertionError):
             validate_schema(receipt)
 
     def test_unknown_nested_source_field_fails_closed(self):
         receipt = minimal_receipt()
-        receipt["document"]["source"]["local_path"] = "C:\\Users\\private\\fixture.pub"
+        receipt["document"]["source"]["local_path"] = "synthetic-unreviewed-fixture"
         with self.assertRaises(AssertionError):
             validate_schema(receipt)
 
