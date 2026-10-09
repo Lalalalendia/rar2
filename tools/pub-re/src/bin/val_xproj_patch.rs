@@ -196,19 +196,24 @@ fn plan(receipt: &Value) -> Result<(Patch, Patch)> {
 }
 
 fn all_streams(path: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
-    let mut comp = cfb::open(path).with_context(|| format!("open CFB {}", path.display()))?;
-    let names: Vec<String> = comp
-        .walk()
-        .filter(|e| e.is_stream())
-        .map(|e| e.path().to_string_lossy().into_owned())
-        .collect();
+    // CFB entry.path() is a std::path::Path and serializing it directly
+    // produces platform-native separators (backslashes on Windows).
+    // structural_base_manifest uses pub-cfb's canonical slash paths.
+    // Reuse exactly that established inventory/stream reader.
+    let inventory = pub_cfb::inspect_path(path)
+        .with_context(|| format!("inspect CFB {}", path.display()))?;
     let mut streams = BTreeMap::new();
-    for name in names {
-        let mut stream = comp.open_stream(&name)?;
-        let mut content = Vec::new();
-        stream.read_to_end(&mut content)?;
-        if streams.insert(name, content).is_some() {
-            bail!("duplicate CFB stream");
+    for entry in inventory
+        .entries
+        .into_iter()
+        .filter(|entry| entry.kind == pub_cfb::EntryKind::Stream)
+    {
+        let content = pub_cfb::read_stream_path(path, &entry.path)?;
+        if content.len() as u64 != entry.len {
+            bail!("CFB inventory stream length mismatch: {}", entry.path);
+        }
+        if streams.insert(entry.path, content).is_some() {
+            bail!("duplicate canonical CFB stream");
         }
     }
     Ok(streams)
