@@ -103,6 +103,13 @@ class M4StructuralContract(unittest.TestCase):
         self.assertGreaterEqual(w.count('group: pub-re-native-publisher-oracle'), 2)
         self.assertIn('dtolnay/rust-toolchain@stable', w)
         self.assertIn('toolchain: "1.94.1"', w)
+        # Self-hosted Windows needs Git Bash before dtolnay's composite bash step:
+        # WSL System32/bash cannot resolve a Windows runner-generated .sh path.
+        self.assertIn('Prefer Git Bash for M4 Rust toolchain', w)
+        self.assertIn('$gitBashDir | Out-File -FilePath $env:GITHUB_PATH', w)
+        idx = w.index('Prefer Git Bash for M4 Rust toolchain')
+        rust = w.index('dtolnay/rust-toolchain@stable', idx)
+        self.assertLess(idx, rust)
         for filename in (
             "text-width-hyphenation-m4-cfb-01.json",
             "text-width-m4-suite-stage.json",
