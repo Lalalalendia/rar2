@@ -1549,6 +1549,28 @@ mod tests {
     }
 
     #[test]
+    fn source_window_fit_pan_outside_image_keeps_frame_clip_without_clamping() {
+        let node = &scene().nodes[0];
+        let window = FixedImageSourceWindow {
+            left_q16: -(1 << 14),
+            top_q16: 0,
+            right_q16: 5 << 14,
+            bottom_q16: 1 << 16,
+        };
+        let mut content = String::new();
+
+        assert!(append_image_source_window(
+            &mut content,
+            node,
+            resource_id(48),
+            &window,
+        ));
+
+        assert!(content.contains("10 20 100 50 re\nW n\n"));
+        assert!(content.contains("66.666666667 0 0 -50 26.666666667 70 cm"));
+    }
+
+    #[test]
     fn exact_rgba_png_uses_soft_mask_and_remains_painted() {
         use std::io::Cursor;
 
