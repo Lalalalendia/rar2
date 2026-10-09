@@ -99,6 +99,7 @@ class TextWidthM1Contract(unittest.TestCase):
         self.assertIn("hresult_hex = $HresultHex", self.worker)
         self.assertIn('($PhaseTag + "_lines_count")', self.worker)
         self.assertIn("Write-Stage \"invalid\" $Stage $hresult", self.worker)
+        self.assertIn('if ($State -eq "running") { $script:Stage = $Phase }', self.worker)
 
     def test_fail_closed_evidence_and_no_claim_before_product_ab(self):
         self.assertIn("source_bytes_uploaded = $false", self.suite)
