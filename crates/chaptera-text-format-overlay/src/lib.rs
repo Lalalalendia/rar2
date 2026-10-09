@@ -13,8 +13,8 @@ use std::fmt;
 
 mod font_resource_authoring_v1;
 pub use font_resource_authoring_v1::{
-    FontAuthoringScopeV1, FontReplacementCandidateV1, FontResourceIdentityV1,
-    ServerFontResourceV1, set_admitted_font_resource_v1,
+    FontAuthoringScopeV1, FontReplacementCandidateV1, FontResourceIdentityV1, ServerFontResourceV1,
+    set_admitted_font_resource_v1,
 };
 
 pub const OVERLAY_PROTOCOL_V1: &str = "chaptera.text-format-overlay.v1";
@@ -718,46 +718,46 @@ pub fn undo_text_format_operation_v1(
 pub fn replay_text_format_operation_v1(
     receipt: &TextFormatOperationReceiptV1,
 ) -> Result<TextFormatOverlayStateV1> {
-    let replay =
-        match receipt.command.kind {
-            TextFormatOperationKindV1::SetTextFormatProperty => {
-                let value = receipt.command.value.clone().ok_or_else(|| {
+    let replay = match receipt.command.kind {
+        TextFormatOperationKindV1::SetTextFormatProperty => {
+            let value =
+                receipt.command.value.clone().ok_or_else(|| {
                     TextFormatOverlayError::new("replay set operation has no value")
                 })?;
-                // This verifies a recorded receipt, not a new authorization.
-                // The EditorProject replay boundary must separately re-admit
-                // exact font bytes before a font command can be applied.
-                if receipt.command.property == FormatPropertyV1::FontResource {
-                    apply_format_operation_v1(
-                        &receipt.before_state,
-                        TextFormatOperationKindV1::SetTextFormatProperty,
-                        receipt.command.start_scalar,
-                        receipt.command.end_scalar,
-                        receipt.command.property,
-                        Some(value),
-                        &receipt.command.expected_state_hash,
-                    )?
-                } else {
-                    set_text_format_property_v1(
-                        &receipt.before_state,
-                        receipt.command.start_scalar,
-                        receipt.command.end_scalar,
-                        receipt.command.property,
-                        value,
-                        &receipt.command.expected_state_hash,
-                    )?
-                }
-            },
-            TextFormatOperationKindV1::ClearTextFormatPropertyOverride => {
-                clear_text_format_property_override_v1(
+            // This verifies a recorded receipt, not a new authorization.
+            // The EditorProject replay boundary must separately re-admit
+            // exact font bytes before a font command can be applied.
+            if receipt.command.property == FormatPropertyV1::FontResource {
+                apply_format_operation_v1(
+                    &receipt.before_state,
+                    TextFormatOperationKindV1::SetTextFormatProperty,
+                    receipt.command.start_scalar,
+                    receipt.command.end_scalar,
+                    receipt.command.property,
+                    Some(value),
+                    &receipt.command.expected_state_hash,
+                )?
+            } else {
+                set_text_format_property_v1(
                     &receipt.before_state,
                     receipt.command.start_scalar,
                     receipt.command.end_scalar,
                     receipt.command.property,
+                    value,
                     &receipt.command.expected_state_hash,
                 )?
             }
-        };
+        }
+        TextFormatOperationKindV1::ClearTextFormatPropertyOverride => {
+            clear_text_format_property_override_v1(
+                &receipt.before_state,
+                receipt.command.start_scalar,
+                receipt.command.end_scalar,
+                receipt.command.property,
+                &receipt.command.expected_state_hash,
+            )?
+        }
+    };
     if replay.after_state != receipt.after_state {
         return Err(TextFormatOverlayError::new(
             "format operation replay did not reproduce canonical state",
