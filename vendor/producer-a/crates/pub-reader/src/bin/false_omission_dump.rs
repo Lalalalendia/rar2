@@ -1,6 +1,6 @@
 use std::{env, fs, io::Cursor, path::PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use pub_core::StreamPath;
 use pub_escher::inspect_sp_containers;
 use serde::Serialize;
