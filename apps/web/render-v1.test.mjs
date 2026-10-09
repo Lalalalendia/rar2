@@ -6,9 +6,19 @@ import { fileURLToPath } from "node:url";
 
 import {
   RENDERER_KINDS,
+  RENDER_SCENE_PROTOCOLS,
+  isRenderableSceneProtocol,
   assertSceneSourceNeutral,
   buildOverlayPlan,
-  buildRenderPlan
+  buildRenderPlan,
+  imageContentRotationGeometry,
+  imagePaintGeometry,
+  imageRecolorPaintPlan,
+  resolvedEditorImagePlan,
+  resolvedEditorTablePlan,
+  tableBorderPaintPlan,
+  tableCellFillPaintPlan,
+  tableCellPaintGeometry
 } from "./render-v1.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -34,6 +44,22 @@ function deepFreeze(value) {
 
 test("preflight exposes all required renderer candidates", () => {
   assert.deepEqual(RENDERER_KINDS, ["svg", "canvas2d", "webgl2-hybrid"]);
+});
+
+test("renderer protocol discriminator keeps canonical and Editor render scenes explicit", () => {
+  assert.deepEqual(RENDER_SCENE_PROTOCOLS, [
+    "chaptera.scene.v1",
+    "chaptera.editor-render-scene.v1",
+  ]);
+  assert.equal(isRenderableSceneProtocol("chaptera.scene.v1"), true);
+  assert.equal(isRenderableSceneProtocol("chaptera.editor-render-scene.v1"), true);
+  assert.equal(isRenderableSceneProtocol("chaptera.reader-scene.v1"), false);
+
+  const editorScene = fixture("simple-text.json");
+  editorScene.protocol_version = "chaptera.editor-render-scene.v1";
+  assert.doesNotThrow(() => buildRenderPlan(editorScene, VIEW));
+  editorScene.protocol_version = "chaptera.reader-scene.v1";
+  assert.throws(() => buildRenderPlan(editorScene, VIEW), /EditorRenderSceneV1/);
 });
 
 test("render plan is deterministic and does not mutate a frozen scene", () => {
@@ -245,4 +271,178 @@ test("Reader shared-resolved text fails closed to preview on font fingerprint mi
   const plan = buildRenderPlan(scene, VIEW);
   assert.equal(plan.pages[0].nodes[0].story.resolved_text, null);
   assert.equal(plan.pages[0].nodes[0].story.authority, "reader_scene_preview");
+});
+
+
+test("Reader picture crop maps q16 source window into fixed-frame image geometry", () => {
+  assert.deepEqual(
+    imagePaintGeometry(
+      { x: 0, y: 0, width: 1000, height: 800 },
+      { left_q16: 16384, top_q16: 0, right_q16: 49152, bottom_q16: 65536 }
+    ),
+    { x: -500, y: 0, width: 2000, height: 800 }
+  );
+});
+
+test("Reader picture cardinal rotation stays content-local and rejects unsupported angles", () => {
+  assert.deepEqual(
+    imageContentRotationGeometry({ x: 100, y: 200, width: 300, height: 900 }, 270),
+    { x: -200, y: 500, width: 900, height: 300, transform: "rotate(270 250 650)" }
+  );
+  assert.equal(
+    imageContentRotationGeometry({ x: 0, y: 0, width: 100, height: 200 }, 45),
+    null
+  );
+});
+
+test("Reader picture recolor keeps bounded sRGB matrix semantics", () => {
+  const plan = imageRecolorPaintPlan({
+    image_recolor: { target_rgb: [51, 102, 153], preserve_grays: false }
+  });
+  assert.ok(plan);
+  assert.equal(plan.values.split(/\s+/).length, 20);
+  assert.equal(
+    imageRecolorPaintPlan({ image_recolor: { target_rgb: [1, 2, 3], preserve_grays: true } }),
+    null
+  );
+});
+
+test("Reader picture render plan uses fixed-frame crop and fails closed on crop plus rotation", () => {
+  const scene = fixture("exact-image.json");
+  scene.nodes[0].visual_authority = "reader_scene";
+  scene.nodes[0].image_source_window = {
+    left_q16: 16384,
+    top_q16: 0,
+    right_q16: 49152,
+    bottom_q16: 65536,
+  };
+  scene.resources[0].availability = "inline_data_url";
+  scene.resources[0].inline_data_url = "data:image/png;base64,iVBORw0KGgo=";
+
+  const plan = buildRenderPlan(scene, VIEW);
+  const image = plan.pages[0].nodes[0].resource.resolved_image;
+  assert.equal(image.authority, "reader-picture-content");
+  assert.equal(image.viewport.width, plan.pages[0].nodes[0].width);
+  assert.equal(image.geometry.x, -plan.pages[0].nodes[0].width / 2);
+  assert.equal(image.geometry.width, plan.pages[0].nodes[0].width * 2);
+
+  scene.nodes[0].image_content_rotation_degrees = 90;
+  const invalid = buildRenderPlan(scene, VIEW);
+  assert.equal(invalid.pages[0].nodes[0].resource.resolved_image, null);
+});
+
+test("resolved Reader picture plan preserves frame while rotating content", () => {
+  const scene = fixture("exact-image.json");
+  scene.nodes[0].visual_authority = "reader_scene";
+  scene.nodes[0].image_content_rotation_degrees = 270;
+  scene.resources[0].availability = "inline_data_url";
+  scene.resources[0].inline_data_url = "data:image/png;base64,iVBORw0KGgo=";
+  const resources = new Map(scene.resources.map((resource) => [resource.resource_id, resource]));
+  const page = { x: 24, y: 24 };
+  const image = resolvedEditorImagePlan(scene.nodes[0], resources.get(scene.nodes[0].resource_id), page, VIEW);
+  assert.ok(image);
+  assert.equal(image.viewport.x, page.x + scene.nodes[0].bounds.x / 9525);
+  assert.match(image.content_transform, /^rotate\(270 /);
+});
+
+
+test("Reader picture out-of-domain fit window preserves blank destination margins", () => {
+  const geometry = imagePaintGeometry(
+    { x: 0, y: 0, width: 1200, height: 600 },
+    { left_q16: -16384, top_q16: 0, right_q16: 81920, bottom_q16: 65536 }
+  );
+  assert.equal(Math.round(geometry.x), 200);
+  assert.equal(Math.round(geometry.width), 800);
+});
+
+test("Reader picture invalid or non-overlapping source windows fail closed", () => {
+  assert.equal(
+    imagePaintGeometry(
+      { x: 0, y: 0, width: 100, height: 100 },
+      { left_q16: 70000, top_q16: 0, right_q16: 80000, bottom_q16: 65536 }
+    ),
+    null
+  );
+});
+
+test("Reader table uses only server-resolved cell geometry for fills", () => {
+  const cell = {
+    cell_id: "cell:0:0",
+    row: 0,
+    column: 0,
+    row_span: 1,
+    column_span: 2,
+    text: "Header",
+    bounds: { x: 95250, y: 190500, width: 952500, height: 476250 },
+    fill_rgb: [12, 34, 56],
+    fill_visible: true,
+  };
+  assert.deepEqual(tableCellPaintGeometry(cell), cell.bounds);
+  assert.deepEqual(tableCellFillPaintPlan(cell), {
+    geometry: cell.bounds,
+    fill: "rgb(12 34 56)",
+  });
+  assert.equal(tableCellPaintGeometry({ ...cell, bounds: null }), null);
+  assert.equal(tableCellFillPaintPlan({ ...cell, fill_visible: false }), null);
+});
+
+test("Reader table borders require exact non-degenerate server segments", () => {
+  const border = {
+    x1_emu: 95250,
+    y1_emu: 190500,
+    x2_emu: 1047750,
+    y2_emu: 190500,
+    rgb: [1, 2, 3],
+    width_emu: 12700,
+  };
+  assert.deepEqual(tableBorderPaintPlan(border), {
+    x1: 95250,
+    y1: 190500,
+    x2: 1047750,
+    y2: 190500,
+    stroke: "rgb(1 2 3)",
+    width: 12700,
+  });
+  assert.equal(tableBorderPaintPlan({ ...border, width_emu: 0 }), null);
+  assert.equal(tableBorderPaintPlan({ ...border, x2_emu: border.x1_emu, y2_emu: border.y1_emu }), null);
+});
+
+test("Reader table plan maps server cell/border geometry to page CSS and keeps text preview-only", () => {
+  const node = {
+    visual_authority: "reader_scene",
+    table: {
+      story_id: "story:table",
+      rows: 2,
+      columns: 2,
+      cells: [{
+        cell_id: "cell:0:0",
+        row: 0,
+        column: 0,
+        row_span: 1,
+        column_span: 2,
+        text: "Header",
+        bounds: { x: 95250, y: 190500, width: 952500, height: 476250 },
+        fill_rgb: [12, 34, 56],
+        fill_visible: true,
+      }],
+      borders: [{
+        x1_emu: 95250,
+        y1_emu: 190500,
+        x2_emu: 1047750,
+        y2_emu: 190500,
+        rgb: [1, 2, 3],
+        width_emu: 12700,
+      }],
+    },
+  };
+  const table = resolvedEditorTablePlan(node, { x: 24, y: 30 }, VIEW);
+  assert.equal(table.authority, "reader-table-resolved");
+  assert.equal(table.cells[0].x, 34);
+  assert.equal(table.cells[0].y, 50);
+  assert.equal(table.cells[0].width, 100);
+  assert.equal(table.cells[0].fill, "rgb(12 34 56)");
+  assert.equal(table.cells[0].text_authority, "browser-preview-only");
+  assert.equal(table.borders[0].x1, 34);
+  assert.equal(table.borders[0].width_css_px, 12700 / 9525);
+  assert.equal(resolvedEditorTablePlan({ ...node, visual_authority: null }, { x: 0, y: 0 }, VIEW), null);
 });

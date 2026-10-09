@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - "packages/protocol/scene/**"
+      - "packages/protocol/editor-render-scene/**"
       - "docs/web-editor-scene-protocol-v1.md"
       - "tools/scene_v1.py"
       - "tools/adapt_viewer_scene_v1.py"
       - "tools/test_scene_adapter.py"
       - "tools/validate_scene_protocol.py"
+      - "tools/validate_editor_render_scene_protocol.py"
       - "tools/build_viewer_geometry_receipt.py"
       - "tools/test_build_viewer_geometry_receipt.py"
       - "tools/run_local_viewer_geometry_cli.py"
@@ -17,6 +19,10 @@ on:
       - "apps/web/acceptance/receipts/viewer-geometry.real.json"
       - ".github/workflows/web-scene-protocol.yml"
   workflow_dispatch:
+
+concurrency:
+  group: web-scene-protocol-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -36,6 +42,9 @@ jobs:
 
       - name: Validate deterministic snapshot fixtures
         run: python tools/validate_scene_protocol.py
+
+      - name: Validate source-free Editor render-scene extension
+        run: python tools/validate_editor_render_scene_protocol.py
 
       - name: Validate source-free Viewer adapter
         run: python tools/test_scene_adapter.py

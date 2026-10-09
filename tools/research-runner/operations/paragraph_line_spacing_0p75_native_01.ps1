@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$PacketPath,
-    [Parameter(Mandatory = $true)][string]$OutputRoot
+    [Parameter(Mandatory = $true)][string]$OutputRoot,
+    [switch]$MixedSize
 )
 
 Set-StrictMode -Version Latest
@@ -88,12 +89,53 @@ function Get-LineGeometry($textRange, [string]$phase) {
     }
 }
 
+function Get-MixedSizeSnapshot($range, [string]$phase) {
+    $samples = @()
+    foreach ($sample in @(
+        @{ position = 1; role = "prefix" },
+        @{ position = 24; role = "large" },
+        @{ position = 52; role = "suffix" }
+    )) {
+        $char = $null
+        try {
+            $char = $range.Characters([int]$sample.position, 1)
+            $samples += [ordered]@{
+                role = $sample.role
+                family = Get-PubSafeValue { [string]$char.Font.Name } "TextRange.Font.Name"
+                point_size = Get-PubSafeValue { [double]$char.Font.Size } "TextRange.Font.Size"
+            }
+        }
+        finally { Release-Com $char }
+    }
+    $paragraph = $null
+    $largeRange = $null
+    try {
+        $paragraph = $range.ParagraphFormat
+        $largeRange = $range.Characters(18, 15)
+        return [ordered]@{
+            phase = $phase
+            range_start = [int]$range.Start
+            range_end = [int]$range.End
+            large_run_start = [int]$largeRange.Start
+            large_run_end = [int]$largeRange.End
+            font_samples = $samples
+            paragraph = Get-ParagraphSnapshot $paragraph $phase
+            geometry = Get-LineGeometry $range $phase
+        }
+    }
+    finally {
+        Release-Com $largeRange
+        Release-Com $paragraph
+    }
+}
+
 function New-SeedFixture() {
     Write-ResearchStage "seed_copy_begin"
     Copy-Item -LiteralPath $env:PUB_RESEARCH_FIXTURE -Destination $seedPub -Force
     Write-ResearchStage "seed_copy_complete"
 
     $app = $null; $doc = $null; $shape = $null; $range = $null; $paragraphRange = $null; $paragraph = $null
+    $mixedSeedRange = $null; $mixedSeedRun = $null
     try {
         Write-ResearchStage "seed_application_create_begin"
         $app = New-PubPublisherApplication
@@ -117,6 +159,15 @@ function New-SeedFixture() {
         $range.Font.Name = "Arial"
         $range.Font.Size = 12
         if ([int]$range.ParagraphsCount -lt 3) { throw "Expected three paragraphs" }
+        if ($MixedSize) {
+            # Separate third-paragraph witness, leaving uniform paragraph 2 intact.
+            $mixedSeedRange = $range.Paragraphs(3)
+            $mixedSeedRun = $mixedSeedRange.Characters(18, 15)
+            $mixedSeedRun.Font.Size = 18
+            Release-Com $mixedSeedRun
+            $mixedSeedSnapshot = Get-MixedSizeSnapshot $mixedSeedRange "seed_before_save"
+            Release-Com $mixedSeedRange
+        }
         $paragraphRange = $range.Paragraphs(2)
         $paragraph = $paragraphRange.ParagraphFormat
         $before = Get-ParagraphSnapshot $paragraph "seed_before_save"
@@ -127,6 +178,7 @@ function New-SeedFixture() {
         Write-ResearchStage "seed_save_complete"
     }
     finally {
+        Release-Com $mixedSeedRun; Release-Com $mixedSeedRange
         Release-Com $paragraph; Release-Com $paragraphRange; Release-Com $range; Release-Com $shape
         if ($null -ne $doc) { Write-ResearchStage "seed_document_close_begin" }
         Close-Document $doc
@@ -141,6 +193,7 @@ function New-SeedFixture() {
         size = [int64]$file.Length
         paragraph_before_save = $before
         line_geometry_before_save = $seedGeometry
+        mixed_size_before_save = $(if ($MixedSize) { $mixedSeedSnapshot } else { $null })
     }
 }
 
@@ -151,6 +204,7 @@ function Invoke-Arm([string]$name, [string]$kind) {
     Copy-Item -LiteralPath $seedPub -Destination $output -Force
 
     $app = $null; $doc = $null; $shape = $null; $range = $null; $paragraphRange = $null; $paragraph = $null
+    $mixedRange = $null; $mixedParagraph = $null
     try {
         Write-ResearchStage ("arm_{0}_application_create_begin" -f $name)
         $app = New-PubPublisherApplication
@@ -166,6 +220,10 @@ function Invoke-Arm([string]$name, [string]$kind) {
         $paragraph = $paragraphRange.ParagraphFormat
         $before = Get-ParagraphSnapshot $paragraph "before_mutation"
         $geometryBefore = Get-LineGeometry $paragraphRange "before_mutation"
+        if ($MixedSize) {
+            $mixedRange = $range.Paragraphs(3)
+            $mixedBefore = Get-MixedSizeSnapshot $mixedRange "before_mutation"
+        }
 
         Write-ResearchStage ("arm_{0}_mutation_begin" -f $name)
         switch ($kind) {
@@ -176,7 +234,16 @@ function Invoke-Arm([string]$name, [string]$kind) {
             "direct-0p75" { $paragraph.LineSpacing = 0.75 }
             default { throw "Unknown arm kind: $kind" }
         }
+        if ($MixedSize -and $kind -in @("direct-0p80", "direct-0p75")) {
+            $mixedParagraph = $mixedRange.ParagraphFormat
+            $mixedParagraph.LineSpacing = $(if ($kind -eq "direct-0p80") { 0.80 } else { 0.75 })
+            Release-Com $mixedParagraph
+        }
         Write-ResearchStage ("arm_{0}_mutation_complete" -f $name)
+        if ($MixedSize) {
+            $mixedAfter = Get-MixedSizeSnapshot $mixedRange "after_mutation"
+            Release-Com $mixedRange
+        }
 
         $after = Get-ParagraphSnapshot $paragraph "after_mutation"
         $geometryAfter = Get-LineGeometry $paragraphRange "after_mutation"
@@ -186,6 +253,7 @@ function Invoke-Arm([string]$name, [string]$kind) {
         Write-ResearchStage ("arm_{0}_save_complete" -f $name)
     }
     finally {
+        Release-Com $mixedParagraph; Release-Com $mixedRange
         Release-Com $paragraph; Release-Com $paragraphRange; Release-Com $range; Release-Com $shape
         if ($null -ne $doc) { Write-ResearchStage ("arm_{0}_document_close_begin" -f $name) }
         Close-Document $doc
@@ -196,6 +264,7 @@ function Invoke-Arm([string]$name, [string]$kind) {
     }
 
     $app2 = $null; $doc2 = $null; $shape2 = $null; $range2 = $null; $paragraphRange2 = $null; $paragraph2 = $null
+    $mixedRange2 = $null
     try {
         Write-ResearchStage ("arm_{0}_reopen_application_create_begin" -f $name)
         $app2 = New-PubPublisherApplication
@@ -211,8 +280,14 @@ function Invoke-Arm([string]$name, [string]$kind) {
         $paragraph2 = $paragraphRange2.ParagraphFormat
         $fresh = Get-ParagraphSnapshot $paragraph2 "fresh_reopen"
         $geometryFresh = Get-LineGeometry $paragraphRange2 "fresh_reopen"
+        if ($MixedSize) {
+            $mixedRange2 = $range2.Paragraphs(3)
+            $mixedFresh = Get-MixedSizeSnapshot $mixedRange2 "fresh_reopen"
+            Release-Com $mixedRange2
+        }
     }
     finally {
+        Release-Com $mixedRange2
         Release-Com $paragraph2; Release-Com $paragraphRange2; Release-Com $range2; Release-Com $shape2
         if ($null -ne $doc2) { Write-ResearchStage ("arm_{0}_reopen_document_close_begin" -f $name) }
         Close-Document $doc2
@@ -232,6 +307,13 @@ function Invoke-Arm([string]$name, [string]$kind) {
         line_geometry_before_mutation = $geometryBefore
         line_geometry_after_mutation = $geometryAfter
         line_geometry_fresh_reopen = $geometryFresh
+        mixed_size = $(if ($MixedSize) {
+            [ordered]@{
+                before_mutation = $mixedBefore
+                after_mutation = $mixedAfter
+                fresh_reopen = $mixedFresh
+            }
+        } else { $null })
         output = [ordered]@{
             sha256 = (Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash.ToLowerInvariant()
             size = [int64]$file.Length
@@ -253,6 +335,7 @@ $result = [ordered]@{
     schema = "chaptera.paragraph-line-spacing-0p75-native-01.v1"
     experiment_id = $ExpectedExperiment
     seed = $seed
+    composition_profile = $(if ($MixedSize) { "mixed-12-18-12" } else { "uniform-12" })
     arms = $arms
     verdict = "native-roundtrip-and-line-geometry-captured-not-yet-carrier-authority"
     boundary = "This stage records Publisher2019 COM mutation/save/fresh-reopen behavior plus per-line Start/End/BoundTop/BoundHeight geometry and retains exact private PUB outputs. It does not grant 0.75-SP carrier authority until structural FDPP/STSH/TEXT review is complete."
@@ -262,6 +345,7 @@ Write-PubJson -Value $result -Path (Join-Path $analysisDir "paragraph-line-spaci
 @(
     "experiment=$ExpectedExperiment",
     "arms=5",
+    "composition_profile=$($result.composition_profile)",
     "matched_control=direct_line_spacing_0.80",
     "target=direct_line_spacing_0.75",
     "line_geometry=paragraph_range_lines_boundtop_boundheight",

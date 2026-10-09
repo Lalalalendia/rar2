@@ -83,7 +83,7 @@ jobs:
                   body,
               )
               research_match = re.fullmatch(
-                  r"/pub-re-native research (paragraph-line-spacing-0p75)",
+                  r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?)",
                   body,
               )
               cancel_match = re.fullmatch(
@@ -252,7 +252,7 @@ jobs:
           "PUB_RE_NATIVE_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
           if ($env:PUB_RE_COMMAND_MODE -eq "research_0p75") {
-            if ($env:PUB_RE_RESEARCH_ID -ne "paragraph-line-spacing-0p75") {
+            if ($env:PUB_RE_RESEARCH_ID -notin @("paragraph-line-spacing-0p75", "paragraph-line-spacing-0p75-mixed")) {
               throw "unsupported bounded research id"
             }
             $researchOutput = Join-Path $output "research-output"
@@ -497,9 +497,13 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
 
+          $mixedArgs = @{}
+          if ($env:PUB_RE_RESEARCH_ID -eq "paragraph-line-spacing-0p75-mixed") {
+            $mixedArgs.MixedSize = $true
+          }
           & tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1 `
             -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT `
-            -ReturnZip $env:PUB_RE_RESEARCH_RETURN_ZIP
+            -ReturnZip $env:PUB_RE_RESEARCH_RETURN_ZIP @mixedArgs
           if (-not $?) {
             throw "bounded 0.75 paragraph research failed"
           }

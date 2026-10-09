@@ -6,6 +6,15 @@ const FORBIDDEN_SOURCE_KEYS = new Set([
 
 export const RENDERER_KINDS = Object.freeze(["svg", "canvas2d", "webgl2-hybrid"]);
 
+export const RENDER_SCENE_PROTOCOLS = Object.freeze([
+  "chaptera.scene.v1",
+  "chaptera.editor-render-scene.v1",
+]);
+
+export function isRenderableSceneProtocol(value) {
+  return RENDER_SCENE_PROTOCOLS.includes(value);
+}
+
 function finite(value, label) {
   if (!Number.isFinite(value)) throw new TypeError(label + " must be finite");
   return value;
@@ -69,6 +78,143 @@ function inlineImageHref(resource) {
   return /^data:image\/(?:png|jpeg|jpg|gif);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : null;
 }
 
+const Q16_ONE = 65_536;
+
+function emuNumberToCss(value, view) {
+  return (finite(value, "EMU number") / view.emu_per_css_px) * view.zoom;
+}
+
+export function imageContentRotationGeometry(bounds, degrees = null) {
+  const x = finite(bounds.x, "image.rotation.bounds.x");
+  const y = finite(bounds.y, "image.rotation.bounds.y");
+  const width = finite(bounds.width, "image.rotation.bounds.width");
+  const height = finite(bounds.height, "image.rotation.bounds.height");
+  if (width <= 0 || height <= 0) return null;
+  if (degrees === null || degrees === undefined || degrees === 0) {
+    return Object.freeze({ x, y, width, height, transform: null });
+  }
+  if (![90, 180, 270].includes(degrees)) return null;
+  const centerX = x + width / 2;
+  const centerY = y + height / 2;
+  if (degrees === 180) {
+    return Object.freeze({
+      x, y, width, height,
+      transform: "rotate(180 " + centerX + " " + centerY + ")"
+    });
+  }
+  return Object.freeze({
+    x: centerX - height / 2,
+    y: centerY - width / 2,
+    width: height,
+    height: width,
+    transform: "rotate(" + degrees + " " + centerX + " " + centerY + ")"
+  });
+}
+
+export function imagePaintGeometry(bounds, sourceWindow = null) {
+  const x = safeInteger(bounds.x, "bounds.x");
+  const y = safeInteger(bounds.y, "bounds.y");
+  const width = safeInteger(bounds.width, "bounds.width");
+  const height = safeInteger(bounds.height, "bounds.height");
+  if (width <= 0 || height <= 0) return null;
+  if (!sourceWindow) return Object.freeze({ x, y, width, height });
+
+  const left = safeInteger(sourceWindow.left_q16, "source_window.left_q16") / Q16_ONE;
+  const top = safeInteger(sourceWindow.top_q16, "source_window.top_q16") / Q16_ONE;
+  const right = safeInteger(sourceWindow.right_q16, "source_window.right_q16") / Q16_ONE;
+  const bottom = safeInteger(sourceWindow.bottom_q16, "source_window.bottom_q16") / Q16_ONE;
+  if (right <= left || bottom <= top) return null;
+
+  const sourceLeft = Math.max(left, 0);
+  const sourceTop = Math.max(top, 0);
+  const sourceRight = Math.min(right, 1);
+  const sourceBottom = Math.min(bottom, 1);
+  if (sourceRight <= sourceLeft || sourceBottom <= sourceTop) return null;
+
+  const windowWidth = right - left;
+  const windowHeight = bottom - top;
+  return Object.freeze({
+    x: x - (left / windowWidth) * width,
+    y: y - (top / windowHeight) * height,
+    width: width / windowWidth,
+    height: height / windowHeight
+  });
+}
+
+export function imageRecolorPaintPlan(node) {
+  const effect = node?.image_recolor;
+  if (!effect || effect.preserve_grays !== false) return null;
+  const target = effect.target_rgb;
+  if (!Array.isArray(target) || target.length !== 3) return null;
+  const channels = target.map((value) => {
+    const channel = Number(value);
+    if (!Number.isInteger(channel) || channel < 0 || channel > 255) {
+      throw new RangeError("image_recolor.target_rgb must contain byte values");
+    }
+    return channel / 255;
+  });
+  const luminance = [0.2125, 0.7154, 0.0721];
+  const rows = channels.map((targetChannel) => [
+    luminance[0] * (1 - targetChannel),
+    luminance[1] * (1 - targetChannel),
+    luminance[2] * (1 - targetChannel),
+    0,
+    targetChannel
+  ]);
+  rows.push([0, 0, 0, 1, 0]);
+  return Object.freeze({
+    target_rgb: Object.freeze([...target]),
+    values: rows.flat().join(" ")
+  });
+}
+
+export function resolvedEditorImagePlan(node, resource, page, view) {
+  if (node?.visual_authority !== "reader_scene") return null;
+  const href = inlineImageHref(resource);
+  if (!href) return null;
+  const frame = node.bounds;
+  const geometry = imagePaintGeometry(frame, node.image_source_window ?? null);
+  if (!geometry) return null;
+
+  const rotation = node.image_content_rotation_degrees ?? null;
+  if (rotation !== null && node.image_source_window != null) return null;
+  const localGeometry = {
+    x: geometry.x - frame.x,
+    y: geometry.y - frame.y,
+    width: geometry.width,
+    height: geometry.height
+  };
+  const content = imageContentRotationGeometry(localGeometry, rotation);
+  if (!content) return null;
+  const recolor = imageRecolorPaintPlan(node);
+
+  return Object.freeze({
+    authority: "reader-picture-content",
+    href,
+    resource_id: resource.resource_id,
+    viewport: Object.freeze({
+      x: page.x + emuToCss(frame.x, view),
+      y: page.y + emuToCss(frame.y, view),
+      width: emuToCss(frame.width, view),
+      height: emuToCss(frame.height, view)
+    }),
+    geometry: Object.freeze({
+      x: emuNumberToCss(content.x, view),
+      y: emuNumberToCss(content.y, view),
+      width: emuNumberToCss(content.width, view),
+      height: emuNumberToCss(content.height, view)
+    }),
+    content_transform: content.transform == null ? null : (() => {
+      const match = /^rotate\((90|180|270) ([^ ]+) ([^)]+)\)$/.exec(content.transform);
+      if (!match) return null;
+      return "rotate(" + match[1] + " "
+        + emuNumberToCss(Number(match[2]), view) + " "
+        + emuNumberToCss(Number(match[3]), view) + ")";
+    })(),
+    recolor
+  });
+}
+
 function inlineFontHref(resource) {
   const value = resource?.inline_data_url;
   if (resource?.kind !== "font" || typeof value !== "string") return null;
@@ -89,6 +235,101 @@ function textColorCss(value) {
   return Array.isArray(value) && value.length === 3
     ? "rgb(" + value.map(Number).join(" ") + ")"
     : "rgba(0,0,0,0.9)";
+}
+
+function tableRgb(value) {
+  if (!Array.isArray(value) || value.length !== 3) return null;
+  const channels = value.map(Number);
+  if (channels.some((channel) => !Number.isInteger(channel) || channel < 0 || channel > 255)) {
+    return null;
+  }
+  return "rgb(" + channels.join(" ") + ")";
+}
+
+export function tableCellPaintGeometry(cell) {
+  const bounds = cell?.bounds;
+  if (!bounds) return null;
+  const x = safeInteger(bounds.x, "table.cell.bounds.x");
+  const y = safeInteger(bounds.y, "table.cell.bounds.y");
+  const width = safeInteger(bounds.width, "table.cell.bounds.width");
+  const height = safeInteger(bounds.height, "table.cell.bounds.height");
+  if (width <= 0 || height <= 0) return null;
+  return Object.freeze({ x, y, width, height });
+}
+
+export function tableCellFillPaintPlan(cell) {
+  const geometry = tableCellPaintGeometry(cell);
+  const fill = tableRgb(cell?.fill_rgb);
+  if (!geometry || cell?.fill_visible !== true || !fill) return null;
+  return Object.freeze({ geometry, fill });
+}
+
+export function tableBorderPaintPlan(border) {
+  const x1 = safeInteger(border?.x1_emu, "table.border.x1_emu");
+  const y1 = safeInteger(border?.y1_emu, "table.border.y1_emu");
+  const x2 = safeInteger(border?.x2_emu, "table.border.x2_emu");
+  const y2 = safeInteger(border?.y2_emu, "table.border.y2_emu");
+  const width = safeInteger(border?.width_emu, "table.border.width_emu");
+  const stroke = tableRgb(border?.rgb);
+  if (!stroke || width <= 0 || (x1 === x2 && y1 === y2)) return null;
+  return Object.freeze({ x1, y1, x2, y2, stroke, width });
+}
+
+export function resolvedEditorTablePlan(node, page, view) {
+  const table = node?.table;
+  if (node?.visual_authority !== "reader_scene" || !table) return null;
+  const rows = safeInteger(table.rows, "table.rows");
+  const columns = safeInteger(table.columns, "table.columns");
+  if (rows <= 0 || columns <= 0) return null;
+
+  const cells = [];
+  for (const cell of table.cells ?? []) {
+    const geometry = tableCellPaintGeometry(cell);
+    if (!geometry) continue;
+    const row = safeInteger(cell.row, "table.cell.row");
+    const column = safeInteger(cell.column, "table.cell.column");
+    const rowSpan = safeInteger(cell.row_span ?? 1, "table.cell.row_span");
+    const columnSpan = safeInteger(cell.column_span ?? 1, "table.cell.column_span");
+    if (row < 0 || column < 0 || rowSpan <= 0 || columnSpan <= 0) continue;
+    const fill = tableCellFillPaintPlan(cell);
+    cells.push(Object.freeze({
+      cell_id: String(cell.cell_id ?? ""),
+      row,
+      column,
+      row_span: rowSpan,
+      column_span: columnSpan,
+      text: String(cell.text ?? ""),
+      text_authority: "browser-preview-only",
+      x: page.x + emuToCss(geometry.x, view),
+      y: page.y + emuToCss(geometry.y, view),
+      width: emuToCss(geometry.width, view),
+      height: emuToCss(geometry.height, view),
+      fill: fill?.fill ?? null,
+    }));
+  }
+
+  const borders = [];
+  for (const border of table.borders ?? []) {
+    const plan = tableBorderPaintPlan(border);
+    if (!plan) continue;
+    borders.push(Object.freeze({
+      x1: page.x + emuToCss(plan.x1, view),
+      y1: page.y + emuToCss(plan.y1, view),
+      x2: page.x + emuToCss(plan.x2, view),
+      y2: page.y + emuToCss(plan.y2, view),
+      stroke: plan.stroke,
+      width_css_px: emuToCss(plan.width, view),
+    }));
+  }
+
+  return Object.freeze({
+    authority: "reader-table-resolved",
+    story_id: typeof table.story_id === "string" ? table.story_id : null,
+    rows,
+    columns,
+    cells: Object.freeze(cells),
+    borders: Object.freeze(borders),
+  });
 }
 
 export function resolvedEditorTextPlan(node, resources, page, view) {
@@ -216,8 +457,8 @@ function previewTextCss(style, view) {
 
 export function buildRenderPlan(snapshot, rawView = {}) {
   assertSceneSourceNeutral(snapshot);
-  if (snapshot?.protocol_version !== "chaptera.scene.v1") {
-    throw new Error("renderer requires BrowserSceneSnapshotV1");
+  if (!isRenderableSceneProtocol(snapshot?.protocol_version)) {
+    throw new Error("renderer requires BrowserSceneSnapshotV1 or EditorRenderSceneV1");
   }
   const view = normalizeView(rawView);
   const pages = [...snapshot.pages].sort((a, b) => a.order - b.order);
@@ -259,13 +500,18 @@ export function buildRenderPlan(snapshot, rawView = {}) {
       const paint = node.paint_id ? paints.get(node.paint_id) ?? null : null;
       const story = storyByNode.get(node.node_id) ?? null;
       const resource = node.resource_id ? resources.get(node.resource_id) ?? null : null;
+      const resolvedImage = resource
+        ? resolvedEditorImagePlan(node, resource, { x: pageX, y: pageY }, view)
+        : null;
       const resolvedText = story
         ? resolvedEditorTextPlan(node, resources, { x: pageX, y: pageY }, view)
         : null;
+      const resolvedTable = resolvedEditorTablePlan(node, { x: pageX, y: pageY }, view);
       const plan = Object.freeze({
         node_id: node.node_id,
         page_id: node.page_id,
         kind: node.kind,
+        visual_authority: node.visual_authority ?? null,
         x: pageX + emuToCss(node.bounds.x, view),
         y: pageY + emuToCss(node.bounds.y, view),
         width: emuToCss(node.bounds.width, view),
@@ -275,6 +521,7 @@ export function buildRenderPlan(snapshot, rawView = {}) {
           stroke: rgbaCss(paint?.stroke?.color ?? null),
           stroke_width_css_px: emuToCss(paint?.stroke?.width_emu ?? 0, view)
         }),
+        table: resolvedTable,
         story: story ? Object.freeze({
           text: story.text,
           text_fidelity: story.text_fidelity,
@@ -291,7 +538,8 @@ export function buildRenderPlan(snapshot, rawView = {}) {
           mime: resource.mime,
           content_hash: resource.content_hash,
           fetch_handle: resource.fetch_handle,
-          inline_data_url: inlineImageHref(resource)
+          inline_data_url: inlineImageHref(resource),
+          resolved_image: resolvedImage
         }) : null,
         diagnostics: Object.freeze([...(diagnosticsByNode.get(node.node_id) ?? [])]),
         canonical_bounds: Object.freeze({ ...node.bounds })
@@ -367,6 +615,99 @@ function svgNode(tag, attrs) {
   const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
   for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
   return node;
+}
+
+function appendResolvedSvgTable(root, table) {
+  if (!table) return false;
+  let painted = false;
+  for (const cell of table.cells) {
+    if (cell.fill) {
+      root.appendChild(svgNode("rect", {
+        x: cell.x,
+        y: cell.y,
+        width: cell.width,
+        height: cell.height,
+        fill: cell.fill,
+        "data-table-cell-id": cell.cell_id,
+        "data-table-cell-paint-authority": "source-t595"
+      }));
+      painted = true;
+    }
+  }
+  for (const border of table.borders) {
+    root.appendChild(svgNode("line", {
+      x1: border.x1,
+      y1: border.y1,
+      x2: border.x2,
+      y2: border.y2,
+      stroke: border.stroke,
+      "stroke-width": border.width_css_px,
+      "data-table-border-authority": "source-t840"
+    }));
+    painted = true;
+  }
+  for (const cell of table.cells) {
+    if (!cell.text) continue;
+    const label = svgNode("text", {
+      x: cell.x + 2,
+      y: cell.y + 12,
+      "font-size": 10,
+      "data-table-cell-id": cell.cell_id,
+      "data-table-row": cell.row,
+      "data-table-column": cell.column,
+      "data-table-row-span": cell.row_span,
+      "data-table-column-span": cell.column_span,
+      "data-text-authority": cell.text_authority,
+      "data-preview-reason": "table_cell_preview"
+    });
+    label.textContent = cell.text.slice(0, 120);
+    root.appendChild(label);
+    painted = true;
+  }
+  return painted;
+}
+
+function appendResolvedSvgImage(root, defs, resource, imageId) {
+  const plan = resource?.resolved_image;
+  if (!plan) return false;
+  let filterId = null;
+  if (plan.recolor) {
+    filterId = imageId + "-recolor";
+    const filter = svgNode("filter", {
+      id: filterId,
+      "color-interpolation-filters": "sRGB"
+    });
+    filter.appendChild(svgNode("feColorMatrix", {
+      type: "matrix",
+      values: plan.recolor.values
+    }));
+    defs.appendChild(filter);
+  }
+  const viewport = svgNode("svg", {
+    x: plan.viewport.x,
+    y: plan.viewport.y,
+    width: plan.viewport.width,
+    height: plan.viewport.height,
+    viewBox: "0 0 " + plan.viewport.width + " " + plan.viewport.height,
+    overflow: "hidden",
+    "data-picture-viewport": "fixed-frame",
+    "data-picture-authority": plan.authority
+  });
+  const image = svgNode("image", {
+    x: plan.geometry.x,
+    y: plan.geometry.y,
+    width: plan.geometry.width,
+    height: plan.geometry.height,
+    preserveAspectRatio: "none",
+    filter: filterId ? "url(#" + filterId + ")" : null,
+    transform: plan.content_transform,
+    "data-resource-id": plan.resource_id,
+    "data-image-recolor-authority": plan.recolor ? "source-picture-recolor" : null
+  });
+  image.setAttribute("href", plan.href);
+  viewport.appendChild(image);
+  root.appendChild(viewport);
+  return true;
 }
 
 function appendResolvedSvgText(root, story) {
@@ -451,8 +792,11 @@ class SvgRenderer {
     const size = hostSize(this.host);
     this.root = svgNode("svg", { width: size.width, height: size.height, "data-renderer": "svg" });
     this.host.appendChild(this.root);
+    this.defs = svgNode("defs", { "data-layer": "reader-picture-defs" });
+    this.root.appendChild(this.defs);
     this.plan = buildRenderPlan(this.snapshot, this.view);
     appendSvgFontFaces(this.root, this.plan);
+    let imageIndex = 0;
     for (const page of this.plan.pages) {
       this.root.appendChild(svgNode("rect", {
         x: page.x, y: page.y, width: page.width, height: page.height,
@@ -466,7 +810,21 @@ class SvgRenderer {
           "stroke-width": Math.max(0.5, node.paint.stroke_width_css_px || 0.5),
           "data-node-id": node.node_id
         }));
-        if (node.resource?.inline_data_url) {
+        appendResolvedSvgTable(this.root, node.table);
+        const paintedResolvedImage = node.resource
+          ? appendResolvedSvgImage(
+              this.root,
+              this.defs,
+              node.resource,
+              "chaptera-editor-image-" + imageIndex++
+            )
+          : false;
+        let paintedGenericImage = false;
+        if (
+          !paintedResolvedImage &&
+          node.visual_authority !== "reader_scene" &&
+          node.resource?.inline_data_url
+        ) {
           const image = svgNode("image", {
             x: node.x,
             y: node.y,
@@ -474,10 +832,11 @@ class SvgRenderer {
             height: node.height,
             preserveAspectRatio: "none",
             "data-resource-id": node.resource.resource_id,
-            "data-resource-authority": "reader-scene-inline"
+            "data-resource-authority": "browser-scene-inline"
           });
           image.setAttribute("href", node.resource.inline_data_url);
           this.root.appendChild(image);
+          paintedGenericImage = true;
         }
         if (node.story && !appendResolvedSvgText(this.root, node.story)) {
           const label = svgNode("text", {
@@ -492,8 +851,20 @@ class SvgRenderer {
           });
           label.textContent = node.story.text.slice(0, 120);
           this.root.appendChild(label);
-        } else if (node.resource && !node.resource.inline_data_url && !node.story) {
-          const label = svgNode("text", { x: node.x + 2, y: node.y + 14, "font-size": 10 });
+        } else if (
+          node.resource &&
+          !paintedResolvedImage &&
+          !paintedGenericImage &&
+          !node.story
+        ) {
+          const label = svgNode("text", {
+            x: node.x + 2,
+            y: node.y + 14,
+            "font-size": 10,
+            "data-image-preview-reason": node.resource.inline_data_url
+              ? "reader_picture_plan_unavailable"
+              : "resource_unavailable"
+          });
           label.textContent = "image:" + node.resource.availability;
           this.root.appendChild(label);
         }

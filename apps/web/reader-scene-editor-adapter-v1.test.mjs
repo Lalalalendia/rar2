@@ -83,7 +83,7 @@ function readerScene() {
 
 test("rich Reader Scene becomes an Editor Scene without changing revision authority", async () => {
   const scene = await adaptReaderSceneToEditorScene(readerScene());
-  assert.equal(scene.protocol_version, "chaptera.scene.v1");
+  assert.equal(scene.protocol_version, "chaptera.editor-render-scene.v1");
   assert.equal(scene.document_id, DOC);
   assert.equal(scene.revision_id, REVISION);
   assert.equal(scene.stacking_fidelity, "exact");
@@ -95,6 +95,8 @@ test("rich Reader Scene becomes an Editor Scene without changing revision author
   assert.equal(scene.nodes[1].z_order, 1);
   assert.deepEqual(scene.paints[0].fill, { r: 1, g: 2, b: 3, a: 255 });
   assert.equal(scene.resources[0].inline_data_url, PIXEL);
+  assert.equal(scene.resources[0].expected_sha256, null);
+  assert.equal(scene.resources[0].family_name, null);
   const font = scene.resources.find((resource) => resource.kind === "font");
   assert.equal(font.resource_id, FONT_ID);
   assert.equal(font.expected_sha256, FONT_SHA);
@@ -128,4 +130,56 @@ test("adapter rejects image/font resource identity collisions", async () => {
     adaptReaderSceneToEditorScene(payload),
     /duplicate image\/font resource identity/,
   );
+});
+
+
+test("adapter preserves Reader picture crop rotation and recolor semantics verbatim", async () => {
+  const payload = readerScene();
+  payload.nodes[0].image_source_window = {
+    left_q16: 16384,
+    top_q16: 0,
+    right_q16: 49152,
+    bottom_q16: 65536,
+  };
+  payload.nodes[0].image_content_rotation_degrees = null;
+  payload.nodes[0].image_recolor = {
+    target_rgb: [51, 102, 153],
+    preserve_grays: false,
+  };
+
+  const scene = await adaptReaderSceneToEditorScene(payload);
+  assert.deepEqual(scene.nodes[0].image_source_window, payload.nodes[0].image_source_window);
+  assert.equal(scene.nodes[0].image_content_rotation_degrees, null);
+  assert.deepEqual(scene.nodes[0].image_recolor, payload.nodes[0].image_recolor);
+});
+
+test("Reader table semantics pass through without browser grid inference", async () => {
+  const payload = readerScene();
+  payload.nodes[0].table = {
+    story_id: "story:table",
+    rows: 2,
+    columns: 2,
+    cells: [{
+      cell_id: "cell:0:0",
+      row: 0,
+      column: 0,
+      row_span: 1,
+      column_span: 2,
+      text: "Header",
+      bounds: { x: 100, y: 200, width: 600, height: 300 },
+      fill_rgb: [12, 34, 56],
+      fill_visible: true,
+    }],
+    borders: [{
+      x1_emu: 100,
+      y1_emu: 200,
+      x2_emu: 700,
+      y2_emu: 200,
+      rgb: [1, 2, 3],
+      width_emu: 12700,
+    }],
+  };
+  const scene = await adaptReaderSceneToEditorScene(payload);
+  assert.deepEqual(scene.nodes[0].table, payload.nodes[0].table);
+  assert.equal(scene.nodes[0].visual_authority, "reader_scene");
 });
