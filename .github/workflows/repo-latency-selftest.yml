@@ -1,0 +1,71 @@
+name: CI-REPO-LATENCY-01 self-test
+
+on:
+  pull_request:
+    paths:
+      - "tools/ci/repo_latency_census.py"
+      - "tools/ci/test_repo_latency_census.py"
+      - ".github/workflows/repo-latency-selftest.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  offline-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Prove repo-wide census semantics without API or external fixtures
+        run: python -m unittest tools.ci.test_repo_latency_census -v
+      - name: Live API smoke on two previously merged exact heads
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci/repo_latency_census.py \
+            --repo "${{ github.repository }}" \
+            --limit 2 \
+            --out target/ci-repo-latency/live-smoke.json
+      - uses: actions/upload-artifact@v4
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          name: ci-repo-latency-live-smoke
+          path: target/ci-repo-latency/live-smoke.json
+          if-no-files-found: error
+          retention-days: 14
+
+  recent-merged-census:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: offline-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Measure actual merged PR feedback, queue and merge-ready latency
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci/repo_latency_census.py \
+            --repo "${{ github.repository }}" \
+            --limit 12 \
+            --out target/ci-repo-latency/recent-merged.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-repo-latency-exact-head
+          path: target/ci-repo-latency/recent-merged.json
+          if-no-files-found: error
+          retention-days: 30
