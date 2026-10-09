@@ -7,6 +7,7 @@ on:
       - "tools/native-pub-candidate-cli/examples/accepted_sample3_project.rs"
       - "tools/test_sample3_browser_pub_download_service.py"
       - "tools/test_sample3_browser_pub_download.mjs"
+      - "tools/test_sample3_editor_ui_acceptance.mjs"
   workflow_dispatch:
 
 permissions:
@@ -105,6 +106,36 @@ jobs:
           print({"http_browser_bytes": "exact_match", "publisher_acceptance": "existing_external_exact_pair_only"})
           PY
 
+      - name: Regenerate original Sample3 Viewer/Scene inputs from current Reader
+        shell: bash
+        run: |
+          set -euo pipefail
+          vendor/producer-a/target/debug/chaptera-producer-a \
+            resolved-graph .sample3-positive/source.pub \
+            > .sample3-positive/resolved-graph.json
+          vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/source.pub \
+            > .sample3-positive/viewer-geometry.json
+          python tools/validate_viewer_geometry_receipt.py \
+            .sample3-positive/viewer-geometry.json
+
+      - name: Prove real Chaptera UI Story edit through Publisher-approved Download PUB
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/test_sample3_editor_ui_acceptance.mjs \
+            .sample3-positive/source.pub \
+            .sample3-positive/baseline.json \
+            .sample3-positive/resolved-graph.json \
+            .sample3-positive/viewer-geometry.json \
+            vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/runtime
+          cmp .sample3-positive/runtime/ui-edited.pub \
+            .sample3-positive/handoff/candidate.pub
+
+      - name: Prove pinned Newsletter still rejects unauthorized native PUB download
+        run: python tools/run_local_real_editor.py --smoke
+
       - name: Keep legacy real-Newsletter browser denial gate
         run: |
           python - <<'PY'
@@ -123,5 +154,6 @@ jobs:
           retention-days: 14
           path: |
             .sample3-positive/runtime/sample3-browser-pub-download.json
+            .sample3-positive/runtime/sample3-ui-pub-download.json
             .sample3-positive/runtime/accepted.json
             .sample3-positive/runtime/baseline.json

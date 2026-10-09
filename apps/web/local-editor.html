@@ -94,8 +94,11 @@ function showState(state){
 
 async function disclosure(){
   const scene=shell.snapshot;
-  const [preview,pubPreview,editorCaps]=await Promise.all([
-    service.exportPreview(document.querySelector("#target").value),
+  // Unsupported editable export must not suppress independent Story/PUB capability
+  // facts or leave the editor without bound commands.
+  const [exportResult,pubPreview,editorCaps]=await Promise.all([
+    service.exportPreview(document.querySelector("#target").value)
+      .then(value=>({ok:true,value}),()=>({ok:false})),
     service.nativePubPreview(),
     service.editorCapabilities(),
   ]);
@@ -106,12 +109,18 @@ async function disclosure(){
     (scene.fidelity.reasons?.length?" — "+scene.fidelity.reasons.join(", "):"");
   document.querySelector("#capabilities").textContent="Capabilities: "+
     (caps.length?caps.map(x=>x.key+"="+x.state).join("; "):"none");
-  const losses=(preview.items??[]).filter(x=>x.disposition!=="preserved");
   const loss=document.querySelector("#loss");
-  loss.className=preview.can_serialize?"ok":"bad";
-  loss.textContent="Export "+preview.target.format.toUpperCase()+": "+
-    (preview.can_serialize?"ready":"blocked")+" · blocking="+preview.counts.blocking+
-    " · losses="+losses.length;
+  if(exportResult.ok){
+    const preview=exportResult.value;
+    const losses=(preview.items??[]).filter(x=>x.disposition!=="preserved");
+    loss.className=preview.can_serialize?"ok":"bad";
+    loss.textContent="Export "+preview.target.format.toUpperCase()+": "+
+      (preview.can_serialize?"ready":"blocked")+" · blocking="+preview.counts.blocking+
+      " · losses="+losses.length;
+  }else{
+    loss.className="bad";
+    loss.textContent="Export: blocked (this target has no validated preview)";
+  }
   const pub=document.querySelector("#pubsave");
   pub.className=pubPreview.can_download===true?"ok":"warn";
   pub.textContent="PUB: "+(pubPreview.can_download===true
