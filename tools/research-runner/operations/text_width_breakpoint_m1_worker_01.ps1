@@ -4,9 +4,10 @@ param(
     [Parameter(Mandatory=$true)][string]$OutputRoot,
     [ValidateSet("none","control-before","narrow","wide","control-after",
         "m2-mid-1","m2-mid-2","m2-mid-3","m2-mid-4",
-        "m2-mid-5","m2-mid-6","m2-mid-7")][string]$ArmId = "none",
+        "m2-mid-5","m2-mid-6","m2-mid-7","m3-audit")][string]$ArmId = "none",
     [double]$WidthPt = 160,
-    [string]$ExpectedSourceSha = ""
+    [string]$ExpectedSourceSha = "",
+    [switch]$CaptureHyphenation
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -127,7 +128,26 @@ function Snapshot($Shape, [string]$PhaseTag = "") {
         $visibleSizePt = [double]$visibleFont.Size
         $visibleTextMatches = ($visibleText -ceq $ExpectedText)
         if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_properties") }
-        return [ordered]@{
+        $hyphenation = $null
+        if ($CaptureHyphenation) {
+            # Observation only: application Options can differ from Story policy.
+            if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_hyphenation_read") }
+            $options = $frame.Application.Options
+            try {
+                $zonePt = [double]$options.HyphenationZone
+                if ([double]::IsNaN($zonePt) -or [double]::IsInfinity($zonePt)) {
+                    throw "m3_hyphenation_zone_nonfinite"
+                }
+                $hyphenation = [ordered]@{
+                    auto_hyphenate = [bool]$options.AutoHyphenate
+                    hyphenation_zone_pt = $zonePt
+                    scope = "app_options_only"
+                    story_policy_observed = $false
+                    options_mutated = $false
+                }
+            } finally { Release-Com $options }
+        }
+        $result = [ordered]@{
             width_pt = [double]$Shape.Width
             height_pt = [double]$Shape.Height
             font_name = [string]$font.Name
@@ -145,6 +165,8 @@ function Snapshot($Shape, [string]$PhaseTag = "") {
             line_count = $count
             lines = $lines
         }
+        if ($CaptureHyphenation) { $result.hyphenation_options = $hyphenation }
+        return $result
     } finally {
         Release-Com $visibleFont
         Release-Com $visibleRange
@@ -274,7 +296,11 @@ try {
             "wide" = 172.0
             "control-after" = 160.0
         }
-        if ($ArmId -match '^m2-mid-[1-7]$') {
+        if ($ArmId -eq "m3-audit") {
+            if (-not $CaptureHyphenation -or [math]::Abs($WidthPt - 162.53125) -gt 0.00001) {
+                throw "m3_readonly_arm_not_allowlisted"
+            }
+        } elseif ($ArmId -match '^m2-mid-[1-7]$') {
             # M2 bisection is a bounded, quantized subset of the proven M1
             # 160..172pt bracket; no arbitrary widths or arm identifiers.
             if ($WidthPt -le 160.0 -or $WidthPt -ge 172.0 -or
