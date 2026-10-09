@@ -1238,7 +1238,8 @@ mod authored_page_identity_tests {
 mod authored_page_append_tests {
     use super::*;
     use crate::{
-        AuthoredEntityProvenanceV1, EDITOR_PROJECT_VERSION_V0_25, EditorProject, PubResolvedGraph,
+        AuthoredEntityProvenanceV1, EDITOR_PROJECT_VERSION_V0_25, EDITOR_PROJECT_VERSION_V0_26,
+        EditorProject, PubResolvedGraph,
     };
     use pub_model::{Document, Sha256Digest, SourceDescriptor};
 
@@ -1545,5 +1546,185 @@ mod authored_page_append_tests {
             .expect("appended ODG page layout end");
         let layout = &tail[..end];
         assert!(layout.contains("fo:page-width=\"200pt\" fo:page-height=\"300pt\""));
+    }
+
+
+    #[test]
+    fn delete_blank_authored_page_roundtrips_undo_redo_and_project_replay() {
+        let source = page_id("22222222-2222-4222-8222-222222222222");
+        let identity = authored_identity();
+        let graph = source_graph(vec![source]);
+        let mut session = EditorSession::new(graph.clone()).expect("session");
+        let source_hash_before = session.source_hash();
+
+        session
+            .append_blank_page_v1(
+                vec![source],
+                identity,
+                Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                None,
+                None,
+            )
+            .expect("append blank page");
+        let after_append_pages = session.graph().document.pages.clone();
+        let after_append_page = session
+            .graph()
+            .pages
+            .get(&identity.page_id)
+            .cloned()
+            .expect("appended page");
+
+        session
+            .delete_blank_authored_page_v1(vec![source], identity.page_id)
+            .expect("delete blank authored page");
+
+        assert_eq!(session.graph().document.pages, vec![source]);
+        assert!(!session.graph().pages.contains_key(&identity.page_id));
+        assert_eq!(
+            session
+                .effective_customer_page_order_v1(&[source])
+                .expect("effective after delete"),
+            vec![source]
+        );
+        assert_eq!(session.source_hash(), source_hash_before);
+
+        session.undo().expect("undo delete");
+        assert_eq!(session.graph().document.pages, after_append_pages);
+        assert_eq!(
+            session.graph().pages.get(&identity.page_id),
+            Some(&after_append_page)
+        );
+        assert_eq!(
+            session
+                .effective_customer_page_order_v1(&[source])
+                .expect("effective after undo"),
+            vec![source, identity.page_id]
+        );
+
+        session.redo().expect("redo delete");
+        assert_eq!(session.graph().document.pages, vec![source]);
+        assert!(!session.graph().pages.contains_key(&identity.page_id));
+
+        let project = session.project();
+        assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_26);
+        let bytes = serde_json::to_vec(&project).expect("serialize project");
+        let decoded: EditorProject = serde_json::from_slice(&bytes).expect("deserialize project");
+
+        let mut reopened = EditorSession::new(graph).expect("fresh session");
+        reopened.apply_project(&decoded).expect("replay delete project");
+        assert_eq!(reopened.operations(), decoded.operations.as_slice());
+        assert_eq!(reopened.graph().document.pages, vec![source]);
+        assert!(!reopened.graph().pages.contains_key(&identity.page_id));
+        assert_eq!(
+            reopened
+                .effective_customer_page_order_v1(&[source])
+                .expect("replayed effective order"),
+            vec![source]
+        );
+        assert_eq!(reopened.source_hash(), source_hash_before);
+    }
+
+    #[test]
+    fn delete_blank_authored_page_blocks_same_page_id_resurrection() {
+        let source = page_id("22222222-2222-4222-8222-222222222222");
+        let identity = authored_identity();
+        let mut session = EditorSession::new(source_graph(vec![source])).expect("session");
+
+        session
+            .append_blank_page_v1(
+                vec![source],
+                identity,
+                Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                None,
+                None,
+            )
+            .expect("append");
+        session
+            .delete_blank_authored_page_v1(vec![source], identity.page_id)
+            .expect("delete");
+
+        assert_eq!(
+            session.append_blank_page_v1(
+                vec![source],
+                identity,
+                Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                None,
+                None,
+            ),
+            Err(EditorError::AuthoredPageIdentityConflict {
+                page_id: identity.page_id,
+            })
+        );
+        assert_eq!(session.operations().len(), 2);
+    }
+
+    #[test]
+    fn delete_blank_authored_page_rejects_source_backed_and_final_customer_membership() {
+        let source = page_id("22222222-2222-4222-8222-222222222222");
+        let identity = authored_identity();
+        let mut session = EditorSession::new(source_graph(vec![source])).expect("session");
+
+        assert!(matches!(
+            session.delete_blank_authored_page_v1(vec![source], source),
+            Err(EditorError::PageDeleteUnsupported { .. })
+        ));
+        assert!(session.operations().is_empty());
+
+        session
+            .append_blank_page_v1(
+                vec![source],
+                identity,
+                Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                None,
+                None,
+            )
+            .expect("append");
+        assert!(matches!(
+            session.delete_blank_authored_page_v1(Vec::new(), identity.page_id),
+            Err(EditorError::PageDeleteUnsupported { .. })
+        ));
+        assert_eq!(session.operations().len(), 1);
+        assert!(session.graph().pages.contains_key(&identity.page_id));
+    }
+
+    #[test]
+    fn deleted_blank_page_is_absent_from_idml_and_odg_packages() {
+        let source = page_id("22222222-2222-4222-8222-222222222222");
+        let identity = authored_identity();
+        let mut session = EditorSession::new(source_graph(vec![source])).expect("session");
+        session
+            .append_blank_page_v1(
+                vec![source],
+                identity,
+                Size2D::new(
+                    LengthEmu::new(200 * pub_model::EMU_PER_POINT),
+                    LengthEmu::new(300 * pub_model::EMU_PER_POINT),
+                ),
+                None,
+                None,
+            )
+            .expect("append");
+        session
+            .delete_blank_authored_page_v1(vec![source], identity.page_id)
+            .expect("delete");
+
+        let source_hex = page_hex(source);
+        let deleted_hex = page_hex(identity.page_id);
+
+        let idml = session
+            .export_editable(crate::EditorEditableTarget::Idml, "delete-blank-page-idml")
+            .expect("export IDML after delete");
+        let designmap = read_zip_text(&idml.bytes, "designmap.xml");
+        assert!(designmap.contains(&format!("Spreads/Spread_usp{source_hex}.xml")));
+        assert!(!designmap.contains(&format!("Spreads/Spread_usp{deleted_hex}.xml")));
+
+        let odg = session
+            .export_editable(crate::EditorEditableTarget::Odg, "delete-blank-page-odg")
+            .expect("export ODG after delete");
+        let content = read_zip_text(&odg.bytes, "content.xml");
+        let styles = read_zip_text(&odg.bytes, "styles.xml");
+        assert!(content.contains(&format!("draw:name=\"Page_{source_hex}\"")));
+        assert!(!content.contains(&format!("draw:name=\"Page_{deleted_hex}\"")));
+        assert!(!styles.contains(&format!("style:name=\"PM_{deleted_hex}\"")));
     }
 }
