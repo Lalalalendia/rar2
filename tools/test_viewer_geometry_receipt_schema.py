@@ -57,6 +57,7 @@ def minimal_receipt():
         "images": [{
             "resource_id": "40000000-0000-4000-8000-000000000001",
             "mime": "image/png",
+            "source_exact": True,
             "node_ids": ["30000000-0000-4000-8000-000000000001"],
         }],
     }
@@ -75,6 +76,12 @@ class ViewerGeometryReceiptSchemaTests(unittest.TestCase):
     def test_unknown_nested_source_field_fails_closed(self):
         receipt = minimal_receipt()
         receipt["document"]["source"]["local_path"] = "C:\\Users\\private\\fixture.pub"
+        with self.assertRaises(AssertionError):
+            validate_schema(receipt)
+
+    def test_source_exact_requires_a_boolean(self):
+        receipt = minimal_receipt()
+        receipt["images"][0]["source_exact"] = "yes"
         with self.assertRaises(AssertionError):
             validate_schema(receipt)
 
