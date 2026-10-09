@@ -768,6 +768,39 @@ pub(super) fn display_page_duplicate_error_v1(
     }
 }
 
+pub(super) fn insert_blank_page_after_error_to_editor_v1(
+    error: InsertBlankPageAfterErrorV1,
+) -> EditorError {
+    match error {
+        InsertBlankPageAfterErrorV1::BeforeStateMismatch
+        | InsertBlankPageAfterErrorV1::AfterStateMismatch
+        | InsertBlankPageAfterErrorV1::InsertionSlotMismatch
+        | InsertBlankPageAfterErrorV1::CurrentCustomerOrderMismatch
+        | InsertBlankPageAfterErrorV1::PageStateMismatch => EditorError::StalePageInsert,
+        other => EditorError::PageInsertUnsupported {
+            message: format!("{other:?}"),
+        },
+    }
+}
+
+pub(super) fn display_page_insert_error_v1(
+    error: &EditorError,
+    formatter: &mut fmt::Formatter<'_>,
+) -> fmt::Result {
+    match error {
+        EditorError::PageInsertUnsupported { message } => {
+            write!(
+                formatter,
+                "insert blank page after is unsupported: {message}"
+            )
+        }
+        EditorError::StalePageInsert => formatter.write_str(
+            "current document/page membership no longer matches insert-page preconditions",
+        ),
+        _ => unreachable!("insert-page display helper receives only insert-page errors"),
+    }
+}
+
 // Authored Page identity is an ordering-adjacent durable history primitive.
 impl EditorSession {
     pub fn authored_page_identities_v1(&self) -> BTreeMap<PageId, AuthoredPageIdentityV1> {
@@ -784,6 +817,9 @@ impl EditorSession {
                     transition.destination_identity.page_id,
                     transition.destination_identity,
                 )),
+                EditOperation::InsertBlankPageAfterV1 { transition } => {
+                    Some((transition.identity.page_id, transition.identity))
+                }
                 _ => None,
             })
             .collect()
@@ -798,6 +834,9 @@ impl EditorSession {
                 }
                 EditOperation::DuplicateBlankPageV1 { transition } => {
                     active.push(transition.destination_identity.page_id);
+                }
+                EditOperation::InsertBlankPageAfterV1 { transition } => {
+                    active.push(transition.identity.page_id);
                 }
                 EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
                     active.retain(|page_id| *page_id != transition.identity.page_id);
@@ -821,6 +860,9 @@ impl EditorSession {
                 }
                 EditOperation::DuplicateBlankPageV1 { transition } => {
                     transition.destination_identity.page_id == page_id
+                }
+                EditOperation::InsertBlankPageAfterV1 { transition } => {
+                    transition.identity.page_id == page_id
                 }
                 _ => false,
             })
@@ -1218,6 +1260,102 @@ impl EditorSession {
         self.consume_canonical_duplicate_blank_page_v1(transition)
     }
 
+    pub fn insert_blank_page_after_v1(
+        &mut self,
+        source_qualified_page_ids: Vec<PageId>,
+        anchor_page_id: PageId,
+        identity: AuthoredPageIdentityV1,
+        size: Size2D,
+        bleed: Option<BoxEdges>,
+        margins: Option<BoxEdges>,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        if self.project_identity.is_none() {
+            return Err(EditorError::PageInsertUnsupported {
+                message: "durable project identity is required".to_owned(),
+            });
+        }
+        if validate_authored_page_identity_v1(&identity).is_err() {
+            return Err(EditorError::AuthoredPageIdentityInvalid {
+                page_id: identity.page_id,
+            });
+        }
+        if self.graph.pages.contains_key(&identity.page_id)
+            || self
+                .authored_page_identities_v1()
+                .contains_key(&identity.page_id)
+            || self.has_page_lifecycle_history_v1(identity.page_id)
+        {
+            return Err(EditorError::AuthoredPageIdentityConflict {
+                page_id: identity.page_id,
+            });
+        }
+        let current_customer_page_ids =
+            self.effective_customer_page_order_v1(&source_qualified_page_ids)?;
+        let page = Page {
+            id: identity.page_id,
+            size,
+            bleed,
+            margins,
+            children: Vec::new(),
+            extensions: Vec::new(),
+        };
+        let transition = plan_insert_blank_page_after_v1(
+            self.graph.document.id,
+            &self.graph.document.pages,
+            &self.graph.pages,
+            &current_customer_page_ids,
+            anchor_page_id,
+            identity,
+            page,
+        )
+        .map_err(insert_blank_page_after_error_to_editor_v1)?;
+        self.consume_canonical_insert_blank_page_after_v1(transition)
+    }
+
+    pub(super) fn consume_canonical_insert_blank_page_after_v1(
+        &mut self,
+        expected: InsertBlankPageAfterTransitionV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        if self.project_identity.is_none() {
+            return Err(EditorError::PageInsertUnsupported {
+                message: "durable project identity is required".to_owned(),
+            });
+        }
+        if self.graph.pages.contains_key(&expected.identity.page_id)
+            || self
+                .authored_page_identities_v1()
+                .contains_key(&expected.identity.page_id)
+            || self.has_page_lifecycle_history_v1(expected.identity.page_id)
+        {
+            return Err(EditorError::AuthoredPageIdentityConflict {
+                page_id: expected.identity.page_id,
+            });
+        }
+        let planned = plan_insert_blank_page_after_v1(
+            self.graph.document.id,
+            &self.graph.document.pages,
+            &self.graph.pages,
+            &expected.before_customer_page_ids,
+            expected.anchor_page_id,
+            expected.identity,
+            expected.page.clone(),
+        )
+        .map_err(insert_blank_page_after_error_to_editor_v1)?;
+        if planned != expected {
+            return Err(EditorError::StalePageInsert);
+        }
+        let operation = EditOperation::InsertBlankPageAfterV1 {
+            transition: expected,
+        };
+        apply_forward(&mut self.graph, &operation)?;
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
     pub(super) fn consume_canonical_duplicate_blank_page_v1(
         &mut self,
         expected: DuplicateBlankPageTransitionV1,
@@ -1437,7 +1575,8 @@ mod authored_page_append_tests {
     use super::*;
     use crate::{
         AuthoredEntityProvenanceV1, EDITOR_PROJECT_VERSION_V0_25, EDITOR_PROJECT_VERSION_V0_26,
-        EDITOR_PROJECT_VERSION_V0_27, EditorProject, PubResolvedGraph,
+        EDITOR_PROJECT_VERSION_V0_27, EDITOR_PROJECT_VERSION_V0_28, EditorProject,
+        PubResolvedGraph,
     };
     use pub_model::{Document, Sha256Digest, SourceDescriptor};
 
@@ -1898,6 +2037,124 @@ mod authored_page_append_tests {
             reopened.graph().document.pages,
             vec![source, appended.page_id]
         );
+    }
+
+    #[test]
+    fn insert_blank_after_contentful_customer_replays_one_exact_page() {
+        let master = page_id("11111111-1111-4111-8111-111111111111");
+        let a = page_id("22222222-2222-4222-8222-222222222222");
+        let service = page_id("33333333-3333-4333-8333-333333333333");
+        let b = page_id("44444444-4444-4444-8444-444444444444");
+        let carrier = page_id("55555555-5555-4555-8555-555555555555");
+        let identity = authored_identity();
+        let graph = source_graph(vec![master, a, service, b, carrier]);
+        let mut session = EditorSession::new(graph.clone()).expect("session");
+        let source_hash = session.source_hash();
+        let shape_id = NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        session
+            .create_shape(
+                shape_id,
+                a,
+                RectEmu::new(
+                    LengthEmu::new(100_000),
+                    LengthEmu::new(100_000),
+                    LengthEmu::new(300_000),
+                    LengthEmu::new(300_000),
+                ),
+                crate::AuthoredShapePaintV1 {
+                    fill: crate::AuthoredSolidFillV1 {
+                        visible: true,
+                        color: crate::Srgb8V1 {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                        },
+                    },
+                    stroke: crate::AuthoredSolidStrokeV1 {
+                        visible: true,
+                        color: crate::Srgb8V1 { r: 0, g: 0, b: 0 },
+                        width_emu: 12_700,
+                    },
+                    provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+                },
+            )
+            .expect("create canonical content on first customer page");
+        let original_content = session.authored_shapes[&shape_id].clone();
+        session
+            .insert_blank_page_after_v1(
+                vec![a, b],
+                a,
+                identity,
+                Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                None,
+                None,
+            )
+            .expect("insert blank after populated customer");
+        let ordered = vec![master, a, identity.page_id, service, b, carrier];
+        assert_eq!(session.graph().document.pages, ordered);
+        assert_eq!(
+            session
+                .effective_customer_page_order_v1(&[a, b])
+                .expect("membership"),
+            vec![a, identity.page_id, b]
+        );
+        assert_eq!(session.operations().len(), 2);
+        assert_eq!(session.authored_shapes[&shape_id], original_content);
+        assert!(session.graph().pages[&identity.page_id].children.is_empty());
+        assert!(
+            session.graph().pages[&identity.page_id]
+                .extensions
+                .is_empty()
+        );
+        assert_eq!(session.source_hash(), source_hash);
+
+        session.undo().expect("undo insert");
+        assert_eq!(session.graph().document.pages, graph.document.pages);
+        assert_eq!(session.authored_shapes[&shape_id], original_content);
+        assert!(
+            session
+                .insert_blank_page_after_v1(
+                    vec![a, b],
+                    a,
+                    identity,
+                    Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                    None,
+                    None,
+                )
+                .is_err(),
+            "undone PageId cannot be recycled by a new insert operation"
+        );
+        session.redo().expect("redo insert");
+        assert_eq!(session.graph().document.pages, ordered);
+
+        let project = session.project();
+        assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_28);
+        let serialized = serde_json::to_vec(&project).expect("encode v0.28");
+        let decoded: EditorProject = serde_json::from_slice(&serialized).expect("decode v0.28");
+        let mut reopened = EditorSession::new(graph.clone()).expect("fresh session");
+        reopened
+            .apply_project(&decoded)
+            .expect("canonical insert replay");
+        assert_eq!(reopened.operations(), decoded.operations.as_slice());
+        assert_eq!(reopened.graph().document.pages, ordered);
+        assert_eq!(reopened.authored_shapes[&shape_id], original_content);
+        assert_eq!(reopened.source_hash(), source_hash);
+
+        let mut legacy = decoded.clone();
+        legacy.schema_version = EDITOR_PROJECT_VERSION_V0_27.to_owned();
+        let mut rejected = EditorSession::new(graph).expect("legacy negative");
+        assert!(matches!(
+            rejected.apply_project(&legacy),
+            Err(EditorProjectError::LegacyProjectCarriesInsertBlankPageOperation { .. })
+        ));
+        reopened
+            .delete_blank_authored_page_v1(vec![a, b], identity.page_id)
+            .expect("inserted empty page is deletable");
+        assert_eq!(
+            reopened.graph().document.pages,
+            vec![master, a, service, b, carrier]
+        );
+        assert_eq!(reopened.authored_shapes[&shape_id], original_content);
     }
 
     #[test]
