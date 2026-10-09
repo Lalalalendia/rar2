@@ -6,6 +6,8 @@ on:
       - "tools/pub-re/src/bin/val_xproj_patch.rs"
       - "tools/pub-re/Cargo.toml"
       - "tools/pub-re/src/bin/t352_crosswalk_census.rs"
+      - "tools/pub-re/src/bin/t352_pathlen_layout.rs"
+      - "tools/windows/run_t352_pathlen_native.ps1"
       - "tools/windows/run_t352_height_native.ps1"
       - "tools/windows/run_t352_independent_native.ps1"
       - ".github/workflows/t352-windows-cfb-path-regression.yml"
@@ -38,12 +40,17 @@ jobs:
         shell: pwsh
         run: rustfmt --edition 2024 --check tools/pub-re/src/bin/t352_crosswalk_census.rs
 
-      - name: Parse independent Publisher-native Width and Height controllers
+      - name: Enforce source-safe Contents layout probe rustfmt
+        shell: pwsh
+        run: rustfmt --edition 2024 --check tools/pub-re/src/bin/t352_pathlen_layout.rs
+
+      - name: Parse independent Publisher-native Width, Height, and Path-Length controllers
         shell: pwsh
         run: |
           foreach ($script in @(
             'tools/windows/run_t352_independent_native.ps1',
-            'tools/windows/run_t352_height_native.ps1'
+            'tools/windows/run_t352_height_native.ps1',
+            'tools/windows/run_t352_pathlen_native.ps1'
           )) {
             $tokens = $null
             $errors = $null
@@ -58,3 +65,6 @@ jobs:
         shell: pwsh
         run: |
           cargo test --manifest-path tools/pub-re/Cargo.toml --bin val_xproj_patch -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "T352 patcher regression failed" }
+          cargo test --manifest-path tools/pub-re/Cargo.toml --bin t352_pathlen_layout -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "T352 path-length layout probe failed" }
