@@ -69,15 +69,19 @@ function Get-ShapeByIdentity($Document, $Meta) {
     }
     return $shape
 }
-function Snapshot($Shape) {
+function Snapshot($Shape, [string]$PhaseTag = "") {
     $frame = $null
     $range = $null
     $font = $null
     $lines = @()
     try {
+        if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_frame") }
         $frame = $Shape.TextFrame
+        if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_range") }
         $range = $frame.TextRange
+        if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_font") }
         $font = $range.Font
+        if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_lines_count") }
         $count = [int]$range.LinesCount
         if ($count -lt 2 -or $count -gt 32) {
             throw "m1_unexpected_line_count"
@@ -85,6 +89,7 @@ function Snapshot($Shape) {
         for ($index=1; $index -le $count; $index++) {
             $line = $null
             try {
+                if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_line_" + $index) }
                 $line = $range.Lines($index,1)
                 $lines += [ordered]@{
                     index = $index
@@ -97,7 +102,9 @@ function Snapshot($Shape) {
                 }
             } finally { Release-Com $line }
         }
+        if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_text") }
         $text = [string]$range.Text
+        if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_properties") }
         return [ordered]@{
             width_pt = [double]$Shape.Width
             height_pt = [double]$Shape.Height
@@ -167,7 +174,7 @@ try {
             $range.Font.Size = $FontSize
             $Stage = "seed_layout_snapshot"
             Write-Stage "running" $Stage
-            $snapshot = Snapshot $shape
+            $snapshot = Snapshot $shape "seed_layout"
             $Stage = "seed_fixed_source_assert"
             Write-Stage "running" $Stage
             Assert-FixedSource $snapshot
