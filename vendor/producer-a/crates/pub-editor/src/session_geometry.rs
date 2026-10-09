@@ -1843,6 +1843,82 @@ mod authored_page_append_tests {
     }
 
     #[test]
+    fn duplicated_blank_page_reaches_idml_and_odg_in_source_order() {
+        let source = page_id("22222222-2222-4222-8222-222222222222");
+        let identity = authored_identity();
+        let mut session = EditorSession::new(source_graph(vec![source])).expect("session");
+        session
+            .duplicate_blank_page_v1(vec![source], source, identity)
+            .expect("duplicate one source-admitted blank customer page");
+
+        assert_eq!(session.graph().document.pages, vec![source, identity.page_id]);
+        assert_eq!(
+            session.graph().pages[&identity.page_id].size,
+            session.graph().pages[&source].size
+        );
+        assert_eq!(
+            session.graph().pages[&identity.page_id].bleed,
+            session.graph().pages[&source].bleed
+        );
+        assert_eq!(
+            session.graph().pages[&identity.page_id].margins,
+            session.graph().pages[&source].margins
+        );
+        assert!(session.graph().pages[&identity.page_id].children.is_empty());
+
+        let source_hex = page_hex(source);
+        let duplicate_hex = page_hex(identity.page_id);
+        let idml = session
+            .export_editable(crate::EditorEditableTarget::Idml, "duplicate-blank-page-idml")
+            .expect("export duplicate to IDML");
+        let designmap = read_zip_text(&idml.bytes, "designmap.xml");
+        let source_spread = format!("Spreads/Spread_usp{source_hex}.xml");
+        let duplicate_spread = format!("Spreads/Spread_usp{duplicate_hex}.xml");
+        assert!(
+            designmap.find(&source_spread).expect("source IDML spread")
+                < designmap
+                    .find(&duplicate_spread)
+                    .expect("duplicate IDML spread"),
+            "duplicate must follow source in IDML designmap"
+        );
+        let duplicate_xml = read_zip_text(&idml.bytes, &duplicate_spread);
+        assert!(
+            duplicate_xml.contains(&format!(
+                r#"<Page Self="up{duplicate_hex}" GeometricBounds="0 0 144 72""#
+            )),
+            "IDML duplicate must preserve source physical page extent"
+        );
+
+        let odg = session
+            .export_editable(crate::EditorEditableTarget::Odg, "duplicate-blank-page-odg")
+            .expect("export duplicate to ODG");
+        let content = read_zip_text(&odg.bytes, "content.xml");
+        assert_eq!(content.matches("<draw:page ").count(), 2);
+        assert!(
+            content
+                .find(&format!(r#"draw:name="Page_{source_hex}""#))
+                .expect("source ODG page")
+                < content
+                    .find(&format!(r#"draw:name="Page_{duplicate_hex}""#))
+                    .expect("duplicate ODG page"),
+            "duplicate must follow source in ODG"
+        );
+
+        let styles = read_zip_text(&odg.bytes, "styles.xml");
+        let duplicate_layout =
+            format!(r#"<style:page-layout style:name="PM_{duplicate_hex}">"#);
+        let start = styles
+            .find(&duplicate_layout)
+            .expect("duplicate ODG page layout");
+        let tail = &styles[start..];
+        let end = tail
+            .find("</style:page-layout>")
+            .expect("ODG page layout end");
+        let layout = &tail[..end];
+        assert!(layout.contains(r#"fo:page-width="72pt" fo:page-height="144pt""#));
+    }
+
+    #[test]
     fn delete_blank_authored_page_roundtrips_undo_redo_and_project_replay() {
         let source = page_id("22222222-2222-4222-8222-222222222222");
         let identity = authored_identity();
