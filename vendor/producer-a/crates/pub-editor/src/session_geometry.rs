@@ -2079,7 +2079,7 @@ mod authored_page_append_tests {
                 },
             )
             .expect("create canonical content on first customer page");
-        let original_content = session.graph().nodes[&shape_id].clone();
+        let original_content = session.authored_shapes[&shape_id].clone();
         session
             .insert_blank_page_after_v1(
                 vec![a, b],
@@ -2099,7 +2099,7 @@ mod authored_page_append_tests {
             vec![a, identity.page_id, b]
         );
         assert_eq!(session.operations().len(), 2);
-        assert_eq!(session.graph().nodes[&shape_id], original_content);
+        assert_eq!(session.authored_shapes[&shape_id], original_content);
         assert!(session.graph().pages[&identity.page_id].children.is_empty());
         assert!(
             session.graph().pages[&identity.page_id]
@@ -2110,7 +2110,7 @@ mod authored_page_append_tests {
 
         session.undo().expect("undo insert");
         assert_eq!(session.graph().document.pages, graph.document.pages);
-        assert_eq!(session.graph().nodes[&shape_id], original_content);
+        assert_eq!(session.authored_shapes[&shape_id], original_content);
         assert!(
             session
                 .insert_blank_page_after_v1(
@@ -2137,7 +2137,7 @@ mod authored_page_append_tests {
             .expect("canonical insert replay");
         assert_eq!(reopened.operations(), decoded.operations.as_slice());
         assert_eq!(reopened.graph().document.pages, ordered);
-        assert_eq!(reopened.graph().nodes[&shape_id], original_content);
+        assert_eq!(reopened.authored_shapes[&shape_id], original_content);
         assert_eq!(reopened.source_hash(), source_hash);
 
         let mut legacy = decoded.clone();
@@ -2154,7 +2154,7 @@ mod authored_page_append_tests {
             reopened.graph().document.pages,
             vec![master, a, service, b, carrier]
         );
-        assert_eq!(reopened.graph().nodes[&shape_id], original_content);
+        assert_eq!(reopened.authored_shapes[&shape_id], original_content);
     }
 
     #[test]
