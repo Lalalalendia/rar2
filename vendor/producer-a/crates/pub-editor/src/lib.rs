@@ -127,9 +127,9 @@ pub use text_format_property_base_v1::{
 };
 pub use writer_assessment::{
     EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1, EditorNativePubCandidate,
-    EditorNativePubMaterializationBlocked, EditorPubPersistenceAssessment, EditorPubWriterAssessment,
-    EditorPubWriterAssessmentError, EditorStoryWriterProbeResult, EditorStoryWriterProbeState,
-    EffectiveStoryTextMutation,
+    EditorNativePubMaterializationBlocked, EditorPubPersistenceAssessment,
+    EditorPubWriterAssessment, EditorPubWriterAssessmentError, EditorStoryWriterProbeResult,
+    EditorStoryWriterProbeState, EffectiveStoryTextMutation,
 };
 
 use chaptera_text_format_overlay::{
@@ -7935,4 +7935,3 @@ fn apply_table_cell_state(
     story.text.push_str(replacement_story);
     Ok(())
 }
-

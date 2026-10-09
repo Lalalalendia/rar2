@@ -1386,7 +1386,13 @@ mod native_pub_candidate_tests {
 
     fn controlled_story(session: &EditorSession, source_hash: Sha256Digest) -> (StoryId, String) {
         let story_id = derive_pub_story_id(&source_hash, 4).expect("source StoryId");
-        let text = session.graph().stories.get(&story_id).expect("controlled Story").text.clone();
+        let text = session
+            .graph()
+            .stories
+            .get(&story_id)
+            .expect("controlled Story")
+            .text
+            .clone();
         (story_id, text)
     }
 
