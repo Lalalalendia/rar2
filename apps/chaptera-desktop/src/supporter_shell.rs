@@ -12,6 +12,7 @@ const SUPPORTER_STORAGE_KEY: &str = "chaptera.supporter.v1";
 
 #[derive(Debug)]
 pub(crate) struct SupporterShell {
+    state: SupporterState,
     seen_receipt: Option<ValueReceipt>,
     prompt_visible: bool,
     market: MarketProfile,
@@ -39,6 +40,7 @@ pub(crate) fn save_state(storage: &mut dyn eframe::Storage, state: &SupporterSta
 impl SupporterShell {
     fn new(market: MarketProfile, routes: SupporterRoutes) -> Self {
         Self {
+            state: SupporterState::default(),
             seen_receipt: None,
             prompt_visible: false,
             market,
@@ -47,7 +49,7 @@ impl SupporterShell {
         }
     }
 
-    pub(crate) fn from_environment() -> Self {
+    pub(crate) fn from_environment(storage: Option<&dyn eframe::Storage>) -> Self {
         let locale = locale::detect_user_locale();
         let market = MarketProfile::from_locale(locale.as_ref().map(locale::DetectedLocale::raw));
         let routes = std::env::var("CHAPTERA_SITE_ORIGIN")
@@ -55,7 +57,13 @@ impl SupporterShell {
             .as_deref()
             .and_then(SupporterRoutes::from_https_origin)
             .unwrap_or_else(SupporterRoutes::disabled);
-        Self::new(market, routes)
+        let mut shell = Self::new(market, routes);
+        shell.state = restore_state(storage);
+        shell
+    }
+
+    pub(crate) fn save(&self, storage: &mut dyn eframe::Storage) {
+        save_state(storage, &self.state);
     }
 
     pub(crate) fn reset_for_workflow(&mut self) {
@@ -64,14 +72,9 @@ impl SupporterShell {
         self.action_status = None;
     }
 
-    pub(crate) fn sync_and_show(
-        &mut self,
-        ctx: &egui::Context,
-        value: &ValueTracker,
-        state: &mut SupporterState,
-    ) {
+    pub(crate) fn sync_and_show(&mut self, ctx: &egui::Context, value: &ValueTracker) {
         let now = current_unix_seconds();
-        self.sync_prompt(value, state, now);
+        self.sync_prompt(value, now);
 
         if !self.prompt_visible {
             return;
@@ -95,16 +98,16 @@ impl SupporterShell {
             });
 
         if let Some(action) = action {
-            self.handle_action(ctx, state, receipt, action, now);
+            self.handle_action(ctx, receipt, action, now);
         }
     }
 
-    fn sync_prompt(&mut self, value: &ValueTracker, state: &mut SupporterState, now: i64) {
+    fn sync_prompt(&mut self, value: &ValueTracker, now: i64) {
         let receipt = value.receipt();
         if receipt != self.seen_receipt {
             self.seen_receipt = receipt;
             if receipt.is_some() {
-                state.record_meaningful_success(now);
+                self.state.record_meaningful_success(now);
             }
         }
 
@@ -112,8 +115,8 @@ impl SupporterShell {
             return;
         }
 
-        if state.can_prompt(now) {
-            state.record_prompt_shown(now);
+        if self.state.can_prompt(now) {
+            self.state.record_prompt_shown(now);
             self.prompt_visible = true;
         }
     }
@@ -121,25 +124,24 @@ impl SupporterShell {
     fn handle_action(
         &mut self,
         ctx: &egui::Context,
-        state: &mut SupporterState,
         receipt: ValueReceipt,
         action: SupporterAction,
         now: i64,
     ) {
         match action {
             SupporterAction::Later => {
-                state.record_later(now);
+                self.state.record_later(now);
                 self.prompt_visible = false;
                 self.action_status = None;
             }
             SupporterAction::AlreadySupported => {
-                state.record_already_supported(now);
+                self.state.record_already_supported(now);
                 self.prompt_visible = false;
                 self.action_status = None;
             }
             SupporterAction::Support => {
                 let attribution =
-                    state
+                    self.state
                         .current_prompt_impression_index(now)
                         .and_then(|impression_index| {
                             SupportClickAttribution::for_action(
@@ -151,7 +153,7 @@ impl SupporterShell {
                         });
                 let effect = attribution.and_then(|value| self.routes.support_effect(value));
                 if dispatch_effect(ctx, effect) {
-                    state.record_support_clicked(now);
+                    self.state.record_support_clicked(now);
                     self.prompt_visible = false;
                     self.action_status = None;
                 } else {
@@ -225,38 +227,35 @@ mod tests {
     #[test]
     fn neutral_market_records_value_but_never_prompts() {
         let tracker = valued_tracker();
-        let mut state = SupporterState::default();
         let mut shell =
             SupporterShell::new(MarketProfile::NeutralEnglish, SupporterRoutes::disabled());
 
-        shell.sync_prompt(&tracker, &mut state, 1_000);
+        shell.sync_prompt(&tracker, 1_000);
 
         assert!(!shell.prompt_visible);
-        assert!(state.can_prompt(1_000));
+        assert!(shell.state.can_prompt(1_000));
     }
 
     #[test]
     fn active_market_prompt_is_post_value_and_has_bounded_impression() {
         let mut tracker = ValueTracker::default();
-        let mut state = SupporterState::default();
         let mut shell = SupporterShell::new(MarketProfile::Us, SupporterRoutes::disabled());
 
-        shell.sync_prompt(&tracker, &mut state, 1_000);
+        shell.sync_prompt(&tracker, 1_000);
         assert!(!shell.prompt_visible);
 
         tracker = valued_tracker();
-        shell.sync_prompt(&tracker, &mut state, 1_001);
+        shell.sync_prompt(&tracker, 1_001);
 
         assert!(shell.prompt_visible);
-        assert_eq!(state.current_prompt_impression_index(1_001), Some(1));
+        assert_eq!(shell.state.current_prompt_impression_index(1_001), Some(1));
     }
 
     #[test]
     fn reset_clears_only_transient_shell_state() {
         let tracker = valued_tracker();
-        let mut state = SupporterState::default();
         let mut shell = SupporterShell::new(MarketProfile::Us, SupporterRoutes::disabled());
-        shell.sync_prompt(&tracker, &mut state, 1_000);
+        shell.sync_prompt(&tracker, 1_000);
         assert!(shell.prompt_visible);
 
         shell.reset_for_workflow();
@@ -264,7 +263,7 @@ mod tests {
         assert!(!shell.prompt_visible);
         assert_eq!(shell.seen_receipt, None);
         assert_eq!(shell.action_status, None);
-        assert!(state.current_prompt_impression_index(1_000).is_some());
+        assert!(shell.state.current_prompt_impression_index(1_000).is_some());
     }
 
     #[test]
