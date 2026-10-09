@@ -15,7 +15,10 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use pub_core::StreamPath;
+use pub_contents::{RawContentsBlockBody, parse_0x2c_header, parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference, parse_confirmed_0x2c_chunk};
+use pub_escher::{inspect_sp_containers, PublisherFieldRecord, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS};
 use std::path::Path;
 
 const DELTA_EMU: i64 = 127_000; // exactly +10 pt
@@ -416,6 +419,84 @@ fn prepare(base: &Path, receipt_path: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
+
+fn singleton_signed_field(record: &PublisherFieldRecord, id: u16) -> Result<i64> {
+    let values: Vec<u32> = record.values(id).collect();
+    let [value] = values.as_slice() else {
+        bail!("required Escher anchor coordinate is not unique: {id:#x}");
+    };
+    Ok(i64::from(*value as i32))
+}
+
+/// Independent of Contents/Escher geometry equality. The normal source-graph
+/// crosswalk requires equal extents and therefore omits the deliberately
+/// contradictory object we must observe in T352.
+fn inspect_projections(path: &Path) -> Result<Value> {
+    let source = fs::read(path)?;
+    let contents = pub_cfb::read_stream_reader(Cursor::new(&source), "/Contents")?;
+    let stream = StreamPath("/Contents".into());
+    let header = parse_0x2c_header(stream.clone(), &contents)?;
+    let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header)?;
+    let reference = parse_confirmed_chunk_reference(&contents, &trailer.directory, 293)?
+        .context("Contents shape seq293 missing")?;
+    let offsets = reference.chunk_offsets.iter().map(|x| x.value).collect::<Vec<_>>();
+    let [chunk_offset] = offsets.as_slice() else {
+        bail!("Contents seq293 must have exactly one chunk offset");
+    };
+    let chunk = parse_confirmed_0x2c_chunk(stream, &contents, *chunk_offset)?;
+    let widths = chunk.fields.iter().filter(|f| f.id == 0x00AA)
+        .collect::<Vec<_>>();
+    let heights = chunk.fields.iter().filter(|f| f.id == 0x00AB)
+        .collect::<Vec<_>>();
+    let ([width], [height]) = (widths.as_slice(), heights.as_slice()) else {
+        bail!("Contents width/height must each have one field");
+    };
+    let decoded = |f: &pub_contents::RawContentsBlock| -> Result<i64> {
+        match &f.body {
+            RawContentsBlockBody::U32 { value, .. } => Ok(i64::from(*value)),
+            _ => bail!("Contents dimensional field is not U32"),
+        }
+    };
+    let contents_width = decoded(width)?;
+    let contents_height = decoded(height)?;
+
+    let escher_bytes = pub_cfb::read_stream_reader(Cursor::new(&source), "/Escher/EscherStm")?;
+    let shapes = inspect_sp_containers(StreamPath("/Escher/EscherStm".into()), &escher_bytes)?;
+    let matched = shapes.shapes.iter().filter(|s| {
+        s.fsp.as_ref().is_some_and(|f| f.spid == 1025 && f.shape_type == 202)
+            && s.client_data.as_ref().is_some_and(|d| {
+                let ids: Vec<u32> = d.values(PUBLISHER_FIELD_SHAPE_ID).collect();
+                ids.as_slice() == [293u32]
+            })
+    }).collect::<Vec<_>>();
+    let [shape] = matched.as_slice() else {
+        bail!("identity-linked Escher seq293 / SPID1025 must occur exactly once");
+    };
+    let anchor = shape.client_anchor.as_ref().context("Escher client anchor missing")?;
+    let xs = singleton_signed_field(anchor, PUBLISHER_FIELD_XS)?;
+    let ys = singleton_signed_field(anchor, PUBLISHER_FIELD_YS)?;
+    let xe = singleton_signed_field(anchor, PUBLISHER_FIELD_XE)?;
+    let ye = singleton_signed_field(anchor, PUBLISHER_FIELD_YE)?;
+    let escher_width = xe.checked_sub(xs).context("Escher width overflow")?;
+    let escher_height = ye.checked_sub(ys).context("Escher height overflow")?;
+    Ok(json!({
+        "schema":"chaptera.t352-identity-projection-inspection.v1",
+        "whole_file_sha256":sha(&source),
+        "source_length":source.len(),
+        "contents_shape_id":293,
+        "escher_spid":1025,
+        "escher_shape_type":202,
+        "contents_width_emu":contents_width,
+        "contents_height_emu":contents_height,
+        "escher_width_emu":escher_width,
+        "escher_height_emu":escher_height,
+        "anchor_xs":xs, "anchor_ys":ys, "anchor_xe":xe, "anchor_ye":ye,
+        "width_equal": contents_width == escher_width,
+        "height_equal": contents_height == escher_height,
+        "identity_join_independent_of_geometry":true
+    }))
+}
+
 fn main() -> Result<()> {
     let args: Vec<_> = env::args_os().skip(1).collect();
     let words: Vec<String> = args
@@ -429,8 +510,11 @@ fn main() -> Result<()> {
         [command, source, output] if command == "fingerprint" => {
             write_json(Path::new(output), &fingerprint(Path::new(source))?)
         }
+        [command, source, output] if command == "inspect" => {
+            write_json(Path::new(output), &inspect_projections(Path::new(source))?)
+        }
         _ => bail!(
-            "usage: val_xproj_patch prepare BASE.pub STRUCTURAL.json NEW_DIR | fingerprint FILE.pub OUT.json"
+            "usage: val_xproj_patch prepare BASE.pub STRUCTURAL.json NEW_DIR | fingerprint FILE.pub OUT.json | inspect FILE.pub OUT.json"
         ),
     }
 }
