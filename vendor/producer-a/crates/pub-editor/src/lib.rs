@@ -4012,7 +4012,10 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesPageOrderOperation { index });
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_24 {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+        {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
                     operation,
