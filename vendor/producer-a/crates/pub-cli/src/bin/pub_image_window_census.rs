@@ -31,6 +31,12 @@ fn main() -> Result<()> {
         .iter()
         .map(|node| (node.origin, node))
         .collect::<BTreeMap<_, _>>();
+    let page_indices = visual
+        .document
+        .pages
+        .iter()
+        .map(|page| (page.id, page.index))
+        .collect::<BTreeMap<_, _>>();
 
     let mut windows = Vec::new();
     for image in visual.images.iter().filter(|image| image.source_exact) {
@@ -44,6 +50,9 @@ fn main() -> Result<()> {
             let node = nodes.get(&placement.node_id);
             let resolved = resolved_graph.nodes.get(&placement.node_id);
             let crop = resolved.and_then(|value| value.payload.explicit_image_crop.as_ref());
+            let page_index = node
+                .and_then(|value| page_indices.get(&value.parent_origin))
+                .copied();
             let inside_unit = window.left_q16 >= 0
                 && window.top_q16 >= 0
                 && window.right_q16 <= Q16_ONE
@@ -75,6 +84,7 @@ fn main() -> Result<()> {
                 "extends_bottom": window.bottom_q16 > Q16_ONE,
                 "rotation_degrees": placement.content_rotation_degrees,
                 "recolor_present": placement.recolor.is_some(),
+                "page_index": page_index,
                 "scene_node_present": node.is_some(),
                 "scene_transform_identity": node.map(|value| value.transform == Affine2D::identity()),
                 "frame_width_emu": node.map(|value| value.bounds.width.get()),
