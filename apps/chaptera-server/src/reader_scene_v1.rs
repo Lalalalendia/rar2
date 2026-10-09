@@ -2044,6 +2044,54 @@ mod tests {
             );
         let explicit_regular =
             bold[0] == fragment.typography.len() && italic[0] == fragment.typography.len();
+        // Source-safe unicode discriminator only: no raw text or scalar values.
+        // Classes are disjoint; the source's identity is SHA-pinned above.
+        let mut non_ascii_classes = [0_usize; 8];
+        let mut non_ascii_prefix = 0_usize;
+        let mut non_ascii_terminal_visible = 0_usize;
+        let mut non_ascii_terminal_consumed = 0_usize;
+        for (index, scalar) in fragment.text.chars().enumerate() {
+            if scalar.is_ascii() {
+                continue;
+            }
+            if index < 712 {
+                non_ascii_prefix += 1;
+            } else if index < 716 {
+                non_ascii_terminal_visible += 1;
+            } else {
+                non_ascii_terminal_consumed += 1;
+            }
+            let class = if scalar.is_whitespace() {
+                0
+            } else {
+                match scalar as u32 {
+                    0x00A1 | 0x00AB | 0x00BB | 0x00BF | 0x2010..=0x2027 | 0x2030..=0x203F => 1,
+                    0x00C0..=0x024F => 2,
+                    0x0300..=0x036F => 3,
+                    0x0590..=0x08FF => 4,
+                    0x2E80..=0x9FFF | 0xAC00..=0xD7AF => 5,
+                    0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x206F | 0xFEFF => 6,
+                    _ => 7,
+                }
+            };
+            non_ascii_classes[class] += 1;
+        }
+        println!(
+            "EXACT082_NONASCII_CLASS_GATE source_sha256={} total={} prefix_0_712={} terminal_visible_712_716={} terminal_consumed_716_717={} whitespace={} punctuation={} latin_extended={} combining={} rtl={} cjk={} format_controls={} other={}",
+            SOURCE_SHA256,
+            non_ascii_classes.iter().sum::<usize>(),
+            non_ascii_prefix,
+            non_ascii_terminal_visible,
+            non_ascii_terminal_consumed,
+            non_ascii_classes[0],
+            non_ascii_classes[1],
+            non_ascii_classes[2],
+            non_ascii_classes[3],
+            non_ascii_classes[4],
+            non_ascii_classes[5],
+            non_ascii_classes[6],
+            non_ascii_classes[7],
+        );
         println!(
             "EXACT082_SOURCE_STYLE_GATE source_sha256={} page=2 scalar_span=717 runs={} ascii={} complete_source_coverage={} family_count={} blank_families={} bold_false={} bold_true={} bold_unknown={} italic_false={} italic_true={} italic_unknown={} terminal_single_complete={} terminal_spacing_unique_fresh={} explicit_regular={}",
             SOURCE_SHA256,
