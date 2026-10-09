@@ -789,6 +789,169 @@ impl ViewerApp {
         Ok(selected_page_id)
     }
 
+    /// Read-only UI admission. The resolved graph and authored overlays are
+    /// checked by EditorSession, never inferred from Page.children alone.
+    fn page_delete_rectangle_capability_v1(&self) -> bool {
+        let (Some(editor), Some(visual)) = (self.editor.as_ref(), self.visual.as_ref()) else {
+            return false;
+        };
+        let Some(selected_page_id) = visual
+            .document
+            .pages
+            .get(self.selected_page)
+            .map(|page| page.id)
+        else {
+            return false;
+        };
+        editor
+            .can_delete_authored_rectangle_page_v1(&self.source_customer_page_ids, selected_page_id)
+    }
+
+    /// One user command is one canonical v0.29 operation. Build Editor and
+    /// Viewer candidates before touching any live editor or visible state.
+    fn delete_selected_authored_rectangle_page_v1(&mut self) -> Result<PageId, String> {
+        let editor = self
+            .editor
+            .as_ref()
+            .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+        let visual = self
+            .visual
+            .as_ref()
+            .ok_or_else(|| "Document page projection is unavailable.".to_owned())?;
+        let selected_page_id = visual
+            .document
+            .pages
+            .get(self.selected_page)
+            .map(|page| page.id)
+            .ok_or_else(|| "Selected PageId is unavailable.".to_owned())?;
+        let before_page_ids = editor
+            .effective_customer_page_order_v1(&self.source_customer_page_ids)
+            .map_err(|error| {
+                format!(
+                    "Rectangle-page delete is unavailable: {} ({})",
+                    error,
+                    error.code()
+                )
+            })?;
+        let deleted_index = before_page_ids
+            .iter()
+            .position(|id| *id == selected_page_id)
+            .ok_or_else(|| "Selected PageId is not an admitted customer page.".to_owned())?;
+        let operations_before = editor.operations().len();
+        if !editor
+            .can_delete_authored_rectangle_page_v1(&self.source_customer_page_ids, selected_page_id)
+        {
+            return Err(
+                "Selected Page is not an admitted single authored Rectangle page.".to_owned(),
+            );
+        }
+
+        let mut candidate = editor.clone();
+        candidate
+            .delete_authored_rectangle_page_v1(
+                self.source_customer_page_ids.clone(),
+                selected_page_id,
+            )
+            .map_err(|error| {
+                format!(
+                    "Rectangle-page delete rejected: {} ({})",
+                    error,
+                    error.code()
+                )
+            })?;
+        let removed_rectangle_id = match candidate.operations().last() {
+            Some(pub_editor::EditOperation::DeleteAuthoredRectanglePageV1 { transition })
+                if candidate.operations().len() == operations_before + 1
+                    && transition.page.identity.page_id == selected_page_id
+                    && transition.page.before_customer_page_ids == before_page_ids
+                    && transition.shape_before.page_id == selected_page_id
+                    && transition.shape_before.parent_id == selected_page_id =>
+            {
+                transition.shape_before.node_id
+            }
+            _ => {
+                return Err(
+                    "Delete Rectangle Page must append exactly one canonical v0.29 operation."
+                        .to_owned(),
+                );
+            }
+        };
+        if candidate.graph().pages.contains_key(&selected_page_id)
+            || candidate.authored_shape(removed_rectangle_id).is_some()
+            || candidate.authored_stack(selected_page_id).is_some()
+        {
+            return Err("Rectangle-page delete left stale Editor membership.".to_owned());
+        }
+        let after_page_ids = candidate
+            .effective_customer_page_order_v1(&self.source_customer_page_ids)
+            .map_err(|error| {
+                format!(
+                    "Rectangle-page membership rejected: {} ({})",
+                    error,
+                    error.code()
+                )
+            })?;
+        let mut expected_page_ids = before_page_ids;
+        expected_page_ids.remove(deleted_index);
+        if after_page_ids != expected_page_ids {
+            return Err(
+                "Rectangle-page delete changed unexpected customer membership or order.".to_owned(),
+            );
+        }
+
+        let mut visual_candidate = visual.clone();
+        visual_candidate
+            .refresh_page_membership_from_resolved(candidate.graph(), &after_page_ids)
+            .map_err(|error| {
+                format!("Rectangle-page Viewer projection rejected before commit: {error}")
+            })?;
+        if visual_candidate
+            .document
+            .pages
+            .iter()
+            .map(|page| page.id)
+            .collect::<Vec<_>>()
+            != after_page_ids
+            || visual_candidate
+                .scene
+                .surfaces
+                .iter()
+                .any(|surface| surface.origin == selected_page_id)
+        {
+            return Err(
+                "Rectangle-page Viewer projection retained removed membership or page surface."
+                    .to_owned(),
+            );
+        }
+        let fallback_index = deleted_index.saturating_sub(1);
+        let fallback_page_id = after_page_ids
+            .get(fallback_index)
+            .copied()
+            .ok_or_else(|| "Rectangle-page delete has no surviving selection.".to_owned())?;
+        if visual_candidate
+            .document
+            .pages
+            .get(fallback_index)
+            .map(|page| page.id)
+            != Some(fallback_page_id)
+        {
+            return Err(
+                "Rectangle-page Viewer projection has inconsistent fallback selection.".to_owned(),
+            );
+        }
+
+        self.editor = Some(candidate);
+        self.visual = Some(visual_candidate);
+        self.selected_page = fallback_index;
+        self.canvas_selection.clear();
+        self.canvas_drag = None;
+        self.canvas_resize = None;
+        self.finish_authoring_change(
+            "Deleted one Chaptera-created page with one authored Rectangle as a single Undo unit. Source PUB bytes were not written.",
+        );
+        Ok(selected_page_id)
+    }
+
     fn page_reorder_capabilities_v1(&self) -> (bool, bool) {
         let Some(editor) = self.editor.as_ref() else {
             return (false, false);
@@ -920,6 +1083,22 @@ impl ViewerApp {
         if !can_delete {
             delete_response.on_disabled_hover_text(
                 "Select an active Chaptera-created customer page. Content-bearing and source-backed pages fail closed.",
+            );
+        }
+
+        let can_delete_rectangle = self.page_delete_rectangle_capability_v1();
+        let rectangle_response = ui.add_enabled(
+            can_delete_rectangle,
+            egui::Button::new("Delete Rectangle Page"),
+        );
+        if rectangle_response.clicked()
+            && let Err(error) = self.delete_selected_authored_rectangle_page_v1()
+        {
+            self.edit_status = Some(error);
+        }
+        if !can_delete_rectangle {
+            rectangle_response.on_disabled_hover_text(
+                "Select one active Chaptera-created page with exactly one direct authored Rectangle. Source-backed, linked and multi-object pages are unsupported.",
             );
         }
 
