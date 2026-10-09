@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use pub_editor::{EditorEditableTarget, EditorProject, LengthEmu, NodeId, StoryId};
 use pub_model::{Sha256Digest, to_cdm_debug_json_v0_1};
 use sha2::{Digest, Sha256};
-use std::{env, fs, io::Cursor, path::Path};
+use std::{env, fs, io::{Cursor, Write}, path::Path};
 
 const SAMPLE_HASH: &str = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf";
 
@@ -19,6 +19,32 @@ fn source_sha256(bytes: &[u8]) -> Sha256Digest {
     let mut value = [0_u8; 32];
     value.copy_from_slice(&digest);
     Sha256Digest::from_bytes(value)
+}
+
+
+fn require_exact_editor_source(bytes: &[u8], expected: Sha256Digest) -> Result<()> {
+    if source_sha256(bytes) != expected {
+        anyhow::bail!("native PUB save source SHA-256 does not match EditorProject");
+    }
+    Ok(())
+}
+
+fn require_unused_native_pub_paths(output_path: &Path, report_path: &Path) -> Result<()> {
+    if output_path == report_path || output_path.exists() || report_path.exists() {
+        anyhow::bail!("native PUB save requires two distinct, unused output paths");
+    }
+    Ok(())
+}
+
+fn write_native_pub_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .with_context(|| format!("create unused output {}", path.display()))?;
+    file.write_all(bytes).context("write new native PUB output bytes")?;
+    file.sync_all().context("flush native PUB output bytes")?;
+    Ok(())
 }
 
 fn emit_viewer(path: &str) -> Result<()> {
@@ -306,16 +332,23 @@ fn emit_editor_story_range(
     Ok(())
 }
 
+/// Materialize only to two fresh paths; never overwrite a prior candidate or receipt.
 fn emit_native_pub_save(
     fixture: &str,
     project_path: &str,
     output_path: &str,
     report_path: &str,
 ) -> Result<()> {
+    let output_path = Path::new(output_path);
+    let report_path = Path::new(report_path);
+    require_unused_native_pub_paths(output_path, report_path)?;
+
     let bytes = fs::read(fixture).context("read source PUB fixture")?;
     let project: EditorProject =
         serde_json::from_slice(&fs::read(project_path).context("read canonical EditorProject")?)
             .context("parse canonical EditorProject")?;
+    require_exact_editor_source(&bytes, project.source_hash)?;
+
     let mut session = pub_editor::open_mature_0x2c_editor(&bytes, project.source_hash)
         .context("open bounded native PUB editor")?;
     session
@@ -333,11 +366,11 @@ fn emit_native_pub_save(
                 "chaptera_reopen_verified": false,
                 "native_publisher_acceptance": "not_evaluated",
             });
-            fs::write(
-                Path::new(report_path),
-                serde_json::to_vec_pretty(&report).context("serialize native PUB save report")?,
+            write_native_pub_new(
+                report_path,
+                &serde_json::to_vec_pretty(&report).context("serialize native PUB save report")?,
             )
-            .context("write native PUB save report")?;
+            .context("write source-safe blocked native PUB save report")?;
             print!("{}", serde_json::to_string(&report)?);
             return Ok(());
         }
@@ -355,12 +388,16 @@ fn emit_native_pub_save(
         "chaptera_reopen_verified": true,
         "native_publisher_acceptance": "not_evaluated",
     });
-    fs::write(Path::new(output_path), &candidate.bytes).context("write native PUB candidate")?;
-    fs::write(
-        Path::new(report_path),
-        serde_json::to_vec_pretty(&report).context("serialize native PUB save report")?,
-    )
-    .context("write native PUB save report")?;
+    write_native_pub_new(output_path, &candidate.bytes).context("write new native PUB candidate")?;
+    if let Err(error) = write_native_pub_new(
+        report_path,
+        &serde_json::to_vec_pretty(&report).context("serialize native PUB save report")?,
+    ) {
+        // A downloadable candidate without its exact receipt is not a valid
+        // product artifact. Remove it rather than leaving an unreceipted PUB.
+        let _ = fs::remove_file(output_path);
+        return Err(error).context("write source-safe native PUB save report");
+    }
     print!("{}", serde_json::to_string(&report)?);
     Ok(())
 }

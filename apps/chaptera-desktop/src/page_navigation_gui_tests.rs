@@ -777,6 +777,10 @@ fn gui_delete_empty_authored_page_projects_membership_and_replays_on_real_pub() 
         harness.get_by_label("Delete Empty Page").is_disabled(),
         "source-backed selected page must not advertise authored-page deletion"
     );
+    assert!(
+        harness.get_by_label("Delete Rectangle Page").is_disabled(),
+        "source-backed selected page must never advertise Rectangle-page deletion"
+    );
 
     harness.get_by_label("Add Page at End").click();
     harness.step();
@@ -800,7 +804,7 @@ fn gui_delete_empty_authored_page_projects_membership_and_replays_on_real_pub() 
 
     // A real canonical authored Rectangle makes the selected page nonblank.
     // The button must be disabled before click, not only fail closed at commit.
-    {
+    let authored_rectangle_id = {
         let app = harness.state_mut();
         let size = app
             .editor
@@ -828,7 +832,8 @@ fn gui_delete_empty_authored_page_projects_membership_and_replays_on_real_pub() 
             )
             .expect("seed content-bearing authored Rectangle");
         app.finish_authoring_change("Seeded canonical Rectangle for Delete Empty Page negative.");
-    }
+        shape_id
+    };
     harness.step();
     assert!(
         harness.get_by_label("Delete Empty Page").is_disabled(),
@@ -846,6 +851,372 @@ fn gui_delete_empty_authored_page_projects_membership_and_replays_on_real_pub() 
         "disabled Delete Empty Page must not create any additional revision"
     );
 
+    // The same page is now admitted exclusively by the new bounded operation.
+    assert!(
+        !harness.get_by_label("Delete Rectangle Page").is_disabled(),
+        "one direct AuthorCreated Rectangle page must enable its own command"
+    );
+    // Reject a cascade: a second authored Rectangle disables Page deletion.
+    let extra_rectangle_id = {
+        let app = harness.state_mut();
+        let size = app
+            .editor
+            .as_ref()
+            .expect("editor")
+            .graph()
+            .pages
+            .get(&appended_page_id)
+            .expect("authored page")
+            .size;
+        let node_id = pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        app.editor
+            .as_mut()
+            .expect("editor")
+            .create_shape(
+                node_id,
+                appended_page_id,
+                pub_editor::RectEmu::new(
+                    pub_editor::LengthEmu::new(size.width.get() / 3),
+                    pub_editor::LengthEmu::new(size.height.get() / 3),
+                    pub_editor::LengthEmu::new(size.width.get() / 5),
+                    pub_editor::LengthEmu::new(size.height.get() / 5),
+                ),
+                rectangle_creation::chaptera_rectangle_paint_v1(),
+            )
+            .expect("create second authored Rectangle");
+        app.finish_authoring_change("Seeded extra Rectangle to prove fail-closed admission.");
+        node_id
+    };
+    harness.step();
+    assert!(
+        harness.get_by_label("Delete Rectangle Page").is_disabled(),
+        "a two-Rectangle Page must not enable one-Rectangle DeletePage"
+    );
+    let two_shape_history = harness.state().editor.as_ref().unwrap().operations().len();
+    harness
+        .get_all_by_label("Undo")
+        .next()
+        .expect("remove second Rectangle")
+        .click();
+    harness.step();
+    harness.step();
+    assert_eq!(
+        harness.state().editor.as_ref().unwrap().operations().len() + 1,
+        two_shape_history
+    );
+    assert!(
+        harness
+            .state()
+            .editor
+            .as_ref()
+            .unwrap()
+            .authored_shape(extra_rectangle_id)
+            .is_none()
+    );
+    assert!(
+        !harness.get_by_label("Delete Rectangle Page").is_disabled(),
+        "one-Rectangle admission must return after undo of extra Rectangle"
+    );
+
+    let shape_before = harness
+        .state()
+        .editor
+        .as_ref()
+        .expect("editor")
+        .authored_shape(authored_rectangle_id)
+        .expect("authored shape")
+        .clone();
+    let before_rectangle_delete = harness
+        .state()
+        .editor
+        .as_ref()
+        .expect("editor")
+        .operations()
+        .len();
+
+    // Candidate Viewer projection must fail before commit on source mismatch.
+    let original_source_hash = harness
+        .state()
+        .visual
+        .as_ref()
+        .expect("visual")
+        .document
+        .source
+        .source_hash;
+    let mismatched_source_hash =
+        if original_source_hash == pub_editor::Sha256Digest::from_bytes([0x39; 32]) {
+            pub_editor::Sha256Digest::from_bytes([0x93; 32])
+        } else {
+            pub_editor::Sha256Digest::from_bytes([0x39; 32])
+        };
+    harness
+        .state_mut()
+        .visual
+        .as_mut()
+        .expect("visual")
+        .document
+        .source
+        .source_hash = mismatched_source_hash;
+    harness.get_by_label("Delete Rectangle Page").click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        assert_eq!(
+            app.editor.as_ref().expect("editor").operations().len(),
+            before_rectangle_delete,
+            "failed Viewer preflight must not add a delete revision"
+        );
+        assert!(
+            app.visual
+                .as_ref()
+                .expect("visual")
+                .document
+                .pages
+                .iter()
+                .any(|page| page.id == appended_page_id),
+            "rejected candidate must not remove the visible authored page"
+        );
+        assert!(
+            app.edit_status
+                .as_deref()
+                .is_some_and(|status| status.contains("before commit")),
+            "rejected Viewer projection must produce an explicit error"
+        );
+    }
+    harness
+        .state_mut()
+        .visual
+        .as_mut()
+        .expect("visual")
+        .document
+        .source
+        .source_hash = original_source_hash;
+    harness.step();
+
+    harness.get_by_label("Delete Rectangle Page").click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        let editor = app
+            .editor
+            .as_ref()
+            .expect("editor after Rectangle-page delete");
+        assert_eq!(editor.operations().len(), before_rectangle_delete + 1);
+        assert!(matches!(
+            editor.operations().last(),
+            Some(pub_editor::EditOperation::DeleteAuthoredRectanglePageV1 { transition })
+                if transition.page.identity.page_id == appended_page_id
+                    && transition.shape_before.node_id == authored_rectangle_id
+                    && transition.shape_before == shape_before
+        ));
+        assert!(editor.authored_shape(authored_rectangle_id).is_none());
+        assert!(editor.authored_stack(appended_page_id).is_none());
+        assert_eq!(
+            app.visual
+                .as_ref()
+                .expect("visual")
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
+            source_order
+        );
+        assert!(
+            app.visual
+                .as_ref()
+                .expect("visual")
+                .scene
+                .surfaces
+                .iter()
+                .all(|surface| surface.origin != appended_page_id)
+        );
+        assert_eq!(
+            app.visual.as_ref().expect("visual").document.pages[app.selected_page].id,
+            *source_order.last().expect("surviving source page"),
+            "deletion must select the preceding admitted customer page"
+        );
+    }
+    harness
+        .get_all_by_label("Undo")
+        .next()
+        .expect("Undo authored Rectangle-page deletion")
+        .click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("editor after Undo");
+        assert_eq!(editor.operations().len(), before_rectangle_delete);
+        assert_eq!(
+            editor.authored_shape(authored_rectangle_id),
+            Some(&shape_before)
+        );
+        assert_eq!(
+            editor
+                .authored_stack(appended_page_id)
+                .expect("restored authored lane")
+                .members,
+            vec![authored_rectangle_id]
+        );
+        assert_eq!(
+            app.visual
+                .as_ref()
+                .expect("visual")
+                .document
+                .pages
+                .last()
+                .unwrap()
+                .id,
+            appended_page_id,
+            "Undo restores exactly the same authored PageId"
+        );
+    }
+    // The restored Page thumbnail can be clipped by the scrollable sidebar.
+    // Navigate with an actual supported keyboard shortcut instead of clicking
+    // an off-viewport label and accidentally retaining the source-page focus.
+    assert_eq!(
+        harness.state().selected_page,
+        source_order.len() - 1,
+        "Undo should keep the preceding surviving customer Page selected"
+    );
+    harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::PageDown);
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        let visual = app
+            .visual
+            .as_ref()
+            .expect("Viewer after selecting restored Page");
+        let selected_page_id = visual
+            .document
+            .pages
+            .get(app.selected_page)
+            .map(|page| page.id);
+        assert_eq!(
+            selected_page_id,
+            Some(appended_page_id),
+            "real Pages sidebar click must select the restored PageId"
+        );
+        let editor = app
+            .editor
+            .as_ref()
+            .expect("Editor after selecting restored Page");
+        let mut debug_candidate = editor.clone();
+        let rejection = debug_candidate
+            .delete_authored_rectangle_page_v1(
+                app.source_customer_page_ids.clone(),
+                appended_page_id,
+            )
+            .err();
+        assert!(
+            editor.can_delete_authored_rectangle_page_v1(
+                &app.source_customer_page_ids,
+                appended_page_id,
+            ),
+            "canonical runtime must re-admit the exact restored Page/Rectangle after Undo: {rejection:?}"
+        );
+    }
+    assert!(
+        !harness.get_by_label("Delete Rectangle Page").is_disabled(),
+        "Undo plus explicit Pages selection must restore Delete Rectangle Page capability"
+    );
+
+    harness
+        .get_all_by_label("Redo")
+        .next()
+        .expect("Redo authored Rectangle-page deletion")
+        .click();
+    harness.step();
+    harness.step();
+    assert_eq!(
+        harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor after Redo")
+            .operations()
+            .len(),
+        before_rectangle_delete + 1
+    );
+    assert!(
+        harness
+            .state()
+            .editor
+            .as_ref()
+            .unwrap()
+            .authored_shape(authored_rectangle_id)
+            .is_none()
+    );
+    // Persist the v0.29 *deleted* state and reload from the original PUB:
+    // reopening a later Delete Empty project would not test this protocol.
+    harness.get_by_label("Save Project").click();
+    harness.step();
+    harness.step();
+    harness.step();
+    {
+        let reopen = harness.get_by_label("Reopen Project");
+        assert!(
+            !reopen.is_disabled(),
+            "v0.29 Rectangle-page project must reopen"
+        );
+        reopen.click();
+    }
+    harness.step();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("fresh v0.29 Editor");
+        assert_eq!(editor.operations().len(), before_rectangle_delete + 1);
+        assert!(matches!(
+            editor.operations().last(),
+            Some(pub_editor::EditOperation::DeleteAuthoredRectanglePageV1 { transition })
+                if transition.page.identity.page_id == appended_page_id
+                    && transition.shape_before.node_id == authored_rectangle_id
+        ));
+        assert!(editor.authored_shape(authored_rectangle_id).is_none());
+        assert_eq!(app.source_customer_page_ids, source_order);
+        assert_eq!(
+            app.visual
+                .as_ref()
+                .expect("fresh v0.29 Viewer")
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
+            source_order
+        );
+        assert_eq!(
+            fs::read(&fixture).expect("read source after v0.29 reopen"),
+            original,
+            "native PUB bytes must not change"
+        );
+    }
+
+    harness
+        .get_all_by_label("Undo")
+        .next()
+        .expect("restore authored Rectangle page for the old blank-page regression")
+        .click();
+    harness.step();
+    harness.step();
+    assert_eq!(
+        harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("restored authored editor")
+            .authored_shape(authored_rectangle_id),
+        Some(&shape_before)
+    );
+
+    // The existing Delete Empty Page acceptance continues from exactly the
+    // same authored Rectangle state and unchanged operation history.
     harness
         .get_all_by_label("Undo")
         .next()
@@ -864,9 +1235,61 @@ fn gui_delete_empty_authored_page_projects_membership_and_replays_on_real_pub() 
         operations_before + 1,
         "Undo of rectangle restores exactly the original blank authored page"
     );
+    // Fresh project reopen starts on a surviving imported Page. Undo restores
+    // the authored PageId without stealing focus from that selected source.
+    // Navigate to the now-empty authored Page explicitly before testing its
+    // separate Delete Empty Page capability and the original regression.
+    let (current_index, target_index, current_page_id) = {
+        let app = harness.state();
+        let visual = app.visual.as_ref().expect("visual after two Undo");
+        let target_index = visual
+            .document
+            .pages
+            .iter()
+            .position(|page| page.id == appended_page_id)
+            .expect("restored blank authored Page remains in Viewer membership");
+        (
+            app.selected_page,
+            target_index,
+            visual.document.pages[app.selected_page].id,
+        )
+    };
+    assert!(
+        source_order.contains(&current_page_id),
+        "fresh reopen plus Undo must keep focus on a surviving source-backed Page"
+    );
+    assert!(
+        current_index < target_index,
+        "restored authored Page must remain after the selected source-backed Page"
+    );
+    for _ in current_index..target_index {
+        harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::PageDown);
+        harness.step();
+        harness.step();
+    }
+    {
+        let app = harness.state();
+        assert_eq!(
+            app.visual.as_ref().expect("visual").document.pages[app.selected_page].id,
+            appended_page_id,
+            "real keyboard navigation must reselect restored blank Page"
+        );
+        let editor = app.editor.as_ref().expect("editor");
+        let mut candidate = editor.clone();
+        let rejection = candidate
+            .delete_blank_authored_page_v1(app.source_customer_page_ids.clone(), appended_page_id)
+            .err();
+        assert!(
+            editor.can_delete_blank_authored_page_v1(
+                &app.source_customer_page_ids,
+                appended_page_id,
+            ),
+            "canonical Delete Empty admission must recover after v0.29 Undo: {rejection:?}"
+        );
+    }
     assert!(
         !harness.get_by_label("Delete Empty Page").is_disabled(),
-        "deletion becomes available only after canonical authored content is removed"
+        "deletion becomes available after restored empty Page is selected"
     );
 
     let source_hash_before = harness
