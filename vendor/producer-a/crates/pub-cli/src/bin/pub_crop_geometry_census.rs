@@ -270,7 +270,9 @@ fn main() -> Result<()> {
                                 .map(Vec::as_slice)
                                 .unwrap_or(&[]);
                             let geometry = match other_matches {
-                                [shape_index] => effective_geometry(&inventory.shapes[*shape_index], dgg),
+                                [shape_index] => {
+                                    effective_geometry(&inventory.shapes[*shape_index], dgg)
+                                }
                                 [] => "shape_join_missing".to_owned(),
                                 _ => "shape_join_ambiguous".to_owned(),
                             };
