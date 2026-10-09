@@ -57,10 +57,15 @@ jobs:
             exit 1
           }
 
-          & $script `
-            -ManifestPath "tools/pub-re/tests/native-shape-rotation.example.json" `
-            -OutputRoot (Join-Path $env:RUNNER_TEMP "pub-re-native-validate") `
-            -ValidateManifestOnly
+          foreach ($manifest in @(
+            "tools/pub-re/tests/native-shape-rotation.example.json",
+            "tools/pub-re/tests/native-save-as-noop.example.json"
+          )) {
+            & $script `
+              -ManifestPath $manifest `
+              -OutputRoot (Join-Path $env:RUNNER_TEMP "pub-re-native-validate") `
+              -ValidateManifestOnly
+          }
 
       - name: Validate pinned native fixture registry
         shell: bash
