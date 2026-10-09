@@ -1107,7 +1107,7 @@ jobs:
           if (Test-Path -LiteralPath $nativeStagePath -PathType Leaf) {
             $nativeStage = Get-Content -LiteralPath $nativeStagePath -Raw | ConvertFrom-Json
             if ($nativeStage.schema -ne "chaptera.quill-readonly-native-stage.v1" -or
-                $nativeStage.phase -notin @("fixture_acquisition", "publisher_identity", "publisher_open", "story_read", "source_integrity", "receipt_write", "complete") -or
+                $nativeStage.phase -notin @("fixture_acquisition", "publisher_identity", "application_create", "document_open", "stories_collection", "story_read", "source_integrity", "receipt_write", "complete") -or
                 $nativeStage.status -notin @("running", "invalid", "complete") -or
                 [int]$nativeStage.witness_index -lt 0 -or [int]$nativeStage.witness_index -gt 4) {
               throw "quill_readonly_native_stage_invalid"
