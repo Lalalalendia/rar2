@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use pub_re::{analyze_manifest_file, attribute_officeart_manifest_file};
+use pub_re::{
+    analyze_manifest_file, attribute_contents_manifest_file,
+    attribute_officeart_manifest_file,
+};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -26,6 +29,12 @@ enum Command {
         output: PathBuf,
     },
     /// Join changed byte ranges in one explicitly selected stream to OfficeArt RawSpan owners.
+    AttributeContents {
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
     AttributeOfficeart {
         #[arg(long)]
         manifest: PathBuf,
@@ -63,6 +72,16 @@ fn main() -> Result<()> {
                 receipt.cfb.added_entries.len(),
                 receipt.cfb.removed_entries.len(),
                 output.display(),
+            );
+            Ok(())
+        }
+        Command::AttributeContents { manifest, output } => {
+            let receipt = attribute_contents_manifest_file(&manifest)?;
+            write_json(&output, &receipt)?;
+            println!(
+                "pub-re contents status={} chunks={} changed={} receipt={}",
+                receipt.status, receipt.compared_chunks, receipt.changed_chunks,
+                output.display()
             );
             Ok(())
         }
