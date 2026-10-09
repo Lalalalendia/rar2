@@ -354,7 +354,10 @@ mod tests {
             document_pages,
             vec![master, a, service, b, identity.page_id, carrier]
         );
-        assert_eq!(transition.after_customer_page_ids, vec![a, b, identity.page_id]);
+        assert_eq!(
+            transition.after_customer_page_ids,
+            vec![a, b, identity.page_id]
+        );
         assert_eq!(pages.get(&identity.page_id), Some(&transition.page));
 
         apply_append_blank_page_inverse_v1(
@@ -412,9 +415,11 @@ mod tests {
         let existing = [source].into_iter().collect::<BTreeSet<_>>();
 
         let mut nonblank = blank_page(identity.page_id);
-        nonblank.extensions.push(pub_model::ExtensionId::from_canonical(
-            CanonicalId::from_bytes([0x44; 16]),
-        ));
+        nonblank
+            .extensions
+            .push(pub_model::ExtensionId::from_canonical(
+                CanonicalId::from_bytes([0x44; 16]),
+            ));
         assert_eq!(
             plan_append_blank_page_v1(
                 document_id("33000000-0000-4000-8000-000000000001"),
