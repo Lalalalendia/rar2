@@ -87,7 +87,6 @@
       "name": "pub-editor facade/core",
       "paths": [
         "vendor/producer-a/crates/pub-editor/src/lib.rs",
-        "vendor/producer-a/crates/pub-editor/src/session_authored_entities.rs",
         "vendor/producer-a/crates/pub-editor/Cargo.toml"
       ],
       "commands": [
