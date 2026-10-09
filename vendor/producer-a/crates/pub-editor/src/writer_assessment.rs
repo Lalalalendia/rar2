@@ -24,6 +24,113 @@ use std::fmt;
 
 pub const EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1: &str = "0.1";
 
+pub(super) fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
+    if operations
+        .iter()
+        .any(|operation| matches!(operation, EditOperation::AppendBlankPageV1 { .. }))
+    {
+        super::EDITOR_PROJECT_VERSION_V0_25
+    } else if operations.iter().any(|operation| {
+        matches!(
+            operation,
+            EditOperation::RegisterAuthoredPageIdentityV1 { .. }
+        )
+    }) {
+        super::EDITOR_PROJECT_VERSION_V0_24
+    } else if operations
+        .iter()
+        .any(|operation| matches!(operation, EditOperation::ReorderPagesV1 { .. }))
+    {
+        super::EDITOR_PROJECT_VERSION_V0_23
+    } else if operations
+        .iter()
+        .any(|operation| matches!(operation, EditOperation::LinkTextFrameTail { .. }))
+    {
+        super::EDITOR_PROJECT_VERSION_V0_22
+    } else if operations
+        .iter()
+        .any(|operation| super::table_rowcol_history_v1(operation).is_some())
+    {
+        super::EDITOR_PROJECT_VERSION_V0_21
+    } else if operations
+        .iter()
+        .any(|operation| matches!(operation, EditOperation::SetTableTrackExtent { .. }))
+    {
+        super::EDITOR_PROJECT_VERSION_V0_20
+    } else if operations
+        .iter()
+        .any(|operation| matches!(operation, EditOperation::SetImageCrop { .. }))
+    {
+        super::EDITOR_PROJECT_VERSION_V0_19
+    } else if operations
+        .iter()
+        .any(|operation| matches!(operation, EditOperation::CreateTable { .. }))
+    {
+        super::EDITOR_PROJECT_VERSION_V0_18
+    } else if operations
+        .iter()
+        .any(|operation| matches!(operation, EditOperation::CreateLine { .. }))
+    {
+        super::EDITOR_PROJECT_VERSION_V0_17
+    } else if operations
+        .iter()
+        .any(super::is_scoped_text_format_operation_v1)
+    {
+        super::EDITOR_PROJECT_VERSION_V0_16
+    } else if operations.iter().any(|operation| {
+        matches!(
+            operation,
+            EditOperation::SetParagraphAlignmentOverride { .. }
+                | EditOperation::ClearParagraphAlignmentOverride { .. }
+        )
+    }) {
+        super::EDITOR_PROJECT_VERSION_V0_15
+    } else if operations
+        .iter()
+        .any(|operation| super::text_format_operation_story_id_v1(operation).is_some())
+    {
+        super::EDITOR_PROJECT_VERSION_V0_14
+    } else if operations
+        .iter()
+        .any(|operation| matches!(operation, EditOperation::ReorderAuthoredStack { .. }))
+    {
+        super::EDITOR_PROJECT_VERSION_V0_13
+    } else {
+        super::EDITOR_PROJECT_VERSION_V0_12
+    }
+}
+
+pub(super) fn append_blank_page_persistence_requirements_v1(
+    transition: &super::AppendBlankPageTransitionV1,
+) -> Vec<PersistenceRequirement> {
+    vec![
+        PersistenceRequirement {
+            feature: "page.created_identity".into(),
+            origin: Some(transition.identity.page_id.into_canonical()),
+            property_path: Some("page.identity".into()),
+        },
+        PersistenceRequirement {
+            feature: "page.geometry".into(),
+            origin: Some(transition.identity.page_id.into_canonical()),
+            property_path: Some("page.size".into()),
+        },
+        PersistenceRequirement {
+            feature: "document.page_membership".into(),
+            origin: Some(transition.document_id.into_canonical()),
+            property_path: Some("document.pages".into()),
+        },
+    ]
+}
+
+pub(super) fn required_editor_asset_refs_v1(
+    operations: &[EditOperation],
+) -> BTreeSet<Sha256Digest> {
+    operations
+        .iter()
+        .flat_map(EditOperation::durable_editor_asset_refs_v1)
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct EffectiveStoryTextMutation {
     pub story_id: StoryId,
@@ -152,6 +259,7 @@ impl EditorSession {
                 | EditOperation::ReorderAuthoredStack { .. }
                 | EditOperation::ReorderPagesV1 { .. }
                 | EditOperation::RegisterAuthoredPageIdentityV1 { .. }
+                | EditOperation::AppendBlankPageV1 { .. }
                 | EditOperation::SetTextFormatProperty { .. }
                 | EditOperation::ClearTextFormatPropertyOverride { .. }
                 | EditOperation::SetTextFormatPropertyScopedV1 { .. }
@@ -265,6 +373,7 @@ impl EditorSession {
                 | EditOperation::ReorderAuthoredStack { .. }
                 | EditOperation::ReorderPagesV1 { .. }
                 | EditOperation::RegisterAuthoredPageIdentityV1 { .. }
+                | EditOperation::AppendBlankPageV1 { .. }
                 | EditOperation::SetTextFormatProperty { .. }
                 | EditOperation::ClearTextFormatPropertyOverride { .. }
                 | EditOperation::SetTextFormatPropertyScopedV1 { .. }
