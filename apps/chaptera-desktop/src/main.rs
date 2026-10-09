@@ -36,10 +36,10 @@ mod reader_update_control;
 mod reader_visual_golden_tests;
 mod rectangle_creation;
 mod rectangle_creation_shell;
+mod render_backend;
 mod resize_modifiers;
 #[cfg(all(test, not(feature = "reader-only")))]
 mod resize_modifiers_gui_tests;
-mod render_backend;
 mod selection_keyboard;
 #[cfg(all(test, not(feature = "reader-only")))]
 mod selection_keyboard_gui_tests;
@@ -4260,7 +4260,9 @@ impl ViewerApp {
                                     handle,
                                     pointer_start,
                                 ) {
-                                    Ok(mut resize) => match resize.update_constrained(pointer_current, resize_modifiers) {
+                                    Ok(mut resize) => match resize
+                                        .update_constrained(pointer_current, resize_modifiers)
+                                    {
                                         Ok(ResizeUpdate::Preview(_))
                                         | Ok(ResizeUpdate::Invalid { .. }) => {
                                             next_canvas_resize = Some(resize);
