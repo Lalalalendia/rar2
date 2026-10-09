@@ -505,6 +505,8 @@ fn build_pdf_artifact(
                 table_paint_incomplete_count += 1;
                 return None;
             }
+            // Measurement-only causal arm: retain exact TABLE fills, suppress borders.
+            borders.clear();
             if fills.is_empty() && borders.is_empty() {
                 table_no_visible_paint_count += 1;
                 return None;
