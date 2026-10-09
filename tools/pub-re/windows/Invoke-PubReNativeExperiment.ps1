@@ -82,7 +82,7 @@ function Assert-NativeManifest {
         throw "manifest_missing_operation"
     }
     $kind = [string](Get-OptionalProperty $operation "kind" "")
-    if ($kind -ne "snapshot_only" -and $kind -ne "shape_rotation_delta") {
+    if ($kind -ne "snapshot_only" -and $kind -ne "save_as_noop" -and $kind -ne "shape_rotation_delta") {
         throw "manifest_unsupported_operation"
     }
 
@@ -622,6 +622,26 @@ try {
         Set-NativeStage "primary_inventory_complete"
         $receipt.status = "complete"
     }
+    elseif ($operationKind -eq "save_as_noop") {
+        Set-NativeStage "primary_open_begin"
+        $document = $application.Open($inputCopy, $false, $false)
+        Set-NativeStage "primary_open_complete"
+
+        Set-NativeStage "primary_inventory_begin"
+        $receipt.before = Get-DocumentInventory $document
+        Set-NativeStage "primary_inventory_complete"
+
+        Set-NativeStage "primary_save_as_begin"
+        $document.SaveAs($mutatedPath, $PbFilePublication, $false)
+        Set-NativeStage "primary_save_as_complete"
+        $saved = Get-FileFingerprint $mutatedPath
+        $receipt.save = [ordered]@{
+            state = "ok"
+            sha256 = $saved.sha256
+            byte_len = $saved.byte_len
+        }
+        $receipt.status = "saved"
+    }
     else {
         $selector = $operation.selector
         $wantedPageId = [int]$selector.page_id
@@ -711,6 +731,68 @@ if (-not $primaryExited) {
     $receipt.status = "process_exit_timeout"
 }
 
+if ($operationKind -eq "save_as_noop" -and $receipt.save.state -eq "ok" -and $primaryExited) {
+    Assert-PublisherIdle
+    $reopenApplication = $null
+    $reopenDocument = $null
+    $reopenSecurityBefore = $null
+
+    try {
+        Set-NativeStage "reopen_application_create_begin"
+        $reopenState = New-SafePublisherApplication -Visible:$visible
+        $reopenApplication = $reopenState.application
+        Set-NativeStage "reopen_application_create_complete"
+
+        $reopenSecurityBefore = $reopenState.automation_security_before
+
+        Set-NativeStage "reopen_open_begin"
+        $reopenDocument = $reopenApplication.Open($mutatedPath, $true, $false)
+        Set-NativeStage "reopen_open_complete"
+
+        Set-NativeStage "reopen_inventory_begin"
+        $reopenInventory = Get-DocumentInventory $reopenDocument
+        Set-NativeStage "reopen_inventory_complete"
+
+        $receipt.reopen = [ordered]@{
+            state = "ok"
+            inventory = $reopenInventory
+        }
+        $receipt.status = "complete"
+    }
+    catch {
+        $script:NativeFailureStage = [string]$script:NativeCurrentStage
+        Write-Host ("PUB_RE_NATIVE_FAILURE_STAGE stage={0}" -f $script:NativeFailureStage)
+        Set-NativeStage "reopen_exception_observed"
+        throw
+    }
+    finally {
+        if ($null -ne $reopenDocument) {
+            Set-NativeStage "reopen_document_close_begin"
+            try {
+                $reopenDocument.Close()
+                Set-NativeStage "reopen_document_close_complete"
+            }
+            catch {
+                Set-NativeStage "reopen_document_close_error"
+            }
+            Release-ComObject $reopenDocument
+        }
+        if ($null -ne $reopenApplication) {
+            Set-NativeStage "reopen_application_quit_begin"
+            [void](Close-SafePublisherApplication -Application $reopenApplication -AutomationSecurityBefore $reopenSecurityBefore)
+            Set-NativeStage "reopen_application_quit_complete"
+        }
+    }
+
+    Set-NativeStage "reopen_process_exit_wait_begin"
+    $reopenExited = Wait-PublisherExit -GraceSeconds $graceSeconds
+    Set-NativeStage "reopen_process_exit_wait_complete"
+    $receipt.process_exit.reopen = if ($reopenExited) { "ok" } else { "timeout" }
+    if (-not $reopenExited) {
+        $receipt.status = "process_exit_timeout"
+    }
+}
+
 if ($operationKind -eq "shape_rotation_delta" -and $receipt.save.state -eq "ok" -and $primaryExited) {
     Assert-PublisherIdle
     $reopenApplication = $null
@@ -792,7 +874,7 @@ $control = [ordered]@{
     officeart_stream = $officeArtStream
     evidence_dir = "evidence"
 }
-if ($operationKind -eq "shape_rotation_delta" -and $receipt.save.state -eq "ok") {
+if (($operationKind -eq "shape_rotation_delta" -or $operationKind -eq "save_as_noop") -and $receipt.save.state -eq "ok") {
     $diffManifest = [ordered]@{
         schema = $DiffSchema
         experiment_id = ([string]$manifest.experiment_id) + "--native-diff"
