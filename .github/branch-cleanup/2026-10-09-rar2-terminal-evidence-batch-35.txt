@@ -1,0 +1,32 @@
+# 2026-10-09 — terminal evidence batch 35
+# Never merge. Exact live tips only from closed-unmerged terminal measurement/control/superseded PRs.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+ci/reader-prebuild-parallel-ab-01 2b50952cdec856bb34459c590acefe8b39f44c2d # #2352 sacrificial AFTER experiment; do not merge
+ops/branch-gc-20261009-editable-cli-predecessor-batch-34 ffaf6d137f3aa5a1d983689a3458bfdb2babdf27 # #2349 completed clean GC carrier 2/2
+measure/pub-pdf-table-derived-borders-01 6fcbbadd0bbce7c53a60710f49185b338ad6217b # #2345 measurement complete; do not merge
+ci/reader-prebuild-baseline-01 f6c6cffe0e7d53697dff12b6237c1b44f775487b # #2342 sacrificial baseline; never merge
+ci/web-font-env-after-2334-control-01 62a21d3c4ec99742b3eddb7fafe72ce3374c8e9c # #2336 sacrificial steady-state control
+measure/pub-pdf-viewer-scene-sorted-01 9e07717d6433f3f2526bbf5676fba4cc22b73bd2 # #2332 measurement complete; close unmerged
+ci/web-font-env-single-runner-ab-01 7b5c7c43295f95106c86b4917c7dcae4c498a53c # #2331 sacrificial A/B; never merge
+measure/pub-pdf-order-fills-only-01 f315062c7ab4c4af1e571f10473cdf2c101ad4e6 # #2329 measurement complete
+measure/pub-pdf-viewer-scene-order-01 6d88d2e7a49b7804881357c98f798e0f98163549 # #2323 confounded measurement; superseded by pure arm
+measure/pub-pdf-table-borders-only-01 860f80a51c3fc72daabfb8bd6483231cfa51984d # #2319 measurement complete
+measure/pub-pdf-table-fills-only-01 584023709f26fcd897be6b9b4a6abc63ea334aec # #2318 measurement complete
+ci/repo-latency-census-36-control-01 e0373ad3975d22342e73f01b3f7c1a04d7d9a8f2 # #2309 measurement-only sacrificial PR
+ci/latency-census-control-12-01 18757dc525206f60c15963395bbd6931b3209224 # #2305 sacrificial evidence control
+measure/pub-pdf-table-paint-discriminator-01 088e0bfb3e83784ace85b51258a28b61af487153 # #2303 measurement complete; close unmerged
+validation/pub-pdf-baseline-43a982 95f7f8bd577dad8aaa9b8c86487325204444021c # #2298 diagnostic complete
+validation/pub-pdf-table-paint-current-main-ab 9ea414d2c68a59e6bfe5d65b6bfebde6dcfcd3de # #2297 diagnostic complete; zero-regression failed
+validation/pub-pdf-current-main-census-20261009 9ad382f39e7a7e22830d49f8aaa09b6f78ccf9bf # #2290 superseded by exact-base #2298
+measure/cloud-reader-image-decode-gate-01 4641aaf834e4644d7019b279762747f409c7b3d3 # #2284 diagnostic-only; never merge
+ci/local-portable-web-asset-postmerge-control-2268 c4deeb1925cde54cc7511bf1714abf3b95ffee9a # #2279 sacrificial post-merge control
+measure/pub-editor-geometry-core-compat-post-01 f7069074691449d54641e3805f7a1ad2d382856e # #2272 sacrificial post-merge control
+ci/pub-editor-delete-test-path-control-2262 fa95f55aa8e7d42192de17a86a5fbc346577188f # #2267 sacrificial routing control
+measure/pub-editor-table-core-compat-pilot-01 700cef54d6a1a139325d479160d2fc4d18e878a3 # #2265 sacrificial pilot; evidence captured
+ci/pub-editor-delete-test-path-control-2253 f93d6ff89d58f018f3236822ea079e5ca28cf617 # #2260 sacrificial routing receipt
+fix/pub-re-0p75-probe-target-dir-01 5574620f78766f52eaf020e2dcd7812f746b1943 # #2255 explicitly superseded by #2254
+ci/pub-editor-delete-test-path-control-2251 281b30a117688d2e2554ee146c4a7f06fa197e14 # #2252 sacrificial routing control
+ci/pub-editor-delete-test-path-control-2235 b364dbd83382d73db3583a1ef35a7d57641bc21d # #2249 sacrificial registration control
+measure/pub-editor-table-core-steady-state-03 b7cc159f906059ced3fc19e2ba85227d09beaec4 # #2246 sacrificial post-merge control
+ci/pub-editor-table-core-fast-01 9034881f137e44cf9534ffbd8a25a355499e57b2 # #2240 explicitly superseded by #2243
