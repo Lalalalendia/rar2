@@ -95,6 +95,29 @@ jobs:
         run: |
           cargo build -p chaptera-server --bin chaptera --jobs 2
           cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-cli --bin pub
+      - name: Source-pinned read-only 022 image admission and Scene envelope census
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          manifest = json.loads(Path('target/reader-pdf-022-probe/manifest.json').read_text())
+          matching = [row for row in manifest['fixtures'] if row['name'] == '022_7079ad60fd810979']
+          assert len(matching) == 1
+          item = matching[0]
+          assert item['sha256'] == '7079ad60fd8109796b84286d294cb490051a1517d8e52ac61e7c416dbd04428c'
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as dest:
+              dest.write('CHAPTERA_READER_SCENE_PROBE_PUB=' + item['source_path'] + '\n')
+              dest.write('CHAPTERA_READER_SCENE_PROBE_SHA256=' + item['sha256'] + '\n')
+          PY
+          cargo test -p chaptera-server --bin chaptera real_reference_scene_projection_probe -- --ignored --nocapture > "$RUNNER_TEMP/022-admission-probe.log" 2>&1 || {
+            tail -n 45 "$RUNNER_TEMP/022-admission-probe.log"
+            exit 1
+          }
+          grep -m 1 'CLOUD_READER_SCENE_PROJECTION_PROBE ok' "$RUNNER_TEMP/022-admission-probe.log"
+          grep -m 1 'CLOUD_READER_FILL_PROJECTION_PROBE' "$RUNNER_TEMP/022-admission-probe.log"
+          grep -m 1 'test result:' "$RUNNER_TEMP/022-admission-probe.log"
       - name: Materialize admitted explicit fallback font locally
         run: |
           cargo run -q -p chaptera-desktop-fallback-font-resource --bin materialize-fallback-font -- "$RUNNER_TEMP/chaptera-fallback.ttf"
