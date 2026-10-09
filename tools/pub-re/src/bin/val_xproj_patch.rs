@@ -1072,4 +1072,137 @@ mod tests {
             prepare_independent(&source, &census_path, 306, &tmp.path().join("wrong-id"), IndependentAxis::Width).is_err()
         );
     }
+
+    #[test]
+    fn independent_height_arms_patch_only_contents_ab_and_tagged_escher_ye() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("height-normalized.pub");
+        let census_path = tmp.path().join("height-census.json");
+        let arms = tmp.path().join("height-arms");
+        let contents_height = 1_122_000i64;
+        let escher_ye = -1_244_000i64;
+        let mut file = cfb::create(&source).unwrap();
+        file.create_storage("/Escher").unwrap();
+        let mut contents = vec![0x12u8; 60_000];
+        contents[32..36].copy_from_slice(&uint32_bytes(contents_height).unwrap());
+        file.create_stream("/Contents")
+            .unwrap()
+            .write_all(&contents)
+            .unwrap();
+        let mut escher = vec![0x48u8; 2048];
+        escher[8..10].copy_from_slice(&0x2003u16.to_le_bytes());
+        escher[10..14].copy_from_slice(&(escher_ye as i32).to_le_bytes());
+        escher[20..22].copy_from_slice(&0x2004u16.to_le_bytes());
+        escher[22..26].copy_from_slice(&(escher_ye as i32).to_le_bytes());
+        file.create_stream("/Escher/EscherStm")
+            .unwrap()
+            .write_all(&escher)
+            .unwrap();
+        drop(file);
+        let original_sha = sha(&fs::read(&source).unwrap());
+        let mut census = json!({
+            "schema": "chaptera.t352-independent-identity-first-preflight.v1",
+            "source_sha256": original_sha,
+            "rows": [{
+                "contents_seq": 305, "spid": 1035, "shape_type": 1,
+                "unique_join": true,
+                "both_geometries_consistent": true,
+                "identity_joined_even_if_extents_differ": true,
+                "height_numeric_patchable": true,
+                "admitted_independent_height_target": true,
+                "contents_height_emu": contents_height,
+                "anchor_height_emu": contents_height,
+                "anchor_ye_emu": escher_ye,
+                "height_value_offset_in_contents": 32,
+                "ye_tagged_field_offset_in_escher": 20
+            }]
+        });
+        write_json(&census_path, &census).unwrap();
+        prepare_independent(
+            &source,
+            &census_path,
+            305,
+            &arms,
+            IndependentAxis::Height,
+        )
+        .unwrap();
+        assert_eq!(sha(&fs::read(&source).unwrap()), original_sha);
+        let before = all_streams(&source).unwrap();
+        for (name, contents_change, escher_change) in [
+            ("control", false, false),
+            ("both_consistent", true, true),
+            ("contents_only", true, false),
+            ("escher_only", false, true),
+        ] {
+            let changed = all_streams(&arms.join(format!("{name}.pub"))).unwrap();
+            assert_eq!(
+                before.keys().collect::<Vec<_>>(),
+                changed.keys().collect::<Vec<_>>()
+            );
+            for (stream_name, bytes) in &before {
+                let offsets = changed_offsets(bytes, &changed[stream_name]).unwrap();
+                let expected = if stream_name == "/Contents" && contents_change {
+                    changed_offsets(
+                        &uint32_bytes(contents_height).unwrap(),
+                        &uint32_bytes(contents_height + DELTA_EMU).unwrap(),
+                    )
+                    .unwrap()
+                    .iter()
+                    .map(|i| i + 32)
+                    .collect::<Vec<_>>()
+                } else if stream_name == "/Escher/EscherStm" && escher_change {
+                    changed_offsets(
+                        &(escher_ye as i32).to_le_bytes(),
+                        &((escher_ye + DELTA_EMU) as i32).to_le_bytes(),
+                    )
+                    .unwrap()
+                    .iter()
+                    .map(|i| i + 22)
+                    .collect::<Vec<_>>()
+                } else {
+                    vec![]
+                };
+                assert_eq!(offsets, expected, "height arm {name} changed {stream_name}");
+            }
+        }
+        let report: Value = serde_json::from_slice(
+            &fs::read(arms.join("t352-independent-height-patch-receipt.json")).unwrap()
+        )
+        .unwrap();
+        assert_eq!(
+            report["schema"],
+            "chaptera.t352-independent-four-arm-height-patch.v1"
+        );
+        assert_eq!(report["height_after_emu"], contents_height + DELTA_EMU);
+        assert_eq!(report["arms"].as_array().unwrap().len(), 4);
+
+        // A byte-matching signed coordinate at the wrong tagged field must
+        // fail closed, even if it looks numerically plausible.
+        census["rows"][0]["ye_tagged_field_offset_in_escher"] = json!(8);
+        write_json(&census_path, &census).unwrap();
+        let wrong_tag = tmp.path().join("wrong-ye-tag");
+        assert!(
+            prepare_independent(
+                &source,
+                &census_path,
+                305,
+                &wrong_tag,
+                IndependentAxis::Height,
+            )
+            .is_err()
+        );
+        let wrong_id = tmp.path().join("wrong-shape-id");
+        assert!(
+            prepare_independent(
+                &source,
+                &census_path,
+                306,
+                &wrong_id,
+                IndependentAxis::Height,
+            )
+            .is_err()
+        );
+    }
+
 }
