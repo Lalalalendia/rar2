@@ -1,0 +1,23 @@
+# rar2 branch GC batch 39: evidence-complete and explicitly superseded closed PR heads.
+# Closed PR receipts and experiment decisions are retained in GitHub/Notion.
+# Runtime validates exact SHA and excludes open PR head/base refs; moved tips fail closed.
+# #2417: completed post-page-order Publisher crop measurement
+measure/pub-pdf-crop-after-page-order-01 02add3bd0a076fca4a7f25d8106aae9b599d810d
+# #2397: closed measurement; current crop product owner #2416
+measure/pub-pdf-source-window-semantics-01 062549da1f7eb92e1cb4f2b67109fe266ea3ed48
+# #2394: obsolete product predecessor; successor #2416 remains active
+fix/pub-pdf-source-window-crop-01 6e76f4818a96005771c3781ec104c9879e1bf705
+# #2395: rejected/diagnostic crop A/B; evidence retained in closed PR
+measure/pub-pdf-source-window-ab-01 645137c089527ef8bb17f5d01b2e87a5b61add4f
+# #2409: completed exact-head page-order Publisher A/B
+measure/pub-pdf-viewer-page-order-ab-01 a6246506736ba252cc74c6a4d045be6d65a4c060
+# #2406: completed page-order census, artifact retained
+measure/pub-pdf-page-order-census-01 7f7f9f62d531ffd72e2051d02aa71cf6efeaebf9
+# #2360: completed image MIME census, evidence retained
+measure/pub-pdf-mime-unsupported-census-01 47a1ddc7355eaa75fbab99882f3b8538f2aaa85a
+# #2357: completed exact-base cardinal placement control
+validation/pub-pdf-cardinal-placement-base-01 abce102628d5cba2eb75a6ca03e390c71cc75bf0
+# #2356: completed cardinal placement A/B
+validation/pub-pdf-cardinal-placement-census-01 c809682a3324ddd9b715c62a1f31b8a2e9533c44
+# #2368: completed batch38 execution-only carrier with clean receipt
+ops/branch-gc-20261009-vba-classifier-predecessor-batch-38 09d4c914f5b3798334d03f2fc13e787dca6c1629
