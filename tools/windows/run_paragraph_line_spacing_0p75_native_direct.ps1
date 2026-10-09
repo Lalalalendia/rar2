@@ -181,9 +181,15 @@ try {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Prepare -PacketPath $Packet -OutputRoot $OutputRoot
     Assert-LastExit "prepare_native_run.ps1"
 
-    $operationArgs = @("-PacketPath", $Packet, "-OutputRoot", $OutputRoot)
-    if ($MixedSize) { $operationArgs += "-MixedSize" }
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Operation @operationArgs
+    # Pass the switch as an explicit Windows PowerShell -File argument,
+    # avoiding array forwarding through the native executable boundary.
+    Write-Host ("PUB_RE_REQUESTED_COMPOSITION_PROFILE={0}" -f $(if ($MixedSize) { "mixed-12-18-12" } else { "uniform-12" }))
+    if ($MixedSize) {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Operation -PacketPath $Packet -OutputRoot $OutputRoot -MixedSize
+    }
+    else {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Operation -PacketPath $Packet -OutputRoot $OutputRoot
+    }
     Assert-LastExit "paragraph_line_spacing_0p75_native_01.ps1"
 
     $cargo = Get-Command cargo -ErrorAction Stop

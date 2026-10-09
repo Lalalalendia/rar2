@@ -385,9 +385,73 @@ jobs:
         if: ${{ needs.gate.outputs.command_mode != 'research_0p75' }}
         shell: powershell
         run: |
-          & tools/pub-re/windows/Invoke-PubReNativeExperiment.ps1 `
-            -ManifestPath $env:PUB_RE_NATIVE_MANIFEST `
-            -OutputRoot $env:PUB_RE_NATIVE_OUTPUT
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $preexistingPublisher = @(Get-Process -Name MSPUB -ErrorAction SilentlyContinue)
+          if ($preexistingPublisher.Count -ne 0) {
+            throw "publisher_busy_before_bounded_wrapper"
+          }
+
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "private"
+          New-Item -ItemType Directory -Force -Path $private | Out-Null
+          $stdout = Join-Path $private "native-child.stdout.txt"
+          $stderr = Join-Path $private "native-child.stderr.txt"
+          $script = Join-Path $env:GITHUB_WORKSPACE "tools\pub-re\windows\Invoke-PubReNativeExperiment.ps1"
+          $env:PUB_RE_NATIVE_CHILD_SCRIPT = $script
+          $startedUtc = [DateTime]::UtcNow
+
+          $childCommand = @'
+          $ErrorActionPreference = "Stop"
+          & $env:PUB_RE_NATIVE_CHILD_SCRIPT -ManifestPath $env:PUB_RE_NATIVE_MANIFEST -OutputRoot $env:PUB_RE_NATIVE_OUTPUT
+          if (-not $?) { exit 1 }
+          '@
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
+          $powershellExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          $process = Start-Process `
+            -FilePath $powershellExe `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encoded) `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr `
+            -PassThru
+
+          $finished = $process.WaitForExit(180000)
+          if (-not $finished) {
+            Write-Host "PUB_RE_NATIVE_WATCHDOG timeout_seconds=180 child_pid=$($process.Id)"
+
+            if (-not $process.HasExited) {
+              try { Stop-Process -Id $process.Id -Force -ErrorAction Stop } catch {}
+              try { [void]$process.WaitForExit(10000) } catch {}
+            }
+
+            $ownedPublisher = @(
+              Get-Process -Name MSPUB -ErrorAction SilentlyContinue | Where-Object {
+                try {
+                  $_.StartTime.ToUniversalTime() -ge $startedUtc.AddSeconds(-2)
+                } catch {
+                  $false
+                }
+              }
+            )
+            foreach ($publisherProcess in $ownedPublisher) {
+              Write-Host "PUB_RE_NATIVE_WATCHDOG terminating_mspub_pid=$($publisherProcess.Id)"
+              try { Stop-Process -Id $publisherProcess.Id -Force -ErrorAction Stop } catch {}
+            }
+
+            Start-Sleep -Seconds 2
+            throw "native_transaction_timeout"
+          }
+
+          $process.Refresh()
+          if (Test-Path -LiteralPath $stdout -PathType Leaf) {
+            Get-Content -LiteralPath $stdout
+          }
+          if (Test-Path -LiteralPath $stderr -PathType Leaf) {
+            Get-Content -LiteralPath $stderr
+          }
+          if ($process.ExitCode -ne 0) {
+            throw "native_transaction_child_failed_exit_$($process.ExitCode)"
+          }
 
       - name: Validate failed native stage receipt
         if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' }}
@@ -497,15 +561,46 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
 
-          $mixedArgs = @{}
+          # Explicitly bind the switch in Windows PowerShell 5.1; splatting
+          # a trailing hashtable previously produced a green uniform-12 run
+          # for an owner-approved mixed command (run 37858450713).
           if ($env:PUB_RE_RESEARCH_ID -eq "paragraph-line-spacing-0p75-mixed") {
-            $mixedArgs.MixedSize = $true
+            & tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1 `
+              -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT `
+              -ReturnZip $env:PUB_RE_RESEARCH_RETURN_ZIP `
+              -MixedSize
+            if (-not $?) { throw "bounded mixed 0.75 paragraph research failed" }
           }
-          & tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1 `
-            -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT `
-            -ReturnZip $env:PUB_RE_RESEARCH_RETURN_ZIP @mixedArgs
-          if (-not $?) {
-            throw "bounded 0.75 paragraph research failed"
+          elseif ($env:PUB_RE_RESEARCH_ID -eq "paragraph-line-spacing-0p75") {
+            & tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1 `
+              -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT `
+              -ReturnZip $env:PUB_RE_RESEARCH_RETURN_ZIP
+            if (-not $?) { throw "bounded uniform 0.75 paragraph research failed" }
+          }
+          else {
+            throw "unsupported bounded paragraph research profile"
+          }
+
+          # Never accept a successful PowerShell invocation as proof the
+          # requested profile ran. Check *both* source-safe receipts before
+          # the workflow is allowed to mark the native job green.
+          $nativePath = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\paragraph-line-spacing-0p75-native-01.json"
+          $structuralPath = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\paragraph-line-spacing-0p75-structural.json"
+          if (-not (Test-Path -LiteralPath $nativePath -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $structuralPath -PathType Leaf)) {
+            throw "publisher research receipt missing for requested profile"
+          }
+          $nativeReceipt = Get-Content -LiteralPath $nativePath -Raw | ConvertFrom-Json
+          $structuralReceipt = Get-Content -LiteralPath $structuralPath -Raw | ConvertFrom-Json
+          $expectedProfile = if ($env:PUB_RE_RESEARCH_ID -eq "paragraph-line-spacing-0p75-mixed") { "mixed-12-18-12" } else { "uniform-12" }
+          if ([string]$nativeReceipt.composition_profile -ne $expectedProfile -or
+              [string]$structuralReceipt.composition_profile -ne $expectedProfile) {
+            throw "Publisher research profile mismatch: expected $expectedProfile"
+          }
+          if ($expectedProfile -eq "mixed-12-18-12" -and
+              ($null -eq $structuralReceipt.mixed_size_research -or
+               [bool]$structuralReceipt.mixed_size_research.mixed_size_product_authority_granted)) {
+            throw "native mixed-size witness missing or wrongly grants product authority"
           }
 
       - name: Stage partial source-safe 0.75 receipt after failure
