@@ -165,7 +165,7 @@ pub fn plan_delete_authored_rectangle_page_v1(
 
     Ok(DeleteAuthoredRectanglePageTransitionV1 {
         page,
-        shape_before: (*shape).clone(),
+        shape_before: (**shape).clone(),
         stack,
         before_state_id,
         after_state_id,
@@ -238,7 +238,7 @@ pub fn apply_delete_authored_rectangle_page_inverse_v1(
 
     let page_id = transition.page.identity.page_id;
     let node_id = transition.shape_before.node_id;
-    if current_customer_page_ids != transition.page.after_customer_page_ids {
+    if current_customer_page_ids != transition.page.after_customer_page_ids.as_slice() {
         return Err(Error::AfterStateMismatch);
     }
     if transition.shape_before.page_id != page_id
