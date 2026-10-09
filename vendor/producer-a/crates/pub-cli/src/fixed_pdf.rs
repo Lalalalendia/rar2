@@ -290,11 +290,55 @@ fn build_pdf_artifact(
     // Reuse that already-resolved scene rather than duplicating its private
     // projector in the CLI. Mature 0x2C retains the established shaped-flow
     // geometry path byte-for-byte.
-    let pdf_scene = if route_uses_viewer_scene {
+    let mut pdf_scene = if route_uses_viewer_scene {
         viewer_scene
     } else {
         shaped_flow.geometry_scene()
     };
+
+    // Measurement-only port of the already-proven Yab fixed-output TABLE path:
+    // border rectangles are output-only nodes inserted immediately before the
+    // TABLE owner. Original scene nodes retain their established baseline order.
+    let tables_by_owner = visual
+        .tables
+        .iter()
+        .map(|table| (table.node_id, table))
+        .collect::<BTreeMap<_, _>>();
+    let mut seen_node_ids = pdf_scene
+        .nodes
+        .iter()
+        .map(|node| node.origin)
+        .collect::<BTreeSet<_>>();
+    let mut derived_table_border_paints = Vec::<FixedNodePaint>::new();
+    let mut ordered_nodes = Vec::new();
+    for node in std::mem::take(&mut pdf_scene.nodes) {
+        if node.transform == Affine2D::identity()
+            && let Some(table) = tables_by_owner.get(&node.origin)
+        {
+            for (ordinal, border) in table.borders.iter().enumerate() {
+                let id = derived_table_border_node_id(node.origin, ordinal)?;
+                if !seen_node_ids.insert(id) {
+                    bail!("derived TABLE border NodeId collides with output scene");
+                }
+                let bounds = table_border_rect(border)
+                    .context("TABLE border must be positive axis-aligned geometry")?;
+                ordered_nodes.push(ResolvedPhysicalNode {
+                    origin: id,
+                    parent_origin: node.parent_origin,
+                    bounds,
+                    transform: Affine2D::identity(),
+                });
+                derived_table_border_paints.push(FixedNodePaint {
+                    node_id: id,
+                    fill_rgb: Some(border.rgb),
+                    stroke: None,
+                });
+            }
+        }
+        ordered_nodes.push(node);
+    }
+    pdf_scene.nodes = ordered_nodes;
+
     let scene_node_ids = pdf_scene
         .nodes
         .iter()
@@ -468,7 +512,7 @@ fn build_pdf_artifact(
     };
 
     let mut filtered_paint_node_count = 0usize;
-    let node_paints = visual
+    let mut node_paints = visual
         .paints
         .iter()
         .filter_map(|paint| {
@@ -485,7 +529,8 @@ fn build_pdf_artifact(
                 }),
             })
         })
-        .collect();
+        .collect::<Vec<_>>();
+    node_paints.extend(derived_table_border_paints);
 
     let mut filtered_image_use_count = 0usize;
     let mut filtered_image_resource_count = 0usize;
