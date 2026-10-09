@@ -24,9 +24,15 @@ fn main() -> Result<()> {
     let source_path = args.next().context("expected SOURCE.pub")?;
     let baseline_path = args.next().context("expected BASELINE.json")?;
     let edited_path = args.next().context("expected EDITED.json")?;
+    let variant = args.next();
     if args.next().is_some() || baseline_path == edited_path {
-        bail!("expected three arguments with distinct output paths");
+        bail!("expected three distinct paths and optional --one-unit only");
     }
+    let (replacement, input_kind) = match variant.as_deref() {
+        None => ("", "pinned_sample3_six_unit_story_delete"),
+        Some("--one-unit") => ("34567", "pinned_sample3_one_unit_story_delete"),
+        _ => bail!("unsupported test variant; only --one-unit is admitted"),
+    };
 
     let source = fs::read(&source_path).context("read pinned Sample3")?;
     let digest = Sha256::digest(&source);
@@ -52,7 +58,7 @@ fn main() -> Result<()> {
     }
     let (story_id, before) = matches.into_iter().next().context("missing Story")?;
     editor
-        .replace_story_text(story_id, before.replacen(MARKER, "", 1))
+        .replace_story_text(story_id, before.replacen(MARKER, replacement, 1))
         .map_err(|error| anyhow::anyhow!("bounded Story edit: {error:?}"))?;
     let edited = serde_json::to_vec_pretty(&editor.project())?;
 
@@ -62,7 +68,7 @@ fn main() -> Result<()> {
         "{}",
         serde_json::json!({
             "source_sha256": SOURCE_SHA,
-            "input_kind": "pinned_sample3_six_unit_story_delete",
+            "input_kind": input_kind,
             "project_files_created": true,
             "publisher_authority": "external_exact_byte_receipt_only"
         })
