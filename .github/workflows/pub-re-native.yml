@@ -484,15 +484,22 @@ jobs:
             throw "native_transaction_timeout"
           }
 
+          $process.WaitForExit()
           $process.Refresh()
+          if (-not $process.HasExited) {
+            throw "native_transaction_child_exit_state_unavailable"
+          }
+
           if (Test-Path -LiteralPath $stdout -PathType Leaf) {
             Get-Content -LiteralPath $stdout
           }
           if (Test-Path -LiteralPath $stderr -PathType Leaf) {
             Get-Content -LiteralPath $stderr
           }
-          if ($process.ExitCode -ne 0) {
-            throw "native_transaction_child_failed_exit_$($process.ExitCode)"
+
+          $exitCode = [int]$process.ExitCode
+          if ($exitCode -ne 0) {
+            throw "native_transaction_child_failed_exit_$exitCode"
           }
 
       - name: Validate failed native stage receipt
