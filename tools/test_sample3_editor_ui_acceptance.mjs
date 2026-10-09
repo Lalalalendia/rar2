@@ -178,7 +178,19 @@ async function main() {
     if (uiState.error) {
       throw new Error("real Story UI edit rejected before download gate: " + uiState.text);
     }
-    const approved = await read("/v1/pub-save/preview");
+    // The UI is also awaiting disclosure() for this revision. Two independent
+    // readers must see the same stable candidate, never race to replace its
+    // output/report pair or treat a colliding create_new() as PUB rejection.
+    const [approved, concurrent] = await Promise.all([
+      read("/v1/pub-save/preview"),
+      read("/v1/pub-save/preview"),
+    ]);
+    if (approved.revision_id !== concurrent.revision_id ||
+        approved.output_hash !== concurrent.output_hash ||
+        approved.can_download !== concurrent.can_download ||
+        approved.native_publisher_authorized !== concurrent.native_publisher_authorized) {
+      throw new Error("concurrent native PUB previews disagree on exact accepted bytes");
+    }
     if (approved.can_download !== true) {
       const state = await read("/v1/harness/state");
       throw new Error("real Story edit accepted but native download not authorized: " +
