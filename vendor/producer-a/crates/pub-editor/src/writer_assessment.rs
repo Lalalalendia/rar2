@@ -27,6 +27,11 @@ pub const EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1: &str = "0.1";
 pub(super) fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
     if operations
         .iter()
+        .any(|operation| matches!(operation, EditOperation::DuplicateBlankPageV1 { .. }))
+    {
+        super::EDITOR_PROJECT_VERSION_V0_27
+    } else if operations
+        .iter()
         .any(|operation| matches!(operation, EditOperation::DeleteBlankAuthoredPageV1 { .. }))
     {
         super::EDITOR_PROJECT_VERSION_V0_26
@@ -266,6 +271,7 @@ impl EditorSession {
                 | EditOperation::RegisterAuthoredPageIdentityV1 { .. }
                 | EditOperation::AppendBlankPageV1 { .. }
                 | EditOperation::DeleteBlankAuthoredPageV1 { .. }
+                | EditOperation::DuplicateBlankPageV1 { .. }
                 | EditOperation::SetTextFormatProperty { .. }
                 | EditOperation::ClearTextFormatPropertyOverride { .. }
                 | EditOperation::SetTextFormatPropertyScopedV1 { .. }
@@ -381,6 +387,7 @@ impl EditorSession {
                 | EditOperation::RegisterAuthoredPageIdentityV1 { .. }
                 | EditOperation::AppendBlankPageV1 { .. }
                 | EditOperation::DeleteBlankAuthoredPageV1 { .. }
+                | EditOperation::DuplicateBlankPageV1 { .. }
                 | EditOperation::SetTextFormatProperty { .. }
                 | EditOperation::ClearTextFormatPropertyOverride { .. }
                 | EditOperation::SetTextFormatPropertyScopedV1 { .. }
@@ -552,6 +559,7 @@ impl EditOperation {
             | Self::RegisterAuthoredPageIdentityV1 { .. }
             | Self::AppendBlankPageV1 { .. }
             | Self::DeleteBlankAuthoredPageV1 { .. }
+            | Self::DuplicateBlankPageV1 { .. }
             | Self::SetTextFormatProperty { .. }
             | Self::ClearTextFormatPropertyOverride { .. }
             | Self::SetTextFormatPropertyScopedV1 { .. }
@@ -795,6 +803,23 @@ impl PersistenceRequirements for EditOperation {
                     feature: "document.page_membership".into(),
                     origin: Some(transition.document_id.into_canonical()),
                     property_path: Some("document.pages".into()),
+                },
+            ],
+            Self::DuplicateBlankPageV1 { transition } => vec![
+                PersistenceRequirement {
+                    feature: "page.created_identity".into(),
+                    origin: Some(transition.destination_identity.page_id.into_canonical()),
+                    property_path: Some("page.identity".into()),
+                },
+                PersistenceRequirement {
+                    feature: "document.page_membership".into(),
+                    origin: Some(transition.document_id.into_canonical()),
+                    property_path: Some("document.pages".into()),
+                },
+                PersistenceRequirement {
+                    feature: "page.geometry".into(),
+                    origin: Some(transition.destination_identity.page_id.into_canonical()),
+                    property_path: Some("page.size".into()),
                 },
             ],
             Self::SetTextFormatProperty { story_id, .. }

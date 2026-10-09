@@ -74,18 +74,14 @@ pub fn duplicate_blank_page_document_state_id_v1(
     format!("sha256:{encoded}")
 }
 
-fn customer_set_v1(
-    page_ids: &[PageId],
-) -> Result<BTreeSet<PageId>, DuplicateBlankPageErrorV1> {
+fn customer_set_v1(page_ids: &[PageId]) -> Result<BTreeSet<PageId>, DuplicateBlankPageErrorV1> {
     if page_ids.is_empty() {
         return Err(DuplicateBlankPageErrorV1::CustomerPagesEmpty);
     }
     let mut set = BTreeSet::new();
     for page_id in page_ids {
         if !set.insert(*page_id) {
-            return Err(DuplicateBlankPageErrorV1::DuplicateCustomerPage {
-                page_id: *page_id,
-            });
+            return Err(DuplicateBlankPageErrorV1::DuplicateCustomerPage { page_id: *page_id });
         }
     }
     Ok(set)
@@ -176,10 +172,7 @@ fn validate_transition_v1(
         return Err(DuplicateBlankPageErrorV1::DestinationMatchesSource);
     }
     if transition.destination_page
-        != duplicate_page_from_source_v1(
-            &transition.source_page,
-            transition.destination_identity,
-        )
+        != duplicate_page_from_source_v1(&transition.source_page, transition.destination_identity)
     {
         return Err(DuplicateBlankPageErrorV1::DestinationPageCopyMismatch);
     }
@@ -232,12 +225,11 @@ pub fn plan_duplicate_blank_page_v1(
         });
     }
 
-    let source_page = pages
-        .get(&source_page_id)
-        .cloned()
-        .ok_or(DuplicateBlankPageErrorV1::SourcePageMissing {
+    let source_page = pages.get(&source_page_id).cloned().ok_or(
+        DuplicateBlankPageErrorV1::SourcePageMissing {
             page_id: source_page_id,
-        })?;
+        },
+    )?;
     validate_blank_source_page_v1(&source_page)?;
 
     let current = current_customer_order_v1(document_pages, current_customer_page_ids)?;
@@ -263,15 +255,11 @@ pub fn plan_duplicate_blank_page_v1(
     };
     let insertion_index = source_index + 1;
 
-    let destination_page =
-        duplicate_page_from_source_v1(&source_page, destination_identity);
+    let destination_page = duplicate_page_from_source_v1(&source_page, destination_identity);
     let mut after_document_pages = document_pages.to_vec();
     after_document_pages.insert(insertion_index, destination_identity.page_id);
     let mut after_customer_page_ids = current.clone();
-    after_customer_page_ids.insert(
-        source_customer_index + 1,
-        destination_identity.page_id,
-    );
+    after_customer_page_ids.insert(source_customer_index + 1, destination_identity.page_id);
 
     Ok(DuplicateBlankPageTransitionV1 {
         document_id,
@@ -322,9 +310,7 @@ pub fn apply_duplicate_blank_page_forward_v1(
         });
     }
     if transition.insertion_index == 0
-        || document_pages
-            .get(transition.insertion_index - 1)
-            .copied()
+        || document_pages.get(transition.insertion_index - 1).copied()
             != Some(transition.source_page_id)
     {
         return Err(DuplicateBlankPageErrorV1::InsertionSlotMismatch);
@@ -377,19 +363,13 @@ pub fn apply_duplicate_blank_page_inverse_v1(
     if pages.get(&transition.source_page_id) != Some(&transition.source_page) {
         return Err(DuplicateBlankPageErrorV1::SourcePageStateMismatch);
     }
-    if pages.get(&transition.destination_identity.page_id)
-        != Some(&transition.destination_page)
-    {
+    if pages.get(&transition.destination_identity.page_id) != Some(&transition.destination_page) {
         return Err(DuplicateBlankPageErrorV1::DestinationPageStateMismatch);
     }
-    if document_pages
-        .get(transition.insertion_index)
-        .copied()
+    if document_pages.get(transition.insertion_index).copied()
         != Some(transition.destination_identity.page_id)
         || transition.insertion_index == 0
-        || document_pages
-            .get(transition.insertion_index - 1)
-            .copied()
+        || document_pages.get(transition.insertion_index - 1).copied()
             != Some(transition.source_page_id)
     {
         return Err(DuplicateBlankPageErrorV1::InsertionSlotMismatch);
@@ -495,7 +475,10 @@ mod tests {
         )
         .expect("plan duplicate");
 
-        assert_eq!(transition.after_customer_page_ids, vec![a, b, destination, c]);
+        assert_eq!(
+            transition.after_customer_page_ids,
+            vec![a, b, destination, c]
+        );
         assert_eq!(transition.insertion_index, 3);
         assert_eq!(transition.destination_page.id, destination);
         assert_eq!(transition.destination_page.size, pages[&b].size);
@@ -639,8 +622,7 @@ mod tests {
             destination_identity(),
         )
         .expect("plan duplicate");
-        transition.destination_page.size =
-            Size2D::new(LengthEmu::new(999), LengthEmu::new(200));
+        transition.destination_page.size = Size2D::new(LengthEmu::new(999), LengthEmu::new(200));
         let mut document_pages = vec![source];
         let before_document = document_pages.clone();
         let before_pages = pages.clone();
