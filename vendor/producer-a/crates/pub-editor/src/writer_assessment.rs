@@ -5,9 +5,8 @@
 //! одна mutation A -> C. Net-zero A -> B -> A не требует Story writer вообще.
 
 use super::{
-    EditOperation, EditorSession, IMAGE_CONTENT_TRANSFORM_FEATURE,
-    mature_0x2c_pub_format_manifest, mature_0x2c_pub_persistence_target,
-    replace_scalar_range_text_v1,
+    EditOperation, EditorSession, IMAGE_CONTENT_TRANSFORM_FEATURE, mature_0x2c_pub_format_manifest,
+    mature_0x2c_pub_persistence_target, replace_scalar_range_text_v1,
 };
 use pub_export::{
     PersistenceCompatibilityAssessment, PersistenceCompatibilityError, PersistenceRequirement,
