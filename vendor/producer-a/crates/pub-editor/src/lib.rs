@@ -35,10 +35,7 @@ mod table_rowcol_graph_v1;
 mod table_rowcol_history_v1;
 mod text_format_property_base_v1;
 mod writer_assessment;
-use writer_assessment::{
-    append_blank_page_persistence_requirements_v1, minimum_identity_project_schema_v1,
-    required_editor_asset_refs_v1,
-};
+use writer_assessment::{minimum_identity_project_schema_v1, required_editor_asset_refs_v1};
 
 pub use authored_paragraph_alignment_v1::{
     AuthoredParagraphAlignmentValueV1, EffectiveParagraphAlignmentV1,
