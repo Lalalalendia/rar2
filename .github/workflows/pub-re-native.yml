@@ -83,7 +83,7 @@ jobs:
                   body,
               )
               research_match = re.fullmatch(
-                  r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?)",
+                  r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?|val-xproj-01)",
                   body,
               )
               cancel_match = re.fullmatch(
@@ -111,8 +111,8 @@ jobs:
                   if not 0.000001 <= abs(delta_value) <= 45.0:
                       raise SystemExit("rotation delta must be nonzero and within 45 degrees")
               elif research_match is not None:
-                  command_mode = "research_0p75"
                   research_id = research_match.group(1)
+                  command_mode = "research_t352" if research_id == "val-xproj-01" else "research_0p75"
               elif cancel_match is not None:
                   command_mode = "cancel_run"
                   target_run_id = cancel_match.group(1)
@@ -124,7 +124,7 @@ jobs:
           if command_mode in {"snapshot_alias", "rotation_alias"} and alias_re.fullmatch(fixture_alias) is None:
               raise SystemExit("fixture alias is invalid")
 
-          native_timeout_minutes = "30" if command_mode == "research_0p75" else "5"
+          native_timeout_minutes = "30" if command_mode in {"research_0p75", "research_t352"} else "5"
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"command_mode={command_mode}\n")
@@ -251,8 +251,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $output | Out-Null
           "PUB_RE_NATIVE_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-          if ($env:PUB_RE_COMMAND_MODE -eq "research_0p75") {
-            if ($env:PUB_RE_RESEARCH_ID -notin @("paragraph-line-spacing-0p75", "paragraph-line-spacing-0p75-mixed")) {
+          if ($env:PUB_RE_COMMAND_MODE -in @("research_0p75", "research_t352")) {
+            if ($env:PUB_RE_RESEARCH_ID -notin @("paragraph-line-spacing-0p75", "paragraph-line-spacing-0p75-mixed", "val-xproj-01")) {
               throw "unsupported bounded research id"
             }
             $researchOutput = Join-Path $output "research-output"
@@ -372,17 +372,17 @@ jobs:
             throw "unsupported PUB RE native command mode"
           }
 
-          if ($env:PUB_RE_COMMAND_MODE -ne "research_0p75") {
+          if ($env:PUB_RE_COMMAND_MODE -notin @("research_0p75", "research_t352")) {
             "PUB_RE_NATIVE_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           }
 
       - name: Build standalone PUB RE
-        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' }}
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
         shell: powershell
         run: cargo build --release --manifest-path tools/pub-re/Cargo.toml --bin pub-re
 
       - name: Run bounded native Publisher transaction
-        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' }}
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
         shell: powershell
         run: |
           Set-StrictMode -Version Latest
@@ -454,7 +454,7 @@ jobs:
           }
 
       - name: Validate failed native stage receipt
-        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' }}
+        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
         shell: powershell
         run: |
           Set-StrictMode -Version Latest
@@ -483,7 +483,7 @@ jobs:
           }
 
       - name: Upload failed native stage receipt
-        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' }}
+        if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
         uses: actions/upload-artifact@v4
         with:
           name: pub-re-native-failure-stage
@@ -492,7 +492,7 @@ jobs:
           retention-days: 14
 
       - name: Join native output to CFB and OfficeArt provenance
-        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' }}
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
         shell: powershell
         run: |
           Set-StrictMode -Version Latest
@@ -519,7 +519,7 @@ jobs:
           }
 
       - name: Enforce source-safe evidence boundary
-        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' }}
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
         shell: powershell
         run: |
           Set-StrictMode -Version Latest
@@ -546,7 +546,7 @@ jobs:
           }
 
       - name: Upload source-safe receipts only
-        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' }}
+        if: ${{ needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' }}
         uses: actions/upload-artifact@v4
         with:
           name: pub-re-native-evidence
@@ -686,6 +686,71 @@ jobs:
           name: pub-re-native-paragraph-line-spacing-0p75-evidence
           path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\evidence\*.json
           if-no-files-found: error
+          retention-days: 14
+
+
+      - name: Execute T352 Publisher geometry matrix
+        if: ${{ needs.gate.outputs.command_mode == 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          & tools/windows/run_t352_native.ps1 -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT
+          if (-not $?) { throw "T352 native experiment failed" }
+          $result = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\t352-native-observations.json"
+          if (-not (Test-Path -LiteralPath $result -PathType Leaf)) {
+            throw "T352 is missing the required native evidence receipt"
+          }
+          $obj = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
+          if ($obj.schema -ne "chaptera.t352-native-observations.v1" -or
+              [int]$obj.observed_arm_count -ne 4) {
+            throw "T352 native result is incomplete"
+          }
+
+      - name: Stage source-safe T352 evidence even on partial failure
+        if: ${{ always() && needs.gate.outputs.command_mode == 'research_t352' }}
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $from = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis"
+          $to = Join-Path $env:PUB_RE_NATIVE_OUTPUT "t352-evidence"
+          New-Item -ItemType Directory -Force -Path $to | Out-Null
+          if (-not (Test-Path -LiteralPath $from -PathType Container)) { exit 0 }
+          foreach ($file in @(Get-ChildItem -LiteralPath $from -File -Filter "*.json")) {
+            if ($file.Name -notmatch '^t352-[a-z0-9-]+\.json
+        if: always()
+        shell: powershell
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:PUB_RE_NATIVE_OUTPUT) -and (Test-Path -LiteralPath $env:PUB_RE_NATIVE_OUTPUT)) {
+            Remove-Item -LiteralPath $env:PUB_RE_NATIVE_OUTPUT -Recurse -Force
+          }
+ -and
+                $file.Name -notmatch '^(control|both_consistent|contents_only|escher_only)-(before|after)-(cfb|projections)\.json
+        if: always()
+        shell: powershell
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:PUB_RE_NATIVE_OUTPUT) -and (Test-Path -LiteralPath $env:PUB_RE_NATIVE_OUTPUT)) {
+            Remove-Item -LiteralPath $env:PUB_RE_NATIVE_OUTPUT -Recurse -Force
+          }
+) {
+              throw "T352 evidence filename violates the allowlist"
+            }
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            if ($text -match '(?i)[A-Z]:\\' -or $text -match '\\\\[^"\s]+\\') {
+              throw "T352 source-safe receipt contains an absolute path"
+            }
+            [void]($text | ConvertFrom-Json)
+            Copy-Item -LiteralPath $file.FullName -Destination $to
+          }
+
+      - name: Upload source-safe T352 evidence
+        if: ${{ always() && needs.gate.outputs.command_mode == 'research_t352' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-re-native-t352-projection-evidence
+          path: ${{ env.PUB_RE_NATIVE_OUTPUT }}\t352-evidence\*.json
+          if-no-files-found: ignore
           retention-days: 14
 
       - name: Remove private native inputs and outputs
