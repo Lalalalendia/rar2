@@ -52,9 +52,27 @@ jobs:
           print("RECEIPT_SHA256", hashlib.sha256(p.read_bytes()).hexdigest())
           print("SCOPES", json.dumps(r["scopes"], sort_keys=True))
           PY
+      - name: Classify real historical Reader source change on both architectures
+        run: |
+          git fetch --no-tags origin 4c50517fae318944feff6d9a3ccbd933770da0ca
+          git fetch --no-tags origin 396655d0d8703249baffa5ee3a4cb00573c83c07
+          python tools/ci/reader_pr_fanout.py \
+            --base 4c50517fae318944feff6d9a3ccbd933770da0ca \
+            --head 396655d0d8703249baffa5ee3a4cb00573c83c07 \
+            --receipt target/reader-classifier-ab/real-reader.json
+          python - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          p=Path("target/reader-classifier-ab/real-reader.json")
+          x=json.loads(p.read_text())
+          assert any(x["scopes"].values()), x["scopes"]
+          assert x["head_sha"]=="396655d0d8703249baffa5ee3a4cb00573c83c07"
+          print("HISTORICAL_READER_SHA256", hashlib.sha256(p.read_bytes()).hexdigest())
+          print("HISTORICAL_READER_SCOPES",json.dumps(x["scopes"],sort_keys=True))
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: reader-classifier-ab-${{ matrix.os }}
-          path: target/reader-classifier-ab/fanout.json
+          path: target/reader-classifier-ab/
           if-no-files-found: error
           retention-days: 14
