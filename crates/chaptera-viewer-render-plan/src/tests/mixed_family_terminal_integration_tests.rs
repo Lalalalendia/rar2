@@ -138,7 +138,13 @@ use super::*;
             })
         };
         assert!(resolve_mixed_family_text_layout_v1(
-            &visual, target, &fragment, &mut missing_face,
+            &visual, target.clone(), &fragment, &mut missing_face,
         ).is_none());
+
+        let mut styled_fragment = fragment.clone();
+        styled_fragment.typography[1].bold = Some(true);
+        assert!(resolve_mixed_family_text_layout_v1(
+            &visual, target, &styled_fragment, &mut resolve,
+        ).is_none(), "Regular family packet cannot authorize Bold source-face retry");
     }
 

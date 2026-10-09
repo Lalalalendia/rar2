@@ -2868,6 +2868,14 @@ where
                 return None;
             }
             let terminal = rejected_terminal?;
+            // The configured Cloud family resource alone does not assert
+            // Bold/Italic face identity. Never treat a Regular container as
+            // exact for a styled source run in this new retry.
+            if fragment.typography.iter().any(|run| {
+                run.bold == Some(true) || run.italic == Some(true)
+            }) {
+                return None;
+            }
             let prefix_height = mixed_family_frozen_prefix_height_emu_v1(&lines, &runs)?;
             let terminal_advance = mixed_family_terminal_source_advance_emu_v1(
                 visual, fragment.story_id, cursor, fragment.scalar_end, &terminal, &runs,
