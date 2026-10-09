@@ -133,24 +133,8 @@ finally {
         try {
             $stage = Get-Content -LiteralPath $stagePath -Raw | ConvertFrom-Json
             if ([string]$stage.schema -eq 'chaptera.pub-native-story-stage.v1' -and
-                [string]$stage.phase -match '^[a-z][a-z0-9_]{0,63}
-        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-    }
-}
-if ($status.result -ne 'pass') {
-    throw ("publisher_native_story_not_passed: {0}" -f $status.failure_code)
-}
-Write-Host ("Publisher Story Open-SaveAs-Reopen and Reader verification PASS: {0}" -f $status.native_saved_sha256)
- -and
-                [string]$stage.candidate_sha256 -match '^[0-9a-f]{64}
-        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-    }
-}
-if ($status.result -ne 'pass') {
-    throw ("publisher_native_story_not_passed: {0}" -f $status.failure_code)
-}
-Write-Host ("Publisher Story Open-SaveAs-Reopen and Reader verification PASS: {0}" -f $status.native_saved_sha256)
-) {
+                [string]$stage.phase -match '^[a-z][a-z0-9_]{0,63}$' -and
+                [string]$stage.candidate_sha256 -match '^[0-9a-f]{64}$') {
                 $status.last_native_phase = [string]$stage.phase
                 $status.candidate_sha256 = [string]$stage.candidate_sha256
             }
