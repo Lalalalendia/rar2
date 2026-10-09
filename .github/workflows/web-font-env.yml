@@ -26,8 +26,9 @@ permissions:
   contents: read
 
 jobs:
-  contract:
+  single-runner:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -41,26 +42,6 @@ jobs:
         run: python tools/validate_font_environment.py
       - name: Test browser font policy adapter
         run: node --test apps/web/font-environment-v1.test.mjs
-
-  real-browser:
-    needs: contract
-    strategy:
-      fail-fast: false
-      matrix:
-        browser: [chromium, firefox]
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install validators
-        run: python -m pip install "jsonschema==4.23.0"
 
       - name: Validate pinned real Viewer receipt
         run: python tools/validate_viewer_geometry_receipt.py apps/web/acceptance/receipts/viewer-geometry.real.json
@@ -98,31 +79,38 @@ jobs:
             target/web-font-env-real/SampleNewsletter.scene.json \
             target/web-font-env-real/font-environment.real.json
 
-      - name: Install Playwright browser
+
+      - name: Install both real Playwright browsers on one runner
         run: |
           npm install --no-save playwright@1.55.0
-          npx playwright install --with-deps ${{ matrix.browser }}
+          npx playwright install --with-deps chromium firefox
 
-      - name: Run real StoryFrame browser boundary
-        run: node tools/run_web_font_environment_real.mjs ${{ matrix.browser }}
+      - name: Prove real StoryFrame geometry in Chromium and Firefox
+        run: |
+          set -euo pipefail
+          node tools/run_web_font_environment_real.mjs chromium
+          node tools/run_web_font_environment_real.mjs firefox
 
       - uses: actions/upload-artifact@v4
         with:
-          name: web-font-env-real-${{ matrix.browser }}
+          name: web-font-env-real-chromium
           if-no-files-found: error
           retention-days: 90
-          path: target/web-font-env-real/${{ matrix.browser }}-receipt.json
+          path: target/web-font-env-real/chromium-receipt.json
 
-  cross-browser:
-    needs: real-browser
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          pattern: web-font-env-real-*
-          path: target/web-font-env-cross/input
-          merge-multiple: true
+          name: web-font-env-real-firefox
+          if-no-files-found: error
+          retention-days: 90
+          path: target/web-font-env-real/firefox-receipt.json
+
+      - name: Prepare both local receipts for the unchanged cross-browser proof
+        run: |
+          set -euo pipefail
+          mkdir -p target/web-font-env-cross/input
+          cp target/web-font-env-real/chromium-receipt.json target/web-font-env-cross/input/
+          cp target/web-font-env-real/firefox-receipt.json target/web-font-env-cross/input/
 
       - name: Cross-check browser receipts
         shell: bash
