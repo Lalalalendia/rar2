@@ -34,7 +34,7 @@ jobs:
 
   compare-publisher:
     # Exact-base diagnostic baseline for TABLE A/B.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'validation/pub-pdf-baseline-43a982'
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'measure/pub-pdf-complete-source-order-01' || github.event.pull_request.head.ref == 'validation/pub-pdf-baseline-43a982'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
