@@ -176,25 +176,11 @@ AssertFile $seed $SeedSha 161792
 $normalizedSha = FileSha $base
 Write-PubJson -Value ([ordered]@{schema="chaptera.t352-progress.v1";stage="normalized";sha256=$normalizedSha}) -Path $progress
 
-$vendor = Join-Path $RepoRoot "vendor/producer-a"
-$vendorManifest = Join-Path $vendor "Cargo.toml"
-$vendorLock = Join-Path $vendor "Cargo.lock"
-$generatedLock = $false
-try {
-    if (-not (Test-Path -LiteralPath $vendorLock -PathType Leaf)) {
-        RunCargo -argv @("generate-lockfile","--offline","--manifest-path",$vendorManifest)
-        $generatedLock = $true
-    }
-    $vendorTarget = Join-Path $private "cargo-target"
-    RunCargo -argv @("build","--release","--offline","--locked","--manifest-path",
-        $vendorManifest,"--target-dir",$vendorTarget,"-p","pub-reader","--bin","t352_crosswalk_census")
-}
-finally {
-    if ($generatedLock -and (Test-Path -LiteralPath $vendorLock -PathType Leaf)) {
-        Remove-Item -LiteralPath $vendorLock -Force
-    }
-}
-$tool = Join-Path $vendorTarget "release/t352_crosswalk_census.exe"
+$researchManifest = Join-Path $RepoRoot "tools/pub-re/Cargo.toml"
+RunCargo -argv @("build","--release","--manifest-path",$researchManifest,"--bin","t352_crosswalk_census")
+$researchMetadata = cargo metadata --no-deps --format-version 1 --manifest-path $researchManifest | ConvertFrom-Json
+$tool = Join-Path ([string]$researchMetadata.target_directory) "release\t352_crosswalk_census.exe"
+if (-not (Test-Path -LiteralPath $tool -PathType Leaf)) { throw "T352 research census binary missing" }
 $census = Join-Path $private "independent-census.json"
 RunExe -file $tool -argv @($base,$census)
 $receipt = Get-Content -LiteralPath $census -Raw | ConvertFrom-Json

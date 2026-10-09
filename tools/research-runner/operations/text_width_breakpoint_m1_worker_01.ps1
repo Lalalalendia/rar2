@@ -49,13 +49,16 @@ function Close-Document($Document) {
     try { $Document.Close() } catch {}
     Release-Com $Document
 }
-function Write-Stage([string]$State, [string]$Phase) {
+function Write-Stage([string]$State, [string]$Phase, [string]$HresultHex = "") {
+    # Persist nested Snapshot subphases through the outer catch handler.
+    if ($State -eq "running") { $script:Stage = $Phase }
     Write-PubJson -Path $StagePath -Value ([ordered]@{
         schema = "chaptera.text-width-m1-stage.v1"
         experiment_id = "TEXT-WIDTH-BREAKPOINT-M1-01"
         case = $stageName
         state = $State
         phase = $Phase
+        hresult_hex = $HresultHex
     })
 }
 function Get-ShapeByIdentity($Document, $Meta) {
@@ -69,15 +72,19 @@ function Get-ShapeByIdentity($Document, $Meta) {
     }
     return $shape
 }
-function Snapshot($Shape) {
+function Snapshot($Shape, [string]$PhaseTag = "") {
     $frame = $null
     $range = $null
     $font = $null
     $lines = @()
     try {
+        if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_frame") }
         $frame = $Shape.TextFrame
+        if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_range") }
         $range = $frame.TextRange
+        if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_font") }
         $font = $range.Font
+        if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_lines_count") }
         $count = [int]$range.LinesCount
         if ($count -lt 2 -or $count -gt 32) {
             throw "m1_unexpected_line_count"
@@ -85,6 +92,7 @@ function Snapshot($Shape) {
         for ($index=1; $index -le $count; $index++) {
             $line = $null
             try {
+                if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_line_" + $index) }
                 $line = $range.Lines($index,1)
                 $lines += [ordered]@{
                     index = $index
@@ -97,7 +105,9 @@ function Snapshot($Shape) {
                 }
             } finally { Release-Com $line }
         }
+        if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_text") }
         $text = [string]$range.Text
+        if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_properties") }
         return [ordered]@{
             width_pt = [double]$Shape.Width
             height_pt = [double]$Shape.Height
@@ -139,22 +149,40 @@ try {
     if ($Mode -eq "seed") {
         if ($ArmId -ne "none") { throw "m1_seed_arm_id_invalid" }
         Copy-Item -LiteralPath $SourcePath -Destination $SeedPath -Force
-        $Stage = "seed_publisher_open"
-        Write-Stage "running" $Stage
         $app = $null; $doc = $null; $shape = $null; $frame = $null; $range = $null
         try {
+            $Stage = "seed_application_create"
+            Write-Stage "running" $Stage
             $app = New-PubPublisherApplication
+            $Stage = "seed_document_open"
+            Write-Stage "running" $Stage
             $doc = $app.Open($SeedPath,$false,$false)
+            $Stage = "seed_page_lookup"
+            Write-Stage "running" $Stage
             $page = $doc.Pages.Item(1)
+            $Stage = "seed_textbox_add"
+            Write-Stage "running" $Stage
             $shape = $page.Shapes.AddTextbox(1,72,72,$InitialWidth,$Height)
+            $Stage = "seed_frame_policy"
+            Write-Stage "running" $Stage
             $frame = $shape.TextFrame
             $frame.AutoFitText = 0
+            $Stage = "seed_text_write"
+            Write-Stage "running" $Stage
             $range = $frame.TextRange
             $range.Text = $ExpectedText
+            $Stage = "seed_font_apply"
+            Write-Stage "running" $Stage
             $range.Font.Name = $FontName
             $range.Font.Size = $FontSize
-            $snapshot = Snapshot $shape
+            $Stage = "seed_layout_snapshot"
+            Write-Stage "running" $Stage
+            $snapshot = Snapshot $shape "seed_layout"
+            $Stage = "seed_fixed_source_assert"
+            Write-Stage "running" $Stage
             Assert-FixedSource $snapshot
+            $Stage = "seed_identity"
+            Write-Stage "running" $Stage
             $shapeId = [int64]$shape.ID
             $pageId = [int64]$page.PageID
             $index = [int]$page.Shapes.Count
@@ -286,6 +314,12 @@ try {
     $Status = "complete"
     Write-Stage $Status "complete"
 } catch {
-    Write-Stage "invalid" $Stage
+    # Public diagnostics contain only the current phase and numeric HRESULT,
+    # never exception text, private paths, or user document contents.
+    $hresult = ""
+    if ($null -ne $_.Exception) {
+        $hresult = ('0x{0:X8}' -f (([long]$_.Exception.HResult) -band 4294967295L))
+    }
+    Write-Stage "invalid" $Stage $hresult
     throw
 }
