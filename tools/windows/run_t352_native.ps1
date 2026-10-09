@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$OutputRoot)
+param([Parameter(Mandatory=$true)][string]$OutputRoot,[switch]$SetterFollowup)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -65,14 +65,41 @@ function Shape293($doc) {
     if ($null -eq $snapshot) { throw "COM Shape.ID=293 not found" }
     $snapshot
 }
-function ObserveArm([string]$name,[string]$source,[string]$patcher,[string]$analysis) {
+function SetShape293Width($doc,[double]$targetPoints) {
+    $count = 0
+    for ($i=1; $i -le [int]$doc.Pages.Count; $i++) {
+        $page=$null
+        try {
+            $page=$doc.Pages.Item($i)
+            for ($j=1; $j -le [int]$page.Shapes.Count; $j++) {
+                $shape=$null
+                try {
+                    $shape=$page.Shapes.Item($j)
+                    if ([long]$shape.ID -ne 293) { continue }
+                    $count++
+                    if ($count -ne 1) { throw "Duplicate target COM Shape.ID293" }
+                    $shape.Width=$targetPoints
+                }
+                finally { ReleaseCom $shape }
+            }
+        }
+        finally { ReleaseCom $page }
+    }
+    if ($count -ne 1) { throw "Target Shape.ID293 missing during COM setter" }
+}
+function ObserveArm([string]$name,[string]$source,[string]$patcher,[string]$analysis,[string]$SetterMode="none") {
+    if ($SetterMode -notin @("none","same_value","to_contents")) { throw "Unsupported setter mode" }
+    $stem = if ($SetterMode -eq "none") { $name } else { "t352-$name" }
     $beforeSha = FileSha $source
-    RunExe -file $patcher -argv @("fingerprint", $source, (Join-Path $analysis "$name-before-cfb.json"))
-    RunExe -file $patcher -argv @("inspect", $source, (Join-Path $analysis "$name-before-projections.json"))
+    RunExe -file $patcher -argv @("fingerprint", $source, (Join-Path $analysis "$stem-before-cfb.json"))
+    $beforeProjectionPath=Join-Path $analysis "$stem-before-projections.json"
+    RunExe -file $patcher -argv @("inspect", $source, $beforeProjectionPath)
+    $beforeProjection=Get-Content -LiteralPath $beforeProjectionPath -Raw | ConvertFrom-Json
 
     $app = $null; $doc = $null
     $openSucceeded = $false
     $opened = $null; $openError = $null; $geometryError = $null; $saveError = $null
+    $setterError=$null; $setterTargetEmu=$null; $afterSetterGeometry=$null
     try {
         try {
             $app = New-PubPublisherApplication
@@ -83,8 +110,29 @@ function ObserveArm([string]$name,[string]$source,[string]$patcher,[string]$anal
         if ($openSucceeded) {
             try { $opened = Shape293 $doc }
             catch { $geometryError = Hr $_.Exception }
-            try { $doc.Save() }
-            catch { $saveError = Hr $_.Exception }
+            if ($SetterMode -ne "none") {
+                if ($null -ne $geometryError) { $setterError = "pre_set_geometry_failed" }
+                else {
+                    try {
+                        $setterTargetEmu = if ($SetterMode -eq "same_value") {
+                            [long]$opened.width_emu
+                        } else {
+                            [long]$beforeProjection.contents_width_emu
+                        }
+                        if ($setterTargetEmu -lt 50000 -or $setterTargetEmu -gt 10000000) {
+                            throw "Setter target width outside bounded EMU range"
+                        }
+                        SetShape293Width $doc ([double]$setterTargetEmu / 12700.0)
+                        $afterSetterGeometry = Shape293 $doc
+                    }
+                    catch { $setterError = Hr $_.Exception }
+                }
+            }
+            if ($null -eq $setterError) {
+                try { $doc.Save() }
+                catch { $saveError = Hr $_.Exception }
+            }
+            else { $saveError = "setter_failed" }
         }
     }
     finally {
@@ -93,9 +141,9 @@ function ObserveArm([string]$name,[string]$source,[string]$patcher,[string]$anal
     }
 
     $afterSha = FileSha $source
-    RunExe -file $patcher -argv @("fingerprint", $source, (Join-Path $analysis "$name-after-cfb.json"))
+    RunExe -file $patcher -argv @("fingerprint", $source, (Join-Path $analysis "$stem-after-cfb.json"))
     $projectionState = "observed"
-    try { RunExe -file $patcher -argv @("inspect", $source, (Join-Path $analysis "$name-after-projections.json")) }
+    try { RunExe -file $patcher -argv @("inspect", $source, (Join-Path $analysis "$stem-after-projections.json")) }
     catch { $projectionState = "not_evaluable" }
 
     $reopened = $null; $reopenSucceeded = $false
@@ -127,6 +175,10 @@ function ObserveArm([string]$name,[string]$source,[string]$patcher,[string]$anal
         open_hresult = $openError
         open_geometry = $opened
         open_geometry_hresult = $geometryError
+        setter_mode = $SetterMode
+        setter_target_emu = $setterTargetEmu
+        setter_hresult = $setterError
+        after_setter_geometry = $afterSetterGeometry
         save = if (-not $openSucceeded) { "not_attempted" } elseif ($null -eq $saveError) { "accepted" } else { "failed" }
         save_hresult = $saveError
         reopen = if ($reopenSucceeded) { "accepted" } elseif (-not $openSucceeded -or $null -ne $saveError) { "not_attempted" } else { "failed" }
@@ -216,6 +268,19 @@ if (-not (Test-Path -LiteralPath $patcher -PathType Leaf)) { throw "T352 patcher
 $arms = Join-Path $private "arms"
 RunExe -file $patcher -argv @("prepare",$base,$structural,$arms)
 Copy-Item -LiteralPath (Join-Path $arms "t352-patch-receipt.json") -Destination (Join-Path $analysis "t352-patch-receipt.json")
+$setterVariants = @()
+if ($SetterFollowup) {
+    $setterVariants = @(
+        [ordered]@{name="settercontentsame"; source="contents_only"; mode="same_value"}
+        [ordered]@{name="settercontentstocontents"; source="contents_only"; mode="to_contents"}
+        [ordered]@{name="settereschersame"; source="escher_only"; mode="same_value"}
+        [ordered]@{name="settereschertocontents"; source="escher_only"; mode="to_contents"}
+    )
+    foreach ($variant in $setterVariants) {
+        Copy-Item -LiteralPath (Join-Path $arms "$($variant.source).pub") 
+            -Destination (Join-Path $arms "$($variant.name).pub")
+    }
+}
 Write-PubJson -Value ([ordered]@{schema="chaptera.t352-progress.v1";stage="prepared";sha256=$normalizedSha}) -Path $progress
 
 $observations = @()
@@ -241,7 +306,40 @@ foreach ($name in @("control","both_consistent","contents_only","escher_only")) 
         semantic_law_status = "not_promoted"
     }) -Path (Join-Path $analysis "t352-native-observations.json")
 }
+if ($observations.Count -ne 4) { throw "T352 controls failed; conflict arms were not all executed" }
+$setterObservations = @()
+if ($SetterFollowup) {
+    if (@($observations | Where-Object { $_.open -ne "accepted" -or $_.save -ne "accepted" -or
+            $_.reopen -ne "accepted" -or $null -eq $_.open_geometry -or
+            $null -eq $_.reopen_geometry }).Count -gt 0) {
+        throw "T352 primary controls failed; refusing setter followup"
+    }
+    foreach ($variant in $setterVariants) {
+        $armPath=Join-Path $arms "$($variant.name).pub"
+        $setterObservations += (ObserveArm -name $variant.name -source $armPath 
+            -patcher $patcher -analysis $analysis -SetterMode $variant.mode)
+        Write-PubJson -Value ([ordered]@{
+            schema="chaptera.t352-setter-transitions.v1"
+            experiment_id="VAL-XPROJ-SETTER-01"
+            publisher_exe_sha256=$ExeSha
+            normalized_base_sha256=$normalizedSha
+            count=$setterObservations.Count
+            observations=$setterObservations
+            interpretation="unclassified_natively_observed_only"
+        }) -Path (Join-Path $analysis "t352-setter-observations.json")
+        Write-PubJson -Value ([ordered]@{
+            schema="chaptera.t352-progress.v1";stage="setter";count=$setterObservations.Count
+        }) -Path $progress
+    }
+    if ($setterObservations.Count -ne 4 -or
+        @($setterObservations | Where-Object { $_.setter_hresult -ne $null -or
+            $_.save -ne "accepted" -or $_.reopen -ne "accepted" }).Count -gt 0) {
+        throw "T352 setter matrix failed; retained partial observations"
+    }
+}
 AssertFile $seed $SeedSha 72192
 AssertFile $base $normalizedSha
-Write-PubJson -Value ([ordered]@{schema="chaptera.t352-progress.v1";stage="completed";count=$observations.Count}) -Path $progress
-if ($observations.Count -ne 4) { throw "T352 controls failed; conflict arms were not all executed" }
+Write-PubJson -Value ([ordered]@{
+    schema="chaptera.t352-progress.v1";stage="completed";count=$observations.Count;
+    setter_count=$setterObservations.Count
+}) -Path $progress
