@@ -30,7 +30,7 @@ def assert_safe_visual_split(pr, visual):
     req(smoke, common + yes_gate, "shared-core visual oracle")
     if "needs.reader-windows-binary.result" in no_smoke:
         raise SystemExit("no-smoke visual oracle waits for unused Reader binary")
-    if no_smoke.split("    with:\n", 1)[1] != smoke.split("    with:\n", 1)[1]:
+    if no_smoke.split("    with:\n", 1)[1].rstrip() != smoke.split("    with:\n", 1)[1].rstrip():
         raise SystemExit("visual-oracle caller inputs diverged")
     req(visual, (
         "if: inputs.run_windows_shared_core_smoke && inputs.reader_binary_artifact_name != ''",
