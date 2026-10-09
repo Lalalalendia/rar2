@@ -75,7 +75,10 @@ pub fn attribute_officeart_manifest_file(
 
     let source = fs::read(manifest_path)
         .with_context(|| format!("read manifest {}", manifest_path.display()))?;
-    let manifest: ExperimentManifestV1 = serde_json::from_slice(&source)
+    let json = source
+        .strip_prefix(&[0xEF, 0xBB, 0xBF])
+        .unwrap_or(source.as_slice());
+    let manifest: ExperimentManifestV1 = serde_json::from_slice(json)
         .with_context(|| format!("parse manifest {}", manifest_path.display()))?;
     validate_manifest(&manifest)?;
     let base_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
