@@ -1,0 +1,190 @@
+name: Publisher 075 surface stage one-shot
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/publisher-075-surface-stage-once.yml"
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: publisher-075-surface-stage-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  contract:
+    if: >-
+      ${{
+        github.event_name == 'pull_request' ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.number == 1100 &&
+          github.actor == 'Lalalalendia' &&
+          github.event.comment.user.login == 'Lalalalendia' &&
+          github.event.comment.author_association == 'OWNER' &&
+          github.event.comment.body == '/publisher-surface-075'
+        )
+      }}
+    runs-on: windows-latest
+    outputs:
+      trusted_sha: ${{ steps.trust.outputs.trusted_sha }}
+    steps:
+      - name: Bind exact candidate
+        id: trust
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            "trusted_sha=${{ github.event.pull_request.head.sha }}" >> $env:GITHUB_OUTPUT
+          } else {
+            "trusted_sha=${{ github.sha }}" >> $env:GITHUB_OUTPUT
+          }
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.trust.outputs.trusted_sha }}
+          persist-credentials: false
+
+      - name: Parse existing read-only surface probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = "tools/windows/run_publisher_supplemental_native_surface_probe.ps1"
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $path).Path,
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "PowerShell parser rejected existing surface probe."
+          }
+
+      - name: Enforce exact source and read-only contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $text = Get-Content "tools/windows/run_publisher_supplemental_native_surface_probe.ps1" -Raw
+          foreach ($forbidden in @(
+            ".Save(",
+            ".SaveAs(",
+            ".ExportAsFixedFormat(",
+            ".PrintOut(",
+            ".Run("
+          )) {
+            if ($text.Contains($forbidden)) {
+              throw "Forbidden mutation/output token in read-only probe: $forbidden"
+            }
+          }
+          foreach ($required in @(
+            '$app.Open($resolved, $true, $false)',
+            'Document.Pages.Count',
+            'Document.PrintStyle',
+            'Document.ViewTwoPageSpread',
+            'ReaderSpread.PageCount',
+            'Page.XOffsetWithinReaderSpread',
+            'Page.YOffsetWithinReaderSpread',
+            'Page.PageID',
+            'Page.PageIndex'
+          )) {
+            if (-not $text.Contains($required)) {
+              throw "Missing native surface-stage evidence marker: $required"
+            }
+          }
+          $workflow = Get-Content ".github/workflows/publisher-075-surface-stage-once.yml" -Raw
+          if (-not $workflow.Contains("082319ac283c99f1b2e5d05fe428bccfd4123ef498267b35b492bba991a3b6e0")) {
+            throw "Workflow is not pinned to exact 075 SHA."
+          }
+          if (-not $workflow.Contains("2202112")) {
+            throw "Workflow is not pinned to exact 075 byte length."
+          }
+
+  native:
+    needs: contract
+    if: >-
+      ${{
+        github.event_name == 'issue_comment' &&
+        github.event.issue.number == 1100 &&
+        github.actor == 'Lalalalendia' &&
+        github.event.comment.user.login == 'Lalalalendia' &&
+        github.event.comment.author_association == 'OWNER' &&
+        github.event.comment.body == '/publisher-surface-075'
+      }}
+    environment: pub-native-lab
+    runs-on:
+      - self-hosted
+      - Windows
+      - pub-research
+      - publisher-2019
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.contract.outputs.trusted_sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Run exact 075 read-only Publisher surface probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sha = "082319ac283c99f1b2e5d05fe428bccfd4123ef498267b35b492bba991a3b6e0"
+          $source = Join-Path "${{ github.workspace }}" "out\pinned1050\materialized\native\$sha.pub"
+          if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw "Exact 075 source missing from pinned 1050 artifact."
+          }
+          $outDir = Join-Path "${{ github.workspace }}" "out\pub-research\publisher-075-surface-${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $receipt = Join-Path $outDir "publisher-075-surface-stage.json"
+
+          pwsh -NoProfile -File tools/windows/run_publisher_supplemental_native_surface_probe.ps1 `
+            -InputPath $source `
+            -ExpectedSha256 $sha `
+            -ExpectedBytes 2202112 `
+            -OutputPath $receipt
+          if ($LASTEXITCODE -ne 0) {
+            throw "075 native surface-stage probe failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Publish source-free verdict
+        if: always()
+        shell: pwsh
+        run: |
+          $receipt = Join-Path "${{ github.workspace }}" "out\pub-research\publisher-075-surface-${{ github.run_id }}\publisher-075-surface-stage.json"
+          "## PUBLISHER-075-SURFACE-STAGE-01" >> $env:GITHUB_STEP_SUMMARY
+          if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) {
+            "- receipt missing" >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          $doc = Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json
+          "- source SHA: $($doc.source.sha256)" >> $env:GITHUB_STEP_SUMMARY
+          "- Pages.Count: $($doc.document.pages_count.value)" >> $env:GITHUB_STEP_SUMMARY
+          "- Publisher reference PDF pages: 27" >> $env:GITHUB_STEP_SUMMARY
+          "- PrintStyle: $($doc.document.print_style.value)" >> $env:GITHUB_STEP_SUMMARY
+          "- ViewTwoPageSpread: $($doc.document.view_two_page_spread.value)" >> $env:GITHUB_STEP_SUMMARY
+          "- PublicationLayout: $($doc.document.publication_layout.value)" >> $env:GITHUB_STEP_SUMMARY
+          "- source unchanged: $($doc.source.unchanged_after_probe)" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload source-free native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publisher-075-surface-stage-${{ github.run_id }}
+          path: out/pub-research/publisher-075-surface-${{ github.run_id }}/publisher-075-surface-stage.json
+          if-no-files-found: error
+          retention-days: 30
