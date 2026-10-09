@@ -91,6 +91,9 @@ class TextWidthM1Contract(unittest.TestCase):
         native_groups = re.findall(r"group: pub-re-native-publisher-oracle", self.workflow)
         self.assertGreaterEqual(len(native_groups), 2)
         self.assertNotIn("pull_request:", self.workflow)
+        # runner.* is unavailable while evaluating jobs.<job>.env on GitHub servers.
+        self.assertNotIn("PUB_M1_OUTPUT: ${{ runner.temp }}", self.workflow)
+        self.assertIn("PUB_M1_OUTPUT: ${{ github.workspace }}", self.workflow)
 
     def test_artifact_allowlist_and_cleanup(self):
         self.assertIn("text-width-m1-suite-stage.json", self.workflow)
