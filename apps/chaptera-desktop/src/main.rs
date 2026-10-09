@@ -675,6 +675,7 @@ struct ViewerApp {
     source_revalidate_after: Option<Instant>,
     source_exact_revalidate_after: Option<Instant>,
     visual: Option<ViewerGeometryDocument>,
+    source_customer_page_ids: Vec<pub_editor::PageId>,
     salvage: Option<ReaderPartialSourceGraph>,
     source_fonts: source_font::DesktopSourceFontRegistry,
     source_fonts_install_attempted: bool,
@@ -741,6 +742,7 @@ impl ViewerApp {
             source_revalidate_after: None,
             source_exact_revalidate_after: None,
             visual: None,
+            source_customer_page_ids: Vec::new(),
             salvage: None,
             source_fonts: source_font::DesktopSourceFontRegistry::new(),
             source_fonts_install_attempted: false,
@@ -1152,6 +1154,12 @@ impl ViewerApp {
             project_status,
         } = prepared;
 
+        let source_customer_page_ids = visual
+            .document
+            .pages
+            .iter()
+            .map(|page| page.id)
+            .collect::<Vec<_>>();
         let source_hash = visual.document.source.source_hash;
         let source_byte_len = visual.document.source.byte_len;
         let supporter_status = match visual.document.fidelity_status() {
@@ -1183,6 +1191,7 @@ impl ViewerApp {
         self.source_fonts = source_fonts;
         self.source_fonts_install_attempted = false;
         self.source_fonts_active = false;
+        self.source_customer_page_ids = source_customer_page_ids;
         self.visual = Some(visual);
         self.salvage = None;
         self.selected_page = 0;
@@ -1227,6 +1236,11 @@ impl ViewerApp {
                 initial_page: 0,
             });
 
+        if let Err(error) = self.sync_visual_page_membership_from_editor() {
+            self.edit_status = Some(format!(
+                "Viewer page membership refresh failed closed: {error}"
+            ));
+        }
         if let Err(error) = self.sync_visual_stories_from_editor() {
             self.edit_status = Some(format!(
                 "Viewer text projection refresh failed closed: {error}"
@@ -1259,6 +1273,7 @@ impl ViewerApp {
         self.source_fonts = source_font::DesktopSourceFontRegistry::new();
         self.source_fonts_install_attempted = false;
         self.source_fonts_active = false;
+        self.source_customer_page_ids.clear();
         self.visual = None;
         self.salvage = Some(prepared.salvage);
         self.selected_page = 0;
@@ -3096,23 +3111,31 @@ impl ViewerApp {
         self.canvas_drag = None;
         self.canvas_resize = None;
         self.page_frame_cache.clear();
+        let membership_refresh = self.sync_visual_page_membership_from_editor();
         let text_projection_refresh = self.sync_visual_stories_from_editor();
         let created_node_scene_sync = self.sync_visual_created_text_boxes_from_editor();
         self.sync_visual_geometry_from_editor();
         self.refresh_search();
         self.export_preview = None;
         self.project_status = Some("Editor project has unsaved changes.".to_owned());
-        self.edit_status = Some(match (text_projection_refresh, created_node_scene_sync) {
-            (Ok(()), Ok(())) => status.to_owned(),
-            (Err(text_error), Ok(())) => {
-                format!("{status} Viewer text projection refresh failed closed: {text_error}")
-            }
-            (Ok(()), Err(scene_error)) => {
-                format!("{status} Viewer created TextBox scene sync failed closed: {scene_error}")
-            }
-            (Err(text_error), Err(scene_error)) => format!(
-                "{status} Viewer text projection refresh failed closed: {text_error}; created TextBox scene sync failed closed: {scene_error}"
-            ),
+
+        let mut refresh_errors = Vec::new();
+        if let Err(error) = membership_refresh {
+            refresh_errors.push(format!("page membership: {error}"));
+        }
+        if let Err(error) = text_projection_refresh {
+            refresh_errors.push(format!("text projection: {error}"));
+        }
+        if let Err(error) = created_node_scene_sync {
+            refresh_errors.push(format!("created TextBox scene: {error}"));
+        }
+        self.edit_status = Some(if refresh_errors.is_empty() {
+            status.to_owned()
+        } else {
+            format!(
+                "{status} Viewer refresh failed closed: {}",
+                refresh_errors.join("; ")
+            )
         });
     }
 

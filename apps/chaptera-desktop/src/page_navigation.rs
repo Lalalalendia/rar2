@@ -6,7 +6,9 @@
 
 use super::{ViewerApp, reader_only_mode, supporter};
 use eframe::egui;
-use pub_editor::PageId;
+use pub_editor::{
+    AuthoredEntityProvenanceV1, AuthoredPageIdentityV1, PageId,
+};
 use std::collections::BTreeMap;
 
 impl ViewerApp {
@@ -27,6 +29,89 @@ impl ViewerApp {
         self.supporter_value
             .observe(supporter::ValueEvent::PageNavigated { page_index: index });
         true
+    }
+
+    pub(super) fn sync_visual_page_membership_from_editor(&mut self) -> Result<bool, String> {
+        let Some(editor) = self.editor.as_ref() else {
+            return Ok(false);
+        };
+        let Some(visual) = self.visual.as_ref() else {
+            return Ok(false);
+        };
+
+        let selected_page_id = visual
+            .document
+            .pages
+            .get(self.selected_page)
+            .map(|page| page.id);
+        let current_page_ids = visual
+            .document
+            .pages
+            .iter()
+            .map(|page| page.id)
+            .collect::<Vec<_>>();
+        let effective_page_ids = editor
+            .effective_customer_page_order_v1(&self.source_customer_page_ids)
+            .map_err(|error| {
+                format!(
+                    "Page membership projection is unavailable: {} ({})",
+                    error,
+                    error.code()
+                )
+            })?;
+        if current_page_ids == effective_page_ids {
+            return Ok(false);
+        }
+
+        {
+            let editor = self
+                .editor
+                .as_ref()
+                .expect("Editor presence validated before page-membership sync");
+            let visual = self
+                .visual
+                .as_mut()
+                .expect("Viewer presence validated before page-membership sync");
+            pub_viewer::refresh_viewer_page_membership_from_resolved(
+                visual,
+                editor.graph(),
+                &effective_page_ids,
+            )
+            .map_err(|error| error.to_string())?;
+        }
+
+        let next_index = selected_page_id
+            .and_then(|page_id| {
+                self.visual
+                    .as_ref()
+                    .and_then(|visual| {
+                        visual
+                            .document
+                            .pages
+                            .iter()
+                            .position(|page| page.id == page_id)
+                    })
+            })
+            .unwrap_or_else(|| {
+                if effective_page_ids.is_empty() {
+                    0
+                } else {
+                    self.selected_page.min(effective_page_ids.len() - 1)
+                }
+            });
+        let next_selected_page_id = self
+            .visual
+            .as_ref()
+            .and_then(|visual| visual.document.pages.get(next_index))
+            .map(|page| page.id);
+
+        self.selected_page = next_index;
+        if selected_page_id != next_selected_page_id {
+            self.canvas_selection.clear();
+            self.canvas_drag = None;
+            self.canvas_resize = None;
+        }
+        Ok(true)
     }
 
     pub(super) fn sync_visual_page_order_from_editor(&mut self) {
@@ -89,6 +174,105 @@ impl ViewerApp {
         {
             self.selected_page = index;
         }
+    }
+
+    fn page_append_capability_v1(&self) -> bool {
+        let Some(editor) = self.editor.as_ref() else {
+            return false;
+        };
+        let Ok(effective_page_ids) =
+            editor.effective_customer_page_order_v1(&self.source_customer_page_ids)
+        else {
+            return false;
+        };
+        let Some(last_page_id) = effective_page_ids.last() else {
+            return false;
+        };
+        editor
+            .graph()
+            .pages
+            .get(last_page_id)
+            .is_some_and(|page| page.size.is_positive())
+    }
+
+    fn append_blank_page_at_end_v1(&mut self) -> Result<PageId, String> {
+        let (operation_count_before, page_size) = {
+            let editor = self
+                .editor
+                .as_ref()
+                .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+            let effective_page_ids = editor
+                .effective_customer_page_order_v1(&self.source_customer_page_ids)
+                .map_err(|error| {
+                    format!(
+                        "Page append is unavailable: {} ({})",
+                        error,
+                        error.code()
+                    )
+                })?;
+            let last_page_id = effective_page_ids
+                .last()
+                .copied()
+                .ok_or_else(|| "Page append requires at least one admitted customer page.".to_owned())?;
+            let page_size = editor
+                .graph()
+                .pages
+                .get(&last_page_id)
+                .ok_or_else(|| "Last admitted customer page is unavailable.".to_owned())?
+                .size;
+            (editor.operations().len(), page_size)
+        };
+
+        let uuid = uuid::Uuid::now_v7();
+        let identity = AuthoredPageIdentityV1 {
+            page_id: PageId::from_canonical(pub_model::CanonicalId::from_bytes(*uuid.as_bytes())),
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+
+        let mut candidate = self
+            .editor
+            .as_ref()
+            .expect("Editor presence validated before page append")
+            .clone();
+        candidate
+            .append_blank_page_v1(
+                self.source_customer_page_ids.clone(),
+                identity,
+                page_size,
+                None,
+                None,
+            )
+            .map_err(|error| format!("Page append rejected: {} ({})", error, error.code()))?;
+        if candidate.operations().len() != operation_count_before + 1
+            || !matches!(
+                candidate.operations().last(),
+                Some(pub_editor::EditOperation::AppendBlankPageV1 { transition })
+                    if transition.identity == identity
+            )
+        {
+            return Err("Add Page must append exactly one canonical lifecycle operation.".to_owned());
+        }
+
+        self.editor = Some(candidate);
+        self.finish_authoring_change(
+            "Appended one blank customer page at publication end. Source PUB bytes were not written.",
+        );
+
+        let new_index = self
+            .visual
+            .as_ref()
+            .and_then(|visual| {
+                visual
+                    .document
+                    .pages
+                    .iter()
+                    .position(|page| page.id == identity.page_id)
+            })
+            .ok_or_else(|| {
+                "Page append committed, but Viewer membership refresh failed closed.".to_owned()
+            })?;
+        self.navigate_to_page_index(new_index);
+        Ok(identity.page_id)
     }
 
     fn page_reorder_capabilities_v1(&self) -> (bool, bool) {
@@ -189,6 +373,15 @@ impl ViewerApp {
     }
 
     pub(super) fn show_page_reorder_controls(&mut self, ui: &mut egui::Ui) {
+        let can_append = self.page_append_capability_v1();
+        if ui
+            .add_enabled(can_append, egui::Button::new("Add Page at End"))
+            .clicked()
+            && let Err(error) = self.append_blank_page_at_end_v1()
+        {
+            self.edit_status = Some(error);
+        }
+
         let (can_move_up, can_move_down) = self.page_reorder_capabilities_v1();
         let mut command = None;
         ui.horizontal(|ui| {
