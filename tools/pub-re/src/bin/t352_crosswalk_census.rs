@@ -139,12 +139,13 @@ fn main() -> Result<()> {
         let Some(((width, width_span), (height, height_span))) = content_dims.get(&id) else {
             continue;
         };
-        let (Some(xs), Some(ys), Some(xe), Some(ye), Some(xe_field)) = (
+        let (Some(xs), Some(ys), Some(xe), Some(ye), Some(xe_field), Some(ye_field)) = (
             unique_signed(anchor, PUBLISHER_FIELD_XS),
             unique_signed(anchor, PUBLISHER_FIELD_YS),
             unique_signed(anchor, PUBLISHER_FIELD_XE),
             unique_signed(anchor, PUBLISHER_FIELD_YE),
             unique_field(anchor, PUBLISHER_FIELD_XE),
+            unique_field(anchor, PUBLISHER_FIELD_YE),
         ) else {
             continue;
         };
@@ -154,6 +155,7 @@ fn main() -> Result<()> {
         if aw <= 0
             || ah <= 0
             || xe_field.source.len != 6
+            || ye_field.source.len != 6
             || width_span.len != 4
             || height_span.len != 4
         {
@@ -165,6 +167,12 @@ fn main() -> Result<()> {
             .checked_add(DELTA_EMU)
             .is_some_and(|next| next <= i64::from(u32::MAX))
             && xe
+                .checked_add(DELTA_EMU)
+                .is_some_and(|next| next <= i64::from(i32::MAX));
+        let height_patchable = height
+            .checked_add(DELTA_EMU)
+            .is_some_and(|next| next <= i64::from(u32::MAX))
+            && ye
                 .checked_add(DELTA_EMU)
                 .is_some_and(|next| next <= i64::from(i32::MAX));
         *id_counts.entry(id).or_default() += 1;
@@ -180,13 +188,17 @@ fn main() -> Result<()> {
             "anchor_height_emu": ah,
             "anchor_xs_emu": xs,
             "anchor_xe_emu": xe,
+            "anchor_ys_emu": ys,
+            "anchor_ye_emu": ye,
             "width_value_offset_in_contents": width_span.offset,
             "height_value_offset_in_contents": height_span.offset,
             "xe_tagged_field_offset_in_escher": xe_field.source.offset,
+            "ye_tagged_field_offset_in_escher": ye_field.source.offset,
             "identity_joined_even_if_extents_differ": true,
             "both_geometries_consistent": *width == aw && *height == ah,
             "different_from_original_t352_width": *width != 5_076_000,
-            "numeric_patchable": patchable
+            "numeric_patchable": patchable,
+            "height_numeric_patchable": height_patchable
         }));
     }
     for row in &mut rows {
@@ -194,6 +206,11 @@ fn main() -> Result<()> {
         let spid = row["spid"].as_u64().context("missing Escher spid")? as u32;
         let unique = id_counts.get(&id) == Some(&1) && spid_counts.get(&spid) == Some(&1);
         row["unique_join"] = json!(unique);
+        row["admitted_independent_height_target"] = json!(
+            unique
+                && row["both_geometries_consistent"] == true
+                && row["height_numeric_patchable"] == true
+        );
         row["admitted_independent_target"] = json!(
             unique
                 && row["both_geometries_consistent"] == true
@@ -205,6 +222,10 @@ fn main() -> Result<()> {
         .iter()
         .filter(|row| row["admitted_independent_target"] == true)
         .count();
+    let admitted_height = rows
+        .iter()
+        .filter(|row| row["admitted_independent_height_target"] == true)
+        .count();
     let result = json!({
         "schema": "chaptera.t352-independent-identity-first-preflight.v1",
         "source_sha256": source_sha,
@@ -213,6 +234,7 @@ fn main() -> Result<()> {
         "escher_shape_container_count": escher_shapes.shapes.len(),
         "identity_joined_pair_count": rows.len(),
         "admitted_independent_target_count": admitted,
+        "admitted_independent_height_target_count": admitted_height,
         "verdict": if admitted > 0 { "admitted_raw_candidates_require_native_normalization" }
                    else { "no_raw_candidate_require_independent_native_check" },
         "rows": rows,

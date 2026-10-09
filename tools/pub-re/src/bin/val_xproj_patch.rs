@@ -526,15 +526,23 @@ fn inspect_projections(path: &Path) -> Result<Value> {
     }))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IndependentAxis {
+    Width,
+    Height,
+}
+
 fn prepare_independent(
     base: &Path,
     census_path: &Path,
     shape_id: u32,
     output: &Path,
+    axis: IndependentAxis,
 ) -> Result<()> {
     if output.exists() {
         bail!("independent T352 output directory already exists");
     }
+    let is_height = axis == IndependentAxis::Height;
     let source_bytes = fs::read(base).context("read independent normalized base")?;
     if !(50_000..=10_000_000).contains(&source_bytes.len()) {
         bail!("independent normalized PUB size is outside bounded policy");
@@ -558,66 +566,120 @@ fn prepare_independent(
         bail!("requested independently joined shape does not have exactly one census row");
     };
     for flag in [
-        "admitted_independent_target",
         "unique_join",
         "both_geometries_consistent",
         "identity_joined_even_if_extents_differ",
-        "numeric_patchable",
-        "different_from_original_t352_width",
     ] {
         if row.get(flag).and_then(Value::as_bool) != Some(true) {
             bail!("independent shape fails the bounded {flag} condition");
         }
     }
+    let axis_flags: &[&str] = if is_height {
+        &[
+            "height_numeric_patchable",
+            "admitted_independent_height_target",
+        ]
+    } else {
+        &[
+            "numeric_patchable",
+            "different_from_original_t352_width",
+            "admitted_independent_target",
+        ]
+    };
+    for flag in axis_flags {
+        if row.get(*flag).and_then(Value::as_bool) != Some(true) {
+            bail!("independent shape fails the bounded {flag} condition");
+        }
+    }
     if require_i64(row, "shape_type")? != 1 {
-        bail!("independent falsifier requires a non-T352 rectangle shape class 1");
+        bail!("independent falsifier requires ordinary rectangle shape class 1");
     }
     let spid = require_i64(row, "spid")?;
-    let width = require_i64(row, "contents_width_emu")?;
-    let anchor_width = require_i64(row, "anchor_width_emu")?;
-    let anchor_xe = require_i64(row, "anchor_xe_emu")?;
-    if width <= 0 || width != anchor_width || width == BASE_WIDTH_EMU {
-        bail!("independent width fails baseline equality/novelty gate");
+    let dimension = require_i64(
+        row,
+        if is_height {
+            "contents_height_emu"
+        } else {
+            "contents_width_emu"
+        },
+    )?;
+    let anchor_dimension = require_i64(
+        row,
+        if is_height {
+            "anchor_height_emu"
+        } else {
+            "anchor_width_emu"
+        },
+    )?;
+    let edge_coordinate = require_i64(
+        row,
+        if is_height {
+            "anchor_ye_emu"
+        } else {
+            "anchor_xe_emu"
+        },
+    )?;
+    if dimension <= 0
+        || dimension != anchor_dimension
+        || (!is_height && dimension == BASE_WIDTH_EMU)
+    {
+        bail!("independent dimension violates baseline equality/novelty gate");
     }
-    let new_width = width
+    let changed_dimension = dimension
         .checked_add(DELTA_EMU)
-        .context("width delta overflow")?;
-    let new_xe = anchor_xe
+        .context("dimension delta overflow")?;
+    let changed_edge = edge_coordinate
         .checked_add(DELTA_EMU)
-        .context("XE delta overflow")?;
-    let xe_old = i32::try_from(anchor_xe).context("XE not signed i32")?;
-    let xe_new = i32::try_from(new_xe).context("XE + delta not signed i32")?;
-    let cw_offset = u64::try_from(require_i64(row, "width_value_offset_in_contents")?)?;
-    let xe_tag_offset = u64::try_from(require_i64(row, "xe_tagged_field_offset_in_escher")?)?;
-    let xe_offset = xe_tag_offset
+        .context("Escher edge delta overflow")?;
+    let edge_old = i32::try_from(edge_coordinate).context("Escher signed edge outside i32")?;
+    let edge_new = i32::try_from(changed_edge).context("Escher signed edge + delta outside i32")?;
+    let dimension_offset = u64::try_from(require_i64(
+        row,
+        if is_height {
+            "height_value_offset_in_contents"
+        } else {
+            "width_value_offset_in_contents"
+        },
+    )?)?;
+    let tagged_offset = u64::try_from(require_i64(
+        row,
+        if is_height {
+            "ye_tagged_field_offset_in_escher"
+        } else {
+            "xe_tagged_field_offset_in_escher"
+        },
+    )?)?;
+    let edge_offset = tagged_offset
         .checked_add(2)
-        .context("XE value offset overflow")?;
-    let cw = Patch {
+        .context("Escher tagged value offset overflow")?;
+    let contents_patch = Patch {
         span: Span {
             stream: "/Contents".to_owned(),
-            offset: cw_offset,
+            offset: dimension_offset,
             len: 4,
         },
-        expected: uint32_bytes(width)?,
-        replacement: uint32_bytes(new_width)?,
+        expected: uint32_bytes(dimension)?,
+        replacement: uint32_bytes(changed_dimension)?,
     };
-    let ex = Patch {
+    let escher_patch = Patch {
         span: Span {
             stream: "/Escher/EscherStm".to_owned(),
-            offset: xe_offset,
+            offset: edge_offset,
             len: 4,
         },
-        expected: xe_old.to_le_bytes(),
-        replacement: xe_new.to_le_bytes(),
+        expected: edge_old.to_le_bytes(),
+        replacement: edge_new.to_le_bytes(),
     };
-    if cw.expected == cw.replacement || ex.expected == ex.replacement {
+    if contents_patch.expected == contents_patch.replacement
+        || escher_patch.expected == escher_patch.replacement
+    {
         bail!("independent exact-range patch would be a no-op");
     }
     let baseline = all_streams(base)?;
     if baseline.len() < 2 {
-        bail!("independent PUB lacks the required complete CFB inventory");
+        bail!("independent PUB lacks required complete CFB inventory");
     }
-    for patch in [&cw, &ex] {
+    for patch in [&contents_patch, &escher_patch] {
         let bytes = baseline
             .get(&patch.span.stream)
             .context("patch stream missing")?;
@@ -626,15 +688,17 @@ fn prepare_independent(
             bail!("census scalar span is not bound to current normalized CFB bytes");
         }
     }
-    // Prove the exact wire ID tag, not just a plausible signed XE value.
+    // Verify actual PublisherField tag at the exact source location. On
+    // width: 0x2003 (XE). On height: 0x2004 (YE), not an adjacent YS field.
     let escher = baseline
         .get("/Escher/EscherStm")
         .context("Escher not found")?;
-    let tag_start = usize::try_from(xe_tag_offset)?;
+    let tag_start = usize::try_from(tagged_offset)?;
+    let required_tag: u16 = if is_height { 0x2004 } else { 0x2003 };
     if escher.get(tag_start..tag_start.saturating_add(2))
-        != Some(0x2003u16.to_le_bytes().as_slice())
+        != Some(required_tag.to_le_bytes().as_slice())
     {
-        bail!("selected Escher field tag is not XE 0x2003");
+        bail!("selected Escher field tag does not match chosen geometry axis");
     }
 
     fs::create_dir_all(output)?;
@@ -648,10 +712,10 @@ fn prepare_independent(
         let arm = output.join(format!("{name}.pub"));
         fs::copy(base, &arm)?;
         if contents_change {
-            patch_one(&arm, &cw)?;
+            patch_one(&arm, &contents_patch)?;
         }
         if escher_change {
-            patch_one(&arm, &ex)?;
+            patch_one(&arm, &escher_patch)?;
         }
         let next = all_streams(&arm)?;
         if baseline.keys().collect::<Vec<_>>() != next.keys().collect::<Vec<_>>() {
@@ -667,9 +731,9 @@ fn prepare_independent(
                 continue;
             }
             let planned = if contents_change && path == "/Contents" {
-                Some(&cw)
+                Some(&contents_patch)
             } else if escher_change && path == "/Escher/EscherStm" {
-                Some(&ex)
+                Some(&escher_patch)
             } else {
                 None
             }
@@ -690,7 +754,7 @@ fn prepare_independent(
             }));
         }
         if changed.len() != usize::from(contents_change) + usize::from(escher_change) {
-            bail!("independent arm does not have precisely the intended changed streams");
+            bail!("independent arm does not have precisely intended changed streams");
         }
         arms.push(json!({
             "arm": name,
@@ -701,25 +765,48 @@ fn prepare_independent(
     if sha(&fs::read(base)?) != source_sha {
         bail!("immutable independent normalized input was changed during experiment");
     }
-    write_json(
-        &output.join("t352-independent-patch-receipt.json"),
-        &json!({
-            "schema": "chaptera.t352-independent-four-arm-patch.v1",
-            "source_sha256": source_sha,
-            "source_length": source_bytes.len(),
-            "contents_shape_id": shape_id,
-            "spid": spid,
-            "shape_type": 1,
-            "width_before_emu": width,
-            "width_after_emu": new_width,
-            "xe_before_emu": anchor_xe,
-            "xe_after_emu": new_xe,
-            "delta_emu": DELTA_EMU,
-            "source_mutated": false,
-            "arms": arms,
-            "native_result": "not_executed"
-        }),
-    )?;
+    let (report_file, report) = if is_height {
+        (
+            "t352-independent-height-patch-receipt.json",
+            json!({
+                "schema": "chaptera.t352-independent-four-arm-height-patch.v1",
+                "source_sha256": source_sha,
+                "source_length": source_bytes.len(),
+                "contents_shape_id": shape_id,
+                "spid": spid,
+                "shape_type": 1,
+                "height_before_emu": dimension,
+                "height_after_emu": changed_dimension,
+                "ye_before_emu": edge_coordinate,
+                "ye_after_emu": changed_edge,
+                "delta_emu": DELTA_EMU,
+                "source_mutated": false,
+                "arms": arms,
+                "native_result": "not_executed"
+            }),
+        )
+    } else {
+        (
+            "t352-independent-patch-receipt.json",
+            json!({
+                "schema": "chaptera.t352-independent-four-arm-patch.v1",
+                "source_sha256": source_sha,
+                "source_length": source_bytes.len(),
+                "contents_shape_id": shape_id,
+                "spid": spid,
+                "shape_type": 1,
+                "width_before_emu": dimension,
+                "width_after_emu": changed_dimension,
+                "xe_before_emu": edge_coordinate,
+                "xe_after_emu": changed_edge,
+                "delta_emu": DELTA_EMU,
+                "source_mutated": false,
+                "arms": arms,
+                "native_result": "not_executed"
+            }),
+        )
+    };
+    write_json(&output.join(report_file), &report)?;
     Ok(())
 }
 
@@ -730,11 +817,24 @@ fn main() -> Result<()> {
         .map(|s| s.to_string_lossy().into_owned())
         .collect();
     match words.as_slice() {
-        [command, base, census, id, output] if command == "prepare-independent" => {
+        [command, base, census, id, output]
+            if command == "prepare-independent" || command == "prepare-independent-height" =>
+        {
             let id = id
                 .parse::<u32>()
                 .context("independent Contents shape id must be u32")?;
-            prepare_independent(Path::new(base), Path::new(census), id, Path::new(output))
+            let axis = if command == "prepare-independent-height" {
+                IndependentAxis::Height
+            } else {
+                IndependentAxis::Width
+            };
+            prepare_independent(
+                Path::new(base),
+                Path::new(census),
+                id,
+                Path::new(output),
+                axis,
+            )
         }
         [command, base, receipt, output] if command == "prepare" => {
             prepare(Path::new(base), Path::new(receipt), Path::new(output))
@@ -746,7 +846,7 @@ fn main() -> Result<()> {
             write_json(Path::new(output), &inspect_projections(Path::new(source))?)
         }
         _ => bail!(
-            "usage: val_xproj_patch prepare BASE.pub STRUCTURAL.json NEW_DIR | fingerprint FILE.pub OUT.json | inspect FILE.pub OUT.json | prepare-independent BASE.pub CENSUS.json SHAPE_ID NEW_DIR"
+            "usage: val_xproj_patch prepare BASE.pub STRUCTURAL.json NEW_DIR | fingerprint FILE.pub OUT.json | inspect FILE.pub OUT.json | prepare-independent BASE.pub CENSUS.json SHAPE_ID NEW_DIR | prepare-independent-height BASE.pub CENSUS.json SHAPE_ID NEW_DIR"
         ),
     }
 }
@@ -937,7 +1037,7 @@ mod tests {
             }]
         });
         write_json(&census_path, &census).unwrap();
-        prepare_independent(&source, &census_path, 305, &arms).unwrap();
+        prepare_independent(&source, &census_path, 305, &arms, IndependentAxis::Width).unwrap();
         assert_eq!(sha(&fs::read(&source).unwrap()), original_sha);
         let before = all_streams(&source).unwrap();
         for (name, contents_change, escher_change) in [
@@ -981,7 +1081,139 @@ mod tests {
             }
         }
         assert!(
-            prepare_independent(&source, &census_path, 306, &tmp.path().join("wrong-id")).is_err()
+            prepare_independent(
+                &source,
+                &census_path,
+                306,
+                &tmp.path().join("wrong-id"),
+                IndependentAxis::Width
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn independent_height_arms_patch_only_contents_ab_and_tagged_escher_ye() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("height-normalized.pub");
+        let census_path = tmp.path().join("height-census.json");
+        let arms = tmp.path().join("height-arms");
+        let contents_height = 1_122_000i64;
+        let escher_ye = -1_244_000i64;
+        let mut file = cfb::create(&source).unwrap();
+        file.create_storage("/Escher").unwrap();
+        let mut contents = vec![0x12u8; 60_000];
+        contents[32..36].copy_from_slice(&uint32_bytes(contents_height).unwrap());
+        file.create_stream("/Contents")
+            .unwrap()
+            .write_all(&contents)
+            .unwrap();
+        let mut escher = vec![0x48u8; 2048];
+        escher[8..10].copy_from_slice(&0x2003u16.to_le_bytes());
+        escher[10..14].copy_from_slice(&(escher_ye as i32).to_le_bytes());
+        escher[20..22].copy_from_slice(&0x2004u16.to_le_bytes());
+        escher[22..26].copy_from_slice(&(escher_ye as i32).to_le_bytes());
+        file.create_stream("/Escher/EscherStm")
+            .unwrap()
+            .write_all(&escher)
+            .unwrap();
+        drop(file);
+        let original_sha = sha(&fs::read(&source).unwrap());
+        let mut census = json!({
+            "schema": "chaptera.t352-independent-identity-first-preflight.v1",
+            "source_sha256": original_sha,
+            "rows": [{
+                "contents_seq": 305, "spid": 1035, "shape_type": 1,
+                "unique_join": true,
+                "both_geometries_consistent": true,
+                "identity_joined_even_if_extents_differ": true,
+                "height_numeric_patchable": true,
+                "admitted_independent_height_target": true,
+                "contents_height_emu": contents_height,
+                "anchor_height_emu": contents_height,
+                "anchor_ye_emu": escher_ye,
+                "height_value_offset_in_contents": 32,
+                "ye_tagged_field_offset_in_escher": 20
+            }]
+        });
+        write_json(&census_path, &census).unwrap();
+        prepare_independent(&source, &census_path, 305, &arms, IndependentAxis::Height).unwrap();
+        assert_eq!(sha(&fs::read(&source).unwrap()), original_sha);
+        let before = all_streams(&source).unwrap();
+        for (name, contents_change, escher_change) in [
+            ("control", false, false),
+            ("both_consistent", true, true),
+            ("contents_only", true, false),
+            ("escher_only", false, true),
+        ] {
+            let changed = all_streams(&arms.join(format!("{name}.pub"))).unwrap();
+            assert_eq!(
+                before.keys().collect::<Vec<_>>(),
+                changed.keys().collect::<Vec<_>>()
+            );
+            for (stream_name, bytes) in &before {
+                let offsets = changed_offsets(bytes, &changed[stream_name]).unwrap();
+                let expected = if stream_name == "/Contents" && contents_change {
+                    changed_offsets(
+                        &uint32_bytes(contents_height).unwrap(),
+                        &uint32_bytes(contents_height + DELTA_EMU).unwrap(),
+                    )
+                    .unwrap()
+                    .iter()
+                    .map(|i| i + 32)
+                    .collect::<Vec<_>>()
+                } else if stream_name == "/Escher/EscherStm" && escher_change {
+                    changed_offsets(
+                        &(escher_ye as i32).to_le_bytes(),
+                        &((escher_ye + DELTA_EMU) as i32).to_le_bytes(),
+                    )
+                    .unwrap()
+                    .iter()
+                    .map(|i| i + 22)
+                    .collect::<Vec<_>>()
+                } else {
+                    vec![]
+                };
+                assert_eq!(offsets, expected, "height arm {name} changed {stream_name}");
+            }
+        }
+        let report: Value = serde_json::from_slice(
+            &fs::read(arms.join("t352-independent-height-patch-receipt.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            report["schema"],
+            "chaptera.t352-independent-four-arm-height-patch.v1"
+        );
+        assert_eq!(report["height_after_emu"], contents_height + DELTA_EMU);
+        assert_eq!(report["arms"].as_array().unwrap().len(), 4);
+
+        // A byte-matching signed coordinate at the wrong tagged field must
+        // fail closed, even if it looks numerically plausible.
+        census["rows"][0]["ye_tagged_field_offset_in_escher"] = json!(8);
+        write_json(&census_path, &census).unwrap();
+        let wrong_tag = tmp.path().join("wrong-ye-tag");
+        assert!(
+            prepare_independent(
+                &source,
+                &census_path,
+                305,
+                &wrong_tag,
+                IndependentAxis::Height,
+            )
+            .is_err()
+        );
+        let wrong_id = tmp.path().join("wrong-shape-id");
+        assert!(
+            prepare_independent(
+                &source,
+                &census_path,
+                306,
+                &wrong_id,
+                IndependentAxis::Height,
+            )
+            .is_err()
         );
     }
 }
