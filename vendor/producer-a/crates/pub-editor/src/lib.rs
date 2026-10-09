@@ -20,7 +20,7 @@ use session_geometry::{
     append_blank_page_error_to_editor_v1, apply_authored_stack_history_forward_v1,
     authored_stack_operation_page_id_v1, delete_blank_authored_page_error_to_editor_v1,
     derive_authored_stacks_from_operations_v1, display_page_append_error_v1,
-    page_order_error_to_editor_v1, validate_move_nodes_transition,
+    display_page_delete_error_v1, page_order_error_to_editor_v1, validate_move_nodes_transition,
     validate_resize_nodes_transition,
 };
 use session_image::{
@@ -1731,6 +1731,9 @@ impl fmt::Display for EditorError {
             Self::PageAppendUnsupported { .. } | Self::StalePageAppend => {
                 display_page_append_error_v1(self, formatter)
             }
+            Self::PageDeleteUnsupported { .. } | Self::StalePageDelete => {
+                display_page_delete_error_v1(self, formatter)
+            }
             Self::NodeMoveUnsupported { node_id } => write!(
                 formatter,
                 "node {} is outside the bounded directly-page-owned move slice",
@@ -1939,6 +1942,8 @@ impl EditorError {
             Self::AuthoredPageIdentityConflict { .. } => "authored_page_identity_conflict",
             Self::PageAppendUnsupported { .. } => "page_append_unsupported",
             Self::StalePageAppend => "stale_page_append",
+            Self::PageDeleteUnsupported { .. } => "page_delete_unsupported",
+            Self::StalePageDelete => "stale_page_delete",
             Self::NodeMoveUnsupported { .. } => "node_move_unsupported",
             Self::NodeMoveNoChange { .. } => "node_move_no_change",
             Self::NodeMoveOverflow { .. } => "node_move_overflow",
