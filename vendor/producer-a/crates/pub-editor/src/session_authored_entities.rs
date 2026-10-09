@@ -5,7 +5,9 @@
 
 use super::*;
 
-pub(super) fn authored_shape_from_operation(operation: &EditOperation) -> Option<AuthoredShapeRuntimeV1> {
+pub(super) fn authored_shape_from_operation(
+    operation: &EditOperation,
+) -> Option<AuthoredShapeRuntimeV1> {
     match operation {
         EditOperation::CreateShape {
             node_id,
@@ -30,7 +32,9 @@ pub(super) fn authored_shape_from_operation(operation: &EditOperation) -> Option
     }
 }
 
-pub(super) fn authored_line_from_operation(operation: &EditOperation) -> Option<AuthoredLineRuntimeV1> {
+pub(super) fn authored_line_from_operation(
+    operation: &EditOperation,
+) -> Option<AuthoredLineRuntimeV1> {
     match operation {
         EditOperation::CreateLine {
             node_id,

@@ -1137,11 +1137,8 @@ impl EditorSession {
         source_qualified_page_ids: &[PageId],
         page_id: PageId,
     ) -> bool {
-        self.plan_delete_authored_rectangle_page_from_session_v1(
-            source_qualified_page_ids,
-            page_id,
-        )
-        .is_ok()
+        self.plan_delete_authored_rectangle_page_from_session_v1(source_qualified_page_ids, page_id)
+            .is_ok()
     }
 
     /// Admission-only seam for the next versioned EditorSession operation.

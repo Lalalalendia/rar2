@@ -7754,4 +7754,3 @@ fn apply_inverse(
     }
     Ok(())
 }
-
