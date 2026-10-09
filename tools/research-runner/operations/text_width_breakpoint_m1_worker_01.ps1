@@ -81,6 +81,8 @@ function Snapshot($Shape, [string]$PhaseTag = "") {
     $frame = $null
     $range = $null
     $font = $null
+    $visibleRange = $null
+    $visibleFont = $null
     $lines = @()
     try {
         if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_frame") }
@@ -112,12 +114,25 @@ function Snapshot($Shape, [string]$PhaseTag = "") {
         }
         if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_text") }
         $text = [string]$range.Text
+        if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_visible_subset") }
+        if ($text.Length -lt $ExpectedText.Length) { throw "m1_visible_text_missing" }
+        # Publisher appends an extra paragraph marker to the full TextRange.
+        # Validate only the exact synthetic content, excluding that marker.
+        $visibleRange = $range.Characters(1, [int]$ExpectedText.Length)
+        $visibleFont = $visibleRange.Font
+        $visibleText = [string]$visibleRange.Text
+        $visibleFamilyMatches = ([string]$visibleFont.Name -eq $FontName)
+        $visibleSizePt = [double]$visibleFont.Size
+        $visibleTextMatches = ($visibleText -ceq $ExpectedText)
         if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_properties") }
         return [ordered]@{
             width_pt = [double]$Shape.Width
             height_pt = [double]$Shape.Height
             font_name = [string]$font.Name
             font_size_pt = [double]$font.Size
+            visible_font_name_matches = $visibleFamilyMatches
+            visible_font_size_pt = $visibleSizePt
+            visible_text_matches_expected = $visibleTextMatches
             auto_fit_mode = [int]$frame.AutoFitText
             margin_left_pt = [double]$frame.MarginLeft
             margin_right_pt = [double]$frame.MarginRight
@@ -129,6 +144,8 @@ function Snapshot($Shape, [string]$PhaseTag = "") {
             lines = $lines
         }
     } finally {
+        Release-Com $visibleFont
+        Release-Com $visibleRange
         Release-Com $font
         Release-Com $range
         Release-Com $frame
@@ -137,22 +154,26 @@ function Snapshot($Shape, [string]$PhaseTag = "") {
 function Assert-FixedSource($Snapshot) {
     # The only source is a fixed synthetic text box created by this operation.
     # Report booleans and bounded metrics, never font strings or text content.
-    $fontNameMatches = ([string]$Snapshot.font_name -eq $FontName)
-    $fontSizeMatches = ([math]::Abs([double]$Snapshot.font_size_pt - $FontSize) -le 0.001)
+    $fontNameMatches = [bool]$Snapshot.visible_font_name_matches
+    $fontSizeMatches = ([math]::Abs([double]$Snapshot.visible_font_size_pt - $FontSize) -le 0.001)
+    $visibleTextMatches = [bool]$Snapshot.visible_text_matches_expected
     $autoFitDisabled = ([int]$Snapshot.auto_fit_mode -eq 0)
     $textLengthInBand = ([int]$Snapshot.text_utf16_units -ge $ExpectedText.Length -and
         [int]$Snapshot.text_utf16_units -le ($ExpectedText.Length + 2))
     $script:LastFixedSourceChecks = [ordered]@{
         font_name_matches = $fontNameMatches
         font_size_matches = $fontSizeMatches
+        visible_text_matches_expected = $visibleTextMatches
         autofit_disabled = $autoFitDisabled
         text_length_in_expected_band = $textLengthInBand
-        observed_font_size_pt = [double]$Snapshot.font_size_pt
+        observed_font_size_pt = [double]$Snapshot.visible_font_size_pt
+        observed_full_range_font_size_pt = [double]$Snapshot.font_size_pt
+        full_range_font_name_matches = ([string]$Snapshot.font_name -eq $FontName)
         observed_autofit_mode = [int]$Snapshot.auto_fit_mode
         observed_text_utf16_units = [int]$Snapshot.text_utf16_units
         expected_text_utf16_units = [int]$ExpectedText.Length
     }
-    if (-not ($fontNameMatches -and $fontSizeMatches -and $autoFitDisabled -and $textLengthInBand)) {
+    if (-not ($fontNameMatches -and $fontSizeMatches -and $visibleTextMatches -and $autoFitDisabled -and $textLengthInBand)) {
         throw "m1_font_or_text_or_autofit_drift"
     }
 }

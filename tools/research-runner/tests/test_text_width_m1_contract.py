@@ -119,6 +119,23 @@ class TextWidthM1Contract(unittest.TestCase):
         self.assertNotIn('observed_text =', self.worker)
         self.assertIn('throw "m1_font_or_text_or_autofit_drift"', self.worker)
 
+    def test_publisher_visible_character_subrange_is_font_authority(self):
+        # Whole TextRange includes a trailing paragraph mark, which must not
+        # be allowed to invalidate uniform font checks for visible text.
+        self.assertIn('$range.Characters(1, [int]$ExpectedText.Length)', self.worker)
+        self.assertIn('visible_font_name_matches = $visibleFamilyMatches', self.worker)
+        self.assertIn('visible_font_size_pt = $visibleSizePt', self.worker)
+        self.assertIn('visible_text_matches_expected = $visibleTextMatches', self.worker)
+        self.assertIn('$visibleText -ceq $ExpectedText', self.worker)
+        self.assertIn('$fontNameMatches = [bool]$Snapshot.visible_font_name_matches', self.worker)
+        self.assertIn('$Snapshot.visible_font_size_pt - $FontSize', self.worker)
+        self.assertIn('$visibleTextMatches = [bool]$Snapshot.visible_text_matches_expected', self.worker)
+        self.assertIn('Release-Com $visibleRange', self.worker)
+        self.assertIn('Release-Com $visibleFont', self.worker)
+        self.assertIn('observed_full_range_font_size_pt', self.worker)
+        self.assertIn('full_range_font_name_matches', self.worker)
+        self.assertNotIn('$fontNameMatches = ([string]$Snapshot.font_name', self.worker)
+
     def test_fail_closed_evidence_and_no_claim_before_product_ab(self):
         self.assertIn("source_bytes_uploaded = $false", self.suite)
         self.assertIn("carrier_authority_granted = $false", self.suite)
