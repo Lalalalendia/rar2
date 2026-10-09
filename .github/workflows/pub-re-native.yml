@@ -246,6 +246,7 @@ jobs:
     timeout-minutes: ${{ fromJSON(needs.gate.outputs.native_timeout_minutes) }}
     concurrency:
       group: pub-re-native-publisher-oracle
+      queue: max
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
@@ -1246,6 +1247,7 @@ jobs:
     timeout-minutes: 30
     concurrency:
       group: pub-re-native-publisher-oracle
+      queue: max
       cancel-in-progress: false
     permissions:
       contents: read
