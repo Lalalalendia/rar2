@@ -55,6 +55,11 @@ pub struct OfficeArtCandidateV1 {
     pub property_complex: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub publisher_field_id: Option<u16>,
+    /// Typed FSP.spid of the unique owner inside the enclosing
+    /// EscherSpContainer. Never confuse FSP record_instance/shape_type
+    /// with a shape identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape_spid: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -197,6 +202,7 @@ fn collect_candidates(
     output: &mut Vec<OfficeArtCandidateV1>,
 ) {
     for record in records {
+        let candidate_start = output.len();
         push_span_candidate(
             output,
             "record_header",
@@ -328,6 +334,29 @@ fn collect_candidates(
             }
             _ => {}
         }
+
+        // An FOPT property belongs to its enclosing shape container, not to
+        // the nearest FSP at a neighboring physical offset. Only a UNIQUE
+        // direct FSP child supplies authority. Preserve descendants' own
+        // SPIDs in nested group shape containers; fail closed on ambiguity.
+        if record.header.rec_type == pub_escher::OFFICE_ART_SP_CONTAINER {
+            if let OfficeArtBody::Container { children } = &record.body {
+                let mut owners = children.iter().filter_map(|child| {
+                    if let OfficeArtBody::Fsp(fsp) = &child.body {
+                        Some(fsp.spid)
+                    } else {
+                        None
+                    }
+                });
+                if let (Some(spid), None) = (owners.next(), owners.next()) {
+                    for candidate in &mut output[candidate_start..] {
+                        if candidate.shape_spid.is_none() {
+                            candidate.shape_spid = Some(spid);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -358,6 +387,7 @@ fn push_span_candidate(
         property_id,
         property_complex,
         publisher_field_id,
+        shape_spid: None,
     });
 }
 
@@ -406,6 +436,57 @@ mod tests {
 
         let json = serde_json::to_string(&candidates).expect("serialize candidates");
         assert!(!json.contains("11223344"));
+    }
+
+    #[test]
+    fn fopt_property_inherits_unique_sibling_fsp_spid_not_shape_type() {
+        // One shape container: typed FSP with SPID 1035 / MSOSPT 202,
+        // followed by one FOPT rotation property with a deliberately
+        // recognizable scalar (never serialized as raw bytes).
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x000fu16.to_le_bytes());
+        bytes.extend_from_slice(&pub_escher::OFFICE_ART_SP_CONTAINER.to_le_bytes());
+        bytes.extend_from_slice(&30u32.to_le_bytes());
+
+        bytes.extend_from_slice(&((202u16 << 4) | 2).to_le_bytes());
+        bytes.extend_from_slice(&pub_escher::OFFICE_ART_FSP.to_le_bytes());
+        bytes.extend_from_slice(&8u32.to_le_bytes());
+        bytes.extend_from_slice(&1035u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+
+        bytes.extend_from_slice(&((1u16 << 4) | 3).to_le_bytes());
+        bytes.extend_from_slice(&OFFICE_ART_FOPT.to_le_bytes());
+        bytes.extend_from_slice(&6u32.to_le_bytes());
+        bytes.extend_from_slice(&4u16.to_le_bytes());
+        bytes.extend_from_slice(&0x1234_5678u32.to_le_bytes());
+        let parsed = parse_officeart_stream(StreamPath("/Escher".to_owned()), &bytes)
+            .expect("synthetic shape container should parse");
+        let candidates = candidates_for_range(&parsed.records, 32, 6);
+        let property = candidates
+            .iter()
+            .find(|candidate| candidate.kind == "fopt_property" && candidate.property_id == Some(4))
+            .expect("FOPT property candidate");
+        assert_eq!(property.shape_spid, Some(1035));
+        assert_ne!(property.shape_spid, Some(202));
+        let json = serde_json::to_string(&candidates).expect("serialize typed candidates");
+        assert!(json.contains(r#""shape_spid":1035"#));
+        assert!(!json.contains("305419896"));
+    }
+
+    #[test]
+    fn unparented_fopt_must_not_guess_a_spid() {
+        let bytes = one_property_fopt(4, 0x1234_5678);
+        let parsed = parse_officeart_stream(StreamPath("/Escher".to_owned()), &bytes)
+            .expect("orphan FOPT should parse");
+        let candidates = candidates_for_range(&parsed.records, 8, 6);
+        let property = candidates
+            .iter()
+            .find(|candidate| candidate.kind == "fopt_property")
+            .expect("orphan FOPT candidate");
+        assert_eq!(property.shape_spid, None);
+        assert!(!serde_json::to_string(property)
+            .expect("serialize")
+            .contains("shape_spid"));
     }
 
     #[test]
