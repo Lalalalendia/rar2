@@ -141,7 +141,7 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          Import-Module tools/windows/pub-runtime/NativeStoryPhase.psm1 -Force
+          Import-Module (Resolve-Path -LiteralPath 'tools/windows/pub-runtime/NativeStoryPhase.psm1').Path -Force
           $root = Join-Path $env:RUNNER_TEMP 'chaptera-phase-test'
           New-Item -ItemType Directory -Force -Path $root | Out-Null
           try {
