@@ -57,8 +57,8 @@ pub use create_table_runtime_v1::{
 pub use delete_blank_authored_page_v1::{
     DELETE_BLANK_AUTHORED_PAGE_PROTOCOL_V1, DeleteBlankAuthoredPageErrorV1,
     DeleteBlankAuthoredPageTransitionV1, apply_delete_blank_authored_page_forward_v1,
-    apply_delete_blank_authored_page_inverse_v1,
-    delete_blank_authored_page_document_state_id_v1, plan_delete_blank_authored_page_v1,
+    apply_delete_blank_authored_page_inverse_v1, delete_blank_authored_page_document_state_id_v1,
+    plan_delete_blank_authored_page_v1,
 };
 
 // Private compatibility for internal module imports only.
