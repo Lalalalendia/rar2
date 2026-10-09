@@ -363,3 +363,273 @@ fn gui_move_page_command_commits_one_reorder_and_replays_on_real_pub() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+
+#[cfg(not(feature = "reader-only"))]
+#[test]
+#[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
+fn gui_add_page_at_end_projects_membership_and_replays_on_real_pub() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let fixture_source = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
+        .map(PathBuf::from)
+        .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
+    let original = fs::read(&fixture_source).expect("read pinned SampleNewsletter fixture");
+    let root =
+        std::env::temp_dir().join(format!("chaptera-gui-page-append-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create page-append GUI temp directory");
+    let fixture = root.join("SampleNewsletter.pub");
+    fs::write(&fixture, &original).expect("write page-append GUI PUB fixture");
+
+    let fixture_for_app = fixture.clone();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 820.0))
+        .with_pixels_per_point(1.0)
+        .with_max_steps(80)
+        .build_eframe(move |cc| {
+            fallback_font::install(&cc.egui_ctx)
+                .expect("pinned Chaptera fallback font resource must validate");
+            ViewerApp::new_with_storage(Some(fixture_for_app), cc.storage)
+        });
+    harness.step();
+    harness.step();
+
+    let (source_order, last_source_size, operations_before) = {
+        let app = harness.state();
+        let visual = app.visual.as_ref().expect("visual loaded");
+        assert!(
+            !visual.document.pages.is_empty(),
+            "fixture must expose at least one customer-visible page"
+        );
+        let source_order = visual
+            .document
+            .pages
+            .iter()
+            .map(|page| page.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            app.source_customer_page_ids, source_order,
+            "Desktop baseline must capture source-qualified membership before lifecycle replay"
+        );
+        let last_page_id = *source_order.last().expect("last source customer page");
+        let last_source_size = app
+            .editor
+            .as_ref()
+            .expect("editor loaded")
+            .graph()
+            .pages
+            .get(&last_page_id)
+            .expect("last source page in editor graph")
+            .size;
+        (
+            source_order,
+            last_source_size,
+            app.editor
+                .as_ref()
+                .expect("editor loaded")
+                .operations()
+                .len(),
+        )
+    };
+
+    let add = harness.get_by_label("Add Page at End");
+    assert!(!add.is_disabled(), "existing customer document admits append");
+    add.click();
+    harness.step();
+    harness.step();
+
+    let appended_page_id = {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("editor after append");
+        assert_eq!(
+            editor.operations().len(),
+            operations_before + 1,
+            "one Add Page click must append exactly one lifecycle operation"
+        );
+        let appended_page_id = match editor.operations().last() {
+            Some(pub_editor::EditOperation::AppendBlankPageV1 { transition }) => {
+                transition.identity.page_id
+            }
+            other => panic!("expected AppendBlankPageV1, got {other:?}"),
+        };
+        let appended_page = editor
+            .graph()
+            .pages
+            .get(&appended_page_id)
+            .expect("appended page in editor graph");
+        assert_eq!(appended_page.size, last_source_size);
+        assert!(appended_page.children.is_empty());
+        assert!(appended_page.extensions.is_empty());
+
+        let visual = app.visual.as_ref().expect("visual after append");
+        let mut expected = source_order.clone();
+        expected.push(appended_page_id);
+        assert_eq!(
+            visual
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
+            expected,
+            "Viewer membership must include authored page at publication end"
+        );
+        assert_eq!(
+            visual.document.pages[app.selected_page].id, appended_page_id,
+            "accepted Add Page selects the newly-created stable PageId"
+        );
+        let surface = visual
+            .scene
+            .surfaces
+            .iter()
+            .find(|surface| surface.origin == appended_page_id)
+            .expect("appended page must have a Viewer scene surface");
+        assert_eq!(surface.size, last_source_size);
+        assert_eq!(
+            visual.document.pages.last().expect("last Viewer page").index,
+            u32::try_from(expected.len()).expect("page count fits u32")
+        );
+        appended_page_id
+    };
+
+    let appended_label = format!("Page {}", source_order.len() + 1);
+    assert!(
+        !harness.get_by_label(&appended_label).is_disabled(),
+        "new page is reachable through the real Pages sidebar"
+    );
+
+    harness
+        .get_all_by_label("Undo")
+        .next()
+        .expect("Undo page append")
+        .click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        let visual = app.visual.as_ref().expect("visual after undo");
+        assert_eq!(
+            visual
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
+            source_order,
+            "Undo removes exact authored membership"
+        );
+        assert!(
+            visual
+                .scene
+                .surfaces
+                .iter()
+                .all(|surface| surface.origin != appended_page_id),
+            "Undo removes the authored page surface"
+        );
+        assert_eq!(
+            visual.document.pages[app.selected_page].id,
+            *source_order.last().expect("last source page"),
+            "when selected authored page disappears, selection falls back to the surviving neighbor"
+        );
+        assert_eq!(
+            app.editor.as_ref().expect("editor").operations().len(),
+            operations_before
+        );
+    }
+
+    harness
+        .get_all_by_label("Redo")
+        .next()
+        .expect("Redo page append")
+        .click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        let visual = app.visual.as_ref().expect("visual after redo");
+        assert_eq!(
+            visual.document.pages.last().expect("restored authored page").id,
+            appended_page_id,
+            "Redo restores the same PageId"
+        );
+        assert!(
+            visual
+                .scene
+                .surfaces
+                .iter()
+                .any(|surface| surface.origin == appended_page_id),
+            "Redo restores the authored page surface"
+        );
+        assert_eq!(
+            app.editor.as_ref().expect("editor").operations().len(),
+            operations_before + 1
+        );
+    }
+
+    harness.get_by_label(&appended_label).click();
+    harness.step();
+    assert_eq!(
+        harness.state().visual.as_ref().expect("visual").document.pages
+            [harness.state().selected_page]
+            .id,
+        appended_page_id,
+        "restored page remains navigable by stable identity"
+    );
+
+    harness.get_by_label("Save Project").click();
+    harness.step();
+    harness.step();
+    harness.step();
+    {
+        let reopen = harness.get_by_label("Reopen Project");
+        assert!(!reopen.is_disabled(), "saved AddPage project can reopen");
+        reopen.click();
+    }
+    harness.step();
+    harness.step();
+    harness.step();
+
+    {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("fresh reopened editor");
+        assert_eq!(editor.operations().len(), operations_before + 1);
+        assert!(matches!(
+            editor.operations().last(),
+            Some(pub_editor::EditOperation::AppendBlankPageV1 { transition })
+                if transition.identity.page_id == appended_page_id
+        ));
+        assert_eq!(
+            app.source_customer_page_ids, source_order,
+            "fresh reopen recovers source-qualified baseline independently of authored lifecycle"
+        );
+
+        let visual = app.visual.as_ref().expect("fresh reopened visual");
+        let mut expected = source_order.clone();
+        expected.push(appended_page_id);
+        assert_eq!(
+            visual
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
+            expected,
+            "fresh source open plus EditorProject replay restores exact page membership/order"
+        );
+        assert!(
+            visual
+                .scene
+                .surfaces
+                .iter()
+                .any(|surface| surface.origin == appended_page_id && surface.size == last_source_size)
+        );
+    }
+
+    assert_eq!(
+        fs::read(&fixture).expect("re-read source PUB"),
+        original,
+        "Add Page sidecar lifecycle must not mutate source PUB bytes"
+    );
+    let _ = fs::remove_dir_all(root);
+}
