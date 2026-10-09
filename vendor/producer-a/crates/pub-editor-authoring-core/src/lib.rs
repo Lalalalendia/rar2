@@ -10,6 +10,7 @@ mod authored_stack_runtime_v1;
 mod create_line_runtime_v1;
 mod create_shape_runtime_v1;
 mod create_table_runtime_v1;
+mod delete_authored_rectangle_page_v1;
 mod delete_blank_authored_page_v1;
 mod duplicate_blank_page_v1;
 mod insert_blank_page_after_v1;
@@ -56,6 +57,12 @@ pub use create_table_runtime_v1::{
     validate_create_table_runtime_v1,
 };
 
+pub use delete_authored_rectangle_page_v1::{
+    DELETE_AUTHORED_RECTANGLE_PAGE_PROTOCOL_V1, DeleteAuthoredRectanglePageErrorV1,
+    DeleteAuthoredRectanglePageStateV1, DeleteAuthoredRectanglePageTransitionV1,
+    apply_delete_authored_rectangle_page_forward_v1,
+    apply_delete_authored_rectangle_page_inverse_v1, plan_delete_authored_rectangle_page_v1,
+};
 pub use delete_blank_authored_page_v1::{
     DELETE_BLANK_AUTHORED_PAGE_PROTOCOL_V1, DeleteBlankAuthoredPageErrorV1,
     DeleteBlankAuthoredPageTransitionV1, apply_delete_blank_authored_page_forward_v1,
