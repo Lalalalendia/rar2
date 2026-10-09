@@ -607,7 +607,7 @@ mod tests {
             candidate.quill_plan.output_stream
         );
 
-// Preservation-first CFB acceptance: logical stream inventory and all
+        // Preservation-first CFB acceptance: logical stream inventory and all
         // non-Quill stream bytes must survive the whole-file materialization.
         // The CFB allocator may rearrange sectors; compare streams, not offsets.
         let before_entries = pub_cfb::inspect_reader(Cursor::new(&source))
