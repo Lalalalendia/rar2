@@ -69,15 +69,20 @@ function ObserveArm([string]$name,[string]$source,[string]$patcher,[string]$anal
     $beforeSha = FileSha $source
     RunExe -file $patcher -argv @("fingerprint", $source, (Join-Path $analysis "$name-before-cfb.json"))
     RunExe -file $patcher -argv @("inspect", $source, (Join-Path $analysis "$name-before-projections.json"))
-    $app = $null; $doc = $null; $opened = $null; $openError = $null; $saveError = $null
+
+    $app = $null; $doc = $null
+    $openSucceeded = $false
+    $opened = $null; $openError = $null; $geometryError = $null; $saveError = $null
     try {
         try {
             $app = New-PubPublisherApplication
             $doc = $app.Open($source, $false, $false)
-            $opened = Shape293 $doc
+            $openSucceeded = $true
         }
         catch { $openError = Hr $_.Exception }
-        if ($null -ne $opened) {
+        if ($openSucceeded) {
+            try { $opened = Shape293 $doc }
+            catch { $geometryError = Hr $_.Exception }
             try { $doc.Save() }
             catch { $saveError = Hr $_.Exception }
         }
@@ -86,22 +91,28 @@ function ObserveArm([string]$name,[string]$source,[string]$patcher,[string]$anal
         CloseDoc $doc
         Close-PubPublisherApplication $app
     }
+
     $afterSha = FileSha $source
     RunExe -file $patcher -argv @("fingerprint", $source, (Join-Path $analysis "$name-after-cfb.json"))
     $projectionState = "observed"
     try { RunExe -file $patcher -argv @("inspect", $source, (Join-Path $analysis "$name-after-projections.json")) }
     catch { $projectionState = "not_evaluable" }
 
-    $reopened = $null; $reopenError = $null
-    if ($null -ne $opened -and $null -eq $saveError) {
+    $reopened = $null; $reopenSucceeded = $false
+    $reopenError = $null; $reopenGeometryError = $null
+    if ($openSucceeded -and $null -eq $saveError) {
         $app2 = $null; $doc2 = $null
         try {
             try {
                 $app2 = New-PubPublisherApplication
                 $doc2 = $app2.Open($source, $true, $false)
-                $reopened = Shape293 $doc2
+                $reopenSucceeded = $true
             }
             catch { $reopenError = Hr $_.Exception }
+            if ($reopenSucceeded) {
+                try { $reopened = Shape293 $doc2 }
+                catch { $reopenGeometryError = Hr $_.Exception }
+            }
         }
         finally {
             CloseDoc $doc2
@@ -112,14 +123,16 @@ function ObserveArm([string]$name,[string]$source,[string]$patcher,[string]$anal
         arm = $name
         initial_sha256 = $beforeSha
         after_save_sha256 = $afterSha
-        open = if ($null -eq $opened) { "failed" } else { "accepted" }
+        open = if ($openSucceeded) { "accepted" } else { "failed" }
         open_hresult = $openError
         open_geometry = $opened
-        save = if ($null -eq $opened) { "not_attempted" } elseif ($null -eq $saveError) { "accepted" } else { "failed" }
+        open_geometry_hresult = $geometryError
+        save = if (-not $openSucceeded) { "not_attempted" } elseif ($null -eq $saveError) { "accepted" } else { "failed" }
         save_hresult = $saveError
-        reopen = if ($null -ne $reopened) { "accepted" } elseif ($null -eq $opened -or $null -ne $saveError) { "not_attempted" } else { "failed" }
+        reopen = if ($reopenSucceeded) { "accepted" } elseif (-not $openSucceeded -or $null -ne $saveError) { "not_attempted" } else { "failed" }
         reopen_hresult = $reopenError
         reopen_geometry = $reopened
+        reopen_geometry_hresult = $reopenGeometryError
         post_save_projection_state = $projectionState
     }
 }
@@ -206,7 +219,8 @@ Write-PubJson -Value ([ordered]@{schema="chaptera.t352-progress.v1";stage="prepa
 $observations = @()
 foreach ($name in @("control","both_consistent","contents_only","escher_only")) {
     if ($observations.Count -eq 2 -and
-        ($observations[0].reopen -ne "accepted" -or $observations[1].reopen -ne "accepted")) {
+        ($observations[0].reopen -ne "accepted" -or $null -eq $observations[0].reopen_geometry -or
+         $observations[1].reopen -ne "accepted" -or $null -eq $observations[1].reopen_geometry)) {
         break
     }
     $arm = Join-Path $arms "$name.pub"
