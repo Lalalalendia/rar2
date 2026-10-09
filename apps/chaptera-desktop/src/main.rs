@@ -715,7 +715,6 @@ struct ViewerApp {
     diagnostic_sweep_open: bool,
     diagnostic_sweep_status: Option<String>,
     supporter_value: supporter::ValueTracker,
-    supporter_state: supporter::SupporterState,
     supporter_shell: supporter_shell::SupporterShell,
     exact_file_consent_open: bool,
     exact_file_consent_status: Option<String>,
@@ -782,8 +781,7 @@ impl ViewerApp {
             diagnostic_sweep_open: false,
             diagnostic_sweep_status: None,
             supporter_value: supporter::ValueTracker::default(),
-            supporter_state: supporter_shell::restore_state(storage),
-            supporter_shell: supporter_shell::SupporterShell::from_environment(),
+            supporter_shell: supporter_shell::SupporterShell::from_environment(storage),
             exact_file_consent_open: false,
             exact_file_consent_status: None,
             show_diagnostics: false,
@@ -4815,7 +4813,7 @@ impl ViewerApp {
 
 impl eframe::App for ViewerApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        supporter_shell::save_state(storage, &self.supporter_state);
+        self.supporter_shell.save(storage);
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -4869,7 +4867,7 @@ impl eframe::App for ViewerApp {
             });
         }
 
-        self.supporter_shell.sync_and_show(ctx, &self.supporter_value, &mut self.supporter_state);
+        self.supporter_shell.sync_and_show(ctx, &self.supporter_value);
 
         egui::TopBottomPanel::bottom("workspace-status").show(ctx, |ui| {
             self.show_workspace_status(ui);
@@ -6078,7 +6076,6 @@ mod tests {
             diagnostic_sweep_open: false,
             diagnostic_sweep_status: None,
             supporter_value: supporter::ValueTracker::default(),
-            supporter_state: supporter::SupporterState::default(),
             supporter_shell: supporter_shell::SupporterShell::default(),
             exact_file_consent_open: false,
             exact_file_consent_status: None,
@@ -6149,7 +6146,6 @@ mod tests {
             diagnostic_sweep_open: false,
             diagnostic_sweep_status: None,
             supporter_value: supporter::ValueTracker::default(),
-            supporter_state: supporter::SupporterState::default(),
             supporter_shell: supporter_shell::SupporterShell::default(),
             exact_file_consent_open: false,
             exact_file_consent_status: None,
@@ -6429,7 +6425,6 @@ mod tests {
             diagnostic_sweep_open: false,
             diagnostic_sweep_status: None,
             supporter_value: supporter::ValueTracker::default(),
-            supporter_state: supporter::SupporterState::default(),
             supporter_shell: supporter_shell::SupporterShell::default(),
             exact_file_consent_open: false,
             exact_file_consent_status: None,
