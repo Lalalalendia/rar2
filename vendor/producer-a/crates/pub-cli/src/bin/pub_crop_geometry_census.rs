@@ -36,9 +36,7 @@ fn scalar_layer(records: &[FoptObservation], property_id: u16) -> ScalarLayer {
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [] => ScalarLayer::Absent,
-        [property] if !property.f_bid() && !property.f_complex() => {
-            ScalarLayer::Value(property.op)
-        }
+        [property] if !property.f_bid() && !property.f_complex() => ScalarLayer::Value(property.op),
         _ => ScalarLayer::Unresolved,
     }
 }
@@ -124,16 +122,16 @@ fn effective_geometry(
 }
 
 fn main() -> Result<()> {
-    let input = env::args().nth(1).context("usage: pub-crop-geometry-census INPUT.pub")?;
+    let input = env::args()
+        .nth(1)
+        .context("usage: pub-crop-geometry-census INPUT.pub")?;
     let path = Path::new(&input);
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let source_sha256 = format!("{:x}", Sha256::digest(&bytes));
 
-    let bundle = pub_viewer::open_pub_bundle(
-        &bytes,
-        pub_viewer::viewer_geometry_environment_v0_1(),
-    )
-    .context("open source through Viewer")?;
+    let bundle =
+        pub_viewer::open_pub_bundle(&bytes, pub_viewer::viewer_geometry_environment_v0_1())
+            .context("open source through Viewer")?;
 
     let window_nodes = bundle
         .geometry
@@ -154,8 +152,7 @@ fn main() -> Result<()> {
     let dgg_inventory =
         inspect_dgg_default_options(StreamPath("/Escher/EscherStm".to_owned()), &escher)
             .context("inspect OfficeArt defaults")?;
-    let dgg = (dgg_inventory.drawing_groups.len() == 1)
-        .then(|| &dgg_inventory.drawing_groups[0]);
+    let dgg = (dgg_inventory.drawing_groups.len() == 1).then(|| &dgg_inventory.drawing_groups[0]);
 
     let mut shapes_by_seq = BTreeMap::<u32, Vec<usize>>::new();
     for (index, shape) in inventory.shapes.iter().enumerate() {
@@ -190,12 +187,14 @@ fn main() -> Result<()> {
             .unwrap_or(&[]);
         let [shape_index] = matches else {
             *joins
-                .entry(if matches.is_empty() {
-                    "shape_join_missing"
-                } else {
-                    "shape_join_ambiguous"
-                }
-                .into())
+                .entry(
+                    if matches.is_empty() {
+                        "shape_join_missing"
+                    } else {
+                        "shape_join_ambiguous"
+                    }
+                    .into(),
+                )
                 .or_default() += 1;
             continue;
         };
