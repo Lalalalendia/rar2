@@ -109,12 +109,27 @@ jobs:
     if: ${{ !cancelled() && always() && (needs.classify.result != 'success' || needs.classify.outputs.fixed_pdf_current_revision == 'true') }}
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      # Match trusted main Windows Editor donor target directory.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
+
+      - name: Restore trusted W2 Editor Cargo dependencies (read-only)
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: chaptera-windows-desktop-deps-v1
+          add-job-id-key: "false"
+          key: ${{ hashFiles('Cargo.toml', 'vendor/producer-a/Cargo.toml') }}
+          workspaces: ". -> target"
+          cache-bin: "false"
+          cache-workspace-crates: "false"
+          cache-on-failure: "false"
+          save-if: "false"
 
       - uses: actions/setup-python@v5
         with:
