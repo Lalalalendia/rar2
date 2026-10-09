@@ -45,9 +45,30 @@ jobs:
       - name: Install independent editable-output consumers
         run: |
           set -euo pipefail
-          sudo timeout 600s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
-          # Hosted Ubuntu mirrors can exceed the former 600s cap; keep the install bounded within the 45-minute job.
-          sudo timeout 1500s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus libreoffice-draw xvfb
+          # Never time out apt while dpkg is installing: download the verified
+          # Ubuntu package closure first, then install it without networking.
+          apt_opts=(-o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
+          consumers=(scribus libreoffice-draw xvfb)
+          if ! sudo timeout --kill-after=10s 120s apt-get "${apt_opts[@]}" update ||
+             ! sudo timeout --kill-after=10s 180s apt-get "${apt_opts[@]}" install -y --download-only --no-install-recommends "${consumers[@]}"; then
+            # The default GitHub Ubuntu image advertises a signed Ubuntu mirror
+            # list: switch away from intermittent azure.archive download stalls.
+            mirror_file=/etc/apt/apt-mirrors.txt
+            if [[ ! -f "$mirror_file" ]] || ! grep -Fq "http://azure.archive.ubuntu.com/ubuntu" "$mirror_file"; then
+              echo "::error::Expected Ubuntu Azure mirrorlist unavailable; no untrusted package source fallback" >&2
+              exit 1
+            fi
+            echo "::warning::Primary Ubuntu mirror exceeded bounded budget; retrying official archive.ubuntu.com"
+            sudo sed -i 's@http://azure.archive.ubuntu.com/ubuntu@http://archive.ubuntu.com/ubuntu@g' "$mirror_file"
+            sudo timeout --kill-after=10s 120s apt-get "${apt_opts[@]}" update
+            sudo timeout --kill-after=10s 300s apt-get "${apt_opts[@]}" install -y --download-only --no-install-recommends "${consumers[@]}"
+          fi
+          # Ubuntu's apt signatures/package checks remain authoritative. No
+          # consumer or independent product assertion may be skipped on errors.
+          sudo timeout --kill-after=10s 240s apt-get "${apt_opts[@]}" install -y --no-download --no-install-recommends "${consumers[@]}"
+          command -v scribus
+          command -v libreoffice
+          command -v xvfb-run
 
       - name: Fetch pinned real Publisher fixture
         shell: bash
