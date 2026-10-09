@@ -24,6 +24,9 @@ const DELTA_EMU: i64 = 127_000;
 const MAX_SLOTS: usize = 40_000;
 const MAX_PUB_BYTES: usize = 32 * 1024 * 1024;
 
+type Dimension = (i64, RawSpan);
+type DimensionPair = (Dimension, Dimension);
+
 fn unique_dimension(fields: &[RawContentsBlock], id: u16) -> Option<(i64, RawSpan)> {
     let mut matches = fields.iter().filter(|f| f.id == id);
     let field = matches.next()?;
@@ -82,7 +85,7 @@ fn main() -> Result<()> {
     }
     // One *unique positional* shape identifier maps to at most one decoded
     // /Contents AA/AB pair and its exact scalar source spans.
-    let mut content_dims: BTreeMap<u32, ((i64, RawSpan), (i64, RawSpan))> = BTreeMap::new();
+    let mut content_dims: BTreeMap<u32, DimensionPair> = BTreeMap::new();
     for index in 0..slot_count {
         let Some(reference) = parse_confirmed_chunk_reference(&contents, &trailer.directory, index)
             .with_context(|| format!("read occupied Contents slot {index}"))?
