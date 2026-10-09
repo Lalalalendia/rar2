@@ -91,6 +91,11 @@ pub use pub_editor_authoring_core::{
     apply_duplicate_blank_page_forward_v1, apply_duplicate_blank_page_inverse_v1,
     duplicate_blank_page_document_state_id_v1, plan_duplicate_blank_page_v1,
 };
+pub use pub_editor_authoring_core::{
+    INSERT_BLANK_PAGE_AFTER_PROTOCOL_V1, InsertBlankPageAfterErrorV1,
+    InsertBlankPageAfterTransitionV1, apply_insert_blank_page_after_forward_v1,
+    apply_insert_blank_page_after_inverse_v1, plan_insert_blank_page_after_v1,
+};
 pub use pub_editor_geometry_core::{
     MAX_MOVE_NODES_V1, MAX_RESIZE_NODES_V1, MoveNodeBatchEntry, ResizeNodeBatchEntry,
 };
@@ -216,6 +221,7 @@ pub const EDITOR_PROJECT_VERSION_V0_24: &str = "pub-editor-v0.24";
 pub const EDITOR_PROJECT_VERSION_V0_25: &str = "pub-editor-v0.25";
 pub const EDITOR_PROJECT_VERSION_V0_26: &str = "pub-editor-v0.26";
 pub const EDITOR_PROJECT_VERSION_V0_27: &str = "pub-editor-v0.27";
+pub const EDITOR_PROJECT_VERSION_V0_28: &str = "pub-editor-v0.28";
 pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_23;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
 pub const PUB_MATURE_0X2C_SCHEMA_FENCE: &str = "pub-family-0x2c";
@@ -409,6 +415,9 @@ pub enum EditOperation {
     },
     DuplicateBlankPageV1 {
         transition: DuplicateBlankPageTransitionV1,
+    },
+    InsertBlankPageAfterV1 {
+        transition: InsertBlankPageAfterTransitionV1,
     },
     SetTextFormatProperty {
         story_id: StoryId,
@@ -1047,6 +1056,10 @@ pub enum EditorError {
         message: String,
     },
     StalePageDuplicate,
+    PageInsertUnsupported {
+        message: String,
+    },
+    StalePageInsert,
     NodeMoveUnsupported {
         node_id: NodeId,
     },
@@ -1434,6 +1447,9 @@ impl fmt::Display for EditorError {
             Self::PageDuplicateUnsupported { .. } | Self::StalePageDuplicate => {
                 display_page_duplicate_error_v1(self, formatter)
             }
+            Self::PageInsertUnsupported { .. } | Self::StalePageInsert => {
+                display_page_insert_error_v1(self, formatter)
+            }
             Self::NodeMoveUnsupported { node_id } => write!(
                 formatter,
                 "node {} is outside the bounded directly-page-owned move slice",
@@ -1646,6 +1662,8 @@ impl EditorError {
             Self::StalePageDelete => "stale_page_delete",
             Self::PageDuplicateUnsupported { .. } => "page_duplicate_unsupported",
             Self::StalePageDuplicate => "stale_page_duplicate",
+            Self::PageInsertUnsupported { .. } => "page_insert_unsupported",
+            Self::StalePageInsert => "stale_page_insert",
             Self::NodeMoveUnsupported { .. } => "node_move_unsupported",
             Self::NodeMoveNoChange { .. } => "node_move_no_change",
             Self::NodeMoveOverflow { .. } => "node_move_overflow",
@@ -1999,6 +2017,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesDuplicateBlankPageOperation {
         index: usize,
     },
+    LegacyProjectCarriesInsertBlankPageOperation {
+        index: usize,
+    },
     LegacyProjectCarriesTextFormatOperation {
         index: usize,
     },
@@ -2059,7 +2080,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, {EDITOR_PROJECT_VERSION_V0_18:?}, {EDITOR_PROJECT_VERSION_V0_19:?}, {EDITOR_PROJECT_VERSION_V0_20:?}, {EDITOR_PROJECT_VERSION_V0_21:?}, {EDITOR_PROJECT_VERSION_V0_22:?}, {EDITOR_PROJECT_VERSION_V0_23:?}, {EDITOR_PROJECT_VERSION_V0_24:?}, {EDITOR_PROJECT_VERSION_V0_25:?}, {EDITOR_PROJECT_VERSION_V0_26:?}, or {EDITOR_PROJECT_VERSION_V0_27:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, {EDITOR_PROJECT_VERSION_V0_18:?}, {EDITOR_PROJECT_VERSION_V0_19:?}, {EDITOR_PROJECT_VERSION_V0_20:?}, {EDITOR_PROJECT_VERSION_V0_21:?}, {EDITOR_PROJECT_VERSION_V0_22:?}, {EDITOR_PROJECT_VERSION_V0_23:?}, {EDITOR_PROJECT_VERSION_V0_24:?}, {EDITOR_PROJECT_VERSION_V0_25:?}, {EDITOR_PROJECT_VERSION_V0_26:?}, {EDITOR_PROJECT_VERSION_V0_27:?}, or {EDITOR_PROJECT_VERSION_V0_28:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -2142,6 +2163,10 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesDuplicateBlankPageOperation { index } => write!(
                 formatter,
                 "legacy editor project cannot carry DuplicateBlankPageV1 operation at index {index}"
+            ),
+            Self::LegacyProjectCarriesInsertBlankPageOperation { index } => write!(
+                formatter,
+                "legacy editor project cannot carry InsertBlankPageAfterV1 operation at index {index}"
             ),
             Self::LegacyProjectCarriesAuthoredPageIdentityOperation { index } => write!(
                 formatter,
@@ -3419,12 +3444,20 @@ impl EditorSession {
         self.validate_source_identity()
             .map_err(EditorProjectError::Session)?;
 
+        // v0.28 preserves all v0.27 operation admissions while adding InsertAfter.
+        let legacy_compatible_schema: &str =
+            if project.schema_version == EDITOR_PROJECT_VERSION_V0_28 {
+                EDITOR_PROJECT_VERSION_V0_27
+            } else {
+                &project.schema_version
+            };
+
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -3462,7 +3495,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             return Err(EditorProjectError::UnsupportedSchema {
                 found: project.schema_version.clone(),
@@ -3505,7 +3538,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -3537,7 +3570,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -3568,7 +3601,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
             && !project.table_grids.is_empty()
         {
             return Err(EditorProjectError::LegacyProjectCarriesTableGrids);
@@ -3593,7 +3626,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
@@ -3620,7 +3653,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -3648,7 +3681,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -3675,7 +3708,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -3695,7 +3728,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -3714,7 +3747,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -3728,7 +3761,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -3741,7 +3774,7 @@ impl EditorSession {
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
@@ -3770,7 +3803,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -3797,7 +3830,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -3821,7 +3854,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::ReorderAuthoredStack { .. })
@@ -3844,7 +3877,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -3865,7 +3898,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -3889,7 +3922,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
@@ -3911,7 +3944,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -3928,7 +3961,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::SetTableTrackExtent { .. })
@@ -3944,7 +3977,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -3970,7 +4003,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
             && project.identity.is_some()
         {
             return Err(EditorProjectError::LegacyProjectCarriesIdentity);
@@ -3991,13 +4024,13 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_24
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_25
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_26
-            || project.schema_version == EDITOR_PROJECT_VERSION_V0_27)
+            || legacy_compatible_schema == EDITOR_PROJECT_VERSION_V0_27)
             && project.identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_27
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::DeleteBlankAuthoredPageV1 { .. })
@@ -4007,13 +4040,22 @@ impl EditorSession {
                 );
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_27 {
+        if legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27 {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::DuplicateBlankPageV1 { .. })
             }) {
                 return Err(
                     EditorProjectError::LegacyProjectCarriesDuplicateBlankPageOperation { index },
                 );
+            }
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_28 {
+            if let Some(index) = project.operations.iter().position(|operation| {
+                matches!(operation, EditOperation::InsertBlankPageAfterV1 { .. })
+            }) {
+                return Err(EditorProjectError::LegacyProjectCarriesInsertBlankPageOperation {
+                    index,
+                });
             }
         }
         if project.source_hash != self.source_hash {
@@ -6178,6 +6220,9 @@ fn replay_canonical_operation(
         EditOperation::DuplicateBlankPageV1 { transition } => session
             .consume_canonical_duplicate_blank_page_v1(transition.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::InsertBlankPageAfterV1 { transition } => session
+            .consume_canonical_insert_blank_page_after_v1(transition.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::SetTextFormatProperty {
             story_id,
             start_scalar,
@@ -7371,6 +7416,15 @@ fn apply_forward(
             )
             .map_err(duplicate_blank_page_error_to_editor_v1)?;
         }
+        EditOperation::InsertBlankPageAfterV1 { transition } => {
+            apply_insert_blank_page_after_forward_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(insert_blank_page_after_error_to_editor_v1)?;
+        }
         EditOperation::ReorderPagesV1 { transition } => {
             apply_page_order_transition_forward_v1(
                 graph.document.id,
@@ -7663,6 +7717,15 @@ fn apply_inverse(
                 transition,
             )
             .map_err(duplicate_blank_page_error_to_editor_v1)?;
+        }
+        EditOperation::InsertBlankPageAfterV1 { transition } => {
+            apply_insert_blank_page_after_inverse_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(insert_blank_page_after_error_to_editor_v1)?;
         }
         EditOperation::ReorderPagesV1 { transition } => {
             apply_page_order_transition_inverse_v1(

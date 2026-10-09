@@ -276,6 +276,21 @@ pub(super) fn operation_summary(operation: &EditOperation) -> Value {
             "page_id": identity.page_id.as_canonical().to_string(),
             "provenance": identity.provenance,
         }),
+        EditOperation::InsertBlankPageAfterV1 { transition } => json!({
+            "kind": "insert_blank_page_after_v1",
+            "document_id": transition.document_id.as_canonical().to_string(),
+            "anchor_page_id": transition.anchor_page_id.as_canonical().to_string(),
+            "destination_page_id": transition.identity.page_id.as_canonical().to_string(),
+            "insertion_index": transition.insertion_index,
+            "before_customer_page_ids": transition.before_customer_page_ids.iter()
+                .map(|id| id.as_canonical().to_string())
+                .collect::<Vec<_>>(),
+            "after_customer_page_ids": transition.after_customer_page_ids.iter()
+                .map(|id| id.as_canonical().to_string())
+                .collect::<Vec<_>>(),
+            "before_document_state_id": transition.before_document_state_id.as_str(),
+            "after_document_state_id": transition.after_document_state_id.as_str(),
+        }),
         EditOperation::DuplicateBlankPageV1 { transition } => json!({
             "kind": "duplicate_blank_page_v1",
             "document_id": transition.document_id.as_canonical().to_string(),
