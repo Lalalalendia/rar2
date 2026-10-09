@@ -152,6 +152,7 @@ impl EditorSession {
                 | EditOperation::ReorderAuthoredStack { .. }
                 | EditOperation::ReorderPagesV1 { .. }
                 | EditOperation::RegisterAuthoredPageIdentityV1 { .. }
+                | EditOperation::AppendBlankPageV1 { .. }
                 | EditOperation::SetTextFormatProperty { .. }
                 | EditOperation::ClearTextFormatPropertyOverride { .. }
                 | EditOperation::SetTextFormatPropertyScopedV1 { .. }
@@ -265,6 +266,7 @@ impl EditorSession {
                 | EditOperation::ReorderAuthoredStack { .. }
                 | EditOperation::ReorderPagesV1 { .. }
                 | EditOperation::RegisterAuthoredPageIdentityV1 { .. }
+                | EditOperation::AppendBlankPageV1 { .. }
                 | EditOperation::SetTextFormatProperty { .. }
                 | EditOperation::ClearTextFormatPropertyOverride { .. }
                 | EditOperation::SetTextFormatPropertyScopedV1 { .. }

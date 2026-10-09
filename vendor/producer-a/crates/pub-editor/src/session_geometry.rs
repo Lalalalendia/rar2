@@ -670,6 +670,23 @@ pub(super) fn validate_resize_nodes_transition(
         .map_err(resize_transition_error_to_editor_v1)
 }
 
+pub(super) fn append_blank_page_error_to_editor_v1(
+    error: AppendBlankPageErrorV1,
+) -> EditorError {
+    match error {
+        AppendBlankPageErrorV1::IdentityCollision { page_id } => {
+            EditorError::AuthoredPageIdentityConflict { page_id }
+        }
+        AppendBlankPageErrorV1::BeforeStateMismatch
+        | AppendBlankPageErrorV1::AfterStateMismatch
+        | AppendBlankPageErrorV1::CurrentCustomerOrderMismatch
+        | AppendBlankPageErrorV1::PageStateMismatch => EditorError::StalePageAppend,
+        other => EditorError::PageAppendUnsupported {
+            message: format!("{other:?}"),
+        },
+    }
+}
+
 // Authored Page identity is an ordering-adjacent durable history primitive.
 impl EditorSession {
     pub fn authored_page_identities_v1(&self) -> BTreeMap<PageId, AuthoredPageIdentityV1> {
@@ -679,9 +696,58 @@ impl EditorSession {
                 EditOperation::RegisterAuthoredPageIdentityV1 { identity } => {
                     Some((identity.page_id, *identity))
                 }
+                EditOperation::AppendBlankPageV1 { transition } => {
+                    Some((transition.identity.page_id, transition.identity))
+                }
                 _ => None,
             })
             .collect()
+    }
+
+    pub fn authored_customer_page_ids_v1(&self) -> Vec<PageId> {
+        self.undo
+            .iter()
+            .filter_map(|operation| match operation {
+                EditOperation::AppendBlankPageV1 { transition } => Some(transition.identity.page_id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn effective_customer_page_order_v1(
+        &self,
+        source_qualified_page_ids: &[PageId],
+    ) -> Result<Vec<PageId>, EditorError> {
+        self.validate_source_identity()?;
+        let mut combined = Vec::with_capacity(
+            source_qualified_page_ids.len() + self.authored_customer_page_ids_v1().len(),
+        );
+        let mut seen = BTreeSet::new();
+        for page_id in source_qualified_page_ids
+            .iter()
+            .copied()
+            .chain(self.authored_customer_page_ids_v1())
+        {
+            if !seen.insert(page_id) {
+                return Err(EditorError::PageAppendUnsupported {
+                    message: format!(
+                        "effective customer membership repeats PageId {}",
+                        page_id.as_canonical()
+                    ),
+                });
+            }
+            if !self.graph.pages.contains_key(&page_id) {
+                return Err(EditorError::PageAppendUnsupported {
+                    message: format!(
+                        "effective customer PageId {} is absent from the current semantic page map",
+                        page_id.as_canonical()
+                    ),
+                });
+            }
+            combined.push(page_id);
+        }
+        qualified_page_order_v1(&self.graph.document.pages, &combined)
+            .map_err(page_order_error_to_editor_v1)
     }
 
     pub fn register_authored_page_identity_v1(
@@ -706,6 +772,111 @@ impl EditorSession {
         }
 
         let operation = EditOperation::RegisterAuthoredPageIdentityV1 { identity };
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    pub fn append_blank_page_v1(
+        &mut self,
+        source_qualified_page_ids: Vec<PageId>,
+        identity: AuthoredPageIdentityV1,
+        size: Size2D,
+        bleed: Option<BoxEdges>,
+        margins: Option<BoxEdges>,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        if self.project_identity.is_none() {
+            return Err(EditorError::PageAppendUnsupported {
+                message: "durable project identity is required".to_owned(),
+            });
+        }
+        if validate_authored_page_identity_v1(&identity).is_err() {
+            return Err(EditorError::AuthoredPageIdentityInvalid {
+                page_id: identity.page_id,
+            });
+        }
+        if self.graph.pages.contains_key(&identity.page_id) {
+            return Err(EditorError::AuthoredPageIdentityConflict {
+                page_id: identity.page_id,
+            });
+        }
+        if let Some(existing) = self.authored_page_identities_v1().get(&identity.page_id) {
+            if *existing != identity {
+                return Err(EditorError::AuthoredPageIdentityConflict {
+                    page_id: identity.page_id,
+                });
+            }
+        }
+
+        let current_customer_page_ids =
+            self.effective_customer_page_order_v1(&source_qualified_page_ids)?;
+        let page = Page {
+            id: identity.page_id,
+            size,
+            bleed,
+            margins,
+            children: Vec::new(),
+            extensions: Vec::new(),
+        };
+        let existing_page_ids = self.graph.pages.keys().copied().collect::<BTreeSet<_>>();
+        let transition = plan_append_blank_page_v1(
+            self.graph.document.id,
+            &self.graph.document.pages,
+            &existing_page_ids,
+            &current_customer_page_ids,
+            identity,
+            page,
+        )
+        .map_err(append_blank_page_error_to_editor_v1)?;
+        self.consume_canonical_append_blank_page_v1(transition)
+    }
+
+    pub(super) fn consume_canonical_append_blank_page_v1(
+        &mut self,
+        expected: AppendBlankPageTransitionV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        if self.project_identity.is_none() {
+            return Err(EditorError::PageAppendUnsupported {
+                message: "durable project identity is required".to_owned(),
+            });
+        }
+        if self.graph.pages.contains_key(&expected.identity.page_id) {
+            return Err(EditorError::AuthoredPageIdentityConflict {
+                page_id: expected.identity.page_id,
+            });
+        }
+        if let Some(existing) = self
+            .authored_page_identities_v1()
+            .get(&expected.identity.page_id)
+        {
+            if *existing != expected.identity {
+                return Err(EditorError::AuthoredPageIdentityConflict {
+                    page_id: expected.identity.page_id,
+                });
+            }
+        }
+
+        let existing_page_ids = self.graph.pages.keys().copied().collect::<BTreeSet<_>>();
+        let planned = plan_append_blank_page_v1(
+            self.graph.document.id,
+            &self.graph.document.pages,
+            &existing_page_ids,
+            &expected.before_customer_page_ids,
+            expected.identity,
+            expected.page.clone(),
+        )
+        .map_err(append_blank_page_error_to_editor_v1)?;
+        if planned != expected {
+            return Err(EditorError::StalePageAppend);
+        }
+
+        let operation = EditOperation::AppendBlankPageV1 {
+            transition: expected,
+        };
+        apply_forward(&mut self.graph, &operation)?;
         self.undo.push(operation.clone());
         self.redo.clear();
         self.validate_source_identity()?;
@@ -872,5 +1043,219 @@ mod authored_page_identity_tests {
             Err(EditorError::AuthoredPageIdentityConflict { page_id })
         );
         assert_eq!(session.operations().len(), 1);
+    }
+}
+
+
+#[cfg(test)]
+mod authored_page_append_tests {
+    use super::*;
+    use crate::{
+        AuthoredEntityProvenanceV1, EDITOR_PROJECT_VERSION_V0_25, EditorProject, PubResolvedGraph,
+    };
+    use pub_model::{Document, Sha256Digest, SourceDescriptor};
+
+    fn source_hash() -> Sha256Digest {
+        Sha256Digest::from_bytes([0x6b; 32])
+    }
+
+    fn page_id(value: &str) -> PageId {
+        serde_json::from_str(&format!("\"{value}\"")).expect("valid PageId")
+    }
+
+    fn authored_identity() -> AuthoredPageIdentityV1 {
+        AuthoredPageIdentityV1 {
+            page_id: page_id("01890f4f-1234-7abc-8def-0123456789ab"),
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        }
+    }
+
+    fn source_page(page_id: PageId) -> Page {
+        Page {
+            id: page_id,
+            size: Size2D::new(LengthEmu::new(914_400), LengthEmu::new(1_828_800)),
+            bleed: None,
+            margins: None,
+            children: Vec::new(),
+            extensions: Vec::new(),
+        }
+    }
+
+    fn source_graph(raw_pages: Vec<PageId>) -> PubResolvedGraph {
+        let hash = source_hash();
+        let pages = raw_pages
+            .iter()
+            .copied()
+            .map(|page_id| (page_id, source_page(page_id)))
+            .collect();
+
+        PubResolvedGraph {
+            cdm_version: "0.1".into(),
+            resolver_version: pub_reader::PUB_RESOLVER_VERSION_V1.into(),
+            source: SourceDescriptor {
+                format: "pub".into(),
+                format_version: Some("0x2c".into()),
+                adapter_version: "pub-rs/test".into(),
+                source_hash: hash,
+            },
+            document: Document {
+                id: serde_json::from_str("\"33000000-0000-4000-8000-000000000001\"")
+                    .expect("document id"),
+                format_origin: "pub".into(),
+                source_hash: hash,
+                pages: raw_pages,
+                resources: Vec::new(),
+                styles: Vec::new(),
+            },
+            pages,
+            nodes: BTreeMap::new(),
+            stories: BTreeMap::new(),
+            paragraphs: BTreeMap::new(),
+            text_runs: BTreeMap::new(),
+            resources: BTreeMap::new(),
+            styles: BTreeMap::new(),
+            extensions: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn append_blank_page_preserves_raw_carriers_and_roundtrips_undo_redo() {
+        let master = page_id("11111111-1111-4111-8111-111111111111");
+        let a = page_id("22222222-2222-4222-8222-222222222222");
+        let service = page_id("33333333-3333-4333-8333-333333333333");
+        let b = page_id("44444444-4444-4444-8444-444444444444");
+        let carrier = page_id("55555555-5555-4555-8555-555555555555");
+        let identity = authored_identity();
+        let mut session =
+            EditorSession::new(source_graph(vec![master, a, service, b, carrier])).expect("session");
+        let source_hash_before = session.source_hash();
+
+        session
+            .append_blank_page_v1(
+                vec![a, b],
+                identity,
+                Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                None,
+                None,
+            )
+            .expect("append");
+
+        assert_eq!(
+            session.graph().document.pages,
+            vec![master, a, service, b, identity.page_id, carrier]
+        );
+        assert!(session.graph().pages.contains_key(&identity.page_id));
+        assert_eq!(
+            session.effective_customer_page_order_v1(&[a, b]).expect("effective"),
+            vec![a, b, identity.page_id]
+        );
+        assert_eq!(session.source_hash(), source_hash_before);
+
+        session.undo().expect("undo");
+        assert_eq!(
+            session.graph().document.pages,
+            vec![master, a, service, b, carrier]
+        );
+        assert!(!session.graph().pages.contains_key(&identity.page_id));
+        assert_eq!(
+            session.effective_customer_page_order_v1(&[a, b]).expect("effective"),
+            vec![a, b]
+        );
+
+        session.redo().expect("redo");
+        assert_eq!(
+            session.graph().document.pages,
+            vec![master, a, service, b, identity.page_id, carrier]
+        );
+        assert!(session.graph().pages.contains_key(&identity.page_id));
+    }
+
+    #[test]
+    fn standalone_identity_is_not_membership_and_can_be_reused_by_append() {
+        let a = page_id("22222222-2222-4222-8222-222222222222");
+        let identity = authored_identity();
+        let mut session = EditorSession::new(source_graph(vec![a])).expect("session");
+
+        session
+            .register_authored_page_identity_v1(identity)
+            .expect("register identity");
+        assert_eq!(
+            session.effective_customer_page_order_v1(&[a]).expect("effective"),
+            vec![a]
+        );
+
+        session
+            .append_blank_page_v1(
+                vec![a],
+                identity,
+                Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                None,
+                None,
+            )
+            .expect("append using pre-registered identity");
+        assert_eq!(
+            session.effective_customer_page_order_v1(&[a]).expect("effective"),
+            vec![a, identity.page_id]
+        );
+
+        session.undo().expect("undo append only");
+        assert!(session.authored_page_identities_v1().contains_key(&identity.page_id));
+        assert_eq!(
+            session.effective_customer_page_order_v1(&[a]).expect("effective"),
+            vec![a]
+        );
+    }
+
+    #[test]
+    fn append_project_replays_exact_membership_geometry_and_identity() {
+        let a = page_id("22222222-2222-4222-8222-222222222222");
+        let identity = authored_identity();
+        let graph = source_graph(vec![a]);
+        let mut session = EditorSession::new(graph.clone()).expect("session");
+        session
+            .append_blank_page_v1(
+                vec![a],
+                identity,
+                Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                None,
+                None,
+            )
+            .expect("append");
+
+        let project = session.project();
+        assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_25);
+        let bytes = serde_json::to_vec(&project).expect("serialize");
+        let decoded: EditorProject = serde_json::from_slice(&bytes).expect("deserialize");
+
+        let mut reopened = EditorSession::new(graph).expect("fresh session");
+        reopened.apply_project(&decoded).expect("replay");
+        assert_eq!(reopened.operations(), decoded.operations.as_slice());
+        assert_eq!(reopened.graph().document.pages, session.graph().document.pages);
+        assert_eq!(
+            reopened.graph().pages.get(&identity.page_id),
+            session.graph().pages.get(&identity.page_id)
+        );
+        assert_eq!(
+            reopened.effective_customer_page_order_v1(&[a]).expect("effective"),
+            vec![a, identity.page_id]
+        );
+    }
+
+    #[test]
+    fn append_blank_page_rejects_zero_customer_input() {
+        let identity = authored_identity();
+        let mut session = EditorSession::new(source_graph(Vec::new())).expect("session");
+        assert!(
+            session
+                .append_blank_page_v1(
+                    Vec::new(),
+                    identity,
+                    Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                    None,
+                    None,
+                )
+                .is_err()
+        );
+        assert!(session.operations().is_empty());
     }
 }

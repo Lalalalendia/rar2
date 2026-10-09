@@ -12,14 +12,19 @@ mod imported_paragraph_alignment_v1;
 mod imported_paragraph_flow_v1;
 mod imported_paragraphs_v1;
 mod link_text_frame_tail_v1;
+mod project_schema;
 mod session_geometry;
 mod session_image;
 mod session_table;
 mod session_text;
+use project_schema::{
+    append_blank_page_persistence_requirements_v1, display_page_append_error_v1,
+    minimum_identity_project_schema_v1, required_editor_asset_refs_v1,
+};
 use session_geometry::{
-    apply_authored_stack_history_forward_v1, authored_stack_operation_page_id_v1,
-    derive_authored_stacks_from_operations_v1, page_order_error_to_editor_v1,
-    validate_move_nodes_transition, validate_resize_nodes_transition,
+    append_blank_page_error_to_editor_v1, apply_authored_stack_history_forward_v1,
+    authored_stack_operation_page_id_v1, derive_authored_stacks_from_operations_v1,
+    page_order_error_to_editor_v1, validate_move_nodes_transition, validate_resize_nodes_transition,
 };
 use session_image::{
     apply_crop_forward, apply_crop_inverse, apply_image_forward, apply_image_inverse,
@@ -40,9 +45,11 @@ pub use authored_paragraph_alignment_v1::{
     ParagraphAlignmentOverrideSnapshotV1, ParagraphAlignmentTransitionErrorV1,
 };
 pub use pub_editor_authoring_core::{
-    AUTHORED_STACK_PROTOCOL_V1, AUTHORED_TABLE_SENTINEL_CONTENTS_SEQ_NUM_V1,
+    APPEND_BLANK_PAGE_PROTOCOL_V1, AUTHORED_STACK_PROTOCOL_V1,
+    AUTHORED_TABLE_SENTINEL_CONTENTS_SEQ_NUM_V1,
     AUTHORED_TABLE_SENTINEL_TEXT_ID_V1, AuthoredEntityProvenanceV1, AuthoredLineRuntimeV1,
-    AuthoredPageIdentityV1, AuthoredPageIdentityValidationErrorV1, AuthoredShapeKindV1,
+    AppendBlankPageErrorV1, AppendBlankPageTransitionV1, AuthoredPageIdentityV1,
+    AuthoredPageIdentityValidationErrorV1, AuthoredShapeKindV1,
     AuthoredShapePaintV1, AuthoredShapeRuntimeV1, AuthoredShapeTransformV1, AuthoredSolidFillV1,
     AuthoredSolidStrokeV1, AuthoredStackLifecycleErrorV1, AuthoredStackLifecycleKindV1,
     AuthoredStackLifecycleTransitionV1, AuthoredStackReorderErrorV1, AuthoredStackReorderModeV1,
@@ -50,12 +57,14 @@ pub use pub_editor_authoring_core::{
     CreateLineRuntimeValidationError, CreateShapeRuntimeValidationError, CreateTablePlanV1,
     CreateTableRuntimeV1, CreateTableRuntimeValidationError, LineGeometryV1,
     PAGE_ORDER_PROTOCOL_V1, PageOrderErrorV1, PageOrderTransitionV1, PointEmuV1, Srgb8V1,
+    apply_append_blank_page_forward_v1, apply_append_blank_page_inverse_v1,
     apply_authored_stack_reorder_forward_v1, apply_authored_stack_reorder_inverse_v1,
     apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
     apply_create_table_forward_v1, apply_create_table_inverse_v1,
     apply_page_order_transition_forward_v1, apply_page_order_transition_inverse_v1,
     authored_stack_state_id_v1, build_create_table_plan_v1, line_bounds_v1, page_order_state_id_v1,
-    plan_create_line_append_v1, plan_create_shape_append_v1, plan_create_table_append_v1,
+    plan_append_blank_page_v1, plan_create_line_append_v1, plan_create_shape_append_v1,
+    plan_create_table_append_v1,
     plan_delete_shape_remove_v1, plan_page_order_transition_v1, plan_reorder_authored_stack_v1,
     qualified_page_order_v1, rebuild_authored_table_story_v1, validate_authored_line_runtime_v1,
     validate_authored_page_identity_v1, validate_authored_shape_runtime_v1,
@@ -151,7 +160,8 @@ use pub_model::{
     StoryFrame, TableColumnId, TableRowId, derive_source_canonical_id, validate_story_frames,
 };
 pub use pub_model::{
-    LengthEmu, NodeId, PageId, ParagraphId, RectEmu, Sha256Digest, StoryId, TableCellId,
+    BoxEdges, LengthEmu, NodeId, Page, PageId, ParagraphId, RectEmu, Sha256Digest, Size2D,
+    StoryId, TableCellId,
 };
 use pub_odg::{
     ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgEmbeddedImagePlacement,
@@ -197,6 +207,7 @@ pub const EDITOR_PROJECT_VERSION_V0_21: &str = "pub-editor-v0.21";
 pub const EDITOR_PROJECT_VERSION_V0_22: &str = "pub-editor-v0.22";
 pub const EDITOR_PROJECT_VERSION_V0_23: &str = "pub-editor-v0.23";
 pub const EDITOR_PROJECT_VERSION_V0_24: &str = "pub-editor-v0.24";
+pub const EDITOR_PROJECT_VERSION_V0_25: &str = "pub-editor-v0.25";
 pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_23;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
 pub const PUB_MATURE_0X2C_SCHEMA_FENCE: &str = "pub-family-0x2c";
@@ -382,6 +393,9 @@ pub enum EditOperation {
     RegisterAuthoredPageIdentityV1 {
         identity: AuthoredPageIdentityV1,
     },
+    AppendBlankPageV1 {
+        transition: AppendBlankPageTransitionV1,
+    },
     SetTextFormatProperty {
         story_id: StoryId,
         start_scalar: u32,
@@ -474,6 +488,7 @@ impl EditOperation {
             | Self::ReorderAuthoredStack { .. }
             | Self::ReorderPagesV1 { .. }
             | Self::RegisterAuthoredPageIdentityV1 { .. }
+            | Self::AppendBlankPageV1 { .. }
             | Self::SetTextFormatProperty { .. }
             | Self::ClearTextFormatPropertyOverride { .. }
             | Self::SetTextFormatPropertyScopedV1 { .. }
@@ -482,13 +497,6 @@ impl EditOperation {
             | Self::ClearParagraphAlignmentOverride { .. } => Vec::new(),
         }
     }
-}
-
-fn required_editor_asset_refs_v1(operations: &[EditOperation]) -> BTreeSet<Sha256Digest> {
-    operations
-        .iter()
-        .flat_map(EditOperation::durable_editor_asset_refs_v1)
-        .collect()
 }
 
 impl PersistenceRequirements for EditOperation {
@@ -711,6 +719,9 @@ impl PersistenceRequirements for EditOperation {
                 origin: Some(identity.page_id.into_canonical()),
                 property_path: Some("page.identity".into()),
             }],
+            Self::AppendBlankPageV1 { transition } => {
+                append_blank_page_persistence_requirements_v1(transition)
+            }
             Self::SetTextFormatProperty { story_id, .. }
             | Self::ClearTextFormatPropertyOverride { story_id, .. }
             | Self::SetTextFormatPropertyScopedV1 { story_id, .. }
@@ -1312,6 +1323,8 @@ pub enum EditorError {
     AuthoredPageIdentityConflict {
         page_id: PageId,
     },
+    PageAppendUnsupported { message: String },
+    StalePageAppend,
     NodeMoveUnsupported {
         node_id: NodeId,
     },
@@ -1690,6 +1703,9 @@ impl fmt::Display for EditorError {
                 "authored Page identity {} collides with an existing source or authored PageId",
                 page_id.as_canonical()
             ),
+            Self::PageAppendUnsupported { .. } | Self::StalePageAppend => {
+                display_page_append_error_v1(self, formatter)
+            }
             Self::NodeMoveUnsupported { node_id } => write!(
                 formatter,
                 "node {} is outside the bounded directly-page-owned move slice",
@@ -1896,6 +1912,8 @@ impl EditorError {
             Self::StalePageOrder => "stale_page_order",
             Self::AuthoredPageIdentityInvalid { .. } => "authored_page_identity_invalid",
             Self::AuthoredPageIdentityConflict { .. } => "authored_page_identity_conflict",
+            Self::PageAppendUnsupported { .. } => "page_append_unsupported",
+            Self::StalePageAppend => "stale_page_append",
             Self::NodeMoveUnsupported { .. } => "node_move_unsupported",
             Self::NodeMoveNoChange { .. } => "node_move_no_change",
             Self::NodeMoveOverflow { .. } => "node_move_overflow",
@@ -2178,74 +2196,6 @@ fn paragraph_alignment_transition_error_to_editor_v1(
         | ParagraphAlignmentTransitionErrorV1::SnapshotShapeMismatch => {
             EditorError::ParagraphAlignmentTransitionInvalid
         }
-    }
-}
-
-fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
-    if operations.iter().any(|operation| {
-        matches!(
-            operation,
-            EditOperation::RegisterAuthoredPageIdentityV1 { .. }
-        )
-    }) {
-        EDITOR_PROJECT_VERSION_V0_24
-    } else if operations
-        .iter()
-        .any(|operation| matches!(operation, EditOperation::ReorderPagesV1 { .. }))
-    {
-        EDITOR_PROJECT_VERSION_V0_23
-    } else if operations
-        .iter()
-        .any(|operation| matches!(operation, EditOperation::LinkTextFrameTail { .. }))
-    {
-        EDITOR_PROJECT_VERSION_V0_22
-    } else if operations
-        .iter()
-        .any(|operation| table_rowcol_history_v1(operation).is_some())
-    {
-        EDITOR_PROJECT_VERSION_V0_21
-    } else if operations
-        .iter()
-        .any(|operation| matches!(operation, EditOperation::SetTableTrackExtent { .. }))
-    {
-        EDITOR_PROJECT_VERSION_V0_20
-    } else if operations
-        .iter()
-        .any(|operation| matches!(operation, EditOperation::SetImageCrop { .. }))
-    {
-        EDITOR_PROJECT_VERSION_V0_19
-    } else if operations
-        .iter()
-        .any(|operation| matches!(operation, EditOperation::CreateTable { .. }))
-    {
-        EDITOR_PROJECT_VERSION_V0_18
-    } else if operations
-        .iter()
-        .any(|operation| matches!(operation, EditOperation::CreateLine { .. }))
-    {
-        EDITOR_PROJECT_VERSION_V0_17
-    } else if operations.iter().any(is_scoped_text_format_operation_v1) {
-        EDITOR_PROJECT_VERSION_V0_16
-    } else if operations.iter().any(|operation| {
-        matches!(
-            operation,
-            EditOperation::SetParagraphAlignmentOverride { .. }
-                | EditOperation::ClearParagraphAlignmentOverride { .. }
-        )
-    }) {
-        EDITOR_PROJECT_VERSION_V0_15
-    } else if operations
-        .iter()
-        .any(|operation| text_format_operation_story_id_v1(operation).is_some())
-    {
-        EDITOR_PROJECT_VERSION_V0_14
-    } else if operations
-        .iter()
-        .any(|operation| matches!(operation, EditOperation::ReorderAuthoredStack { .. }))
-    {
-        EDITOR_PROJECT_VERSION_V0_13
-    } else {
-        EDITOR_PROJECT_VERSION_V0_12
     }
 }
 
@@ -3726,6 +3676,7 @@ impl EditorSession {
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project
                 .operations
@@ -3761,6 +3712,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             return Err(EditorProjectError::UnsupportedSchema {
                 found: project.schema_version.clone(),
@@ -3801,6 +3753,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project
                 .operations
@@ -3830,6 +3783,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project
                 .operations
@@ -3858,6 +3812,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && !project.table_grids.is_empty()
         {
             return Err(EditorProjectError::LegacyProjectCarriesTableGrids);
@@ -3880,6 +3835,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
@@ -3904,6 +3860,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project
                 .operations
@@ -3929,6 +3886,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project
                 .operations
@@ -3953,6 +3911,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project
                 .operations
@@ -3970,6 +3929,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project
                 .operations
@@ -3986,6 +3946,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project
                 .operations
@@ -3997,6 +3958,7 @@ impl EditorSession {
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project
                 .operations
@@ -4032,6 +3994,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project
                 .operations
@@ -4056,6 +4019,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project
                 .operations
@@ -4077,6 +4041,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::ReorderAuthoredStack { .. })
@@ -4097,6 +4062,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project
                 .operations
@@ -4115,6 +4081,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project
                 .operations
@@ -4136,6 +4103,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
@@ -4155,6 +4123,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project
                 .operations
@@ -4169,6 +4138,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::SetTableTrackExtent { .. })
@@ -4182,6 +4152,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
         {
             if let Some(index) = project
                 .operations
@@ -4205,6 +4176,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.identity.is_some()
         {
             return Err(EditorProjectError::LegacyProjectCarriesIdentity);
@@ -4222,7 +4194,8 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_21
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_22
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_23
-            || project.schema_version == EDITOR_PROJECT_VERSION_V0_24)
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_24
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_25)
             && project.identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
@@ -4259,6 +4232,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_22
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_23
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_24
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_25
         {
             let expected = required_editor_asset_refs_v1(&project.operations)
                 .into_iter()
@@ -4335,6 +4309,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_22
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_23
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_24
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_25
         {
             let actual_grids =
                 effective_table_grids_with_history(&candidate.graph, &candidate.undo);
@@ -6378,6 +6353,9 @@ fn replay_canonical_operation(
         EditOperation::RegisterAuthoredPageIdentityV1 { identity } => session
             .register_authored_page_identity_v1(*identity)
             .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::AppendBlankPageV1 { transition } => session
+            .consume_canonical_append_blank_page_v1(transition.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::SetTextFormatProperty {
             story_id,
             start_scalar,
@@ -7544,6 +7522,15 @@ fn apply_forward(
         EditOperation::RegisterAuthoredPageIdentityV1 { .. } => {
             // Authored Page identity is derived from durable history only.
         }
+        EditOperation::AppendBlankPageV1 { transition } => {
+            apply_append_blank_page_forward_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(append_blank_page_error_to_editor_v1)?;
+        }
         EditOperation::ReorderPagesV1 { transition } => {
             apply_page_order_transition_forward_v1(
                 graph.document.id,
@@ -7809,6 +7796,15 @@ fn apply_inverse(
         }
         EditOperation::RegisterAuthoredPageIdentityV1 { .. } => {
             // Undo removes the declaration from active history; SourceGraph stays immutable.
+        }
+        EditOperation::AppendBlankPageV1 { transition } => {
+            apply_append_blank_page_inverse_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(append_blank_page_error_to_editor_v1)?;
         }
         EditOperation::ReorderPagesV1 { transition } => {
             apply_page_order_transition_inverse_v1(

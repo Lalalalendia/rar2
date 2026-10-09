@@ -276,6 +276,22 @@ pub(super) fn operation_summary(operation: &EditOperation) -> Value {
             "page_id": identity.page_id.as_canonical().to_string(),
             "provenance": identity.provenance,
         }),
+        EditOperation::AppendBlankPageV1 { transition } => json!({
+            "kind": "append_blank_page_v1",
+            "document_id": transition.document_id.as_canonical().to_string(),
+            "page_id": transition.identity.page_id.as_canonical().to_string(),
+            "provenance": transition.identity.provenance,
+            "width_emu": transition.page.size.width.get(),
+            "height_emu": transition.page.size.height.get(),
+            "before_customer_page_ids": transition.before_customer_page_ids.iter()
+                .map(|id| id.as_canonical().to_string())
+                .collect::<Vec<_>>(),
+            "after_customer_page_ids": transition.after_customer_page_ids.iter()
+                .map(|id| id.as_canonical().to_string())
+                .collect::<Vec<_>>(),
+            "before_document_state_id": transition.before_document_state_id.as_str(),
+            "after_document_state_id": transition.after_document_state_id.as_str(),
+        }),
         EditOperation::SetTextFormatProperty {
             story_id,
             start_scalar,
