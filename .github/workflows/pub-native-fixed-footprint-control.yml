@@ -1,0 +1,211 @@
+name: PUB native fixed-footprint Story shrink discriminator
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-native-fixed-footprint-control.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/pub-native-fixed-footprint-control.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pub-native-fixed-footprint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  prepare-fixed-footprint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Generate baseline length-changing writer candidate
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- generate \
+            --output-dir out/native-fixed-footprint
+      - name: Keep Quill service chunks at original offsets with an explicit TEXT gap
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import struct
+
+          root = Path("out/native-fixed-footprint")
+          original = (root / "source.pub").read_bytes()
+          baseline = (root / "candidate.pub").read_bytes()
+          manifest_path = root / "handoff.json"
+          manifest = json.loads(manifest_path.read_text())
+          sha = lambda b: hashlib.sha256(b).hexdigest()
+          original_sha = "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc"
+          baseline_sha = "a92543b6f2b6ac3a8ae2481e15a2188a338ddc2a92832580f8987079fa4f70f8"
+          variant_sha = "6bac9f44eeb27dc0efabea5a7f5d184a232b1650ff7ebd3598bece4d8019b50e"
+          if manifest.get("schema") != "chaptera.pub-native-story-handoff.v1":
+              raise SystemExit("handoff schema mismatch")
+          if len(original) != 72192 or len(baseline) != 72192:
+              raise SystemExit("pinned Sample3 CFB length mismatch")
+          if sha(original) != original_sha or sha(baseline) != baseline_sha:
+              raise SystemExit("source or canonical 6-unit writer candidate SHA mismatch")
+          if manifest.get("source_sha256") != original_sha:
+              raise SystemExit("manifest/source SHA mismatch")
+          # Exact physical CFB layout is valid ONLY under these SHA pins:
+          # Quill/QuillSub/CONTENTS stream starts at byte 64512 and has 7168 bytes.
+          quill_base = 64512
+          old_text_end, new_text_end, service_anchor = 1504, 1492, 2048
+          shrink = old_text_end - new_text_end
+          if shrink != 12:
+              raise SystemExit("unexpected edit delta")
+          original_offset = lambda logical: quill_base + logical
+          if struct.unpack_from("<I", original, original_offset(52))[0] != 992:
+              raise SystemExit("source TEXT declared size changed")
+          if struct.unpack_from("<I", baseline, original_offset(52))[0] != 980:
+              raise SystemExit("canonical writer TEXT shrink changed")
+          service_offsets = (72, 96, 120)
+          original_service_starts = (1504, 1534, 1974)
+          canonical_service_starts = (1492, 1522, 1962)
+          for offset, source_value, writer_value in zip(
+              service_offsets, original_service_starts, canonical_service_starts
+          ):
+              if struct.unpack_from("<I", original, original_offset(offset))[0] != source_value:
+                  raise SystemExit("source Quill descriptor location drifted")
+              if struct.unpack_from("<I", baseline, original_offset(offset))[0] != writer_value:
+                  raise SystemExit("canonical shifted Quill descriptor location drifted")
+          variant = bytearray(baseline)
+          # Preserve writer-corrected TEXT bytes, Story length and FDPP/BTE boundary
+          # values, but move already-patched service bytes BACK to original locations.
+          # This retains the new TEXT length 980 and a 12-byte zero gap before STSH.
+          variant[original_offset(new_text_end):original_offset(old_text_end)] = bytes(shrink)
+          variant[original_offset(old_text_end):original_offset(service_anchor)] = baseline[
+              original_offset(new_text_end):original_offset(service_anchor - shrink)
+          ]
+          for offset in service_offsets:
+              start = original_offset(offset)
+              variant[start:start + 4] = original[start:start + 4]
+          variant = bytes(variant)
+          if sha(variant) != variant_sha:
+              raise SystemExit("service-offset-held variant SHA mismatch")
+          if variant[original_offset(new_text_end):original_offset(old_text_end)] != bytes(shrink):
+              raise SystemExit("new TEXT/service gap is nonzero")
+          if struct.unpack_from("<I", variant, original_offset(52))[0] != 980:
+              raise SystemExit("TEXT length not coherent after service gap")
+          if struct.unpack_from("<I", variant, original_offset(5146))[0] != 64:
+              raise SystemExit("edited Story logical UTF16 length changed")
+          if struct.unpack_from("<I", variant, original_offset(3584))[0] != 10:
+              raise SystemExit("SYID header outside this experiment")
+          for offset, value in zip(service_offsets, original_service_starts):
+              if struct.unpack_from("<I", variant, original_offset(offset))[0] != value:
+                  raise SystemExit("service chunk anchor moved unexpectedly")
+          (root / "candidate.pub").write_bytes(variant)
+          manifest["candidate_sha256"] = variant_sha
+          manifest["research_variant"] = "story_shrink_with_fixed_service_chunk_addresses"
+          manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+          print("PASS 12-byte Quill gap before anchored service chunks; TEXT length coherent")
+          print("Fixed-service candidate SHA256:", variant_sha)
+          PY
+      - name: Prove fixed-footprint shortened Story under current Reader
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- verify \
+            --pub out/native-fixed-footprint/candidate.pub \
+            --manifest out/native-fixed-footprint/handoff.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pub-native-fixed-footprint-input-${{ github.run_id }}
+          path: |
+            out/native-fixed-footprint/source.pub
+            out/native-fixed-footprint/candidate.pub
+            out/native-fixed-footprint/handoff.json
+          if-no-files-found: error
+          retention-days: 14
+
+  native-fixed-footprint:
+    needs: prepare-fixed-footprint
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Lalalalendia/rar2' }}
+    runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
+    concurrency:
+      group: pub-re-native-publisher-oracle
+      cancel-in-progress: false
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Supply Git Bash for pinned Rust verifier
+        shell: powershell
+        run: |
+          $gitBashDir = 'C:\Program Files\Git\bin'
+          if (-not (Test-Path -LiteralPath (Join-Path $gitBashDir 'bash.exe') -PathType Leaf)) {
+            throw 'git_bash_unavailable'
+          }
+          $gitBashDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Download verified original and fixed-footprint candidate from this run
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-native-fixed-footprint-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/chaptera-native-fixed-footprint/input
+      - name: Build current source-safe Reader verifier
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-writer --bin pub_story_native_handoff
+          if ($LASTEXITCODE -ne 0) { throw 'fixed_footprint_reader_verifier_build_failed' }
+      - name: Matched unmodified Sample3 Publisher Open SaveAs Reopen control
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/windows/pub-runtime/Invoke-StoryNativeSourceControl.ps1 `
+            -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-native-fixed-footprint/input') `
+            -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-native-fixed-footprint/private-original')
+          if (-not $?) { throw 'original_source_control_failed' }
+      - name: Guarded native SaveAs of fixed-footprint writer candidate
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1 `
+            -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-native-fixed-footprint/input') `
+            -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-native-fixed-footprint/private-candidate')
+          if (-not $?) { throw 'fixed_footprint_saveas_failed' }
+      - name: Upload original source-safe status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-native-fixed-footprint-original-receipt-${{ github.run_id }}
+          path: ${{ runner.temp }}/chaptera-native-fixed-footprint/private-original/source-control-status.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Upload candidate source-safe status and native receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-native-fixed-footprint-candidate-receipt-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/chaptera-native-fixed-footprint/private-candidate/native-roundtrip-status.json
+            ${{ runner.temp }}/chaptera-native-fixed-footprint/private-candidate/native-roundtrip-stage.json
+            ${{ runner.temp }}/chaptera-native-fixed-footprint/private-candidate/native-roundtrip-receipt.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Clear all private original/candidate native files and logs
+        if: always()
+        shell: powershell
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'chaptera-native-fixed-footprint'
+          if (Test-Path -LiteralPath $root) {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
+          }
