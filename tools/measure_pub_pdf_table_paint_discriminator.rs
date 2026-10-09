@@ -141,6 +141,49 @@ fn main() -> Result<()> {
             .iter()
             .filter(|cell| cell.paint.as_ref().is_some_and(|paint| !paint.fill_visible))
             .count();
+        let source_plain_cell_fill_count = source_table
+            .cells
+            .iter()
+            .filter(|cell| {
+                cell.paint.as_ref().is_some_and(|paint| paint.source_refs.iter().any(|source_ref| {
+                    source_ref.path.as_deref() == Some("SpContainer/FOPT/table-cell-fill")
+                }))
+            })
+            .count();
+        let source_autoformat_cell_fill_count = source_table
+            .cells
+            .iter()
+            .filter(|cell| {
+                cell.paint.as_ref().is_some_and(|paint| paint.source_refs.iter().any(|source_ref| {
+                    source_ref.path.as_deref() == Some("SpContainer/FOPT/table-autoformat-cell-fill")
+                }))
+            })
+            .count();
+        let source_cell_fill_scheme_ref_count = source_table
+            .cells
+            .iter()
+            .filter(|cell| {
+                cell.paint.as_ref().is_some_and(|paint| paint.source_refs.iter().any(|source_ref| {
+                    source_ref.path.as_deref() == Some("OplSccm/current-color-scheme")
+                }))
+            })
+            .count();
+        let source_cell_fill_dgg_default_ref_count = source_table
+            .cells
+            .iter()
+            .filter(|cell| {
+                cell.paint.as_ref().is_some_and(|paint| paint.source_refs.iter().any(|source_ref| {
+                    source_ref.path.as_deref() == Some("DggContainer/FOPT-defaults")
+                }))
+            })
+            .count();
+        let source_border_scheme_ref_count = source_table
+            .border_segments
+            .iter()
+            .filter(|segment| segment.source_refs.iter().any(|source_ref| {
+                source_ref.path.as_deref() == Some("OplSccm/current-color-scheme")
+            }))
+            .count();
         let source_horizontal_border_count = source_table
             .border_segments
             .iter()
@@ -227,6 +270,11 @@ fn main() -> Result<()> {
                 "cell_paint_count": source_cell_paint_count,
                 "fill_true_count": source_fill_true_count,
                 "fill_false_count": source_fill_false_count,
+                "plain_cell_fill_count": source_plain_cell_fill_count,
+                "autoformat_cell_fill_count": source_autoformat_cell_fill_count,
+                "cell_fill_scheme_ref_count": source_cell_fill_scheme_ref_count,
+                "cell_fill_dgg_default_ref_count": source_cell_fill_dgg_default_ref_count,
+                "border_scheme_ref_count": source_border_scheme_ref_count,
                 "simple_table": source_table.simple_table.is_some(),
                 "story_id_present": source_table.story_id.is_some(),
                 "cells_seq_num_present": source_table.cells_seq_num.is_some(),
@@ -247,7 +295,7 @@ fn main() -> Result<()> {
     }
 
     let payload = json!({
-        "schema": "chaptera.pub-pdf-table-paint-discriminator.v1",
+        "schema": "chaptera.pub-pdf-table-paint-discriminator.v2",
         "source_sha256": source_sha256,
         "table_count": rows.len(),
         "tables": rows,
