@@ -1949,6 +1949,123 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a SHA-pinned external exact082 PUB source"]
+    fn source_safe_exact082_terminal_style_coverage_probe() {
+        const SOURCE_SHA256: &str =
+            "2531deb3629797af53d79f740a31cb00886c61ba0b3bfb59e163e006278dd763";
+        let path = env::var("CHAPTERA_READER_SCENE_PROBE_PUB")
+            .expect("exact082 source must be provided out of band");
+        let bytes = fs::read(path).expect("pinned exact082 source must be readable");
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&bytes)),
+            SOURCE_SHA256,
+            "exact082 input identity drift"
+        );
+        let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
+            .expect("exact082 bundle must open");
+        let plan = chaptera_viewer_render_plan::build_page_render_plan_v1(&bundle.geometry, 1)
+            .expect("exact082 second page must project");
+        let mut candidates = plan
+            .nodes
+            .into_iter()
+            .filter_map(|node| node.text)
+            .filter(|text| text.scalar_start == 0 && text.scalar_end == 717)
+            .filter(|text| text.typography.len() == 14)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            candidates.len(),
+            1,
+            "expected precisely one source-backed 14-run p2 fragment"
+        );
+        let fragment = candidates.pop().expect("one exact082 p2 fragment");
+        let mut cursor = fragment.scalar_start;
+        let mut complete_coverage = true;
+        let mut blank_family_runs = 0_usize;
+        let mut families = std::collections::BTreeSet::<String>::new();
+        // Each array is [Some(false), Some(true), None]; no source text,
+        // family identity, node ID, path or licensed font bytes are logged.
+        let mut bold = [0_usize; 3];
+        let mut italic = [0_usize; 3];
+        for run in &fragment.typography {
+            complete_coverage &= run.scalar_start == cursor
+                && run.scalar_end > run.scalar_start
+                && run.scalar_end <= fragment.scalar_end
+                && run.text_size_emu > 0;
+            cursor = run.scalar_end;
+            let family = run.source_font_name.trim();
+            if family.is_empty() {
+                blank_family_runs += 1;
+            } else {
+                families.insert(family.to_lowercase());
+            }
+            bold[match run.bold {
+                Some(false) => 0,
+                Some(true) => 1,
+                None => 2,
+            }] += 1;
+            italic[match run.italic {
+                Some(false) => 0,
+                Some(true) => 1,
+                None => 2,
+            }] += 1;
+        }
+        complete_coverage &= cursor == fragment.scalar_end && blank_family_runs == 0;
+        let terminal = fragment
+            .typography
+            .iter()
+            .filter(|run| run.scalar_start < 716 && run.scalar_end > 712)
+            .collect::<Vec<_>>();
+        let terminal_single_complete = terminal.len() == 1
+            && terminal[0].scalar_start <= 712
+            && terminal[0].scalar_end >= 716;
+        let story = bundle
+            .geometry
+            .document
+            .stories
+            .iter()
+            .find(|story| story.id == fragment.story_id)
+            .expect("source-backed fragment must reference a Story");
+        let spacing = bundle
+            .geometry
+            .paragraph_line_spacings
+            .iter()
+            .filter(|run| run.story_id == fragment.story_id)
+            .filter(|run| run.applies_to_story_text(&story.text))
+            .filter(|run| run.scalar_start < 716 && run.scalar_end > 712)
+            .collect::<Vec<_>>();
+        let terminal_spacing_unique_fresh = spacing.len() == 1
+            && spacing[0].scalar_start <= 712
+            && spacing[0].scalar_end >= 716
+            && spacing[0].source_value.is_some()
+            && matches!(
+                spacing[0].line_spacing,
+                pub_viewer::ViewerParagraphLineSpacing::Proportional {
+                    point_equivalent_emu: 114_300,
+                }
+            );
+        let explicit_regular = bold[0] == fragment.typography.len()
+            && italic[0] == fragment.typography.len();
+        println!(
+            "EXACT082_SOURCE_STYLE_GATE source_sha256={} page=2 scalar_span=717 runs={} ascii={} complete_source_coverage={} family_count={} blank_families={} bold_false={} bold_true={} bold_unknown={} italic_false={} italic_true={} italic_unknown={} terminal_single_complete={} terminal_spacing_unique_fresh={} explicit_regular={}",
+            SOURCE_SHA256,
+            fragment.typography.len(),
+            fragment.text.is_ascii(),
+            complete_coverage,
+            families.len(),
+            blank_family_runs,
+            bold[0],
+            bold[1],
+            bold[2],
+            italic[0],
+            italic[1],
+            italic[2],
+            terminal_single_complete,
+            terminal_spacing_unique_fresh,
+            explicit_regular,
+        );
+    }
+
+    #[test]
     #[ignore = "requires an explicitly pinned external PUB path"]
     fn real_reference_scene_projection_probe() {
         let path = env::var("CHAPTERA_READER_SCENE_PROBE_PUB")
