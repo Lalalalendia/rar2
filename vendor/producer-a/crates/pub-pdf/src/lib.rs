@@ -453,7 +453,7 @@ pub fn render_bounded_pdf(
                                 code: "pdf.image.placement_combination_unsupported".into(),
                                 severity: PdfDiagnosticSeverity::FidelityWarning,
                                 origin: node.origin.into_canonical(),
-                                message: "cardinal image-content rotation combined with crop or recolor is outside the bounded fixed-PDF slice".into(),
+                                message: "image crop or recolor is outside the bounded fixed-PDF slice".into(),
                             });
                             image_partial = true;
                         }
@@ -1383,6 +1383,58 @@ mod tests {
                 .filter(|node| node.code == "pdf.node.painted_exact_image")
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn source_window_only_image_placement_remains_fail_closed() {
+        let png = vec![
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x7b, 0x40, 0xe8, 0xdd, 0x00, 0x00, 0x00, 0x0f, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xc0, 0xf0, 0x9f, 0x01, 0x00, 0x07, 0xff, 0x01, 0xff,
+            0x01, 0x7f, 0x89, 0xa7, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42,
+            0x60, 0x82,
+        ];
+        let resources = FixedPdfResources {
+            images: vec![FixedImageResource {
+                resource_id: resource_id(47),
+                mime: "image/png".into(),
+                source_exact: true,
+                node_ids: vec![node_id(10)],
+                placements: vec![FixedImagePlacement {
+                    node_id: node_id(10),
+                    content_rotation_degrees: None,
+                    source_window_present: true,
+                    recolor_present: false,
+                }],
+                bytes: png,
+            }],
+            ..FixedPdfResources::default()
+        };
+
+        let output = render_bounded_pdf(
+            &scene(),
+            &resources,
+            &PdfTargetProfile::basic_geometry_v0_1(),
+        )
+        .unwrap();
+
+        let text = String::from_utf8_lossy(&output.bytes);
+        assert!(!text.contains(" Do\n"));
+        assert!(
+            output
+                .report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "pdf.image.placement_combination_unsupported")
+        );
+        assert!(
+            output
+                .report
+                .nodes
+                .iter()
+                .any(|node| node.code == "pdf.node.resource_unsupported")
         );
     }
 
