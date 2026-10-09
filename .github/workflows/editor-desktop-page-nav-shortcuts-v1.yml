@@ -87,3 +87,9 @@ jobs:
           cargo test -p chaptera-desktop
           gui_add_page_at_end_projects_membership_and_replays_on_real_pub
           -- --ignored --nocapture
+
+      - name: Prove real GUI empty authored-page delete
+        run: >-
+          cargo test -p chaptera-desktop
+          gui_delete_empty_authored_page_projects_membership_and_replays_on_real_pub
+          -- --ignored --nocapture

@@ -294,6 +294,156 @@ impl ViewerApp {
         Ok(identity.page_id)
     }
 
+    fn page_delete_blank_capability_v1(&self) -> bool {
+        let Some(editor) = self.editor.as_ref() else {
+            return false;
+        };
+        let Some(visual) = self.visual.as_ref() else {
+            return false;
+        };
+        let Some(selected_page_id) = visual
+            .document
+            .pages
+            .get(self.selected_page)
+            .map(|page| page.id)
+        else {
+            return false;
+        };
+        editor.can_delete_blank_authored_page_v1(&self.source_customer_page_ids, selected_page_id)
+    }
+
+    fn delete_selected_blank_authored_page_v1(&mut self) -> Result<PageId, String> {
+        let (operation_count_before, selected_page_id, before_page_ids, deleted_index) = {
+            let editor = self
+                .editor
+                .as_ref()
+                .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+            let visual = self
+                .visual
+                .as_ref()
+                .ok_or_else(|| "Document page projection is unavailable.".to_owned())?;
+            let selected_page_id = visual
+                .document
+                .pages
+                .get(self.selected_page)
+                .map(|page| page.id)
+                .ok_or_else(|| "Selected page is unavailable.".to_owned())?;
+            let before_page_ids = editor
+                .effective_customer_page_order_v1(&self.source_customer_page_ids)
+                .map_err(|error| {
+                    format!("Page delete is unavailable: {} ({})", error, error.code())
+                })?;
+            let deleted_index = before_page_ids
+                .iter()
+                .position(|page_id| *page_id == selected_page_id)
+                .ok_or_else(|| {
+                    "Selected PageId is absent from effective customer membership.".to_owned()
+                })?;
+            (
+                editor.operations().len(),
+                selected_page_id,
+                before_page_ids,
+                deleted_index,
+            )
+        };
+
+        let mut candidate = self
+            .editor
+            .as_ref()
+            .expect("Editor presence validated before page delete")
+            .clone();
+        candidate
+            .delete_blank_authored_page_v1(self.source_customer_page_ids.clone(), selected_page_id)
+            .map_err(|error| format!("Page delete rejected: {} ({})", error, error.code()))?;
+        if candidate.operations().len() != operation_count_before + 1
+            || !matches!(
+                candidate.operations().last(),
+                Some(pub_editor::EditOperation::DeleteBlankAuthoredPageV1 { transition })
+                    if transition.identity.page_id == selected_page_id
+            )
+        {
+            return Err(
+                "Delete Empty Page must append exactly one canonical lifecycle operation."
+                    .to_owned(),
+            );
+        }
+
+        let effective_page_ids = candidate
+            .effective_customer_page_order_v1(&self.source_customer_page_ids)
+            .map_err(|error| {
+                format!(
+                    "Page delete projection is unavailable before commit: {} ({})",
+                    error,
+                    error.code()
+                )
+            })?;
+        if effective_page_ids.len() + 1 != before_page_ids.len()
+            || effective_page_ids.contains(&selected_page_id)
+        {
+            return Err(
+                "Page delete did not produce the expected effective customer membership."
+                    .to_owned(),
+            );
+        }
+
+        let mut visual_candidate = self
+            .visual
+            .as_ref()
+            .ok_or_else(|| "Document page projection is unavailable.".to_owned())?
+            .clone();
+        visual_candidate
+            .refresh_page_membership_from_resolved(candidate.graph(), &effective_page_ids)
+            .map_err(|error| format!("Page delete projection rejected before commit: {error}"))?;
+        if visual_candidate
+            .document
+            .pages
+            .iter()
+            .any(|page| page.id == selected_page_id)
+            || visual_candidate
+                .scene
+                .surfaces
+                .iter()
+                .any(|surface| surface.origin == selected_page_id)
+        {
+            return Err(
+                "Page delete projection still contains the deleted canonical PageId.".to_owned(),
+            );
+        }
+
+        let fallback_index = if deleted_index == 0 {
+            0
+        } else {
+            deleted_index - 1
+        };
+        let fallback_page_id = effective_page_ids
+            .get(fallback_index)
+            .copied()
+            .ok_or_else(|| "Page delete produced no valid surviving selection.".to_owned())?;
+        if visual_candidate
+            .document
+            .pages
+            .get(fallback_index)
+            .map(|page| page.id)
+            != Some(fallback_page_id)
+        {
+            return Err(
+                "Page delete projection did not preserve the canonical fallback page order."
+                    .to_owned(),
+            );
+        }
+
+        self.editor = Some(candidate);
+        self.visual = Some(visual_candidate);
+        self.selected_page = fallback_index;
+        self.canvas_selection.clear();
+        self.canvas_drag = None;
+        self.canvas_resize = None;
+        self.finish_authoring_change(
+            "Deleted one empty Chaptera-created customer page. Source PUB bytes were not written.",
+        );
+        Ok(selected_page_id)
+    }
+
     fn page_reorder_capabilities_v1(&self) -> (bool, bool) {
         let Some(editor) = self.editor.as_ref() else {
             return (false, false);
@@ -399,6 +549,19 @@ impl ViewerApp {
             && let Err(error) = self.append_blank_page_at_end_v1()
         {
             self.edit_status = Some(error);
+        }
+
+        let can_delete = self.page_delete_blank_capability_v1();
+        let delete_response = ui.add_enabled(can_delete, egui::Button::new("Delete Empty Page"));
+        if delete_response.clicked()
+            && let Err(error) = self.delete_selected_blank_authored_page_v1()
+        {
+            self.edit_status = Some(error);
+        }
+        if !can_delete {
+            delete_response.on_disabled_hover_text(
+                "Select an active Chaptera-created customer page. Content-bearing and source-backed pages fail closed.",
+            );
         }
 
         let (can_move_up, can_move_down) = self.page_reorder_capabilities_v1();

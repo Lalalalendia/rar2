@@ -978,11 +978,22 @@ impl EditorSession {
         Ok(operation)
     }
 
-    pub fn delete_blank_authored_page_v1(
-        &mut self,
-        source_qualified_page_ids: Vec<PageId>,
+    /// Read-only admission for the exact same bounded deletion as the command.
+    /// No EditorSession clone, revision, history or graph mutation per UI frame.
+    pub fn can_delete_blank_authored_page_v1(
+        &self,
+        source_qualified_page_ids: &[PageId],
         page_id: PageId,
-    ) -> Result<EditOperation, EditorError> {
+    ) -> bool {
+        self.plan_delete_blank_authored_page_from_session_v1(source_qualified_page_ids, page_id)
+            .is_ok()
+    }
+
+    fn plan_delete_blank_authored_page_from_session_v1(
+        &self,
+        source_qualified_page_ids: &[PageId],
+        page_id: PageId,
+    ) -> Result<DeleteBlankAuthoredPageTransitionV1, EditorError> {
         self.validate_source_identity()?;
         if self.project_identity.is_none() {
             return Err(EditorError::PageDeleteUnsupported {
@@ -1018,15 +1029,24 @@ impl EditorSession {
             });
         }
         let current_customer_page_ids =
-            self.effective_customer_page_order_v1(&source_qualified_page_ids)?;
-        let transition = plan_delete_blank_authored_page_v1(
+            self.effective_customer_page_order_v1(source_qualified_page_ids)?;
+        plan_delete_blank_authored_page_v1(
             self.graph.document.id,
             &self.graph.document.pages,
             &self.graph.pages,
             &current_customer_page_ids,
             identity,
         )
-        .map_err(delete_blank_authored_page_error_to_editor_v1)?;
+        .map_err(delete_blank_authored_page_error_to_editor_v1)
+    }
+
+    pub fn delete_blank_authored_page_v1(
+        &mut self,
+        source_qualified_page_ids: Vec<PageId>,
+        page_id: PageId,
+    ) -> Result<EditOperation, EditorError> {
+        let transition = self
+            .plan_delete_blank_authored_page_from_session_v1(&source_qualified_page_ids, page_id)?;
         self.consume_canonical_delete_blank_authored_page_v1(transition)
     }
 
@@ -1546,6 +1566,75 @@ mod authored_page_append_tests {
             .expect("appended ODG page layout end");
         let layout = &tail[..end];
         assert!(layout.contains("fo:page-width=\"200pt\" fo:page-height=\"300pt\""));
+    }
+
+    #[test]
+    fn delete_blank_capability_is_read_only_and_rejects_authored_content() {
+        let source = page_id("22222222-2222-4222-8222-222222222222");
+        let identity = authored_identity();
+        let mut session = EditorSession::new(source_graph(vec![source])).expect("session");
+        session
+            .append_blank_page_v1(
+                vec![source],
+                identity,
+                Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                None,
+                None,
+            )
+            .expect("append blank authored page");
+
+        let before_operations = session.operations().len();
+        let before_pages = session.graph().document.pages.clone();
+        assert!(session.can_delete_blank_authored_page_v1(&[source], identity.page_id));
+        assert!(!session.can_delete_blank_authored_page_v1(&[source], source));
+        assert_eq!(session.operations().len(), before_operations);
+        assert_eq!(session.graph().document.pages, before_pages);
+
+        let shape_id = NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        session
+            .create_shape(
+                shape_id,
+                identity.page_id,
+                RectEmu::new(
+                    LengthEmu::new(100_000),
+                    LengthEmu::new(100_000),
+                    LengthEmu::new(400_000),
+                    LengthEmu::new(300_000),
+                ),
+                crate::AuthoredShapePaintV1 {
+                    fill: crate::AuthoredSolidFillV1 {
+                        visible: true,
+                        color: crate::Srgb8V1 {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                        },
+                    },
+                    stroke: crate::AuthoredSolidStrokeV1 {
+                        visible: true,
+                        color: crate::Srgb8V1 { r: 0, g: 0, b: 0 },
+                        width_emu: 12_700,
+                    },
+                    provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+                },
+            )
+            .expect("create canonical content-bearing authored Rectangle");
+        let content_operations = session.operations().len();
+        assert!(!session.can_delete_blank_authored_page_v1(&[source], identity.page_id));
+        assert!(
+            session
+                .delete_blank_authored_page_v1(vec![source], identity.page_id)
+                .is_err()
+        );
+        assert_eq!(session.operations().len(), content_operations);
+        assert!(session.graph().pages.contains_key(&identity.page_id));
+
+        session.undo().expect("undo authored Rectangle");
+        assert!(session.can_delete_blank_authored_page_v1(&[source], identity.page_id));
+        session
+            .delete_blank_authored_page_v1(vec![source], identity.page_id)
+            .expect("delete after content removed");
+        assert!(!session.can_delete_blank_authored_page_v1(&[source], identity.page_id));
     }
 
     #[test]
