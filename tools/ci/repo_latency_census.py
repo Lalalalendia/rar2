@@ -93,6 +93,15 @@ def domains(paths: list[str]) -> list[str]:
     return sorted(result) or ["unknown"]
 
 
+def primary_class(groups: list[str]) -> str:
+    substantive = [name for name in groups if name not in ("ci-infra", "shared-or-other")]
+    if len(substantive) > 1:
+        return "mixed"
+    if len(substantive) == 1:
+        return substantive[0]
+    return "ci-infra" if "ci-infra" in groups else groups[0]
+
+
 def analyze_pr(pr: dict, runs: list[dict], jobs_by_run: dict, paths: list[str]) -> dict:
     head = pr["head"]["sha"]
     merged = pr.get("merged_at")
@@ -165,7 +174,7 @@ def analyze_pr(pr: dict, runs: list[dict], jobs_by_run: dict, paths: list[str]) 
         "title": pr.get("title"),
         "head_sha": head,
         "domains": groups,
-        "class": groups[0] if len(groups) == 1 else "mixed",
+        "class": primary_class(groups),
         "changed_file_count": len(paths),
         "workflow_count": len(applicable),
         "job_count": len(jobs),
