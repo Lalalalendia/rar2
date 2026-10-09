@@ -82,6 +82,10 @@ jobs:
                   r"/pub-re-native rotate ([a-z0-9][a-z0-9._-]{0,63}) ([1-9][0-9]{0,9}) ([1-9][0-9]{0,9}) (-?[0-9]+(?:[.][0-9]{1,6})?)",
                   body,
               )
+              rotation_pair_match = re.fullmatch(
+                  r"/pub-re-native rotation-pair ([a-z0-9][a-z0-9._-]{0,63}) ([1-9][0-9]{0,9}) ([1-9][0-9]{0,9}) (-?[0-9]+(?:[.][0-9]{1,6})?)",
+                  body,
+              )
               research_match = re.fullmatch(
                   r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?|val-xproj-01)",
                   body,
@@ -110,6 +114,20 @@ jobs:
                       raise SystemExit("Publisher selector is outside signed 32-bit bounds")
                   if not 0.000001 <= abs(delta_value) <= 45.0:
                       raise SystemExit("rotation delta must be nonzero and within 45 degrees")
+              elif rotation_pair_match is not None:
+                  command_mode = "rotation_pair"
+                  fixture_alias = rotation_pair_match.group(1)
+                  page_id = rotation_pair_match.group(2)
+                  shape_id = rotation_pair_match.group(3)
+                  delta_degrees = rotation_pair_match.group(4)
+
+                  page_value = int(page_id)
+                  shape_value = int(shape_id)
+                  delta_value = float(delta_degrees)
+                  if page_value > 2147483647 or shape_value > 2147483647:
+                      raise SystemExit("Publisher selector is outside signed 32-bit bounds")
+                  if not 0.000001 <= abs(delta_value) <= 45.0:
+                      raise SystemExit("rotation delta must be nonzero and within 45 degrees")
               elif research_match is not None:
                   research_id = research_match.group(1)
                   command_mode = "research_t352" if research_id == "val-xproj-01" else "research_0p75"
@@ -121,10 +139,10 @@ jobs:
               else:
                   raise SystemExit("invalid PUB RE native control command")
 
-          if command_mode in {"snapshot_alias", "rotation_alias"} and alias_re.fullmatch(fixture_alias) is None:
+          if command_mode in {"snapshot_alias", "rotation_alias", "rotation_pair"} and alias_re.fullmatch(fixture_alias) is None:
               raise SystemExit("fixture alias is invalid")
 
-          native_timeout_minutes = "30" if command_mode in {"research_0p75", "research_t352"} else "5"
+          native_timeout_minutes = "30" if command_mode in {"research_0p75", "research_t352"} else "10" if command_mode == "rotation_pair" else "5"
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"command_mode={command_mode}\n")
