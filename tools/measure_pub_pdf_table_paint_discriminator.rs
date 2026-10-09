@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use anyhow::{Context, Result, bail};
 use pub_model::Affine2D;
 use pub_reader::PubTableBorderAxis;
