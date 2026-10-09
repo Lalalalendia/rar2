@@ -1,0 +1,187 @@
+name: PUB native Story Save on disposable copy
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-native-story-save-copy.yml"
+      - "tools/windows/pub-runtime/Test-StoryNativeSaveCopy.ps1"
+      - "tools/windows/pub-runtime/Invoke-StoryNativeSaveCopyGuarded.ps1"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/pub-native-story-save-copy.yml"
+permissions:
+  contents: read
+
+concurrency:
+  group: pub-native-story-save-copy-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate-hosted:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Parse exact guarded Save-copy scripts without Publisher
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($relative in @(
+            'tools/windows/pub-runtime/Invoke-StoryNativeSaveCopyGuarded.ps1',
+            'tools/windows/pub-runtime/Test-StoryNativeSaveCopy.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $relative).Path, [ref]$tokens, [ref]$errors
+            )
+            if ($errors.Count -ne 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              throw 'native_save_copy_powershell_parse_failed'
+            }
+          }
+      - name: Assert only Save method and fail-closed acceptance classification
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $native = Get-Content -LiteralPath 'tools/windows/pub-runtime/Test-StoryNativeSaveCopy.ps1' -Raw
+          $guard = Get-Content -LiteralPath 'tools/windows/pub-runtime/Invoke-StoryNativeSaveCopyGuarded.ps1' -Raw
+          if (-not $native.Contains('$document.Save()') -or
+              $native.Contains('$document.SaveAs(') -or
+              -not $native.Contains("saveas_evaluated = `$false") -or
+              -not $guard.Contains("native_publisher_acceptance = `$false") -or
+              -not $guard.Contains('save_copy_child_timeout')) {
+            throw 'save_copy_research_boundary_not_enforced'
+          }
+  prepare-original:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Materialize exact original Sample3 from existing writer handoff
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- generate \
+            --output-dir out/native-story-save-copy
+      - name: Verify original source and manifest before handoff
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root = Path("out/native-story-save-copy")
+          manifest = json.loads((root / "handoff.json").read_text())
+          assert manifest["schema"] == "chaptera.pub-native-story-handoff.v1"
+          assert hashlib.sha256((root / "source.pub").read_bytes()).hexdigest() == manifest["source_sha256"]
+          assert hashlib.sha256((root / "candidate.pub").read_bytes()).hexdigest() == manifest["candidate_sha256"]
+          if manifest["source_sha256"] != "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc":
+              raise SystemExit("pinned source SHA mismatch")
+          if manifest["candidate_sha256"] != "a92543b6f2b6ac3a8ae2481e15a2188a338ddc2a92832580f8987079fa4f70f8":
+              raise SystemExit("pinned candidate SHA mismatch")
+          if len((root / "source.pub").read_bytes()) != 72192 or len((root / "candidate.pub").read_bytes()) != 72192:
+              raise SystemExit("pinned CFB length mismatch")
+          print("PASS original and six-unit Story writer candidate exact SHA")
+          PY
+      - name: Verify exact writer Story before native experiment
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- verify \
+            --pub out/native-story-save-copy/candidate.pub \
+            --manifest out/native-story-save-copy/handoff.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pub-native-story-save-copy-${{ github.run_id }}
+          path: |
+            out/native-story-save-copy/source.pub
+            out/native-story-save-copy/candidate.pub
+            out/native-story-save-copy/handoff.json
+          if-no-files-found: error
+          retention-days: 14
+
+  native-save-copy:
+    needs: [prepare-original, validate-hosted]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Lalalalendia/rar2' }}
+    runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
+    timeout-minutes: 24
+    concurrency:
+      group: pub-re-native-publisher-oracle
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download matched source and candidate from this exact run
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-native-story-save-copy-${{ github.run_id }}
+          path: ${{ runner.temp }}/chaptera-story-save-copy/input
+      - name: Supply Git Bash to current Rust verifier
+        shell: powershell
+        run: |
+          $gitBashDir = 'C:\Program Files\Git\bin'
+          if (-not (Test-Path -LiteralPath (Join-Path $gitBashDir 'bash.exe') -PathType Leaf)) {
+            throw 'git_bash_unavailable'
+          }
+          $gitBashDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Prebuild matched candidate Reader verifier
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-writer --bin pub_story_native_handoff
+          if ($LASTEXITCODE -ne 0) { throw 'matched_candidate_verifier_build_failed' }
+      - name: Save no-op original in a disposable copy, then fresh reopen
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/windows/pub-runtime/Invoke-StoryNativeSaveCopyGuarded.ps1 -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-story-save-copy/input') -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-story-save-copy/private-original') -Arm Original -TimeoutSeconds 240
+          if (-not $?) { throw 'original_copy_save_failed' }
+      - name: Save exact six-unit writer candidate in a disposable copy, then verify Story
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/windows/pub-runtime/Invoke-StoryNativeSaveCopyGuarded.ps1 -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-story-save-copy/input') -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-story-save-copy/private-candidate') -Arm Candidate -TimeoutSeconds 360
+          if (-not $?) { throw 'candidate_copy_save_failed' }
+      - name: Upload source-safe control receipt only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-native-story-save-copy-original-receipt-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/chaptera-story-save-copy/private-original/save-copy-status.json
+            ${{ runner.temp }}/chaptera-story-save-copy/private-original/save-copy-receipt.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Upload source-safe writer candidate receipt only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-native-story-save-copy-candidate-receipt-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/chaptera-story-save-copy/private-candidate/save-copy-status.json
+            ${{ runner.temp }}/chaptera-story-save-copy/private-candidate/save-copy-receipt.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Remove all disposable PUBs and private child logs
+        if: always()
+        shell: powershell
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'chaptera-story-save-copy'
+          if (Test-Path -LiteralPath $root) {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
+          }
