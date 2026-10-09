@@ -67,7 +67,7 @@ jobs:
               [ref]$errors
             )
             if ($errors.Count -ne 0) {
-              $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
+              $errors | ForEach-Object { Write-Error "${file}: line $($_.Extent.StartLineNumber), column $($_.Extent.StartColumnNumber), token=[$($_.Extent.Text)]: $($_.Message)" }
               throw "PowerShell parser rejected $file"
             }
           }
