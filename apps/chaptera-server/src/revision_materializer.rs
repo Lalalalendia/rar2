@@ -9,7 +9,8 @@ use pub_editor::{
     EDITOR_PROJECT_VERSION_V0_17, EDITOR_PROJECT_VERSION_V0_18, EDITOR_PROJECT_VERSION_V0_19,
     EDITOR_PROJECT_VERSION_V0_20, EDITOR_PROJECT_VERSION_V0_21, EDITOR_PROJECT_VERSION_V0_22,
     EDITOR_PROJECT_VERSION_V0_23, EDITOR_PROJECT_VERSION_V0_24, EDITOR_PROJECT_VERSION_V0_25,
-    EditOperation, EditorProject, Sha256Digest, open_mature_0x2c_editor,
+    EDITOR_PROJECT_VERSION_V0_26, EditOperation, EditorProject, Sha256Digest,
+    open_mature_0x2c_editor,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -502,6 +503,7 @@ fn cloud_replay_requires_local_identity(schema_version: &str) -> bool {
         EDITOR_PROJECT_VERSION_V0_23,
         EDITOR_PROJECT_VERSION_V0_24,
         EDITOR_PROJECT_VERSION_V0_25,
+        EDITOR_PROJECT_VERSION_V0_26,
     ]
     .contains(&schema_version)
 }
@@ -515,6 +517,7 @@ fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
 
     for operation in &project.operations {
         let operation_rank = match operation {
+            EditOperation::DeleteBlankAuthoredPageV1 { .. } => 26,
             EditOperation::AppendBlankPageV1 { .. } => 25,
             EditOperation::RegisterAuthoredPageIdentityV1 { .. } => 24,
             EditOperation::ReorderPagesV1 { .. } => 23,
@@ -551,6 +554,7 @@ fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
     }
 
     match rank {
+        26 => EDITOR_PROJECT_VERSION_V0_26,
         25 => EDITOR_PROJECT_VERSION_V0_25,
         24 => EDITOR_PROJECT_VERSION_V0_24,
         23 => EDITOR_PROJECT_VERSION_V0_23,

@@ -741,6 +741,43 @@ mod tests {
     }
 
     #[test]
+    fn fixed_pdf_page_projection_excludes_deleted_lifecycle_membership() {
+        let (mut editor, admitted, _) = page_order_editor_fixture();
+        let deleted: PageId = canonical_id("01890f4f-1234-7abc-8def-0123456789ab");
+        let identity = AuthoredPageIdentityV1 {
+            page_id: deleted,
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        editor
+            .append_blank_page_v1(
+                admitted.clone(),
+                identity,
+                Size2D::new(LengthEmu::new(8_000_000), LengthEmu::new(10_000_000)),
+                None,
+                None,
+            )
+            .expect("append blank customer page");
+        editor
+            .delete_blank_authored_page_v1(admitted.clone(), deleted)
+            .expect("delete blank authored customer page");
+
+        let effective = editor
+            .effective_customer_page_order_v1(&admitted)
+            .expect("effective customer membership after delete");
+        assert_eq!(effective, admitted);
+
+        let authoring = bounded_authoring_slice_for_pages_v1(&editor, &effective)
+            .expect("fixed-PDF page projection after delete");
+        let projected = authoring
+            .pages
+            .iter()
+            .map(|page| page.id)
+            .collect::<Vec<_>>();
+        assert_eq!(projected, admitted);
+        assert!(!projected.contains(&deleted));
+    }
+
+    #[test]
     fn qualified_fixed_pdf_page_set_rejects_empty_projection() {
         let bytes = b"not-a-real-pub";
         let digest = Sha256::digest(bytes);

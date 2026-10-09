@@ -18,8 +18,9 @@ mod session_table;
 mod session_text;
 use session_geometry::{
     append_blank_page_error_to_editor_v1, apply_authored_stack_history_forward_v1,
-    authored_stack_operation_page_id_v1, derive_authored_stacks_from_operations_v1,
-    display_page_append_error_v1, page_order_error_to_editor_v1, validate_move_nodes_transition,
+    authored_stack_operation_page_id_v1, delete_blank_authored_page_error_to_editor_v1,
+    derive_authored_stacks_from_operations_v1, display_page_append_error_v1,
+    display_page_delete_error_v1, page_order_error_to_editor_v1, validate_move_nodes_transition,
     validate_resize_nodes_transition,
 };
 use session_image::{
@@ -34,10 +35,7 @@ mod table_rowcol_graph_v1;
 mod table_rowcol_history_v1;
 mod text_format_property_base_v1;
 mod writer_assessment;
-use writer_assessment::{
-    append_blank_page_persistence_requirements_v1, minimum_identity_project_schema_v1,
-    required_editor_asset_refs_v1,
-};
+use writer_assessment::{minimum_identity_project_schema_v1, required_editor_asset_refs_v1};
 
 pub use authored_paragraph_alignment_v1::{
     AuthoredParagraphAlignmentValueV1, EffectiveParagraphAlignmentV1,
@@ -70,15 +68,18 @@ pub use pub_editor_authoring_core::{
     AuthoredStackReorderModeV1, AuthoredStackReorderTransitionV1, AuthoredStackV1,
     AuthoredTableStoryRangesV1, CreateLineRuntimeValidationError,
     CreateShapeRuntimeValidationError, CreateTablePlanV1, CreateTableRuntimeV1,
-    CreateTableRuntimeValidationError, LineGeometryV1, PAGE_ORDER_PROTOCOL_V1, PageOrderErrorV1,
-    PageOrderTransitionV1, PointEmuV1, Srgb8V1, apply_append_blank_page_forward_v1,
-    apply_append_blank_page_inverse_v1, apply_authored_stack_reorder_forward_v1,
-    apply_authored_stack_reorder_inverse_v1, apply_authored_stack_transition_forward_v1,
-    apply_authored_stack_transition_inverse_v1, apply_create_table_forward_v1,
-    apply_create_table_inverse_v1, apply_page_order_transition_forward_v1,
-    apply_page_order_transition_inverse_v1, authored_stack_state_id_v1, build_create_table_plan_v1,
-    line_bounds_v1, page_order_state_id_v1, plan_append_blank_page_v1, plan_create_line_append_v1,
-    plan_create_shape_append_v1, plan_create_table_append_v1, plan_delete_shape_remove_v1,
+    CreateTableRuntimeValidationError, DELETE_BLANK_AUTHORED_PAGE_PROTOCOL_V1,
+    DeleteBlankAuthoredPageErrorV1, DeleteBlankAuthoredPageTransitionV1, LineGeometryV1,
+    PAGE_ORDER_PROTOCOL_V1, PageOrderErrorV1, PageOrderTransitionV1, PointEmuV1, Srgb8V1,
+    apply_append_blank_page_forward_v1, apply_append_blank_page_inverse_v1,
+    apply_authored_stack_reorder_forward_v1, apply_authored_stack_reorder_inverse_v1,
+    apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
+    apply_create_table_forward_v1, apply_create_table_inverse_v1,
+    apply_delete_blank_authored_page_forward_v1, apply_delete_blank_authored_page_inverse_v1,
+    apply_page_order_transition_forward_v1, apply_page_order_transition_inverse_v1,
+    authored_stack_state_id_v1, build_create_table_plan_v1, line_bounds_v1, page_order_state_id_v1,
+    plan_append_blank_page_v1, plan_create_line_append_v1, plan_create_shape_append_v1,
+    plan_create_table_append_v1, plan_delete_blank_authored_page_v1, plan_delete_shape_remove_v1,
     plan_page_order_transition_v1, plan_reorder_authored_stack_v1, qualified_page_order_v1,
     rebuild_authored_table_story_v1, validate_authored_line_runtime_v1,
     validate_authored_page_identity_v1, validate_authored_shape_runtime_v1,
@@ -206,6 +207,7 @@ pub const EDITOR_PROJECT_VERSION_V0_22: &str = "pub-editor-v0.22";
 pub const EDITOR_PROJECT_VERSION_V0_23: &str = "pub-editor-v0.23";
 pub const EDITOR_PROJECT_VERSION_V0_24: &str = "pub-editor-v0.24";
 pub const EDITOR_PROJECT_VERSION_V0_25: &str = "pub-editor-v0.25";
+pub const EDITOR_PROJECT_VERSION_V0_26: &str = "pub-editor-v0.26";
 pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_23;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
 pub const PUB_MATURE_0X2C_SCHEMA_FENCE: &str = "pub-family-0x2c";
@@ -394,6 +396,9 @@ pub enum EditOperation {
     AppendBlankPageV1 {
         transition: AppendBlankPageTransitionV1,
     },
+    DeleteBlankAuthoredPageV1 {
+        transition: DeleteBlankAuthoredPageTransitionV1,
+    },
     SetTextFormatProperty {
         story_id: StoryId,
         start_scalar: u32,
@@ -439,308 +444,6 @@ pub enum EditOperation {
         before: Vec<ParagraphAlignmentOverrideSnapshotV1>,
         after: Vec<ParagraphAlignmentOverrideSnapshotV1>,
     },
-}
-
-impl EditOperation {
-    /// Exact editor-owned asset identities required to retain this canonical
-    /// operation in a durable EditorProject.
-    ///
-    /// Keep this match exhaustive: every future asset-bearing operation must
-    /// make an explicit reachability decision here.
-    pub fn durable_editor_asset_refs_v1(&self) -> Vec<Sha256Digest> {
-        match self {
-            Self::ReplaceImage {
-                before_asset,
-                after_asset,
-                ..
-            } => {
-                let mut refs = Vec::with_capacity(2);
-                if let Some(before_asset) = before_asset {
-                    refs.push(*before_asset);
-                }
-                refs.push(*after_asset);
-                refs.sort_unstable();
-                refs.dedup();
-                refs
-            }
-            Self::ReplaceStoryRange { .. }
-            | Self::ReplaceStoryText { .. }
-            | Self::BreakTextFrameForwardLink { .. }
-            | Self::LinkTextFrameTail { .. }
-            | Self::ReplaceTableCellText { .. }
-            | Self::SetImageCrop { .. }
-            | Self::MoveNode { .. }
-            | Self::MoveNodes { .. }
-            | Self::ResizeNode { .. }
-            | Self::ResizeNodes { .. }
-            | Self::CreateTextBox { .. }
-            | Self::CreateShape { .. }
-            | Self::CreateLine { .. }
-            | Self::CreateTable { .. }
-            | Self::SetTableTrackExtent { .. }
-            | Self::InsertTableRow { .. }
-            | Self::DeleteTableRow { .. }
-            | Self::InsertTableColumn { .. }
-            | Self::DeleteTableColumn { .. }
-            | Self::DeleteNode { .. }
-            | Self::ReorderAuthoredStack { .. }
-            | Self::ReorderPagesV1 { .. }
-            | Self::RegisterAuthoredPageIdentityV1 { .. }
-            | Self::AppendBlankPageV1 { .. }
-            | Self::SetTextFormatProperty { .. }
-            | Self::ClearTextFormatPropertyOverride { .. }
-            | Self::SetTextFormatPropertyScopedV1 { .. }
-            | Self::ClearTextFormatPropertyOverrideScopedV1 { .. }
-            | Self::SetParagraphAlignmentOverride { .. }
-            | Self::ClearParagraphAlignmentOverride { .. } => Vec::new(),
-        }
-    }
-}
-
-impl PersistenceRequirements for EditOperation {
-    fn persistence_requirements(&self) -> Vec<PersistenceRequirement> {
-        match self {
-            Self::ReplaceStoryRange { story_id, .. } | Self::ReplaceStoryText { story_id, .. } => {
-                vec![PersistenceRequirement {
-                    feature: "story.text".into(),
-                    origin: Some(story_id.into_canonical()),
-                    property_path: Some("story.text".into()),
-                }]
-            }
-            Self::BreakTextFrameForwardLink {
-                story_id,
-                new_story_id,
-                ..
-            } => vec![
-                PersistenceRequirement {
-                    feature: "story.linked_frames".into(),
-                    origin: Some(story_id.into_canonical()),
-                    property_path: Some("story.frames".into()),
-                },
-                PersistenceRequirement {
-                    feature: "story.created_identity".into(),
-                    origin: Some(new_story_id.into_canonical()),
-                    property_path: Some("story".into()),
-                },
-            ],
-            Self::LinkTextFrameTail { transition } => vec![
-                PersistenceRequirement {
-                    feature: "story.linked_frames".into(),
-                    origin: Some(transition.story_id.into_canonical()),
-                    property_path: Some("story.frames".into()),
-                },
-                PersistenceRequirement {
-                    feature: "story.created_identity".into(),
-                    origin: Some(transition.target_empty_story.id.into_canonical()),
-                    property_path: Some("story.inverse_empty_target".into()),
-                },
-            ],
-            Self::ReplaceTableCellText {
-                story_id, cell_id, ..
-            } => vec![
-                PersistenceRequirement {
-                    feature: "story.text".into(),
-                    origin: Some(story_id.into_canonical()),
-                    property_path: Some("story.text".into()),
-                },
-                PersistenceRequirement {
-                    feature: "table.cell_text".into(),
-                    origin: Some(cell_id.into_canonical()),
-                    property_path: Some("table.cell.text".into()),
-                },
-            ],
-            Self::ReplaceImage { node_id, .. } => vec![PersistenceRequirement {
-                feature: "image.replacement".into(),
-                origin: Some(node_id.into_canonical()),
-                property_path: Some("node.image.resource".into()),
-            }],
-            Self::SetImageCrop { node_id, .. } => vec![PersistenceRequirement {
-                feature: IMAGE_CONTENT_TRANSFORM_FEATURE.into(),
-                origin: Some(node_id.into_canonical()),
-                property_path: Some("node.image.crop".into()),
-            }],
-            Self::MoveNode { node_id, .. } => vec![PersistenceRequirement {
-                feature: "node.geometry.position".into(),
-                origin: Some(node_id.into_canonical()),
-                property_path: Some("node.bounds.position".into()),
-            }],
-            Self::MoveNodes { entries, .. } => entries
-                .iter()
-                .map(|entry| PersistenceRequirement {
-                    feature: "node.geometry.position".into(),
-                    origin: Some(entry.node_id.into_canonical()),
-                    property_path: Some("node.bounds.position".into()),
-                })
-                .collect(),
-            Self::ResizeNode { node_id, .. } => vec![PersistenceRequirement {
-                feature: "node.geometry.bounds".into(),
-                origin: Some(node_id.into_canonical()),
-                property_path: Some("node.bounds".into()),
-            }],
-            Self::ResizeNodes { entries, .. } => entries
-                .iter()
-                .map(|entry| PersistenceRequirement {
-                    feature: "node.geometry.bounds".into(),
-                    origin: Some(entry.node_id.into_canonical()),
-                    property_path: Some("node.bounds".into()),
-                })
-                .collect(),
-            Self::CreateTextBox {
-                node_id, story_id, ..
-            } => vec![
-                PersistenceRequirement {
-                    feature: "node.created_identity".into(),
-                    origin: Some(node_id.into_canonical()),
-                    property_path: Some("node".into()),
-                },
-                PersistenceRequirement {
-                    feature: "story.created_identity".into(),
-                    origin: Some(story_id.into_canonical()),
-                    property_path: Some("story".into()),
-                },
-                PersistenceRequirement {
-                    feature: "node.geometry.bounds".into(),
-                    origin: Some(node_id.into_canonical()),
-                    property_path: Some("node.bounds".into()),
-                },
-                PersistenceRequirement {
-                    feature: "story.text".into(),
-                    origin: Some(story_id.into_canonical()),
-                    property_path: Some("story.text".into()),
-                },
-            ],
-            Self::CreateShape { node_id, .. } => vec![
-                PersistenceRequirement {
-                    feature: "node.created_identity".into(),
-                    origin: Some(node_id.into_canonical()),
-                    property_path: Some("node".into()),
-                },
-                PersistenceRequirement {
-                    feature: "node.geometry.bounds".into(),
-                    origin: Some(node_id.into_canonical()),
-                    property_path: Some("node.bounds".into()),
-                },
-                PersistenceRequirement {
-                    feature: "shape.paint".into(),
-                    origin: Some(node_id.into_canonical()),
-                    property_path: Some("node.paint".into()),
-                },
-            ],
-            Self::CreateLine { node_id, .. } => vec![
-                PersistenceRequirement {
-                    feature: "node.created_identity".into(),
-                    origin: Some(node_id.into_canonical()),
-                    property_path: Some("node".into()),
-                },
-                PersistenceRequirement {
-                    feature: "line.geometry.endpoints".into(),
-                    origin: Some(node_id.into_canonical()),
-                    property_path: Some("node.line.geometry".into()),
-                },
-                PersistenceRequirement {
-                    feature: "line.stroke".into(),
-                    origin: Some(node_id.into_canonical()),
-                    property_path: Some("node.line.stroke".into()),
-                },
-            ],
-            Self::CreateTable { table } => vec![
-                PersistenceRequirement {
-                    feature: "node.created_identity".into(),
-                    origin: Some(table.node_id.into_canonical()),
-                    property_path: Some("node".into()),
-                },
-                PersistenceRequirement {
-                    feature: "story.created_identity".into(),
-                    origin: Some(table.story_id.into_canonical()),
-                    property_path: Some("story".into()),
-                },
-                PersistenceRequirement {
-                    feature: "table.grid".into(),
-                    origin: Some(table.node_id.into_canonical()),
-                    property_path: Some("table.grid".into()),
-                },
-                PersistenceRequirement {
-                    feature: "node.geometry.bounds".into(),
-                    origin: Some(table.node_id.into_canonical()),
-                    property_path: Some("node.bounds".into()),
-                },
-            ],
-            Self::SetTableTrackExtent { history } => vec![
-                PersistenceRequirement {
-                    feature: "table.track_extent".into(),
-                    origin: Some(history.table_id.into_canonical()),
-                    property_path: Some("table.grid.track.extent".into()),
-                },
-                PersistenceRequirement {
-                    feature: "node.geometry.bounds".into(),
-                    origin: Some(history.table_id.into_canonical()),
-                    property_path: Some("node.bounds".into()),
-                },
-            ],
-            Self::InsertTableRow { history }
-            | Self::DeleteTableRow { history }
-            | Self::InsertTableColumn { history }
-            | Self::DeleteTableColumn { history } => vec![
-                PersistenceRequirement {
-                    feature: "table.structure".into(),
-                    origin: Some(history.table_id.into_canonical()),
-                    property_path: Some("table.grid".into()),
-                },
-                PersistenceRequirement {
-                    feature: "story.text".into(),
-                    origin: Some(history.story_id.into_canonical()),
-                    property_path: Some("story.text".into()),
-                },
-                PersistenceRequirement {
-                    feature: "node.geometry.bounds".into(),
-                    origin: Some(history.table_id.into_canonical()),
-                    property_path: Some("node.bounds".into()),
-                },
-            ],
-            Self::DeleteNode { node_id, .. } => vec![PersistenceRequirement {
-                feature: "node.deleted_identity".into(),
-                origin: Some(node_id.into_canonical()),
-                property_path: Some("node".into()),
-            }],
-            Self::ReorderAuthoredStack { transition } => vec![PersistenceRequirement {
-                feature: "node.authored_stack_order".into(),
-                origin: Some(transition.node_id.into_canonical()),
-                property_path: Some("page.authored_stack".into()),
-            }],
-            Self::ReorderPagesV1 { transition } => vec![PersistenceRequirement {
-                feature: "document.page_order".into(),
-                origin: Some(transition.document_id.into_canonical()),
-                property_path: Some("document.pages".into()),
-            }],
-            Self::RegisterAuthoredPageIdentityV1 { identity } => vec![PersistenceRequirement {
-                feature: "page.created_identity".into(),
-                origin: Some(identity.page_id.into_canonical()),
-                property_path: Some("page.identity".into()),
-            }],
-            Self::AppendBlankPageV1 { transition } => {
-                append_blank_page_persistence_requirements_v1(transition)
-            }
-            Self::SetTextFormatProperty { story_id, .. }
-            | Self::ClearTextFormatPropertyOverride { story_id, .. }
-            | Self::SetTextFormatPropertyScopedV1 { story_id, .. }
-            | Self::ClearTextFormatPropertyOverrideScopedV1 { story_id, .. } => {
-                vec![PersistenceRequirement {
-                    feature: "story.character_format_overlay".into(),
-                    origin: Some(story_id.into_canonical()),
-                    property_path: Some("story.character_format".into()),
-                }]
-            }
-            Self::SetParagraphAlignmentOverride { paragraph_ids, .. }
-            | Self::ClearParagraphAlignmentOverride { paragraph_ids, .. } => paragraph_ids
-                .iter()
-                .map(|paragraph_id| PersistenceRequirement {
-                    feature: "story.paragraph_alignment".into(),
-                    origin: Some(paragraph_id.into_canonical()),
-                    property_path: Some("paragraph.alignment".into()),
-                })
-                .collect(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1325,6 +1028,10 @@ pub enum EditorError {
         message: String,
     },
     StalePageAppend,
+    PageDeleteUnsupported {
+        message: String,
+    },
+    StalePageDelete,
     NodeMoveUnsupported {
         node_id: NodeId,
     },
@@ -1706,6 +1413,9 @@ impl fmt::Display for EditorError {
             Self::PageAppendUnsupported { .. } | Self::StalePageAppend => {
                 display_page_append_error_v1(self, formatter)
             }
+            Self::PageDeleteUnsupported { .. } | Self::StalePageDelete => {
+                display_page_delete_error_v1(self, formatter)
+            }
             Self::NodeMoveUnsupported { node_id } => write!(
                 formatter,
                 "node {} is outside the bounded directly-page-owned move slice",
@@ -1914,6 +1624,8 @@ impl EditorError {
             Self::AuthoredPageIdentityConflict { .. } => "authored_page_identity_conflict",
             Self::PageAppendUnsupported { .. } => "page_append_unsupported",
             Self::StalePageAppend => "stale_page_append",
+            Self::PageDeleteUnsupported { .. } => "page_delete_unsupported",
+            Self::StalePageDelete => "stale_page_delete",
             Self::NodeMoveUnsupported { .. } => "node_move_unsupported",
             Self::NodeMoveNoChange { .. } => "node_move_no_change",
             Self::NodeMoveOverflow { .. } => "node_move_overflow",
@@ -2261,6 +1973,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesAuthoredPageIdentityOperation {
         index: usize,
     },
+    LegacyProjectCarriesDeleteBlankPageOperation {
+        index: usize,
+    },
     LegacyProjectCarriesTextFormatOperation {
         index: usize,
     },
@@ -2321,7 +2036,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, {EDITOR_PROJECT_VERSION_V0_18:?}, {EDITOR_PROJECT_VERSION_V0_19:?}, {EDITOR_PROJECT_VERSION_V0_20:?}, {EDITOR_PROJECT_VERSION_V0_21:?}, {EDITOR_PROJECT_VERSION_V0_22:?}, {EDITOR_PROJECT_VERSION_V0_23:?}, or {EDITOR_PROJECT_VERSION_V0_24:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, {EDITOR_PROJECT_VERSION_V0_18:?}, {EDITOR_PROJECT_VERSION_V0_19:?}, {EDITOR_PROJECT_VERSION_V0_20:?}, {EDITOR_PROJECT_VERSION_V0_21:?}, {EDITOR_PROJECT_VERSION_V0_22:?}, {EDITOR_PROJECT_VERSION_V0_23:?}, {EDITOR_PROJECT_VERSION_V0_24:?}, {EDITOR_PROJECT_VERSION_V0_25:?}, or {EDITOR_PROJECT_VERSION_V0_26:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -2396,6 +2111,10 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesPageOrderOperation { index } => write!(
                 formatter,
                 "editor project operation {index} uses ReorderPagesV1 but the project schema predates pub-editor-v0.23"
+            ),
+            Self::LegacyProjectCarriesDeleteBlankPageOperation { index } => write!(
+                formatter,
+                "legacy editor project cannot carry DeleteBlankAuthoredPageV1 operation at index {index}"
             ),
             Self::LegacyProjectCarriesAuthoredPageIdentityOperation { index } => write!(
                 formatter,
@@ -3677,6 +3396,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project
                 .operations
@@ -3713,6 +3433,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             return Err(EditorProjectError::UnsupportedSchema {
                 found: project.schema_version.clone(),
@@ -3754,6 +3475,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project
                 .operations
@@ -3784,6 +3506,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project
                 .operations
@@ -3813,6 +3536,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && !project.table_grids.is_empty()
         {
             return Err(EditorProjectError::LegacyProjectCarriesTableGrids);
@@ -3836,6 +3560,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
@@ -3861,6 +3586,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project
                 .operations
@@ -3887,6 +3613,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project
                 .operations
@@ -3912,6 +3639,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project
                 .operations
@@ -3930,6 +3658,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project
                 .operations
@@ -3947,6 +3676,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project
                 .operations
@@ -3959,6 +3689,7 @@ impl EditorSession {
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project
                 .operations
@@ -3968,7 +3699,10 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesPageOrderOperation { index });
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_24 {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+        {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
                     operation,
@@ -3995,6 +3729,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project
                 .operations
@@ -4020,6 +3755,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project
                 .operations
@@ -4042,6 +3778,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::ReorderAuthoredStack { .. })
@@ -4063,6 +3800,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project
                 .operations
@@ -4082,6 +3820,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project
                 .operations
@@ -4104,6 +3843,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
@@ -4124,6 +3864,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project
                 .operations
@@ -4139,6 +3880,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::SetTableTrackExtent { .. })
@@ -4153,6 +3895,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
         {
             if let Some(index) = project
                 .operations
@@ -4177,6 +3920,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && project.identity.is_some()
         {
             return Err(EditorProjectError::LegacyProjectCarriesIdentity);
@@ -4195,10 +3939,20 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_22
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_23
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_24
-            || project.schema_version == EDITOR_PROJECT_VERSION_V0_25)
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_25
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_26)
             && project.identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_26 {
+            if let Some(index) = project.operations.iter().position(|operation| {
+                matches!(operation, EditOperation::DeleteBlankAuthoredPageV1 { .. })
+            }) {
+                return Err(
+                    EditorProjectError::LegacyProjectCarriesDeleteBlankPageOperation { index },
+                );
+            }
         }
         if project.source_hash != self.source_hash {
             return Err(EditorProjectError::SourceHashMismatch {
@@ -6356,6 +6110,9 @@ fn replay_canonical_operation(
         EditOperation::AppendBlankPageV1 { transition } => session
             .consume_canonical_append_blank_page_v1(transition.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::DeleteBlankAuthoredPageV1 { transition } => session
+            .consume_canonical_delete_blank_authored_page_v1(transition.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::SetTextFormatProperty {
             story_id,
             start_scalar,
@@ -7531,6 +7288,15 @@ fn apply_forward(
             )
             .map_err(append_blank_page_error_to_editor_v1)?;
         }
+        EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
+            apply_delete_blank_authored_page_forward_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(delete_blank_authored_page_error_to_editor_v1)?;
+        }
         EditOperation::ReorderPagesV1 { transition } => {
             apply_page_order_transition_forward_v1(
                 graph.document.id,
@@ -7805,6 +7571,15 @@ fn apply_inverse(
                 transition,
             )
             .map_err(append_blank_page_error_to_editor_v1)?;
+        }
+        EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
+            apply_delete_blank_authored_page_inverse_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(delete_blank_authored_page_error_to_editor_v1)?;
         }
         EditOperation::ReorderPagesV1 { transition } => {
             apply_page_order_transition_inverse_v1(
