@@ -495,6 +495,8 @@ fn build_pdf_artifact(
                 table_paint_incomplete_count += 1;
                 return None;
             }
+            // Measurement-only factorial arm: preserved Viewer order + TABLE borders only.
+            fills.clear();
             if fills.is_empty() && borders.is_empty() {
                 table_no_visible_paint_count += 1;
                 return None;
