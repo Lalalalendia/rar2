@@ -618,6 +618,7 @@ $document = $null
 $securityBefore = $null
 $target = $null
 $mutatedPath = Join-Path $privateDir "mutated.pub"
+$inPlaceSaveCompleted = $false
 
 try {
     Set-NativeStage "primary_application_create_begin"
@@ -676,13 +677,13 @@ try {
         Set-NativeStage "primary_save_begin"
         $document.Save()
         Set-NativeStage "primary_save_complete"
-        $saved = Get-FileFingerprint $mutatedPath
+        $inPlaceSaveCompleted = $true
         $receipt.save = [ordered]@{
-            state = "ok"
-            sha256 = $saved.sha256
-            byte_len = $saved.byte_len
+            state = "pending_process_exit"
+            sha256 = $null
+            byte_len = $null
         }
-        $receipt.status = "saved"
+        $receipt.status = "saved_pending_process_exit"
     }
     else {
         $selector = $operation.selector
@@ -736,19 +737,26 @@ try {
             Set-NativeStage "primary_save_begin"
             $document.Save()
             Set-NativeStage "primary_save_complete"
+            $inPlaceSaveCompleted = $true
+            $receipt.save = [ordered]@{
+                state = "pending_process_exit"
+                sha256 = $null
+                byte_len = $null
+            }
+            $receipt.status = "saved_pending_process_exit"
         }
         else {
             Set-NativeStage "primary_save_as_begin"
             $document.SaveAs($mutatedPath, $PbFilePublication, $false)
             Set-NativeStage "primary_save_as_complete"
+            $saved = Get-FileFingerprint $mutatedPath
+            $receipt.save = [ordered]@{
+                state = "ok"
+                sha256 = $saved.sha256
+                byte_len = $saved.byte_len
+            }
+            $receipt.status = "saved"
         }
-        $saved = Get-FileFingerprint $mutatedPath
-        $receipt.save = [ordered]@{
-            state = "ok"
-            sha256 = $saved.sha256
-            byte_len = $saved.byte_len
-        }
-        $receipt.status = "saved"
     }
 }
 catch {
@@ -786,6 +794,26 @@ Set-NativeStage "primary_process_exit_wait_complete"
 $receipt.process_exit.primary = if ($primaryExited) { "ok" } else { "timeout" }
 if (-not $primaryExited) {
     $receipt.status = "process_exit_timeout"
+}
+
+if ($inPlaceSaveCompleted -and $primaryExited) {
+    try {
+        Set-NativeStage "primary_saved_file_fingerprint_begin"
+        $saved = Get-FileFingerprint $mutatedPath
+        Set-NativeStage "primary_saved_file_fingerprint_complete"
+        $receipt.save = [ordered]@{
+            state = "ok"
+            sha256 = $saved.sha256
+            byte_len = $saved.byte_len
+        }
+        $receipt.status = "saved"
+    }
+    catch {
+        $script:NativeFailureStage = [string]$script:NativeCurrentStage
+        Write-Host ("PUB_RE_NATIVE_FAILURE_STAGE stage={0}" -f $script:NativeFailureStage)
+        Set-NativeStage "primary_saved_file_fingerprint_error"
+        throw
+    }
 }
 
 if (($operationKind -eq "save_as_noop" -or $operationKind -eq "save_in_place_noop") -and $receipt.save.state -eq "ok" -and $primaryExited) {
