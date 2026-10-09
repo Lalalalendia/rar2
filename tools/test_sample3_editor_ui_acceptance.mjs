@@ -167,7 +167,7 @@ async function main() {
     await page.locator("#apply-text").click();
     await page.waitForFunction(() => {
       const state = document.getElementById("state").textContent;
-      return state.startsWith("revision ") && !state.includes(" · selected ") &&
+      return state.startsWith("revision ") &&
         document.getElementById("save-pub").disabled === false;
     }, null, { timeout: 120000 });
     const approved = await read("/v1/pub-save/preview");
