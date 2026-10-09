@@ -648,12 +648,21 @@ mod tests {
             content_rotation_degrees: None,
             recolor: None,
         };
-        assert!(!fixed_image_placement_has_output_semantics("image/png", &empty));
-        assert!(!fixed_image_placement_has_output_semantics("image/gif", &empty));
+        assert!(!fixed_image_placement_has_output_semantics(
+            "image/png",
+            &empty
+        ));
+        assert!(!fixed_image_placement_has_output_semantics(
+            "image/gif",
+            &empty
+        ));
 
         let mut rotation = empty.clone();
         rotation.content_rotation_degrees = Some(90);
-        assert!(fixed_image_placement_has_output_semantics("image/png", &rotation));
+        assert!(fixed_image_placement_has_output_semantics(
+            "image/png",
+            &rotation
+        ));
 
         let mut crop = empty.clone();
         crop.source_window = Some(ViewerImageSourceWindowV1 {
@@ -662,16 +671,28 @@ mod tests {
             right_q16: 1 << 15,
             bottom_q16: 1 << 16,
         });
-        assert!(!fixed_image_placement_has_output_semantics("image/png", &crop));
-        assert!(fixed_image_placement_has_output_semantics("image/gif", &crop));
+        assert!(!fixed_image_placement_has_output_semantics(
+            "image/png",
+            &crop
+        ));
+        assert!(fixed_image_placement_has_output_semantics(
+            "image/gif",
+            &crop
+        ));
 
         let mut recolor = empty;
         recolor.recolor = Some(ViewerImageRecolorV1 {
             target_rgb: [1, 2, 3],
             preserve_grays: true,
         });
-        assert!(!fixed_image_placement_has_output_semantics("image/jpeg", &recolor));
-        assert!(fixed_image_placement_has_output_semantics("image/gif", &recolor));
+        assert!(!fixed_image_placement_has_output_semantics(
+            "image/jpeg",
+            &recolor
+        ));
+        assert!(fixed_image_placement_has_output_semantics(
+            "image/gif",
+            &recolor
+        ));
     }
 
     #[test]
