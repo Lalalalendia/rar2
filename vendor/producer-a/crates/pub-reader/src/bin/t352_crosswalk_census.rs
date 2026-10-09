@@ -7,8 +7,7 @@
 use anyhow::{Context, Result, bail};
 use pub_contents::{
     BLOCK_TYPE_U32, RawContentsBlock, RawContentsBlockBody, parse_0x2c_header,
-    parse_confirmed_0x2c_chunk, parse_confirmed_0x2c_trailer_root,
-    parse_confirmed_chunk_reference,
+    parse_confirmed_0x2c_chunk, parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
 };
 use pub_core::{RawSpan, StreamPath};
 use pub_escher::{
@@ -32,8 +31,10 @@ fn unique_dimension(fields: &[RawContentsBlock], id: u16) -> Option<(i64, RawSpa
         return None;
     }
     match &field.body {
-        RawContentsBlockBody::U32 { value, value_source } if value_source.len == 4 =>
-            Some((i64::from(*value), value_source.clone())),
+        RawContentsBlockBody::U32 {
+            value,
+            value_source,
+        } if value_source.len == 4 => Some((i64::from(*value), value_source.clone())),
         _ => None,
     }
 }
@@ -50,8 +51,12 @@ fn unique_signed(record: &PublisherFieldRecord, id: u16) -> Option<i64> {
 
 fn main() -> Result<()> {
     let mut args = env::args_os().skip(1);
-    let source = args.next().context("usage: t352_crosswalk_census INPUT.pub OUTPUT.json")?;
-    let output = args.next().context("usage: t352_crosswalk_census INPUT.pub OUTPUT.json")?;
+    let source = args
+        .next()
+        .context("usage: t352_crosswalk_census INPUT.pub OUTPUT.json")?;
+    let output = args
+        .next()
+        .context("usage: t352_crosswalk_census INPUT.pub OUTPUT.json")?;
     if args.next().is_some() {
         bail!("usage: t352_crosswalk_census INPUT.pub OUTPUT.json");
     }
@@ -60,7 +65,10 @@ fn main() -> Result<()> {
         bail!("source byte size outside bounded PUB census policy");
     }
     let digest = Sha256::digest(&raw);
-    let source_sha = digest.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    let source_sha = digest
+        .iter()
+        .map(|x| format!("{x:02x}"))
+        .collect::<String>();
 
     let contents = pub_cfb::read_stream_reader(Cursor::new(&raw), CONTENTS_PATH)
         .context("read /Contents using canonical CFB reader")?;
@@ -76,9 +84,8 @@ fn main() -> Result<()> {
     // /Contents AA/AB pair and its exact scalar source spans.
     let mut content_dims: BTreeMap<u32, ((i64, RawSpan), (i64, RawSpan))> = BTreeMap::new();
     for index in 0..slot_count {
-        let Some(reference) =
-            parse_confirmed_chunk_reference(&contents, &trailer.directory, index)
-                .with_context(|| format!("read occupied Contents slot {index}"))?
+        let Some(reference) = parse_confirmed_chunk_reference(&contents, &trailer.directory, index)
+            .with_context(|| format!("read occupied Contents slot {index}"))?
         else {
             continue;
         };
@@ -111,9 +118,8 @@ fn main() -> Result<()> {
 
     let escher = pub_cfb::read_stream_reader(Cursor::new(&raw), ESCHER_PATH)
         .context("read /Escher/EscherStm using canonical CFB reader")?;
-    let escher_shapes =
-        inspect_sp_containers(StreamPath(ESCHER_PATH.into()), &escher)
-            .context("parse Escher SpContainer inventory")?;
+    let escher_shapes = inspect_sp_containers(StreamPath(ESCHER_PATH.into()), &escher)
+        .context("parse Escher SpContainer inventory")?;
     let mut rows: Vec<Value> = Vec::new();
     let mut id_counts: BTreeMap<u32, u32> = BTreeMap::new();
     let mut spid_counts: BTreeMap<u32, u32> = BTreeMap::new();
@@ -127,8 +133,7 @@ fn main() -> Result<()> {
             continue;
         };
         let id = identity_field.value;
-        let Some(((width, width_span), (height, height_span))) = content_dims.get(&id)
-        else {
+        let Some(((width, width_span), (height, height_span))) = content_dims.get(&id) else {
             continue;
         };
         let (Some(xs), Some(ys), Some(xe), Some(ye), Some(xe_field)) = (
@@ -140,21 +145,25 @@ fn main() -> Result<()> {
         ) else {
             continue;
         };
-        let (Some(aw), Some(ah)) = (xe.checked_sub(xs), ye.checked_sub(ys))
-        else {
+        let (Some(aw), Some(ah)) = (xe.checked_sub(xs), ye.checked_sub(ys)) else {
             continue;
         };
-        if aw <= 0 || ah <= 0 || xe_field.source.len != 6
-            || width_span.len != 4 || height_span.len != 4
+        if aw <= 0
+            || ah <= 0
+            || xe_field.source.len != 6
+            || width_span.len != 4
+            || height_span.len != 4
         {
             continue;
         }
         // The T352 mutation must remain positive, bounded U32 width and a
         // signed 32-bit Escher coordinate; it must not alter stream lengths.
-        let patchable = width.checked_add(DELTA_EMU).is_some_and(|next|
-            next <= i64::from(u32::MAX))
-            && xe.checked_add(DELTA_EMU).is_some_and(|next|
-                next <= i64::from(i32::MAX));
+        let patchable = width
+            .checked_add(DELTA_EMU)
+            .is_some_and(|next| next <= i64::from(u32::MAX))
+            && xe
+                .checked_add(DELTA_EMU)
+                .is_some_and(|next| next <= i64::from(i32::MAX));
         *id_counts.entry(id).or_default() += 1;
         *spid_counts.entry(fsp.spid).or_default() += 1;
         rows.push(json!({
@@ -189,7 +198,10 @@ fn main() -> Result<()> {
                 && row["numeric_patchable"] == true
         );
     }
-    let admitted = rows.iter().filter(|row| row["admitted_independent_target"] == true).count();
+    let admitted = rows
+        .iter()
+        .filter(|row| row["admitted_independent_target"] == true)
+        .count();
     let result = json!({
         "schema": "chaptera.t352-independent-identity-first-preflight.v1",
         "source_sha256": source_sha,
