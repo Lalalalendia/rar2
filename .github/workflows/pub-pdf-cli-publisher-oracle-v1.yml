@@ -34,7 +34,7 @@ jobs:
 
   compare-publisher:
     # One bounded current-main A/B for TABLE paint; diagnostic branch only.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'measure/pub-pdf-table-borders-only-01'
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'measure/pub-pdf-table-borders-clipped-01'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
