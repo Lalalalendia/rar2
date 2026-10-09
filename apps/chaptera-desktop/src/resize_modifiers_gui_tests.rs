@@ -72,9 +72,7 @@ fn gui_resize_handle_commits_one_resize_node() {
                         return None;
                     }
                     let point = pub_interaction::DocumentPoint::new(
-                        pub_editor::LengthEmu::new(
-                            hit.bounds.x.get() + hit.bounds.width.get() / 2,
-                        ),
+                        pub_editor::LengthEmu::new(hit.bounds.x.get() + hit.bounds.width.get() / 2),
                         pub_editor::LengthEmu::new(
                             hit.bounds.y.get() + hit.bounds.height.get() / 2,
                         ),
@@ -340,9 +338,7 @@ fn gui_resize_modifiers_toggle_mid_drag_and_commit_exact_constraint_plan() {
                         return None;
                     }
                     let point = pub_interaction::DocumentPoint::new(
-                        pub_editor::LengthEmu::new(
-                            hit.bounds.x.get() + hit.bounds.width.get() / 2,
-                        ),
+                        pub_editor::LengthEmu::new(hit.bounds.x.get() + hit.bounds.width.get() / 2),
                         pub_editor::LengthEmu::new(
                             hit.bounds.y.get() + hit.bounds.height.get() / 2,
                         ),
@@ -350,7 +346,14 @@ fn gui_resize_modifiers_toggle_mid_drag_and_commit_exact_constraint_plan() {
                     hit_index
                         .topmost_at(point)
                         .filter(|top| top.instance_id == hit.instance_id)
-                        .map(|_| (format!("Page {}", page.index), point, hit.node_id, hit.bounds))
+                        .map(|_| {
+                            (
+                                format!("Page {}", page.index),
+                                point,
+                                hit.node_id,
+                                hit.bounds,
+                            )
+                        })
                 })
             })
             .expect("real fixture exposes a topmost ResizeNode-admitted object")
@@ -449,7 +452,8 @@ fn gui_resize_modifiers_toggle_mid_drag_and_commit_exact_constraint_plan() {
             surface.size.height.get(),
             viewport,
         )
-        .expect("fit scale") * app.zoom;
+        .expect("fit scale")
+            * app.zoom;
         let page_width = surface.size.width.get() as f32 * scene_scale;
         let page_height = surface.size.height.get() as f32 * scene_scale;
         let page_left = ((canvas.x0 + canvas.x1) as f32 - page_width) / 2.0;
@@ -617,4 +621,3 @@ fn gui_resize_modifiers_toggle_mid_drag_and_commit_exact_constraint_plan() {
         "modifier resize must not mutate source PUB bytes"
     );
 }
-
