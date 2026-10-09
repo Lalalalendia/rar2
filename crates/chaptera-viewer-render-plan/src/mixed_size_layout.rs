@@ -997,7 +997,10 @@ mod tests {
                 .map(LengthEmu::get)
                 .expect("exact terminal physical metric");
         let expected_terminal_advance = (terminal_extent * 3 + 2) / 4;
-        let frame_height = first_extent.min(30 * 12_700) + expected_terminal_advance;
+        // Admit the first line at its normal baseline, then require the
+        // bounded physical-prefix retry only for the terminal visible line.
+        let frame_height =
+            (30 * 12_700).max(first_extent.min(30 * 12_700) + expected_terminal_advance);
         assert!(
             30 * 12_700 + 45 * 12_700 > frame_height,
             "ordinary baseline must overflow the selected narrow frame"
