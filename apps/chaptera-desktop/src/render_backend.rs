@@ -1,3 +1,4 @@
+// Sacrificial CI Reader critical-path baseline: code semantics unchanged.
 //! Desktop egui execution backend for source-neutral Chaptera render plans.
 //!
 //! This module owns only how already-resolved document paint facts are executed
