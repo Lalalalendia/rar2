@@ -27,7 +27,7 @@ def enforce(source: str) -> None:
     require(CONSUMERS in script, "Any of the three required real consumers removed")
     require(script.count("sudo timeout --kill-after=10s") == 4, "APT time boundaries removed")
     require("120s apt-get " in script and "180s apt-get " in script and "300s apt-get " in script , "Bounded primary/fallback budgets changed")
-    require('Acquire::Retries=1' in script and 'Acquire::http::Timeout=15' in script and 'Acquire::https::Timeout=15' in script, "Short APT network retry/timeout policy removed")
+    require("-o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15" in script, "Exact short APT retry/timeout policy removed")
     require(script.count(DOWNLOAD) == 2, "Network download-only primary/fallback proof missing")
     require(script.count(INSTALL) == 1, "Offline installation after downloads missing")
     require("if ! sudo timeout" in script and "then" in script and "\nfi" in script, "Real primary failure branch lost")
