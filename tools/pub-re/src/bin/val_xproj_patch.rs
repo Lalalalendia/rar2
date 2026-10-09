@@ -840,4 +840,77 @@ mod tests {
             receipt["source_sha256"].as_str().unwrap()
         );
     }
+
+    #[test]
+    fn independent_type1_arms_are_bound_to_unique_census_and_exact_stream_spans() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("normalized.pub");
+        let census_path = tmp.path().join("census.json");
+        let arms = tmp.path().join("arms");
+        let width = 2_289_185i64;
+        let xe = 3_144_900i64;
+        let mut cfb = cfb::create(&source).unwrap();
+        cfb.create_storage("/Escher").unwrap();
+        let mut contents = vec![0x12u8; 60_000];
+        contents[16..20].copy_from_slice(&uint32_bytes(width).unwrap());
+        cfb.create_stream("/Contents").unwrap().write_all(&contents).unwrap();
+        let mut escher = vec![0x48u8; 2048];
+        escher[8..10].copy_from_slice(&0x2003u16.to_le_bytes());
+        escher[10..14].copy_from_slice(&(xe as i32).to_le_bytes());
+        cfb.create_stream("/Escher/EscherStm").unwrap().write_all(&escher).unwrap();
+        drop(cfb);
+
+        let original_sha = sha(&fs::read(&source).unwrap());
+        let census = json!({
+            "schema":"chaptera.t352-independent-identity-first-preflight.v1",
+            "source_sha256": original_sha,
+            "rows":[{
+                "contents_seq": 305,
+                "spid": 1035,
+                "shape_type": 1,
+                "admitted_independent_target": true,
+                "unique_join": true,
+                "both_geometries_consistent": true,
+                "identity_joined_even_if_extents_differ": true,
+                "numeric_patchable": true,
+                "different_from_original_t352_width": true,
+                "contents_width_emu": width,
+                "anchor_width_emu": width,
+                "anchor_xe_emu": xe,
+                "width_value_offset_in_contents": 16,
+                "xe_tagged_field_offset_in_escher": 8
+            }]
+        });
+        write_json(&census_path, &census).unwrap();
+        prepare_independent(&source, &census_path, 305, &arms).unwrap();
+        assert_eq!(sha(&fs::read(&source).unwrap()), original_sha);
+        let before = all_streams(&source).unwrap();
+        for (name, contents_change, escher_change) in [
+            ("control", false, false),
+            ("both_consistent", true, true),
+            ("contents_only", true, false),
+            ("escher_only", false, true),
+        ] {
+            let changed = all_streams(&arms.join(format!("{name}.pub"))).unwrap();
+            assert_eq!(before.keys().collect::<Vec<_>>(), changed.keys().collect::<Vec<_>>());
+            for (stream_name, bytes) in &before {
+                let offsets = changed_offsets(bytes, &changed[stream_name]).unwrap();
+                let expected = if stream_name == "/Contents" && contents_change {
+                    changed_offsets(
+                        &uint32_bytes(width).unwrap(),
+                        &uint32_bytes(width + DELTA_EMU).unwrap()
+                    ).unwrap().iter().map(|i| i + 16).collect::<Vec<_>>()
+                } else if stream_name == "/Escher/EscherStm" && escher_change {
+                    changed_offsets(
+                        &(xe as i32).to_le_bytes(),
+                        &((xe + DELTA_EMU) as i32).to_le_bytes()
+                    ).unwrap().iter().map(|i| i + 10).collect::<Vec<_>>()
+                } else { vec![] };
+                assert_eq!(offsets, expected, "unplanned source-stream mutation in {name}");
+            }
+        }
+        assert!(prepare_independent(&source, &census_path, 306, &tmp.path().join("wrong-id")).is_err());
+    }
+
 }
