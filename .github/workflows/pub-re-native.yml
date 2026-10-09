@@ -1145,13 +1145,17 @@ jobs:
       - name: Execute T352 Publisher geometry matrix
         if: ${{ needs.gate.outputs.command_mode == 'research_t352' }}
         shell: powershell
+        env:
+          PUB_RE_RESEARCH_ID: ${{ needs.gate.outputs.research_id }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
           if ($env:PUB_RE_RESEARCH_ID -eq "val-xproj-independent-01") {
             & tools/windows/run_t352_independent_native.ps1 -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT
-          } else {
+          } elseif ($env:PUB_RE_RESEARCH_ID -eq "val-xproj-01") {
             & tools/windows/run_t352_native.ps1 -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT
+          } else {
+            throw "unexpected T352 research_id; refusing implicit fallback"
           }
           if (-not $?) { throw "T352 native experiment failed" }
           $result = Join-Path $env:PUB_RE_RESEARCH_OUTPUT "analysis\t352-native-observations.json"
