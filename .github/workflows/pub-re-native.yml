@@ -1237,6 +1237,19 @@ jobs:
         with:
           persist-credentials: false
 
+      # The native Windows runner resolves bare bash to System32 WSL bash
+      # unless Git Bash is explicitly preferred (same proven native-job guard).
+      - name: Prefer Git Bash for M4 Rust toolchain
+        if: ${{ needs.gate.outputs.command_mode == 'research_width_m4_cfb' }}
+        shell: powershell
+        run: |
+          $gitBashDir = "C:\Program Files\Git\bin"
+          $gitBash = Join-Path $gitBashDir "bash.exe"
+          if (-not (Test-Path -LiteralPath $gitBash -PathType Leaf)) {
+            throw "Git Bash is required at $gitBash"
+          }
+          $gitBashDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - uses: dtolnay/rust-toolchain@stable
         if: ${{ needs.gate.outputs.command_mode == 'research_width_m4_cfb' }}
         with:
