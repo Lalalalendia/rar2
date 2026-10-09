@@ -100,6 +100,69 @@ fn main() -> Result<()> {
             .filter(|cell| !cell.text.is_empty())
             .count();
 
+        let mut visible_fill_by_row = vec![0usize; table.rows as usize];
+        let mut nonwhite_fill_by_row = vec![0usize; table.rows as usize];
+        let mut white_fill_by_row = vec![0usize; table.rows as usize];
+        let mut visible_fill_by_column = vec![0usize; table.columns as usize];
+        let mut nonwhite_fill_by_column = vec![0usize; table.columns as usize];
+        let mut white_fill_by_column = vec![0usize; table.columns as usize];
+        let mut nonempty_text_by_row = vec![0usize; table.rows as usize];
+        for cell in &table.cells {
+            let row = cell.address.row as usize;
+            let column = cell.address.column as usize;
+            if row < nonempty_text_by_row.len() && !cell.text.is_empty() {
+                nonempty_text_by_row[row] += 1;
+            }
+            if cell.fill_visible != Some(true) {
+                continue;
+            }
+            if row < visible_fill_by_row.len() {
+                visible_fill_by_row[row] += 1;
+            }
+            if column < visible_fill_by_column.len() {
+                visible_fill_by_column[column] += 1;
+            }
+            match cell.fill_rgb {
+                Some([255, 255, 255]) => {
+                    if row < white_fill_by_row.len() {
+                        white_fill_by_row[row] += 1;
+                    }
+                    if column < white_fill_by_column.len() {
+                        white_fill_by_column[column] += 1;
+                    }
+                }
+                Some(_) => {
+                    if row < nonwhite_fill_by_row.len() {
+                        nonwhite_fill_by_row[row] += 1;
+                    }
+                    if column < nonwhite_fill_by_column.len() {
+                        nonwhite_fill_by_column[column] += 1;
+                    }
+                }
+                None => {}
+            }
+        }
+
+        let mut source_horizontal_border_by_boundary = vec![0usize; table.rows.saturating_add(1) as usize];
+        let mut source_vertical_border_by_boundary = vec![0usize; table.columns.saturating_add(1) as usize];
+        for segment in &source_table.border_segments {
+            match segment.axis {
+                PubTableBorderAxis::Horizontal if segment.row_start == segment.row_end => {
+                    let index = segment.row_start as usize;
+                    if index < source_horizontal_border_by_boundary.len() {
+                        source_horizontal_border_by_boundary[index] += 1;
+                    }
+                }
+                PubTableBorderAxis::Vertical if segment.column_start == segment.column_end => {
+                    let index = segment.column_start as usize;
+                    if index < source_vertical_border_by_boundary.len() {
+                        source_vertical_border_by_boundary[index] += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+
         let horizontal_border_count = table
             .borders
             .iter()
@@ -255,6 +318,15 @@ fn main() -> Result<()> {
             "visible_fill_nonwhite_count": visible_fill_nonwhite_count,
             "visible_fill_unique_color_count": visible_fill_unique_color_count,
             "nonempty_text_cell_count": nonempty_text_cell_count,
+            "visible_fill_by_row": visible_fill_by_row,
+            "nonwhite_fill_by_row": nonwhite_fill_by_row,
+            "white_fill_by_row": white_fill_by_row,
+            "visible_fill_by_column": visible_fill_by_column,
+            "nonwhite_fill_by_column": nonwhite_fill_by_column,
+            "white_fill_by_column": white_fill_by_column,
+            "nonempty_text_by_row": nonempty_text_by_row,
+            "source_horizontal_border_by_boundary": source_horizontal_border_by_boundary,
+            "source_vertical_border_by_boundary": source_vertical_border_by_boundary,
             "border_count": table.borders.len(),
             "horizontal_border_count": horizontal_border_count,
             "vertical_border_count": vertical_border_count,
@@ -319,7 +391,7 @@ fn main() -> Result<()> {
     }
 
     let payload = json!({
-        "schema": "chaptera.pub-pdf-table-paint-discriminator.v3",
+        "schema": "chaptera.pub-pdf-table-paint-discriminator.v4",
         "source_sha256": source_sha256,
         "table_count": rows.len(),
         "tables": rows,
