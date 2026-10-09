@@ -258,8 +258,7 @@ pub fn render_bounded_pdf(
         }
     }
 
-    let mut nodes = scene.nodes.clone();
-    nodes.sort_by_key(|node| node.origin);
+    let nodes = scene.nodes.clone();
 
     let node_ids = nodes
         .iter()
