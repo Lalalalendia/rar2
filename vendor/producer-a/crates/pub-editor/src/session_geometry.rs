@@ -1168,11 +1168,7 @@ impl EditorSession {
             .collect::<BTreeSet<_>>();
         // Other pages' authored lanes cannot reference a shape that we remove.
         let foreign_stack_reference = self.authored_stacks.iter().any(|(other_page, stack)| {
-            *other_page != page_id
-                && stack
-                    .members
-                    .iter()
-                    .any(|id| shapes_on_target.contains(id))
+            *other_page != page_id && stack.members.iter().any(|id| shapes_on_target.contains(id))
         });
         // Graph descendants whose parent is an authored overlay may not reach
         // the Page via graph.nodes alone. Walk both the Page and overlay roots.
@@ -1192,16 +1188,14 @@ impl EditorSession {
                 parent = ancestor.header.parent_id;
             }
         });
-        let foreign_or_unproven_membership =
-            self.page_has_resolved_node_membership_v1(page_id)
+        let foreign_or_unproven_membership = self.page_has_resolved_node_membership_v1(page_id)
             || dependent_graph_node
             || foreign_stack_reference
             || self
                 .authored_lines
                 .values()
                 .any(|line| line.page_id == page_id || line.parent_id == page_id);
-        let customer_pages =
-            self.effective_customer_page_order_v1(source_qualified_page_ids)?;
+        let customer_pages = self.effective_customer_page_order_v1(source_qualified_page_ids)?;
         let state = DeleteAuthoredRectanglePageStateV1 {
             document_pages: self.graph.document.pages.clone(),
             pages: self.graph.pages.clone(),
@@ -2077,7 +2071,11 @@ mod authored_page_append_tests {
                 crate::AuthoredShapePaintV1 {
                     fill: crate::AuthoredSolidFillV1 {
                         visible: true,
-                        color: crate::Srgb8V1 { r: 255, g: 255, b: 255 },
+                        color: crate::Srgb8V1 {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                        },
                     },
                     stroke: crate::AuthoredSolidStrokeV1 {
                         visible: true,
@@ -2091,10 +2089,7 @@ mod authored_page_append_tests {
         let original_operations = session.operations().len();
         let original_graph_pages = session.graph().document.pages.clone();
         let planned = session
-            .plan_delete_authored_rectangle_page_from_session_v1(
-                &[source],
-                identity.page_id,
-            )
+            .plan_delete_authored_rectangle_page_from_session_v1(&[source], identity.page_id)
             .expect("admitted authored Rectangle page");
         assert_eq!(planned.shape_before.node_id, shape_id);
         assert_eq!(session.operations().len(), original_operations);
@@ -2116,10 +2111,7 @@ mod authored_page_append_tests {
             .clear();
         assert!(
             session
-                .plan_delete_authored_rectangle_page_from_session_v1(
-                    &[source],
-                    identity.page_id,
-                )
+                .plan_delete_authored_rectangle_page_from_session_v1(&[source], identity.page_id,)
                 .is_err()
         );
         assert_eq!(session.operations().len(), original_operations);
