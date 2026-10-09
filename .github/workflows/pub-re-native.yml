@@ -511,6 +511,87 @@ jobs:
             throw "native_transaction_child_failed_exit_$exitCode"
           }
 
+      - name: Run matched rotation pair
+        if: ${{ needs.gate.outputs.command_mode == 'rotation_pair' }}
+        shell: powershell
+        env:
+          PUB_RE_PAIR_PAGE_ID: ${{ needs.gate.outputs.page_id }}
+          PUB_RE_PAIR_SHAPE_ID: ${{ needs.gate.outputs.shape_id }}
+          PUB_RE_PAIR_DELTA: ${{ needs.gate.outputs.delta_degrees }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $preexistingPublisher = @(Get-Process -Name MSPUB -ErrorAction SilentlyContinue)
+          if ($preexistingPublisher.Count -ne 0) {
+            throw "publisher_busy_before_rotation_pair_wrapper"
+          }
+
+          $private = Join-Path $env:PUB_RE_NATIVE_OUTPUT "pair-wrapper"
+          New-Item -ItemType Directory -Force -Path $private | Out-Null
+          $stdout = Join-Path $private "rotation-pair.stdout.txt"
+          $stderr = Join-Path $private "rotation-pair.stderr.txt"
+          $script = Join-Path $env:GITHUB_WORKSPACE "tools\pub-re\windows\Invoke-PubReRotationPair.ps1"
+          $env:PUB_RE_ROTATION_PAIR_SCRIPT = $script
+          $startedUtc = [DateTime]::UtcNow
+
+          $childCommand = @'
+          $ErrorActionPreference = "Stop"
+          & $env:PUB_RE_ROTATION_PAIR_SCRIPT `
+            -SourcePath $env:PUB_RE_ROTATION_PAIR_SOURCE `
+            -ExpectedSha256 $env:PUB_RE_ROTATION_PAIR_SHA `
+            -OutputRoot $env:PUB_RE_NATIVE_OUTPUT `
+            -PageId ([int]$env:PUB_RE_PAIR_PAGE_ID) `
+            -ShapeId ([int]$env:PUB_RE_PAIR_SHAPE_ID) `
+            -DeltaDegrees ([double]::Parse($env:PUB_RE_PAIR_DELTA, [System.Globalization.CultureInfo]::InvariantCulture))
+          if (-not $?) { exit 1 }
+          '@
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
+          $powershellExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          $process = Start-Process `
+            -FilePath $powershellExe `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encoded) `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr `
+            -PassThru
+
+          $finished = $process.WaitForExit(360000)
+          if (-not $finished) {
+            Write-Host "PUB_RE_ROTATION_PAIR_WATCHDOG timeout_seconds=360 child_pid=$($process.Id)"
+            if (-not $process.HasExited) {
+              try { Stop-Process -Id $process.Id -Force -ErrorAction Stop } catch {}
+              try { [void]$process.WaitForExit(10000) } catch {}
+            }
+
+            $ownedPublisher = @(
+              Get-Process -Name MSPUB -ErrorAction SilentlyContinue | Where-Object {
+                try {
+                  $_.StartTime.ToUniversalTime() -ge $startedUtc.AddSeconds(-2)
+                } catch {
+                  $false
+                }
+              }
+            )
+            foreach ($publisherProcess in $ownedPublisher) {
+              Write-Host "PUB_RE_ROTATION_PAIR_WATCHDOG terminating_mspub_pid=$($publisherProcess.Id)"
+              try { Stop-Process -Id $publisherProcess.Id -Force -ErrorAction Stop } catch {}
+            }
+            Start-Sleep -Seconds 2
+            throw "rotation_pair_timeout"
+          }
+
+          $process.WaitForExit()
+          $process.Refresh()
+          if (-not $process.HasExited) {
+            throw "rotation_pair_child_exit_state_unavailable"
+          }
+          if (Test-Path -LiteralPath $stdout -PathType Leaf) { Get-Content -LiteralPath $stdout }
+          if (Test-Path -LiteralPath $stderr -PathType Leaf) { Get-Content -LiteralPath $stderr }
+          $exitCode = [int]$process.ExitCode
+          if ($exitCode -ne 0) {
+            throw "rotation_pair_child_failed_exit_$exitCode"
+          }
+
       - name: Validate failed native stage receipt
         if: ${{ failure() && needs.gate.outputs.command_mode != 'research_0p75' && needs.gate.outputs.command_mode != 'research_t352' && needs.gate.outputs.command_mode != 'rotation_pair' }}
         shell: powershell
