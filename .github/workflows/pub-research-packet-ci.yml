@@ -67,7 +67,7 @@ jobs:
               [ref]$errors
             )
             if ($errors.Count -ne 0) {
-              $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
+              $errors | ForEach-Object { Write-Error "${file}: line $($_.Extent.StartLineNumber), column $($_.Extent.StartColumnNumber), token=[$($_.Extent.Text)]: $($_.Message)" }
               throw "PowerShell parser rejected $file"
             }
           }
@@ -91,6 +91,14 @@ jobs:
       - name: Guard bounded M2 Publisher breakpoint contract
         shell: pwsh
         run: python tools/research-runner/tests/test_text_width_m2_contract.py
+
+      - name: Guard M3 read-only hyphenation options audit
+        shell: pwsh
+        run: python tools/research-runner/tests/test_text_width_m3_audit_contract.py
+
+      - name: Guard M3b application-wide preference transaction
+        shell: pwsh
+        run: python tools/research-runner/tests/test_text_width_m3b_contract.py
 
       - name: Exercise Structured Storage deletion helper
         shell: pwsh

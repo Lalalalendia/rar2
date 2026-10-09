@@ -4,9 +4,12 @@ param(
     [Parameter(Mandatory=$true)][string]$OutputRoot,
     [ValidateSet("none","control-before","narrow","wide","control-after",
         "m2-mid-1","m2-mid-2","m2-mid-3","m2-mid-4",
-        "m2-mid-5","m2-mid-6","m2-mid-7")][string]$ArmId = "none",
+        "m2-mid-5","m2-mid-6","m2-mid-7","m3-audit")][string]$ArmId = "none",
     [double]$WidthPt = 160,
-    [string]$ExpectedSourceSha = ""
+    [string]$ExpectedSourceSha = "",
+    [switch]$CaptureHyphenation,
+    [double]$M3bSeedWidthPt = 160.0,
+    [switch]$M3bOffDuringCreation
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -127,7 +130,26 @@ function Snapshot($Shape, [string]$PhaseTag = "") {
         $visibleSizePt = [double]$visibleFont.Size
         $visibleTextMatches = ($visibleText -ceq $ExpectedText)
         if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_properties") }
-        return [ordered]@{
+        $hyphenation = $null
+        if ($CaptureHyphenation) {
+            # Observation only: application Options can differ from Story policy.
+            if ($PhaseTag) { Write-Stage "running" ($PhaseTag + "_hyphenation_read") }
+            $options = $frame.Application.Options
+            try {
+                $zonePt = [double]$options.HyphenationZone
+                if ([double]::IsNaN($zonePt) -or [double]::IsInfinity($zonePt)) {
+                    throw "m3_hyphenation_zone_nonfinite"
+                }
+                $hyphenation = [ordered]@{
+                    auto_hyphenate = [bool]$options.AutoHyphenate
+                    hyphenation_zone_pt = $zonePt
+                    scope = "app_options_only"
+                    story_policy_observed = $false
+                    options_mutated = $false
+                }
+            } finally { Release-Com $options }
+        }
+        $result = [ordered]@{
             width_pt = [double]$Shape.Width
             height_pt = [double]$Shape.Height
             font_name = [string]$font.Name
@@ -145,6 +167,8 @@ function Snapshot($Shape, [string]$PhaseTag = "") {
             line_count = $count
             lines = $lines
         }
+        if ($CaptureHyphenation) { $result.hyphenation_options = $hyphenation }
+        return $result
     } finally {
         Release-Com $visibleFont
         Release-Com $visibleRange
@@ -189,12 +213,44 @@ try {
 
     if ($Mode -eq "seed") {
         if ($ArmId -ne "none") { throw "m1_seed_arm_id_invalid" }
+        if ($M3bOffDuringCreation -and -not $CaptureHyphenation) {
+            throw "m3b_capture_required_for_intervention"
+        }
+        if ([math]::Abs($M3bSeedWidthPt - 160.0) -gt 0.00001 -and
+            (-not $CaptureHyphenation -or
+             [math]::Abs($M3bSeedWidthPt - 162.53125) -gt 0.00001)) {
+            throw "m3b_seed_width_not_allowlisted"
+        }
         Copy-Item -LiteralPath $SourcePath -Destination $SeedPath -Force
         $app = $null; $doc = $null; $shape = $null; $frame = $null; $range = $null
         try {
             $Stage = "seed_application_create"
             Write-Stage "running" $Stage
-            $app = New-PubPublisherApplication
+            $app = if ($M3bOffDuringCreation) {
+                New-PubPublisherApplication -AllowHyphenationRecovery
+            } else {
+                New-PubPublisherApplication
+            }
+            if ($M3bOffDuringCreation) {
+                $Stage = "m3b_preference_transaction"
+                Write-Stage "running" $Stage
+                $marker = Join-Path $env:USERPROFILE ".chaptera-publisher-hyphenation-quarantine"
+                if (-not (Test-Path -LiteralPath $marker -PathType Leaf) -or
+                    (Get-Content -LiteralPath $marker -Raw).Trim() -cne "TEXT-WIDTH-HYPHENATION-M3B-01") {
+                    throw "m3b_quarantine_marker_missing_or_wrong"
+                }
+                $options = $app.Options
+                try {
+                    if (-not [bool]$options.AutoHyphenate -or
+                        [math]::Abs([double]$options.HyphenationZone - 18.0) -gt 0.000001) {
+                        throw "m3b_preference_initial_not_pinned"
+                    }
+                    $options.AutoHyphenate = $false
+                    if ([bool]$options.AutoHyphenate) {
+                        throw "m3b_preference_off_readback_failed"
+                    }
+                } finally { Release-Com $options }
+            }
             $Stage = "seed_document_open"
             Write-Stage "running" $Stage
             $doc = $app.Open($SeedPath,$false,$false)
@@ -203,7 +259,7 @@ try {
             $page = $doc.Pages.Item(1)
             $Stage = "seed_textbox_add"
             Write-Stage "running" $Stage
-            $shape = $page.Shapes.AddTextbox(1,72,72,$InitialWidth,$Height)
+            $shape = $page.Shapes.AddTextbox(1,72,72,$M3bSeedWidthPt,$Height)
             $Stage = "seed_frame_policy"
             Write-Stage "running" $Stage
             $frame = $shape.TextFrame
@@ -230,18 +286,44 @@ try {
             $Stage = "seed_save"
             Write-Stage "running" $Stage
             $doc.Save()
+            if ($CaptureHyphenation -and
+                [math]::Abs($M3bSeedWidthPt - 162.53125) -le 0.00001) {
+                $snapshotAfterSave = Snapshot $shape "m3b_after_save"
+            }
         } finally {
             Release-Com $range
             Release-Com $frame
             Release-Com $shape
             Close-Document $doc
-            Close-PubPublisherApplication $app
+            if ($M3bOffDuringCreation -and $null -ne $app) {
+                $Stage = "m3b_preference_restore"
+                Write-Stage "running" $Stage
+                $restoreSucceeded = $false
+                try {
+                    $restoreOptions = $app.Options
+                    try {
+                        $restoreOptions.AutoHyphenate = $true
+                        $restoreSucceeded = ([bool]$restoreOptions.AutoHyphenate -and
+                            [math]::Abs([double]$restoreOptions.HyphenationZone - 18.0) -le 0.000001)
+                    } finally { Release-Com $restoreOptions }
+                } finally {
+                    Close-PubPublisherApplication $app
+                }
+                $app = $null
+                if (-not $restoreSucceeded) { throw "m3b_preference_restore_failed" }
+            } else {
+                Close-PubPublisherApplication $app
+            }
         }
         $Stage = "seed_fresh_reopen"
         Write-Stage "running" $Stage
         $app2 = $null; $doc2 = $null; $shape2 = $null
         try {
-            $app2 = New-PubPublisherApplication
+            $app2 = if ($M3bOffDuringCreation) {
+                New-PubPublisherApplication -AllowHyphenationRecovery
+            } else {
+                New-PubPublisherApplication
+            }
             $doc2 = $app2.Open($SeedPath,$true,$false)
             $shape2 = Get-ShapeByIdentity $doc2 ([pscustomobject]@{page_id=$pageId;shape_id=$shapeId;shape_index=$index})
             $snapshotFresh = Snapshot $shape2
@@ -256,7 +338,7 @@ try {
         if ((File-Sha $SourcePath) -ne $sourceSha) {
             throw "m1_source_mutated_during_seed"
         }
-        Write-PubJson -Path $SeedMetaPath -Value ([ordered]@{
+        $seedReceipt = [ordered]@{
             schema = "chaptera.text-width-m1-seed.v1"
             source_sha256 = $sourceSha
             seed_sha256 = File-Sha $SeedPath
@@ -266,7 +348,13 @@ try {
             snapshot_before_save = $snapshot
             snapshot_fresh_reopen = $snapshotFresh
             synthetic_text_only = $true
-        })
+        }
+        if ($CaptureHyphenation -and
+            [math]::Abs($M3bSeedWidthPt - 162.53125) -le 0.00001) {
+            $seedReceipt.snapshot_after_save = $snapshotAfterSave
+            $seedReceipt.m3b_creation_intervention = [bool]$M3bOffDuringCreation
+        }
+        Write-PubJson -Path $SeedMetaPath -Value $seedReceipt
     } else {
         $expectedWidths = @{
             "control-before" = 160.0
@@ -274,7 +362,11 @@ try {
             "wide" = 172.0
             "control-after" = 160.0
         }
-        if ($ArmId -match '^m2-mid-[1-7]$') {
+        if ($ArmId -eq "m3-audit") {
+            if (-not $CaptureHyphenation -or [math]::Abs($WidthPt - 162.53125) -gt 0.00001) {
+                throw "m3_readonly_arm_not_allowlisted"
+            }
+        } elseif ($ArmId -match '^m2-mid-[1-7]$') {
             # M2 bisection is a bounded, quantized subset of the proven M1
             # 160..172pt bracket; no arbitrary widths or arm identifiers.
             if ($WidthPt -le 160.0 -or $WidthPt -ge 172.0 -or
