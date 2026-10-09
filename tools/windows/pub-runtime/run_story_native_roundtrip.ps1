@@ -40,6 +40,35 @@ if ($candidateBefore.sha256 -ne ([string]$manifest.candidate_sha256).ToLowerInva
     throw "Candidate PUB hash does not match handoff manifest"
 }
 
+function Write-PubNativeStage {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet(
+            'inputs_verified', 'publisher_identity_begin', 'publisher_identity_verified',
+            'candidate_application_begin', 'candidate_application_ready',
+            'candidate_open_begin', 'candidate_open_ok',
+            'saveas_begin', 'saveas_ok', 'candidate_application_closed',
+            'reopen_application_begin', 'reopen_application_ready',
+            'native_reopen_begin', 'native_reopen_ok', 'native_application_closed',
+            'source_immutable', 'reader_verify_begin', 'reader_verify_ok',
+            'pass'
+        )]
+        [string]$Phase
+    )
+    $payload = [ordered]@{
+        schema = 'chaptera.pub-native-story-stage.v1'
+        phase = $Phase
+        source_sha256 = [string]$manifest.source_sha256
+        candidate_sha256 = [string]$manifest.candidate_sha256
+    }
+    $temporaryPath = Join-Path $output 'native-roundtrip-stage.next.json'
+    $stagePath = Join-Path $output 'native-roundtrip-stage.json'
+    $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporaryPath -Encoding utf8
+    Move-Item -LiteralPath $temporaryPath -Destination $stagePath -Force
+}
+
+Write-PubNativeStage 'inputs_verified'
+Write-PubNativeStage 'publisher_identity_begin'
 $publisher = Get-PubPublisherIdentity
 if (-not $publisher.available) {
     throw "Microsoft Publisher COM automation is unavailable"
@@ -50,6 +79,7 @@ if ($publisher.version.state -ne "value" -or [string]$publisher.version.value -n
 if ($publisher.build.state -ne "value" -or -not ([string]$publisher.build.value).StartsWith($ExpectedBuildPrefix)) {
     throw "Publisher build mismatch: expected prefix $ExpectedBuildPrefix, got $($publisher.build.value)"
 }
+Write-PubNativeStage 'publisher_identity_verified'
 
 function Close-PubDocument {
     param($Document)
@@ -83,16 +113,23 @@ $reopenSnapshot = $null
 $application = $null
 $document = $null
 try {
+    Write-PubNativeStage 'candidate_application_begin'
     $application = New-PubPublisherApplication
+    Write-PubNativeStage 'candidate_application_ready'
+    Write-PubNativeStage 'candidate_open_begin'
     $document = $application.Open($candidatePath, $false, $false)
+    Write-PubNativeStage 'candidate_open_ok'
     $openSnapshot = Get-SafeDocumentSnapshot -Document $document -Phase "candidate_open"
     # pbFilePublication = 1. Save to a new path; never overwrite the generated candidate.
+    Write-PubNativeStage 'saveas_begin'
     $document.SaveAs($savedPath, 1, $false)
+    Write-PubNativeStage 'saveas_ok'
 }
 finally {
     Close-PubDocument $document
     Close-PubPublisherApplication $application
 }
+Write-PubNativeStage 'candidate_application_closed'
 
 if (-not (Test-Path -LiteralPath $savedPath -PathType Leaf)) {
     throw "Publisher SaveAs did not create native-saveas.pub"
@@ -101,14 +138,19 @@ if (-not (Test-Path -LiteralPath $savedPath -PathType Leaf)) {
 $reopenApplication = $null
 $reopenDocument = $null
 try {
+    Write-PubNativeStage 'reopen_application_begin'
     $reopenApplication = New-PubPublisherApplication
+    Write-PubNativeStage 'reopen_application_ready'
+    Write-PubNativeStage 'native_reopen_begin'
     $reopenDocument = $reopenApplication.Open($savedPath, $true, $false)
+    Write-PubNativeStage 'native_reopen_ok'
     $reopenSnapshot = Get-SafeDocumentSnapshot -Document $reopenDocument -Phase "fresh_reopen"
 }
 finally {
     Close-PubDocument $reopenDocument
     Close-PubPublisherApplication $reopenApplication
 }
+Write-PubNativeStage 'native_application_closed'
 
 $sourceAfter = Get-PubFileRecord $sourcePath
 $candidateAfter = Get-PubFileRecord $candidatePath
@@ -118,7 +160,8 @@ if ($sourceAfter.sha256 -ne $sourceBefore.sha256) {
 if ($candidateAfter.sha256 -ne $candidateBefore.sha256) {
     throw "Generated candidate changed during native lifecycle"
 }
-
+Write-PubNativeStage 'source_immutable'
+Write-PubNativeStage 'reader_verify_begin'
 Push-Location $repoRoot
 try {
     $verifyOutput = & cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml -p pub-writer --bin pub_story_native_handoff -- verify --pub $savedPath --manifest $manifestPath
@@ -130,6 +173,7 @@ finally {
     Pop-Location
 }
 $semantic = ($verifyOutput -join [Environment]::NewLine) | ConvertFrom-Json
+Write-PubNativeStage 'reader_verify_ok'
 $savedRecord = Get-PubFileRecord $savedPath
 
 $receipt = [ordered]@{
@@ -165,6 +209,7 @@ $receipt = [ordered]@{
     }
 }
 $receipt | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $receiptPath -Encoding utf8
+Write-PubNativeStage 'pass'
 
 Write-Host "PUB native Story roundtrip PASS"
 Write-Host "Receipt: $receiptPath"
