@@ -7,6 +7,7 @@ on:
       - "crates/pub-model/src/shape_paint.rs"
       - "crates/pub-model/src/shape_paint_op.rs"
       - "crates/pub-paint-bridge/**"
+      - "tools/acquire_carlton_march_pair.py"
       - ".github/workflows/cdm-shape-paint-v1.yml"
   workflow_dispatch:
 
@@ -25,6 +26,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact Carlton acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Acquire exact Carlton TABLE fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/cdm-shape-paint-carlton"
+          mkdir -p "$root"
+          python tools/acquire_carlton_march_pair.py "$root"
+          fixture="$root/March-2026.pub"
+          test -f "$fixture"
+          echo "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3  $fixture" | sha256sum --check
+          echo "CHAPTERA_TABLE_CELL_PAINT_FIXTURE=$fixture" >> "$GITHUB_ENV"
+
       - name: Check formatting
         run: cargo fmt -p pub-model -p pub-paint-bridge -- --check
       - name: Check workspace
