@@ -357,9 +357,20 @@ jobs:
     uses: ./.github/workflows/chaptera-desktop-windows.yml
 
   visual-oracle:
-    name: Reader visual oracle
+    name: Reader visual oracle (no shared core)
+    needs: [classify, tier-a]
+    if: ${{ !cancelled() && always() && needs.classify.outputs.visual_oracle == 'true' && needs.classify.outputs.reader_windows_smoke != 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/carlton-reader-visual-oracle.yml
+    with:
+      run_typography_golden: ${{ needs.classify.outputs.typography_golden == 'true' }}
+      run_windows_shared_core_smoke: ${{ needs.classify.outputs.reader_windows_smoke == 'true' }}
+      reader_binary_artifact_name: chaptera-reader-windows-binary-${{ github.sha }}
+
+
+  visual-oracle-with-smoke:
+    name: Reader visual oracle (shared core)
     needs: [classify, tier-a, reader-windows-binary]
-    if: ${{ !cancelled() && always() && needs.classify.outputs.visual_oracle == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') && (needs.classify.outputs.reader_windows_smoke != 'true' || needs.reader-windows-binary.result == 'success') }}
+    if: ${{ !cancelled() && always() && needs.classify.outputs.visual_oracle == 'true' && needs.classify.outputs.reader_windows_smoke == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') && needs.reader-windows-binary.result == 'success' }}
     uses: ./.github/workflows/carlton-reader-visual-oracle.yml
     with:
       run_typography_golden: ${{ needs.classify.outputs.typography_golden == 'true' }}
