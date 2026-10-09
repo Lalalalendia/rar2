@@ -276,6 +276,21 @@ pub(super) fn operation_summary(operation: &EditOperation) -> Value {
             "page_id": identity.page_id.as_canonical().to_string(),
             "provenance": identity.provenance,
         }),
+        EditOperation::DuplicateBlankPageV1 { transition } => json!({
+            "kind": "duplicate_blank_page_v1",
+            "document_id": transition.document_id.as_canonical().to_string(),
+            "source_page_id": transition.source_page_id.as_canonical().to_string(),
+            "destination_page_id": transition.destination_identity.page_id.as_canonical().to_string(),
+            "before_customer_page_ids": transition.before_customer_page_ids.iter()
+                .map(|id| id.as_canonical().to_string())
+                .collect::<Vec<_>>(),
+            "after_customer_page_ids": transition.after_customer_page_ids.iter()
+                .map(|id| id.as_canonical().to_string())
+                .collect::<Vec<_>>(),
+            "insertion_index": transition.insertion_index,
+            "before_document_state_id": transition.before_document_state_id.as_str(),
+            "after_document_state_id": transition.after_document_state_id.as_str(),
+        }),
         EditOperation::DeleteBlankAuthoredPageV1 { transition } => json!({
             "kind": "delete_blank_authored_page_v1",
             "document_id": transition.document_id.as_canonical().to_string(),

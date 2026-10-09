@@ -735,6 +735,39 @@ pub(super) fn display_page_delete_error_v1(
     }
 }
 
+pub(super) fn duplicate_blank_page_error_to_editor_v1(
+    error: DuplicateBlankPageErrorV1,
+) -> EditorError {
+    match error {
+        DuplicateBlankPageErrorV1::BeforeStateMismatch
+        | DuplicateBlankPageErrorV1::AfterStateMismatch
+        | DuplicateBlankPageErrorV1::SourcePageStateMismatch
+        | DuplicateBlankPageErrorV1::DestinationPageStateMismatch
+        | DuplicateBlankPageErrorV1::InsertionSlotMismatch
+        | DuplicateBlankPageErrorV1::CurrentCustomerOrderMismatch => {
+            EditorError::StalePageDuplicate
+        }
+        other => EditorError::PageDuplicateUnsupported {
+            message: format!("{other:?}"),
+        },
+    }
+}
+
+pub(super) fn display_page_duplicate_error_v1(
+    error: &EditorError,
+    formatter: &mut fmt::Formatter<'_>,
+) -> fmt::Result {
+    match error {
+        EditorError::PageDuplicateUnsupported { message } => {
+            write!(formatter, "duplicate blank page is unsupported: {message}")
+        }
+        EditorError::StalePageDuplicate => formatter.write_str(
+            "current document/page membership no longer matches the duplicate-page precondition",
+        ),
+        _ => unreachable!("page-duplicate display helper receives only duplicate errors"),
+    }
+}
+
 // Authored Page identity is an ordering-adjacent durable history primitive.
 impl EditorSession {
     pub fn authored_page_identities_v1(&self) -> BTreeMap<PageId, AuthoredPageIdentityV1> {
@@ -747,6 +780,10 @@ impl EditorSession {
                 EditOperation::AppendBlankPageV1 { transition } => {
                     Some((transition.identity.page_id, transition.identity))
                 }
+                EditOperation::DuplicateBlankPageV1 { transition } => Some((
+                    transition.destination_identity.page_id,
+                    transition.destination_identity,
+                )),
                 _ => None,
             })
             .collect()
@@ -758,6 +795,9 @@ impl EditorSession {
             match operation {
                 EditOperation::AppendBlankPageV1 { transition } => {
                     active.push(transition.identity.page_id);
+                }
+                EditOperation::DuplicateBlankPageV1 { transition } => {
+                    active.push(transition.destination_identity.page_id);
                 }
                 EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
                     active.retain(|page_id| *page_id != transition.identity.page_id);
@@ -778,6 +818,9 @@ impl EditorSession {
                 }
                 EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
                     transition.identity.page_id == page_id
+                }
+                EditOperation::DuplicateBlankPageV1 { transition } => {
+                    transition.destination_identity.page_id == page_id
                 }
                 _ => false,
             })
@@ -1090,6 +1133,110 @@ impl EditorSession {
         self.validate_source_identity()?;
         Ok(operation)
     }
+
+    /// Duplicate one externally admitted blank page without object/Story cloning.
+    /// Customer membership comes only from the source-qualified caller and active history.
+    pub fn duplicate_blank_page_v1(
+        &mut self,
+        source_qualified_page_ids: Vec<PageId>,
+        source_page_id: PageId,
+        destination_identity: AuthoredPageIdentityV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        if self.project_identity.is_none() {
+            return Err(EditorError::PageDuplicateUnsupported {
+                message: "durable project identity is required".to_owned(),
+            });
+        }
+        if validate_authored_page_identity_v1(&destination_identity).is_err() {
+            return Err(EditorError::AuthoredPageIdentityInvalid {
+                page_id: destination_identity.page_id,
+            });
+        }
+        if self.graph.pages.contains_key(&destination_identity.page_id)
+            || self
+                .authored_page_identities_v1()
+                .contains_key(&destination_identity.page_id)
+            || self.has_page_lifecycle_history_v1(destination_identity.page_id)
+        {
+            return Err(EditorError::AuthoredPageIdentityConflict {
+                page_id: destination_identity.page_id,
+            });
+        }
+        if self.page_has_resolved_node_membership_v1(source_page_id)
+            || !self
+                .current_authored_stack_v1(source_page_id)
+                .members
+                .is_empty()
+        {
+            return Err(EditorError::PageDuplicateUnsupported {
+                message: "source page owns resolved or authored content".to_owned(),
+            });
+        }
+        let customer_page_ids =
+            self.effective_customer_page_order_v1(&source_qualified_page_ids)?;
+        let transition = plan_duplicate_blank_page_v1(
+            self.graph.document.id,
+            &self.graph.document.pages,
+            &self.graph.pages,
+            &customer_page_ids,
+            source_page_id,
+            destination_identity,
+        )
+        .map_err(duplicate_blank_page_error_to_editor_v1)?;
+        self.consume_canonical_duplicate_blank_page_v1(transition)
+    }
+
+    pub(super) fn consume_canonical_duplicate_blank_page_v1(
+        &mut self,
+        expected: DuplicateBlankPageTransitionV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        if self.project_identity.is_none() {
+            return Err(EditorError::PageDuplicateUnsupported {
+                message: "durable project identity is required".to_owned(),
+            });
+        }
+        if self.page_has_resolved_node_membership_v1(expected.source_page_id)
+            || !self
+                .current_authored_stack_v1(expected.source_page_id)
+                .members
+                .is_empty()
+        {
+            return Err(EditorError::PageDuplicateUnsupported {
+                message: "source page owns resolved or authored content".to_owned(),
+            });
+        }
+        if self
+            .authored_page_identities_v1()
+            .contains_key(&expected.destination_identity.page_id)
+            || self.has_page_lifecycle_history_v1(expected.destination_identity.page_id)
+        {
+            return Err(EditorError::AuthoredPageIdentityConflict {
+                page_id: expected.destination_identity.page_id,
+            });
+        }
+        let planned = plan_duplicate_blank_page_v1(
+            self.graph.document.id,
+            &self.graph.document.pages,
+            &self.graph.pages,
+            &expected.before_customer_page_ids,
+            expected.source_page_id,
+            expected.destination_identity,
+        )
+        .map_err(duplicate_blank_page_error_to_editor_v1)?;
+        if planned != expected {
+            return Err(EditorError::StalePageDuplicate);
+        }
+        let operation = EditOperation::DuplicateBlankPageV1 {
+            transition: expected,
+        };
+        apply_forward(&mut self.graph, &operation)?;
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
 }
 
 #[cfg(test)]
@@ -1259,7 +1406,7 @@ mod authored_page_append_tests {
     use super::*;
     use crate::{
         AuthoredEntityProvenanceV1, EDITOR_PROJECT_VERSION_V0_25, EDITOR_PROJECT_VERSION_V0_26,
-        EditorProject, PubResolvedGraph,
+        EDITOR_PROJECT_VERSION_V0_27, EditorProject, PubResolvedGraph,
     };
     use pub_model::{Document, Sha256Digest, SourceDescriptor};
 
@@ -1635,6 +1782,145 @@ mod authored_page_append_tests {
             .delete_blank_authored_page_v1(vec![source], identity.page_id)
             .expect("delete after content removed");
         assert!(!session.can_delete_blank_authored_page_v1(&[source], identity.page_id));
+    }
+
+    #[test]
+    fn duplicate_blank_page_preserves_raw_slots_and_replays_exact_identity() {
+        let master = page_id("11111111-1111-4111-8111-111111111111");
+        let source = page_id("22222222-2222-4222-8222-222222222222");
+        let service = page_id("33333333-3333-4333-8333-333333333333");
+        let later = page_id("44444444-4444-4444-8444-444444444444");
+        let carrier = page_id("55555555-5555-4555-8555-555555555555");
+        let identity = authored_identity();
+        let graph = source_graph(vec![master, source, service, later, carrier]);
+        let mut session = EditorSession::new(graph.clone()).expect("session");
+        let source_hash = session.source_hash();
+
+        session
+            .duplicate_blank_page_v1(vec![source, later], source, identity)
+            .expect("duplicate empty source customer page");
+        let expected = vec![master, source, identity.page_id, service, later, carrier];
+        assert_eq!(session.graph().document.pages, expected);
+        assert_eq!(
+            session
+                .effective_customer_page_order_v1(&[source, later])
+                .expect("effective order"),
+            vec![source, identity.page_id, later]
+        );
+        assert_eq!(
+            session.graph().pages[&identity.page_id].size,
+            graph.pages[&source].size
+        );
+        assert_eq!(session.source_hash(), source_hash);
+
+        session.undo().expect("undo duplicate");
+        assert_eq!(session.graph().document.pages, graph.document.pages);
+        session.redo().expect("redo duplicate");
+        assert_eq!(session.graph().document.pages, expected);
+
+        let project = session.project();
+        assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_27);
+        let bytes = serde_json::to_vec(&project).expect("serialize project");
+        let decoded: EditorProject = serde_json::from_slice(&bytes).expect("deserialize project");
+        let mut reopened = EditorSession::new(graph).expect("fresh editor");
+        reopened.apply_project(&decoded).expect("replay duplicate");
+        assert_eq!(reopened.operations(), decoded.operations.as_slice());
+        assert_eq!(reopened.graph().document.pages, expected);
+
+        reopened
+            .delete_blank_authored_page_v1(vec![source, later], identity.page_id)
+            .expect("duplicate is eligible for DeleteBlank");
+        assert_eq!(
+            reopened.graph().document.pages,
+            vec![master, source, service, later, carrier]
+        );
+        assert_eq!(reopened.source_hash(), source_hash);
+        assert!(
+            reopened
+                .duplicate_blank_page_v1(vec![source, later], source, identity)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn duplicated_blank_page_reaches_idml_and_odg_in_source_order() {
+        let source = page_id("22222222-2222-4222-8222-222222222222");
+        let identity = authored_identity();
+        let mut session = EditorSession::new(source_graph(vec![source])).expect("session");
+        session
+            .duplicate_blank_page_v1(vec![source], source, identity)
+            .expect("duplicate one source-admitted blank customer page");
+
+        assert_eq!(
+            session.graph().document.pages,
+            vec![source, identity.page_id]
+        );
+        assert_eq!(
+            session.graph().pages[&identity.page_id].size,
+            session.graph().pages[&source].size
+        );
+        assert_eq!(
+            session.graph().pages[&identity.page_id].bleed,
+            session.graph().pages[&source].bleed
+        );
+        assert_eq!(
+            session.graph().pages[&identity.page_id].margins,
+            session.graph().pages[&source].margins
+        );
+        assert!(session.graph().pages[&identity.page_id].children.is_empty());
+
+        let source_hex = page_hex(source);
+        let duplicate_hex = page_hex(identity.page_id);
+        let idml = session
+            .export_editable(
+                crate::EditorEditableTarget::Idml,
+                "duplicate-blank-page-idml",
+            )
+            .expect("export duplicate to IDML");
+        let designmap = read_zip_text(&idml.bytes, "designmap.xml");
+        let source_spread = format!("Spreads/Spread_usp{source_hex}.xml");
+        let duplicate_spread = format!("Spreads/Spread_usp{duplicate_hex}.xml");
+        assert!(
+            designmap.find(&source_spread).expect("source IDML spread")
+                < designmap
+                    .find(&duplicate_spread)
+                    .expect("duplicate IDML spread"),
+            "duplicate must follow source in IDML designmap"
+        );
+        let duplicate_xml = read_zip_text(&idml.bytes, &duplicate_spread);
+        assert!(
+            duplicate_xml.contains(&format!(
+                r#"<Page Self="up{duplicate_hex}" GeometricBounds="0 0 144 72""#
+            )),
+            "IDML duplicate must preserve source physical page extent"
+        );
+
+        let odg = session
+            .export_editable(crate::EditorEditableTarget::Odg, "duplicate-blank-page-odg")
+            .expect("export duplicate to ODG");
+        let content = read_zip_text(&odg.bytes, "content.xml");
+        assert_eq!(content.matches("<draw:page ").count(), 2);
+        assert!(
+            content
+                .find(&format!(r#"draw:name="Page_{source_hex}""#))
+                .expect("source ODG page")
+                < content
+                    .find(&format!(r#"draw:name="Page_{duplicate_hex}""#))
+                    .expect("duplicate ODG page"),
+            "duplicate must follow source in ODG"
+        );
+
+        let styles = read_zip_text(&odg.bytes, "styles.xml");
+        let duplicate_layout = format!(r#"<style:page-layout style:name="PM_{duplicate_hex}">"#);
+        let start = styles
+            .find(&duplicate_layout)
+            .expect("duplicate ODG page layout");
+        let tail = &styles[start..];
+        let end = tail
+            .find("</style:page-layout>")
+            .expect("ODG page layout end");
+        let layout = &tail[..end];
+        assert!(layout.contains(r#"fo:page-width="72pt" fo:page-height="144pt""#));
     }
 
     #[test]
