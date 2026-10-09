@@ -5,22 +5,23 @@
 //! parser/raw crates and does not reconstruct authoring semantics.
 //!
 //! The current v0.1 slice closes page structure, explicit solid rectangle
-//! paint, exact opaque PNG/JPEG placement, and bounded resolved glyph text with
-//! explicit OutputFontPlan embed-full resources. Image crop/inner transforms,
-//! alpha, broader font materializations, and richer vector primitives remain
-//! explicit future capabilities under FIXED-RENDER-01.
+//! paint, exact PNG/JPEG plus single-frame GIF placement, and bounded resolved
+//! glyph text with explicit OutputFontPlan embed-full resources. Image crop/inner
+//! transforms, animated GIF, broader font materializations, and richer vector
+//! primitives remain explicit future capabilities under FIXED-RENDER-01.
 
 mod text;
 
 pub use text::{FixedFontResource, FixedTextRun, PdfTextPreparationError};
 
-use image::ImageFormat;
+use image::{AnimationDecoder, ImageFormat};
 use pub_layout::{BoundedResolvedScene, ResolvedPhysicalNode, ResolvedSurface};
 use pub_model::{Affine2D, CanonicalId, NodeId, PageId, ResourceId};
 use pub_output::{FontIdentity, OutputFontPlan};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::io::Cursor;
 
 pub const PDF_RENDER_SCHEMA_V0_1: &str = "fixed-pdf-v0.1";
 pub const PDF_RENDERER_REVISION_V0_1: &str = "pub-pdf-v0.1";
@@ -625,22 +626,60 @@ fn prepare_image(image: &FixedImageResource) -> Result<PreparedImage, PdfRenderE
     let format = match image.mime.as_str() {
         "image/png" => ImageFormat::Png,
         "image/jpeg" => ImageFormat::Jpeg,
+        "image/gif" if image.source_exact => ImageFormat::Gif,
+        "image/gif" => {
+            return Ok(PreparedImage::Unsupported {
+                code: "pdf.image.preview_gif_unsupported".into(),
+                message: "derived GIF preview is outside the exact-image PDF slice".into(),
+            });
+        }
         other => {
             return Ok(PreparedImage::Unsupported {
                 code: "pdf.image.mime_unsupported".into(),
                 message: format!(
-                    "exact image MIME {other:?} is outside the bounded PNG/JPEG PDF slice"
+                    "exact image MIME {other:?} is outside the bounded PNG/JPEG/single-frame-GIF PDF slice"
                 ),
             });
         }
     };
 
-    let decoded = image::load_from_memory_with_format(&image.bytes, format).map_err(|error| {
-        PdfRenderError::ImageDecodeFailed {
-            resource_id: image.resource_id,
-            message: error.to_string(),
+    let decoded = if format == ImageFormat::Gif {
+        let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(image.bytes.as_slice()))
+            .map_err(|error| PdfRenderError::ImageDecodeFailed {
+                resource_id: image.resource_id,
+                message: error.to_string(),
+            })?;
+        let frames = decoder
+            .into_frames()
+            .collect_frames()
+            .map_err(|error| PdfRenderError::ImageDecodeFailed {
+                resource_id: image.resource_id,
+                message: error.to_string(),
+            })?;
+        if frames.len() != 1 {
+            return Ok(PreparedImage::Unsupported {
+                code: "pdf.image.gif_animation_unsupported".into(),
+                message: format!(
+                    "exact GIF contains {} frames; bounded PDF supports exactly one",
+                    frames.len()
+                ),
+            });
         }
-    })?;
+        image::DynamicImage::ImageRgba8(
+            frames
+                .into_iter()
+                .next()
+                .expect("single-frame GIF count already checked")
+                .into_buffer(),
+        )
+    } else {
+        image::load_from_memory_with_format(&image.bytes, format).map_err(|error| {
+            PdfRenderError::ImageDecodeFailed {
+                resource_id: image.resource_id,
+                message: error.to_string(),
+            }
+        })?
+    };
     let rgba = decoded.to_rgba8();
     let (width, height) = rgba.dimensions();
     let mut rgb = Vec::with_capacity(width as usize * height as usize * 3);
@@ -1397,6 +1436,109 @@ mod tests {
                 .diagnostics
                 .iter()
                 .all(|diagnostic| diagnostic.code != "pdf.image.alpha_unsupported")
+        );
+    }
+
+    #[test]
+    fn exact_single_frame_gif_is_painted_and_preserves_transparency() {
+        let mut rgba = image::RgbaImage::new(2, 1);
+        rgba.put_pixel(0, 0, image::Rgba([10, 20, 30, 255]));
+        rgba.put_pixel(1, 0, image::Rgba([40, 50, 60, 0]));
+        let mut encoded = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut encoded);
+            encoder
+                .encode_frame(image::Frame::new(rgba))
+                .expect("encode single-frame GIF");
+        }
+
+        let resources = FixedPdfResources {
+            node_paints: Vec::new(),
+            images: vec![FixedImageResource {
+                resource_id: resource_id(45),
+                mime: "image/gif".into(),
+                source_exact: true,
+                node_ids: vec![node_id(10)],
+                placements: Vec::new(),
+                bytes: encoded,
+            }],
+            ..FixedPdfResources::default()
+        };
+
+        let output = render_bounded_pdf(
+            &scene(),
+            &resources,
+            &PdfTargetProfile::basic_geometry_v0_1(),
+        )
+        .unwrap();
+
+        let text = String::from_utf8_lossy(&output.bytes);
+        assert!(text.contains("/SMask "));
+        assert_eq!(
+            output
+                .report
+                .nodes
+                .iter()
+                .filter(|node| node.code == "pdf.node.painted_exact_image")
+                .count(),
+            1
+        );
+        assert!(
+            output
+                .report
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != "pdf.image.mime_unsupported")
+        );
+    }
+
+    #[test]
+    fn exact_multi_frame_gif_remains_fail_closed() {
+        let mut encoded = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut encoded);
+            for rgb in [[10, 20, 30, 255], [40, 50, 60, 255]] {
+                let mut rgba = image::RgbaImage::new(1, 1);
+                rgba.put_pixel(0, 0, image::Rgba(rgb));
+                encoder
+                    .encode_frame(image::Frame::new(rgba))
+                    .expect("encode GIF frame");
+            }
+        }
+
+        let resources = FixedPdfResources {
+            node_paints: Vec::new(),
+            images: vec![FixedImageResource {
+                resource_id: resource_id(46),
+                mime: "image/gif".into(),
+                source_exact: true,
+                node_ids: vec![node_id(10)],
+                placements: Vec::new(),
+                bytes: encoded,
+            }],
+            ..FixedPdfResources::default()
+        };
+
+        let output = render_bounded_pdf(
+            &scene(),
+            &resources,
+            &PdfTargetProfile::basic_geometry_v0_1(),
+        )
+        .unwrap();
+
+        assert!(
+            output
+                .report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "pdf.image.gif_animation_unsupported")
+        );
+        assert!(
+            output
+                .report
+                .nodes
+                .iter()
+                .any(|node| node.code == "pdf.node.resource_unsupported")
         );
     }
 
