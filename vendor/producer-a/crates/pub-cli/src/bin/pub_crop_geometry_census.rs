@@ -222,7 +222,9 @@ fn main() -> Result<()> {
 
         if let Some(order) = source_orders.get(&node.header.parent_id) {
             if let Some(rank) = order.iter().position(|id| *id == node.header.id) {
-                *topology\n                    .entry("source_order_member".to_owned())\n                    .or_default() += 1;
+                *topology
+                    .entry("source_order_member".to_owned())
+                    .or_default() += 1;
                 let node_right = node.header.bounds.right().map(|v| v.get());
                 let node_bottom = node.header.bounds.bottom().map(|v| v.get());
                 if let (Some(node_right), Some(node_bottom)) = (node_right, node_bottom) {
