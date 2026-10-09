@@ -1077,9 +1077,39 @@ fn gui_delete_empty_authored_page_projects_membership_and_replays_on_real_pub() 
     let appended_label = format!("Page {}", source_order.len() + 1);
     harness.get_by_label(&appended_label).click();
     harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        let visual = app.visual.as_ref().expect("Viewer after selecting restored Page");
+        let selected_page_id = visual
+            .document
+            .pages
+            .get(app.selected_page)
+            .map(|page| page.id);
+        assert_eq!(
+            selected_page_id,
+            Some(appended_page_id),
+            "real Pages sidebar click must select the restored PageId"
+        );
+        let editor = app.editor.as_ref().expect("Editor after selecting restored Page");
+        let mut debug_candidate = editor.clone();
+        let rejection = debug_candidate
+            .delete_authored_rectangle_page_v1(
+                app.source_customer_page_ids.clone(),
+                appended_page_id,
+            )
+            .err();
+        assert!(
+            editor.can_delete_authored_rectangle_page_v1(
+                &app.source_customer_page_ids,
+                appended_page_id,
+            ),
+            "canonical runtime must re-admit the exact restored Page/Rectangle after Undo: {rejection:?}"
+        );
+    }
     assert!(
         !harness.get_by_label("Delete Rectangle Page").is_disabled(),
-        "Undo must restore the same runnable Page+Rectangle command"
+        "Undo plus explicit Pages selection must restore Delete Rectangle Page capability"
     );
 
     harness
