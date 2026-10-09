@@ -22,9 +22,9 @@ impl SupporterRoutes {
         let host = origin.strip_prefix("https://")?;
 
         if host.is_empty()
-            || host.chars().any(|ch| {
-                matches!(ch, '/' | '?' | '#' | '@' | '\\') || ch.is_whitespace()
-            })
+            || host
+                .chars()
+                .any(|ch| matches!(ch, '/' | '?' | '#' | '@' | '\\') || ch.is_whitespace())
         {
             return None;
         }
