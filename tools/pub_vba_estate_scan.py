@@ -68,6 +68,9 @@ CALL_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
         ("Page.Delete", re.compile(r"(?i)\b(?:page|pages\s*\([^\)]*\))\s*\.\s*delete\b")),
         ("Page.Move", re.compile(r"(?i)\b(?:page|pages\s*\([^\)]*\))\s*\.\s*move\b")),
     ],
+    "scratch_area": [
+        ("ScratchArea", re.compile(r"(?i)\bscratcharea\b")),
+    ],
     "shapes": [
         ("Shapes", re.compile(r"(?i)(?:\.|\b)shapes\b")),
         ("ShapeRange", re.compile(r"(?i)\bshaperange\b")),
