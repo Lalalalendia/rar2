@@ -99,18 +99,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import json, os
+          export CHAPTERA_READER_SCENE_PROBE_SHA256=7079ad60fd8109796b84286d294cb490051a1517d8e52ac61e7c416dbd04428c
+          CHAPTERA_READER_SCENE_PROBE_PUB="$(python - <<'PY'
+          import json
           from pathlib import Path
           manifest = json.loads(Path('target/reader-pdf-022-probe/manifest.json').read_text())
           matching = [row for row in manifest['fixtures'] if row['name'] == '022_7079ad60fd810979']
           assert len(matching) == 1
           item = matching[0]
           assert item['sha256'] == '7079ad60fd8109796b84286d294cb490051a1517d8e52ac61e7c416dbd04428c'
-          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as dest:
-              dest.write('CHAPTERA_READER_SCENE_PROBE_PUB=' + item['source_path'] + '\n')
-              dest.write('CHAPTERA_READER_SCENE_PROBE_SHA256=' + item['sha256'] + '\n')
+          source = Path(item['source_path'])
+          assert source.is_file()
+          print(source)
           PY
+          )"
+          export CHAPTERA_READER_SCENE_PROBE_PUB
+          test -f "$CHAPTERA_READER_SCENE_PROBE_PUB"
           cargo test -p chaptera-server --bin chaptera real_reference_scene_projection_probe -- --ignored --nocapture > "$RUNNER_TEMP/022-admission-probe.log" 2>&1 || {
             tail -n 45 "$RUNNER_TEMP/022-admission-probe.log"
             exit 1
