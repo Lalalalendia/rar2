@@ -983,13 +983,19 @@ mod tests {
             ..known.clone()
         };
         // Historical ASCII shaping is not silently broadened by this fix.
-        assert!(newly_admitted_unicode_glyphs_proven_v1("AB", &[known.clone(), missing.clone()]));
+        assert!(newly_admitted_unicode_glyphs_proven_v1(
+            "AB",
+            &[known.clone(), missing.clone()]
+        ));
         assert!(!newly_admitted_unicode_glyphs_proven_v1("A\u{2019}B", &[]));
         assert!(newly_admitted_unicode_glyphs_proven_v1(
             "A\u{2019}B",
             std::slice::from_ref(&known)
         ));
-        assert!(!newly_admitted_unicode_glyphs_proven_v1("A\u{2019}B", &[known, missing]));
+        assert!(!newly_admitted_unicode_glyphs_proven_v1(
+            "A\u{2019}B",
+            &[known, missing]
+        ));
 
         // Existing AHEM positive controls exercise the actual wrapper too.
         let bytes = font_test_data::AHEM;
