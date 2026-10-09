@@ -39,7 +39,7 @@ jobs:
     needs: contract
     if: >-
       ${{ github.event_name == 'pull_request' &&
-          github.event.pull_request.head.ref == 'measure/reader-pdf-022-causes-01' &&
+          github.event.pull_request.head.ref == 'measure/reader-022-cross-output-causal-01' &&
           github.event.pull_request.head.repo.full_name == 'Lalalalendia/rar2' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
