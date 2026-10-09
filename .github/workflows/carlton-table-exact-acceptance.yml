@@ -5,16 +5,8 @@ on:
     paths:
       - ".github/workflows/carlton-table-exact-acceptance.yml"
       - "tools/acquire_carlton_march_pair.py"
-      - "vendor/producer-a/Cargo.toml"
-      - "vendor/producer-a/Cargo.lock"
-      - "vendor/producer-a/crates/pub-cfb/**"
-      - "vendor/producer-a/crates/pub-contents/**"
-      - "vendor/producer-a/crates/pub-core/**"
-      - "vendor/producer-a/crates/pub-escher/**"
-      - "vendor/producer-a/crates/pub-model/**"
-      - "vendor/producer-a/crates/pub-quill/**"
-      - "vendor/producer-a/crates/pub-reader/**"
-      - "vendor/producer-a/crates/pub-viewer/**"
+  schedule:
+    - cron: "41 4 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -55,7 +47,7 @@ jobs:
       - name: Prove exact Carlton merged TABLE through Reader
         shell: bash
         env:
-          CHAPTERA_TABLE_CELL_PAINT_FIXTURE: out/carlton/table-exact/March-2026.pub
+          CHAPTERA_TABLE_CELL_PAINT_FIXTURE: ${{ github.workspace }}/out/carlton/table-exact/March-2026.pub
         run: |
           set -euo pipefail
           cargo test --manifest-path vendor/producer-a/Cargo.toml \
@@ -65,7 +57,7 @@ jobs:
       - name: Prove exact Carlton merged TABLE through Viewer
         shell: bash
         env:
-          CHAPTERA_TABLE_CELL_PAINT_FIXTURE: out/carlton/table-exact/March-2026.pub
+          CHAPTERA_TABLE_CELL_PAINT_FIXTURE: ${{ github.workspace }}/out/carlton/table-exact/March-2026.pub
         run: |
           set -euo pipefail
           cargo test --manifest-path vendor/producer-a/Cargo.toml \
