@@ -1,8 +1,7 @@
 const CURRENT_DOCUMENT_V1 = "chaptera.current-document.v1";
 const SCENE_V1 = "chaptera.scene.v1";
 
-const PARTIAL_REASONS = Object.freeze([
-  "paint_projection_deferred",
+const BASE_PARTIAL_REASONS = Object.freeze([
   "resource_projection_deferred",
   "stacking_order_unavailable",
   "text_style_projection_deferred",
@@ -129,6 +128,55 @@ function sceneNodeKind(kind) {
   }
 }
 
+function rgba(rgb, label) {
+  if (!Array.isArray(rgb) || rgb.length !== 3) {
+    throw new TypeError(label + " must be [r,g,b]");
+  }
+  const values = rgb.map((value, index) => {
+    if (!Number.isInteger(value) || value < 0 || value > 255) {
+      throw new RangeError(label + "[" + index + "] must be 0..255");
+    }
+    return value;
+  });
+  return { r: values[0], g: values[1], b: values[2], a: 255 };
+}
+
+function effectivePaint(nodeId, payload) {
+  const source = payload?.effective_paint;
+  if (!source || typeof source !== "object" || Array.isArray(source)) return null;
+
+  const fill = source.fill ?? {};
+  const line = source.line ?? {};
+  const fillVisible = fill.visible?.value;
+  const fillSolid = fill.solid?.value;
+  const fillColor = fill.color_rgb?.value;
+  const lineVisible = line.visible?.value;
+  const lineColor = line.color_rgb?.value;
+  const lineWidth = line.width_emu?.value;
+
+  let mappedFill = null;
+  if (fillVisible === true && fillSolid === true && fillColor != null) {
+    mappedFill = rgba(fillColor, "effective_paint.fill.color_rgb.value");
+  }
+
+  let mappedStroke = null;
+  if (lineVisible === true && lineColor != null && lineWidth != null) {
+    safeInteger(lineWidth, "effective_paint.line.width_emu.value");
+    if (lineWidth < 0) throw new RangeError("effective paint line width must be non-negative");
+    mappedStroke = {
+      color: rgba(lineColor, "effective_paint.line.color_rgb.value"),
+      width_emu: lineWidth,
+    };
+  }
+
+  if (mappedFill == null && mappedStroke == null) return null;
+  return {
+    paint_id: "paint." + nodeId,
+    fill: mappedFill,
+    stroke: mappedStroke,
+  };
+}
+
 function validateTransform(transform, label) {
   object(transform, label);
   for (const key of ["a", "b", "c", "d"]) {
@@ -224,6 +272,7 @@ export async function projectCurrentAuthoringGraphToScene(current) {
 
   const nodes = [];
   const storyFrames = [];
+  const paints = [];
   for (const [nodeId, rawNode] of Object.entries(nodesById)) {
     const node = object(rawNode, "authoring_graph.nodes[" + nodeId + "]");
     const header = object(node.header, "node.header");
@@ -231,6 +280,8 @@ export async function projectCurrentAuthoringGraphToScene(current) {
     const bounds = object(header.bounds, "node.header.bounds");
     const parentIsNode = Boolean(nodesById[header.parent_id]);
     const pageId = resolveNodePage(nodeId, nodesById, pageIds);
+    const paint = effectivePaint(nodeId, node.payload);
+    if (paint) paints.push(paint);
     nodes.push({
       node_id: nodeId,
       page_id: pageId,
@@ -244,7 +295,7 @@ export async function projectCurrentAuthoringGraphToScene(current) {
       },
       z_order: null,
       paint_order: null,
-      paint_id: null,
+      paint_id: paint?.paint_id ?? null,
       resource_id: null,
       transform: validateTransform(header.transform, "node.header.transform"),
     });
@@ -287,7 +338,7 @@ export async function projectCurrentAuthoringGraphToScene(current) {
     nodes,
     stories,
     story_frames: storyFrames,
-    paints: [],
+    paints,
     resources: [],
     diagnostics: [
       {
@@ -300,8 +351,10 @@ export async function projectCurrentAuthoringGraphToScene(current) {
       { key: "render.geometry", state: "supported", note: null },
       {
         key: "render.paint",
-        state: "unsupported",
-        note: "Paint projection is not yet admitted from the authoring graph.",
+        state: paints.length ? "partial" : "unsupported",
+        note: paints.length
+          ? "Bounded effective solid fill/line paint is projected from canonical resolved authoring state."
+          : "No bounded effective solid paint is available on this authoring graph.",
       },
       {
         key: "render.resources",
@@ -321,7 +374,10 @@ export async function projectCurrentAuthoringGraphToScene(current) {
     ],
     fidelity: {
       state: "partial",
-      reasons: [...PARTIAL_REASONS],
+      reasons: [
+        ...BASE_PARTIAL_REASONS,
+        paints.length ? "paint_projection_partial" : "paint_projection_unavailable",
+      ],
     },
     stacking_fidelity: "unknown",
   };

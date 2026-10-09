@@ -78,8 +78,20 @@ jobs:
                   r"/pub-re-native snapshot ([a-z0-9][a-z0-9._-]{0,63})",
                   body,
               )
+              saveas_match = re.fullmatch(
+                  r"/pub-re-native saveas ([a-z0-9][a-z0-9._-]{0,63})",
+                  body,
+              )
+              save_match = re.fullmatch(
+                  r"/pub-re-native save ([a-z0-9][a-z0-9._-]{0,63})",
+                  body,
+              )
               rotation_match = re.fullmatch(
                   r"/pub-re-native rotate ([a-z0-9][a-z0-9._-]{0,63}) ([1-9][0-9]{0,9}) ([1-9][0-9]{0,9}) (-?[0-9]+(?:[.][0-9]{1,6})?)",
+                  body,
+              )
+              rotation_save_match = re.fullmatch(
+                  r"/pub-re-native rotate-save ([a-z0-9][a-z0-9._-]{0,63}) ([1-9][0-9]{0,9}) ([1-9][0-9]{0,9}) (-?[0-9]+(?:[.][0-9]{1,6})?)",
                   body,
               )
               research_match = re.fullmatch(
@@ -96,12 +108,19 @@ jobs:
               elif snapshot_match is not None:
                   command_mode = "snapshot_alias"
                   fixture_alias = snapshot_match.group(1)
-              elif rotation_match is not None:
-                  command_mode = "rotation_alias"
-                  fixture_alias = rotation_match.group(1)
-                  page_id = rotation_match.group(2)
-                  shape_id = rotation_match.group(3)
-                  delta_degrees = rotation_match.group(4)
+              elif saveas_match is not None:
+                  command_mode = "saveas_alias"
+                  fixture_alias = saveas_match.group(1)
+              elif save_match is not None:
+                  command_mode = "save_alias"
+                  fixture_alias = save_match.group(1)
+              elif rotation_match is not None or rotation_save_match is not None:
+                  match = rotation_match if rotation_match is not None else rotation_save_match
+                  command_mode = "rotation_alias" if rotation_match is not None else "rotation_save_alias"
+                  fixture_alias = match.group(1)
+                  page_id = match.group(2)
+                  shape_id = match.group(3)
+                  delta_degrees = match.group(4)
 
                   page_value = int(page_id)
                   shape_value = int(shape_id)
@@ -121,7 +140,7 @@ jobs:
               else:
                   raise SystemExit("invalid PUB RE native control command")
 
-          if command_mode in {"snapshot_alias", "rotation_alias"} and alias_re.fullmatch(fixture_alias) is None:
+          if command_mode in {"snapshot_alias", "saveas_alias", "save_alias", "rotation_alias", "rotation_save_alias"} and alias_re.fullmatch(fixture_alias) is None:
               raise SystemExit("fixture alias is invalid")
 
           native_timeout_minutes = "30" if command_mode == "research_0p75" else "5"
@@ -273,7 +292,11 @@ jobs:
               throw "requested native experiment manifest is not present"
             }
           }
-          elseif ($env:PUB_RE_COMMAND_MODE -eq "snapshot_alias" -or $env:PUB_RE_COMMAND_MODE -eq "rotation_alias") {
+          elseif ($env:PUB_RE_COMMAND_MODE -eq "snapshot_alias" -or
+                  $env:PUB_RE_COMMAND_MODE -eq "saveas_alias" -or
+                  $env:PUB_RE_COMMAND_MODE -eq "save_alias" -or
+                  $env:PUB_RE_COMMAND_MODE -eq "rotation_alias" -or
+                  $env:PUB_RE_COMMAND_MODE -eq "rotation_save_alias") {
             if ($env:PUB_RE_FIXTURE_ALIAS -notmatch '^[a-z0-9][a-z0-9._-]{0,63}$') {
               throw "fixture alias is invalid"
             }
@@ -319,6 +342,18 @@ jobs:
                 kind = "snapshot_only"
               }
             }
+            elseif ($env:PUB_RE_COMMAND_MODE -eq "saveas_alias") {
+              $experimentPrefix = "saveas"
+              $operation = [ordered]@{
+                kind = "save_as_noop"
+              }
+            }
+            elseif ($env:PUB_RE_COMMAND_MODE -eq "save_alias") {
+              $experimentPrefix = "save"
+              $operation = [ordered]@{
+                kind = "save_in_place_noop"
+              }
+            }
             else {
               if ($env:PUB_RE_PAGE_ID -notmatch '^[1-9][0-9]{0,9}$' -or
                   $env:PUB_RE_SHAPE_ID -notmatch '^[1-9][0-9]{0,9}$' -or
@@ -339,9 +374,16 @@ jobs:
                 throw "rotation delta must be nonzero and within 45 degrees"
               }
 
-              $experimentPrefix = "rotate"
+              if ($env:PUB_RE_COMMAND_MODE -eq "rotation_save_alias") {
+                $experimentPrefix = "rotate-save"
+                $rotationKind = "shape_rotation_delta_in_place_save"
+              }
+              else {
+                $experimentPrefix = "rotate"
+                $rotationKind = "shape_rotation_delta"
+              }
               $operation = [ordered]@{
-                kind = "shape_rotation_delta"
+                kind = $rotationKind
                 selector = [ordered]@{
                   page_id = [int]$pageId64
                   shape_id = [int]$shapeId64
