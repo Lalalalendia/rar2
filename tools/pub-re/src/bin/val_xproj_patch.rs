@@ -200,8 +200,8 @@ fn all_streams(path: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
     // produces platform-native separators (backslashes on Windows).
     // structural_base_manifest uses pub-cfb's canonical slash paths.
     // Reuse exactly that established inventory/stream reader.
-    let inventory = pub_cfb::inspect_path(path)
-        .with_context(|| format!("inspect CFB {}", path.display()))?;
+    let inventory =
+        pub_cfb::inspect_path(path).with_context(|| format!("inspect CFB {}", path.display()))?;
     let mut streams = BTreeMap::new();
     for entry in inventory
         .entries
@@ -600,8 +600,14 @@ mod tests {
 
         let baseline = all_streams(&source).unwrap();
         for path in baseline.keys() {
-            assert!(path.starts_with('/'), "CFB stream path is not canonical: {path}");
-            assert!(!path.contains('\\'), "Windows separator leaked into CFB path");
+            assert!(
+                path.starts_with('/'),
+                "CFB stream path is not canonical: {path}"
+            );
+            assert!(
+                !path.contains('\\'),
+                "Windows separator leaked into CFB path"
+            );
         }
         let stream_digests: Vec<_> = baseline
             .iter()
