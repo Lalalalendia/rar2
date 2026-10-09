@@ -35,7 +35,8 @@ def job(id, name, created, started, completed, conclusion="success", **overrides
     row = {
         "id": id, "name": name, "created_at": created,
         "started_at": started, "completed_at": completed,
-        "conclusion": conclusion, "labels": ["ubuntu-latest"],
+        "conclusion": conclusion, "status": "completed",
+        "labels": ["ubuntu-latest"],
     }
     row.update(overrides)
     return row
@@ -144,6 +145,21 @@ class TimeTests(unittest.TestCase):
         self.assertIsNone(row["pr_created_to_merged_s"])
         self.assertEqual(row["runner_active_s"], 0)
         self.assertEqual(row["class"], "ci-infra")
+
+    def test_skipped_jobs_are_not_dispatch_wait_samples(self):
+        row = analyze_pr(
+            pr(), [run(1, "WEB-FONT-ENV-01")], {"1": [
+                job(1, "skipped browser", "2026-10-08T23:00:00Z",
+                    "2026-10-08T23:00:00Z", "2026-10-08T23:00:00Z",
+                    conclusion="skipped"),
+                job(2, "actual browser", "2026-10-08T23:00:00Z",
+                    "2026-10-08T23:00:45Z", "2026-10-08T23:00:53Z"),
+            ]}, ["apps/web/font-environment-v1.mjs"],
+        )
+        self.assertEqual(row["queue_wait"]["n"], 1)
+        self.assertEqual(row["queue_wait"]["p50_s"], 45)
+        self.assertEqual(row["runner_active_s"], 8)
+        self.assertEqual(row["first_relevant_feedback_s"], 184)
 
     def test_single_product_failure_is_fast_negative_feedback(self):
         row = analyze_pr(
