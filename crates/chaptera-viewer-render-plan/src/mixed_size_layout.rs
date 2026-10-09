@@ -573,6 +573,21 @@ pub(super) fn resolve_mixed_size_text_layout_v1(
     }
 }
 
+// Exact mixed-family source text is still explicitly LTR. The only newly
+// admitted non-ASCII scalars are bounded ordinary Unicode punctuation: no
+// bidi controls, combining marks, non-Latin scripts or ambient font lookup.
+// The independent exact per-run face/SHA/shaping and spacing gates still apply.
+pub(super) fn source_text_simple_ltr_v1(text: &str) -> bool {
+    !text.is_empty()
+        && text.chars().all(|ch| {
+            ch.is_ascii()
+                || matches!(
+                    ch as u32,
+                    0x00A1 | 0x00AB | 0x00BB | 0x00BF | 0x2010..=0x2027 | 0x2030..=0x203F
+                )
+        })
+}
+
 // Exact source-backed mixed-family terminal admission, preserving all earlier
 // bounded break choices and accepted physical shaping.
 const NATIVE_PROVEN_THREE_QUARTER_SPACING_EMU_V1: u32 = 9 * 12_700;
@@ -916,6 +931,21 @@ mod tests {
     use super::super::tests::{fixture, render_fragment};
     use super::*;
     use pub_viewer::{ViewerParagraphLineSpacingRun, viewer_story_text_sha256};
+
+    #[test]
+    fn mixed_family_source_text_only_admits_bounded_ltr_punctuation() {
+        assert!(source_text_simple_ltr_v1("AB\rCD"));
+        assert!(source_text_simple_ltr_v1("A\u{2019}B\rCD"));
+        assert!(source_text_simple_ltr_v1("A\u{2013}B"));
+        assert!(source_text_simple_ltr_v1("A\u{00AB}B"));
+
+        assert!(!source_text_simple_ltr_v1(""));
+        assert!(!source_text_simple_ltr_v1("A\u{00A0}B"));
+        assert!(!source_text_simple_ltr_v1("A\u{0301}B"));
+        assert!(!source_text_simple_ltr_v1("A\u{05D0}B"));
+        assert!(!source_text_simple_ltr_v1("A\u{4E2D}B"));
+        assert!(!source_text_simple_ltr_v1("A\u{200F}B"));
+    }
 
     #[test]
     fn mixed_family_terminal_114300_needs_exact_fonts_and_fresh_unique_spacing() {

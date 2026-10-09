@@ -43,7 +43,7 @@ use mixed_size_layout::{
 };
 use mixed_size_layout::{
     MixedLineCandidateV1, admitted_font_size_emu, resolve_mixed_family_text_layout_v1,
-    resolve_mixed_size_text_layout_v1, scalar_text_range_v1,
+    resolve_mixed_size_text_layout_v1, scalar_text_range_v1, source_text_simple_ltr_v1,
 };
 pub use shared_layout_diagnostics::{
     SharedLayoutIncompleteCauseV1, classify_shared_layout_incomplete_cause_v1,
@@ -2567,7 +2567,7 @@ where
         &RenderTypographyRunV1,
     ) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
 {
-    if fragment.text.is_empty() || !fragment.text.is_ascii() || fragment.typography.len() < 2 {
+    if !source_text_simple_ltr_v1(&fragment.text) || fragment.typography.len() < 2 {
         return None;
     }
 
