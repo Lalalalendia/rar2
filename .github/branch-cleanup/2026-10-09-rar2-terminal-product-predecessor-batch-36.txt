@@ -1,0 +1,11 @@
+# 2026-10-09 — terminal product/predecessor batch 36
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+editor/cloud-reader-image-01-restack-2 3ebd51507a716520cfa85ee493548b00ed1a1ebd # #2250 predecessor; same seven-file image convergence diff merged via #2281
+fix/pub-pdf-table-paint-01 75db87873c2617c54a19140539f838303c83114f # #2269 hard zero-regression acceptance failed; closed unmerged
+fix/viewer-082-proportional-114300-01 244844611d2c69f3ae372ea31015ef6e62ceef82 # #2287 terminal structurally unexecutable positive design; closed unmerged
+fix/pub-re-native-inner-watchdog-01 5fd3d73e12bc19093b06c4e44eccae95f72e2d60 # #2289 fresh-main unchanged watchdog behavior merged via #2293
+research/fix-mixed-size-native-dispatch-01 24ea7a186d4b51d0a30a151aa81d52a5a54c6b23 # #2296 explicitly superseded by merged #2294; no unique behavior
+ci/repo-latency-slim-pilot-01 1285491187169f241291948cf3e551a7a213bd1d # #2307 controlled experiment rejected; retain ubuntu-latest
+ops/branch-gc-20261009-terminal-evidence-batch-35 63355129ebc17c6e272304e2c6c772ee6dfe2689 # completed #2358 clean receipt: 28/28 deleted
