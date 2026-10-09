@@ -9,6 +9,10 @@ on:
       - "tools/ci/obsolete_actions_recovery.py"
       - "tools/ci/test_obsolete_actions_recovery.py"
   workflow_dispatch:
+  # Re-check provider-stuck zero-job obsolete PR runs even without a manual dispatch.
+  # The existing recovery script refuses to cancel current PR heads.
+  schedule:
+    - cron: "37 3 * * *"
 
 permissions:
   actions: write
