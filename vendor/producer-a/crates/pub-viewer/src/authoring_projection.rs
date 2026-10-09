@@ -392,7 +392,10 @@ mod page_membership_tests {
         assert_eq!(pages[0].height_emu, graph.pages[&second].size.height.get());
 
         assert_eq!(
-            surfaces.iter().map(|surface| surface.origin).collect::<Vec<_>>(),
+            surfaces
+                .iter()
+                .map(|surface| surface.origin)
+                .collect::<Vec<_>>(),
             vec![first, second]
         );
         assert_eq!(surfaces[0].size, graph.pages[&first].size);
