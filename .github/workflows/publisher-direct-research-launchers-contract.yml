@@ -60,6 +60,117 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $workflow = Get-Content -LiteralPath ".github/workflows/pub-re-native.yml" -Raw
+          # GitHub Actions env is step-scoped. The preparatory step sees
+          # research_id but the native experiment must bind it independently.
+          $marker = '      - name: Run bounded 0.75 paragraph research'
+          $sections = $workflow.Split([string[]]@($marker), [System.StringSplitOptions]::None)
+          if ($sections.Count -ne 2) {
+            throw "Bounded research step must occur exactly once"
+          }
+          $boundedStep = ($sections[1] -split '(?m)^      - name: ', 2)[0]
+          $binding = '(?m)^        env:\r?\n          PUB_RE_RESEARCH_ID: \$\{\{ needs\.gate\.outputs\.research_id \}\}\r?
+          if ($workflow.Contains("@mixedArgs") -or $launcher.Contains("@operationArgs")) {
+            throw "Mixed native mode must use explicit switch binding at both PowerShell boundaries"
+          }
+          foreach ($required in @(
+            "paragraph-line-spacing-0p75-mixed",
+            "mixed-12-18-12",
+            "Publisher research profile mismatch",
+            "mixed-size witness missing",
+            "-MixedSize"
+          )) {
+            if (-not $workflow.Contains($required)) {
+              throw "Mixed native mode lacks fail-closed workflow marker: $required"
+            }
+          }
+          if (-not $launcher.Contains("PUB_RE_REQUESTED_COMPOSITION_PROFILE") -or
+              -not $launcher.Contains(" -MixedSize")) {
+            throw "Mixed native mode lacks explicit launcher switch forwarding"
+          }
+
+          # Runtime smoke uses Windows PowerShell 5.1 parameter binding and a
+          # synthetic script; no Publisher, fonts, or private fixture required.
+          $smoke = Join-Path $env:RUNNER_TEMP "mixed-research-flag-smoke.ps1"
+          'param([switch]$MixedSize); if ($MixedSize) { "mixed-12-18-12" } else { "uniform-12" }' |
+            Set-Content -LiteralPath $smoke -Encoding ASCII
+          $mixed = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $smoke -MixedSize) -join ""
+          if ($LASTEXITCODE -ne 0 -or $mixed -ne "mixed-12-18-12") {
+            throw "Windows PowerShell explicit -MixedSize switch did not bind"
+          }
+          $ordinary = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $smoke) -join ""
+          if ($LASTEXITCODE -ne 0 -or $ordinary -ne "uniform-12") {
+            throw "Windows PowerShell default uniform mode regressed"
+          }
+
+      - name: Enforce offline bounded launcher contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $paths = @(
+            "tools/windows/run_master_projection_stack_auth_direct.ps1",
+            "tools/windows/run_paragraph_metrics_auth_direct.ps1",
+            "tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1"
+          )
+          foreach ($path in $paths) {
+            $text = Get-Content -LiteralPath $path -Raw
+            foreach ($forbidden in @(
+              "Invoke-WebRequest",
+              "Start-BitsTransfer",
+              "curl.exe",
+              "config.cmd",
+              "registration token",
+              "actions/runner-registration"
+            )) {
+              if ($text.Contains($forbidden)) {
+                throw "Forbidden direct-launcher capability '$forbidden' in $path"
+              }
+            }
+            foreach ($required in @(
+              "git hash-object",
+              "Publisher Build mismatch",
+              "MSPUB.EXE",
+              "OutputRoot is not empty"
+            )) {
+              if (-not $text.Contains($required)) {
+                throw "Missing bounded direct-launcher marker '$required' in $path"
+              }
+            }
+            if ($path -eq "tools/windows/run_master_projection_stack_auth_direct.ps1") {
+              foreach ($required in @(
+                "chaptera.master-projection-stack-auth.v1",
+                "MASTER-PROJECTION-STACK-AUTH-01",
+                "allowedVerdicts",
+                "armWinners",
+                "ambiguous_or_creation_order_sensitive"
+              )) {
+                if (-not $text.Contains($required)) {
+                  throw "Missing master-stack receipt marker '$required' in $path"
+                }
+              }
+            }
+            if ($path -eq "tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1") {
+              foreach ($required in @(
+                "paragraph-line-spacing-0p75-native-01.packet.json",
+                "line_geometry_fresh_reopen",
+                "Compress-Archive",
+                "RETURN-TO-CHAT-PARAGRAPH-0P75",
+                "PUB_RESEARCH_PACKET_SHA256"
+              )) {
+                if (-not $text.Contains($required)) {
+                  throw "Missing 0.75-SP direct-return marker '$required' in $path"
+                }
+              }
+            }
+          }
+
+          if ($boundedStep -notmatch $binding) {
+            throw "Bounded native research step must bind gate research_id in its own env"
+          }
+          # Synthetic negative: deleting the binding must fail this contract.
+          $withoutBinding = $boundedStep -replace $binding, ''
+          if ($withoutBinding -match $binding) {
+            throw "Bounded research environment contract cannot detect removed binding"
+          }
           $launcher = Get-Content -LiteralPath "tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1" -Raw
           if ($workflow.Contains("@mixedArgs") -or $launcher.Contains("@operationArgs")) {
             throw "Mixed native mode must use explicit switch binding at both PowerShell boundaries"
