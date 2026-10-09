@@ -470,11 +470,28 @@ class RealAcceptanceState:
         else:
             raise ValueError("unsupported history transition")
         project["operations"] = operations
-        # Undo/Redo change the operation log, not the versioned project's
-        # persisted identity contract. Downgrading to v0.2 after Story Undo
-        # loses the v0.11+ admission for EditorProject.identity and makes the
-        # unchanged source-backed project fail Rust apply_project replay.
-        # Retain the admitted schema of the existing canonical project.
+        if self.strict_acceptance:
+            # The pinned Newsletter Producer B receipt deliberately uses
+            # v0.2 baseline and v0.4 after MoveNode; its public history
+            # state/revision hashes are an existing acceptance contract.
+            # This legacy receipt has no EditorProject.identity.
+            if project.get("identity") is not None:
+                raise RuntimeError("legacy Newsletter history unexpectedly has project identity")
+            project["schema_version"] = (
+                "pub-editor-v0.4"
+                if any(
+                    isinstance(operation, dict)
+                    and operation.get("kind") == "move_node"
+                    for operation in operations
+                )
+                else "pub-editor-v0.2"
+            )
+        else:
+            # Real interactive Sample3 has a versioned, identity-bearing
+            # canonical Rust EditorProject. Its schema must not be downgraded
+            # by Undo/Redo: Rust rejects identity in pre-v0.11 projects.
+            if project.get("identity") is None:
+                raise RuntimeError("interactive Sample3 lost canonical project identity")
         return project, [{"key": "history." + transition_kind, "state": "supported", "note": None}]
 
     def commit(self, request: dict, principal_id: str) -> dict:
