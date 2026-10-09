@@ -1239,20 +1239,34 @@ fn gui_delete_empty_authored_page_projects_membership_and_replays_on_real_pub() 
     // the authored PageId without stealing focus from that selected source.
     // Navigate to the now-empty authored Page explicitly before testing its
     // separate Delete Empty Page capability and the original regression.
-    assert_eq!(
-        harness
-            .state()
-            .visual
-            .as_ref()
-            .expect("visual after two Undo")
+    let (current_index, target_index, current_page_id) = {
+        let app = harness.state();
+        let visual = app.visual.as_ref().expect("visual after two Undo");
+        let target_index = visual
             .document
-            .pages[harness.state().selected_page]
-            .id,
-        *source_order.last().expect("surviving source Page")
+            .pages
+            .iter()
+            .position(|page| page.id == appended_page_id)
+            .expect("restored blank authored Page remains in Viewer membership");
+        (
+            app.selected_page,
+            target_index,
+            visual.document.pages[app.selected_page].id,
+        )
+    };
+    assert!(
+        source_order.contains(&current_page_id),
+        "fresh reopen plus Undo must keep focus on a surviving source-backed Page"
     );
-    harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::PageDown);
-    harness.step();
-    harness.step();
+    assert!(
+        current_index < target_index,
+        "restored authored Page must remain after the selected source-backed Page"
+    );
+    for _ in current_index..target_index {
+        harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::PageDown);
+        harness.step();
+        harness.step();
+    }
     {
         let app = harness.state();
         assert_eq!(
