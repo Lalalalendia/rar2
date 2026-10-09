@@ -64,7 +64,12 @@ function Write-PubNativeStage {
     $temporaryPath = Join-Path $output 'native-roundtrip-stage.next.json'
     $stagePath = Join-Path $output 'native-roundtrip-stage.json'
     $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporaryPath -Encoding utf8
-    Move-Item -LiteralPath $temporaryPath -Destination $stagePath -Force
+    if ([System.IO.File]::Exists($stagePath)) {
+        [System.IO.File]::Replace($temporaryPath, $stagePath, $null)
+    }
+    else {
+        [System.IO.File]::Move($temporaryPath, $stagePath)
+    }
 }
 
 Write-PubNativeStage 'inputs_verified'
