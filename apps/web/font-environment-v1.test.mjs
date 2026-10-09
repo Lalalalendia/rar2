@@ -1,3 +1,4 @@
+// Sacrificial post-merge WEB-FONT-ENV runner topology control: no test behavior change.
 import test from "node:test";
 import assert from "node:assert/strict";
 
