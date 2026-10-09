@@ -100,6 +100,10 @@ jobs:
         shell: pwsh
         run: python tools/research-runner/tests/test_text_width_m3b_contract.py
 
+      - name: Guard M4 three-arm hyphenation CFB localization
+        shell: pwsh
+        run: python tools/research-runner/tests/test_text_width_m4_contract.py
+
       - name: Exercise Structured Storage deletion helper
         shell: pwsh
         run: |
