@@ -35,7 +35,7 @@ fn main() -> Result<()> {
         .document
         .pages
         .iter()
-        .map(|page| (page.id, page.index))
+        .map(|page| (page.id.into_canonical(), page.index))
         .collect::<BTreeMap<_, _>>();
 
     let mut windows = Vec::new();
