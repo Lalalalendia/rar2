@@ -296,15 +296,42 @@ class RealAcceptanceState:
             if not isinstance(page, dict) or not isinstance(page.get("id"), str):
                 raise ValueError(f"Viewer receipt document.pages[{index}].id is required")
             viewer_page_ids.append(page["id"])
-        source_scene = project_resolved_graph_scene(
-            current_graph,
-            page_ids=viewer_page_ids,
-        )
-        source_scene = align_adapter_scene_to_viewer_node_order(viewer, source_scene)
-        if require_viewer_equivalence:
-            compare_viewer_and_adapter_scene(viewer, source_scene)
-        current_viewer = copy.deepcopy(viewer)
-        current_viewer["scene"] = source_scene
+        if self.fixture_profile == "sample3":
+            # The legacy Sample3 Viewer has a real additional Page/surface that
+            # is not in resolved_graph.document.pages. A Story-only edit cannot
+            # legitimately re-project/omit that surface to satisfy the newer
+            # mature-0x2C Scene bridge. Keep the actual Reader Viewer geometry,
+            # prove it is bound to the immutable source, and only bridge canonical
+            # Story text. This path cannot admit a geometry/materialization edit.
+            operations = project.get("operations")
+            if not isinstance(operations, list) or any(
+                not isinstance(op, dict) or op.get("kind") != "replace_story_range"
+                for op in operations
+            ):
+                raise RuntimeError("Sample3 Viewer Story projection forbids geometry edits")
+            if current_graph.get("document", {}).get("source_hash") != self.source_hash:
+                raise RuntimeError("resolved graph source identity changed")
+            if viewer.get("document", {}).get("source", {}).get("source_hash") != self.source_hash:
+                raise RuntimeError("Viewer source identity changed")
+            before_stories = graph.get("stories")
+            viewer_stories = viewer.get("document", {}).get("stories")
+            if not isinstance(before_stories, dict) or not isinstance(viewer_stories, list):
+                raise RuntimeError("legacy Story catalogs are not verifiable")
+            for item in viewer_stories:
+                origin = before_stories.get(item.get("id"))
+                if not isinstance(origin, dict) or origin.get("text") != item.get("text"):
+                    raise RuntimeError("legacy Viewer Story differs from immutable Reader graph")
+            current_viewer = copy.deepcopy(viewer)
+        else:
+            source_scene = project_resolved_graph_scene(
+                current_graph,
+                page_ids=viewer_page_ids,
+            )
+            source_scene = align_adapter_scene_to_viewer_node_order(viewer, source_scene)
+            if require_viewer_equivalence:
+                compare_viewer_and_adapter_scene(viewer, source_scene)
+            current_viewer = copy.deepcopy(viewer)
+            current_viewer["scene"] = source_scene
 
         # Story text in the browser snapshot follows the canonical edited
         # resolved graph. Geometry still comes from the same Viewer/Scene path;
