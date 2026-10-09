@@ -34,7 +34,7 @@ jobs:
           cargo run --manifest-path vendor/producer-a/Cargo.toml \
             -p pub-writer --bin pub_story_native_handoff -- generate \
             --output-dir out/native-fixed-footprint
-      - name: Construct pinned shrink-without-global-relocation control
+      - name: Keep Quill service chunks at original offsets with an explicit TEXT gap
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -48,64 +48,71 @@ jobs:
           baseline = (root / "candidate.pub").read_bytes()
           manifest_path = root / "handoff.json"
           manifest = json.loads(manifest_path.read_text())
-          sha = lambda data: hashlib.sha256(data).hexdigest()
+          sha = lambda b: hashlib.sha256(b).hexdigest()
           original_sha = "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc"
           baseline_sha = "a92543b6f2b6ac3a8ae2481e15a2188a338ddc2a92832580f8987079fa4f70f8"
-          variant_sha = "c2b3270c32c7facce31a778e1f0523177aa77b9947b0e76dfcd1ae959471bf52"
+          variant_sha = "6bac9f44eeb27dc0efabea5a7f5d184a232b1650ff7ebd3598bece4d8019b50e"
           if manifest.get("schema") != "chaptera.pub-native-story-handoff.v1":
               raise SystemExit("handoff schema mismatch")
           if len(original) != 72192 or len(baseline) != 72192:
-              raise SystemExit("pinned Sample3 file size changed")
+              raise SystemExit("pinned Sample3 CFB length mismatch")
           if sha(original) != original_sha or sha(baseline) != baseline_sha:
-              raise SystemExit("source or baseline six-unit writer candidate changed")
+              raise SystemExit("source or canonical 6-unit writer candidate SHA mismatch")
           if manifest.get("source_sha256") != original_sha:
               raise SystemExit("manifest/source SHA mismatch")
-          # These physical offsets are valid ONLY for this exact pinned source SHA.
-          # Quill/QuillSub/CONTENTS starts at physical offset 64512.
-          story_start = 65392
-          marker_start = 65442
-          story_end = 65532
-          story_length_field = 69658
-          source_story = "This is the second page12345678\r\rIt is also times new roman, 10 point\r"
-          expected_shorter = source_story.replace("345678", "", 1)
-          if original[story_start:story_end].decode("utf-16le") != source_story:
-              raise SystemExit("source Story physical span changed")
-          if original[marker_start:marker_start + 12] != "345678".encode("utf-16le"):
-              raise SystemExit("unique marker moved")
-          if struct.unpack_from("<I", original, story_length_field)[0] != 70:
-              raise SystemExit("source Story length field moved")
-          if struct.unpack_from("<I", original, 64512 + 52)[0] != 992:
-              raise SystemExit("source TEXT descriptor changed")
-          variant = bytearray(original)
-          variant[marker_start:story_end - 12] = original[marker_start + 12:story_end]
-          variant[story_end - 12:story_end] = bytes(12)
-          struct.pack_into("<I", variant, story_length_field, 64)
-          variant = bytes(variant)
-          if variant[story_start:story_start + 128].decode("utf-16le") != expected_shorter:
-              raise SystemExit("shortened Story content failed fixed-footprint replay")
-          if variant[story_end - 12:story_end] != bytes(12):
-              raise SystemExit("expected bounded trailing empty space absent")
-          changed = [i for i, (a, b) in enumerate(zip(original, variant)) if a != b]
-          if not changed or any(
-              not (marker_start <= i < story_end or story_length_field <= i < story_length_field + 4)
-              for i in changed
+          # Exact physical CFB layout is valid ONLY under these SHA pins:
+          # Quill/QuillSub/CONTENTS stream starts at byte 64512 and has 7168 bytes.
+          quill_base = 64512
+          old_text_end, new_text_end, service_anchor = 1504, 1492, 2048
+          shrink = old_text_end - new_text_end
+          if shrink != 12:
+              raise SystemExit("unexpected edit delta")
+          original_offset = lambda logical: quill_base + logical
+          if struct.unpack_from("<I", original, original_offset(52))[0] != 992:
+              raise SystemExit("source TEXT declared size changed")
+          if struct.unpack_from("<I", baseline, original_offset(52))[0] != 980:
+              raise SystemExit("canonical writer TEXT shrink changed")
+          service_offsets = (72, 96, 120)
+          original_service_starts = (1504, 1534, 1974)
+          canonical_service_starts = (1492, 1522, 1962)
+          for offset, source_value, writer_value in zip(
+              service_offsets, original_service_starts, canonical_service_starts
           ):
-              raise SystemExit("unexpected edit outside Story local bytes and Story length field")
+              if struct.unpack_from("<I", original, original_offset(offset))[0] != source_value:
+                  raise SystemExit("source Quill descriptor location drifted")
+              if struct.unpack_from("<I", baseline, original_offset(offset))[0] != writer_value:
+                  raise SystemExit("canonical shifted Quill descriptor location drifted")
+          variant = bytearray(baseline)
+          # Preserve writer-corrected TEXT bytes, Story length and FDPP/BTE boundary
+          # values, but move already-patched service bytes BACK to original locations.
+          # This retains the new TEXT length 980 and a 12-byte zero gap before STSH.
+          variant[original_offset(new_text_end):original_offset(old_text_end)] = bytes(shrink)
+          variant[original_offset(old_text_end):original_offset(service_anchor)] = baseline[
+              original_offset(new_text_end):original_offset(service_anchor - shrink)
+          ]
+          for offset in service_offsets:
+              start = original_offset(offset)
+              variant[start:start + 4] = original[start:start + 4]
+          variant = bytes(variant)
           if sha(variant) != variant_sha:
-              raise SystemExit("fixed-footprint candidate SHA mismatch")
-          # Deliberately preserve original TEXT size, STSH/FDPP locations and all
-          # BTE/FDPP/FDPC/SYID bytes, unlike the canonical relocation writer.
-          assert variant[64512:story_start] == original[64512:story_start]
-          assert variant[story_end:story_length_field] == original[story_end:story_length_field]
-          assert variant[story_length_field + 4:] == original[story_length_field + 4:]
-          assert struct.unpack_from("<I", variant, 64512 + 52)[0] == 992
-          assert struct.unpack_from("<I", variant, 64512 + 72)[0] == 1504
+              raise SystemExit("service-offset-held variant SHA mismatch")
+          if variant[original_offset(new_text_end):original_offset(old_text_end)] != bytes(shrink):
+              raise SystemExit("new TEXT/service gap is nonzero")
+          if struct.unpack_from("<I", variant, original_offset(52))[0] != 980:
+              raise SystemExit("TEXT length not coherent after service gap")
+          if struct.unpack_from("<I", variant, original_offset(5146))[0] != 64:
+              raise SystemExit("edited Story logical UTF16 length changed")
+          if struct.unpack_from("<I", variant, original_offset(3584))[0] != 10:
+              raise SystemExit("SYID header outside this experiment")
+          for offset, value in zip(service_offsets, original_service_starts):
+              if struct.unpack_from("<I", variant, original_offset(offset))[0] != value:
+                  raise SystemExit("service chunk anchor moved unexpectedly")
           (root / "candidate.pub").write_bytes(variant)
           manifest["candidate_sha256"] = variant_sha
-          manifest["research_variant"] = "story_shrink_in_fixed_text_footprint"
+          manifest["research_variant"] = "story_shrink_with_fixed_service_chunk_addresses"
           manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-          print("PASS fixed-footprint Story shrink, unchanged Quill descriptor and service offsets")
-          print("Fixed-footprint candidate SHA256:", variant_sha)
+          print("PASS 12-byte Quill gap before anchored service chunks; TEXT length coherent")
+          print("Fixed-service candidate SHA256:", variant_sha)
           PY
       - name: Prove fixed-footprint shortened Story under current Reader
         run: |
