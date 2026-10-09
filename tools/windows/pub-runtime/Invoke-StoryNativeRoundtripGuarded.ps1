@@ -128,6 +128,22 @@ catch {
     Write-Warning ("Publisher native Story experiment did not pass: {0}" -f $status.failure_code)
 }
 finally {
+    $stagePath = Join-Path $root 'native-roundtrip-stage.json'
+    if (Test-Path -LiteralPath $stagePath -PathType Leaf) {
+        try {
+            $stage = Get-Content -LiteralPath $stagePath -Raw | ConvertFrom-Json
+            if ([string]$stage.schema -eq 'chaptera.pub-native-story-stage.v1' -and
+                [string]$stage.phase -match '^[a-z][a-z0-9_]{0,63}$' -and
+                [string]$stage.candidate_sha256 -match '^[0-9a-f]{64}$') {
+                $status.last_native_phase = [string]$stage.phase
+                $status.candidate_sha256 = [string]$stage.candidate_sha256
+            }
+            else {
+                $status.stage_receipt_valid = $false
+            }
+        }
+        catch { $status.stage_receipt_valid = $false }
+    }
     $status | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $statusPath -Encoding utf8
     foreach ($path in @($stdoutPath, $stderrPath)) {
         Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue

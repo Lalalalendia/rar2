@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/pub-save-roundtrip-handoff.yml"
       - "tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1"
+      - "tools/windows/pub-runtime/run_story_native_roundtrip.ps1"
   pull_request:
     paths:
       - ".github/workflows/pub-save-roundtrip-handoff.yml"
@@ -189,6 +190,7 @@ jobs:
           name: pub-story-native-acceptance-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/chaptera-native-story/private/native-roundtrip-status.json
+            ${{ runner.temp }}/chaptera-native-story/private/native-roundtrip-stage.json
             ${{ runner.temp }}/chaptera-native-story/private/native-roundtrip-receipt.json
           if-no-files-found: warn
           retention-days: 30
