@@ -26,7 +26,14 @@ use std::fmt;
 pub const EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1: &str = "0.1";
 
 pub(super) fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
-    if operations
+    if operations.iter().any(|operation| {
+        matches!(
+            operation,
+            EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+        )
+    }) {
+        super::EDITOR_PROJECT_VERSION_V0_29
+    } else if operations
         .iter()
         .any(|operation| matches!(operation, EditOperation::InsertBlankPageAfterV1 { .. }))
     {
@@ -279,6 +286,7 @@ impl EditorSession {
                 | EditOperation::DeleteBlankAuthoredPageV1 { .. }
                 | EditOperation::DuplicateBlankPageV1 { .. }
                 | EditOperation::InsertBlankPageAfterV1 { .. }
+                | EditOperation::DeleteAuthoredRectanglePageV1 { .. }
                 | EditOperation::SetTextFormatProperty { .. }
                 | EditOperation::ClearTextFormatPropertyOverride { .. }
                 | EditOperation::SetTextFormatPropertyScopedV1 { .. }
@@ -396,6 +404,7 @@ impl EditorSession {
                 | EditOperation::DeleteBlankAuthoredPageV1 { .. }
                 | EditOperation::DuplicateBlankPageV1 { .. }
                 | EditOperation::InsertBlankPageAfterV1 { .. }
+                | EditOperation::DeleteAuthoredRectanglePageV1 { .. }
                 | EditOperation::SetTextFormatProperty { .. }
                 | EditOperation::ClearTextFormatPropertyOverride { .. }
                 | EditOperation::SetTextFormatPropertyScopedV1 { .. }
@@ -691,6 +700,7 @@ impl EditOperation {
             | Self::DeleteBlankAuthoredPageV1 { .. }
             | Self::DuplicateBlankPageV1 { .. }
             | Self::InsertBlankPageAfterV1 { .. }
+            | Self::DeleteAuthoredRectanglePageV1 { .. }
             | Self::SetTextFormatProperty { .. }
             | Self::ClearTextFormatPropertyOverride { .. }
             | Self::SetTextFormatPropertyScopedV1 { .. }
@@ -934,6 +944,23 @@ impl PersistenceRequirements for EditOperation {
                     feature: "document.page_membership".into(),
                     origin: Some(transition.document_id.into_canonical()),
                     property_path: Some("document.pages".into()),
+                },
+            ],
+            Self::DeleteAuthoredRectanglePageV1 { transition } => vec![
+                PersistenceRequirement {
+                    feature: "page.created_identity".into(),
+                    origin: Some(transition.page.identity.page_id.into_canonical()),
+                    property_path: Some("page.identity".into()),
+                },
+                PersistenceRequirement {
+                    feature: "document.page_membership".into(),
+                    origin: Some(transition.page.document_id.into_canonical()),
+                    property_path: Some("document.pages".into()),
+                },
+                PersistenceRequirement {
+                    feature: "node.deleted_identity".into(),
+                    origin: Some(transition.shape_before.node_id.into_canonical()),
+                    property_path: Some("node".into()),
                 },
             ],
             Self::DuplicateBlankPageV1 { transition } => vec![

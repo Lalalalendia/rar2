@@ -519,6 +519,7 @@ fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
 
     for operation in &project.operations {
         let operation_rank = match operation {
+            EditOperation::DeleteAuthoredRectanglePageV1 { .. } => 29,
             EditOperation::InsertBlankPageAfterV1 { .. } => 28,
             EditOperation::DuplicateBlankPageV1 { .. } => 27,
             EditOperation::DeleteBlankAuthoredPageV1 { .. } => 26,
