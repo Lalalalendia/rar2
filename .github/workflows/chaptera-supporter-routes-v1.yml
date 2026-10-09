@@ -1,0 +1,38 @@
+name: Chaptera supporter shell V1
+
+on:
+  pull_request:
+    paths:
+      - "apps/chaptera-desktop/src/supporter.rs"
+      - "apps/chaptera-desktop/src/supporter_attribution.rs"
+      - "apps/chaptera-desktop/src/supporter_routes.rs"
+      - "apps/chaptera-desktop/src/supporter_shell.rs"
+      - "apps/chaptera-desktop/src/supporter_ui.rs"
+      - ".github/workflows/chaptera-supporter-routes-v1.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/chaptera-desktop/src/supporter.rs"
+      - "apps/chaptera-desktop/src/supporter_attribution.rs"
+      - "apps/chaptera-desktop/src/supporter_routes.rs"
+      - "apps/chaptera-desktop/src/supporter_shell.rs"
+      - "apps/chaptera-desktop/src/supporter_ui.rs"
+      - ".github/workflows/chaptera-supporter-routes-v1.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "chaptera-supporter-shell-v1-${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test supporter shell contract
+        run: cargo test -p chaptera-desktop "supporter"
