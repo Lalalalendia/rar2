@@ -4,7 +4,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$OutputRoot,
     [ValidateRange(60, 600)]
-    [int]$TimeoutSeconds = 360
+    [int]$TimeoutSeconds = 360,
+    [ValidateSet('WindowsPowerShell51', 'PowerShell7')]
+    [string]$ChildPowerShell = 'WindowsPowerShell51'
 )
 
 Set-StrictMode -Version Latest
@@ -51,9 +53,14 @@ try {
     $env:CHAPTERA_STORY_NATIVE_SCRIPT = Join-Path $PSScriptRoot 'run_story_native_roundtrip.ps1'
     $env:CHAPTERA_STORY_NATIVE_BUNDLE = $bundle
     $env:CHAPTERA_STORY_NATIVE_OUTPUT = $root
+    $env:CHAPTERA_STORY_NATIVE_CHILD_SHELL = $ChildPowerShell
     $command = @'
 $ErrorActionPreference = 'Stop'
 try {
+    if ($env:CHAPTERA_STORY_NATIVE_CHILD_SHELL -eq 'PowerShell7' -and
+        ([string]$PSVersionTable.PSEdition -ne 'Core' -or $PSVersionTable.PSVersion.Major -ne 7)) {
+        exit 78
+    }
     & $env:CHAPTERA_STORY_NATIVE_SCRIPT -BundleDir $env:CHAPTERA_STORY_NATIVE_BUNDLE -OutputRoot $env:CHAPTERA_STORY_NATIVE_OUTPUT
     exit 0
 }
@@ -63,6 +70,30 @@ catch {
 '@
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if ($ChildPowerShell -eq 'PowerShell7') {
+        # Controlled historical-runtime discriminator. Never resolve a runner PATH alias.
+        $powershellExe = Join-Path ${env:ProgramFiles} 'PowerShell\7\pwsh.exe'
+        if (-not (Test-Path -LiteralPath $powershellExe -PathType Leaf)) {
+            $status.failure_code = 'pwsh7_executable_absent'
+            throw 'pwsh7_executable_absent'
+        }
+        # Source-safe metadata only: no executable paths, user/profile names or raw COM logs.
+        $probe = @(& $powershellExe -NoLogo -NoProfile -NonInteractive -Command '$v=$PSVersionTable.PSVersion.ToString();$e=[string]$PSVersionTable.PSEdition;$a=[System.Threading.Thread]::CurrentThread.GetApartmentState().ToString();$b=[int][Environment]::Is64BitProcess;Write-Output "$v|$e|$a|$b"')
+        if ($LASTEXITCODE -ne 0 -or $probe.Count -ne 1) {
+            $status.failure_code = 'pwsh7_preflight_failed'
+            throw 'pwsh7_preflight_failed'
+        }
+        $probeText = [string]$probe[0]
+        if ($probeText -notmatch '^7\.[0-9]+\.[0-9]+(\.[0-9]+)?\|Core\|(STA|MTA|Unknown)\|[01]$') {
+            $status.failure_code = 'pwsh7_identity_mismatch'
+            throw 'pwsh7_identity_mismatch'
+        }
+        $parts = $probeText.Split('|')
+        $status['child_shell_mode'] = 'PowerShell7'
+        $status['child_powershell_version'] = $parts[0]
+        $status['child_apartment'] = $parts[2]
+        $status['child_is_64_bit_process'] = ($parts[3] -eq '1')
+    }
     $child = Start-Process -FilePath $powershellExe `
         -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded) `
         -RedirectStandardOutput $stdoutPath `
