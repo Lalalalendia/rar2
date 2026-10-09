@@ -803,10 +803,8 @@ impl ViewerApp {
         else {
             return false;
         };
-        editor.can_delete_authored_rectangle_page_v1(
-            &self.source_customer_page_ids,
-            selected_page_id,
-        )
+        editor
+            .can_delete_authored_rectangle_page_v1(&self.source_customer_page_ids, selected_page_id)
     }
 
     /// One user command is one canonical v0.29 operation. Build Editor and
@@ -829,17 +827,20 @@ impl ViewerApp {
         let before_page_ids = editor
             .effective_customer_page_order_v1(&self.source_customer_page_ids)
             .map_err(|error| {
-                format!("Rectangle-page delete is unavailable: {} ({})", error, error.code())
+                format!(
+                    "Rectangle-page delete is unavailable: {} ({})",
+                    error,
+                    error.code()
+                )
             })?;
         let deleted_index = before_page_ids
             .iter()
             .position(|id| *id == selected_page_id)
             .ok_or_else(|| "Selected PageId is not an admitted customer page.".to_owned())?;
         let operations_before = editor.operations().len();
-        if !editor.can_delete_authored_rectangle_page_v1(
-            &self.source_customer_page_ids,
-            selected_page_id,
-        ) {
+        if !editor
+            .can_delete_authored_rectangle_page_v1(&self.source_customer_page_ids, selected_page_id)
+        {
             return Err(
                 "Selected Page is not an admitted single authored Rectangle page.".to_owned(),
             );
@@ -852,7 +853,11 @@ impl ViewerApp {
                 selected_page_id,
             )
             .map_err(|error| {
-                format!("Rectangle-page delete rejected: {} ({})", error, error.code())
+                format!(
+                    "Rectangle-page delete rejected: {} ({})",
+                    error,
+                    error.code()
+                )
             })?;
         let removed_rectangle_id = match candidate.operations().last() {
             Some(pub_editor::EditOperation::DeleteAuthoredRectanglePageV1 { transition })
@@ -880,7 +885,11 @@ impl ViewerApp {
         let after_page_ids = candidate
             .effective_customer_page_order_v1(&self.source_customer_page_ids)
             .map_err(|error| {
-                format!("Rectangle-page membership rejected: {} ({})", error, error.code())
+                format!(
+                    "Rectangle-page membership rejected: {} ({})",
+                    error,
+                    error.code()
+                )
             })?;
         let mut expected_page_ids = before_page_ids;
         expected_page_ids.remove(deleted_index);
