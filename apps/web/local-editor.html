@@ -47,6 +47,7 @@ button:disabled{cursor:not-allowed;opacity:.45}
 import {BrowserEditorShellV1} from "./editor-shell-v1.mjs";
 import {HttpEditorServiceV1} from "./editor-service-client-v1.mjs";
 import {BrowserObservabilityV1} from "./observability-v1.mjs";
+import {prepareStoryTextForTextarea, restoreStoryTextFromTextarea} from "./story-line-endings-v1.mjs";
 
 const params=new URLSearchParams(location.search);
 const api=params.get("api") ?? "http://127.0.0.1:18765";
@@ -94,11 +95,23 @@ function showState(state){
 
 async function disclosure(){
   const scene=shell.snapshot;
-  const [preview,pubPreview,editorCaps]=await Promise.all([
-    service.exportPreview(document.querySelector("#target").value),
+  // A new revision may make previously authorized PUB bytes ineligible.
+  // Fail closed while recalculating capability, including on HTTP failure.
+  savePubButton.disabled=true;
+  // Unsupported editable export must not suppress independent Story/PUB capability
+  // facts or leave the editor without bound commands.
+  const [exportResult,pubPreview,editorCaps]=await Promise.all([
+    service.exportPreview(document.querySelector("#target").value)
+      .then(value=>({ok:true,value}),()=>({ok:false})),
     service.nativePubPreview(),
     service.editorCapabilities(),
   ]);
+  // Never admit a preview fetched for a different (possibly older) revision.
+  if(shell.snapshot.revision_id!==scene.revision_id||
+     pubPreview.revision_id!==scene.revision_id||
+     editorCaps.revision_id!==scene.revision_id){
+    throw new Error("PUB capability refresh is stale relative to current Editor revision");
+  }
   editableStoryIds=new Set(editorCaps.editable_story_ids??[]);
   syncTextControls();
   const caps=scene.capabilities ?? [];
@@ -106,12 +119,18 @@ async function disclosure(){
     (scene.fidelity.reasons?.length?" — "+scene.fidelity.reasons.join(", "):"");
   document.querySelector("#capabilities").textContent="Capabilities: "+
     (caps.length?caps.map(x=>x.key+"="+x.state).join("; "):"none");
-  const losses=(preview.items??[]).filter(x=>x.disposition!=="preserved");
   const loss=document.querySelector("#loss");
-  loss.className=preview.can_serialize?"ok":"bad";
-  loss.textContent="Export "+preview.target.format.toUpperCase()+": "+
-    (preview.can_serialize?"ready":"blocked")+" · blocking="+preview.counts.blocking+
-    " · losses="+losses.length;
+  if(exportResult.ok){
+    const preview=exportResult.value;
+    const losses=(preview.items??[]).filter(x=>x.disposition!=="preserved");
+    loss.className=preview.can_serialize?"ok":"bad";
+    loss.textContent="Export "+preview.target.format.toUpperCase()+": "+
+      (preview.can_serialize?"ready":"blocked")+" · blocking="+preview.counts.blocking+
+      " · losses="+losses.length;
+  }else{
+    loss.className="bad";
+    loss.textContent="Export: blocked (this target has no validated preview)";
+  }
   const pub=document.querySelector("#pubsave");
   pub.className=pubPreview.can_download===true?"ok":"warn";
   pub.textContent="PUB: "+(pubPreview.can_download===true
@@ -126,14 +145,17 @@ function openTextEditor(){
   const selected=selectedStory();
   if(!selected||!editableStoryIds.has(selected.story.story_id)) return;
   const original=selected.story.text;
-  const terminalCr=original.endsWith("\r");
+  // A textarea normalizes CR/CRLF to LF. Persist the exact source paragraph
+  // separator convention so a text-only mutation cannot rewrite other lines.
+  const sourceText=prepareStoryTextForTextarea(original);
   editingStory={
     story_id:selected.story.story_id,
     node_id:selected.node_id,
     original_text:original,
-    terminal_cr:terminalCr,
+    terminal_cr:sourceText.terminal_cr,
+    line_ending_kind:sourceText.line_ending_kind,
   };
-  textValue.value=terminalCr?original.slice(0,-1):original;
+  textValue.value=sourceText.value;
   textTools.hidden=false;
   textValue.focus();
 }
@@ -148,7 +170,7 @@ async function applyTextEdit(){
   if(!current || current.text!==editingStory.original_text){
     throw new Error("Story changed since text editor opened");
   }
-  const replacement=textValue.value+(editingStory.terminal_cr?"\r":"");
+  const replacement=restoreStoryTextFromTextarea(textValue.value,editingStory);
   if(replacement===editingStory.original_text){
     closeTextEditor();
     return;
@@ -168,6 +190,7 @@ async function applyTextEdit(){
       replacement_text:replacement,
     },
   };
+  savePubButton.disabled=true;
   const accepted=await service.commit(request);
   if(accepted.protocol_version!=="chaptera.commit-accepted.v1"){
     throw new Error("Story edit rejected: "+JSON.stringify(accepted));
@@ -195,6 +218,8 @@ async function downloadNativePub(){
 }
 
 async function history(kind){
+  // Undo/Redo revoke any prior Download PUB UI admission immediately.
+  savePubButton.disabled=true;
   const snapshot=shell.snapshot;
   const accepted=await service.historyTransition({
     protocol_version:"chaptera.history-transition-intent.v1",
@@ -227,6 +252,7 @@ async function start(){
   document.querySelector("#redo").onclick=()=>history("redo").catch(showError);
   document.querySelector("#reopen").onclick=async()=>{
     try{
+      savePubButton.disabled=true;
       const response=await fetch(api+"/v1/harness/reopen",{method:"POST",headers:{"x-chaptera-principal-id":"synthetic-editor"}});
       const scene=await response.json();
       if(!response.ok) throw new Error(JSON.stringify(scene));
@@ -236,7 +262,7 @@ async function start(){
   };
   document.querySelector("#preview").onclick=()=>disclosure().catch(showError);
   document.querySelector("#target").onchange=()=>disclosure().catch(showError);
-  editTextButton.onclick=()=>openTextEditor();
+  editTextButton.onclick=()=>{try{openTextEditor()}catch(error){showError(error)}};
   document.querySelector("#apply-text").onclick=()=>applyTextEdit().catch(showError);
   document.querySelector("#cancel-text").onclick=()=>closeTextEditor();
   savePubButton.onclick=()=>downloadNativePub().catch(showError);

@@ -18,8 +18,10 @@ import copy
 import hashlib
 import json
 import pathlib
+import re
 import subprocess
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -44,6 +46,13 @@ from security.authorized_revision_gateway import AuthorizedRevisionGateway
 
 PINNED_SHA = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
 PINNED_LEN = 291840
+SAMPLE3_SHA = "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc"
+SAMPLE3_LEN = 72192
+# This is a source fixture admission list, not a Writer/Publisher approval list.
+PINNED_FIXTURE_PROFILES = {
+    "newsletter": (PINNED_SHA, PINNED_LEN),
+    "sample3": (SAMPLE3_SHA, SAMPLE3_LEN),
+}
 
 # Native Publisher 2019 Open -> SaveAs -> fresh Reopen -> Reader evidence:
 # protected-main Actions #37982376097, receipt artifact #11641486612.
@@ -154,38 +163,72 @@ class RealAcceptanceState:
         fixture: pathlib.Path,
         resolved_graph: pathlib.Path,
         viewer_receipt: pathlib.Path,
-        revision_receipt: pathlib.Path,
+        revision_receipt: pathlib.Path | None,
         exporter: pathlib.Path,
         work_dir: pathlib.Path,
         strict_acceptance: bool = True,
+        baseline_project: pathlib.Path | None = None,
+        fixture_profile: str = "newsletter",
     ):
         self.fixture = fixture.resolve(strict=True)
         self.resolved_graph_path = resolved_graph.resolve(strict=True)
         self.viewer_receipt_path = viewer_receipt.resolve(strict=True)
-        self.revision_receipt_path = revision_receipt.resolve(strict=True)
+        self.revision_receipt_path = (
+            revision_receipt.resolve(strict=True) if revision_receipt is not None else None
+        )
         self.exporter = exporter.resolve(strict=True)
         self.work_dir = work_dir.resolve()
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.strict_acceptance = strict_acceptance
 
-        if self.fixture.stat().st_size != PINNED_LEN or sha256_path(self.fixture) != PINNED_SHA:
-            raise RuntimeError("pinned SampleNewsletter source identity mismatch")
+        if fixture_profile not in PINNED_FIXTURE_PROFILES:
+            raise RuntimeError("unrecognized pinned PUB fixture profile")
+        self.fixture_profile = fixture_profile
+        self.pinned_sha, self.pinned_len = PINNED_FIXTURE_PROFILES[fixture_profile]
+        if (
+            self.fixture.stat().st_size != self.pinned_len
+            or sha256_path(self.fixture) != self.pinned_sha
+        ):
+            raise RuntimeError("pinned PUB source identity mismatch")
 
-        self.revision_receipt = load_json(self.revision_receipt_path)
-        self.document_id = self.revision_receipt["document_id"]
-        self.source_hash = self.revision_receipt["source_hash"]
-        if self.source_hash != PINNED_SHA:
-            raise RuntimeError("revision receipt is not bound to pinned source")
-
-        self.baseline_project = copy.deepcopy(self.revision_receipt["baseline"]["project"])
-        self.expected_baseline_revision = self.revision_receipt["baseline"]["revision_id"]
-        self.expected_accepted_revision = self.revision_receipt["accepted"]["revision_id"]
-        self.canonical_operation = copy.deepcopy(
-            self.revision_receipt["accepted"]["canonical_operation"]
-        )
-        self.canonical_request = copy.deepcopy(self.revision_receipt["request"])
-        self.target_node_id = self.canonical_operation["node_id"]
-        self.target_after = copy.deepcopy(self.canonical_operation["after"])
+        if self.revision_receipt_path is not None:
+            if baseline_project is not None or fixture_profile != "newsletter":
+                raise RuntimeError("canonical revision receipt requires Newsletter profile")
+            self.revision_receipt = load_json(self.revision_receipt_path)
+            self.document_id = self.revision_receipt["document_id"]
+            self.source_hash = self.revision_receipt["source_hash"]
+            if self.source_hash != self.pinned_sha:
+                raise RuntimeError("revision receipt is not bound to pinned source")
+            self.baseline_project = copy.deepcopy(
+                self.revision_receipt["baseline"]["project"]
+            )
+            self.expected_baseline_revision = self.revision_receipt["baseline"]["revision_id"]
+            self.expected_accepted_revision = self.revision_receipt["accepted"]["revision_id"]
+            self.canonical_operation = copy.deepcopy(
+                self.revision_receipt["accepted"]["canonical_operation"]
+            )
+            self.canonical_request = copy.deepcopy(self.revision_receipt["request"])
+            self.target_node_id = self.canonical_operation["node_id"]
+            self.target_after = copy.deepcopy(self.canonical_operation["after"])
+        else:
+            # An isolated, exact-source interactive scenario, not a fabricated
+            # Producer B move receipt. The canonical baseline is real Rust EditorProject.
+            if (
+                fixture_profile != "sample3"
+                or strict_acceptance
+                or baseline_project is None
+            ):
+                raise RuntimeError("Sample3 requires interactive exact baseline Project")
+            self.revision_receipt = None
+            self.document_id = "a75950c7-cfb5-4b6c-925b-27a8d8b3d102"
+            self.source_hash = self.pinned_sha
+            self.baseline_project = load_json(baseline_project.resolve(strict=True))
+            self.expected_baseline_revision = None
+            self.expected_accepted_revision = None
+            self.canonical_operation = None
+            self.canonical_request = None
+            self.target_node_id = None
+            self.target_after = None
 
         self.kernel = RevisionKernel()
         baseline = self.kernel.register_baseline(
@@ -193,7 +236,9 @@ class RealAcceptanceState:
             source_hash=self.source_hash,
             project=copy.deepcopy(self.baseline_project),
         )
-        if baseline.revision_id != self.expected_baseline_revision:
+        if self.expected_baseline_revision is None:
+            self.expected_baseline_revision = baseline.revision_id
+        elif baseline.revision_id != self.expected_baseline_revision:
             raise RuntimeError("RevisionKernel baseline differs from Producer B")
 
         self.tenant_id = "web-acceptance-real"
@@ -223,11 +268,16 @@ class RealAcceptanceState:
         self.reopen_count = 0
         self.export_cache = {}
         self.native_pub_cache = {}
+        # One Editor revision maps to one immutable, receipt-backed PUB candidate.
+        # The threaded HTTP server may receive the browser's disclosure preview
+        # concurrently with an acceptance/client preview; do not unlink and
+        # recreate the same candidate paths in two Rust child processes.
+        self.native_pub_lock = threading.Lock()
 
         baseline_scene = self._scene_from_project(
             self.baseline_project,
             self.expected_baseline_revision,
-            require_viewer_equivalence=True,
+            require_viewer_equivalence=self.strict_acceptance,
         )
         self.scenes = {self.expected_baseline_revision: baseline_scene}
 
@@ -253,15 +303,42 @@ class RealAcceptanceState:
             if not isinstance(page, dict) or not isinstance(page.get("id"), str):
                 raise ValueError(f"Viewer receipt document.pages[{index}].id is required")
             viewer_page_ids.append(page["id"])
-        source_scene = project_resolved_graph_scene(
-            current_graph,
-            page_ids=viewer_page_ids,
-        )
-        source_scene = align_adapter_scene_to_viewer_node_order(viewer, source_scene)
-        if require_viewer_equivalence:
-            compare_viewer_and_adapter_scene(viewer, source_scene)
-        current_viewer = copy.deepcopy(viewer)
-        current_viewer["scene"] = source_scene
+        if self.fixture_profile == "sample3":
+            # The legacy Sample3 Viewer has a real additional Page/surface that
+            # is not in resolved_graph.document.pages. A Story-only edit cannot
+            # legitimately re-project/omit that surface to satisfy the newer
+            # mature-0x2C Scene bridge. Keep the actual Reader Viewer geometry,
+            # prove it is bound to the immutable source, and only bridge canonical
+            # Story text. This path cannot admit a geometry/materialization edit.
+            operations = project.get("operations")
+            if not isinstance(operations, list) or any(
+                not isinstance(op, dict) or op.get("kind") != "replace_story_range"
+                for op in operations
+            ):
+                raise RuntimeError("Sample3 Viewer Story projection forbids geometry edits")
+            if current_graph.get("document", {}).get("source_hash") != self.source_hash:
+                raise RuntimeError("resolved graph source identity changed")
+            if viewer.get("document", {}).get("source", {}).get("source_hash") != self.source_hash:
+                raise RuntimeError("Viewer source identity changed")
+            before_stories = graph.get("stories")
+            viewer_stories = viewer.get("document", {}).get("stories")
+            if not isinstance(before_stories, dict) or not isinstance(viewer_stories, list):
+                raise RuntimeError("legacy Story catalogs are not verifiable")
+            for item in viewer_stories:
+                origin = before_stories.get(item.get("id"))
+                if not isinstance(origin, dict) or origin.get("text") != item.get("text"):
+                    raise RuntimeError("legacy Viewer Story differs from immutable Reader graph")
+            current_viewer = copy.deepcopy(viewer)
+        else:
+            source_scene = project_resolved_graph_scene(
+                current_graph,
+                page_ids=viewer_page_ids,
+            )
+            source_scene = align_adapter_scene_to_viewer_node_order(viewer, source_scene)
+            if require_viewer_equivalence:
+                compare_viewer_and_adapter_scene(viewer, source_scene)
+            current_viewer = copy.deepcopy(viewer)
+            current_viewer["scene"] = source_scene
 
         # Story text in the browser snapshot follows the canonical edited
         # resolved graph. Geometry still comes from the same Viewer/Scene path;
@@ -393,15 +470,27 @@ class RealAcceptanceState:
         else:
             raise ValueError("unsupported history transition")
         project["operations"] = operations
-        project["schema_version"] = (
-            "pub-editor-v0.4"
-            if any(
-                isinstance(operation, dict)
-                and operation.get("kind") == "move_node"
-                for operation in operations
+        if project.get("identity") is None:
+            # Legacy no-identity Projects (both pinned Newsletter Producer B
+            # and interactive Newsletter smoke) normalize to v0.2 with no
+            # MoveNode, and v0.4 when MoveNode survives. This is required for
+            # the existing immutable public Undo/Redo history state hashes.
+            project["schema_version"] = (
+                "pub-editor-v0.4"
+                if any(
+                    isinstance(operation, dict)
+                    and operation.get("kind") == "move_node"
+                    for operation in operations
+                )
+                else "pub-editor-v0.2"
             )
-            else "pub-editor-v0.2"
-        )
+        else:
+            # Identity-bearing canonical Rust EditorProjects cannot be
+            # downgraded below v0.11. Preserve schema across history changes.
+            # In this fixture-constrained acceptance service these are the
+            # exact-source interactive Sample3 projects.
+            if self.fixture_profile == "newsletter":
+                raise RuntimeError("Newsletter unexpectedly gained a project identity")
         return project, [{"key": "history." + transition_kind, "state": "supported", "note": None}]
 
     def commit(self, request: dict, principal_id: str) -> dict:
@@ -590,6 +679,13 @@ class RealAcceptanceState:
         }
 
     def _native_pub_for_revision(self, revision_id: str) -> dict:
+        # Serialize cache lookup, write-once native materialization and receipt
+        # validation. The lock is per document instance and never guards other
+        # unrelated Reader/Editor/HTTP operations.
+        with self.native_pub_lock:
+            return self._native_pub_for_revision_serialized(revision_id)
+
+    def _native_pub_for_revision_serialized(self, revision_id: str) -> dict:
         if revision_id in self.native_pub_cache:
             return self.native_pub_cache[revision_id]
 
@@ -621,7 +717,38 @@ class RealAcceptanceState:
             check=False,
         )
         if completed.returncode != 0:
-            raise RuntimeError("native PUB save producer failed")
+            # The real service is reachable over HTTP. Never echo the Rust
+            # stderr here: it can include private source paths or document
+            # content. Classify only fixed, source-independent producer stages
+            # so hosted acceptance can diagnose a failure without leaking it.
+            signatures = (
+                ("native PUB save requires two distinct, unused output paths", "output_paths_occupied"),
+                ("read source PUB fixture", "source_read"),
+                ("parse canonical EditorProject", "project_parse"),
+                ("source SHA-256 does not match EditorProject", "source_hash_mismatch"),
+                ("open bounded native PUB editor", "editor_open"),
+                ("replay canonical EditorProject", "project_replay"),
+                ("write source-safe blocked native PUB save report", "blocked_receipt_write"),
+                ("write new native PUB candidate", "candidate_write"),
+                ("write source-safe native PUB save report", "candidate_receipt_write"),
+                ("unexpected extra arguments", "cli_args"),
+            )
+            failure_code = next(
+                (code for message, code in signatures if message in completed.stderr),
+                "unclassified_nonzero",
+            )
+            # Keep only the OS error number and path-state booleans, not
+            # untrusted CLI stderr, source paths, or candidate bytes.
+            errno_match = re.search(r"\(os error (\d+)\)", completed.stderr)
+            errno_code = errno_match.group(1) if errno_match else "none"
+            artifact_exists = artifact_path.exists()
+            parent_exists = artifact_path.parent.is_dir()
+            raise RuntimeError(
+                "native PUB save producer failed "
+                f"[{failure_code};os_errno={errno_code};"
+                f"artifact_exists={str(artifact_exists).lower()};"
+                f"parent_exists={str(parent_exists).lower()}]"
+            )
         report = load_json(report_path)
         if (
             report.get("protocol_version") != "chaptera.native-pub-save.v1"
@@ -698,7 +825,10 @@ class RealAcceptanceState:
             revision_id=current.revision_id,
         )
         # Re-read immutable inputs and rebuild from the persisted canonical project.
-        if self.fixture.stat().st_size != PINNED_LEN or sha256_path(self.fixture) != PINNED_SHA:
+        if (
+            self.fixture.stat().st_size != self.pinned_len
+            or sha256_path(self.fixture) != self.pinned_sha
+        ):
             raise RuntimeError("immutable source changed before reopen")
         fresh = self._scene_from_project(record.project, current.revision_id)
         previous = self.scenes[current.revision_id]
@@ -879,7 +1009,11 @@ def main():
     parser.add_argument("--fixture", required=True, type=pathlib.Path)
     parser.add_argument("--resolved-graph", required=True, type=pathlib.Path)
     parser.add_argument("--viewer-receipt", required=True, type=pathlib.Path)
-    parser.add_argument("--revision-receipt", required=True, type=pathlib.Path)
+    parser.add_argument("--revision-receipt", type=pathlib.Path)
+    parser.add_argument("--baseline-project", type=pathlib.Path)
+    parser.add_argument(
+        "--fixture-profile", choices=("newsletter", "sample3"), default="newsletter"
+    )
     parser.add_argument("--exporter", required=True, type=pathlib.Path)
     parser.add_argument("--work-dir", required=True, type=pathlib.Path)
     parser.add_argument(
@@ -897,6 +1031,8 @@ def main():
         exporter=args.exporter,
         work_dir=args.work_dir,
         strict_acceptance=not args.interactive,
+        baseline_project=args.baseline_project,
+        fixture_profile=args.fixture_profile,
     )
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(

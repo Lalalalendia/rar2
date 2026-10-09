@@ -7,6 +7,9 @@ on:
       - "tools/native-pub-candidate-cli/examples/accepted_sample3_project.rs"
       - "tools/test_sample3_browser_pub_download_service.py"
       - "tools/test_sample3_browser_pub_download.mjs"
+      - "tools/test_sample3_editor_ui_acceptance.mjs"
+      - "apps/web/story-line-endings-v1.mjs"
+      - "tools/test_story_line_endings_v1.mjs"
   workflow_dispatch:
 
 permissions:
@@ -77,6 +80,9 @@ jobs:
             .sample3-positive/baseline.json \
             .sample3-positive/edited.json
 
+      - name: Prove source Story separator roundtrip is byte-exact
+        run: node tools/test_story_line_endings_v1.mjs
+
       - name: Install Chromium
         run: |
           npm install --no-save playwright@1.55.0
@@ -105,6 +111,122 @@ jobs:
           print({"http_browser_bytes": "exact_match", "publisher_acceptance": "existing_external_exact_pair_only"})
           PY
 
+      - name: Regenerate original Sample3 Viewer/Scene inputs from current Reader
+        shell: bash
+        run: |
+          set -euo pipefail
+          vendor/producer-a/target/debug/chaptera-producer-a \
+            resolved-graph .sample3-positive/source.pub \
+            > .sample3-positive/resolved-graph.json
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root = Path(".sample3-positive")
+          source_hash = hashlib.sha256((root / "source.pub").read_bytes()).hexdigest()
+          graph = json.loads((root / "resolved-graph.json").read_text())
+          assert source_hash == "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc"
+          assert graph["document"]["source_hash"] == source_hash, (
+              "resolved-graph producer misbound the actual source PUB identity",
+              graph["document"]["source_hash"],
+              source_hash,
+          )
+          print({"resolved_graph_source_identity": "exact_source_bytes"})
+          PY
+          vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/source.pub \
+            > .sample3-positive/viewer-raw.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path(".sample3-positive")
+          raw = json.loads((root / "viewer-raw.json").read_text())
+          # Keep the original current Reader receipt intact on disk. Only
+          # admit a partial, visibly disclosed Scene if the edited Story has
+          # no relation to any table Story. Never flatten or reclassify cells.
+          tables = raw.pop("tables", [])
+          if not isinstance(tables, list):
+              raise SystemExit("Reader tables carrier is not an array")
+          stories = raw.get("document", {}).get("stories", [])
+          targets = [
+              item["id"] for item in stories
+              if isinstance(item, dict) and "345678" in item.get("text", "")
+          ]
+          if len(targets) != 1:
+              raise SystemExit("no unique real Reader Story marker in Sample3")
+          target = targets[0]
+          all_stories = {item["id"] for item in stories}
+          node_ids = {item["origin"] for item in raw["scene"]["nodes"]}
+          rows = []
+          for table in tables:
+              if (
+                  not isinstance(table, dict)
+                  or not isinstance(table.get("story_id"), str)
+                  or table["story_id"] not in all_stories
+                  or not isinstance(table.get("node_id"), str)
+                  or table["node_id"] not in node_ids
+                  or not isinstance(table.get("cells"), list)
+                  or not isinstance(table.get("rows"), int)
+                  or not isinstance(table.get("columns"), int)
+              ):
+                  raise SystemExit("Reader table identity/topology is not verifiable")
+              if table["story_id"] == target:
+                  raise SystemExit(
+                      "target SYID Story belongs to an actual Table; generic Story "
+                      "editor must not bypass table cell boundaries"
+                  )
+              rows.append({
+                  "node_id": table["node_id"],
+                  "story_id": table["story_id"],
+                  "rows": table["rows"],
+                  "columns": table["columns"],
+                  "cell_count": len(table["cells"]),
+              })
+          if tables:
+              # The current source-neutral Scene has no cell carrier. Mark
+              # explicit Partial fidelity; Writer still preserves all CFB
+              # contents and is separately Publisher-SHA fenced.
+              raw.setdefault("document", {}).setdefault("diagnostics", []).append({
+                  "code": "viewer.table.unprojected_in_sample3_story_ui",
+                  "severity": "fidelity_warning",
+                  "message": "Source table cells are not rendered by this bounded Story editing view.",
+              })
+          (root / "sample3-table-dependency.json").write_text(
+              json.dumps({
+                  "source": "exact_public_Sample3",
+                  "target_story_id": target,
+                  "tables": rows,
+                  "target_table_dependency": False,
+                  "browser_table_projection": "partial_not_rendered" if rows else "not_applicable",
+              }, indent=2),
+              encoding="utf-8",
+          )
+          (root / "viewer-geometry.json").write_text(
+              json.dumps(raw, ensure_ascii=False, separators=(",", ":")),
+              encoding="utf-8",
+          )
+          print({"viewer_extra_tables": len(rows), "edited_story_table_owned": False,
+                 "browser_fidelity": "partial" if rows else "unchanged"})
+          PY
+          python tools/validate_viewer_geometry_receipt.py \
+            .sample3-positive/viewer-geometry.json
+
+      - name: Prove real Chaptera UI Story edit through Publisher-approved Download PUB
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/test_sample3_editor_ui_acceptance.mjs \
+            .sample3-positive/source.pub \
+            .sample3-positive/baseline.json \
+            .sample3-positive/resolved-graph.json \
+            .sample3-positive/viewer-geometry.json \
+            vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/runtime
+          cmp .sample3-positive/runtime/ui-edited.pub \
+            .sample3-positive/handoff/candidate.pub
+
+      - name: Prove pinned Newsletter still rejects unauthorized native PUB download
+        run: python tools/run_local_real_editor.py --smoke
+
       - name: Keep legacy real-Newsletter browser denial gate
         run: |
           python - <<'PY'
@@ -123,5 +245,7 @@ jobs:
           retention-days: 14
           path: |
             .sample3-positive/runtime/sample3-browser-pub-download.json
+            .sample3-positive/runtime/sample3-ui-pub-download.json
             .sample3-positive/runtime/accepted.json
             .sample3-positive/runtime/baseline.json
+            .sample3-positive/sample3-table-dependency.json

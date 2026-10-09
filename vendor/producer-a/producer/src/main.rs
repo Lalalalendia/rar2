@@ -60,8 +60,11 @@ fn emit_viewer(path: &str) -> Result<()> {
 
 fn emit_resolved_graph(path: &str) -> Result<()> {
     let bytes = fs::read(path).context("read pinned PUB fixture")?;
+    // resolved-graph is used with more than the original Newsletter fixture.
+    // The CDM must bind to the bytes actually read, never to a demo constant.
+    let source_hash = source_sha256(&bytes);
     let source =
-        pub_reader::build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), pinned_hash())
+        pub_reader::build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash)
             .context("build mature-0x2c SourceGraph")?;
     let resolved =
         pub_reader::resolve_pub_source_graph(&source.graph).context("resolve PUB SourceGraph")?;
