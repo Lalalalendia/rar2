@@ -50,6 +50,16 @@ function Assert-WitnessRoot {
 }
 
 Push-Location $repoRoot
+$pwshCommand = Get-Command -Name pwsh -CommandType Application -ErrorAction SilentlyContinue
+$researchPowerShell = if ($null -ne $pwshCommand) {
+    [string]$pwshCommand.Source
+} else {
+    Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+}
+if (-not (Test-Path -LiteralPath $researchPowerShell -PathType Leaf)) {
+    throw "No supported PowerShell host executable found."
+}
+
 $previousFixtureRoot = [string]$env:PUB_RESEARCH_FIXTURE_ROOT
 $tempRoot = $null
 try {
@@ -91,19 +101,19 @@ try {
     $env:PUB_RESEARCH_PROFILE_ID = "publisher-2019"
 
     Write-Host "Quill Story oracle direct host: prepare"
-    & pwsh -NoProfile -File $prepare -PacketPath $packet -OutputRoot $OutputRoot
+    & $researchPowerShell -NoProfile -ExecutionPolicy Bypass -File $prepare -PacketPath $packet -OutputRoot $OutputRoot
     if ($LASTEXITCODE -ne 0) {
         throw "prepare_native_run.ps1 failed with exit code $LASTEXITCODE"
     }
 
     Write-Host "Quill Story oracle direct host: execute read-only Publisher observation"
-    & pwsh -NoProfile -File $operation -PacketPath $packet -OutputRoot $OutputRoot
+    & $researchPowerShell -NoProfile -ExecutionPolicy Bypass -File $operation -PacketPath $packet -OutputRoot $OutputRoot
     if ($LASTEXITCODE -ne 0) {
         throw "quill_story_readonly_oracle_02.ps1 failed with exit code $LASTEXITCODE"
     }
 
     Write-Host "Quill Story oracle direct host: finalize"
-    & pwsh -NoProfile -File $finalize -PacketPath $packet -OutputRoot $OutputRoot
+    & $researchPowerShell -NoProfile -ExecutionPolicy Bypass -File $finalize -PacketPath $packet -OutputRoot $OutputRoot
     if ($LASTEXITCODE -ne 0) {
         throw "finalize_native_run.ps1 failed with exit code $LASTEXITCODE"
     }

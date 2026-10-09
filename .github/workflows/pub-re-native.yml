@@ -1002,7 +1002,11 @@ jobs:
           try {
             $quotedLauncher = '"' + $launcher + '"'
             $quotedOutput = '"' + $env:PUB_RE_RESEARCH_OUTPUT + '"'
-            $child = Start-Process -FilePath (Get-Command -Name pwsh -CommandType Application).Source -ArgumentList @("-NoProfile", "-File", $quotedLauncher, "-OutputRoot", $quotedOutput) -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+            $windowsPowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          if (-not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf)) {
+            throw "quill_readonly_windows_powershell_unavailable"
+          }
+          $child = Start-Process -FilePath $windowsPowerShell -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $quotedLauncher, "-OutputRoot", $quotedOutput) -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
 
             if (-not $child.WaitForExit(1080000)) {
               throw "quill_readonly_watchdog_timeout_1080s"
