@@ -45,6 +45,21 @@ pub use authored_paragraph_alignment_v1::{
     EffectiveParagraphAlignmentValueV1, ParagraphAlignmentAuthorityV1,
     ParagraphAlignmentOverrideSnapshotV1, ParagraphAlignmentTransitionErrorV1,
 };
+pub use duplicate_authored_rectangle_v1::{
+    DUPLICATE_OFFSET_EMU_V1, DUPLICATE_PLACEMENT_POLICY_V1, DuplicateAuthoredRectangleErrorV1,
+    DuplicateAuthoredRectanglePlanV1, plan_duplicate_authored_rectangle_v1,
+    validate_duplicate_authored_rectangle_source_v1,
+};
+pub use imported_paragraph_alignment_v1::{
+    ImportedParagraphAlignmentValueV1, ImportedParagraphBaseAlignmentErrorV1,
+    ImportedParagraphBaseAlignmentV1,
+};
+pub use imported_paragraph_flow_v1::{
+    ImportedParagraphFlowConstraintBindingV1, ImportedParagraphFlowConstraintV1,
+    ImportedParagraphFlowErrorV1,
+};
+pub use imported_paragraphs_v1::{ImportedParagraphProjectionErrorV1, ImportedParagraphV1};
+pub use link_text_frame_tail_v1::TextFrameLinkTransitionV1;
 pub use pub_editor_authoring_core::{
     APPEND_BLANK_PAGE_PROTOCOL_V1, AUTHORED_STACK_PROTOCOL_V1,
     AUTHORED_TABLE_SENTINEL_CONTENTS_SEQ_NUM_V1, AUTHORED_TABLE_SENTINEL_TEXT_ID_V1,
@@ -70,21 +85,6 @@ pub use pub_editor_authoring_core::{
     validate_authored_page_identity_v1, validate_authored_shape_runtime_v1,
     validate_authored_stack_v1, validate_create_table_runtime_v1,
 };
-pub use duplicate_authored_rectangle_v1::{
-    DUPLICATE_OFFSET_EMU_V1, DUPLICATE_PLACEMENT_POLICY_V1, DuplicateAuthoredRectangleErrorV1,
-    DuplicateAuthoredRectanglePlanV1, plan_duplicate_authored_rectangle_v1,
-    validate_duplicate_authored_rectangle_source_v1,
-};
-pub use imported_paragraph_alignment_v1::{
-    ImportedParagraphAlignmentValueV1, ImportedParagraphBaseAlignmentErrorV1,
-    ImportedParagraphBaseAlignmentV1,
-};
-pub use imported_paragraph_flow_v1::{
-    ImportedParagraphFlowConstraintBindingV1, ImportedParagraphFlowConstraintV1,
-    ImportedParagraphFlowErrorV1,
-};
-pub use imported_paragraphs_v1::{ImportedParagraphProjectionErrorV1, ImportedParagraphV1};
-pub use link_text_frame_tail_v1::TextFrameLinkTransitionV1;
 pub use pub_editor_geometry_core::{
     MAX_MOVE_NODES_V1, MAX_RESIZE_NODES_V1, MoveNodeBatchEntry, ResizeNodeBatchEntry,
 };
