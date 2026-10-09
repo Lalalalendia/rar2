@@ -1,6 +1,7 @@
 //! Windows GUI acceptance: real on-canvas selection, raw resize control and Ctrl/Shift toggles.
 
 use crate::*;
+use pub_interaction::ResizeModifierMaskV1;
 
 #[cfg(not(feature = "reader-only"))]
 #[test]
