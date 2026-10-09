@@ -2,12 +2,18 @@ name: PUB Save roundtrip handoff
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/pub-save-roundtrip-handoff.yml"
+      - "tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1"
   pull_request:
     paths:
       - ".github/workflows/pub-save-roundtrip-handoff.yml"
       - "vendor/producer-a/crates/pub-writer/**"
       - "vendor/producer-a/crates/pub-quill/tests/fixtures/Sample3.pub.b64"
       - "tools/windows/pub-runtime/run_story_native_roundtrip.ps1"
+      - "tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1"
       - "tools/windows/pub-runtime/PubRuntime.psm1"
 
 permissions:
@@ -92,3 +98,103 @@ jobs:
             out/pub-save-roundtrip-handoff/LOCAL-CODEX.txt
           if-no-files-found: error
           retention-days: 30
+
+
+  validate-native-wrapper:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Parse bounded PowerShell 5.1 native wrapper
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($relative in @(
+            'tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1',
+            'tools/windows/pub-runtime/run_story_native_roundtrip.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $relative).Path, [ref]$tokens, [ref]$errors
+            )
+            if ($errors.Count -ne 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              throw 'native_powershell_parse_failed'
+            }
+          }
+          Write-Host 'Publisher native roundtrip PowerShell 5.1 parse PASS'
+
+  native-roundtrip:
+    needs: prepare-handoff
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Lalalalendia/rar2' }}
+    runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
+    timeout-minutes: 35
+    concurrency:
+      group: pub-re-native-publisher-oracle
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Supply Git Bash to the pinned Rust toolchain
+        shell: powershell
+        run: |
+          $gitBashDir = 'C:\Program Files\Git\bin'
+          if (-not (Test-Path -LiteralPath (Join-Path $gitBashDir 'bash.exe') -PathType Leaf)) {
+            throw 'git_bash_unavailable'
+          }
+          $gitBashDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download generated candidate from this exact run
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-save-roundtrip-handoff-${{ github.run_id }}
+          path: ${{ runner.temp }}/chaptera-native-story/input
+
+      - name: Prebuild current Reader semantic verifier
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-writer --bin pub_story_native_handoff
+          if ($LASTEXITCODE -ne 0) { throw 'native_story_verifier_build_failed' }
+
+      - name: Execute guarded Publisher Open SaveAs Reopen
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1 `
+            -BundleDir (Join-Path $env:RUNNER_TEMP 'chaptera-native-story/input') `
+            -OutputRoot (Join-Path $env:RUNNER_TEMP 'chaptera-native-story/private')
+          if ($LASTEXITCODE -ne 0) { throw 'native_story_roundtrip_failed' }
+
+      - name: Upload source-safe native acceptance receipts only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-story-native-acceptance-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/chaptera-native-story/private/native-roundtrip-status.json
+            ${{ runner.temp }}/chaptera-native-story/private/native-roundtrip-receipt.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Clear disposable PUB candidate, native save and private logs
+        if: always()
+        shell: powershell
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'chaptera-native-story'
+          if (Test-Path -LiteralPath $root) {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
+          }
