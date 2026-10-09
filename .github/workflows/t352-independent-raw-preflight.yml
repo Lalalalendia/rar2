@@ -3,7 +3,7 @@ name: T352 identity-first independent fixture crosswalk preflight
 on:
   pull_request:
     paths:
-      - "vendor/producer-a/crates/pub-reader/src/bin/t352_crosswalk_census.rs"
+      - "tools/pub-re/src/bin/t352_crosswalk_census.rs"
       - ".github/workflows/t352-independent-raw-preflight.yml"
   workflow_dispatch:
 
@@ -30,7 +30,7 @@ jobs:
 
       - name: Enforce committed Rust formatting
         shell: bash
-        run: rustfmt --edition 2024 --check vendor/producer-a/crates/pub-reader/src/bin/t352_crosswalk_census.rs
+        run: rustfmt --edition 2024 --check tools/pub-re/src/bin/t352_crosswalk_census.rs
 
       - name: Obtain two immutable Apache POI sources
         shell: bash
@@ -53,18 +53,18 @@ jobs:
           test "$(wc -c < "$RUNNER_TEMP/t352-source/SampleBrochure.pub")" -eq 161792
           test "$(wc -c < "$RUNNER_TEMP/t352-source/SampleNewsletter.pub")" -eq 291840
 
-      - name: Compile existing pub-reader structural census
+      - name: Compile existing pub-re structural census
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release --manifest-path vendor/producer-a/Cargo.toml \
-            -p pub-reader --bin t352_crosswalk_census
+          cargo build --release --manifest-path tools/pub-re/Cargo.toml \
+            --bin t352_crosswalk_census
 
       - name: Produce identity-first crosswalk census (not native Publisher proof)
         shell: bash
         run: |
           set -euo pipefail
-          tool=vendor/producer-a/target/release/t352_crosswalk_census
+          tool=tools/pub-re/target/release/t352_crosswalk_census
           for name in SampleBrochure SampleNewsletter; do
             if "$tool" "$RUNNER_TEMP/t352-source/$name.pub" \
               "$RUNNER_TEMP/t352-evidence/$name-census.json"; then
