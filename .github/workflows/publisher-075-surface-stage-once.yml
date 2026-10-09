@@ -1,0 +1,152 @@
+name: Publisher 075 surface stage handoff
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/publisher-075-surface-stage-once.yml"
+      - "tools/windows/run_publisher_075_surface_stage_direct.ps1"
+      - "tools/windows/run_publisher_supplemental_native_surface_probe.ps1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publisher-075-surface-stage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Parse direct launcher and existing read-only probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($path in @(
+            "tools/windows/run_publisher_075_surface_stage_direct.ps1",
+            "tools/windows/run_publisher_supplemental_native_surface_probe.ps1"
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -ne 0) {
+              $errors | ForEach-Object { Write-Error "${path}: $($_.Message)" }
+              throw "PowerShell parser rejected Publisher 075 surface handoff."
+            }
+          }
+
+      - name: Enforce read-only exact-source handoff
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $launcher = Get-Content "tools/windows/run_publisher_075_surface_stage_direct.ps1" -Raw
+          $probe = Get-Content "tools/windows/run_publisher_supplemental_native_surface_probe.ps1" -Raw
+
+          foreach ($forbidden in @(
+            "Invoke-WebRequest",
+            "Start-BitsTransfer",
+            "curl.exe",
+            ".Save(",
+            ".SaveAs(",
+            ".ExportAsFixedFormat(",
+            ".PrintOut(",
+            ".Run("
+          )) {
+            if ($launcher.Contains($forbidden) -or $probe.Contains($forbidden)) {
+              throw "Forbidden capability in Publisher 075 read-only handoff: $forbidden"
+            }
+          }
+
+          foreach ($required in @(
+            "082319ac283c99f1b2e5d05fe428bccfd4123ef498267b35b492bba991a3b6e0",
+            "2202112",
+            'git -C $RepoRoot hash-object',
+            "Compress-Archive",
+            "PUBLISHER_075_SURFACE_RETURN"
+          )) {
+            if (-not $launcher.Contains($required)) {
+              throw "Missing bounded direct-return marker: $required"
+            }
+          }
+
+          foreach ($required in @(
+            '$app.Open($resolved, $true, $false)',
+            'Document.Pages.Count',
+            'Document.PrintStyle',
+            'Document.ViewTwoPageSpread',
+            'ReaderSpread.PageCount',
+            'Page.XOffsetWithinReaderSpread',
+            'Page.YOffsetWithinReaderSpread',
+            'Page.PageID',
+            'Page.PageIndex'
+          )) {
+            if (-not $probe.Contains($required)) {
+              throw "Missing native surface evidence marker: $required"
+            }
+          }
+
+      - name: Prove wrong source fails before Publisher activation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture = Join-Path $env:RUNNER_TEMP ("publisher-075-wrong-" + [guid]::NewGuid().ToString() + ".pub")
+          $output = Join-Path $env:RUNNER_TEMP ("publisher-075-wrong-out-" + [guid]::NewGuid().ToString())
+          [IO.File]::WriteAllBytes($fixture, [byte[]]@(0, 1, 2, 3))
+          try {
+            $ErrorActionPreference = "Continue"
+            $text = (& pwsh -NoProfile -File tools/windows/run_publisher_075_surface_stage_direct.ps1 -InputPath $fixture -OutputRoot $output 2>&1 | ForEach-Object { [string]$_ }) -join "`n"
+            $exitCode = $LASTEXITCODE
+            $ErrorActionPreference = "Stop"
+            if ($exitCode -eq 0 -or -not $text.Contains("075 source size mismatch")) {
+              throw "Direct handoff did not reject wrong source before Publisher boundary: $text"
+            }
+            if (Test-Path -LiteralPath $output) {
+              throw "Rejected source created output before exact identity admission."
+            }
+          } finally {
+            Remove-Item -LiteralPath $fixture -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $output -Force -Recurse -ErrorAction SilentlyContinue
+          }
+          Write-Host "Wrong-source control rejected before Publisher activation; no output created."
+          exit 0
+
+      - name: Emit local execution handoff
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $handoff = @"
+          PUBLISHER-075-SURFACE-STAGE-01
+
+          Exact source:
+            SHA-256: 082319ac283c99f1b2e5d05fe428bccfd4123ef498267b35b492bba991a3b6e0
+            bytes: 2202112
+
+          Run locally on the pinned Publisher 2019 lab machine:
+            pwsh -NoProfile -File tools/windows/run_publisher_075_surface_stage_direct.ps1 -InputPath "<exact-075.pub>" -OutputRoot "<empty-output-dir>"
+
+          Return only:
+            publisher-075-surface-stage-return.zip
+
+          The ZIP contains source-free receipt + repo/probe identity metadata. It contains no PUB bytes.
+          "@
+          $path = Join-Path $env:RUNNER_TEMP "publisher-075-surface-stage-handoff.txt"
+          Set-Content -LiteralPath $path -Value $handoff -Encoding utf8
+          Get-Content -LiteralPath $path
+          Copy-Item -LiteralPath $path -Destination "${{ github.workspace }}\publisher-075-surface-stage-handoff.txt"
+
+      - name: Upload handoff
+        uses: actions/upload-artifact@v4
+        with:
+          name: publisher-075-surface-stage-handoff-${{ github.run_id }}
+          path: publisher-075-surface-stage-handoff.txt
+          retention-days: 30
