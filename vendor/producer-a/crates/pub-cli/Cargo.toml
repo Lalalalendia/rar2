@@ -9,6 +9,10 @@ license.workspace = true
 name = "pub"
 path = "src/main.rs"
 
+[[bin]]
+name = "pub-page-order-census"
+path = "src/bin/pub_page_order_census.rs"
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
