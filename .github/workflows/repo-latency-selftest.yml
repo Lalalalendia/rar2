@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   offline-contract:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
