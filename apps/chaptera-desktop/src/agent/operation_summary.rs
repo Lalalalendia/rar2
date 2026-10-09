@@ -271,6 +271,11 @@ pub(super) fn operation_summary(operation: &EditOperation) -> Value {
             "before_state_id": transition.before_state_id.as_str(),
             "after_state_id": transition.after_state_id.as_str(),
         }),
+        EditOperation::RegisterAuthoredPageIdentityV1 { identity } => json!({
+            "kind": "register_authored_page_identity_v1",
+            "page_id": identity.page_id.as_canonical().to_string(),
+            "provenance": identity.provenance,
+        }),
         EditOperation::SetTextFormatProperty {
             story_id,
             start_scalar,

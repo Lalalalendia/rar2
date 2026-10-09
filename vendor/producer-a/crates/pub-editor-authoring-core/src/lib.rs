@@ -3,12 +3,17 @@
 //! This crate contains only session-neutral authoring primitives. It must not
 //! depend on pub-editor or EditorSession.
 
+mod authored_page_identity_v1;
 mod authored_stack_lifecycle_v1;
 mod authored_stack_runtime_v1;
 mod create_line_runtime_v1;
 mod create_shape_runtime_v1;
 mod create_table_runtime_v1;
 
+pub use authored_page_identity_v1::{
+    AuthoredPageIdentityV1, AuthoredPageIdentityValidationErrorV1,
+    is_editor_created_uuid_v7_page_id, validate_authored_page_identity_v1,
+};
 pub use authored_stack_lifecycle_v1::{
     AUTHORED_STACK_PROTOCOL_V1, AuthoredStackLifecycleErrorV1, AuthoredStackLifecycleKindV1,
     AuthoredStackLifecycleTransitionV1, AuthoredStackV1,
