@@ -193,6 +193,8 @@ fn main() -> Result<()> {
     let mut joins = BTreeMap::<String, usize>::new();
     let mut topology = BTreeMap::<String, usize>::new();
     let mut overlap_family = BTreeMap::<String, usize>::new();
+    let mut earlier_overlap_geometry = BTreeMap::<String, usize>::new();
+    let mut later_overlap_geometry = BTreeMap::<String, usize>::new();
     let mut earlier_overlap_count = 0_usize;
     let mut later_overlap_count = 0_usize;
 
@@ -262,6 +264,23 @@ fn main() -> Result<()> {
                             "other_shape"
                         };
                         *overlap_family.entry(family.to_owned()).or_default() += 1;
+                        if family == "other_shape" {
+                            let other_matches = shapes_by_seq
+                                .get(&other.payload.contents_seq_num)
+                                .map(Vec::as_slice)
+                                .unwrap_or(&[]);
+                            let geometry = match other_matches {
+                                [shape_index] => effective_geometry(&inventory.shapes[*shape_index], dgg),
+                                [] => "shape_join_missing".to_owned(),
+                                _ => "shape_join_ambiguous".to_owned(),
+                            };
+                            let geometry_counts = if other_rank < rank {
+                                &mut earlier_overlap_geometry
+                            } else {
+                                &mut later_overlap_geometry
+                            };
+                            *geometry_counts.entry(geometry).or_default() += 1;
+                        }
                     }
                 }
             }
@@ -310,6 +329,8 @@ fn main() -> Result<()> {
         "earlier_overlap_count": earlier_overlap_count,
         "later_overlap_count": later_overlap_count,
         "overlap_family_counts": overlap_family,
+        "earlier_other_shape_geometry_counts": earlier_overlap_geometry,
+        "later_other_shape_geometry_counts": later_overlap_geometry,
         "claims": {
             "source_only": true,
             "publisher_pdf_used_as_authority": false,
