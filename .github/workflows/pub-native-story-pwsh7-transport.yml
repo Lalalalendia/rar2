@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/pub-native-story-pwsh7-transport.yml"
       - "tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1"
+      - "tools/ci/test_pub_story_pwsh7_probe.py"
   push:
     branches: [main]
     paths:
@@ -54,6 +55,13 @@ jobs:
               -not $wrapper.Contains("7.6.5")) {
             throw 'portable_pwsh7_guard_missing'
           }
+      - name: Prove literal PowerShell7 preflight probe survives child transport (no COM)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/ci/test_pub_story_pwsh7_probe.py
+          if ($LASTEXITCODE -ne 0) { throw 'pwsh7_encoded_probe_smoke_failed' }
+
       - name: Verify existing native stage writer without Publisher
         shell: powershell
         run: |
