@@ -18,6 +18,7 @@ import copy
 import hashlib
 import json
 import pathlib
+import re
 import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -711,7 +712,18 @@ class RealAcceptanceState:
                 (code for message, code in signatures if message in completed.stderr),
                 "unclassified_nonzero",
             )
-            raise RuntimeError(f"native PUB save producer failed [{failure_code}]")
+            # Keep only the OS error number and path-state booleans, not
+            # untrusted CLI stderr, source paths, or candidate bytes.
+            errno_match = re.search(r"\\(os error (\\d+)\\)", completed.stderr)
+            errno_code = errno_match.group(1) if errno_match else "none"
+            artifact_exists = artifact_path.exists()
+            parent_exists = artifact_path.parent.is_dir()
+            raise RuntimeError(
+                "native PUB save producer failed "
+                f"[{failure_code};os_errno={errno_code};"
+                f"artifact_exists={str(artifact_exists).lower()};"
+                f"parent_exists={str(parent_exists).lower()}]"
+            )
         report = load_json(report_path)
         if (
             report.get("protocol_version") != "chaptera.native-pub-save.v1"
