@@ -16,7 +16,7 @@ pub use text::{FixedFontResource, FixedTextRun, PdfTextPreparationError};
 
 use image::ImageFormat;
 use pub_layout::{BoundedResolvedScene, ResolvedPhysicalNode, ResolvedSurface};
-use pub_model::{Affine2D, CanonicalId, NodeId, PageId, ResourceId};
+use pub_model::{Affine2D, CanonicalId, LengthEmu, NodeId, PageId, RectEmu, ResourceId};
 use pub_output::{FontIdentity, OutputFontPlan};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -57,6 +57,31 @@ pub struct FixedNodePaint {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FixedTableFill {
+    pub bounds: RectEmu,
+    pub rgb: [u8; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FixedTableBorder {
+    pub x1_emu: i64,
+    pub y1_emu: i64,
+    pub x2_emu: i64,
+    pub y2_emu: i64,
+    pub rgb: [u8; 3],
+    pub width_emu: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FixedTablePaintResource {
+    pub node_id: NodeId,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fills: Vec<FixedTableFill>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub borders: Vec<FixedTableBorder>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FixedImageResource {
     pub resource_id: ResourceId,
     pub mime: String,
@@ -72,6 +97,8 @@ pub struct FixedImageResource {
 pub struct FixedPdfResources {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub node_paints: Vec<FixedNodePaint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub table_paints: Vec<FixedTablePaintResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<FixedImageResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -160,6 +187,12 @@ pub enum PdfRenderError {
     PaintReferencesMissingNode {
         node_id: NodeId,
     },
+    DuplicateTablePaint {
+        node_id: NodeId,
+    },
+    TablePaintReferencesMissingNode {
+        node_id: NodeId,
+    },
     DuplicateImageResource {
         resource_id: ResourceId,
     },
@@ -195,6 +228,15 @@ impl fmt::Display for PdfRenderError {
                 write!(
                     f,
                     "explicit paint references missing resolved node {node_id:?}"
+                )
+            }
+            Self::DuplicateTablePaint { node_id } => {
+                write!(f, "duplicate fixed TABLE paint for node {node_id:?}")
+            }
+            Self::TablePaintReferencesMissingNode { node_id } => {
+                write!(
+                    f,
+                    "fixed TABLE paint references missing resolved node {node_id:?}"
                 )
             }
             Self::DuplicateImageResource { resource_id } => {
@@ -275,6 +317,20 @@ pub fn render_bounded_pdf(
         if paint_by_node.insert(paint.node_id, paint).is_some() {
             return Err(PdfRenderError::DuplicatePaint {
                 node_id: paint.node_id,
+            });
+        }
+    }
+
+    let mut table_paint_by_node = BTreeMap::new();
+    for table in &resources.table_paints {
+        if !node_ids.contains(&table.node_id) {
+            return Err(PdfRenderError::TablePaintReferencesMissingNode {
+                node_id: table.node_id,
+            });
+        }
+        if table_paint_by_node.insert(table.node_id, table).is_some() {
+            return Err(PdfRenderError::DuplicateTablePaint {
+                node_id: table.node_id,
             });
         }
     }
@@ -360,6 +416,7 @@ pub fn render_bounded_pdf(
         }
 
         let paint = paint_by_node.get(&node.origin).copied();
+        let table_paint = table_paint_by_node.get(&node.origin).copied();
         let image_resource_id = image_by_node.get(&node.origin).copied();
 
         let valid_paint = paint.filter(|paint| {
@@ -386,6 +443,10 @@ pub fn render_bounded_pdf(
         if let Some(paint) = valid_paint {
             append_rectangle(content, node, paint);
         }
+
+        let (table_painted, table_partial) = table_paint.map_or((false, false), |table| {
+            append_table_paint(content, node, table, &mut diagnostics)
+        });
 
         let mut image_painted = false;
         let mut image_partial = false;
@@ -446,18 +507,43 @@ pub fn render_bounded_pdf(
             }
         }
 
-        let any_partial = image_partial || text_partial;
-        let painted_code = match (valid_paint.is_some(), image_painted, text_painted) {
-            (true, true, true) => {
+        let any_partial = table_partial || image_partial || text_partial;
+        let painted_code = match (
+            valid_paint.is_some(),
+            table_painted,
+            image_painted,
+            text_painted,
+        ) {
+            (true, true, true, true) => {
+                Some("pdf.node.painted_explicit_rectangle_table_exact_image_and_resolved_text")
+            }
+            (true, true, true, false) => {
+                Some("pdf.node.painted_explicit_rectangle_table_and_exact_image")
+            }
+            (true, true, false, true) => {
+                Some("pdf.node.painted_explicit_rectangle_table_and_resolved_text")
+            }
+            (false, true, true, true) => {
+                Some("pdf.node.painted_table_exact_image_and_resolved_text")
+            }
+            (true, false, true, true) => {
                 Some("pdf.node.painted_explicit_rectangle_exact_image_and_resolved_text")
             }
-            (true, true, false) => Some("pdf.node.painted_explicit_rectangle_and_exact_image"),
-            (true, false, true) => Some("pdf.node.painted_explicit_rectangle_and_resolved_text"),
-            (false, true, true) => Some("pdf.node.painted_exact_image_and_resolved_text"),
-            (true, false, false) => Some("pdf.node.painted_explicit_rectangle"),
-            (false, true, false) => Some("pdf.node.painted_exact_image"),
-            (false, false, true) => Some("pdf.node.painted_resolved_text"),
-            (false, false, false) => None,
+            (true, true, false, false) => Some("pdf.node.painted_explicit_rectangle_and_table"),
+            (false, true, true, false) => Some("pdf.node.painted_table_and_exact_image"),
+            (false, true, false, true) => Some("pdf.node.painted_table_and_resolved_text"),
+            (true, false, true, false) => {
+                Some("pdf.node.painted_explicit_rectangle_and_exact_image")
+            }
+            (true, false, false, true) => {
+                Some("pdf.node.painted_explicit_rectangle_and_resolved_text")
+            }
+            (false, false, true, true) => Some("pdf.node.painted_exact_image_and_resolved_text"),
+            (true, false, false, false) => Some("pdf.node.painted_explicit_rectangle"),
+            (false, true, false, false) => Some("pdf.node.painted_table"),
+            (false, false, true, false) => Some("pdf.node.painted_exact_image"),
+            (false, false, false, true) => Some("pdf.node.painted_resolved_text"),
+            (false, false, false, false) => None,
         };
 
         match (painted_code, any_partial) {
@@ -483,7 +569,7 @@ pub fn render_bounded_pdf(
                 node,
                 Some(surface.origin),
                 "pdf.node.resource_missing",
-                "resolved node has neither explicit fixed-output paint, exact image, nor resolved text resources",
+                "resolved node has neither explicit fixed-output paint, TABLE paint, exact image, nor resolved text resources",
                 &mut reports,
                 &mut diagnostics,
             ),
@@ -633,6 +719,96 @@ fn page_report(surface: &ResolvedSurface) -> PdfPageReport {
             format_points(surface.size.height.get()),
         ],
     }
+}
+
+fn append_solid_rect(content: &mut String, bounds: RectEmu, rgb: [u8; 3]) {
+    content.push_str("q\n");
+    content.push_str(&format!(
+        "{} {} {} rg\n{} {} {} {} re\nf\nQ\n",
+        format_rgb(rgb[0]),
+        format_rgb(rgb[1]),
+        format_rgb(rgb[2]),
+        format_points(bounds.x.get()),
+        format_points(bounds.y.get()),
+        format_points(bounds.width.get()),
+        format_points(bounds.height.get()),
+    ));
+}
+
+fn table_border_rect(border: &FixedTableBorder) -> Option<RectEmu> {
+    if border.width_emu <= 0 {
+        return None;
+    }
+    let half = border.width_emu / 2;
+    if border.y1_emu == border.y2_emu && border.x1_emu < border.x2_emu {
+        return Some(RectEmu::new(
+            LengthEmu::new(border.x1_emu),
+            LengthEmu::new(border.y1_emu.checked_sub(half)?),
+            LengthEmu::new(border.x2_emu.checked_sub(border.x1_emu)?),
+            LengthEmu::new(border.width_emu),
+        ));
+    }
+    if border.x1_emu == border.x2_emu && border.y1_emu < border.y2_emu {
+        return Some(RectEmu::new(
+            LengthEmu::new(border.x1_emu.checked_sub(half)?),
+            LengthEmu::new(border.y1_emu),
+            LengthEmu::new(border.width_emu),
+            LengthEmu::new(border.y2_emu.checked_sub(border.y1_emu)?),
+        ));
+    }
+    None
+}
+
+fn append_table_paint(
+    content: &mut String,
+    node: &ResolvedPhysicalNode,
+    table: &FixedTablePaintResource,
+    diagnostics: &mut Vec<PdfDiagnostic>,
+) -> (bool, bool) {
+    let mut painted = false;
+    let mut partial = false;
+
+    for fill in &table.fills {
+        if fill.bounds.width.get() <= 0 || fill.bounds.height.get() <= 0 {
+            diagnostics.push(PdfDiagnostic {
+                code: "pdf.table.fill_geometry_invalid".into(),
+                severity: PdfDiagnosticSeverity::FidelityWarning,
+                origin: node.origin.into_canonical(),
+                message: "TABLE cell fill has non-positive physical bounds".into(),
+            });
+            partial = true;
+            continue;
+        }
+        append_solid_rect(content, fill.bounds, fill.rgb);
+        painted = true;
+    }
+
+    for border in &table.borders {
+        let Some(bounds) = table_border_rect(border) else {
+            diagnostics.push(PdfDiagnostic {
+                code: "pdf.table.border_geometry_invalid".into(),
+                severity: PdfDiagnosticSeverity::FidelityWarning,
+                origin: node.origin.into_canonical(),
+                message: "TABLE border must be positive-width axis-aligned geometry".into(),
+            });
+            partial = true;
+            continue;
+        };
+        append_solid_rect(content, bounds, border.rgb);
+        painted = true;
+    }
+
+    if !painted && !partial {
+        diagnostics.push(PdfDiagnostic {
+            code: "pdf.table.paint_empty".into(),
+            severity: PdfDiagnosticSeverity::FidelityWarning,
+            origin: node.origin.into_canonical(),
+            message: "TABLE paint resource contains no visible fill or border primitives".into(),
+        });
+        partial = true;
+    }
+
+    (painted, partial)
 }
 
 fn append_rectangle(content: &mut String, node: &ResolvedPhysicalNode, paint: &FixedNodePaint) {
@@ -1147,6 +1323,85 @@ mod tests {
         assert!(text.contains("1 0 0 -1 0 780 cm"));
         assert!(text.contains("1 0 0 rg\n10 20 100 50 re\nf"));
         assert!(text.contains("0 0 1 RG\n1 w\n30 40 70 60 re\nS"));
+    }
+
+    #[test]
+    fn table_fill_and_border_paint_at_existing_owner_slot() {
+        let mut resources = resources();
+        resources.table_paints.push(FixedTablePaintResource {
+            node_id: node_id(12),
+            fills: vec![FixedTableFill {
+                bounds: RectEmu::new(
+                    LengthEmu::new(254_000),
+                    LengthEmu::new(381_000),
+                    LengthEmu::new(127_000),
+                    LengthEmu::new(127_000),
+                ),
+                rgb: [0, 255, 0],
+            }],
+            borders: vec![FixedTableBorder {
+                x1_emu: 254_000,
+                y1_emu: 635_000,
+                x2_emu: 508_000,
+                y2_emu: 635_000,
+                rgb: [255, 0, 255],
+                width_emu: 12_700,
+            }],
+        });
+
+        let output = render_bounded_pdf(
+            &scene(),
+            &resources,
+            &PdfTargetProfile::basic_geometry_v0_1(),
+        )
+        .unwrap();
+        let text = String::from_utf8_lossy(&output.bytes);
+
+        assert!(text.contains("0 1 0 rg\n20 30 10 10 re\nf"));
+        assert!(text.contains("1 0 1 rg\n20 49.5 20 1 re\nf"));
+        assert!(output.report.nodes.iter().any(|node| {
+            node.origin == node_id(12)
+                && node.disposition == PdfRenderDisposition::Painted
+                && node.code == "pdf.node.painted_table"
+        }));
+        assert!(!output.report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.origin == node_id(12).into_canonical()
+                && diagnostic.code == "pdf.node.resource_missing"
+        }));
+    }
+
+    #[test]
+    fn invalid_table_border_fails_closed_without_painting_owner() {
+        let mut resources = resources();
+        resources.table_paints.push(FixedTablePaintResource {
+            node_id: node_id(12),
+            fills: Vec::new(),
+            borders: vec![FixedTableBorder {
+                x1_emu: 254_000,
+                y1_emu: 635_000,
+                x2_emu: 508_000,
+                y2_emu: 762_000,
+                rgb: [255, 0, 255],
+                width_emu: 12_700,
+            }],
+        });
+
+        let output = render_bounded_pdf(
+            &scene(),
+            &resources,
+            &PdfTargetProfile::basic_geometry_v0_1(),
+        )
+        .unwrap();
+
+        assert!(output.report.nodes.iter().any(|node| {
+            node.origin == node_id(12)
+                && node.disposition == PdfRenderDisposition::Unsupported
+                && node.code == "pdf.node.resource_unsupported"
+        }));
+        assert!(output.report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.origin == node_id(12).into_canonical()
+                && diagnostic.code == "pdf.table.border_geometry_invalid"
+        }));
     }
 
     #[test]
