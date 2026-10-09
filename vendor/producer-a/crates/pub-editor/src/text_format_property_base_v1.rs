@@ -13,7 +13,9 @@ pub const TEXT_FORMAT_PROPERTY_STATE_V1: &str = "chaptera.text-format-property-s
 fn validate_supported_property_v1(property: FormatPropertyV1) -> Result<(), String> {
     match property {
         FormatPropertyV1::Bold | FormatPropertyV1::Italic => Ok(()),
-        FormatPropertyV1::FontSizeEmu | FormatPropertyV1::TextColorRgb => {
+        FormatPropertyV1::FontSizeEmu
+        | FormatPropertyV1::TextColorRgb
+        | FormatPropertyV1::FontResource => {
             Err("property-scoped text-format state v1 supports only bold/italic".to_owned())
         }
     }
@@ -53,7 +55,12 @@ fn validate_property_value(
         (FormatPropertyV1::Bold | FormatPropertyV1::Italic, FormatValueV1::Bool(_)) => Ok(()),
         (FormatPropertyV1::Bold, _) => Err("bold must be boolean".to_owned()),
         (FormatPropertyV1::Italic, _) => Err("italic must be boolean".to_owned()),
-        (FormatPropertyV1::FontSizeEmu | FormatPropertyV1::TextColorRgb, _) => {
+        (
+            FormatPropertyV1::FontSizeEmu
+            | FormatPropertyV1::TextColorRgb
+            | FormatPropertyV1::FontResource,
+            _,
+        ) => {
             unreachable!("unsupported properties are fenced above")
         }
     }
@@ -99,6 +106,11 @@ fn source_property_value(
             Ok(FormatValueV1::String(format!(
                 "#{red:02X}{green:02X}{blue:02X}"
             )))
+        }
+        // Physical font bytes and authoring grants must be verified by the
+        // dedicated full-resource gate, never inferred from a Reader label.
+        FormatPropertyV1::FontResource => {
+            Err("font-resource property requires server-owned byte admission".to_owned())
         }
     }
 }
