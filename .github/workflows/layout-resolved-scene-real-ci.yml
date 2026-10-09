@@ -5,6 +5,16 @@ on:
     paths:
       - ".github/workflows/layout-resolved-scene-real-ci.yml"
       - "vendor/producer-a/producer/**"
+      - "vendor/producer-a/Cargo.toml"
+      - "vendor/producer-a/Cargo.lock"
+      - "vendor/producer-a/crates/pub-cfb/**"
+      - "vendor/producer-a/crates/pub-contents/**"
+      - "vendor/producer-a/crates/pub-core/**"
+      - "vendor/producer-a/crates/pub-escher/**"
+      - "vendor/producer-a/crates/pub-format-registry/**"
+      - "vendor/producer-a/crates/pub-model/**"
+      - "vendor/producer-a/crates/pub-quill/**"
+      - "vendor/producer-a/crates/pub-reader/**"
       - "tools/build_layout_resolved_scene_receipt.py"
       - "tools/run_local_layout_resolved_scene_engine.py"
       - "tools/run_sample_newsletter_resolved_scene_bridge.py"
@@ -67,7 +77,7 @@ jobs:
           from pathlib import Path
           p = Path(".web-v0/resolved-graph.json")
           digest = hashlib.sha256(p.read_bytes()).hexdigest()
-          expected = "818049a1d8599ab9ef68e3da2174bbfe876afbfa6711fad9f6a9efabc7d81c40"
+          expected = "ce23072d71e76fd4a48854e4b6850a4f4d22e97cefcde7bc26865fc1a9f1965b"
           print({"resolved_graph_sha256": digest, "bytes": p.stat().st_size})
           assert digest == expected, (digest, expected)
           PY
@@ -132,7 +142,7 @@ jobs:
                 --resolved-graph .web-v0/resolved-graph.json \
                 --viewer-receipt .web-v0/viewer-geometry.json \
                 --source-page-paint-orders .web-v0/source-page-paint-orders.json \
-                --expected-resolved-graph-sha256 818049a1d8599ab9ef68e3da2174bbfe876afbfa6711fad9f6a9efabc7d81c40 \
+                --expected-resolved-graph-sha256 ce23072d71e76fd4a48854e4b6850a4f4d22e97cefcde7bc26865fc1a9f1965b \
                 --target-node-id 007d9898-568b-5125-b519-8d88243aabfb \
                 --target-page-id 58ffa2e0-896e-5a40-806c-bd0184ea9c85 \
                 --after-x-emu 653710 \
