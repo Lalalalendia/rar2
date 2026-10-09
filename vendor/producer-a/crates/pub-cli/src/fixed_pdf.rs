@@ -147,10 +147,6 @@ fn build_pdf_artifact(
             )
         }
     };
-    let route_uses_viewer_scene = matches!(
-        classification.route,
-        pub_viewer::PubReaderRoute::Legacy22LowText | pub_viewer::PubReaderRoute::Legacy22Quill
-    );
     let bundle =
         pub_viewer::open_pub_bundle(pub_bytes, pub_viewer::viewer_geometry_environment_v0_1())
             .context("open supported PUB for bounded PDF conversion")?;
@@ -245,16 +241,10 @@ fn build_pdf_artifact(
         },
     )
     .context("resolve bounded shaped text flow for fixed PDF")?;
-    // Legacy no-Quill Viewer owns additional source-backed geometry laws
-    // (structural point-group suppression and bounded grouped-image placement).
-    // Reuse that already-resolved scene rather than duplicating its private
-    // projector in the CLI. Mature 0x2C retains the established shaped-flow
-    // geometry path byte-for-byte.
-    let pdf_scene = if route_uses_viewer_scene {
-        viewer_scene
-    } else {
-        shaped_flow.geometry_scene()
-    };
+    // Measurement-only causal arm: use the already-resolved Viewer scene for
+    // every supported route so proven page-local paint order is not replaced by
+    // the canonical-ID ordering of the bounded shaped-flow geometry scene.
+    let pdf_scene = viewer_scene;
     let scene_node_ids = pdf_scene
         .nodes
         .iter()
