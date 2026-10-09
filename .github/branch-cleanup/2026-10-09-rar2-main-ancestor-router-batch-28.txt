@@ -1,0 +1,8 @@
+# 2026-10-09 — main-ancestor/router batch 28
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+fix/pub-re-native-stage-cleanup-02 a07b2da1250ffbad28fc51872b6ab35ae9312172 # exact branch tip already reachable from current main history
+measure/pub-editor-text-core-compat-post-01 4c50517fae318944feff6d9a3ccbd933770da0ca # exact branch tip already reachable from current main history
+perf/rust-contract-router-01 62158e0c9ec2adb65178d9114b8efce1f4d49f0e # #1839 superseded by merged fresh-main #2295
+ops/branch-gc-20261009-predictor-predecessor-batch-27 2db79afb1f6ece325ada0cf31ae30b6e3f834f19 # completed #2292 clean receipt: 2/2 deleted
