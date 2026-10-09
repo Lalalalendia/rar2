@@ -14,6 +14,9 @@ use serde_json::Value;
 pub const READER_SCENE_V1: &str = "chaptera.reader-scene.v1";
 
 const MAX_INLINE_IMAGE_RESOURCE_BYTES: usize = 4 * 1024 * 1024;
+// A source-backed JPEG can be larger than 4 MiB while still fitting inside
+// the unchanged 16 MiB serialized Reader Scene envelope. Keep PNG/GIF at 4 MiB.
+const MAX_INLINE_JPEG_RESOURCE_BYTES: usize = 5 * 1024 * 1024;
 #[cfg(test)]
 const MAX_INLINE_IMAGE_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_SCENE_BYTES: usize = 16 * 1024 * 1024;
@@ -1843,12 +1846,17 @@ fn reader_image_resource(
     }
 }
 
+fn inline_image_resource_byte_limit(mime: &str) -> Option<usize> {
+    match mime {
+        "image/jpeg" | "image/jpg" => Some(MAX_INLINE_JPEG_RESOURCE_BYTES),
+        "image/png" | "image/gif" => Some(MAX_INLINE_IMAGE_RESOURCE_BYTES),
+        _ => None,
+    }
+}
+
 fn inline_image_data_url(mime: &str, bytes: &[u8], remaining_budget: &mut usize) -> Option<String> {
-    if !matches!(mime, "image/png" | "image/jpeg" | "image/jpg" | "image/gif")
-        || bytes.is_empty()
-        || bytes.len() > MAX_INLINE_IMAGE_RESOURCE_BYTES
-        || bytes.len() > *remaining_budget
-    {
+    let resource_limit = inline_image_resource_byte_limit(mime)?;
+    if bytes.is_empty() || bytes.len() > resource_limit || bytes.len() > *remaining_budget {
         return None;
     }
     *remaining_budget -= bytes.len();
@@ -1902,9 +1910,10 @@ mod tests {
 
     use super::{
         MAX_INLINE_IMAGE_RESOURCE_BYTES, MAX_INLINE_IMAGE_TOTAL_BYTES,
-        ReaderConfiguredFontResourceV1, ReaderNodeV1, ReaderPageV1, ReaderPaintV1, ReaderRectV1,
-        ReaderTransformV1, SHARED_FALLBACK_FONT_MIME, base64_encode, bind_visible_paint,
-        from_viewer_geometry, from_viewer_geometry_with_fonts, inline_image_data_url,
+        MAX_INLINE_JPEG_RESOURCE_BYTES, ReaderConfiguredFontResourceV1, ReaderNodeV1, ReaderPageV1,
+        ReaderPaintV1, ReaderRectV1, ReaderTransformV1, SHARED_FALLBACK_FONT_MIME, base64_encode,
+        bind_visible_paint, from_viewer_geometry, from_viewer_geometry_with_fonts,
+        inline_image_data_url, inline_image_resource_byte_limit,
         insert_inherited_master_nodes_before_page_locals, insert_projected_nodes_after_targets,
         reader_image_resource, shared_text_font_resource, take_direct_render_text,
     };
@@ -1935,11 +1944,12 @@ mod tests {
         byte_len: usize,
         remaining_budget: usize,
     ) -> ProbeImageInlineAdmission {
-        if !matches!(mime, "image/png" | "image/jpeg" | "image/jpg" | "image/gif") {
-            ProbeImageInlineAdmission::UnsupportedMime
-        } else if byte_len == 0 {
+        let Some(limit) = inline_image_resource_byte_limit(mime) else {
+            return ProbeImageInlineAdmission::UnsupportedMime;
+        };
+        if byte_len == 0 {
             ProbeImageInlineAdmission::EmptyPayload
-        } else if byte_len > MAX_INLINE_IMAGE_RESOURCE_BYTES {
+        } else if byte_len > limit {
             ProbeImageInlineAdmission::PerResourceLimit
         } else if byte_len > remaining_budget {
             ProbeImageInlineAdmission::AggregateBudgetExhausted
@@ -3209,6 +3219,52 @@ mod tests {
         let mut exhausted = 2;
         assert!(inline_image_data_url("image/png", b"png", &mut exhausted).is_none());
         assert_eq!(exhausted, 2);
+    }
+
+    #[test]
+    fn bounded_large_jpeg_is_inline_but_png_gif_and_oversized_jpeg_are_not() {
+        // A realistic large JPEG size crosses the old raster limit but still
+        // has an explicitly bounded 5 MiB JPEG admission and a 16 MiB Scene cap.
+        let byte_len = MAX_INLINE_IMAGE_RESOURCE_BYTES + 1;
+        let raw = vec![0x7f_u8; byte_len];
+        let mut jpeg_budget = MAX_INLINE_JPEG_RESOURCE_BYTES;
+        let jpeg = reader_image_resource(
+            "resource:large-jpeg-control".to_owned(),
+            "image/jpeg".to_owned(),
+            &raw,
+            &mut jpeg_budget,
+        );
+        assert_eq!(jpeg.availability, "inline_data_url");
+        assert_eq!(
+            jpeg.inline_data_url.as_ref().map(String::len),
+            Some("data:image/jpeg;base64,".len() + raw.len().div_ceil(3) * 4)
+        );
+        assert_eq!(jpeg_budget, MAX_INLINE_JPEG_RESOURCE_BYTES - byte_len);
+
+        let mut png_budget = usize::MAX;
+        assert!(inline_image_data_url("image/png", &raw, &mut png_budget).is_none());
+        assert!(inline_image_data_url("image/gif", &raw, &mut png_budget).is_none());
+        assert_eq!(png_budget, usize::MAX);
+        assert_eq!(
+            classify_probe_image_inline_admission(
+                "image/jpeg",
+                MAX_INLINE_JPEG_RESOURCE_BYTES + 1,
+                usize::MAX
+            ),
+            ProbeImageInlineAdmission::PerResourceLimit
+        );
+        assert_eq!(
+            classify_probe_image_inline_admission(
+                "image/jpg",
+                MAX_INLINE_IMAGE_RESOURCE_BYTES + 1,
+                MAX_INLINE_JPEG_RESOURCE_BYTES
+            ),
+            ProbeImageInlineAdmission::Inline
+        );
+        assert_eq!(
+            classify_probe_image_inline_admission("image/jpeg", byte_len, byte_len - 1),
+            ProbeImageInlineAdmission::AggregateBudgetExhausted
+        );
     }
 
     #[test]
