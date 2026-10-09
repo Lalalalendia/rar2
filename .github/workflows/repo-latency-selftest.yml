@@ -35,8 +35,28 @@ jobs:
         run: |
           python tools/ci/repo_latency_census.py \
             --repo "${{ github.repository }}" \
-            --limit 2 \
+            --limit 12 \
             --out target/ci-repo-latency/live-smoke.json
+      - name: Print the one-shot 12-PR latency sample to logs
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d = json.loads(Path("target/ci-repo-latency/live-smoke.json").read_text())
+          print("SAMPLE_COUNT", d["sample_count"])
+          for row in d["prs"]:
+              print("PR_ROW", json.dumps({
+                  "pr": row["pr_number"],
+                  "class": row["class"],
+                  "feedback_s": row["first_relevant_feedback_s"],
+                  "merge_ready_s": row["merge_ready_s"],
+                  "queue_p95_s": row["queue_wait"]["p95_s"],
+                  "longest_queue": row["longest_queue"],
+                  "critical_tail": row["critical_tail"],
+              }, sort_keys=True))
+          print("BY_CLASS", json.dumps(d["by_class"], sort_keys=True))
+          PY
       - uses: actions/upload-artifact@v4
         if: ${{ github.event_name == 'pull_request' }}
         with:
