@@ -5,6 +5,16 @@ on:
     paths:
       - "tools/sanitize_pub_native_runner_recovery_v1.py"
       - ".github/workflows/pub-native-runner-recovery-summary-contract.yml"
+      - "tools/ci/test_pub_native_queue_contract.py"
+      - ".github/workflows/pub-native-fixed-footprint-control.yml"
+      - ".github/workflows/pub-native-length-preserving-story.yml"
+      - ".github/workflows/pub-native-one-unit-delete-control.yml"
+      - ".github/workflows/pub-native-saveas-source-control.yml"
+      - ".github/workflows/pub-native-story-pwsh7-transport.yml"
+      - ".github/workflows/pub-native-story-save-copy.yml"
+      - ".github/workflows/pub-native-syid-header-control.yml"
+      - ".github/workflows/pub-re-native.yml"
+      - ".github/workflows/pub-save-roundtrip-handoff.yml"
 
 permissions:
   contents: read
@@ -28,3 +38,5 @@ jobs:
         run: python -m py_compile tools/sanitize_pub_native_runner_recovery_v1.py
       - name: Run source-safe sanitizer self-test
         run: python tools/sanitize_pub_native_runner_recovery_v1.py --self-test
+      - name: Enforce lossless exclusive Publisher-native queue
+        run: python tools/ci/test_pub_native_queue_contract.py
