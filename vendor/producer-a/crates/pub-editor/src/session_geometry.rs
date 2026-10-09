@@ -1301,7 +1301,9 @@ mod authored_page_append_tests {
 
         let mut archive =
             zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("open exported ZIP");
-        let mut entry = archive.by_name(path).expect("expected exported package part");
+        let mut entry = archive
+            .by_name(path)
+            .expect("expected exported package part");
         let mut text = String::new();
         entry
             .read_to_string(&mut text)
@@ -1327,16 +1329,15 @@ mod authored_page_append_tests {
         let appended_hex = page_hex(identity.page_id);
 
         let idml = session
-            .export_editable(
-                crate::EditorEditableTarget::Idml,
-                "append-blank-page-idml",
-            )
+            .export_editable(crate::EditorEditableTarget::Idml, "append-blank-page-idml")
             .expect("export appended page to IDML");
         let designmap = read_zip_text(&idml.bytes, "designmap.xml");
         let source_spread = format!("Spreads/Spread_usp{source_hex}.xml");
         let appended_spread = format!("Spreads/Spread_usp{appended_hex}.xml");
         assert!(
-            designmap.find(&source_spread).expect("source spread in designmap")
+            designmap
+                .find(&source_spread)
+                .expect("source spread in designmap")
                 < designmap
                     .find(&appended_spread)
                     .expect("appended spread in designmap"),
@@ -1370,9 +1371,6 @@ mod authored_page_append_tests {
             .find("</style:page-layout>")
             .expect("appended ODG page layout end");
         let layout = &tail[..end];
-        assert!(layout.contains(
-            "fo:page-width=\"200pt\" fo:page-height=\"300pt\""
-        ));
+        assert!(layout.contains("fo:page-width=\"200pt\" fo:page-height=\"300pt\""));
     }
-
 }
