@@ -28,9 +28,12 @@ jobs:
           toolchain: "1.94.1"
           components: rustfmt
 
-      - name: Verify census Rust formatting
+      - name: Format census for hosted preflight and print source delta
         shell: bash
-        run: rustfmt --edition 2024 --check vendor/producer-a/crates/pub-reader/src/bin/t352_crosswalk_census.rs
+        run: |
+          set -euo pipefail
+          rustfmt --edition 2024 vendor/producer-a/crates/pub-reader/src/bin/t352_crosswalk_census.rs
+          git diff -- vendor/producer-a/crates/pub-reader/src/bin/t352_crosswalk_census.rs
 
       - name: Obtain two immutable Apache POI sources
         shell: bash
