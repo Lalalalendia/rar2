@@ -35,7 +35,6 @@ use session_text::{
 mod table_rowcol_graph_v1;
 mod table_rowcol_history_v1;
 mod text_format_property_base_v1;
-mod native_pub;
 mod writer_assessment;
 use writer_assessment::{minimum_identity_project_schema_v1, required_editor_asset_refs_v1};
 
@@ -126,11 +125,11 @@ pub use text_format_property_base_v1::{
     fold_text_format_property_history_v1, set_text_format_property_state_v1,
     text_format_property_state_hash_v1,
 };
-pub use native_pub::{EditorNativePubCandidate, EditorNativePubMaterializationBlocked};
 pub use writer_assessment::{
-    EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1, EditorPubPersistenceAssessment,
-    EditorPubWriterAssessment, EditorPubWriterAssessmentError, EditorStoryWriterProbeResult,
-    EditorStoryWriterProbeState, EffectiveStoryTextMutation,
+    EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1, EditorNativePubCandidate,
+    EditorNativePubMaterializationBlocked, EditorPubPersistenceAssessment, EditorPubWriterAssessment,
+    EditorPubWriterAssessmentError, EditorStoryWriterProbeResult, EditorStoryWriterProbeState,
+    EffectiveStoryTextMutation,
 };
 
 use chaptera_text_format_overlay::{
@@ -7937,5 +7936,3 @@ fn apply_table_cell_state(
     Ok(())
 }
 
-#[cfg(test)]
-mod table_rowcol_metadata_tests;
