@@ -5,6 +5,8 @@ on:
     paths:
       - "tools/pub-re/src/bin/val_xproj_patch.rs"
       - "tools/pub-re/Cargo.toml"
+      - "tools/windows/run_t352_native.ps1"
+      - ".github/workflows/pub-re-native.yml"
       - ".github/workflows/t352-windows-cfb-path-regression.yml"
   workflow_dispatch:
 
@@ -30,3 +32,35 @@ jobs:
         shell: pwsh
         run: |
           cargo test --manifest-path tools/pub-re/Cargo.toml --bin val_xproj_patch -- --nocapture
+
+      - name: Parse guarded native T352 PowerShell and check bounded setter contract
+        shell: pwsh
+        run: |
+          $source = (Resolve-Path "tools/windows/run_t352_native.ps1").Path
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            $source, [ref]$tokens, [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "T352 PowerShell parser rejected native setter extension"
+          }
+          $scriptText = Get-Content -LiteralPath $source -Raw
+          foreach ($required in @(
+            'if ($SetterFollowup)',
+            'SetShape293Width',
+            'T352 positive control geometry drifted',
+            't352-setter-observations.json',
+            't352-native-observations.json'
+          )) {
+            if (-not $scriptText.Contains($required)) {
+              throw "Missing T352 bounded setter marker: $required"
+            }
+          }
+          $workflowText = Get-Content -LiteralPath ".github/workflows/pub-re-native.yml" -Raw
+          foreach ($required in @('val-xproj-(?:setter-)?01', 'val-xproj-setter-01', 't352-setter-transitions.v1')) {
+            if (-not $workflowText.Contains($required)) {
+              throw "Missing trusted bounded native control marker: $required"
+            }
+          }
