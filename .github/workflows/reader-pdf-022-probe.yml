@@ -1,0 +1,145 @@
+name: Reader 022 versus exact fixed PDF causal screen
+
+on:
+  pull_request:
+    paths:
+      - "tools/reader_pdf_022_probe_v1.py"
+      - "tools/test_reader_pdf_022_probe_v1.py"
+      - ".github/workflows/reader-pdf-022-probe.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: reader-pdf-022-probe-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify syntax and six bounded source-safe controls
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir 'PyMuPDF==1.26.7' 'Pillow==12.3.0'
+          python -m py_compile tools/reader_pdf_022_probe_v1.py tools/test_reader_pdf_022_probe_v1.py
+          python tools/test_reader_pdf_022_probe_v1.py
+
+  exact-three-source:
+    name: Exact 001 022 023 Reader/PDF/Publisher triage
+    needs: contract
+    if: >-
+      ${{ github.event_name == 'pull_request' &&
+          github.event.pull_request.head.ref == 'measure/reader-pdf-022-causes-01' &&
+          github.event.pull_request.head.repo.full_name == 'Lalalalendia/rar2' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      EXACT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+      - name: Install pinned raster and browser comparison libraries
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir 'PyMuPDF==1.26.7' 'Pillow==12.3.0'
+          npm install --no-save playwright@1.55.0
+          npx playwright install chromium
+          python tools/test_reader_pdf_022_probe_v1.py
+      - name: Download pinned exact-1050 corpus into temporary runner storage
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+      - name: Verify exact source registry before any source parse
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          files = sorted(Path('out/pinned1050/materialized/native').glob('*.pub'))
+          digests = [p.stem.casefold() for p in files]
+          expected = '21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43'
+          assert len(digests) == 1050
+          assert hashlib.sha256(''.join(s+'\n' for s in digests).encode('ascii')).hexdigest() == expected
+          print('pinned corpus identity admitted',len(digests))
+          PY
+      - name: Prepare only exact 022 and independent 001/023 controls
+        run: |
+          python tools/reader_pdf_022_probe_v1.py prepare \
+            --source-root out/pinned1050/materialized/native \
+            --reference tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json \
+            --manifest target/reader-pdf-022-probe/manifest.json
+      - name: Build unchanged Reader guest worker and public PUB PDF CLI
+        run: |
+          cargo build -p chaptera-server --bin chaptera --jobs 2
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-cli --bin pub
+      - name: Materialize admitted explicit fallback font locally
+        run: |
+          cargo run -q -p chaptera-desktop-fallback-font-resource --bin materialize-fallback-font -- "$RUNNER_TEMP/chaptera-fallback.ttf"
+          test -s "$RUNNER_TEMP/chaptera-fallback.ttf"
+      - name: Render three actual Reader pages in controlled browser
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/debug/chaptera
+          READER_REAL_MANIFEST: ${{ github.workspace }}/target/reader-pdf-022-probe/manifest.json
+          READER_REAL_OUTPUT: ${{ runner.temp }}/reader-pdf-022-browser
+          READER_REFERENCE_RASTER_DPI: '144'
+          READER_CONTINUE_WORKER_FAILURES: '1'
+          READER_WORKER_TIMEOUT_SECONDS: '120'
+          READER_WORKER_CPU_SECONDS: '90'
+          READER_WORKER_ADDRESS_SPACE_MB: '768'
+        run: node apps/cloud-reader/real-browser.test.mjs
+      - name: Convert the exact same sources once through real PUB PDF CLI
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import subprocess
+          manifest = json.loads(Path('target/reader-pdf-022-probe/manifest.json').read_text())
+          out = Path('target/reader-pdf-022-probe/pdfs')
+          out.mkdir(parents=True,exist_ok=True)
+          cli = Path('vendor/producer-a/target/debug/pub').resolve()
+          font = Path(__import__('os').environ['RUNNER_TEMP']) / 'chaptera-fallback.ttf'
+          for row in manifest['fixtures']:
+              name = row['name']
+              subprocess.run([str(cli),'convert',row['source_path'],'--to','pdf','--output',str(out/f'{name}.pdf'),'--fallback-font',str(font)],check=True,timeout=120)
+          print('Converted',len(manifest['fixtures']),'exact SHA-verified sources without upload')
+          PY
+      - name: Cross-check actual 022 and controls on one exact code SHA
+        run: |
+          python tools/reader_pdf_022_probe_v1.py collect \
+            --browser-dir "$RUNNER_TEMP/reader-pdf-022-browser" \
+            --pdf-dir target/reader-pdf-022-probe/pdfs \
+            --reference tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json \
+            --commit "$EXACT_HEAD_SHA" \
+            --out target/reader-pdf-022-probe/aggregate-only.json
+      - name: Upload aggregate-only source-safe cause screen
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reader-pdf-022-causal-screen
+          path: target/reader-pdf-022-probe/aggregate-only.json
+          if-no-files-found: warn
+          retention-days: 30
