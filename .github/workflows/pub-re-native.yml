@@ -497,13 +497,17 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
 
-          $mixedArgs = @{}
           if ($env:PUB_RE_RESEARCH_ID -eq "paragraph-line-spacing-0p75-mixed") {
-            $mixedArgs.MixedSize = $true
+            & tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1 `
+              -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT `
+              -ReturnZip $env:PUB_RE_RESEARCH_RETURN_ZIP `
+              -MixedSize
           }
-          & tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1 `
-            -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT `
-            -ReturnZip $env:PUB_RE_RESEARCH_RETURN_ZIP @mixedArgs
+          else {
+            & tools/windows/run_paragraph_line_spacing_0p75_native_direct.ps1 `
+              -OutputRoot $env:PUB_RE_RESEARCH_OUTPUT `
+              -ReturnZip $env:PUB_RE_RESEARCH_RETURN_ZIP
+          }
           if (-not $?) {
             throw "bounded 0.75 paragraph research failed"
           }
