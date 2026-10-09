@@ -147,7 +147,10 @@ struct LoadedInput {
 
 pub fn analyze_manifest_file(path: &Path) -> Result<PubReReceiptV1> {
     let source = fs::read(path).with_context(|| format!("read manifest {}", path.display()))?;
-    let manifest: ExperimentManifestV1 = serde_json::from_slice(&source)
+    let json = source
+        .strip_prefix(&[0xEF, 0xBB, 0xBF])
+        .unwrap_or(source.as_slice());
+    let manifest: ExperimentManifestV1 = serde_json::from_slice(json)
         .with_context(|| format!("parse manifest {}", path.display()))?;
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
     analyze_manifest(&manifest, base_dir)
