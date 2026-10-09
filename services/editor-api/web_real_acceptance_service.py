@@ -21,6 +21,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -267,6 +268,11 @@ class RealAcceptanceState:
         self.reopen_count = 0
         self.export_cache = {}
         self.native_pub_cache = {}
+        # One Editor revision maps to one immutable, receipt-backed PUB candidate.
+        # The threaded HTTP server may receive the browser's disclosure preview
+        # concurrently with an acceptance/client preview; do not unlink and
+        # recreate the same candidate paths in two Rust child processes.
+        self.native_pub_lock = threading.Lock()
 
         baseline_scene = self._scene_from_project(
             self.baseline_project,
@@ -661,6 +667,13 @@ class RealAcceptanceState:
         }
 
     def _native_pub_for_revision(self, revision_id: str) -> dict:
+        # Serialize cache lookup, write-once native materialization and receipt
+        # validation. The lock is per document instance and never guards other
+        # unrelated Reader/Editor/HTTP operations.
+        with self.native_pub_lock:
+            return self._native_pub_for_revision_serialized(revision_id)
+
+    def _native_pub_for_revision_serialized(self, revision_id: str) -> dict:
         if revision_id in self.native_pub_cache:
             return self.native_pub_cache[revision_id]
 
@@ -714,7 +727,7 @@ class RealAcceptanceState:
             )
             # Keep only the OS error number and path-state booleans, not
             # untrusted CLI stderr, source paths, or candidate bytes.
-            errno_match = re.search(r"\\(os error (\\d+)\\)", completed.stderr)
+            errno_match = re.search(r"\(os error (\d+)\)", completed.stderr)
             errno_code = errno_match.group(1) if errno_match else "none"
             artifact_exists = artifact_path.exists()
             parent_exists = artifact_path.parent.is_dir()
