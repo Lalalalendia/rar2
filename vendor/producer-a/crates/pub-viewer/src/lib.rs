@@ -58,13 +58,13 @@ use pub_layout::{
 };
 #[cfg(feature = "cmo-slot-compose")]
 use pub_model::CanonicalId;
-#[cfg(test)]
-use pub_model::{StoryFrame, TableCellAddress, TableCellId};
 use pub_model::{
     Affine2D, AuthorityClass, LengthEmu, Node, NodeId, NodeKind, PageId, ReadConfidence, RectEmu,
     ResourceId, Sha256Digest, SourceDerivedIdInput, SourceRole, StoryId,
     derive_source_canonical_id,
 };
+#[cfg(test)]
+use pub_model::{StoryFrame, TableCellAddress, TableCellId};
 use pub_paint_bridge::{
     PubEffectiveFillSourceV1, PubEffectiveLineSourceV1, PubEffectivePaintAuthorityV1,
     PubEffectivePaintSourceSpanV1, PubEffectivePaintValueV1, PubEffectiveShapePaintSourceV1,
@@ -115,8 +115,7 @@ use pub_reader::{
     build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
     build_mature_0x2c_wmf_preview_bundle_from_bytes, derive_pub_page_id, rasterize_wmf_preview,
-    read_legacy_0x22_image_wmfs,
-    resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
+    read_legacy_0x22_image_wmfs, resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
     select_unambiguous_legacy_ole_cached_presentation,
 };
 #[cfg(feature = "cmo-slot-compose")]
