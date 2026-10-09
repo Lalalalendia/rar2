@@ -165,12 +165,41 @@ async function main() {
     await editor.fill(previous.replace(MARKER, ""));
     const revisionBefore = scene.revision_id;
     await page.locator("#apply-text").click();
-    await page.waitForFunction(() => {
-      const state = document.getElementById("state").textContent;
-      return state.startsWith("revision ") &&
-        document.getElementById("save-pub").disabled === false;
-    }, null, { timeout: 120000 });
+    await page.waitForFunction((priorRevision) => {
+      const element = document.getElementById("state");
+      return element.classList.contains("bad") ||
+        (element.textContent.startsWith("revision ") &&
+         !element.textContent.includes(priorRevision));
+    }, revisionBefore, { timeout: 15000 });
+    const uiState = await page.locator("#state").evaluate((element) => ({
+      text: element.textContent,
+      error: element.classList.contains("bad"),
+    }));
+    if (uiState.error) {
+      throw new Error("real Story UI edit rejected before download gate: " + uiState.text);
+    }
     const approved = await read("/v1/pub-save/preview");
+    if (approved.can_download !== true) {
+      const state = await read("/v1/harness/state");
+      throw new Error("real Story edit accepted but native download not authorized: " +
+        JSON.stringify({
+          revision: approved.revision_id,
+          can_serialize: approved.can_serialize,
+          output_hash: approved.output_hash,
+          blocker: approved.download_blocker_code ?? approved.blocker_code,
+          source_hash: approved.source_hash,
+          editor_commits: state.commit_requests,
+        }));
+    }
+    await page.waitForFunction(() => {
+      const el = document.getElementById("state");
+      return el.classList.contains("bad") ||
+        document.getElementById("save-pub").disabled === false;
+    }, null, { timeout: 15000 });
+    const rendered = await page.locator("#state").evaluate((element) => ({
+      text: element.textContent, error: element.classList.contains("bad"),
+    }));
+    if (rendered.error) throw new Error("Story UI disclosure failed: " + rendered.text);
     if (approved.output_hash !== OUTPUT_SHA || approved.can_download !== true ||
         approved.native_publisher_authorized !== true ||
         approved.revision_id === revisionBefore) {
