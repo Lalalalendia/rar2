@@ -4,12 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/free-pub-editable-cli-v1.yml"
-      - "vendor/producer-a/Cargo.toml"
       - "vendor/producer-a/crates/pub-cli/**"
-      - "vendor/producer-a/crates/pub-editor/**"
-      - "vendor/producer-a/crates/pub-idml/**"
-      - "vendor/producer-a/crates/pub-odg/**"
-      - "vendor/producer-a/crates/pub-export/**"
   workflow_dispatch:
 
 permissions:
