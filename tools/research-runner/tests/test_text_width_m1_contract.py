@@ -36,6 +36,10 @@ class TextWidthM1Contract(unittest.TestCase):
         )
         self.assertTrue(self.packet["requires_publisher"])
         self.assertEqual(len(self.packet["publisher"]["exe_sha256"]), 64)
+        # prepare_native_run.ps1 is inherited by a strict PowerShell caller;
+        # absent optional PSCustomObject properties throw before any COM execution.
+        self.assertEqual(self.packet["reset"], {"required": False})
+        self.assertIsNone(self.packet["fixture"])
 
     def test_uses_only_known_compatible_public_source(self):
         fixtures = [x for x in self.registry["fixtures"] if x["alias"] == "sample-newsletter"]
