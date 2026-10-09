@@ -94,7 +94,7 @@ fn plan(receipt: &Value) -> Result<(Patch, Patch)> {
     if target.get("contents_anchor_extent_exact").and_then(Value::as_bool) != Some(true) {
         bail!("T370 Contents/Escher invariant absent");
     }
-    if require_i64(target, "contents_width_wire_type")? != 2 {
+    if require_i64(target, "contents_width_wire_type")? != 0x20 {
         // The U32 tag's block_type is defined by pub-contents; a changed
         // encoding requires explicit review, never guessing a 4-byte patch.
         bail!("Contents width is not a known U32 wire type");
