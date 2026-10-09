@@ -54,7 +54,6 @@ fn main() -> Result<()> {
             windows.push(json!({
                 "mime": image.mime,
                 "source_exact": image.source_exact,
-                "node_kind": resolved.map(|value| format!("{:?}", value.header.kind)),
                 "officeart_shape_type": resolved.and_then(|value| value.payload.officeart_shape_type),
                 "crop_top_raw": crop.and_then(|value| value.top_raw),
                 "crop_bottom_raw": crop.and_then(|value| value.bottom_raw),
