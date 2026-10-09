@@ -56,10 +56,14 @@ fn snapshot(path: &Path) -> Result<Snapshot> {
     let mut slots = Vec::new();
     for (ordinal, slot) in root.directory.slots.iter().enumerate() {
         slots.push((slot.source().offset, slot.source().len));
-        if let Some(reference) = parse_confirmed_chunk_reference(
-            &contents, &root.directory, ordinal,
-        )? {
-            let offsets = reference.chunk_offsets.iter().map(|item| item.value).collect();
+        if let Some(reference) =
+            parse_confirmed_chunk_reference(&contents, &root.directory, ordinal)?
+        {
+            let offsets = reference
+                .chunk_offsets
+                .iter()
+                .map(|item| item.value)
+                .collect();
             chunk_refs.insert(ordinal, offsets);
         }
     }
@@ -115,9 +119,7 @@ fn main() -> Result<()> {
 
     let mut slot_delta_counts = BTreeMap::new();
     let mut slot_lengths_equal = 0_usize;
-    for ((start_a, len_a), (start_b, len_b)) in
-        before.slots.iter().zip(after.slots.iter())
-    {
+    for ((start_a, len_a), (start_b, len_b)) in before.slots.iter().zip(after.slots.iter()) {
         increment(&mut slot_delta_counts, *start_b as i64 - *start_a as i64);
         if len_a == len_b {
             slot_lengths_equal += 1;
@@ -201,7 +203,9 @@ mod tests {
 
     #[test]
     fn finds_ascii_utf16_leaves_without_disclosing_contents() {
-        let bytes = [0xff, 0x01, b'a', 0, b'.', 0, b'p', 0, b'u', 0, b'b', 0, 0xee];
+        let bytes = [
+            0xff, 0x01, b'a', 0, b'.', 0, b'p', 0, b'u', 0, b'b', 0, 0xee,
+        ];
         assert_eq!(utf16_hits(&bytes, "a.pub").unwrap(), vec![2]);
         assert!(utf16_hits(&bytes, "../a.pub").is_err());
     }
