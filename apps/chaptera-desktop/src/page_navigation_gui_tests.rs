@@ -1116,7 +1116,10 @@ fn gui_delete_empty_authored_page_projects_membership_and_replays_on_real_pub() 
     harness.step();
     {
         let reopen = harness.get_by_label("Reopen Project");
-        assert!(!reopen.is_disabled(), "v0.29 Rectangle-page project must reopen");
+        assert!(
+            !reopen.is_disabled(),
+            "v0.29 Rectangle-page project must reopen"
+        );
         reopen.click();
     }
     harness.step();
