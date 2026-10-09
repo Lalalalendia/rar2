@@ -484,15 +484,22 @@ jobs:
             throw "native_transaction_timeout"
           }
 
+          $process.WaitForExit()
           $process.Refresh()
+          if (-not $process.HasExited) {
+            throw "native_transaction_child_exit_state_unavailable"
+          }
+
           if (Test-Path -LiteralPath $stdout -PathType Leaf) {
             Get-Content -LiteralPath $stdout
           }
           if (Test-Path -LiteralPath $stderr -PathType Leaf) {
             Get-Content -LiteralPath $stderr
           }
-          if ($process.ExitCode -ne 0) {
-            throw "native_transaction_child_failed_exit_$($process.ExitCode)"
+
+          $exitCode = [int]$process.ExitCode
+          if ($exitCode -ne 0) {
+            throw "native_transaction_child_failed_exit_$exitCode"
           }
 
       - name: Validate failed native stage receipt
@@ -546,14 +553,20 @@ jobs:
           $control = Get-Content -LiteralPath $controlPath -Raw | ConvertFrom-Json
 
           if ([bool]$control.has_diff) {
+            $metadata = cargo metadata --no-deps --format-version 1 --manifest-path tools/pub-re/Cargo.toml | ConvertFrom-Json
+            $pubRe = Join-Path ([string]$metadata.target_directory) "release\pub-re.exe"
+            if (-not (Test-Path -LiteralPath $pubRe -PathType Leaf)) {
+              throw "built pub-re.exe was not found in Cargo target directory"
+            }
+
             $diffManifest = Join-Path $private "diff-manifest.json"
             $cfbReceipt = Join-Path $evidence "cfb-receipt.json"
-            & tools/pub-re/target/release/pub-re.exe analyze `
+            & $pubRe analyze `
               --manifest $diffManifest `
               --output $cfbReceipt
 
             if (-not [string]::IsNullOrWhiteSpace([string]$control.officeart_stream)) {
-              & tools/pub-re/target/release/pub-re.exe attribute-officeart `
+              & $pubRe attribute-officeart `
                 --manifest $diffManifest `
                 --stream ([string]$control.officeart_stream) `
                 --output (Join-Path $evidence "officeart-receipt.json")
