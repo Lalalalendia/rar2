@@ -440,13 +440,12 @@ fn gui_add_page_at_end_projects_membership_and_replays_on_real_pub() {
         .document
         .source
         .source_hash;
-    let mismatched_source_hash = if source_hash_before
-        == pub_editor::Sha256Digest::from_bytes([0x5a; 32])
-    {
-        pub_editor::Sha256Digest::from_bytes([0xa5; 32])
-    } else {
-        pub_editor::Sha256Digest::from_bytes([0x5a; 32])
-    };
+    let mismatched_source_hash =
+        if source_hash_before == pub_editor::Sha256Digest::from_bytes([0x5a; 32]) {
+            pub_editor::Sha256Digest::from_bytes([0xa5; 32])
+        } else {
+            pub_editor::Sha256Digest::from_bytes([0x5a; 32])
+        };
     harness
         .state_mut()
         .visual
