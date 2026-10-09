@@ -28,6 +28,22 @@ jobs:
           python-version: "3.12"
       - name: Prove repo-wide census semantics without API or external fixtures
         run: python -m unittest tools.ci.test_repo_latency_census -v
+      - name: Live API smoke on two previously merged exact heads
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci/repo_latency_census.py \
+            --repo "${{ github.repository }}" \
+            --limit 2 \
+            --out target/ci-repo-latency/live-smoke.json
+      - uses: actions/upload-artifact@v4
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          name: ci-repo-latency-live-smoke
+          path: target/ci-repo-latency/live-smoke.json
+          if-no-files-found: error
+          retention-days: 14
 
   recent-merged-census:
     if: ${{ github.event_name == 'workflow_dispatch' }}
