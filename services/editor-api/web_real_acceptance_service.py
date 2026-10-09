@@ -45,6 +45,27 @@ from security.authorized_revision_gateway import AuthorizedRevisionGateway
 PINNED_SHA = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
 PINNED_LEN = 291840
 
+# Native Publisher 2019 Open -> SaveAs -> fresh Reopen -> Reader evidence:
+# protected-main Actions #37982376097, receipt artifact #11641486612.
+# This is an exact-byte authorization, NEVER an approval for other Stories,
+# edits, source fixtures, or arbitrary Reader-green output.
+NATIVE_PUBLISHER_ACCEPTED_SHA_PAIRS_V1 = frozenset({
+    (
+        "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc",
+        "a92543b6f2b6ac3a8ae2481e15a2188a338ddc2a92832580f8987079fa4f70f8",
+    ),
+})
+
+
+def publisher_authorizes_exact_bytes(source_sha: str, report: dict) -> bool:
+    """Transfer only Publisher-accepted exact bytes; Reader proof is insufficient."""
+    return (
+        report.get("can_serialize") is True
+        and report.get("chaptera_reopen_verified") is True
+        and (source_sha, report.get("output_hash"))
+        in NATIVE_PUBLISHER_ACCEPTED_SHA_PAIRS_V1
+    )
+
 STATE = None
 
 
@@ -621,12 +642,24 @@ class RealAcceptanceState:
         elif artifact_path.exists():
             raise RuntimeError("blocked native PUB save emitted an artifact")
 
+        # An arbitrary CFB accepted by Chaptera Reader is not a product Save PUB
+        # permission. This separate policy is pinned to real Publisher evidence.
+        native_authorized = publisher_authorizes_exact_bytes(self.source_hash, report)
+        if native_authorized and not can_serialize:
+            raise RuntimeError("Publisher authority without materialized candidate")
         preview = {
             "protocol_version": "chaptera.native-pub-save-preview.v1",
             "document_id": self.document_id,
             "source_hash": self.source_hash,
             "revision_id": revision_id,
             "can_serialize": can_serialize,
+            "can_download": native_authorized,
+            "native_publisher_authorized": native_authorized,
+            "download_blocker_code": (
+                None if native_authorized else
+                "publisher_exact_sha_evidence_missing" if can_serialize else
+                report.get("blocker_code")
+            ),
             "blocker_code": report.get("blocker_code"),
             "output_hash": report.get("output_hash"),
             "byte_len": report.get("byte_len"),
@@ -650,8 +683,12 @@ class RealAcceptanceState:
     def native_pub_artifact(self) -> tuple[pathlib.Path, dict]:
         current = self.kernel.current_revision(self.document_id)
         value = self._native_pub_for_revision(current.revision_id)
-        if not value["preview"]["can_serialize"] or value["artifact"] is None:
-            raise ValueError("native_pub_save_blocked")
+        if (
+            not value["preview"]["can_download"]
+            or not value["preview"]["native_publisher_authorized"]
+            or value["artifact"] is None
+        ):
+            raise ValueError("native_pub_download_not_authorized")
         return value["artifact"], copy.deepcopy(value["preview"])
 
     def reopen(self) -> dict:
@@ -767,7 +804,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/v1/pub-save/download":
                 self._authorize(CAP_EXPORT)
-                artifact, _preview = STATE.native_pub_artifact()
+                try:
+                    artifact, _preview = STATE.native_pub_artifact()
+                except ValueError:
+                    self._json({"error": "native_pub_download_not_authorized"}, 409)
+                    return
                 self._pub_file(artifact)
                 return
             if path == "/v1/export/preview":
