@@ -718,22 +718,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $to | Out-Null
           if (-not (Test-Path -LiteralPath $from -PathType Container)) { exit 0 }
           foreach ($file in @(Get-ChildItem -LiteralPath $from -File -Filter "*.json")) {
-            if ($file.Name -notmatch '^t352-[a-z0-9-]+\.json
-        if: always()
-        shell: powershell
-        run: |
-          if (-not [string]::IsNullOrWhiteSpace($env:PUB_RE_NATIVE_OUTPUT) -and (Test-Path -LiteralPath $env:PUB_RE_NATIVE_OUTPUT)) {
-            Remove-Item -LiteralPath $env:PUB_RE_NATIVE_OUTPUT -Recurse -Force
-          }
- -and
-                $file.Name -notmatch '^(control|both_consistent|contents_only|escher_only)-(before|after)-(cfb|projections)\.json
-        if: always()
-        shell: powershell
-        run: |
-          if (-not [string]::IsNullOrWhiteSpace($env:PUB_RE_NATIVE_OUTPUT) -and (Test-Path -LiteralPath $env:PUB_RE_NATIVE_OUTPUT)) {
-            Remove-Item -LiteralPath $env:PUB_RE_NATIVE_OUTPUT -Recurse -Force
-          }
-) {
+            if ($file.Name -notmatch '^t352-[a-z0-9-]+\.json$' -and
+                $file.Name -notmatch '^(control|both_consistent|contents_only|escher_only)-(before|after)-(cfb|projections)\.json$') {
               throw "T352 evidence filename violates the allowlist"
             }
             $text = Get-Content -LiteralPath $file.FullName -Raw
