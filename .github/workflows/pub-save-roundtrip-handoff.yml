@@ -12,6 +12,7 @@ on:
     paths:
       - ".github/workflows/pub-save-roundtrip-handoff.yml"
       - "vendor/producer-a/crates/pub-writer/**"
+      - "tools/native-pub-candidate-cli/**"
       - "vendor/producer-a/crates/pub-quill/tests/fixtures/Sample3.pub.b64"
       - "tools/windows/pub-runtime/run_story_native_roundtrip.ps1"
       - "tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1"
@@ -42,6 +43,13 @@ jobs:
 
       - name: Prove logical CFB and sibling Story preservation
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-writer --lib
+
+      - name: Prove standalone source-bound EditorProject PUB CLI
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          rustup component add rustfmt --toolchain 1.94.1
+          rustfmt --edition 2024 --check tools/native-pub-candidate-cli/src/main.rs
+          cargo test --manifest-path tools/native-pub-candidate-cli/Cargo.toml
 
       - name: Generate deterministic PUB candidate handoff
         run: |
