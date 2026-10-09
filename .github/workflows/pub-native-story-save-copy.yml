@@ -117,6 +117,7 @@ jobs:
     timeout-minutes: 24
     concurrency:
       group: pub-re-native-publisher-oracle
+      queue: max
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
