@@ -244,16 +244,36 @@ fn build_pdf_artifact(
         },
     )
     .context("resolve bounded shaped text flow for fixed PDF")?;
-    // Legacy no-Quill Viewer owns additional source-backed geometry laws
-    // (structural point-group suppression and bounded grouped-image placement).
-    // Reuse that already-resolved scene rather than duplicating its private
-    // projector in the CLI. Mature 0x2C retains the established shaped-flow
-    // geometry path byte-for-byte.
-    let pdf_scene = if route_uses_viewer_scene {
-        viewer_scene
+    // Preserve the existing route-specific physical geometry, but recover only
+    // the Viewer node ordering already established by source-backed stack authority.
+    // Matched nodes are reordered within their existing slots; unmatched nodes do not move.
+    let mut pdf_scene = if route_uses_viewer_scene {
+        viewer_scene.clone()
     } else {
         shaped_flow.geometry_scene()
     };
+    if !route_uses_viewer_scene {
+        let viewer_rank = viewer_scene
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (node.origin, index))
+            .collect::<BTreeMap<_, _>>();
+        let matched_positions = pdf_scene
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| viewer_rank.contains_key(&node.origin).then_some(index))
+            .collect::<Vec<_>>();
+        let mut matched_nodes = matched_positions
+            .iter()
+            .map(|index| pdf_scene.nodes[*index].clone())
+            .collect::<Vec<_>>();
+        matched_nodes.sort_by_key(|node| viewer_rank[&node.origin]);
+        for (index, node) in matched_positions.into_iter().zip(matched_nodes) {
+            pdf_scene.nodes[index] = node;
+        }
+    }
     let scene_node_ids = pdf_scene
         .nodes
         .iter()
