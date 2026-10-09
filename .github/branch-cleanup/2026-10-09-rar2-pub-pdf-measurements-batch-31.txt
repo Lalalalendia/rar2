@@ -1,0 +1,8 @@
+# 2026-10-09 — PUB-PDF measurements batch 31
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+measure/pub-pdf-viewer-scene-order-pure-01 989ad7d6eda5a1248a679f5c9d3727bffb254352 # #2328 terminal measurement; Publisher census complete
+measure/pub-pdf-order-borders-only-01 0a21e4bd5caf8b9da4e197e6ae31ea64756af0d3 # #2330 terminal factorial measurement; Publisher census complete
+validation/pub-pdf-table-paint-oracle-01 cc917566c954676c6336c2d9c0b0ccd4a470851d # #2276 diagnostic-only oracle child; receipt complete
+ops/branch-gc-20261009-recovery-predecessor-batch-30 6d0e0c81303e62b9102590b4d218c086bc56f5c7 # completed #2325 clean receipt: 2/2 deleted
