@@ -1154,12 +1154,6 @@ impl ViewerApp {
             project_status,
         } = prepared;
 
-        let source_customer_page_ids = visual
-            .document
-            .pages
-            .iter()
-            .map(|page| page.id)
-            .collect::<Vec<_>>();
         let source_hash = visual.document.source.source_hash;
         let source_byte_len = visual.document.source.byte_len;
         let supporter_status = match visual.document.fidelity_status() {
@@ -1191,8 +1185,8 @@ impl ViewerApp {
         self.source_fonts = source_fonts;
         self.source_fonts_install_attempted = false;
         self.source_fonts_active = false;
-        self.source_customer_page_ids = source_customer_page_ids;
         self.visual = Some(visual);
+        self.capture_source_customer_page_ids_from_visual();
         self.salvage = None;
         self.selected_page = 0;
         self.page_frame_cache.clear();
@@ -1236,22 +1230,7 @@ impl ViewerApp {
                 initial_page: 0,
             });
 
-        if let Err(error) = self.sync_visual_page_membership_from_editor() {
-            self.edit_status = Some(format!(
-                "Viewer page membership refresh failed closed: {error}"
-            ));
-        }
-        if let Err(error) = self.sync_visual_stories_from_editor() {
-            self.edit_status = Some(format!(
-                "Viewer text projection refresh failed closed: {error}"
-            ));
-        }
-        if let Err(error) = self.sync_visual_created_text_boxes_from_editor() {
-            self.edit_status = Some(format!(
-                "Viewer created TextBox scene sync failed closed: {error}"
-            ));
-        }
-        self.sync_visual_geometry_from_editor();
+        self.finish_open_authoring_projection();
     }
 
     fn commit_prepared_salvage_open(
@@ -3105,38 +3084,6 @@ impl ViewerApp {
             self.selected_table_cell_index = None;
             self.table_cell_buffer.clear();
         }
-    }
-
-    fn finish_authoring_change(&mut self, status: &str) {
-        self.canvas_drag = None;
-        self.canvas_resize = None;
-        self.page_frame_cache.clear();
-        let membership_refresh = self.sync_visual_page_membership_from_editor();
-        let text_projection_refresh = self.sync_visual_stories_from_editor();
-        let created_node_scene_sync = self.sync_visual_created_text_boxes_from_editor();
-        self.sync_visual_geometry_from_editor();
-        self.refresh_search();
-        self.export_preview = None;
-        self.project_status = Some("Editor project has unsaved changes.".to_owned());
-
-        let mut refresh_errors = Vec::new();
-        if let Err(error) = membership_refresh {
-            refresh_errors.push(format!("page membership: {error}"));
-        }
-        if let Err(error) = text_projection_refresh {
-            refresh_errors.push(format!("text projection: {error}"));
-        }
-        if let Err(error) = created_node_scene_sync {
-            refresh_errors.push(format!("created TextBox scene: {error}"));
-        }
-        self.edit_status = Some(if refresh_errors.is_empty() {
-            status.to_owned()
-        } else {
-            format!(
-                "{status} Viewer refresh failed closed: {}",
-                refresh_errors.join("; ")
-            )
-        });
     }
 
     fn saved_project_operation_count(&self) -> Result<Option<usize>, String> {

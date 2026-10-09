@@ -20,23 +20,25 @@ use std::collections::BTreeSet;
 /// Page-role qualification remains external. The caller supplies the exact
 /// admitted customer PageIds; this seam neither classifies raw Publisher pages
 /// nor invents a second durable page list.
-pub fn refresh_viewer_page_membership_from_resolved(
-    visual: &mut ViewerGeometryDocument,
-    graph: &PubResolvedGraph,
-    page_ids: &[PageId],
-) -> Result<()> {
-    if graph.source.source_hash != visual.document.source.source_hash
-        || graph.document.source_hash != visual.document.source.source_hash
-    {
-        return Err(anyhow!(
-            "Viewer page-membership refresh rejected a resolved graph with different source identity"
-        ));
-    }
+impl ViewerGeometryDocument {
+    pub fn refresh_page_membership_from_resolved(
+        &mut self,
+        graph: &PubResolvedGraph,
+        page_ids: &[PageId],
+    ) -> Result<()> {
+        if graph.source.source_hash != self.document.source.source_hash
+            || graph.document.source_hash != self.document.source.source_hash
+        {
+            return Err(anyhow!(
+                "Viewer page-membership refresh rejected a resolved graph with different source identity"
+            ));
+        }
 
-    let (pages, surfaces) = viewer_page_membership_from_resolved(graph, page_ids)?;
-    visual.document.pages = pages;
-    visual.scene.surfaces = surfaces;
-    Ok(())
+        let (pages, surfaces) = viewer_page_membership_from_resolved(graph, page_ids)?;
+        self.document.pages = pages;
+        self.scene.surfaces = surfaces;
+        Ok(())
+    }
 }
 
 fn viewer_page_membership_from_resolved(

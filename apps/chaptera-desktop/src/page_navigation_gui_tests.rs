@@ -364,7 +364,6 @@ fn gui_move_page_command_commits_one_reorder_and_replays_on_real_pub() {
     let _ = fs::remove_dir_all(root);
 }
 
-
 #[cfg(not(feature = "reader-only"))]
 #[test]
 #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
@@ -434,7 +433,10 @@ fn gui_add_page_at_end_projects_membership_and_replays_on_real_pub() {
     };
 
     let add = harness.get_by_label("Add Page at End");
-    assert!(!add.is_disabled(), "existing customer document admits append");
+    assert!(
+        !add.is_disabled(),
+        "existing customer document admits append"
+    );
     add.click();
     harness.step();
     harness.step();
@@ -487,7 +489,12 @@ fn gui_add_page_at_end_projects_membership_and_replays_on_real_pub() {
             .expect("appended page must have a Viewer scene surface");
         assert_eq!(surface.size, last_source_size);
         assert_eq!(
-            visual.document.pages.last().expect("last Viewer page").index,
+            visual
+                .document
+                .pages
+                .last()
+                .expect("last Viewer page")
+                .index,
             u32::try_from(expected.len()).expect("page count fits u32")
         );
         appended_page_id
@@ -549,7 +556,12 @@ fn gui_add_page_at_end_projects_membership_and_replays_on_real_pub() {
         let app = harness.state();
         let visual = app.visual.as_ref().expect("visual after redo");
         assert_eq!(
-            visual.document.pages.last().expect("restored authored page").id,
+            visual
+                .document
+                .pages
+                .last()
+                .expect("restored authored page")
+                .id,
             appended_page_id,
             "Redo restores the same PageId"
         );
@@ -570,8 +582,13 @@ fn gui_add_page_at_end_projects_membership_and_replays_on_real_pub() {
     harness.get_by_label(&appended_label).click();
     harness.step();
     assert_eq!(
-        harness.state().visual.as_ref().expect("visual").document.pages
-            [harness.state().selected_page]
+        harness
+            .state()
+            .visual
+            .as_ref()
+            .expect("visual")
+            .document
+            .pages[harness.state().selected_page]
             .id,
         appended_page_id,
         "restored page remains navigable by stable identity"
@@ -622,7 +639,8 @@ fn gui_add_page_at_end_projects_membership_and_replays_on_real_pub() {
                 .scene
                 .surfaces
                 .iter()
-                .any(|surface| surface.origin == appended_page_id && surface.size == last_source_size)
+                .any(|surface| surface.origin == appended_page_id
+                    && surface.size == last_source_size)
         );
     }
 

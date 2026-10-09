@@ -3,12 +3,8 @@ name: Editor Desktop Page Nav Shortcuts V1
 on:
   pull_request:
     paths:
-      - "apps/chaptera-desktop/Cargo.toml"
-      - "apps/chaptera-desktop/src/main.rs"
       - "apps/chaptera-desktop/src/page_navigation.rs"
       - "apps/chaptera-desktop/src/page_navigation_gui_tests.rs"
-      - "vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
-      - "vendor/producer-a/crates/pub-viewer/src/lib.rs"
       - ".github/workflows/editor-desktop-page-nav-shortcuts-v1.yml"
   workflow_dispatch:
 
@@ -91,5 +87,3 @@ jobs:
           cargo test -p chaptera-desktop
           gui_add_page_at_end_projects_membership_and_replays_on_real_pub
           -- --ignored --nocapture
-
-

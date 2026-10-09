@@ -6,9 +6,7 @@
 
 use super::{ViewerApp, reader_only_mode, supporter};
 use eframe::egui;
-use pub_editor::{
-    AuthoredEntityProvenanceV1, AuthoredPageIdentityV1, PageId,
-};
+use pub_editor::{AuthoredEntityProvenanceV1, AuthoredPageIdentityV1, PageId};
 use std::collections::BTreeMap;
 
 impl ViewerApp {
@@ -72,25 +70,20 @@ impl ViewerApp {
                 .visual
                 .as_mut()
                 .expect("Viewer presence validated before page-membership sync");
-            pub_viewer::refresh_viewer_page_membership_from_resolved(
-                visual,
-                editor.graph(),
-                &effective_page_ids,
-            )
-            .map_err(|error| error.to_string())?;
+            visual
+                .refresh_page_membership_from_resolved(editor.graph(), &effective_page_ids)
+                .map_err(|error| error.to_string())?;
         }
 
         let next_index = selected_page_id
             .and_then(|page_id| {
-                self.visual
-                    .as_ref()
-                    .and_then(|visual| {
-                        visual
-                            .document
-                            .pages
-                            .iter()
-                            .position(|page| page.id == page_id)
-                    })
+                self.visual.as_ref().and_then(|visual| {
+                    visual
+                        .document
+                        .pages
+                        .iter()
+                        .position(|page| page.id == page_id)
+                })
             })
             .unwrap_or_else(|| {
                 if effective_page_ids.is_empty() {
@@ -204,16 +197,11 @@ impl ViewerApp {
             let effective_page_ids = editor
                 .effective_customer_page_order_v1(&self.source_customer_page_ids)
                 .map_err(|error| {
-                    format!(
-                        "Page append is unavailable: {} ({})",
-                        error,
-                        error.code()
-                    )
+                    format!("Page append is unavailable: {} ({})", error, error.code())
                 })?;
-            let last_page_id = effective_page_ids
-                .last()
-                .copied()
-                .ok_or_else(|| "Page append requires at least one admitted customer page.".to_owned())?;
+            let last_page_id = effective_page_ids.last().copied().ok_or_else(|| {
+                "Page append requires at least one admitted customer page.".to_owned()
+            })?;
             let page_size = editor
                 .graph()
                 .pages
@@ -250,7 +238,9 @@ impl ViewerApp {
                     if transition.identity == identity
             )
         {
-            return Err("Add Page must append exactly one canonical lifecycle operation.".to_owned());
+            return Err(
+                "Add Page must append exactly one canonical lifecycle operation.".to_owned(),
+            );
         }
 
         self.editor = Some(candidate);
@@ -404,6 +394,71 @@ impl ViewerApp {
             self.edit_status = Some(error);
         }
         ui.separator();
+    }
+
+    pub(super) fn capture_source_customer_page_ids_from_visual(&mut self) {
+        self.source_customer_page_ids = self
+            .visual
+            .as_ref()
+            .map(|visual| {
+                visual
+                    .document
+                    .pages
+                    .iter()
+                    .map(|page| page.id)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+    }
+
+    pub(super) fn finish_open_authoring_projection(&mut self) {
+        let mut refresh_errors = Vec::new();
+        if let Err(error) = self.sync_visual_page_membership_from_editor() {
+            refresh_errors.push(format!("page membership: {error}"));
+        }
+        if let Err(error) = self.sync_visual_stories_from_editor() {
+            refresh_errors.push(format!("text projection: {error}"));
+        }
+        if let Err(error) = self.sync_visual_created_text_boxes_from_editor() {
+            refresh_errors.push(format!("created TextBox scene: {error}"));
+        }
+        self.sync_visual_geometry_from_editor();
+
+        if !refresh_errors.is_empty() {
+            self.edit_status = Some(format!(
+                "Viewer authoring projection refresh failed closed: {}",
+                refresh_errors.join("; ")
+            ));
+        }
+    }
+
+    pub(super) fn finish_authoring_change(&mut self, status: &str) {
+        self.canvas_drag = None;
+        self.canvas_resize = None;
+        self.page_frame_cache.clear();
+
+        let mut refresh_errors = Vec::new();
+        if let Err(error) = self.sync_visual_page_membership_from_editor() {
+            refresh_errors.push(format!("page membership: {error}"));
+        }
+        if let Err(error) = self.sync_visual_stories_from_editor() {
+            refresh_errors.push(format!("text projection: {error}"));
+        }
+        if let Err(error) = self.sync_visual_created_text_boxes_from_editor() {
+            refresh_errors.push(format!("created TextBox scene: {error}"));
+        }
+        self.sync_visual_geometry_from_editor();
+        self.refresh_search();
+        self.export_preview = None;
+        self.project_status = Some("Editor project has unsaved changes.".to_owned());
+        self.edit_status = Some(if refresh_errors.is_empty() {
+            status.to_owned()
+        } else {
+            format!(
+                "{status} Viewer refresh failed closed: {}",
+                refresh_errors.join("; ")
+            )
+        });
     }
 
     pub(super) fn process_global_page_navigation_shortcuts(&mut self, ctx: &egui::Context) {
