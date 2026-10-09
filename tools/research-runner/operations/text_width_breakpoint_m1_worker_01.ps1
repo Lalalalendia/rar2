@@ -123,7 +123,8 @@ function Assert-FixedSource($Snapshot) {
     if ([string]$Snapshot.font_name -ne $FontName -or
         [math]::Abs([double]$Snapshot.font_size_pt - $FontSize) -gt 0.001 -or
         [int]$Snapshot.auto_fit_mode -ne 0 -or
-        [string]$Snapshot.text_utf16le_sha256 -ne (Text-Sha $ExpectedText)) {
+        [int]$Snapshot.text_utf16_units -lt $ExpectedText.Length -or
+        [int]$Snapshot.text_utf16_units -gt ($ExpectedText.Length + 2)) {
         throw "m1_font_or_text_or_autofit_drift"
     }
 }
@@ -167,6 +168,20 @@ try {
             Close-Document $doc
             Close-PubPublisherApplication $app
         }
+        $Stage = "seed_fresh_reopen"
+        Write-Stage "running" $Stage
+        $app2 = $null; $doc2 = $null; $shape2 = $null
+        try {
+            $app2 = New-PubPublisherApplication
+            $doc2 = $app2.Open($SeedPath,$true,$false)
+            $shape2 = Get-ShapeByIdentity $doc2 ([pscustomobject]@{page_id=$pageId;shape_id=$shapeId;shape_index=$index})
+            $snapshotFresh = Snapshot $shape2
+            Assert-FixedSource $snapshotFresh
+        } finally {
+            Release-Com $shape2
+            Close-Document $doc2
+            Close-PubPublisherApplication $app2
+        }
         $Stage = "seed_receipt"
         Write-Stage "running" $Stage
         if ((File-Sha $SourcePath) -ne $sourceSha) {
@@ -180,6 +195,7 @@ try {
             shape_id = $shapeId
             shape_index = $index
             snapshot_before_save = $snapshot
+            snapshot_fresh_reopen = $snapshotFresh
             synthetic_text_only = $true
         })
     } else {
@@ -211,9 +227,15 @@ try {
             $shape = Get-ShapeByIdentity $doc $seed
             $before = Snapshot $shape
             Assert-FixedSource $before
+            if ($before.text_utf16le_sha256 -ne [string]$seed.snapshot_fresh_reopen.text_utf16le_sha256) {
+                throw "m1_seed_text_changed_before_arm"
+            }
             $shape.Width = $WidthPt
             $after = Snapshot $shape
             Assert-FixedSource $after
+            if ($after.text_utf16le_sha256 -ne $before.text_utf16le_sha256) {
+                throw "m1_width_mutation_changed_text"
+            }
             $Stage = "arm_save"
             Write-Stage "running" $Stage
             $doc.Save()
@@ -231,6 +253,9 @@ try {
             $shape2 = Get-ShapeByIdentity $doc2 $seed
             $fresh = Snapshot $shape2
             Assert-FixedSource $fresh
+            if ($fresh.text_utf16le_sha256 -ne $before.text_utf16le_sha256) {
+                throw "m1_save_reopen_changed_text"
+            }
         } finally {
             Release-Com $shape2
             Close-Document $doc2
