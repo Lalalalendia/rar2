@@ -166,6 +166,7 @@ fn build_pdf_artifact(
     )
     .context("project effective PUB pages for bounded PDF conversion")?;
     let projection = project_bounded(authoring);
+    let source_page_paint_orders = bundle.source_page_paint_orders.clone();
     let visual = bundle.geometry;
     let viewer_scene = visual.scene.clone();
 
@@ -244,16 +245,83 @@ fn build_pdf_artifact(
         },
     )
     .context("resolve bounded shaped text flow for fixed PDF")?;
-    // Legacy no-Quill Viewer owns additional source-backed geometry laws
-    // (structural point-group suppression and bounded grouped-image placement).
-    // Reuse that already-resolved scene rather than duplicating its private
-    // projector in the CLI. Mature 0x2C retains the established shaped-flow
-    // geometry path byte-for-byte.
-    let pdf_scene = if route_uses_viewer_scene {
+    // Keep the established route-specific geometry. Source paint order is
+    // admitted only when it completely covers every directly rendered node on
+    // every output page, mirroring the Reader's source_back_to_front gate.
+    let mut pdf_scene = if route_uses_viewer_scene {
         viewer_scene
     } else {
         shaped_flow.geometry_scene()
     };
+    let surface_ids = pdf_scene
+        .surfaces
+        .iter()
+        .map(|surface| surface.origin.into_canonical())
+        .collect::<BTreeSet<_>>();
+    let mut expected_by_page = BTreeMap::new();
+    let mut source_order_complete = !pdf_scene.nodes.is_empty();
+    for node in &pdf_scene.nodes {
+        if !surface_ids.contains(&node.parent_origin) {
+            source_order_complete = false;
+            break;
+        }
+        expected_by_page
+            .entry(node.parent_origin)
+            .or_insert_with(BTreeSet::new)
+            .insert(node.origin);
+    }
+
+    let mut ranks_by_page = BTreeMap::new();
+    if source_order_complete {
+        for order in &source_page_paint_orders {
+            let page = order.page_id.into_canonical();
+            let Some(expected) = expected_by_page.get(&page) else {
+                continue;
+            };
+            if ranks_by_page.contains_key(&page) {
+                source_order_complete = false;
+                break;
+            }
+            let mut ranks = BTreeMap::new();
+            for (rank, node_id) in order.node_ids.iter().copied().enumerate() {
+                if !expected.contains(&node_id) || ranks.insert(node_id, rank).is_some() {
+                    source_order_complete = false;
+                    break;
+                }
+            }
+            if !source_order_complete || ranks.len() != expected.len() {
+                source_order_complete = false;
+                break;
+            }
+            ranks_by_page.insert(page, ranks);
+        }
+        if ranks_by_page.len() != expected_by_page.len() {
+            source_order_complete = false;
+        }
+    }
+
+    if source_order_complete {
+        for (page, ranks) in &ranks_by_page {
+            let slots = pdf_scene
+                .nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(index, node)| (node.parent_origin == *page).then_some(index))
+                .collect::<Vec<_>>();
+            let mut ordered = slots
+                .iter()
+                .map(|index| pdf_scene.nodes[*index].clone())
+                .collect::<Vec<_>>();
+            ordered.sort_by_key(|node| ranks[&node.origin]);
+            for (slot, node) in slots.into_iter().zip(ordered) {
+                pdf_scene.nodes[slot] = node;
+            }
+        }
+    } else {
+        // Preserve the previous public-CLI behavior when stacking authority is
+        // incomplete: no partial order is promoted into product output.
+        pdf_scene.nodes.sort_by_key(|node| node.origin);
+    }
     let scene_node_ids = pdf_scene
         .nodes
         .iter()
