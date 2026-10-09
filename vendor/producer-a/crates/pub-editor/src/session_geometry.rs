@@ -5,6 +5,10 @@
 //! mutation, image/text session logic, frame topology, and export remain outside.
 
 use super::*;
+use pub_editor_authoring_core::{
+    DeleteAuthoredRectanglePageStateV1, DeleteAuthoredRectanglePageTransitionV1,
+    plan_delete_authored_rectangle_page_v1,
+};
 use pub_editor_geometry_core::{
     GeometryNodeSnapshotV1, MoveNodesTransitionErrorV1, ResizeNodesTransitionErrorV1,
     validate_move_nodes_transition_v1 as validate_move_nodes_transition_core_v1,
@@ -1125,6 +1129,97 @@ impl EditorSession {
         .map_err(delete_blank_authored_page_error_to_editor_v1)
     }
 
+    /// Admission-only seam for the next versioned EditorSession operation.
+    ///
+    /// An authored Rectangle is an overlay, not a Page.children entry. The
+    /// source-neutral planner deliberately cannot prove absence of resolved
+    /// nodes, other authored entity types, or references to the overlay from
+    /// the resolved graph. This runtime boundary MUST prove those facts.
+    pub(super) fn plan_delete_authored_rectangle_page_from_session_v1(
+        &self,
+        source_qualified_page_ids: &[PageId],
+        page_id: PageId,
+    ) -> Result<DeleteAuthoredRectanglePageTransitionV1, EditorError> {
+        self.validate_source_identity()?;
+        if self.project_identity.is_none() {
+            return Err(EditorError::PageDeleteUnsupported {
+                message: "durable project identity is required".to_owned(),
+            });
+        }
+        let identity = self
+            .authored_page_identities_v1()
+            .get(&page_id)
+            .copied()
+            .ok_or_else(|| EditorError::PageDeleteUnsupported {
+                message: "target PageId lacks active authored identity".to_owned(),
+            })?;
+        if !self.authored_customer_page_ids_v1().contains(&page_id) {
+            return Err(EditorError::PageDeleteUnsupported {
+                message: "target PageId is not active authored customer membership".to_owned(),
+            });
+        }
+
+        let shapes_on_target = self
+            .authored_shapes
+            .iter()
+            .filter_map(|(id, shape)| {
+                (shape.page_id == page_id || shape.parent_id == page_id).then_some(*id)
+            })
+            .collect::<BTreeSet<_>>();
+        // Other pages' authored lanes cannot reference a shape that we remove.
+        let foreign_stack_reference = self.authored_stacks.iter().any(|(other_page, stack)| {
+            *other_page != page_id
+                && stack
+                    .members
+                    .iter()
+                    .any(|id| shapes_on_target.contains(id))
+        });
+        // Graph descendants whose parent is an authored overlay may not reach
+        // the Page via graph.nodes alone. Walk both the Page and overlay roots.
+        let dependent_graph_node = self.graph.nodes.values().any(|node| {
+            let mut parent = node.header.parent_id;
+            let mut visited = BTreeSet::new();
+            loop {
+                if parent == page_id.into_canonical()
+                    || shapes_on_target.contains(&NodeId::from_canonical(parent))
+                    || !visited.insert(parent)
+                {
+                    return true;
+                }
+                let Some(ancestor) = self.graph.nodes.get(&NodeId::from_canonical(parent)) else {
+                    return false;
+                };
+                parent = ancestor.header.parent_id;
+            }
+        });
+        let foreign_or_unproven_membership =
+            self.page_has_resolved_node_membership_v1(page_id)
+            || dependent_graph_node
+            || foreign_stack_reference
+            || self
+                .authored_lines
+                .values()
+                .any(|line| line.page_id == page_id || line.parent_id == page_id);
+        let customer_pages =
+            self.effective_customer_page_order_v1(source_qualified_page_ids)?;
+        let state = DeleteAuthoredRectanglePageStateV1 {
+            document_pages: self.graph.document.pages.clone(),
+            pages: self.graph.pages.clone(),
+            authored_shapes: self.authored_shapes.clone(),
+            authored_stack: self.current_authored_stack_v1(page_id),
+        };
+        plan_delete_authored_rectangle_page_v1(
+            self.graph.document.id,
+            &state,
+            &customer_pages,
+            identity,
+            foreign_or_unproven_membership,
+        )
+        .map_err(|error| EditorError::PageDeleteUnsupported {
+            message: format!("atomic rectangle-page admission rejected: {error:?}"),
+        })
+    }
+
     pub fn delete_blank_authored_page_v1(
         &mut self,
         source_qualified_page_ids: Vec<PageId>,
@@ -1952,6 +2047,82 @@ mod authored_page_append_tests {
             .delete_blank_authored_page_v1(vec![source], identity.page_id)
             .expect("delete after content removed");
         assert!(!session.can_delete_blank_authored_page_v1(&[source], identity.page_id));
+    }
+
+    #[test]
+    fn authored_rectangle_page_delete_admission_is_read_only_and_fail_closed() {
+        let source = page_id("22222222-2222-4222-8222-222222222222");
+        let identity = authored_identity();
+        let mut session = EditorSession::new(source_graph(vec![source])).expect("session");
+        session
+            .append_blank_page_v1(
+                vec![source],
+                identity,
+                Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                None,
+                None,
+            )
+            .expect("append authored page");
+        let shape_id = NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        session
+            .create_shape(
+                shape_id,
+                identity.page_id,
+                RectEmu::new(
+                    LengthEmu::new(100_000),
+                    LengthEmu::new(100_000),
+                    LengthEmu::new(400_000),
+                    LengthEmu::new(300_000),
+                ),
+                crate::AuthoredShapePaintV1 {
+                    fill: crate::AuthoredSolidFillV1 {
+                        visible: true,
+                        color: crate::Srgb8V1 { r: 255, g: 255, b: 255 },
+                    },
+                    stroke: crate::AuthoredSolidStrokeV1 {
+                        visible: true,
+                        color: crate::Srgb8V1 { r: 0, g: 0, b: 0 },
+                        width_emu: 12_700,
+                    },
+                    provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+                },
+            )
+            .expect("one authored Rectangle");
+        let original_operations = session.operations().len();
+        let original_graph_pages = session.graph().document.pages.clone();
+        let planned = session
+            .plan_delete_authored_rectangle_page_from_session_v1(
+                &[source],
+                identity.page_id,
+            )
+            .expect("admitted authored Rectangle page");
+        assert_eq!(planned.shape_before.node_id, shape_id);
+        assert_eq!(session.operations().len(), original_operations);
+        assert_eq!(session.graph().document.pages, original_graph_pages);
+        assert!(!session.can_delete_blank_authored_page_v1(&[source], identity.page_id));
+        assert!(
+            session
+                .plan_delete_authored_rectangle_page_from_session_v1(&[source], source)
+                .is_err(),
+            "a source-backed Page is never admitted"
+        );
+
+        // A missing lane member must fail even when Page.children is empty.
+        session
+            .authored_stacks
+            .get_mut(&identity.page_id)
+            .expect("created authored lane")
+            .members
+            .clear();
+        assert!(
+            session
+                .plan_delete_authored_rectangle_page_from_session_v1(
+                    &[source],
+                    identity.page_id,
+                )
+                .is_err()
+        );
+        assert_eq!(session.operations().len(), original_operations);
     }
 
     #[test]
