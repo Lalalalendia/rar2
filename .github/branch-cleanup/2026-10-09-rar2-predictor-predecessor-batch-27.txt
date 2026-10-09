@@ -1,0 +1,6 @@
+# 2026-10-09 — predictor predecessor batch 27
+# Never merge. Exact live tips only.
+# Runtime rechecks open PR heads/bases and exact SHA lease.
+
+research/recovery-damage-signature-predictor-current-v3 ed2348e67968a620834861c8c7444b9f9581280f # #2257 superseded by merged current-main #2283 with byte-identical predictor blob
+ops/branch-gc-20261008-pub-pdf-falsified-text-batch-26 fa42fdb0590869867dda0b0b51c0154379d6d61b # completed #2280 clean receipt: 5/5 deleted
