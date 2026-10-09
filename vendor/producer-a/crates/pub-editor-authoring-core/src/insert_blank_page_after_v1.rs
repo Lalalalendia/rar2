@@ -69,18 +69,14 @@ pub fn insert_blank_page_after_document_state_id_v1(
     format!("sha256:{hex}")
 }
 
-fn customer_set_v1(
-    page_ids: &[PageId],
-) -> Result<BTreeSet<PageId>, InsertBlankPageAfterErrorV1> {
+fn customer_set_v1(page_ids: &[PageId]) -> Result<BTreeSet<PageId>, InsertBlankPageAfterErrorV1> {
     if page_ids.is_empty() {
         return Err(InsertBlankPageAfterErrorV1::CustomerPagesEmpty);
     }
     let mut seen = BTreeSet::new();
     for page_id in page_ids {
         if !seen.insert(*page_id) {
-            return Err(InsertBlankPageAfterErrorV1::DuplicateCustomerPage {
-                page_id: *page_id,
-            });
+            return Err(InsertBlankPageAfterErrorV1::DuplicateCustomerPage { page_id: *page_id });
         }
     }
     Ok(seen)
@@ -190,12 +186,11 @@ pub fn plan_insert_blank_page_after_v1(
     if current != current_customer_page_ids {
         return Err(InsertBlankPageAfterErrorV1::CurrentCustomerOrderMismatch);
     }
-    let anchor_customer_index = current
-        .iter()
-        .position(|id| *id == anchor_page_id)
-        .ok_or(InsertBlankPageAfterErrorV1::AnchorNotCustomer {
+    let anchor_customer_index = current.iter().position(|id| *id == anchor_page_id).ok_or(
+        InsertBlankPageAfterErrorV1::AnchorNotCustomer {
             page_id: anchor_page_id,
-        })?;
+        },
+    )?;
     let anchors = document_pages
         .iter()
         .enumerate()
@@ -263,9 +258,12 @@ pub fn apply_insert_blank_page_after_forward_v1(
         });
     }
     if document_pages
-        .get(transition.insertion_index.checked_sub(1).ok_or(
-            InsertBlankPageAfterErrorV1::InsertionSlotMismatch,
-        )?)
+        .get(
+            transition
+                .insertion_index
+                .checked_sub(1)
+                .ok_or(InsertBlankPageAfterErrorV1::InsertionSlotMismatch)?,
+        )
         .copied()
         != Some(transition.anchor_page_id)
     {
@@ -316,12 +314,14 @@ pub fn apply_insert_blank_page_after_inverse_v1(
             page_id: transition.anchor_page_id,
         });
     }
-    if document_pages.get(transition.insertion_index).copied()
-        != Some(transition.identity.page_id)
+    if document_pages.get(transition.insertion_index).copied() != Some(transition.identity.page_id)
         || document_pages
-            .get(transition.insertion_index.checked_sub(1).ok_or(
-                InsertBlankPageAfterErrorV1::InsertionSlotMismatch,
-            )?)
+            .get(
+                transition
+                    .insertion_index
+                    .checked_sub(1)
+                    .ok_or(InsertBlankPageAfterErrorV1::InsertionSlotMismatch)?,
+            )
             .copied()
             != Some(transition.anchor_page_id)
     {
@@ -357,8 +357,7 @@ mod tests {
     }
 
     fn document_id() -> DocumentId {
-        serde_json::from_str("\"33000000-0000-4000-8000-000000000001\"")
-            .expect("valid DocumentId")
+        serde_json::from_str("\"33000000-0000-4000-8000-000000000001\"").expect("valid DocumentId")
     }
 
     fn page(id: PageId, width: i64) -> Page {
@@ -397,23 +396,45 @@ mod tests {
         let original = pages.clone();
         let new_page = page(identity().page_id, 1_500_000);
         let transition = plan_insert_blank_page_after_v1(
-            document_id(), &before, &pages, &[a, b], a, identity(), new_page.clone(),
+            document_id(),
+            &before,
+            &pages,
+            &[a, b],
+            a,
+            identity(),
+            new_page.clone(),
         )
         .expect("admitted content-bearing anchor");
         assert_eq!(transition.insertion_index, 2);
-        assert_eq!(transition.after_customer_page_ids, vec![a, identity().page_id, b]);
+        assert_eq!(
+            transition.after_customer_page_ids,
+            vec![a, identity().page_id, b]
+        );
 
         let mut order = before.clone();
         apply_insert_blank_page_after_forward_v1(
-            document_id(), &mut order, &mut pages, &transition,
+            document_id(),
+            &mut order,
+            &mut pages,
+            &transition,
         )
         .expect("forward");
-        assert_eq!(order, vec![master, a, identity().page_id, service, b, carrier]);
-        assert_eq!(pages.get(&a), original.get(&a), "content anchor was not changed");
+        assert_eq!(
+            order,
+            vec![master, a, identity().page_id, service, b, carrier]
+        );
+        assert_eq!(
+            pages.get(&a),
+            original.get(&a),
+            "content anchor was not changed"
+        );
         assert_eq!(pages.get(&identity().page_id), Some(&new_page));
 
         apply_insert_blank_page_after_inverse_v1(
-            document_id(), &mut order, &mut pages, &transition,
+            document_id(),
+            &mut order,
+            &mut pages,
+            &transition,
         )
         .expect("inverse");
         assert_eq!(order, before);
@@ -433,16 +454,30 @@ mod tests {
         let requested = page(identity().page_id, 1_000_000);
         assert_eq!(
             plan_insert_blank_page_after_v1(
-                document_id(), &before, &pages, &[a], service, identity(), requested.clone(),
+                document_id(),
+                &before,
+                &pages,
+                &[a],
+                service,
+                identity(),
+                requested.clone(),
             ),
             Err(InsertBlankPageAfterErrorV1::AnchorNotCustomer { page_id: service })
         );
         pages.insert(identity().page_id, requested.clone());
         assert_eq!(
             plan_insert_blank_page_after_v1(
-                document_id(), &before, &pages, &[a], a, identity(), requested,
+                document_id(),
+                &before,
+                &pages,
+                &[a],
+                a,
+                identity(),
+                requested,
             ),
-            Err(InsertBlankPageAfterErrorV1::IdentityCollision { page_id: identity().page_id })
+            Err(InsertBlankPageAfterErrorV1::IdentityCollision {
+                page_id: identity().page_id
+            })
         );
     }
 
@@ -450,9 +485,16 @@ mod tests {
     fn tampered_state_and_contentful_destination_fail_atomically() {
         let a = page_id("22222222-2222-4222-8222-222222222222");
         let before = vec![a];
-        let original = [(a, page(a, 1_000_000))].into_iter().collect::<BTreeMap<_, _>>();
+        let original = [(a, page(a, 1_000_000))]
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
         let mut transition = plan_insert_blank_page_after_v1(
-            document_id(), &before, &original, &[a], a, identity(),
+            document_id(),
+            &before,
+            &original,
+            &[a],
+            a,
+            identity(),
             page(identity().page_id, 1_000_000),
         )
         .expect("plan");
@@ -462,7 +504,10 @@ mod tests {
         transition.after_document_state_id = "sha256:tampered".to_owned();
         assert_eq!(
             apply_insert_blank_page_after_forward_v1(
-                document_id(), &mut order, &mut pages, &transition,
+                document_id(),
+                &mut order,
+                &mut pages,
+                &transition,
             ),
             Err(InsertBlankPageAfterErrorV1::AfterStateMismatch)
         );
@@ -470,21 +515,34 @@ mod tests {
         assert_eq!(pages, original);
 
         transition = plan_insert_blank_page_after_v1(
-            document_id(), &before, &original, &[a], a, identity(),
+            document_id(),
+            &before,
+            &original,
+            &[a],
+            a,
+            identity(),
             page(identity().page_id, 1_000_000),
         )
         .expect("plan again");
         apply_insert_blank_page_after_forward_v1(
-            document_id(), &mut order, &mut pages, &transition,
+            document_id(),
+            &mut order,
+            &mut pages,
+            &transition,
         )
         .expect("forward");
-        pages.get_mut(&identity().page_id).expect("destination").children.push(
-            NodeId::from_canonical(CanonicalId::from_bytes([0x55; 16]))
-        );
+        pages
+            .get_mut(&identity().page_id)
+            .expect("destination")
+            .children
+            .push(NodeId::from_canonical(CanonicalId::from_bytes([0x55; 16])));
         let before_inverse = pages.clone();
         assert_eq!(
             apply_insert_blank_page_after_inverse_v1(
-                document_id(), &mut order, &mut pages, &transition,
+                document_id(),
+                &mut order,
+                &mut pages,
+                &transition,
             ),
             Err(InsertBlankPageAfterErrorV1::PageStateMismatch)
         );
