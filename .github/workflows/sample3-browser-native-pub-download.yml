@@ -121,17 +121,72 @@ jobs:
           from pathlib import Path
           root = Path(".sample3-positive")
           raw = json.loads((root / "viewer-raw.json").read_text())
+          # Keep the original current Reader receipt intact on disk. Only
+          # admit a partial, visibly disclosed Scene if the edited Story has
+          # no relation to any table Story. Never flatten or reclassify cells.
           tables = raw.pop("tables", [])
-          if tables != []:
-              raise SystemExit(
-                  "Sample3 has nonempty Reader table semantics not admitted "
-                  "by source-neutral Viewer schema; no lossy test normalization"
-              )
+          if not isinstance(tables, list):
+              raise SystemExit("Reader tables carrier is not an array")
+          stories = raw.get("document", {}).get("stories", [])
+          targets = [
+              item["id"] for item in stories
+              if isinstance(item, dict) and "345678" in item.get("text", "")
+          ]
+          if len(targets) != 1:
+              raise SystemExit("no unique real Reader Story marker in Sample3")
+          target = targets[0]
+          all_stories = {item["id"] for item in stories}
+          node_ids = {item["origin"] for item in raw["scene"]["nodes"]}
+          rows = []
+          for table in tables:
+              if (
+                  not isinstance(table, dict)
+                  or not isinstance(table.get("story_id"), str)
+                  or table["story_id"] not in all_stories
+                  or not isinstance(table.get("node_id"), str)
+                  or table["node_id"] not in node_ids
+                  or not isinstance(table.get("cells"), list)
+                  or not isinstance(table.get("rows"), int)
+                  or not isinstance(table.get("columns"), int)
+              ):
+                  raise SystemExit("Reader table identity/topology is not verifiable")
+              if table["story_id"] == target:
+                  raise SystemExit(
+                      "target SYID Story belongs to an actual Table; generic Story "
+                      "editor must not bypass table cell boundaries"
+                  )
+              rows.append({
+                  "node_id": table["node_id"],
+                  "story_id": table["story_id"],
+                  "rows": table["rows"],
+                  "columns": table["columns"],
+                  "cell_count": len(table["cells"]),
+              })
+          if tables:
+              # The current source-neutral Scene has no cell carrier. Mark
+              # explicit Partial fidelity; Writer still preserves all CFB
+              # contents and is separately Publisher-SHA fenced.
+              raw.setdefault("document", {}).setdefault("diagnostics", []).append({
+                  "code": "viewer.table.unprojected_in_sample3_story_ui",
+                  "severity": "fidelity_warning",
+                  "message": "Source table cells are not rendered by this bounded Story editing view.",
+              })
+          (root / "sample3-table-dependency.json").write_text(
+              json.dumps({
+                  "source": "exact_public_Sample3",
+                  "target_story_id": target,
+                  "tables": rows,
+                  "target_table_dependency": False,
+                  "browser_table_projection": "partial_not_rendered" if rows else "not_applicable",
+              }, indent=2),
+              encoding="utf-8",
+          )
           (root / "viewer-geometry.json").write_text(
               json.dumps(raw, ensure_ascii=False, separators=(",", ":")),
               encoding="utf-8",
           )
-          print({"viewer_extra_tables": "empty_only", "source_semantics_dropped": False})
+          print({"viewer_extra_tables": len(rows), "edited_story_table_owned": False,
+                 "browser_fidelity": "partial" if rows else "unchanged"})
           PY
           python tools/validate_viewer_geometry_receipt.py \
             .sample3-positive/viewer-geometry.json
@@ -174,3 +229,4 @@ jobs:
             .sample3-positive/runtime/sample3-ui-pub-download.json
             .sample3-positive/runtime/accepted.json
             .sample3-positive/runtime/baseline.json
+            .sample3-positive/sample3-table-dependency.json
