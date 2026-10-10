@@ -17,7 +17,6 @@ mod session_image;
 mod session_table;
 use session_table::apply_table_cell_state;
 mod session_text;
-pub use session_text::EditorProjectFontReopenGrantV1;
 use session_geometry::{
     append_blank_page_error_to_editor_v1, apply_authored_line_inverse,
     apply_authored_rectangle_page_history_candidate_v1, apply_authored_shape_delete_forward,
@@ -35,10 +34,11 @@ use session_geometry::{
 use session_image::{
     apply_crop_forward, apply_crop_inverse, apply_image_forward, apply_image_inverse,
 };
+pub use session_text::EditorProjectFontReopenGrantV1;
 use session_text::{
     apply_text_format_history_operation_semantic_v1, apply_text_format_history_operation_v1,
-    is_scoped_text_format_operation_v1, text_format_operation_property_v1,
-    text_format_operation_story_id_v1,
+    is_scoped_text_format_operation_v1, replay_project_operation_with_font_grants_v1 as replay_font,
+    text_format_operation_property_v1, text_format_operation_story_id_v1,
 };
 mod table_rowcol_graph_v1;
 mod table_rowcol_history_v1;
@@ -4176,9 +4176,7 @@ impl EditorSession {
             return Err(EditorProjectError::AssetMetadataNonCanonical);
         }
         for (index, expected) in project.operations.iter().enumerate() {
-            let actual = session_text::replay_project_operation_with_font_grants_v1(
-                &mut candidate, expected, index, project, font_grants,
-            )?;
+            let actual = replay_font(&mut candidate, expected, index, project, font_grants)?;
             if &actual != expected {
                 return Err(EditorProjectError::OperationMismatch { index });
             }
