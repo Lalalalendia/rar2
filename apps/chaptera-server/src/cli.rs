@@ -80,6 +80,18 @@ pub enum Command {
         #[arg(long)]
         expected_project_sha256: String,
     },
+    /// Materialize an exact Product revision chain in a confined process.
+    #[command(name = "product-isolated-materialize", hide = true)]
+    ProductIsolatedMaterialize {
+        #[arg(long)]
+        document_id: String,
+        #[arg(long)]
+        expected_sha256: String,
+        #[arg(long)]
+        expected_byte_len: u64,
+        #[arg(long)]
+        replay_json: PathBuf,
+    },
     #[command(hide = true)]
     GuestReaderScene {
         #[arg(long)]
@@ -182,6 +194,23 @@ mod tests {
             .unwrap()
             .command,
             Command::ProductIsolatedReplay { .. }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "chaptera",
+                "product-isolated-materialize",
+                "--document-id",
+                "document-one",
+                "--expected-sha256",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "--expected-byte-len",
+                "1024",
+                "--replay-json",
+                "/tmp/replay.json",
+            ])
+            .unwrap()
+            .command,
+            Command::ProductIsolatedMaterialize { .. }
         ));
         assert!(matches!(
             Cli::try_parse_from(["chaptera", "migrate", "status"])
