@@ -1,0 +1,41 @@
+{
+  "evidence": [
+    {
+      "kind": "scenario",
+      "pr": 2496,
+      "run_id": 38004934821,
+      "claim": "Sample3: реальный Chromium Story edit → Publisher-approved PUB download с отрицательными контролями",
+      "limit": "только закреплённый Sample3 и один разрешённый вариант Story, не произвольный PUB",
+      "required_steps": [
+        "Prove real Chaptera UI Story edit through Publisher-approved Download PUB",
+        "Prove one-unit Story through real Chromium editor and approved Publisher bytes",
+        "Reject adjacent unapproved two-unit Story on exact same source",
+        "Prove pinned Newsletter still rejects unauthorized native PUB download"
+      ]
+    },
+    {
+      "kind": "scenario",
+      "pr": 2492,
+      "run_id": 38002020135,
+      "claim": "Sample3 real UI Story edit → exact Publisher-approved Download PUB",
+      "limit": "одна закреплённая fixture",
+      "required_steps": [
+        "Prove real Chaptera UI Story edit through Publisher-approved Download PUB"
+      ]
+    },
+    {
+      "kind": "visual",
+      "pr": 2433,
+      "run_id": 37933908096,
+      "claim": "Reader exact022 candidate pixel A/B",
+      "limit": "Нет автоматического подтверждения чисел из распакованного парного receipt"
+    },
+    {
+      "kind": "visual",
+      "pr": 2408,
+      "run_id": 37925617794,
+      "claim": "PDF page-order A/B",
+      "limit": "Смешанный результат и неопределённая эталонная поверхность"
+    }
+  ]
+}
