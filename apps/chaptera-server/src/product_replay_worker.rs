@@ -1442,7 +1442,10 @@ mod tests {
         }
     }
 
-    fn source_authority_for(source_sha256: &str, baseline_revision_id: &str) -> crate::revision_materializer::AuthorizedDocumentSource {
+    fn source_authority_for(
+        source_sha256: &str,
+        baseline_revision_id: &str,
+    ) -> crate::revision_materializer::AuthorizedDocumentSource {
         crate::revision_materializer::AuthorizedDocumentSource {
             tenant_id: "tenant-a".to_owned(),
             document_id: "document-a".to_owned(),
@@ -1468,10 +1471,8 @@ mod tests {
     fn host_rejects_isolated_project_bound_to_another_source() {
         let source = source_authority_for(&"a".repeat(64), "revision-baseline");
         let project = project_for_source(&"b".repeat(64));
-        let receipt = materialization_receipt_for(
-            project.clone(),
-            project_sha256(&project).unwrap(),
-        );
+        let receipt =
+            materialization_receipt_for(project.clone(), project_sha256(&project).unwrap());
         let error = validate_host_materialization_binding(
             &source,
             &[],
@@ -1479,17 +1480,18 @@ mod tests {
             &receipt,
         )
         .unwrap_err();
-        assert_eq!(error.code, "product_materialization_project_source_mismatch");
+        assert_eq!(
+            error.code,
+            "product_materialization_project_source_mismatch"
+        );
     }
 
     #[test]
     fn host_rejects_self_consistent_project_that_disagrees_with_durable_edge_state() {
         let source = source_authority_for(&"a".repeat(64), "revision-baseline");
         let project = project_for_source(&"a".repeat(64));
-        let receipt = materialization_receipt_for(
-            project.clone(),
-            project_sha256(&project).unwrap(),
-        );
+        let receipt =
+            materialization_receipt_for(project.clone(), project_sha256(&project).unwrap());
         let edge = RevisionEdge {
             document_id: "document-a".to_owned(),
             parent_revision: "revision-baseline".to_owned(),
