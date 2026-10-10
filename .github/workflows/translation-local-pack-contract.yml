@@ -1,0 +1,31 @@
+name: Translation local pack parser contract
+
+on:
+  push:
+    branches:
+      - research/translation-local-source-pack-20261010
+    paths:
+      - research/translation_pilot/**
+      - .github/workflows/translation-local-pack-contract.yml
+  pull_request:
+    paths:
+      - research/translation_pilot/**
+      - .github/workflows/translation-local-pack-contract.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-parser-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned dependencies
+        run: python -m pip install requests==2.32.3 beautifulsoup4==4.12.3
+      - name: Test synthetic chapter export and integrity guards
+        run: python -m unittest discover -s research/translation_pilot -p 'test_*.py' -v
