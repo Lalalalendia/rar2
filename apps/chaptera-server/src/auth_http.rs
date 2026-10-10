@@ -5,11 +5,12 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{Query, State},
+    extract::{Query, Request, State},
     http::{
-        HeaderMap, StatusCode,
-        header::{HOST, ORIGIN},
+        HeaderMap, HeaderValue, StatusCode,
+        header::{CACHE_CONTROL, HOST, ORIGIN},
     },
+    middleware::{self, Next},
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
 };
@@ -145,6 +146,19 @@ pub fn router(state: AuthHttpState) -> Router {
         .route("/v1/session", get(session))
         .route("/v1/auth/logout", post(logout))
         .with_state(state)
+        .layer(middleware::from_fn(auth_private_response))
+}
+
+// Auth and CSRF responses are never eligible for caches or referrer leakage.
+async fn auth_private_response(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    response
 }
 
 #[derive(Debug, Deserialize)]
@@ -460,9 +474,86 @@ fn now_ms_i64() -> Result<i64, AuthHttpError> {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::HeaderValue;
+    use axum::{
+        body::Body,
+        http::{HeaderValue, Request},
+    };
+    use tower::ServiceExt;
+
+    use crate::{
+        oidc_authn::OidcVerifiedIdentity,
+        schema_migration::SqliteMigrationRuntime,
+    };
 
     use super::*;
+
+    #[tokio::test]
+    async fn auth_router_never_caches_session_csrf_or_callback_responses() {
+        let path = std::env::temp_dir().join(format!(
+            "chaptera-auth-response-{}-{}.sqlite",
+            std::process::id(),
+            now_ms_i64().unwrap()
+        ));
+        SqliteMigrationRuntime::new(&path, Duration::from_secs(2))
+            .unwrap()
+            .migrate_up()
+            .await
+            .unwrap();
+        let authn = SqliteAuthnStore::open(&path, 4, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let policy =
+            SessionPolicy::new(Duration::from_secs(600), Duration::from_secs(3600)).unwrap();
+        let issued = issue_verified_login_session(
+            &authn,
+            OidcVerifiedIdentity {
+                issuer: "https://issuer.example.test".to_owned(),
+                subject: "subject-private-auth-response".to_owned(),
+                email_snapshot: None,
+                return_path: "/".to_owned(),
+            },
+            now_ms_i64().unwrap(),
+            policy,
+        )
+        .await
+        .unwrap();
+        let app = router(
+            AuthHttpState::api_test(authn.clone(), policy, "https://cloud.example.test").unwrap(),
+        );
+
+        // Covers successful sensitive JSON, missing-session errors,
+        // a rejected callback and a denied logout. All must be uncacheable.
+        for (method, path, attach_cookie, expected) in [
+            ("GET", "/v1/session", true, StatusCode::OK),
+            ("GET", "/v1/session", false, StatusCode::UNAUTHORIZED),
+            ("GET", "/v1/auth/callback", false, StatusCode::BAD_REQUEST),
+            ("POST", "/v1/auth/logout", true, StatusCode::FORBIDDEN),
+        ] {
+            let mut builder = Request::builder()
+                .method(method)
+                .uri(path)
+                .header(HOST, "cloud.example.test");
+            if attach_cookie {
+                builder = builder.header(
+                    "cookie",
+                    format!("{SESSION_COOKIE}={}", issued.session_token),
+                );
+            }
+            let response = app
+                .clone()
+                .oneshot(builder.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected, "{method} {path}");
+            assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+            assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+        }
+
+        authn.close().await;
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{}", path.display(), suffix));
+        }
+    }
 
     #[test]
     fn session_cookie_is_host_only_secure_http_only_and_lax() {
