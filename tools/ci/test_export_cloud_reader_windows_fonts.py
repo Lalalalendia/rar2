@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import struct
 import sys
@@ -168,6 +169,93 @@ def test_ambiguous_family_fails(tmp: Path) -> None:
         raise AssertionError("duplicate Regular faces must fail closed")
 
 
+def test_private_requirements_regular_only_fence(tmp: Path) -> None:
+    private_module = MODULE_PATH.parent / "pub_source_font_requirements_v1.py"
+    source_spec = importlib.util.spec_from_file_location("source_requirements", private_module)
+    assert source_spec and source_spec.loader
+    module = importlib.util.module_from_spec(source_spec)
+    sys.modules[source_spec.name] = module
+    source_spec.loader.exec_module(module)
+    source_sha = "a" * 64
+    story_id = "15613e56-726e-5ae7-8c54-ec876c9bcfda"
+    text = "Hello!"
+    proof = hashlib.sha256(text.encode()).hexdigest()
+    def run(start: int, end: int, family: str, bold: bool) -> dict:
+        return {
+            "story_id": story_id, "scalar_start": start, "scalar_end": end,
+            "source_story_text_sha256": proof, "source_font_name": family,
+            "bold": {"effective_value": bold},
+            "italic": {"effective_value": False},
+        }
+    viewer = {
+        "schema_version": "0.1",
+        "document": {
+            "source": {"format": "pub", "source_hash": source_sha},
+            "stories": [{"id": story_id, "text": text}],
+        },
+        "story_frames": [{"story_id": story_id, "frame_id": story_id}],
+        "typography_runs": [
+            run(0, 3, "Example Serif", False),
+            run(3, 6, "Example Sans", True),
+        ],
+        "script_font_maps": [{
+            "story_id": story_id, "scalar_start": 0, "scalar_end": 6,
+            "source_story_text_sha256": proof, "entries": [
+                {"script_slot": 2, "source_font_index": 7,
+                 "source_font_name": "Example Serif", "disposition": "resolved"},
+                {"script_slot": 2, "source_font_index": 8,
+                 "source_font_name": "Example Sans", "disposition": "resolved"},
+            ],
+        }],
+    }
+    requirements = module.source_font_requirements_v1(viewer)
+    plan = tmp / "requirements.json"
+    plan.write_text(json.dumps(requirements), encoding="utf-8")
+    font_dir = tmp / "installed-private-fonts"
+    font_dir.mkdir()
+    for family in ("Example Serif", "Example Sans"):
+        (font_dir / (family.replace(" ", "") + ".ttf")).write_bytes(standalone_font(family))
+
+    families, source = font_export.read_private_source_requirements(plan)
+    assert set(families) == {"Example Serif", "Example Sans"}
+    assert source["source_sha256"] == source_sha
+    assert source["partial_style_or_source_coverage"] is True
+    blocked = tmp / "blocked"
+    assert font_export.main([
+        "--requirements", str(plan), "--font-dir", str(font_dir),
+        "--output-dir", str(blocked),
+    ]) == 2
+    assert not blocked.exists(), "incomplete style gate must precede font copying"
+
+    out = tmp / "private-partial"
+    assert font_export.main([
+        "--requirements", str(plan), "--font-dir", str(font_dir),
+        "--output-dir", str(out), "--allow-incomplete-styles",
+    ]) == 0
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert len(manifest["resources"]) == 2
+    metadata = manifest["publisher_source_requirements"]
+    assert metadata["source_sha256"] == source_sha
+    assert metadata["source_family_requirements_only"] is True
+    assert metadata["partial_style_or_source_coverage"] is True
+    assert metadata["regular_only_packet"] is True
+    assert metadata["private_licensed_source_face_mapping_unverified"] is True
+    assert metadata["publisher_visual_parity_verified"] is False
+    assert metadata["fixed_pdf_allowed"] is False
+    for record in manifest["resources"]:
+        assert (out / record["packet_file"]).is_file()
+
+    fake = json.loads(plan.read_text(encoding="utf-8"))
+    fake["fixed_pdf_allowed"] = True
+    plan.write_text(json.dumps(fake), encoding="utf-8")
+    try:
+        font_export.read_private_source_requirements(plan)
+    except font_export.FontPacketError as exc:
+        assert "falsely authorized" in str(exc)
+    else:
+        raise AssertionError("source font names must never authorize a PDF or Publisher layout")
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
@@ -179,6 +267,7 @@ def main() -> None:
             ("packet", test_packet_generation),
             ("cloud_path_fence", test_cloud_path_fence),
             ("ambiguous", test_ambiguous_family_fails),
+            ("requirements", test_private_requirements_regular_only_fence),
         ]:
             case = root / name
             case.mkdir()

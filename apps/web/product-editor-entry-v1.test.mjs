@@ -11,18 +11,6 @@ test("editor path admits one canonical document identity",()=>{
   assert.equal(documentIdFromEditorPath("/reader/doc/"+DOC),null);
 });
 
-test("project-from-upload DocumentId is accepted without changing persistent identities",()=>{
-  // Mirrors project_persistence_sqlite::stable_id("document", tenant, request).
-  const persisted = "document:" + "0123456789abcdef01234567";
-  assert.equal(documentIdFromEditorPath("/editor/doc/" + persisted), persisted);
-  assert.equal(documentIdFromEditorPath("/editor/doc/" + persisted + "/"), persisted);
-  assert.equal(documentIdFromEditorPath("/editor/doc/document:" + "a".repeat(23)), null);
-  assert.equal(documentIdFromEditorPath("/editor/doc/document:" + "a".repeat(25)), null);
-  assert.equal(documentIdFromEditorPath("/editor/doc/document:" + "A".repeat(24)), null);
-  assert.equal(documentIdFromEditorPath("/editor/doc/" + persisted + "/extra"), null);
-  assert.equal(documentIdFromEditorPath("/editor/doc/%2e%2e%2fadmin"), null);
-});
-
 test("login return stays same-origin relative",()=>{
   assert.equal(
     loginUrlForReturnPath("/editor/doc/"+DOC+"?mode=move"),
@@ -60,4 +48,16 @@ test("pending, rejected and uncertain edits are not presented as a saved revisio
   assert.equal(confirmed.kind, "ok");
   assert.equal(confirmed.status, "Revision sha256:child · selected");
   assert.equal(confirmed.fidelity, "Fidelity: supported");
+});
+
+
+test("SourceIngress persisted document identity opens through the same Editor page", () => {
+  const sourceDocument = "document:c54c2429d0bf699b890aab84";
+  assert.equal(documentIdFromEditorPath("/editor/doc/" + sourceDocument), sourceDocument);
+  assert.equal(documentIdFromEditorPath("/editor/doc/" + encodeURIComponent(sourceDocument)), sourceDocument);
+  assert.equal(documentIdFromEditorPath("/editor/doc/" + sourceDocument.toUpperCase()), null);
+  assert.equal(documentIdFromEditorPath("/editor/doc/document:123"), null);
+  assert.equal(documentIdFromEditorPath("/editor/doc/document:%2F%2Fevil.invalid"), null);
+  assert.equal(documentIdFromEditorPath("/editor/doc/%GG"), null);
+  assert.equal(documentIdFromEditorPath("/editor/doc/" + sourceDocument + "/extra"), null);
 });
