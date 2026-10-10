@@ -253,6 +253,7 @@ def read_private_source_requirements(path: Path) -> tuple[list[str], dict]:
     families: list[str] = []
     lower_names = set()
     incomplete_styles = False
+    missing_quill_indices = 0
     for item in items:
         if not isinstance(item, dict):
             raise FontPacketError("malformed source family requirement")
@@ -266,8 +267,14 @@ def read_private_source_requirements(path: Path) -> tuple[list[str], dict]:
         if key in lower_names:
             raise FontPacketError("ambiguous normalized family names in source requirements")
         lower_names.add(key)
-        if not isinstance(item.get("source_font_index_candidates"), list):
-            raise FontPacketError("source Quill font index candidates are required")
+        indices = item.get("source_font_index_candidates")
+        if (not isinstance(indices, list) or any(
+            type(index) is not int or not 0 <= index <= 65535 for index in indices
+        ) or indices != sorted(set(indices))):
+            raise FontPacketError("source Quill font index candidates are malformed")
+        if item.get("source_quill_index_proven") is not bool(indices):
+            raise FontPacketError("source font index proof contradicted by source family requirements")
+        missing_quill_indices += not bool(indices)
         styles = item.get("effective_style_run_counts")
         if not isinstance(styles, dict):
             raise FontPacketError("source run style counts are required")
@@ -282,8 +289,11 @@ def read_private_source_requirements(path: Path) -> tuple[list[str], dict]:
         )
         if item.get("needs_non_regular_style") is not needs_non_regular:
             raise FontPacketError("source font style requirements contradict Reader evidence")
-        incomplete_styles |= needs_non_regular or bool(styles.get("unknown", 0))
+        incomplete_styles |= needs_non_regular or bool(styles.get("unknown", 0)) or not bool(indices)
         families.append(family)
+    if (type(packet.get("source_families_without_quill_index_count")) is not int
+            or packet["source_families_without_quill_index_count"] != missing_quill_indices):
+        raise FontPacketError("source Quill-index gap count disagrees with family requirements")
     if (type(packet.get("unresolved_source_family_run_count")) is not int
             or packet["unresolved_source_family_run_count"] < 0
             or type(packet.get("unknown_effective_style_run_count")) is not int
