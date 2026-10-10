@@ -30,6 +30,7 @@ TOOLS = ROOT / "tools"
 sys.path.insert(0, str(TOOLS))
 
 from adapt_viewer_scene_v1 import adapt_viewer_geometry
+from scene_v1 import finalize_snapshot
 from resolved_graph_scene_bridge_v1 import (
     apply_project_to_resolved_graph,
     compare_viewer_and_adapter_scene,
@@ -427,6 +428,16 @@ class RealAcceptanceState:
             story["text"] = graph_story["text"]
 
         browser_scene = adapt_viewer_geometry(current_viewer, self.document_id, revision_id)
+        if self.fixture_profile == "newsletter-font" and project["operations"]:
+            # Canonical authoring changed, but no glyph metrics or frame flow
+            # was recalculated. Make the product fidelity gate explicit in
+            # every Scene revision and fresh reopen; never render as complete.
+            browser_scene["fidelity"]["state"] = "partial"
+            browser_scene["fidelity"]["reasons"] = sorted(set(
+                browser_scene["fidelity"]["reasons"]
+                + ["font_resource_layout_not_implemented"]
+            ))
+            browser_scene = finalize_snapshot(browser_scene)
         return bind_font_set_to_scene(browser_scene, self.pinned_abel)
 
     def _run_font_worker(
