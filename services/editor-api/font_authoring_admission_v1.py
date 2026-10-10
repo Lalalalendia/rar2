@@ -152,7 +152,7 @@ def issue_font_authoring_admission_v1(
         if not isinstance(descriptor.get("fetch_handle"), str) or not descriptor["fetch_handle"]:
             _denied("exact_font_delivery_handle_missing")
         trusted = registry.get(rid)
-        if trusted is None or not trusted.authoring_admitted:
+        if trusted is None or trusted.authoring_admitted is not True:
             continue
         trusted_identity = _identity({
             "resource_id": trusted.resource_id,
@@ -162,7 +162,7 @@ def issue_font_authoring_admission_v1(
         })
         if identity != trusted_identity:
             _denied("trusted_font_resource_identity_mismatch")
-        if not trusted.parser_verified or not trusted.is_full_resource:
+        if trusted.parser_verified is not True or trusted.is_full_resource is not True:
             continue
         if (
             type(trusted.face_count) is not int
