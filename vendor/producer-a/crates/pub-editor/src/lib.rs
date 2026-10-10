@@ -17,6 +17,7 @@ mod session_image;
 mod session_table;
 use session_table::apply_table_cell_state;
 mod session_text;
+pub use session_text::EditorProjectFontReopenGrantV1;
 use session_geometry::{
     append_blank_page_error_to_editor_v1, apply_authored_line_inverse,
     apply_authored_rectangle_page_history_candidate_v1, apply_authored_shape_delete_forward,
@@ -3454,14 +3455,14 @@ impl EditorSession {
         self.apply_project_with_assets(project, &BTreeMap::new())
     }
 
-    pub fn apply_project_with_assets(
+    pub fn apply_project_with_admitted_font_resources_v1(
         &mut self,
         project: &EditorProject,
         asset_bytes: &BTreeMap<Sha256Digest, Vec<u8>>,
+        font_grants: &[EditorProjectFontReopenGrantV1<'_>],
     ) -> Result<(), EditorProjectError> {
         self.validate_source_identity()
             .map_err(EditorProjectError::Session)?;
-
         // v0.28/v0.29 preserve v0.27 admissions; each adds a fenced operation.
         let legacy_compatible_schema: &str = if project.schema_version
             == EDITOR_PROJECT_VERSION_V0_28
@@ -3471,7 +3472,6 @@ impl EditorSession {
         } else {
             &project.schema_version
         };
-
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
@@ -4140,7 +4140,6 @@ impl EditorSession {
                 return Err(EditorProjectError::AssetReachabilityMismatch { expected, found });
             }
         }
-
         let mut candidate = self.clone();
         candidate.project_identity = project.identity.clone();
         for (index, metadata) in project.assets.iter().enumerate() {
@@ -4176,9 +4175,10 @@ impl EditorSession {
         if canonical_editor_asset_metadata(&candidate.replacement_assets) != project.assets {
             return Err(EditorProjectError::AssetMetadataNonCanonical);
         }
-
         for (index, expected) in project.operations.iter().enumerate() {
-            let actual = replay_canonical_operation(&mut candidate, expected, index)?;
+            let actual = session_text::replay_project_operation_with_font_grants_v1(
+                &mut candidate, expected, index, project, font_grants,
+            )?;
             if &actual != expected {
                 return Err(EditorProjectError::OperationMismatch { index });
             }
