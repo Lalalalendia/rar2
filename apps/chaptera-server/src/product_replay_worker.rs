@@ -30,7 +30,7 @@ use crate::{
         ExactSourceLoader, MATERIALIZATION_RECEIPT_SCHEMA_V1, PubEditorReplayEngine,
         RevisionMaterializerError, project_sha256, validate_authorized_source,
     },
-    source_baseline::SourceBaselineProducerConfig,
+    source_baseline::{SourceBaselineProducerConfig, derive_import_baseline_identities},
     sqlite_store::{RevisionEdge, SqliteRevisionStore},
 };
 
@@ -1180,6 +1180,44 @@ impl ExactRevisionMaterializerPort for IsolatedExactRevisionMaterializer {
             .require_revision_identity(document_id, requested_revision_id)
             .await
             .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+
+        if isolated.project.source_hash.to_string() != source.source_sha256 {
+            return Err(RevisionMaterializerError::new(
+                "product_materialization_project_source_mismatch",
+                "isolated materialized project is bound to a different immutable source",
+            ));
+        }
+        if !isolated.project.assets.is_empty() {
+            return Err(RevisionMaterializerError::new(
+                "editor_asset_replay_unsupported",
+                "isolated materialized project contains unresolved external assets",
+            ));
+        }
+        if let Some(last_edge) = edges.last() {
+            if isolated.project_sha256 != last_edge.resulting_state_hash {
+                return Err(RevisionMaterializerError::new(
+                    "product_materialization_state_hash_mismatch",
+                    "isolated materialized project differs from durable RevisionStream state",
+                ));
+            }
+        } else {
+            let baseline = derive_import_baseline_identities(
+                document_id,
+                &source.source_sha256,
+                &isolated.project.schema_version,
+                &isolated.project,
+            )
+            .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+            if baseline.project_hash != isolated.project_sha256
+                || baseline.service_revision_id != source.baseline_revision_id
+                || baseline.canonical_authoring_revision_id != identity.canonical_revision_id
+            {
+                return Err(RevisionMaterializerError::new(
+                    "product_materialization_baseline_identity_mismatch",
+                    "isolated baseline project differs from durable baseline identity",
+                ));
+            }
+        }
 
         let receipt = ExactRevisionMaterializationReceipt {
             schema_version: MATERIALIZATION_RECEIPT_SCHEMA_V1.to_owned(),
