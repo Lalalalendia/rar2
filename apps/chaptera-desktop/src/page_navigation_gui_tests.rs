@@ -2635,7 +2635,10 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
             ])
         );
         assert_eq!(
-            painted.solid_line.as_ref().map(|line| (line.rgb, line.width_emu)),
+            painted
+                .solid_line
+                .as_ref()
+                .map(|line| (line.rgb, line.width_emu)),
             source_shape.paint.stroke.visible.then_some((
                 [
                     source_shape.paint.stroke.color.r,
