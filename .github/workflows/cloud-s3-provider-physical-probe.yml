@@ -15,7 +15,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.CHAPTERA_S3_PROBE_SECRET_ACCESS_KEY }}
       AWS_SESSION_TOKEN: ${{ secrets.CHAPTERA_S3_PROBE_SESSION_TOKEN }}
       AWS_REGION: ${{ vars.CHAPTERA_S3_PROBE_REGION }}
-      AWS_ENDPOINT_URL_S3: ${{ vars.CHAPTERA_S3_PROBE_ENDPOINT_URL }}
+      CHAPTERA_S3_PROBE_ENDPOINT_URL: ${{ vars.CHAPTERA_S3_PROBE_ENDPOINT_URL }}
       CHAPTERA_S3_QUARANTINE_BUCKET: ${{ vars.CHAPTERA_S3_PROBE_QUARANTINE_BUCKET }}
       CHAPTERA_S3_PRIVATE_BUCKET: ${{ vars.CHAPTERA_S3_PROBE_PRIVATE_BUCKET }}
       CHAPTERA_S3_EXPECTED_BUCKET_OWNER: ${{ vars.CHAPTERA_S3_PROBE_EXPECTED_BUCKET_OWNER }}
@@ -39,6 +39,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/cloud-s3-provider-probe
+          if [ -n "${CHAPTERA_S3_PROBE_ENDPOINT_URL:-}" ]; then
+            export AWS_ENDPOINT_URL_S3="$CHAPTERA_S3_PROBE_ENDPOINT_URL"
+          fi
           cargo run -p chaptera-server --example cloud_blob_provider_probe --quiet > target/cloud-s3-provider-probe/receipt.json
           python - <<'PY'
           import json
