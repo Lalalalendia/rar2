@@ -2779,6 +2779,489 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
 #[cfg(not(feature = "reader-only"))]
 #[test]
 #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
+fn gui_duplicate_authored_rectangles_page_v031_click_undo_redo_reopen_real_pub() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let fixture_source = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
+        .map(PathBuf::from)
+        .expect("CHAPTERA_SAMPLE_NEWSLETTER must name the pinned Apache POI fixture");
+    let original = fs::read(&fixture_source).expect("read pinned SampleNewsletter source");
+    let root = std::env::temp_dir().join(format!(
+        "chaptera-gui-duplicate-multi-rectangle-page-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create GUI multi-duplicate temp directory");
+    let fixture = root.join("SampleNewsletter.pub");
+    fs::write(&fixture, &original).expect("copy immutable source PUB");
+
+    let path = fixture.clone();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 820.0))
+        .with_pixels_per_point(1.0)
+        .with_max_steps(180)
+        .build_eframe(move |cc| {
+            fallback_font::install(&cc.egui_ctx)
+                .expect("pinned Chaptera fallback font must validate");
+            ViewerApp::new_with_storage(Some(path), cc.storage)
+        });
+    harness.step();
+    harness.step();
+
+    let source_pages = harness.state().source_customer_page_ids.clone();
+    assert!(
+        !source_pages.is_empty(),
+        "real PUB must expose customer Pages"
+    );
+    assert!(
+        harness
+            .get_by_label("Duplicate Multi-Rectangle Page")
+            .is_disabled(),
+        "imported source-backed Page must fail multi-Rectangle admission"
+    );
+
+    harness.get_by_label("Add Page at End").click();
+    harness.step();
+    harness.step();
+    let authored_page_id = {
+        let app = harness.state();
+        match app.editor.as_ref().expect("editor").operations().last() {
+            Some(pub_editor::EditOperation::AppendBlankPageV1 { transition }) => {
+                transition.identity.page_id
+            }
+            other => panic!("expected canonical AppendBlankPageV1: {other:?}"),
+        }
+    };
+    assert!(
+        harness
+            .get_by_label("Duplicate Multi-Rectangle Page")
+            .is_disabled(),
+        "blank Page must not pass multi-Rectangle duplicate"
+    );
+
+    let source_node_a = pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
+    let source_node_b = pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
+    {
+        let app = harness.state_mut();
+        let size = app.editor.as_ref().expect("editor").graph().pages[&authored_page_id].size;
+        let paint_a = rectangle_creation::chaptera_rectangle_paint_v1();
+        app.editor
+            .as_mut()
+            .expect("editor")
+            .create_shape(
+                source_node_a,
+                authored_page_id,
+                pub_editor::RectEmu::new(
+                    pub_editor::LengthEmu::new(size.width.get() / 7),
+                    pub_editor::LengthEmu::new(size.height.get() / 7),
+                    pub_editor::LengthEmu::new(size.width.get() / 5),
+                    pub_editor::LengthEmu::new(size.height.get() / 5),
+                ),
+                paint_a,
+            )
+            .expect("first direct AuthorCreated Rectangle");
+        app.finish_authoring_change("Seeded first canonical authored Rectangle.");
+    }
+    harness.step();
+    assert!(
+        !harness
+            .get_by_label("Duplicate Rectangle Page")
+            .is_disabled(),
+        "one Rectangle still belongs to the v0.30 command"
+    );
+    assert!(
+        harness
+            .get_by_label("Duplicate Multi-Rectangle Page")
+            .is_disabled(),
+        "one Rectangle must not activate the plural command"
+    );
+
+    {
+        let app = harness.state_mut();
+        let size = app.editor.as_ref().expect("editor").graph().pages[&authored_page_id].size;
+        let mut paint_b = rectangle_creation::chaptera_rectangle_paint_v1();
+        paint_b.fill.color = pub_editor::Srgb8V1 {
+            r: 34,
+            g: 132,
+            b: 211,
+        };
+        paint_b.stroke.color = pub_editor::Srgb8V1 {
+            r: 190,
+            g: 61,
+            b: 44,
+        };
+        paint_b.stroke.width_emu = 25_400;
+        app.editor
+            .as_mut()
+            .expect("editor")
+            .create_shape(
+                source_node_b,
+                authored_page_id,
+                pub_editor::RectEmu::new(
+                    pub_editor::LengthEmu::new(size.width.get() / 2),
+                    pub_editor::LengthEmu::new(size.height.get() / 3),
+                    pub_editor::LengthEmu::new(size.width.get() / 6),
+                    pub_editor::LengthEmu::new(size.height.get() / 4),
+                ),
+                paint_b,
+            )
+            .expect("second direct AuthorCreated Rectangle");
+        app.finish_authoring_change("Seeded second canonical authored Rectangle.");
+    }
+    harness.step();
+    assert!(
+        harness
+            .get_by_label("Duplicate Rectangle Page")
+            .is_disabled(),
+        "the one-Rectangle command must remain fail-closed on multi-object Page"
+    );
+    assert!(
+        !harness
+            .get_by_label("Duplicate Multi-Rectangle Page")
+            .is_disabled(),
+        "two independent authored Rectangles must enable the plural command"
+    );
+
+    let (history_before, source_shapes, source_stack, source_page, source_hash) = {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("editor");
+        (
+            editor.operations().len(),
+            vec![
+                editor
+                    .authored_shape(source_node_a)
+                    .expect("first source shape")
+                    .clone(),
+                editor
+                    .authored_shape(source_node_b)
+                    .expect("second source shape")
+                    .clone(),
+            ],
+            editor
+                .authored_stack(authored_page_id)
+                .expect("source authored stack")
+                .members
+                .clone(),
+            editor.graph().pages[&authored_page_id].clone(),
+            app.visual
+                .as_ref()
+                .expect("Viewer")
+                .document
+                .source
+                .source_hash,
+        )
+    };
+    assert_eq!(source_stack, vec![source_node_a, source_node_b]);
+
+    let wrong_hash = if source_hash == pub_editor::Sha256Digest::from_bytes([0x79; 32]) {
+        pub_editor::Sha256Digest::from_bytes([0x97; 32])
+    } else {
+        pub_editor::Sha256Digest::from_bytes([0x79; 32])
+    };
+    harness
+        .state_mut()
+        .visual
+        .as_mut()
+        .expect("Viewer")
+        .document
+        .source
+        .source_hash = wrong_hash;
+    harness
+        .get_by_label("Duplicate Multi-Rectangle Page")
+        .click();
+    harness.step();
+    harness.step();
+    assert_eq!(
+        harness.state().editor.as_ref().unwrap().operations().len(),
+        history_before,
+        "Viewer preflight mismatch must consume no plural history operation"
+    );
+    harness
+        .state_mut()
+        .visual
+        .as_mut()
+        .expect("Viewer")
+        .document
+        .source
+        .source_hash = source_hash;
+    harness.step();
+
+    harness
+        .get_by_label("Duplicate Multi-Rectangle Page")
+        .click();
+    harness.step();
+    harness.step();
+
+    let (destination_page_id, destination_node_ids, after_history_len) = {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("post-click editor");
+        assert_eq!(editor.operations().len(), history_before + 1);
+        let transition = match editor.operations().last() {
+            Some(pub_editor::EditOperation::DuplicateAuthoredRectanglesPageV1 { transition }) => {
+                transition
+            }
+            other => panic!("real GUI click did not create canonical v0.31 operation: {other:?}"),
+        };
+        assert_eq!(transition.page.source_page_id, authored_page_id);
+        assert_eq!(
+            transition
+                .source_shapes
+                .iter()
+                .map(|shape| shape.node_id)
+                .collect::<Vec<_>>(),
+            vec![source_node_a, source_node_b]
+        );
+        assert_eq!(transition.destination_shapes.len(), 2);
+        let destination_page_id = transition.page.destination_identity.page_id;
+        let destination_node_ids = transition
+            .destination_shapes
+            .iter()
+            .map(|shape| shape.node_id)
+            .collect::<Vec<_>>();
+        assert_ne!(destination_page_id, authored_page_id);
+        assert_ne!(destination_node_ids[0], source_node_a);
+        assert_ne!(destination_node_ids[1], source_node_b);
+        assert_ne!(destination_node_ids[0], destination_node_ids[1]);
+        assert_eq!(editor.graph().pages[&authored_page_id], source_page);
+        for ((source_id, source_shape), destination_id) in [
+            (source_node_a, &source_shapes[0]),
+            (source_node_b, &source_shapes[1]),
+        ]
+        .into_iter()
+        .zip(&destination_node_ids)
+        {
+            assert_eq!(
+                editor.authored_shape(source_id),
+                Some(source_shape),
+                "source Rectangle remains unchanged"
+            );
+            let duplicated = editor
+                .authored_shape(*destination_id)
+                .expect("destination authored Rectangle");
+            assert_eq!(duplicated.page_id, destination_page_id);
+            assert_eq!(duplicated.parent_id, destination_page_id);
+            assert_eq!(duplicated.bounds, source_shape.bounds);
+            assert_eq!(duplicated.paint, source_shape.paint);
+        }
+        assert_eq!(
+            editor
+                .authored_stack(destination_page_id)
+                .expect("destination authored stack")
+                .members,
+            destination_node_ids
+        );
+        let mut expected = source_pages.clone();
+        expected.push(authored_page_id);
+        expected.push(destination_page_id);
+        assert_eq!(
+            editor
+                .effective_customer_page_order_v1(&source_pages)
+                .expect("canonical membership"),
+            expected
+        );
+        let visual = app.visual.as_ref().expect("post-click Viewer");
+        assert_eq!(
+            visual
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            visual.document.pages[app.selected_page].id,
+            destination_page_id
+        );
+        assert!(
+            visual
+                .scene
+                .surfaces
+                .iter()
+                .any(|surface| surface.origin == destination_page_id),
+            "new Page must have a real Viewer surface"
+        );
+        (
+            destination_page_id,
+            destination_node_ids,
+            editor.operations().len(),
+        )
+    };
+
+    let assert_copied_rectangles_are_painted = |app: &ViewerApp| {
+        let visual = app.visual.as_ref().expect("real PUB Viewer");
+        let destination_index = visual
+            .document
+            .pages
+            .iter()
+            .position(|page| page.id == destination_page_id)
+            .expect("visible cloned customer Page");
+        let frame = app
+            .build_page_frame_work(destination_index)
+            .expect("production Desktop canvas render plan");
+        assert_eq!(frame.render_plan.page_id, destination_page_id);
+        for (destination_node_id, source_shape) in destination_node_ids.iter().zip(&source_shapes) {
+            let rendered = frame
+                .render_plan
+                .nodes
+                .iter()
+                .filter(|node| node.node_id == *destination_node_id)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                rendered.len(),
+                1,
+                "each cloned authored Rectangle must appear exactly once in the painted Page lane"
+            );
+            let painted = rendered[0];
+            assert_eq!(painted.bounds, source_shape.bounds);
+            assert_eq!(
+                painted.solid_fill_rgb,
+                source_shape.paint.fill.visible.then_some([
+                    source_shape.paint.fill.color.r,
+                    source_shape.paint.fill.color.g,
+                    source_shape.paint.fill.color.b,
+                ])
+            );
+            assert_eq!(
+                painted
+                    .solid_line
+                    .as_ref()
+                    .map(|line| (line.rgb, line.width_emu)),
+                source_shape.paint.stroke.visible.then_some((
+                    [
+                        source_shape.paint.stroke.color.r,
+                        source_shape.paint.stroke.color.g,
+                        source_shape.paint.stroke.color.b,
+                    ],
+                    source_shape.paint.stroke.width_emu,
+                ))
+            );
+            let instance_id = frame
+                .hit_index
+                .instance_for_node(*destination_node_id)
+                .expect("visible cloned Rectangle must be selectable by canvas hit testing");
+            let hit = frame
+                .hit_index
+                .entry_for_instance(instance_id)
+                .expect("canvas instance must resolve to one hit entry");
+            assert_eq!(hit.node_id, *destination_node_id);
+            assert_eq!(hit.bounds, source_shape.bounds);
+        }
+    };
+    assert_copied_rectangles_are_painted(harness.state());
+
+    harness
+        .get_all_by_label("Undo")
+        .next()
+        .expect("Undo one Page+multi-Rectangle duplicate")
+        .click();
+    harness.step();
+    harness.step();
+    {
+        let editor = harness.state().editor.as_ref().expect("editor after Undo");
+        assert_eq!(editor.operations().len(), history_before);
+        assert!(!editor.graph().pages.contains_key(&destination_page_id));
+        for destination_node_id in &destination_node_ids {
+            assert!(editor.authored_shape(*destination_node_id).is_none());
+        }
+        assert!(editor.authored_stack(destination_page_id).is_none());
+        assert_eq!(
+            editor
+                .authored_stack(authored_page_id)
+                .expect("source stack survives")
+                .members,
+            source_stack
+        );
+    }
+
+    harness
+        .get_all_by_label("Redo")
+        .next()
+        .expect("Redo one Page+multi-Rectangle duplicate")
+        .click();
+    harness.step();
+    harness.step();
+    {
+        let editor = harness.state().editor.as_ref().expect("editor after Redo");
+        assert_eq!(editor.operations().len(), after_history_len);
+        assert!(editor.graph().pages.contains_key(&destination_page_id));
+        for destination_node_id in &destination_node_ids {
+            assert!(editor.authored_shape(*destination_node_id).is_some());
+        }
+    }
+    assert_copied_rectangles_are_painted(harness.state());
+
+    harness.get_by_label("Save Project").click();
+    harness.step();
+    harness.step();
+    {
+        let reopen = harness.get_by_label("Reopen Project");
+        assert!(!reopen.is_disabled(), "v0.31 project must be reopenable");
+        reopen.click();
+    }
+    harness.step();
+    harness.step();
+    harness.step();
+
+    {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("fresh v0.31 session");
+        assert_eq!(
+            editor.project().schema_version,
+            pub_editor::EDITOR_PROJECT_VERSION_V0_31
+        );
+        assert_eq!(editor.operations().len(), after_history_len);
+        assert!(matches!(
+            editor.operations().last(),
+            Some(pub_editor::EditOperation::DuplicateAuthoredRectanglesPageV1 { transition })
+                if transition.page.destination_identity.page_id == destination_page_id
+                    && transition
+                        .destination_shapes
+                        .iter()
+                        .map(|shape| shape.node_id)
+                        .collect::<Vec<_>>()
+                        == destination_node_ids
+        ));
+        for ((source_id, source_shape), destination_node_id) in [
+            (source_node_a, &source_shapes[0]),
+            (source_node_b, &source_shapes[1]),
+        ]
+        .into_iter()
+        .zip(&destination_node_ids)
+        {
+            assert_eq!(editor.authored_shape(source_id), Some(source_shape));
+            assert_eq!(
+                editor
+                    .authored_shape(*destination_node_id)
+                    .map(|shape| (shape.bounds, shape.paint.clone())),
+                Some((source_shape.bounds, source_shape.paint.clone()))
+            );
+        }
+        assert_eq!(
+            app.visual
+                .as_ref()
+                .expect("fresh Viewer")
+                .document
+                .pages
+                .iter()
+                .map(|page| page.id)
+                .next_back(),
+            Some(destination_page_id)
+        );
+    }
+    assert_copied_rectangles_are_painted(harness.state());
+
+    assert_eq!(
+        fs::read(&fixture).expect("read original PUB after v0.31 Save/Reopen"),
+        original,
+        "Desktop v0.31 multi-Rectangle Page duplication must preserve native PUB bytes"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(not(feature = "reader-only"))]
+#[test]
+#[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
 fn gui_delete_authored_rectangles_page_v032_click_undo_redo_reopen_real_pub() {
     use egui_kittest::{Harness, kittest::Queryable};
 
