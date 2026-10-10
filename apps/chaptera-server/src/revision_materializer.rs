@@ -267,6 +267,16 @@ pub struct ExactRevisionMaterializedState {
     pub source_bytes: Vec<u8>,
 }
 
+#[async_trait::async_trait]
+pub trait ExactRevisionMaterializerPort: Send + Sync {
+    async fn materialize_state(
+        &self,
+        tenant_id: &str,
+        document_id: &str,
+        requested_revision_id: &str,
+    ) -> Result<ExactRevisionMaterializedState, RevisionMaterializerError>;
+}
+
 pub struct ExactRevisionMaterializer {
     source_authority: Arc<dyn DocumentSourceAuthority>,
     source_loader: Arc<dyn ExactSourceLoader>,
@@ -332,17 +342,6 @@ impl ExactRevisionMaterializer {
             ));
         }
 
-        let mut current_project = self
-            .editor
-            .baseline_project(&source_bytes, &source.source_sha256)?;
-        require_project_source(&current_project, &source.source_sha256)?;
-        if !current_project.assets.is_empty() {
-            return Err(RevisionMaterializerError::new(
-                "editor_asset_replay_unsupported",
-                "baseline project contains asset metadata without a materialization asset resolver",
-            ));
-        }
-
         let edges = self
             .revision_store
             .load_chain_to_revision(
@@ -354,11 +353,13 @@ impl ExactRevisionMaterializer {
             .await
             .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
 
-        let mut authoring_root_hash = None;
-        for edge in &edges {
-            current_project = self.replay_edge(&source_bytes, &source, current_project, edge)?;
-            authoring_root_hash = edge.authoring_root_hash.clone();
-        }
+        let (current_project, authoring_root_hash) = Self::replay_exact_chain(
+            self.editor.as_ref(),
+            &source_bytes,
+            &source.document_id,
+            source_sha256,
+            &edges,
+        )?;
 
         let project_sha256 = project_sha256(&current_project)?;
         let identity = self
@@ -388,21 +389,60 @@ impl ExactRevisionMaterializer {
         })
     }
 
-    fn replay_edge(
-        &self,
+    pub(crate) fn replay_exact_chain(
+        editor: &dyn EditorReplayEngine,
         source_bytes: &[u8],
-        source: &AuthorizedDocumentSource,
+        document_id: &str,
+        source_sha256: &str,
+        edges: &[RevisionEdge],
+    ) -> Result<(EditorProject, Option<String>), RevisionMaterializerError> {
+        let mut current_project = editor.baseline_project(source_bytes, source_sha256)?;
+        require_project_source(&current_project, source_sha256)?;
+        if !current_project.assets.is_empty() {
+            return Err(RevisionMaterializerError::new(
+                "editor_asset_replay_unsupported",
+                "baseline project contains asset metadata without a materialization asset resolver",
+            ));
+        }
+
+        let mut authoring_root_hash = None;
+        for edge in edges {
+            current_project = Self::replay_edge(
+                editor,
+                source_bytes,
+                document_id,
+                source_sha256,
+                current_project,
+                edge,
+            )?;
+            authoring_root_hash = edge.authoring_root_hash.clone();
+        }
+        Ok((current_project, authoring_root_hash))
+    }
+
+    fn replay_edge(
+        editor: &dyn EditorReplayEngine,
+        source_bytes: &[u8],
+        document_id: &str,
+        source_sha256: &str,
         current_project: EditorProject,
         edge: &RevisionEdge,
     ) -> Result<EditorProject, RevisionMaterializerError> {
-        if edge.document_id != source.document_id {
+        if edge.document_id != document_id {
             return Err(RevisionMaterializerError::new(
                 "revision_document_mismatch",
                 "RevisionStream edge belongs to a different document",
             ));
         }
         if edge.semantic_schema_version == EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION {
-            return self.replay_undo_edge_v2(source_bytes, source, current_project, edge);
+            return Self::replay_undo_edge_v2(
+                editor,
+                source_bytes,
+                document_id,
+                source_sha256,
+                current_project,
+                edge,
+            );
         }
         if edge.semantic_schema_version != EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION {
             return Err(RevisionMaterializerError::new(
@@ -415,7 +455,7 @@ impl ExactRevisionMaterializer {
         }
 
         let event = decode_editor_revision_event_v1(edge)?;
-        if event.source_sha256 != source.source_sha256 {
+        if event.source_sha256 != source_sha256 {
             return Err(RevisionMaterializerError::new(
                 "event_source_mismatch",
                 "revision event is bound to a different immutable source",
@@ -443,9 +483,7 @@ impl ExactRevisionMaterializer {
         }
 
         let candidate = append_event_operation(current_project, event.operation)?;
-        let replayed =
-            self.editor
-                .replay_project(source_bytes, &source.source_sha256, &candidate)?;
+        let replayed = editor.replay_project(source_bytes, source_sha256, &candidate)?;
         if replayed != candidate {
             return Err(RevisionMaterializerError::new(
                 "editor_replay_mismatch",
@@ -471,14 +509,15 @@ impl ExactRevisionMaterializer {
     }
 
     fn replay_undo_edge_v2(
-        &self,
+        editor: &dyn EditorReplayEngine,
         source_bytes: &[u8],
-        source: &AuthorizedDocumentSource,
+        document_id: &str,
+        source_sha256: &str,
         current_project: EditorProject,
         edge: &RevisionEdge,
     ) -> Result<EditorProject, RevisionMaterializerError> {
         let event = decode_editor_history_event_v1(edge)?;
-        if event.source_sha256 != source.source_sha256 {
+        if event.source_sha256 != source_sha256 {
             return Err(RevisionMaterializerError::new(
                 "event_source_mismatch",
                 "history event is bound to a different immutable source",
@@ -499,8 +538,8 @@ impl ExactRevisionMaterializer {
             ));
         }
         let base_state = derive_authoring_state_identity(
-            &edge.document_id,
-            &source.source_sha256,
+            document_id,
+            source_sha256,
             &current_project.schema_version,
             &current_project,
         )
@@ -513,9 +552,7 @@ impl ExactRevisionMaterializer {
         }
 
         let candidate = undo_event_operation(current_project, &event.operation)?;
-        let replayed =
-            self.editor
-                .replay_project(source_bytes, &source.source_sha256, &candidate)?;
+        let replayed = editor.replay_project(source_bytes, source_sha256, &candidate)?;
         if replayed != candidate {
             return Err(RevisionMaterializerError::new(
                 "editor_replay_mismatch",
@@ -538,8 +575,8 @@ impl ExactRevisionMaterializer {
         }
 
         let resulting_state = derive_authoring_state_identity(
-            &edge.document_id,
-            &source.source_sha256,
+            document_id,
+            source_sha256,
             &replayed.schema_version,
             &replayed,
         )
@@ -551,8 +588,8 @@ impl ExactRevisionMaterializer {
             ));
         }
         let identities = derive_history_revision_identities(
-            &edge.document_id,
-            &source.source_sha256,
+            document_id,
+            source_sha256,
             &replayed.schema_version,
             &replayed,
             &edge.parent_revision,
@@ -570,6 +607,24 @@ impl ExactRevisionMaterializer {
         }
 
         Ok(replayed)
+    }
+}
+
+#[async_trait::async_trait]
+impl ExactRevisionMaterializerPort for ExactRevisionMaterializer {
+    async fn materialize_state(
+        &self,
+        tenant_id: &str,
+        document_id: &str,
+        requested_revision_id: &str,
+    ) -> Result<ExactRevisionMaterializedState, RevisionMaterializerError> {
+        ExactRevisionMaterializer::materialize_state(
+            self,
+            tenant_id,
+            document_id,
+            requested_revision_id,
+        )
+        .await
     }
 }
 
@@ -870,7 +925,7 @@ fn validate_event_fields(event: &EditorRevisionEventV1) -> Result<(), RevisionMa
     Ok(())
 }
 
-fn validate_authorized_source(
+pub(crate) fn validate_authorized_source(
     source: &AuthorizedDocumentSource,
     tenant_id: &str,
     document_id: &str,
@@ -889,7 +944,7 @@ fn validate_authorized_source(
     }
     require_identifier(&source.binding_id, "binding_id")?;
     require_identifier(&source.baseline_revision_id, "baseline_revision_id")?;
-    require_sha256(&source.source_sha256, "source_sha256")?;
+    require_sha256(source_sha256, "source_sha256")?;
     if source.byte_len == 0 {
         return Err(RevisionMaterializerError::new(
             "source_length_invalid",
