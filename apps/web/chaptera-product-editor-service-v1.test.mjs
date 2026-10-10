@@ -577,3 +577,64 @@ test("migration API binds capability, create, and loss download to exact source"
     assert.equal(call.options.credentials, "include");
   }
 });
+
+test("rich editor state consumes the exact authenticated Product current visual scene", async () => {
+  const paths = [];
+  const fetchImpl = (url, options) => {
+    const path = new URL(url).pathname;
+    paths.push({ path, credentials: options.credentials });
+    if (path === "/v1/documents/" + DOC + "/current") return Promise.resolve(json(current()));
+    if (path === "/v1/reader/documents/" + DOC + "/scene") return Promise.resolve(json(readerScene()));
+    throw new Error("unexpected path " + path);
+  };
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  const state = await service.currentRichEditorState();
+  assert.equal(state.current_document.revision_id, BASE);
+  assert.equal(state.reader_scene.protocol_version, "chaptera.reader-scene.v1");
+  assert.equal(state.reader_scene.revision_id, BASE);
+  assert.equal(state.interaction_scene.protocol_version, "chaptera.editor-interaction-scene.v1");
+  assert.equal(state.interaction_scene.revision_id, BASE);
+  assert.equal(state.interaction_scene.nodes.length, 1);
+  assert.equal(state.interaction_scene.nodes[0].z_order, null);
+  assert.deepEqual(paths.map((call) => call.path).sort(), [
+    "/v1/documents/" + DOC + "/current",
+    "/v1/reader/documents/" + DOC + "/scene",
+  ].sort());
+  assert.ok(paths.every((call) => call.credentials === "include"));
+});
+
+test("rich editor state denies a mismatched document/Reader revision", async () => {
+  const fetchImpl = (url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/documents/" + DOC + "/current") return Promise.resolve(json(current(BASE)));
+    if (path === "/v1/reader/documents/" + DOC + "/scene") return Promise.resolve(json(readerScene(CHILD)));
+    throw new Error("unexpected path " + path);
+  };
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  await assert.rejects(
+    service.currentRichEditorState(),
+    /visual Scene revision differs from canonical current document/,
+  );
+});
+
+test("rich Reader scene re-fetch rejects unexpected advanced child revision", async () => {
+  const fetchImpl = (url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/documents/" + DOC + "/current") return Promise.resolve(json(current(CHILD)));
+    if (path === "/v1/reader/documents/" + DOC + "/scene") return Promise.resolve(json(readerScene(CHILD)));
+    throw new Error("unexpected path " + path);
+  };
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  await assert.rejects(
+    service.readerSceneForRevision(BASE),
+    /canonical current revision advanced before exact rich Scene reconciliation/,
+  );
+  const reader = await service.readerSceneForRevision(CHILD);
+  assert.equal(reader.revision_id, CHILD);
+});
