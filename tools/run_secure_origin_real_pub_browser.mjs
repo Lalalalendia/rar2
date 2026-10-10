@@ -8,8 +8,9 @@ const origin = process.env.CHAPTERA_SECURE_ORIGIN;
 const fixture = process.env.CHAPTERA_SOURCE_PUB_FIXTURE;
 const expectedHash = process.env.CHAPTERA_SOURCE_PUB_SHA256;
 const receiptPath = process.env.CHAPTERA_SECURE_RECEIPT;
-if (!origin || !fixture || !expectedHash || !receiptPath) {
-  throw new Error("real source browser requires secure origin, fixture, SHA and receipt path");
+const storageStatePath = process.env.CHAPTERA_BROWSER_STORAGE_STATE;
+if (!origin || !fixture || !expectedHash || !receiptPath || !storageStatePath) {
+  throw new Error("real source browser requires secure origin, fixture, SHA, receipt and storage-state paths");
 }
 const raw = await readFile(fixture);
 const hash = createHash("sha256").update(raw).digest("hex");
@@ -182,6 +183,7 @@ try {
   if (process.env.CHAPTERA_SECURE_SCREENSHOT) {
     await page.screenshot({ path: process.env.CHAPTERA_SECURE_SCREENSHOT, fullPage: true });
   }
+  await context.storageState({ path: storageStatePath });
 
   for (const [method, path] of [
     ["GET", "/v1/session"],
