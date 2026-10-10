@@ -301,7 +301,9 @@ fn approved_reader_scene_shape(scene: &Value) -> bool {
 fn valid_revision_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 256
-        && !value.chars().any(|ch| ch.is_control() || ch.is_whitespace())
+        && !value
+            .chars()
+            .any(|ch| ch.is_control() || ch.is_whitespace())
 }
 
 /// Invoke only through the existing no-network, resource-limited worker harness.
@@ -1005,9 +1007,7 @@ impl IsolatedProductReplayProducer {
                 "verified source differs from worker request",
             ));
         }
-        if reader_scene.is_some()
-            && (project.is_none() || move_node.is_some())
-        {
+        if reader_scene.is_some() && (project.is_none() || move_node.is_some()) {
             return Err(ProductReplayWorkerError::new(
                 "product_reader_scene_invalid",
                 "Reader scene request must have an exact project without a mutation",
@@ -1337,9 +1337,16 @@ mod tests {
             scene_sha256: sha256_hex(&serde_json::to_vec(&scene).unwrap()),
             scene,
         });
-        assert!(validate_product_replay_receipt(
-            &expected, "document-a", &"a".repeat(64), 512, &"b".repeat(64)
-        ).is_ok());
+        assert!(
+            validate_product_replay_receipt(
+                &expected,
+                "document-a",
+                &"a".repeat(64),
+                512,
+                &"b".repeat(64)
+            )
+            .is_ok()
+        );
 
         let mut other_revision = expected.clone();
         let refscene = other_revision.reader_scene.as_mut().unwrap();
@@ -1349,8 +1356,14 @@ mod tests {
         refscene.scene_sha256 = sha256_hex(&serde_json::to_vec(&refscene.scene).unwrap());
         assert_eq!(
             validate_product_replay_receipt(
-                &other_revision, "document-a", &"a".repeat(64), 512, &"b".repeat(64)
-            ).unwrap_err().code,
+                &other_revision,
+                "document-a",
+                &"a".repeat(64),
+                512,
+                &"b".repeat(64)
+            )
+            .unwrap_err()
+            .code,
             "product_replay_receipt_invalid"
         );
 
@@ -1360,8 +1373,14 @@ mod tests {
         leak.scene_sha256 = sha256_hex(&serde_json::to_vec(&leak.scene).unwrap());
         assert_eq!(
             validate_product_replay_receipt(
-                &leaked, "document-a", &"a".repeat(64), 512, &"b".repeat(64)
-            ).unwrap_err().code,
+                &leaked,
+                "document-a",
+                &"a".repeat(64),
+                512,
+                &"b".repeat(64)
+            )
+            .unwrap_err()
+            .code,
             "product_replay_receipt_invalid"
         );
 
@@ -1371,8 +1390,14 @@ mod tests {
         bad.scene_sha256 = sha256_hex(&serde_json::to_vec(&bad.scene).unwrap());
         assert_eq!(
             validate_product_replay_receipt(
-                &bad_shape, "document-a", &"a".repeat(64), 512, &"b".repeat(64)
-            ).unwrap_err().code,
+                &bad_shape,
+                "document-a",
+                &"a".repeat(64),
+                512,
+                &"b".repeat(64)
+            )
+            .unwrap_err()
+            .code,
             "product_replay_receipt_invalid"
         );
     }
