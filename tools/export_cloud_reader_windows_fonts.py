@@ -272,7 +272,7 @@ def read_private_source_requirements(path: Path) -> tuple[list[str], dict]:
         raise FontPacketError("bounded source family requirements are missing")
     families: list[str] = []
     lower_names = set()
-    indices_by_family: dict[str, set[int]] = {}
+    direct_indices_by_family: dict[str, set[int]] = {}
     incomplete_styles = False
     missing_quill_indices = 0
     for item in items:
@@ -296,7 +296,16 @@ def read_private_source_requirements(path: Path) -> tuple[list[str], dict]:
         if item.get("source_quill_index_proven") is not bool(indices):
             raise FontPacketError("source font index proof contradicted by source family requirements")
         missing_quill_indices += not bool(indices)
-        indices_by_family[family] = set(indices)
+        direct_indices = item.get("direct_run_source_font_indices", [])
+        if (not isinstance(direct_indices, list) or any(
+            type(index) is not int or not 0 <= index <= 65535
+            for index in direct_indices
+        ) or direct_indices != sorted(set(direct_indices))
+                or not set(direct_indices).issubset(indices)):
+            raise FontPacketError("direct Quill index evidence contradicts source candidate index list")
+        # Script-font alternatives may contribute to family candidates, but
+        # only an actual typography run proves a *direct* Editor binding.
+        direct_indices_by_family[family] = set(direct_indices)
         styles = item.get("effective_style_run_counts")
         if not isinstance(styles, dict):
             raise FontPacketError("source run style counts are required")
@@ -344,8 +353,9 @@ def read_private_source_requirements(path: Path) -> tuple[list[str], dict]:
         story = entry.get("story_id")
         start, end = entry.get("scalar_start"), entry.get("scalar_end")
         value = entry.get("source_font_binding_id")
-        if (not isinstance(family, str) or family not in indices_by_family
-                or type(index) is not int or index not in indices_by_family[family]
+        if (not isinstance(family, str) or family not in direct_indices_by_family
+                or type(index) is not int
+                or index not in direct_indices_by_family[family]
                 or not isinstance(story, str) or not _STORY_ID_RE.fullmatch(story)
                 or type(start) is not int or type(end) is not int
                 or not 0 <= start < end <= 0xFFFFFFFF
