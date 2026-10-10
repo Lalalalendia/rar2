@@ -6,8 +6,12 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    extract::{Path, Request, State},
+    http::{
+        HeaderMap, HeaderValue, StatusCode,
+        header::CACHE_CONTROL,
+    },
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -103,6 +107,15 @@ pub fn router(state: ProductApiHttpState) -> Router {
         )
         .route("/v1/documents/{document_id}/commit", post(commit_move_node))
         .with_state(state)
+        .layer(middleware::from_fn(private_document_response))
+}
+
+async fn private_document_response(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 #[derive(Debug, Serialize)]
