@@ -406,7 +406,7 @@ fn project_reader_scene_from_exact_source(
             })?;
 
         let mut moved_node_ids = Vec::new();
-        for operation in project.operations {
+        for operation in &project.operations {
             match operation {
                 EditOperation::MoveNode { node_id, .. } => moved_node_ids.push(*node_id),
                 _ => {
