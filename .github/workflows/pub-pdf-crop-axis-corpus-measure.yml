@@ -1,0 +1,189 @@
+name: PUB PDF crop axis corpus measure
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-pdf-crop-axis-corpus-measure.yml"
+      - "vendor/producer-a/crates/pub-cli/Cargo.toml"
+      - "vendor/producer-a/crates/pub-cli/src/bin/pub_crop_geometry_census.rs"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  census:
+    if: github.event.pull_request.head.ref == 'measure/pub-pdf-crop-axis-corpus-01'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Format and compile source-only census
+        run: |
+          rustfmt --edition 2024 --check vendor/producer-a/crates/pub-cli/src/bin/pub_crop_geometry_census.rs
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-cli --bin pub-crop-geometry-census
+
+      - name: Acquire pinned exact-1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Census every pinned PUB for source-window cohorts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import collections
+          import concurrent.futures
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          root = Path("out/pinned1050/materialized/native")
+          binary = Path("vendor/producer-a/target/debug/pub-crop-geometry-census")
+          out = Path("target/pub-pdf-crop-axis-corpus")
+          out.mkdir(parents=True, exist_ok=True)
+
+          paths = sorted(root.glob("*.pub"))
+          if not paths:
+              raise SystemExit("pinned corpus contains no PUB files")
+
+          def inspect(path):
+              proc = subprocess.run(
+                  [str(binary), str(path)],
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  timeout=90,
+              )
+              if proc.returncode != 0:
+                  return ("failure", None)
+              try:
+                  row = json.loads(proc.stdout)
+              except json.JSONDecodeError:
+                  return ("invalid_json", None)
+              return ("ok", row)
+
+          rows = []
+          failures = collections.Counter()
+          workers = min(4, max(1, os.cpu_count() or 1))
+          with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+              futures = {pool.submit(inspect, path): path for path in paths}
+              for future in concurrent.futures.as_completed(futures):
+                  try:
+                      state, row = future.result()
+                  except subprocess.TimeoutExpired:
+                      failures["timeout"] += 1
+                      continue
+                  except Exception:
+                      failures["exception"] += 1
+                      continue
+                  if state != "ok":
+                      failures[state] += 1
+                      continue
+                  if int(row.get("source_window_node_count", 0)) > 0:
+                      rows.append(row)
+
+          rows.sort(key=lambda row: row["source_sha256"])
+
+          aggregate_keys = [
+              "source_window_profile_counts",
+              "geometry_class_counts",
+              "shape_type_counts",
+              "join_counts",
+              "topology_counts",
+              "overlap_family_counts",
+              "earlier_other_shape_geometry_counts",
+              "later_other_shape_geometry_counts",
+              "earlier_other_shape_type_counts",
+              "later_other_shape_type_counts",
+          ]
+          aggregates = {key: collections.Counter() for key in aggregate_keys}
+          profile_fixtures = collections.defaultdict(set)
+          one_sided_windows = 0
+          paired_or_default_windows = 0
+          other_profile_windows = 0
+
+          def changed(value):
+              return value != "default"
+
+          for row in rows:
+              for key in aggregate_keys:
+                  aggregates[key].update(row.get(key, {}))
+              for profile, count in row.get("source_window_profile_counts", {}).items():
+                  profile_fixtures[profile].add(row["source_sha256"])
+                  pieces = dict(part.split(":", 1) for part in profile.split("|"))
+                  x_count = int(changed(pieces["l"])) + int(changed(pieces["r"]))
+                  y_count = int(changed(pieces["t"])) + int(changed(pieces["b"]))
+                  if x_count == 1 or y_count == 1:
+                      one_sided_windows += int(count)
+                  elif x_count in (0, 2) and y_count in (0, 2):
+                      paired_or_default_windows += int(count)
+                  else:
+                      other_profile_windows += int(count)
+
+          receipt = {
+              "schema": "chaptera.pub-pdf-crop-axis-corpus-receipt.v1",
+              "pinned_pub_count": len(paths),
+              "parsed_pub_count": len(paths) - sum(failures.values()),
+              "parse_failure_counts": dict(sorted(failures.items())),
+              "crop_fixture_count": len(rows),
+              "crop_window_count": sum(int(row["source_window_node_count"]) for row in rows),
+              "axis_cohort_counts": {
+                  "one_sided_axis": one_sided_windows,
+                  "paired_or_default_axes": paired_or_default_windows,
+                  "other": other_profile_windows,
+              },
+              "aggregate_counts": {
+                  key: dict(sorted(counter.items()))
+                  for key, counter in aggregates.items()
+              },
+              "profile_fixture_counts": {
+                  key: len(value)
+                  for key, value in sorted(profile_fixtures.items())
+              },
+              "fixtures": rows,
+              "claims": {
+                  "source_only": True,
+                  "publisher_pdf_used_as_authority": False,
+                  "pub_bytes_emitted": False,
+                  "raw_crop_values_emitted": False,
+                  "node_ids_emitted": False,
+                  "geometry_coordinates_emitted": False,
+                  "path_vertices_emitted": False,
+              },
+          }
+          path = out / "receipt.json"
+          path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+          print(json.dumps({
+              "pinned_pub_count": receipt["pinned_pub_count"],
+              "parsed_pub_count": receipt["parsed_pub_count"],
+              "parse_failure_counts": receipt["parse_failure_counts"],
+              "crop_fixture_count": receipt["crop_fixture_count"],
+              "crop_window_count": receipt["crop_window_count"],
+              "axis_cohort_counts": receipt["axis_cohort_counts"],
+              "profile_fixture_counts": receipt["profile_fixture_counts"],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-safe corpus receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-pdf-crop-axis-corpus
+          path: target/pub-pdf-crop-axis-corpus/receipt.json
+          retention-days: 30
