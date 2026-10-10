@@ -430,13 +430,6 @@ async fn commit_move_node(
         .resolve_by_document_id(&document_id)
         .await
         .map_err(ProductApiError::Source)?;
-    if request.source_hash != source.source_sha256 {
-        return Err(ProductApiError::bad_request(
-            "source_hash_mismatch",
-            "commit request source_hash differs from durable source authority",
-        ));
-    }
-
     let request_hash = request_hash(&request)?;
     let now = now_ms()?;
 
@@ -454,6 +447,14 @@ async fn commit_move_node(
         .map_err(ProductApiError::Authz)?
     {
         return accepted_from_receipt(&state, &source, existing, true).await;
+    }
+
+    // Check current geometry authorization before source identity comparison.
+    if request.source_hash != source.source_sha256 {
+        return Err(ProductApiError::bad_request(
+            "source_hash_mismatch",
+            "commit request source_hash differs from durable source authority",
+        ));
     }
 
     let head = current_head(&state.revisions, &source).await?;
