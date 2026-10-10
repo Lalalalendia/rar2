@@ -247,6 +247,16 @@
           "pub-editor",
           "--test",
           "story_text_session_v1"
+        ],
+        [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "vendor/producer-a/Cargo.toml",
+          "-p",
+          "pub-editor",
+          "--lib",
+          "font_resource_session_tests"
         ]
       ]
     },
