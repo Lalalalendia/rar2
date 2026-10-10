@@ -25,7 +25,7 @@ use tokio::{fs as async_fs, io::AsyncWriteExt, process::Command, time::timeout};
 
 use crate::{
     revision_materializer::{
-        DocumentSourceAuthority, ExactRevisionMaterializationReceipt,
+        AuthorizedDocumentSource, DocumentSourceAuthority, ExactRevisionMaterializationReceipt,
         ExactRevisionMaterializedState, ExactRevisionMaterializer, ExactRevisionMaterializerPort,
         ExactSourceLoader, MATERIALIZATION_RECEIPT_SCHEMA_V1, PubEditorReplayEngine,
         RevisionMaterializerError, project_sha256, validate_authorized_source,
@@ -788,9 +788,9 @@ impl IsolatedProductReplayProducer {
             .arg(&self.config.worker_binary)
             .arg("product-isolated-replay")
             .arg("--document-id")
-            .arg(document_id)
+            .arg(&source.document_id)
             .arg("--expected-sha256")
-            .arg(source_sha256)
+            .arg(&source.source_sha256)
             .arg("--expected-byte-len")
             .arg(source_bytes.len().to_string())
             .arg("--project-json")
@@ -893,19 +893,17 @@ impl IsolatedProductMaterializationProducer {
 
     pub async fn materialize_exact_project(
         &self,
-        document_id: &str,
-        source_sha256: &str,
+        source: &AuthorizedDocumentSource,
         source_bytes: &[u8],
-        baseline_revision_id: &str,
-        baseline_cursor: i64,
         requested_revision_id: &str,
         edges: &[RevisionEdge],
     ) -> Result<ProductMaterializationWorkerReceiptV1, ProductReplayWorkerError> {
-        require_document_id(document_id)?;
-        require_sha256(source_sha256)?;
+        require_document_id(&source.document_id)?;
+        require_sha256(&source.source_sha256)?;
         if source_bytes.is_empty()
             || source_bytes.len() as u64 > MAX_SOURCE_BYTES
-            || sha256_hex(source_bytes) != source_sha256
+            || source_bytes.len() as u64 != source.byte_len
+            || sha256_hex(source_bytes) != source.source_sha256
         {
             return Err(ProductReplayWorkerError::new(
                 "product_materialization_source_mismatch",
@@ -915,19 +913,19 @@ impl IsolatedProductMaterializationProducer {
 
         let input = ProductMaterializationInputV1 {
             protocol_version: PRODUCT_MATERIALIZATION_WORKER_V1.to_owned(),
-            document_id: document_id.to_owned(),
-            source_sha256: source_sha256.to_owned(),
-            source_byte_len: source_bytes.len() as u64,
-            baseline_revision_id: baseline_revision_id.to_owned(),
-            baseline_cursor,
+            document_id: source.document_id.clone(),
+            source_sha256: source.source_sha256.clone(),
+            source_byte_len: source.byte_len,
+            baseline_revision_id: source.baseline_revision_id.clone(),
+            baseline_cursor: source.baseline_cursor,
             requested_revision_id: requested_revision_id.to_owned(),
             edges: edges.iter().map(ProductRevisionEdgeV1::from).collect(),
         };
         validate_materialization_input(
             &input,
-            document_id,
-            source_sha256,
-            source_bytes.len() as u64,
+            &source.document_id,
+            &source.source_sha256,
+            source.byte_len,
         )?;
         let replay_bytes = serde_json::to_vec(&input).map_err(|_| {
             ProductReplayWorkerError::new(
@@ -997,9 +995,9 @@ impl IsolatedProductMaterializationProducer {
             .arg(&self.config.worker_binary)
             .arg("product-isolated-materialize")
             .arg("--document-id")
-            .arg(document_id)
+            .arg(&source.document_id)
             .arg("--expected-sha256")
-            .arg(source_sha256)
+            .arg(&source.source_sha256)
             .arg("--expected-byte-len")
             .arg(source_bytes.len().to_string())
             .arg("--replay-json")
@@ -1219,15 +1217,7 @@ impl ExactRevisionMaterializerPort for IsolatedExactRevisionMaterializer {
 
         let isolated = self
             .producer
-            .materialize_exact_project(
-                document_id,
-                &source.source_sha256,
-                &source_bytes,
-                &source.baseline_revision_id,
-                source.baseline_cursor,
-                requested_revision_id,
-                &edges,
-            )
+            .materialize_exact_project(&source, &source_bytes, requested_revision_id, &edges)
             .await
             .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
 
