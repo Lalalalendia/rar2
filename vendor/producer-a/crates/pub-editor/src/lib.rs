@@ -12,7 +12,6 @@ mod imported_paragraph_alignment_v1;
 mod imported_paragraph_flow_v1;
 mod imported_paragraphs_v1;
 mod link_text_frame_tail_v1;
-mod rectangle_page_history;
 mod session_geometry;
 mod session_image;
 mod session_table;
