@@ -1249,6 +1249,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(opened.status(), StatusCode::OK);
+        assert_eq!(opened.headers()[CACHE_CONTROL], "no-store");
         let opened = json_body(opened).await;
         assert_eq!(opened["revision_id"], baseline.service_revision_id);
 
@@ -1264,6 +1265,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(reader_scene.status(), StatusCode::OK);
+        assert_eq!(reader_scene.headers()[CACHE_CONTROL], "no-store");
         let reader_scene = json_body(reader_scene).await;
         assert_eq!(
             reader_scene["protocol_version"],
@@ -1607,6 +1609,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+        assert_eq!(forbidden.headers()[CACHE_CONTROL], "no-store");
         assert_eq!(json_body(forbidden).await["error"]["code"], "grant_missing");
 
         // A real Viewer grant allows reading the same reopened document but
