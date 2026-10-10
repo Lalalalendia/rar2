@@ -845,20 +845,12 @@ mod tests {
             "schema_version": "pub-editor-v0.2",
             "source_hash": SOURCE_SHA,
         });
-        let baseline = derive_import_baseline_identities(
-            DOCUMENT_ID,
-            SOURCE_SHA,
-            "pub-editor-v0.2",
-            &project,
-        )
-        .unwrap();
-        let state = derive_authoring_state_identity(
-            DOCUMENT_ID,
-            SOURCE_SHA,
-            "pub-editor-v0.2",
-            &project,
-        )
-        .unwrap();
+        let baseline =
+            derive_import_baseline_identities(DOCUMENT_ID, SOURCE_SHA, "pub-editor-v0.2", &project)
+                .unwrap();
+        let state =
+            derive_authoring_state_identity(DOCUMENT_ID, SOURCE_SHA, "pub-editor-v0.2", &project)
+                .unwrap();
 
         assert_eq!(state.project_hash, baseline.project_hash);
         assert_eq!(state.state_id, baseline.state_id);
@@ -926,13 +918,9 @@ mod tests {
             "schema_version": "pub-editor-v0.2",
             "source_hash": SOURCE_SHA,
         });
-        let baseline = derive_import_baseline_identities(
-            DOCUMENT_ID,
-            SOURCE_SHA,
-            "pub-editor-v0.2",
-            &project,
-        )
-        .unwrap();
+        let baseline =
+            derive_import_baseline_identities(DOCUMENT_ID, SOURCE_SHA, "pub-editor-v0.2", &project)
+                .unwrap();
 
         assert_eq!(
             derive_history_revision_identities(
