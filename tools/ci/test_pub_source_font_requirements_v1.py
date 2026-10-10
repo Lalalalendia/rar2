@@ -85,6 +85,41 @@ def synthetic_controls() -> None:
     assert out["physical_font_bytes_included"] is False
     assert out["fixed_pdf_allowed"] is False
     assert out["original_publisher_layout_authoritative"] is False
+
+    assert req.source_font_binding_id_v1(
+        SOURCE_SHA, 18, "Rockwell Condensed"
+    ) == "pub-source-font:b402e726-72b4-5d52-bb0d-07a0c13dc05d"
+    assert out["direct_source_binding_count"] == 0
+    assert out["direct_source_bindings"] == []
+    assert out["direct_source_bindings_only_source_identity"] is True
+    # A modern Reader receipt carries the index from the actual typography
+    # run; script font *alternatives* alone never create this exact binding.
+    directly_proven = copy.deepcopy(viewer)
+    directly_proven["typography_runs"][0]["source_font_index"] = 7
+    directly_proven["typography_runs"][1]["source_font_index"] = 7
+    current = req.source_font_requirements_v1(directly_proven)
+    assert current["direct_source_binding_count"] == 2
+    assert len(current["direct_source_bindings"]) == 2
+    expected_id = req.source_font_binding_id_v1(SOURCE_SHA, 7, "Example Serif")
+    assert all(record["source_font_binding_id"] == expected_id for record
+               in current["direct_source_bindings"])
+    assert all(record["source_font_index"] == 7 for record
+               in current["direct_source_bindings"])
+    assert current["families"][0]["direct_run_source_font_indices"] == [7]
+    assert current["physical_font_bytes_included"] is False
+    assert current["fixed_pdf_allowed"] is False
+    direct_wrong = copy.deepcopy(directly_proven)
+    direct_wrong["typography_runs"][0]["source_font_index"] = True
+    must_block(direct_wrong, "invalid direct source Quill")
+    direct_wrong = copy.deepcopy(directly_proven)
+    direct_wrong["typography_runs"][0]["source_font_index"] = -1
+    must_block(direct_wrong, "invalid direct source Quill")
+    direct_wrong = copy.deepcopy(directly_proven)
+    direct_wrong["typography_runs"][0]["source_font_name"] = " Example Serif "
+    must_block(direct_wrong, "cannot be silently trimmed")
+    assert req.source_font_binding_id_v1(SOURCE_SHA, 18, "Rockwell Condensed") != (
+        req.source_font_binding_id_v1("a" * 64, 18, "Rockwell Condensed")
+    )
     assert out["unresolved_source_family_run_count"] == 1
     assert out["unresolved_script_font_entry_count"] == 1
     assert {x["source_family"] for x in out["families"]} == {"Example Serif", "Supplement Sans"}
@@ -125,6 +160,10 @@ def real_publisher() -> None:
     source = json.loads(REAL.read_text(encoding="utf-8"))
     out = req.source_font_requirements_v1(source)
     assert out["document_source_sha256"] == SOURCE_SHA
+    # Historical pinned receipt predates the direct-index Viewer field; no
+    # source binding ID may be inferred from script names alone.
+    assert out["direct_source_binding_count"] == 0
+    assert out["direct_source_bindings"] == []
     assert {item["source_family"] for item in out["families"]} == ALL_FAMILIES
     assert out["visible_story_count"] > 0
     assert out["source_story_count"] >= out["visible_story_count"]
