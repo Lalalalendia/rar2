@@ -182,7 +182,6 @@ pub fn set_admitted_font_resource_v1(
     )
 }
 
-
 /// Reconstruct a font operation already admitted by a trusted EditorSession.
 ///
 /// This is *history validation*, not independent authoring permission. A new
