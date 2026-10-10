@@ -414,7 +414,21 @@ def font_apply_smoke() -> None:
     if json_request("/v1/scenes/current") != before:
         raise RuntimeError("denied font requests mutated current revision")
 
-    accepted = json_request("/v1/commit", method="POST", body=request)
+    try:
+        accepted = json_request("/v1/commit", method="POST", body=request)
+    except urllib.error.HTTPError as error:
+        if error.code != 400:
+            raise
+        # Fixed-field bounded diagnostic: Rust stderr and original PUB text
+        # must never enter hosted CI logs or a browser HTTP error.
+        receipt = json.loads(error.read().decode("utf-8"))
+        message = receipt.get("detail", "missing_diagnostic")
+        if not isinstance(message, str):
+            message = "invalid_diagnostic"
+        raise RuntimeError(
+            "font Rust/HTTP admission rejected: "
+            + str(error.code) + " / " + message[:200]
+        ) from None
     if accepted.get("protocol_version") != "chaptera.commit-accepted.v1":
         raise RuntimeError(f"font commit not accepted: {accepted}")
     operation = accepted["canonical_operation"]
