@@ -1466,20 +1466,19 @@ mod tests {
         let restarted_authz = SqliteAuthzAuthority::open(&path, 4, Duration::from_secs(2))
             .await
             .unwrap();
-        let restarted_source = SqliteDocumentSourceAuthority::open(
-            &path,
-            4,
-            Duration::from_secs(2),
-        )
-        .await
-        .unwrap();
-        let restarted_revisions =
-            SqliteRevisionStore::open(&path, 4, Duration::from_secs(2))
+        let restarted_source =
+            SqliteDocumentSourceAuthority::open(&path, 4, Duration::from_secs(2))
                 .await
                 .unwrap();
-        let restarted_auth =
-            AuthHttpState::api_test(restarted_authn.clone(), policy, "https://cloud.example.test")
-                .unwrap();
+        let restarted_revisions = SqliteRevisionStore::open(&path, 4, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let restarted_auth = AuthHttpState::api_test(
+            restarted_authn.clone(),
+            policy,
+            "https://cloud.example.test",
+        )
+        .unwrap();
         let restarted_app = router(
             ProductApiHttpState::with_source_loader(
                 restarted_auth,
