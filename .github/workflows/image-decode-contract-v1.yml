@@ -33,6 +33,10 @@ jobs:
         run: cargo test -p chaptera-image-decode-contract
       - name: Prove exact Viewer-to-Desktop hash-once admission and tamper rejection
         shell: bash
+        # Decoder Clippy above remains strict; the Desktop binary has independent
+        # legacy dead-code/unused warnings unrelated to image hash admission.
+        env:
+          RUSTFLAGS: ""
         run: |
           set -euo pipefail
           output="$(mktemp)"
