@@ -65,6 +65,14 @@ def physical_glyphs(scene: dict, story_id: str, principal="synthetic-editor"):
     )
     return api(query,principal=principal)
 
+def physical_line_fit(scene: dict, story_id: str, principal="synthetic-editor"):
+    query=(
+        "/v1/editor/font-line-fit?story_id="+story_id+
+        "&revision_id="+scene["revision_id"]+
+        "&snapshot_id="+scene["snapshot_id"]
+    )
+    return api(query,principal=principal)
+
 def history(scene: dict, kind: str, seq: int):
     status, result=api("/v1/commit",{
         "protocol_version":"chaptera.history-transition-intent.v1",
@@ -176,6 +184,16 @@ def run(fixture: pathlib.Path, graph: pathlib.Path, viewer: pathlib.Path, *, bro
                 "unmodified source binding silently attributed to Abel physical bytes")
         require(physical_glyphs(scene,chosen["story_id"],"synthetic-viewer")[0]==403,
                 "viewer received privileged exact physical-glyph authoring scope")
+        status,original_fit=physical_line_fit(scene,chosen["story_id"])
+        require(status==200 and original_fit["flow"]["state"]=="source_font_unresolved"
+                and original_fit["flow"]["lines"]==[]
+                and original_fit["flow"]["overset_start_scalar"] is None
+                and original_fit["flow"]["fixed_pdf_allowed"] is False
+                and original_fit["flow"]["native_publisher_layout_authoritative"] is False
+                and original_fit["flow"]["source_gaps"],
+                "original source font line-fit made false Publisher line geometry")
+        require(physical_line_fit(scene,chosen["story_id"],"synthetic-viewer")[0]==403,
+                "viewer received privileged current mixed-font line-fit")
         check_denied("/v1/commit",request,principal="synthetic-viewer")
         forged=copy.deepcopy(request)
         forged["command"]["full_font_bytes"]="forged-client-authority"
@@ -234,6 +252,22 @@ def run(fixture: pathlib.Path, graph: pathlib.Path, viewer: pathlib.Path, *, bro
                 "exact admitted glyph clusters or unresolved original font provenance was lost")
         require(physical_glyphs(scene,chosen["story_id"])[0]==409,
                 "physical glyph endpoint accepted stale Scene after font revision")
+        status,after_fit=physical_line_fit(changed,chosen["story_id"])
+        require(status==200 and after_fit["flow"]["state"]=="source_font_unresolved"
+                and after_fit["flow"]["lines"]==[]
+                and after_fit["flow"]["overset_start_scalar"] is None
+                and after_fit["flow"]["unicode_breaks_evaluated"] is False
+                and after_fit["flow"]["fixed_pdf_allowed"] is False
+                and after_fit["flow"]["native_publisher_layout_authoritative"] is False
+                and after_fit["project_state_id"]==admitted["project_state_id"]
+                and after_fit["story_format_state_hash"]==admitted["story_format_state_hash"]
+                and after_fit["flow"]["source_gaps"]==[
+                    {"start_scalar":p["start_scalar"],"end_scalar":p["end_scalar"],
+                     "source_font_binding_id":p["source_font_binding_id"]}
+                    for p in admitted["spans"] if p["kind"]=="source_unresolved"],
+                "real Source font unknown chars manufactured a physical line placement")
+        require(physical_line_fit(scene,chosen["story_id"])[0]==409,
+                "stale font-layout Scene incorrectly returned current physical line fit")
         require(api("/v1/export/preview?target=idml")[0]==409,
                 "unshaped font IDML export must fail closed")
         require(api("/v1/pub-save/download")[0]==409,
@@ -255,6 +289,9 @@ def run(fixture: pathlib.Path, graph: pathlib.Path, viewer: pathlib.Path, *, bro
         require(status==200 and undo_glyphs["admitted_scalar_count"]==0 and
                 undo_glyphs["source_unresolved_scalar_count"]==chosen["story_scalar_len"],
                 "Undo did not restore unresolved Publisher source physical-font scope")
+        status,undo_fit=physical_line_fit(undo,chosen["story_id"])
+        require(status==200 and undo_fit["flow"]==original_fit["flow"],
+                "Undo did not restore exact source font gap and blocked line placement")
         redo=history(undo,"redo",2)
         status,redo_scope=api("/v1/editor/font-format-scope")
         redo_story=next(x for x in redo_scope["stories"] if x["story_id"]==chosen["story_id"])
@@ -264,6 +301,9 @@ def run(fixture: pathlib.Path, graph: pathlib.Path, viewer: pathlib.Path, *, bro
         require(status==200 and redo_glyphs["admitted_scalar_count"]==1
                 and redo_glyphs["spans"]==admitted["spans"],
                 "Redo did not reproduce canonical source-mixed exact physical glyph stream")
+        status,redo_fit=physical_line_fit(redo,chosen["story_id"])
+        require(status==200 and redo_fit["flow"]==after_fit["flow"],
+                "Redo did not recover identical source-mixed Rust line-fit denial")
         before_browser=history(redo,"undo",3)
         require(hashlib.sha256(source.read_bytes()).hexdigest()==SOURCE_SHA,
                 "HTTP font commits changed original Publisher file")
@@ -293,6 +333,9 @@ def run(fixture: pathlib.Path, graph: pathlib.Path, viewer: pathlib.Path, *, bro
             "unresolved_source_scalars":admitted["source_unresolved_scalar_count"],
             "shaped_physical_glyphs":admitted["shaped_glyph_count"],
             "glyphs_survive_undo_redo":True,
+            "blocked_source_mixed_line_fit":True,
+            "line_fit_survives_undo_redo":True,
+            "native_publisher_line_fit_authoritative":False,
             "browser_selected_range":bool(chromium),
         }
         (work/"receipt.json").write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n",

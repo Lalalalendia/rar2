@@ -112,6 +112,33 @@ test("current physical glyph scope requires an exact Story and current Scene ide
   });
 });
 
+test("source-bound physical line-fit HTTP client accepts only exact Story/Scene scope",async()=>{
+  const story="15613e56-726e-5ae7-8c54-ec876c9bcfda";
+  const service=new HttpEditorServiceV1("http://127.0.0.1:18765");
+  const old=globalThis.fetch;
+  let calls=0;
+  try{
+    globalThis.fetch=async(url)=>{
+      const parsed=new URL(url);
+      assert.equal(parsed.pathname,"/v1/editor/font-line-fit");
+      assert.equal(parsed.searchParams.get("story_id"),story);
+      assert.equal(parsed.searchParams.get("revision_id"),REV);
+      assert.equal(parsed.searchParams.get("snapshot_id"),SNAP);
+      calls++;
+      return new Response(JSON.stringify({state:"source_font_unresolved"}),
+        {headers:{"content-type":"application/json"}});
+    };
+    const response=await service.currentPhysicalFontLineFit({
+      story_id:story,revision_id:REV,snapshot_id:SNAP,
+    });
+    assert.equal(response.state,"source_font_unresolved");
+    await assert.rejects(service.currentPhysicalFontLineFit({
+      story_id:"unknown",revision_id:REV,snapshot_id:SNAP,
+    }),TypeError);
+    assert.equal(calls,1);
+  }finally{globalThis.fetch=old;}
+});
+
 test("name, relative unscoped route, host substitution and invalid candidate cannot deliver", async () => {
   const service = new HttpEditorServiceV1("http://127.0.0.1:18765");
   const alternatives = [
