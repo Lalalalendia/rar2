@@ -854,6 +854,134 @@ pub(super) fn display_page_insert_error_v1(
     }
 }
 
+pub(super) fn apply_page_lifecycle_graph_forward_v1(
+    graph: &mut PubResolvedGraph,
+    operation: &EditOperation,
+) -> Result<(), EditorError> {
+    match operation {
+        EditOperation::RegisterAuthoredPageIdentityV1 { .. } => Ok(()),
+        EditOperation::AppendBlankPageV1 { transition } => apply_append_blank_page_forward_v1(
+            graph.document.id,
+            &mut graph.document.pages,
+            &mut graph.pages,
+            transition,
+        )
+        .map_err(append_blank_page_error_to_editor_v1),
+        EditOperation::DeleteAuthoredRectanglePageV1 { .. } => {
+            Err(EditorError::PageDeleteUnsupported {
+                message: "combined authored page/shape transition needs EditorSession".into(),
+            })
+        }
+        EditOperation::DuplicateAuthoredRectanglePageV1 { .. } => {
+            Err(EditorError::PageDuplicateUnsupported {
+                message: "combined authored Page/Rectangle transition needs EditorSession".into(),
+            })
+        }
+        EditOperation::DuplicateAuthoredRectanglesPageV1 { .. } => {
+            Err(EditorError::PageDuplicateUnsupported {
+                message: "combined authored Page/multi-Rectangle transition needs EditorSession"
+                    .into(),
+            })
+        }
+        EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
+            apply_delete_blank_authored_page_forward_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(delete_blank_authored_page_error_to_editor_v1)
+        }
+        EditOperation::DuplicateBlankPageV1 { transition } => apply_duplicate_blank_page_forward_v1(
+            graph.document.id,
+            &mut graph.document.pages,
+            &mut graph.pages,
+            transition,
+        )
+        .map_err(duplicate_blank_page_error_to_editor_v1),
+        EditOperation::InsertBlankPageAfterV1 { transition } => {
+            apply_insert_blank_page_after_forward_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(insert_blank_page_after_error_to_editor_v1)
+        }
+        EditOperation::ReorderPagesV1 { transition } => apply_page_order_transition_forward_v1(
+            graph.document.id,
+            &mut graph.document.pages,
+            transition,
+        )
+        .map_err(page_order_error_to_editor_v1),
+        _ => unreachable!("page-lifecycle graph helper receives only page operations"),
+    }
+}
+
+pub(super) fn apply_page_lifecycle_graph_inverse_v1(
+    graph: &mut PubResolvedGraph,
+    operation: &EditOperation,
+) -> Result<(), EditorError> {
+    match operation {
+        EditOperation::RegisterAuthoredPageIdentityV1 { .. } => Ok(()),
+        EditOperation::AppendBlankPageV1 { transition } => apply_append_blank_page_inverse_v1(
+            graph.document.id,
+            &mut graph.document.pages,
+            &mut graph.pages,
+            transition,
+        )
+        .map_err(append_blank_page_error_to_editor_v1),
+        EditOperation::DeleteAuthoredRectanglePageV1 { .. } => {
+            Err(EditorError::PageDeleteUnsupported {
+                message: "combined authored page/shape transition needs EditorSession".into(),
+            })
+        }
+        EditOperation::DuplicateAuthoredRectanglePageV1 { .. } => {
+            Err(EditorError::PageDuplicateUnsupported {
+                message: "combined authored Page/Rectangle transition needs EditorSession".into(),
+            })
+        }
+        EditOperation::DuplicateAuthoredRectanglesPageV1 { .. } => {
+            Err(EditorError::PageDuplicateUnsupported {
+                message: "combined authored Page/multi-Rectangle transition needs EditorSession"
+                    .into(),
+            })
+        }
+        EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
+            apply_delete_blank_authored_page_inverse_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(delete_blank_authored_page_error_to_editor_v1)
+        }
+        EditOperation::DuplicateBlankPageV1 { transition } => apply_duplicate_blank_page_inverse_v1(
+            graph.document.id,
+            &mut graph.document.pages,
+            &mut graph.pages,
+            transition,
+        )
+        .map_err(duplicate_blank_page_error_to_editor_v1),
+        EditOperation::InsertBlankPageAfterV1 { transition } => {
+            apply_insert_blank_page_after_inverse_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(insert_blank_page_after_error_to_editor_v1)
+        }
+        EditOperation::ReorderPagesV1 { transition } => apply_page_order_transition_inverse_v1(
+            graph.document.id,
+            &mut graph.document.pages,
+            transition,
+        )
+        .map_err(page_order_error_to_editor_v1),
+        _ => unreachable!("page-lifecycle graph helper receives only page operations"),
+    }
+}
+
 // Authored Page identity is an ordering-adjacent durable history primitive.
 impl EditorSession {
     pub fn authored_page_identities_v1(&self) -> BTreeMap<PageId, AuthoredPageIdentityV1> {
