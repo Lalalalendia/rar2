@@ -510,6 +510,7 @@ fn cloud_replay_requires_local_identity(schema_version: &str) -> bool {
         EDITOR_PROJECT_VERSION_V0_29,
         EDITOR_PROJECT_VERSION_V0_30,
         EDITOR_PROJECT_VERSION_V0_31,
+        EDITOR_PROJECT_VERSION_V0_32,
     ]
     .contains(&schema_version)
 }
@@ -523,6 +524,7 @@ fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
 
     for operation in &project.operations {
         let operation_rank = match operation {
+            EditOperation::DeleteAuthoredRectanglesPageV1 { .. } => 32,
             EditOperation::DuplicateAuthoredRectanglesPageV1 { .. } => 31,
             EditOperation::DuplicateAuthoredRectanglePageV1 { .. } => 30,
             EditOperation::DeleteAuthoredRectanglePageV1 { .. } => 29,
