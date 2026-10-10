@@ -25,6 +25,7 @@ use rand::{RngCore, rngs::OsRng};
 use tokio::{fs as async_fs, io::AsyncWriteExt, process::Command, time::timeout};
 
 use crate::{
+    reader_scene_v1::{MAX_SCENE_BYTES, READER_SCENE_V1},
     revision_materializer::{
         EditorReplayEngine, PubEditorReplayEngine, append_event_operation,
         cloud_replay_requires_local_identity, cloud_revision_project, project_sha256,
@@ -49,6 +50,22 @@ pub struct IsolatedMoveNodeReceiptV1 {
     pub resulting_project: EditorProject,
     pub resulting_project_sha256: String,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolatedReaderSceneIntentV1 {
+    pub revision_id: String,
+    pub baseline_revision_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolatedReaderSceneReceiptV1 {
+    pub revision_id: String,
+    pub baseline_revision_id: String,
+    pub scene_sha256: String,
+    pub scene: Value,
+}
+
 const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PROJECT_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
@@ -88,6 +105,8 @@ pub struct ProductReplayWorkerReceiptV1 {
     pub baseline_project: Option<EditorProject>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub move_node: Option<IsolatedMoveNodeReceiptV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reader_scene: Option<IsolatedReaderSceneReceiptV1>,
     pub filesystem_confinement: bool,
 }
 
@@ -210,7 +229,41 @@ pub fn validate_product_replay_receipt(
             "isolated MoveNode receipt violates source and project identity",
         ));
     }
+    if let Some(scene) = &receipt.reader_scene {
+        let payload = serde_json::to_vec(&scene.scene).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "Reader scene receipt could not be serialized",
+            )
+        })?;
+        if receipt.baseline_project.is_some()
+            || receipt.move_node.is_some()
+            || !valid_revision_id(&scene.revision_id)
+            || !valid_revision_id(&scene.baseline_revision_id)
+            || scene.scene["protocol_version"] != READER_SCENE_V1
+            || scene.scene["scene_authority"] != "server_viewer_projection"
+            || scene.scene["document_id"] != document_id
+            || scene.scene["source_hash"] != source_sha256
+            || scene.scene["revision_id"] != scene.revision_id
+            || !scene.scene["pages"].is_array()
+            || !scene.scene["nodes"].is_array()
+            || !scene.scene["stories"].is_array()
+            || payload.len() > MAX_SCENE_BYTES
+            || sha256_hex(&payload) != scene.scene_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "Reader scene disagrees with exact document, revision or bounded payload",
+            ));
+        }
+    }
     Ok(())
+}
+
+fn valid_revision_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && !value.chars().any(|ch| ch.is_control() || ch.is_whitespace())
 }
 
 /// Invoke only through the existing no-network, resource-limited worker harness.
@@ -223,6 +276,7 @@ pub fn run_product_replay_worker(
     project_path: Option<&Path>,
     expected_project_sha256: Option<&str>,
     move_node_intent: Option<IsolatedMoveNodeIntentV1>,
+    reader_scene_intent: Option<IsolatedReaderSceneIntentV1>,
 ) -> Result<(), ProductReplayWorkerError> {
     require_document_id(document_id)?;
     require_sha256(expected_source_sha256)?;
@@ -240,6 +294,18 @@ pub fn run_product_replay_worker(
             "product_replay_identity_invalid",
             "MoveNode requires an authorized exact source-bound project",
         ));
+    }
+    if let Some(scene) = &reader_scene_intent {
+        if project_path.is_none()
+            || move_node_intent.is_some()
+            || !valid_revision_id(&scene.revision_id)
+            || !valid_revision_id(&scene.baseline_revision_id)
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_identity_invalid",
+                "Reader scene requires an exact project and exclusive revision identities",
+            ));
+        }
     }
     if expected_source_byte_len == 0 || expected_source_byte_len > MAX_SOURCE_BYTES {
         return Err(ProductReplayWorkerError::new(
@@ -450,6 +516,46 @@ pub fn run_product_replay_worker(
         None
     };
 
+    let reader_scene = if let Some(intent) = reader_scene_intent {
+        // This is the only execution point for the source-neutral Viewer.
+        // It runs AFTER seccomp filesystem deny and under the no-network
+        // process limits; the host never calls open_pub_bundle.
+        let scene = crate::product_api_http::render_reader_scene_in_isolated_worker(
+            document_id,
+            expected_source_sha256,
+            &intent.revision_id,
+            &intent.baseline_revision_id,
+            &source_bytes,
+            &project,
+        )
+        .map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_reader_scene_rejected",
+                "isolated Viewer failed to project the exact authorized revision",
+            )
+        })?;
+        let bytes = serde_json::to_vec(&scene).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_reader_scene_invalid",
+                "isolated Reader scene cannot be serialized",
+            )
+        })?;
+        if bytes.len() > MAX_SCENE_BYTES {
+            return Err(ProductReplayWorkerError::new(
+                "product_reader_scene_limit",
+                "isolated Reader scene exceeds the bounded response envelope",
+            ));
+        }
+        Some(IsolatedReaderSceneReceiptV1 {
+            revision_id: intent.revision_id,
+            baseline_revision_id: intent.baseline_revision_id,
+            scene_sha256: sha256_hex(&bytes),
+            scene,
+        })
+    } else {
+        None
+    };
+
     let graph: Value = serde_json::to_value(session.graph()).map_err(|_| {
         ProductReplayWorkerError::new(
             "product_replay_projection_failed",
@@ -479,6 +585,7 @@ pub fn run_product_replay_worker(
         authoring_graph: graph,
         baseline_project: if baseline_mode { Some(project) } else { None },
         move_node,
+        reader_scene,
         filesystem_confinement: true,
     };
     validate_product_replay_receipt(
@@ -1002,6 +1109,7 @@ mod tests {
             authoring_graph: graph,
             baseline_project: None,
             move_node: None,
+            reader_scene: None,
             filesystem_confinement: true,
         }
     }
