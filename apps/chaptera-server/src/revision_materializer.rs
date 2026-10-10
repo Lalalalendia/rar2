@@ -18,14 +18,19 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     blob_store::BlobStoreService,
+    source_baseline::{
+        derive_authoring_state_identity, derive_history_revision_identities,
+    },
     sqlite_store::{
         RevisionEdge, SqliteRevisionStore, decode_canonical_event, encode_canonical_event,
     },
 };
 
 pub const EDITOR_REVISION_EVENT_SCHEMA_V1: &str = "chaptera.editor-revision-event.v1";
+pub const EDITOR_HISTORY_EVENT_SCHEMA_V1: &str = "chaptera.editor-history-event.v1";
 pub const MATERIALIZATION_RECEIPT_SCHEMA_V1: &str = "chaptera.exact-revision-materialization.v1";
 pub const EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION: i64 = 1;
+pub const EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevisionMaterializerError {
@@ -225,6 +230,21 @@ pub struct EditorRevisionEventV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditorHistoryEventV1 {
+    pub schema_version: String,
+    pub source_sha256: String,
+    pub transition_kind: String,
+    pub before_project_sha256: String,
+    pub after_project_sha256: String,
+    pub base_state_id: String,
+    pub resulting_state_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authoring_root_hash: Option<String>,
+    pub operation: EditOperation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExactRevisionMaterializationReceipt {
     pub schema_version: String,
     pub tenant_id: String,
@@ -383,11 +403,14 @@ impl ExactRevisionMaterializer {
                 "RevisionStream edge belongs to a different document",
             ));
         }
+        if edge.semantic_schema_version == EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION {
+            return self.replay_undo_edge_v2(source_bytes, source, current_project, edge);
+        }
         if edge.semantic_schema_version != EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION {
             return Err(RevisionMaterializerError::new(
                 "unsupported_event_schema",
                 format!(
-                    "semantic schema version {} is not supported by exact materialization V1",
+                    "semantic schema version {} is not supported by exact materialization",
                     edge.semantic_schema_version
                 ),
             ));
@@ -448,6 +471,108 @@ impl ExactRevisionMaterializer {
 
         Ok(replayed)
     }
+
+    fn replay_undo_edge_v2(
+        &self,
+        source_bytes: &[u8],
+        source: &AuthorizedDocumentSource,
+        current_project: EditorProject,
+        edge: &RevisionEdge,
+    ) -> Result<EditorProject, RevisionMaterializerError> {
+        let event = decode_editor_history_event_v1(edge)?;
+        if event.source_sha256 != source.source_sha256 {
+            return Err(RevisionMaterializerError::new(
+                "event_source_mismatch",
+                "history event is bound to a different immutable source",
+            ));
+        }
+        if event.authoring_root_hash != edge.authoring_root_hash {
+            return Err(RevisionMaterializerError::new(
+                "authoring_root_mismatch",
+                "history event authoring root does not match the durable RevisionStream edge",
+            ));
+        }
+
+        let before_hash = project_sha256(&current_project)?;
+        if event.before_project_sha256 != before_hash {
+            return Err(RevisionMaterializerError::new(
+                "before_state_mismatch",
+                "history event before-project hash does not match the materialized predecessor state",
+            ));
+        }
+        let base_state = derive_authoring_state_identity(
+            &edge.document_id,
+            &source.source_sha256,
+            &current_project.schema_version,
+            &current_project,
+        )
+        .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+        if event.base_state_id != base_state.state_id {
+            return Err(RevisionMaterializerError::new(
+                "history_base_state_mismatch",
+                "history event base_state_id does not match the materialized predecessor state",
+            ));
+        }
+
+        let candidate = undo_event_operation(current_project, &event.operation)?;
+        let replayed = self
+            .editor
+            .replay_project(source_bytes, &source.source_sha256, &candidate)?;
+        if replayed != candidate {
+            return Err(RevisionMaterializerError::new(
+                "editor_replay_mismatch",
+                "canonical editor replay returned a different project after durable undo",
+            ));
+        }
+
+        let after_hash = project_sha256(&replayed)?;
+        if event.after_project_sha256 != after_hash {
+            return Err(RevisionMaterializerError::new(
+                "event_state_hash_mismatch",
+                "history event after-project hash does not match canonical replay",
+            ));
+        }
+        if edge.resulting_state_hash != after_hash {
+            return Err(RevisionMaterializerError::new(
+                "revision_state_hash_mismatch",
+                "durable RevisionStream resulting_state_hash does not match canonical undo replay",
+            ));
+        }
+
+        let resulting_state = derive_authoring_state_identity(
+            &edge.document_id,
+            &source.source_sha256,
+            &replayed.schema_version,
+            &replayed,
+        )
+        .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+        if event.resulting_state_id != resulting_state.state_id {
+            return Err(RevisionMaterializerError::new(
+                "history_resulting_state_mismatch",
+                "history event resulting_state_id does not match canonical undo replay",
+            ));
+        }
+        let identities = derive_history_revision_identities(
+            &edge.document_id,
+            &source.source_sha256,
+            &replayed.schema_version,
+            &replayed,
+            &edge.parent_revision,
+            &event.base_state_id,
+            &event.transition_kind,
+        )
+        .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+        if identities.state_id != event.resulting_state_id
+            || identities.service_revision_id != edge.child_revision
+        {
+            return Err(RevisionMaterializerError::new(
+                "history_revision_identity_mismatch",
+                "durable history edge differs from the canonical history-transition revision law",
+            ));
+        }
+
+        Ok(replayed)
+    }
 }
 
 pub fn encode_editor_revision_event_v1(
@@ -471,6 +596,30 @@ pub fn decode_editor_revision_event_v1(
         )
     })?;
     validate_event_fields(&event)?;
+    Ok(event)
+}
+
+pub fn encode_editor_history_event_v1(
+    event: &EditorHistoryEventV1,
+) -> Result<Vec<u8>, RevisionMaterializerError> {
+    validate_history_event_fields(event)?;
+    let payload = canonical_json_bytes(event, "event_encode_failed", "editor history event")?;
+    encode_canonical_event(&payload)
+        .map_err(|error| RevisionMaterializerError::new(error.code, error.message))
+}
+
+pub fn decode_editor_history_event_v1(
+    edge: &RevisionEdge,
+) -> Result<EditorHistoryEventV1, RevisionMaterializerError> {
+    let payload = decode_canonical_event(&edge.canonical_event)
+        .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+    let event: EditorHistoryEventV1 = serde_json::from_slice(&payload).map_err(|error| {
+        RevisionMaterializerError::new(
+            "event_decode_failed",
+            format!("canonical RevisionStream event is not supported history-event JSON: {error}"),
+        )
+    })?;
+    validate_history_event_fields(&event)?;
     Ok(event)
 }
 
@@ -639,6 +788,68 @@ fn append_event_operation(
     Ok(cloud_revision_project(&project))
 }
 
+fn undo_event_operation(
+    mut project: EditorProject,
+    operation: &EditOperation,
+) -> Result<EditorProject, RevisionMaterializerError> {
+    require_project_source(&project, &project.source_hash.to_string())?;
+    if !project.assets.is_empty() {
+        return Err(RevisionMaterializerError::new(
+            "editor_asset_replay_unsupported",
+            "EditorProject asset metadata requires a separate immutable asset resolver",
+        ));
+    }
+    let Some(last) = project.operations.last() else {
+        return Err(RevisionMaterializerError::new(
+            "history_undo_empty",
+            "durable undo requires one canonical operation in current project history",
+        ));
+    };
+    if last != operation {
+        return Err(RevisionMaterializerError::new(
+            "history_undo_operation_mismatch",
+            "durable undo event does not match the latest canonical project operation",
+        ));
+    }
+    project.operations.pop();
+    Ok(cloud_revision_project(&project))
+}
+
+fn validate_history_event_fields(
+    event: &EditorHistoryEventV1,
+) -> Result<(), RevisionMaterializerError> {
+    if event.schema_version != EDITOR_HISTORY_EVENT_SCHEMA_V1 {
+        return Err(RevisionMaterializerError::new(
+            "unsupported_event_schema",
+            format!(
+                "unsupported editor history event schema {:?}",
+                event.schema_version
+            ),
+        ));
+    }
+    if event.transition_kind != "undo" {
+        return Err(RevisionMaterializerError::new(
+            "unsupported_history_transition",
+            "materialization V2 currently admits durable undo only",
+        ));
+    }
+    if !matches!(event.operation, EditOperation::MoveNode { .. }) {
+        return Err(RevisionMaterializerError::new(
+            "unsupported_history_operation",
+            "durable history V2 currently admits MoveNode undo only",
+        ));
+    }
+    require_sha256(&event.source_sha256, "event.source_sha256")?;
+    require_sha256(&event.before_project_sha256, "event.before_project_sha256")?;
+    require_sha256(&event.after_project_sha256, "event.after_project_sha256")?;
+    require_prefixed_sha256(&event.base_state_id, "event.base_state_id")?;
+    require_prefixed_sha256(&event.resulting_state_id, "event.resulting_state_id")?;
+    if let Some(root) = &event.authoring_root_hash {
+        require_sha256(root, "event.authoring_root_hash")?;
+    }
+    Ok(())
+}
+
 fn validate_event_fields(event: &EditorRevisionEventV1) -> Result<(), RevisionMaterializerError> {
     if event.schema_version != EDITOR_REVISION_EVENT_SCHEMA_V1 {
         return Err(RevisionMaterializerError::new(
@@ -735,6 +946,19 @@ fn require_sha256(value: &str, field: &'static str) -> Result<(), RevisionMateri
     Ok(())
 }
 
+fn require_prefixed_sha256(
+    value: &str,
+    field: &'static str,
+) -> Result<(), RevisionMaterializerError> {
+    let Some(raw) = value.strip_prefix("sha256:") else {
+        return Err(RevisionMaterializerError::new(
+            "invalid_hash",
+            format!("{field} must use sha256: identity syntax"),
+        ));
+    };
+    require_sha256(raw, field)
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut out = String::with_capacity(64);
@@ -748,6 +972,49 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod replay_identity_tests {
     use super::*;
+
+    #[test]
+    fn durable_undo_rejects_empty_project_history() {
+        let project: EditorProject = serde_json::from_value(serde_json::json!({
+            "schema_version": "pub-editor-v0.2",
+            "source_hash": "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
+            "operations": []
+        }))
+        .unwrap();
+        let operation: EditOperation = serde_json::from_value(serde_json::json!({
+            "kind": "move_node",
+            "node_id": "00000000-0000-4000-8000-000000000001",
+            "before": {"x": 0, "y": 0, "width": 100, "height": 100},
+            "after": {"x": 10, "y": 20, "width": 100, "height": 100}
+        }))
+        .unwrap();
+
+        assert_eq!(
+            undo_event_operation(project, &operation).unwrap_err().code,
+            "history_undo_empty"
+        );
+    }
+
+    #[test]
+    fn durable_undo_pops_only_the_exact_latest_canonical_operation() {
+        let operation: EditOperation = serde_json::from_value(serde_json::json!({
+            "kind": "move_node",
+            "node_id": "00000000-0000-4000-8000-000000000001",
+            "before": {"x": 0, "y": 0, "width": 100, "height": 100},
+            "after": {"x": 10, "y": 20, "width": 100, "height": 100}
+        }))
+        .unwrap();
+        let project: EditorProject = serde_json::from_value(serde_json::json!({
+            "schema_version": "pub-editor-v0.4",
+            "source_hash": "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
+            "operations": [operation.clone()]
+        }))
+        .unwrap();
+
+        let undone = undo_event_operation(project, &operation).unwrap();
+        assert!(undone.operations.is_empty());
+        assert_eq!(undone.schema_version, EDITOR_PROJECT_VERSION_V0_2);
+    }
 
     #[test]
     fn local_identity_rehydration_starts_at_v011() {
