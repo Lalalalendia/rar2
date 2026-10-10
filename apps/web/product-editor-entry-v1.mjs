@@ -5,7 +5,6 @@ import { RichReaderEditorShellV1 } from "./rich-reader-editor-shell-v1.mjs";
 const UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 // SourceIngress persists project documents as `document:` plus 24 lowercase SHA-256 hex chars.
 const SOURCE_INGRESS_DOCUMENT_RE=/^document:[0-9a-f]{24}$/;
-const TRACE_ID_RE=/^[A-Za-z0-9._:-]{8,160}$/;
 
 export function documentIdFromEditorPath(pathname){
   if(typeof pathname!=="string") return null;
@@ -23,7 +22,7 @@ export function loginUrlForReturnPath(returnPath){
   return "/v1/auth/login?return_path="+encodeURIComponent(returnPath);
 }
 
-export function productEditorStatusView(state, readerScene = null, traceContext = null) {
+export function productEditorStatusView(state, readerScene = null) {
   if (!state || typeof state !== "object") {
     throw new TypeError("editor state receipt is required");
   }
@@ -31,22 +30,36 @@ export function productEditorStatusView(state, readerScene = null, traceContext 
   const reasons = readerScene?.fidelity?.reasons;
   const fidelity = "Fidelity: " + (readerScene?.fidelity?.state ?? "unknown") +
     (Array.isArray(reasons) && reasons.length ? " — " + reasons.join(", ") : "");
-  const traceRef = typeof traceContext?.trace_id === "string" && TRACE_ID_RE.test(traceContext.trace_id)
-    ? " · Ref " + traceContext.trace_id
-    : "";
   if (state.reason === "commit_sent") {
     return { status: "Saving change…", kind: "pending", fidelity };
   }
   if (state.reason === "commit_error") {
     return {
-      status: "Change not confirmed — reload to reconcile before retrying" + traceRef,
+      status: "Change not confirmed — reload to reconcile before retrying",
       kind: "error",
       fidelity,
     };
   }
   if (state.reason === "commit_rejected") {
     return {
-      status: "Change rejected — reload the document before retrying" + traceRef,
+      status: "Change rejected — reload the document before retrying",
+      kind: "error",
+      fidelity,
+    };
+  }
+  if (state.reason === "history_sent") {
+    return { status: "Undoing change…", kind: "pending", fidelity };
+  }
+  if (state.reason === "history_error") {
+    return {
+      status: "Undo not confirmed — reload to reconcile before retrying",
+      kind: "error",
+      fidelity,
+    };
+  }
+  if (state.reason === "history_rejected") {
+    return {
+      status: "Undo rejected — current revision was not changed",
       kind: "error",
       fidelity,
     };
@@ -105,9 +118,11 @@ export async function bootProductEditor({
   shell=new RichReaderEditorShellV1({
     host,
     service,
+    keyboardTarget:documentObject,
     operationIdFactory:()=> "product-move-"+cryptoObject.randomUUID(),
+    historyOperationIdFactory:()=> "product-undo-"+cryptoObject.randomUUID(),
     onState:(state)=>{
-      const view=productEditorStatusView(state,shell?.readerScene,service.lastCommitTraceContext);
+      const view=productEditorStatusView(state,shell?.readerScene);
       statusText(status,view.status,view.kind);
       fidelity.textContent=view.fidelity;
     },
