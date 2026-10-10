@@ -153,6 +153,38 @@ try {
   if(native.can_download||native.can_serialize||native.blocker_code!=="font_layout_unverified"){
     throw new Error("font-changed real PUB is falsely downloadable");
   }
+  // Real user screenshot must never present unresolved Publisher Story text
+  // as a free-running single line across other objects. This is a rendering
+  // safety claim only; it does NOT prove authoritative glyph placement.
+  const clip=await page.evaluate(()=>{
+    const viewports=[...document.querySelectorAll(
+      '#host svg[data-text-viewport="unshaped-source-frame"]'
+    )];
+    const offFrame=[...document.querySelectorAll(
+      '#host text[data-preview-reason="story_text_layout_not_implemented"]'
+    )].filter(node=>!node.closest(
+      '[data-text-viewport="unshaped-source-frame"]'
+    ));
+    const mismatched=viewports.filter(viewport=>{
+      const width=Number(viewport.getAttribute("width"));
+      const height=Number(viewport.getAttribute("height"));
+      return viewport.getAttribute("overflow")!=="hidden"||
+        viewport.getAttribute("data-layout-verified")!=="false"||
+        viewport.getAttribute("data-preview-reason")!=="story_text_layout_not_implemented"||
+        !Number.isFinite(width)||width<=0||
+        !Number.isFinite(height)||height<=0;
+    });
+    return {
+      unresolved_frames:viewports.length,
+      escaped_text_nodes:offFrame.length,
+      incorrectly_marked_frames:mismatched.length,
+    };
+  });
+  if(clip.unresolved_frames===0||clip.escaped_text_nodes!==0||
+     clip.incorrectly_marked_frames!==0){
+    throw new Error("real Publisher Story text painted outside unshaped source frame: "+
+                    JSON.stringify(clip));
+  }
   fs.mkdirSync("target/font-http-acceptance",{recursive:true});
   const evidence={
     receipt_kind:"chaptera.real-chromium-font-range-apply.v1",
@@ -169,6 +201,8 @@ try {
     original_story_text_unchanged:true,
     user_typography_inspector:true,
     diagnostics_collapsed_by_default:true,
+    unresolved_story_frame_clip:clip,
+    unshaped_layout_still_unverified:true,
     page_errors:errors,
   };
   if(errors.length)throw Error("Chromium page errors: "+errors.join("; "));
