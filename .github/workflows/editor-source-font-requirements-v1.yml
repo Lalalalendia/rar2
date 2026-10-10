@@ -6,6 +6,8 @@ on:
       - "tools/pub_source_font_requirements_v1.py"
       - "tools/export_cloud_reader_windows_fonts.py"
       - "tools/audit_private_source_font_styles_v1.py"
+      - "tools/private_font_os2_embedding_v1.py"
+      - "tools/ci/test_private_font_os2_policy_v1.py"
       - "tools/ci/test_private_source_font_styles_v1.py"
       - "tools/ci/test_pub_source_font_requirements_v1.py"
       - "tools/ci/test_export_cloud_reader_windows_fonts.py"
@@ -45,3 +47,5 @@ jobs:
         run: python tools/ci/test_export_cloud_reader_windows_fonts.py
       - name: Prove private source face/style coverage cannot authorize native output
         run: python tools/ci/test_private_source_font_styles_v1.py
+      - name: Prove OS2 font embedding restrictions are only negative evidence
+        run: python tools/ci/test_private_font_os2_policy_v1.py
