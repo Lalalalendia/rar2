@@ -7,6 +7,7 @@ on:
       - "crates/chaptera-desktop-shaped-flow-runtime/src/lib.rs"
       - "crates/chaptera-desktop-shaped-flow-runtime/src/font_resource.rs"
       - "crates/chaptera-desktop-shaped-flow-runtime/src/current_typography.rs"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/current_font_spans.rs"
       - "crates/chaptera-caret-layout-feed/**"
       - "crates/chaptera-text-caret-map-adapter/**"
       - "vendor/producer-a/crates/pub-layout/**"
@@ -78,3 +79,10 @@ jobs:
         run: |
           cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml \
             real_sample_newsletter_current_story_builds_deterministically_and_rebinds_after_edit -- --nocapture
+      - name: Real Publisher exact physical-font override glyph spans with fresh project
+        run: |
+          set -o pipefail
+          cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml \
+            real_newsletter_font_history_shapes_only_admitted_scalar_and_survives_reopen -- --nocapture \
+            | tee /tmp/chaptera-current-exact-font-spans.log
+          grep -Fq 'REAL_PUB_FONT_SPANS_OK' /tmp/chaptera-current-exact-font-spans.log
