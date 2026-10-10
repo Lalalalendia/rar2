@@ -11,6 +11,18 @@ test("editor path admits one canonical document identity",()=>{
   assert.equal(documentIdFromEditorPath("/reader/doc/"+DOC),null);
 });
 
+test("project-from-upload DocumentId is accepted without changing persistent identities",()=>{
+  // Mirrors project_persistence_sqlite::stable_id("document", tenant, request).
+  const persisted = "document:" + "0123456789abcdef01234567";
+  assert.equal(documentIdFromEditorPath("/editor/doc/" + persisted), persisted);
+  assert.equal(documentIdFromEditorPath("/editor/doc/" + persisted + "/"), persisted);
+  assert.equal(documentIdFromEditorPath("/editor/doc/document:" + "a".repeat(23)), null);
+  assert.equal(documentIdFromEditorPath("/editor/doc/document:" + "a".repeat(25)), null);
+  assert.equal(documentIdFromEditorPath("/editor/doc/document:" + "A".repeat(24)), null);
+  assert.equal(documentIdFromEditorPath("/editor/doc/" + persisted + "/extra"), null);
+  assert.equal(documentIdFromEditorPath("/editor/doc/%2e%2e%2fadmin"), null);
+});
+
 test("login return stays same-origin relative",()=>{
   assert.equal(
     loginUrlForReturnPath("/editor/doc/"+DOC+"?mode=move"),

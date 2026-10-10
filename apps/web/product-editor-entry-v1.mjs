@@ -3,13 +3,15 @@ import { ChapteraProductEditorServiceV1 } from "./chaptera-product-editor-servic
 import { RichReaderEditorShellV1 } from "./rich-reader-editor-shell-v1.mjs";
 
 const UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+// ProjectPersistence V0 emits document:<24 lowercase SHA-256 hex>, not a UUID.
+const PERSISTED_DOCUMENT_RE=/^document:[0-9a-f]{24}$/;
 
 export function documentIdFromEditorPath(pathname){
   if(typeof pathname!=="string") return null;
   const match=pathname.match(/^\/editor\/doc\/([^/]+)\/?$/);
   if(!match) return null;
   const value=decodeURIComponent(match[1]);
-  return UUID_RE.test(value)?value:null;
+  return (UUID_RE.test(value) || PERSISTED_DOCUMENT_RE.test(value)) ? value : null;
 }
 
 export function loginUrlForReturnPath(returnPath){
