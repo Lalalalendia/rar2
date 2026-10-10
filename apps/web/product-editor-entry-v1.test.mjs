@@ -40,6 +40,21 @@ test("pending, rejected and uncertain edits are not presented as a saved revisio
     assert.match(view.status, /reload/);
     assert.doesNotMatch(view.status, /Revision sha256:base/);
   }
+  const undoPending = productEditorStatusView(
+    { reason: "history_sent", revision_id: "sha256:child" },
+    scene,
+  );
+  assert.equal(undoPending.kind, "pending");
+  assert.match(undoPending.status, /Undoing/);
+  for (const reason of ["history_error", "history_rejected"]) {
+    const view = productEditorStatusView(
+      { reason, revision_id: "sha256:child" },
+      scene,
+    );
+    assert.equal(view.kind, "error");
+    assert.doesNotMatch(view.status, /Revision sha256:child/);
+  }
+
   const confirmed = productEditorStatusView({
     reason: "commit_reconciled",
     revision_id: "sha256:child",
