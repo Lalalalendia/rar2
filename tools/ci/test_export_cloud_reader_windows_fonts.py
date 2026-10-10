@@ -295,7 +295,7 @@ def test_private_requirements_regular_only_fence(tmp: Path) -> None:
         assert "not canonical source evidence" in str(exc)
     else:
         raise AssertionError("script-only Quill alternative invented direct font identity")
-    script_only["families"][0]["direct_run_source_font_indices"] = [7, 9]
+    serif["direct_run_source_font_indices"] = [7, 9]
     plan.write_text(json.dumps(script_only), encoding="utf-8")
     # Even an internally consistent but tampered packet cannot become Editor
     # admission. This parser is explicitly non-authorizing.
