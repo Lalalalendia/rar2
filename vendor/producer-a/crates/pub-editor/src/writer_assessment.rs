@@ -1125,6 +1125,11 @@ impl PersistenceRequirements for EditOperation {
                             origin: Some(shape.node_id.into_canonical()),
                             property_path: Some("node.paint".into()),
                         },
+                        PersistenceRequirement {
+                            feature: "node.authored_stack_order".into(),
+                            origin: Some(shape.node_id.into_canonical()),
+                            property_path: Some("page.authored_stack".into()),
+                        },
                     ]);
                 }
                 requirements
