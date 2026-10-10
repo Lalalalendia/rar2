@@ -81,8 +81,29 @@ impl ViewerEmbeddedImage {
         }
     }
 
-    /// Construct an exact admitted embedded image resource.
+    /// Construct exact image bytes without independently verified source SHA.
+    /// Used by synthetic Viewer consumers; Desktop refuses source-exact decode
+    /// until the Reader asset manifest has verified the original resource.
     pub fn exact(
+        resource_id: ResourceId,
+        mime: String,
+        node_ids: Vec<NodeId>,
+        placements: Vec<ViewerImagePlacementV1>,
+        bytes: Vec<u8>,
+    ) -> Self {
+        Self {
+            resource_id,
+            mime,
+            source_exact: true,
+            verified_source_sha256: None,
+            node_ids,
+            placements,
+            bytes,
+        }
+    }
+
+    /// Only the independently verified Reader export may promote original bytes.
+    pub fn exact_with_verified_source_sha256(
         resource_id: ResourceId,
         mime: String,
         node_ids: Vec<NodeId>,
@@ -90,15 +111,9 @@ impl ViewerEmbeddedImage {
         verified_source_sha256: Sha256Digest,
         bytes: Vec<u8>,
     ) -> Self {
-        Self {
-            resource_id,
-            mime,
-            source_exact: true,
-            verified_source_sha256: Some(verified_source_sha256),
-            node_ids,
-            placements,
-            bytes,
-        }
+        let mut image = Self::exact(resource_id, mime, node_ids, placements, bytes);
+        image.verified_source_sha256 = Some(verified_source_sha256);
+        image
     }
 }
 

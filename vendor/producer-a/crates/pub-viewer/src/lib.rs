@@ -2541,14 +2541,11 @@ fn open_mature_0x2c_bundle(
                         });
                     }
                 }
-
-                images.push(ViewerEmbeddedImage::exact(
+                images.push(ViewerEmbeddedImage::exact_with_verified_source_sha256(
                     file.resource_id,
                     entry.mime.clone(),
                     entry.uses.iter().map(|usage| usage.node_id).collect(),
                     placements,
-                    // The Reader export bundle already cross-checked these
-                    // materialized bytes against the source asset manifest.
                     entry.sha256,
                     file.bytes,
                 ));

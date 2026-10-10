@@ -311,16 +311,12 @@ mod tests {
         let actual_bytes = b"not the manifest resource";
         let verified = Sha256Digest::from_bytes([0x22; 32]);
         let extra_hash_passes = Cell::new(0);
-        let expected = expected_viewer_image_sha256_with_v1(
-            true,
-            Some(verified),
-            actual_bytes,
-            |bytes| {
+        let expected =
+            expected_viewer_image_sha256_with_v1(true, Some(verified), actual_bytes, |bytes| {
                 extra_hash_passes.set(extra_hash_passes.get() + 1);
                 exact_sha256_hex(bytes)
-            },
-        )
-        .expect("source-exact must carry Reader proof");
+            })
+            .expect("source-exact must carry Reader proof");
         assert_eq!(extra_hash_passes.get(), 0, "no self-issued predecode hash");
         assert_eq!(expected, "22".repeat(32));
 
@@ -328,28 +324,24 @@ mod tests {
             .expect_err("decoder must still hash actual bytes and fail closed");
         assert_eq!(mismatch.code, "resource_hash_mismatch");
 
-        let missing = expected_viewer_image_sha256_with_v1(
-            true, None, actual_bytes,
-            |_| panic!("missing trusted SHA must not hash/accept source bytes"),
-        )
+        let missing = expected_viewer_image_sha256_with_v1(true, None, actual_bytes, |_| {
+            panic!("missing trusted SHA must not hash/accept source bytes")
+        })
         .expect_err("no Reader authority means no exact admission");
         assert_eq!(missing.code, "missing_verified_source_image_hash");
 
-        let bad_preview = expected_viewer_image_sha256_with_v1(
-            false, Some(verified), actual_bytes,
-            |_| panic!("preview cannot gain exact source authority"),
-        )
-        .expect_err("preview cannot impersonate a validated source resource");
+        let bad_preview =
+            expected_viewer_image_sha256_with_v1(false, Some(verified), actual_bytes, |_| {
+                panic!("preview cannot gain exact source authority")
+            })
+            .expect_err("preview cannot impersonate a validated source resource");
         assert_eq!(bad_preview.code, "preview_claims_verified_source_hash");
 
         let preview_hash_passes = Cell::new(0);
-        let preview = expected_viewer_image_sha256_with_v1(
-            false, None, actual_bytes,
-            |bytes| {
-                preview_hash_passes.set(preview_hash_passes.get() + 1);
-                exact_sha256_hex(bytes)
-            },
-        )
+        let preview = expected_viewer_image_sha256_with_v1(false, None, actual_bytes, |bytes| {
+            preview_hash_passes.set(preview_hash_passes.get() + 1);
+            exact_sha256_hex(bytes)
+        })
         .expect("legacy preview uses derived PNG identity only");
         assert_eq!(preview_hash_passes.get(), 1);
         assert_eq!(preview, exact_sha256_hex(actual_bytes));
