@@ -2,8 +2,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     Json, Router,
+    body::Body,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{
+        HeaderMap, HeaderName, HeaderValue, StatusCode,
+        header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
+    },
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -11,10 +15,13 @@ use axum_extra::extract::cookie::CookieJar;
 use chaptera_cdm_model::AUTHORING_REVISION_SCHEMA_V1;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
+use tokio::io::AsyncReadExt;
 
 use crate::{
     auth_http::{AuthHttpError, AuthHttpState},
     blob_store::{BlobStoreError, BlobStoreService},
+    export_executor::{IDML_BOUNDED_EDITABLE_PROFILE, ODG_BOUNDED_EDITABLE_PROFILE},
     jobs_runtime::{
         AuthorizedExportDownloadV1, CreateExportJobRequestV1, ExportJobSnapshotV1, JobsRuntime,
         JobsRuntimeError,
@@ -28,6 +35,9 @@ pub const EXPORT_JOB_HTTP_V1: &str = "chaptera.export-job-http.v1";
 pub const EXPORT_DOWNLOAD_V1: &str = "chaptera.export-download.v1";
 pub const EXPORT_LOSS_DOWNLOAD_V1: &str = "chaptera.export-loss-download.v1";
 const DOWNLOAD_GRANT_TTL_MS: u64 = 5 * 60 * 1000;
+const STREAMED_EXPORT_BUFFER_BYTES: usize = 64 * 1024;
+const MAX_STREAMED_EXPORT_BYTES: usize = 64 * 1024 * 1024;
+const X_CONTENT_TYPE_OPTIONS: HeaderName = HeaderName::from_static("x-content-type-options");
 
 #[derive(Clone)]
 pub struct ProductExportHttpState {
@@ -62,6 +72,10 @@ pub fn router(state: ProductExportHttpState) -> Router {
         .route("/v1/exports/{job_id}", get(export_status))
         .route("/v1/exports/{job_id}/cancel", post(cancel_export))
         .route("/v1/exports/{job_id}/download", post(authorize_download))
+        .route(
+            "/v1/exports/{job_id}/artifacts/{artifact_id}",
+            get(stream_export_artifact),
+        )
         .route(
             "/v1/exports/{job_id}/loss-report/download",
             post(authorize_loss_report_download),
@@ -282,6 +296,544 @@ async fn authorize_download(
         download_handle: grant.opaque_url,
         expires_at_ms: grant.expires_at_ms,
     }))
+}
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DownloadRepresentation {
+    mime: &'static str,
+    extension: &'static str,
+}
+
+async fn stream_export_artifact(
+    State(state): State<ProductExportHttpState>,
+    Path((job_id, artifact_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    jar: CookieJar,
+) -> Result<Response, ProductExportHttpError> {
+    require_ident(&job_id, "job_id")?;
+    require_ident(&artifact_id, "artifact_id")?;
+
+    let principal = state
+        .auth
+        .authenticate_read_request(&headers, &jar)
+        .await
+        .map_err(ProductExportHttpError::Auth)?;
+    let publication = state
+        .jobs
+        .authorize_download_by_job_id(
+            &principal.principal_id,
+            &job_id,
+            "export:http-download",
+            now_ms()?,
+        )
+        .await
+        .map_err(ProductExportHttpError::Jobs)?;
+    if artifact_id != publication.artifact_binding_id {
+        return Err(ProductExportHttpError::conflict(
+            "artifact_identity_mismatch",
+            "requested artifact differs from the current authorized export publication",
+        ));
+    }
+
+    let representation = target_download_representation(&publication.target_profile)?;
+    let bytes = read_verified_binding_bounded(
+        &state.blobs,
+        &publication.tenant_id,
+        &publication.artifact_binding_id,
+    )
+    .await?;
+    let observed_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+    if observed_hash != publication.artifact_content_hash {
+        return Err(ProductExportHttpError::internal(
+            "artifact_publication_hash_mismatch",
+            "verified blob bytes differ from the immutable export publication hash",
+        ));
+    }
+
+    let byte_len = bytes.len();
+    let (filename, filename_star) =
+        safe_export_filename(&publication.document_id, representation.extension);
+    let disposition =
+        format!("attachment; filename=\"{filename}\"; filename*=UTF-8''{filename_star}");
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = StatusCode::OK;
+    let response_headers = response.headers_mut();
+    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static(representation.mime));
+    response_headers.insert(
+        CONTENT_DISPOSITION,
+        HeaderValue::from_str(&disposition).map_err(|_| {
+            ProductExportHttpError::internal(
+                "download_header_invalid",
+                "sanitized Content-Disposition could not be encoded",
+            )
+        })?,
+    );
+    response_headers.insert(
+        CONTENT_LENGTH,
+        HeaderValue::from_str(&byte_len.to_string()).map_err(|_| {
+            ProductExportHttpError::internal(
+                "download_header_invalid",
+                "verified Content-Length could not be encoded",
+            )
+        })?,
+    );
+    response_headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    Ok(response)
+}
+
+async fn read_verified_binding_bounded(
+    blobs: &BlobStoreService,
+    tenant_id: &str,
+    binding_id: &str,
+) -> Result<Vec<u8>, ProductExportHttpError> {
+    let (writer, mut reader) = tokio::io::duplex(STREAMED_EXPORT_BUFFER_BYTES);
+    let stream = async {
+        let mut writer = writer;
+        blobs
+            .stream_binding_verified(tenant_id, binding_id, &mut writer)
+            .await
+            .map_err(ProductExportHttpError::Blob)?;
+        Ok::<(), ProductExportHttpError>(())
+    };
+    let collect = async {
+        let mut output = Vec::new();
+        let mut buffer = [0_u8; STREAMED_EXPORT_BUFFER_BYTES];
+        loop {
+            let count = reader.read(&mut buffer).await.map_err(|error| {
+                ProductExportHttpError::internal(
+                    "download_stream_read_failed",
+                    format!("failed to read verified export stream: {error}"),
+                )
+            })?;
+            if count == 0 {
+                break;
+            }
+            let next_len = output.len().checked_add(count).ok_or_else(|| {
+                ProductExportHttpError::payload_too_large(
+                    "streamed_export_too_large",
+                    "server-streamed export exceeds the bounded download adapter",
+                )
+            })?;
+            if next_len > MAX_STREAMED_EXPORT_BYTES {
+                return Err(ProductExportHttpError::payload_too_large(
+                    "streamed_export_too_large",
+                    "server-streamed export exceeds the bounded download adapter",
+                ));
+            }
+            output.extend_from_slice(&buffer[..count]);
+        }
+        Ok::<Vec<u8>, ProductExportHttpError>(output)
+    };
+    let ((), bytes) = tokio::try_join!(stream, collect)?;
+    Ok(bytes)
+}
+
+fn target_download_representation(
+    target_profile: &str,
+) -> Result<DownloadRepresentation, ProductExportHttpError> {
+    match target_profile {
+        IDML_BOUNDED_EDITABLE_PROFILE => Ok(DownloadRepresentation {
+            mime: "application/vnd.adobe.indesign-idml-package",
+            extension: "idml",
+        }),
+        ODG_BOUNDED_EDITABLE_PROFILE => Ok(DownloadRepresentation {
+            mime: "application/vnd.oasis.opendocument.graphics",
+            extension: "odg",
+        }),
+        _ => Err(ProductExportHttpError::conflict(
+            "export_target_profile_unsupported",
+            "authorized export publication has no admitted browser download representation",
+        )),
+    }
+}
+
+fn safe_export_filename(stem: &str, extension: &str) -> (String, String) {
+    let mut cleaned = String::new();
+    let mut previous_dash = false;
+    for ch in stem.chars().take(80) {
+        if ch.is_alphanumeric() || matches!(ch, '-' | '_') {
+            cleaned.push(ch);
+            previous_dash = false;
+        } else if !previous_dash && !cleaned.is_empty() {
+            cleaned.push('-');
+            previous_dash = true;
+        }
+    }
+    while cleaned.ends_with('-') || cleaned.ends_with('_') {
+        cleaned.pop();
+    }
+    if cleaned.is_empty() {
+        cleaned.push_str("export");
+    }
+
+    let unicode_name = format!("chaptera-{cleaned}.{extension}");
+    let mut ascii_name = String::with_capacity(unicode_name.len());
+    let mut last_underscore = false;
+    for ch in unicode_name.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            ascii_name.push(ch);
+            last_underscore = false;
+        } else if !last_underscore {
+            ascii_name.push('_');
+            last_underscore = true;
+        }
+    }
+    (ascii_name, rfc5987_encode(&unicode_name))
+}
+
+fn rfc5987_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.as_bytes() {
+        if byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'!' | b'#' | b'
+    State(state): State<ProductExportHttpState>,
+    Path(job_id): Path<String>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Json(request): Json<LossReportDownloadRequestV1>,
+) -> Result<Json<ExportLossDownloadResponseV1>, ProductExportHttpError> {
+    require_ident(&job_id, "job_id")?;
+    require_ident(&request.loss_report_id, "loss_report_id")?;
+    let principal = state
+        .auth
+        .authenticate_mutation_request(&headers, &jar)
+        .await
+        .map_err(ProductExportHttpError::Auth)?;
+    let now = now_ms()?;
+    let publication = state
+        .jobs
+        .authorize_download_by_job_id(
+            &principal.principal_id,
+            &job_id,
+            "export:loss-report-download",
+            now,
+        )
+        .await
+        .map_err(ProductExportHttpError::Jobs)?;
+    if request.loss_report_id != publication.loss_binding_id {
+        return Err(ProductExportHttpError::conflict(
+            "loss_report_identity_mismatch",
+            "requested loss_report_id differs from the visible authorized export publication",
+        ));
+    }
+    let now_u64 = u64::try_from(now)
+        .map_err(|_| ProductExportHttpError::internal("clock_out_of_range", "negative clock"))?;
+    let expires_at_ms = now_u64.checked_add(DOWNLOAD_GRANT_TTL_MS).ok_or_else(|| {
+        ProductExportHttpError::internal("clock_out_of_range", "grant expiry overflow")
+    })?;
+    let grant = state
+        .blobs
+        .issue_download_grant(
+            &publication.tenant_id,
+            &publication.loss_binding_id,
+            now_u64,
+            expires_at_ms,
+        )
+        .await
+        .map_err(ProductExportHttpError::Blob)?;
+
+    Ok(Json(ExportLossDownloadResponseV1 {
+        protocol_version: EXPORT_LOSS_DOWNLOAD_V1,
+        job_id,
+        loss_report_id: publication.loss_binding_id,
+        download_handle: grant.opaque_url,
+        expires_at_ms: grant.expires_at_ms,
+    }))
+}
+
+fn job_response(
+    snapshot: ExportJobSnapshotV1,
+    publication: Option<&AuthorizedExportDownloadV1>,
+) -> ExportJobHttpV1 {
+    let status = match snapshot.status.as_str() {
+        "queued" => "queued",
+        "running" => "running",
+        "succeeded" => "ready",
+        "failed" => "failed",
+        "cancelled" => "cancelled",
+        _ => "failed",
+    };
+    ExportJobHttpV1 {
+        protocol_version: EXPORT_JOB_HTTP_V1,
+        job_id: snapshot.job_id,
+        document_id: snapshot.document_id,
+        revision_id: snapshot.exact_revision_id,
+        target_profile: snapshot.target_profile,
+        layout_environment_id: snapshot.layout_environment_id,
+        status,
+        artifact_id: publication.map(|value| value.artifact_binding_id.clone()),
+        loss_report_id: publication.map(|value| value.loss_binding_id.clone()),
+        error_code: if status == "failed" {
+            snapshot
+                .terminal_code
+                .or_else(|| Some("export_failed".to_owned()))
+        } else {
+            None
+        },
+        progress_percent: None,
+    }
+}
+
+fn validate_create_request(request: &CreateExportHttpV1) -> Result<(), ProductExportHttpError> {
+    if request.protocol_version != EXPORT_CREATE_V1 {
+        return Err(ProductExportHttpError::bad_request(
+            "protocol_version_invalid",
+            "chaptera.export-create.v1 is required",
+        ));
+    }
+    for (label, value) in [
+        ("document_id", request.document_id.as_str()),
+        ("revision_id", request.revision_id.as_str()),
+        ("target_profile", request.target_profile.as_str()),
+        (
+            "layout_environment_id",
+            request.layout_environment_id.as_str(),
+        ),
+        ("client_request_id", request.client_request_id.as_str()),
+    ] {
+        require_ident(value, label)?;
+    }
+    Ok(())
+}
+
+fn require_ident(value: &str, label: &'static str) -> Result<(), ProductExportHttpError> {
+    if value.is_empty()
+        || value.len() > 256
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'@' | b'/' | b'-')
+        })
+    {
+        return Err(ProductExportHttpError::bad_request(
+            "invalid_identity",
+            format!("invalid {label}"),
+        ));
+    }
+    Ok(())
+}
+
+fn now_ms() -> Result<i64, ProductExportHttpError> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| {
+            ProductExportHttpError::internal("clock_invalid", "system clock is before epoch")
+        })?
+        .as_millis();
+    i64::try_from(millis).map_err(|_| {
+        ProductExportHttpError::internal("clock_out_of_range", "system clock is out of range")
+    })
+}
+
+#[derive(Debug)]
+enum ProductExportHttpError {
+    Auth(AuthHttpError),
+    Source(SourceAuthorityError),
+    Store(SqliteStoreError),
+    Jobs(JobsRuntimeError),
+    Blob(BlobStoreError),
+    Http {
+        status: StatusCode,
+        code: &'static str,
+        message: String,
+    },
+}
+
+impl ProductExportHttpError {
+    fn bad_request(code: &'static str, message: impl Into<String>) -> Self {
+        Self::Http {
+            status: StatusCode::BAD_REQUEST,
+            code,
+            message: message.into(),
+        }
+    }
+
+    fn conflict(code: &'static str, message: impl Into<String>) -> Self {
+        Self::Http {
+            status: StatusCode::CONFLICT,
+            code,
+            message: message.into(),
+        }
+    }
+
+    fn payload_too_large(code: &'static str, message: impl Into<String>) -> Self {
+        Self::Http {
+            status: StatusCode::PAYLOAD_TOO_LARGE,
+            code,
+            message: message.into(),
+        }
+    }
+
+    fn internal(code: &'static str, message: impl Into<String>) -> Self {
+        Self::Http {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl IntoResponse for ProductExportHttpError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Auth(error) => error.into_response(),
+            Self::Source(error) => (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error":{"code":error.code,"message":error.message}})),
+            )
+                .into_response(),
+            Self::Store(error) => {
+                let status = if error.code == "canonical_revision_unbound" {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                };
+                (
+                    status,
+                    Json(json!({"error":{"code":error.code,"message":error.message}})),
+                )
+                    .into_response()
+            }
+            Self::Jobs(error) => {
+                let status = match error.code {
+                    "job_not_found" => StatusCode::NOT_FOUND,
+                    "idempotency_conflict"
+                    | "job_scope_mismatch"
+                    | "job_payload_scope_mismatch"
+                    | "export_artifact_not_ready"
+                    | "export_artifact_not_visible" => StatusCode::CONFLICT,
+                    "grant_missing"
+                    | "grant_expired"
+                    | "capability_denied"
+                    | "authz_denied"
+                    | "authz_expired" => StatusCode::FORBIDDEN,
+                    "invalid_client_request_id" | "invalid_operation_id" => StatusCode::BAD_REQUEST,
+                    _ => StatusCode::INTERNAL_SERVER_ERROR,
+                };
+                (
+                    status,
+                    Json(json!({"error":{"code":error.code,"message":error.message}})),
+                )
+                    .into_response()
+            }
+            Self::Blob(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":{"code":error.code,"message":error.message}})),
+            )
+                .into_response(),
+            Self::Http {
+                status,
+                code,
+                message,
+            } => (
+                status,
+                Json(json!({"error":{"code":code,"message":message}})),
+            )
+                .into_response(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loss_report_download_request_rejects_artifact_authority() {
+        let value = json!({
+            "loss_report_id": "binding:loss",
+            "artifact_id": "binding:artifact"
+        });
+        assert!(serde_json::from_value::<LossReportDownloadRequestV1>(value).is_err());
+    }
+
+    #[test]
+    fn create_shape_rejects_browser_tenant_and_canonical_revision_authority() {
+        let value = json!({
+            "protocol_version": EXPORT_CREATE_V1,
+            "document_id": "doc:one",
+            "revision_id": format!("sha256:{}", "a".repeat(64)),
+            "target_profile": "idml:bounded-editable",
+            "layout_environment_id": format!("sha256:{}", "b".repeat(64)),
+            "client_request_id": "export-request-0001",
+            "tenant_id": "tenant:browser",
+            "canonical_authoring_revision_id": "c".repeat(64)
+        });
+        assert!(serde_json::from_value::<CreateExportHttpV1>(value).is_err());
+    }
+
+    #[test]
+    fn succeeded_job_becomes_ready_only_with_visible_publication_ids() {
+        let snapshot = ExportJobSnapshotV1 {
+            job_id: "export-job:ready".into(),
+            tenant_id: "tenant:one".into(),
+            document_id: "doc:one".into(),
+            exact_revision_id: format!("sha256:{}", "a".repeat(64)),
+            canonical_authoring_revision_id: "b".repeat(64),
+            target_profile: "idml:bounded-editable".into(),
+            layout_environment_id: format!("sha256:{}", "c".repeat(64)),
+            status: "succeeded".into(),
+            attempt: 1,
+            max_attempts: 3,
+            cancel_requested: false,
+            terminal_code: None,
+        };
+        let publication = AuthorizedExportDownloadV1 {
+            job_id: "export-job:ready".into(),
+            tenant_id: "tenant:one".into(),
+            document_id: "doc:one".into(),
+            exact_revision_id: format!("sha256:{}", "a".repeat(64)),
+            canonical_authoring_revision_id: "b".repeat(64),
+            target_profile: "idml:bounded-editable".into(),
+            layout_environment_id: format!("sha256:{}", "c".repeat(64)),
+            artifact_binding_id: "binding:artifact".into(),
+            artifact_content_hash: format!("sha256:{}", "d".repeat(64)),
+            loss_binding_id: "binding:loss".into(),
+            loss_report_hash: format!("sha256:{}", "e".repeat(64)),
+        };
+        let response = job_response(snapshot, Some(&publication));
+        assert_eq!(response.status, "ready");
+        assert_eq!(response.artifact_id.as_deref(), Some("binding:artifact"));
+        assert_eq!(response.loss_report_id.as_deref(), Some("binding:loss"));
+        assert_eq!(response.progress_percent, None);
+    }
+
+    #[test]
+    fn web_job_shape_never_fabricates_progress_or_artifact_before_ready() {
+        let snapshot = ExportJobSnapshotV1 {
+            job_id: "export-job:one".into(),
+            tenant_id: "tenant:one".into(),
+            document_id: "doc:one".into(),
+            exact_revision_id: format!("sha256:{}", "a".repeat(64)),
+            canonical_authoring_revision_id: "b".repeat(64),
+            target_profile: "idml:bounded-editable".into(),
+            layout_environment_id: format!("sha256:{}", "c".repeat(64)),
+            status: "running".into(),
+            attempt: 1,
+            max_attempts: 3,
+            cancel_requested: false,
+            terminal_code: None,
+        };
+        let response = job_response(snapshot, None);
+        assert_eq!(response.status, "running");
+        assert_eq!(response.progress_percent, None);
+        assert_eq!(response.artifact_id, None);
+        assert_eq!(response.loss_report_id, None);
+    }
+}
+ | b'&' | b'+' | b'-' | b'.' | b'^' | b'_'
+                    | b'\x60' | b'|' | b'~'
+            )
+        {
+            encoded.push(char::from(*byte));
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(&mut encoded, "%{byte:02X}");
+        }
+    }
+    encoded
 }
 
 async fn authorize_loss_report_download(
@@ -605,4 +1157,50 @@ mod tests {
         assert_eq!(response.artifact_id, None);
         assert_eq!(response.loss_report_id, None);
     }
+
+    #[test]
+    fn browser_download_representation_is_exact_target_derived() {
+        let idml = target_download_representation(IDML_BOUNDED_EDITABLE_PROFILE).unwrap();
+        assert_eq!(idml.extension, "idml");
+        assert_eq!(
+            idml.mime,
+            "application/vnd.adobe.indesign-idml-package"
+        );
+
+        let odg = target_download_representation(ODG_BOUNDED_EDITABLE_PROFILE).unwrap();
+        assert_eq!(odg.extension, "odg");
+        assert_eq!(odg.mime, "application/vnd.oasis.opendocument.graphics");
+
+        assert!(target_download_representation("html:guess").is_err());
+    }
+
+    #[test]
+    fn export_filename_is_attachment_safe_for_hostile_and_unicode_stems() {
+        let (ascii, encoded) =
+            safe_export_filename("../../CON\\\r\n<script>Книга</script>", "idml");
+        assert!(ascii.starts_with("chaptera-"));
+        assert!(ascii.ends_with(".idml"));
+        assert!(!ascii.contains('/'));
+        assert!(!ascii.contains('\\'));
+        assert!(!ascii.contains('\r'));
+        assert!(!ascii.contains('\n'));
+        assert!(!ascii.contains('"'));
+        assert!(!encoded.contains('/'));
+        assert!(!encoded.contains('\\'));
+        assert!(encoded.contains("%D0%9A"));
+        assert!(encoded.ends_with(".idml"));
+    }
+
+    #[test]
+    fn export_authz_denials_are_http_forbidden_not_internal_errors() {
+        for code in ["grant_missing", "grant_expired", "capability_denied"] {
+            let response = ProductExportHttpError::Jobs(JobsRuntimeError {
+                code,
+                message: "denied".to_owned(),
+            })
+            .into_response();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{code}");
+        }
+    }
+
 }
