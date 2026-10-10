@@ -2776,7 +2776,6 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
     let _ = fs::remove_dir_all(root);
 }
 
-
 #[cfg(not(feature = "reader-only"))]
 #[test]
 #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
@@ -2810,11 +2809,12 @@ fn gui_delete_authored_rectangles_page_v032_click_undo_redo_reopen_real_pub() {
     harness.step();
 
     let source_pages = harness.state().source_customer_page_ids.clone();
-    assert!(!source_pages.is_empty(), "real PUB must expose customer Pages");
     assert!(
-        harness
-            .get_by_label("Delete Rectangle Page")
-            .is_disabled(),
+        !source_pages.is_empty(),
+        "real PUB must expose customer Pages"
+    );
+    assert!(
+        harness.get_by_label("Delete Rectangle Page").is_disabled(),
         "source-backed Page must fail one-Rectangle Page deletion"
     );
     assert!(
@@ -2867,9 +2867,7 @@ fn gui_delete_authored_rectangles_page_v032_click_undo_redo_reopen_real_pub() {
     }
     harness.step();
     assert!(
-        !harness
-            .get_by_label("Delete Rectangle Page")
-            .is_disabled(),
+        !harness.get_by_label("Delete Rectangle Page").is_disabled(),
         "one Rectangle must remain owned by the v0.29 command"
     );
     assert!(
@@ -2913,9 +2911,7 @@ fn gui_delete_authored_rectangles_page_v032_click_undo_redo_reopen_real_pub() {
     }
     harness.step();
     assert!(
-        harness
-            .get_by_label("Delete Rectangle Page")
-            .is_disabled(),
+        harness.get_by_label("Delete Rectangle Page").is_disabled(),
         "one-Rectangle command must fail closed on the two-object Page"
     );
     assert!(
@@ -3025,9 +3021,7 @@ fn gui_delete_authored_rectangles_page_v032_click_undo_redo_reopen_real_pub() {
         .document
         .source
         .source_hash = wrong_hash;
-    harness
-        .get_by_label("Delete Multi-Rectangle Page")
-        .click();
+    harness.get_by_label("Delete Multi-Rectangle Page").click();
     harness.step();
     harness.step();
     assert_eq!(
@@ -3055,9 +3049,7 @@ fn gui_delete_authored_rectangles_page_v032_click_undo_redo_reopen_real_pub() {
         .source_hash = source_hash;
     harness.step();
 
-    harness
-        .get_by_label("Delete Multi-Rectangle Page")
-        .click();
+    harness.get_by_label("Delete Multi-Rectangle Page").click();
     harness.step();
     harness.step();
 
@@ -3089,7 +3081,11 @@ fn gui_delete_authored_rectangles_page_v032_click_undo_redo_reopen_real_pub() {
 
         let visual = app.visual.as_ref().expect("Viewer after delete");
         assert!(
-            visual.document.pages.iter().all(|page| page.id != authored_page_id),
+            visual
+                .document
+                .pages
+                .iter()
+                .all(|page| page.id != authored_page_id),
             "deleted Page must leave Viewer membership"
         );
         assert!(
@@ -3149,7 +3145,10 @@ fn gui_delete_authored_rectangles_page_v032_click_undo_redo_reopen_real_pub() {
     harness.step();
     {
         let reopen = harness.get_by_label("Reopen Project");
-        assert!(!reopen.is_disabled(), "v0.32 plural delete project must reopen");
+        assert!(
+            !reopen.is_disabled(),
+            "v0.32 plural delete project must reopen"
+        );
         reopen.click();
     }
     harness.step();
@@ -3201,7 +3200,11 @@ fn gui_delete_authored_rectangles_page_v032_click_undo_redo_reopen_real_pub() {
     harness.step();
     harness.step();
     {
-        let editor = harness.state().editor.as_ref().expect("editor after reopen Undo");
+        let editor = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor after reopen Undo");
         assert_eq!(editor.operations().len(), history_before);
         assert_eq!(editor.authored_shape(node_a), Some(&shapes_before[0]));
         assert_eq!(editor.authored_shape(node_b), Some(&shapes_before[1]));
