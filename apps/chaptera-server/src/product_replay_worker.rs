@@ -1279,6 +1279,54 @@ mod tests {
     }
 
     #[test]
+    fn reader_scene_receipt_rejects_replayed_revision_and_bad_shape() {
+        let mut expected = receipt();
+        let scene = serde_json::json!({
+            "protocol_version": READER_SCENE_V1,
+            "scene_authority": "server_viewer_projection",
+            "document_id": "document-a",
+            "source_hash": "a".repeat(64),
+            "revision_id": "revision-a",
+            "pages": [],
+            "nodes": [],
+            "stories": []
+        });
+        expected.reader_scene = Some(IsolatedReaderSceneReceiptV1 {
+            revision_id: "revision-a".into(),
+            baseline_revision_id: "revision-a".into(),
+            scene_sha256: sha256_hex(&serde_json::to_vec(&scene).unwrap()),
+            scene,
+        });
+        assert!(validate_product_replay_receipt(
+            &expected, "document-a", &"a".repeat(64), 512, &"b".repeat(64)
+        ).is_ok());
+
+        let mut other_revision = expected.clone();
+        let refscene = other_revision.reader_scene.as_mut().unwrap();
+        refscene.scene["revision_id"] = Value::String("revision-other".into());
+        // Even when a malicious worker recomputes the checksum, its revision
+        // payload must be bound to the declared exact revision identity.
+        refscene.scene_sha256 = sha256_hex(&serde_json::to_vec(&refscene.scene).unwrap());
+        assert_eq!(
+            validate_product_replay_receipt(
+                &other_revision, "document-a", &"a".repeat(64), 512, &"b".repeat(64)
+            ).unwrap_err().code,
+            "product_replay_receipt_invalid"
+        );
+
+        let mut bad_shape = expected.clone();
+        let bad = bad_shape.reader_scene.as_mut().unwrap();
+        bad.scene["nodes"] = Value::String("forged nodes".into());
+        bad.scene_sha256 = sha256_hex(&serde_json::to_vec(&bad.scene).unwrap());
+        assert_eq!(
+            validate_product_replay_receipt(
+                &bad_shape, "document-a", &"a".repeat(64), 512, &"b".repeat(64)
+            ).unwrap_err().code,
+            "product_replay_receipt_invalid"
+        );
+    }
+
+    #[test]
     fn rejects_untyped_projection_even_when_it_has_a_self_consistent_checksum() {
         let receipt = receipt();
         // A malicious worker could recompute a checksum over arbitrary JSON;
