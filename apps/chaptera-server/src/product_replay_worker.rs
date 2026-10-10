@@ -1461,6 +1461,68 @@ mod tests {
             "product_replay_receipt_invalid"
         );
 
+        // Recomputing a valid scene SHA must never make private fields in
+        // child collections eligible for browser delivery.
+        for (collection, injected) in [
+            (
+                "pages",
+                serde_json::json!({
+                    "page_id": "page-a",
+                    "order": 0,
+                    "width_emu": 100,
+                    "height_emu": 100,
+                    "private_file_path": "/srv/private/source.pub",
+                }),
+            ),
+            (
+                "stories",
+                serde_json::json!({
+                    "story_id": "story-a",
+                    "text": "visible",
+                    "text_fidelity": "source",
+                    "raw_pub_bytes": "secret",
+                }),
+            ),
+            (
+                "resources",
+                serde_json::json!({
+                    "resource_id": "resource-a",
+                    "mime": "image/png",
+                    "availability": "available",
+                    "provider_token": "secret",
+                }),
+            ),
+            (
+                "nodes",
+                serde_json::json!({
+                    "node_id": "node-a",
+                    "page_id": "page-a",
+                    "kind": "shape",
+                    "bounds": {"x": 0, "y": 0, "width": 10, "height": 10},
+                    "transform": {"a": "1", "b": "0", "c": "0", "d": "1", "tx": 0, "ty": 0},
+                    "editor_project": {"private": "secret"},
+                }),
+            ),
+        ] {
+            let mut forged = expected.clone();
+            let scene = forged.reader_scene.as_mut().unwrap();
+            scene.scene[collection] = serde_json::json!([injected]);
+            scene.scene_sha256 = sha256_hex(&serde_json::to_vec(&scene.scene).unwrap());
+            assert_eq!(
+                validate_product_replay_receipt(
+                    &forged,
+                    "document-a",
+                    &"a".repeat(64),
+                    512,
+                    &"b".repeat(64),
+                )
+                .unwrap_err()
+                .code,
+                "product_replay_receipt_invalid",
+                "nested leak in {collection} should be rejected",
+            );
+        }
+
         let mut bad_shape = expected.clone();
         let bad = bad_shape.reader_scene.as_mut().unwrap();
         bad.scene["nodes"] = Value::String("forged nodes".into());
