@@ -194,8 +194,8 @@ pub fn validate_product_replay_receipt(
             "isolated baseline project does not match its source/project identity",
         ));
     }
-    if let Some(move_node) = &receipt.move_node {
-        if receipt.baseline_project.is_some()
+    if let Some(move_node) = &receipt.move_node
+        && (receipt.baseline_project.is_some()
             || !matches!(move_node.operation, EditOperation::MoveNode { .. })
             || move_node.resulting_project.source_hash.to_string() != source_sha256
             || project_sha256(&move_node.resulting_project).map_err(|_| {
@@ -203,13 +203,12 @@ pub fn validate_product_replay_receipt(
                     "product_replay_receipt_invalid",
                     "isolated MoveNode project cannot be canonically hashed",
                 )
-            })? != move_node.resulting_project_sha256
-        {
-            return Err(ProductReplayWorkerError::new(
-                "product_replay_receipt_invalid",
-                "isolated MoveNode receipt violates source and project identity",
-            ));
-        }
+            })? != move_node.resulting_project_sha256)
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_receipt_invalid",
+            "isolated MoveNode receipt violates source and project identity",
+        ));
     }
     Ok(())
 }
