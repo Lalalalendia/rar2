@@ -6,7 +6,7 @@
 use std::{path::PathBuf, str::FromStr, time::Duration};
 
 use chaptera_server::{
-    product_replay_worker::IsolatedProductReplayProducer,
+    product_replay_worker::{IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer},
     revision_materializer::{
         EditorReplayEngine, PubEditorReplayEngine, cloud_revision_project, project_sha256,
     },
@@ -127,10 +127,42 @@ async fn pinned_sample3_exact_project_replays_in_real_seccomp_worker() {
                 .map(|_| (*node_id, x, y))
         })
         .expect("Sample3 must have a movable object");
-    expected
+    let expected_operation = expected
         .move_node_to(node_id, LengthEmu::new(x_emu), LengthEmu::new(y_emu))
         .unwrap();
     let edited_project = cloud_revision_project(&expected.project());
+    let intent = IsolatedMoveNodeIntentV1 {
+        node_id: serde_json::to_value(node_id).unwrap().as_str().unwrap().to_owned(),
+        x_emu,
+        y_emu,
+    };
+    let (isolated_operation, isolated_project) = producer
+        .move_node_to(
+            "document-sample3-isolated",
+            &source_sha256,
+            &source_bytes,
+            &project,
+            &project_hash,
+            &intent,
+        )
+        .await
+        .unwrap();
+    assert_eq!(isolated_operation, expected_operation);
+    assert_eq!(isolated_project, edited_project);
+
+    // This is a host-side source/revision fence, before any subprocess.
+    let mismatched = producer
+        .move_node_to(
+            "document-sample3-isolated",
+            &source_sha256,
+            &source_bytes,
+            &project,
+            &"0".repeat(64),
+            &intent,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(mismatched.code, "product_replay_project_hash_mismatch");
     let edited_sha = project_sha256(&edited_project).unwrap();
     let isolated_edited = producer
         .project_authoring_graph(
