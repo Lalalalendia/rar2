@@ -17,7 +17,8 @@ use crate::{
     apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
     apply_duplicate_blank_page_forward_v1, apply_duplicate_blank_page_inverse_v1,
     is_editor_created_uuid_v7_node_id, plan_create_shape_append_v1, plan_duplicate_blank_page_v1,
-    validate_authored_shape_runtime_v1, validate_authored_stack_v1,
+    validate_authored_page_identity_v1, validate_authored_shape_runtime_v1,
+    validate_authored_stack_v1,
 };
 use pub_model::{DocumentId, Page};
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,9 @@ pub const DUPLICATE_AUTHORED_RECTANGLE_PAGE_PROTOCOL_V1: &str =
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DuplicateAuthoredRectanglePageStateV1 {
+    /// Independently evidenced AuthorCreated identity; the EditorSession caller
+    /// must verify this against durable page-identity history.
+    pub source_identity: AuthoredPageIdentityV1,
     pub document_pages: Vec<PageId>,
     pub pages: BTreeMap<PageId, Page>,
     pub authored_shapes: BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
@@ -49,6 +53,7 @@ pub struct DuplicateAuthoredRectanglePageTransitionV1 {
 #[derive(Debug, PartialEq, Eq)]
 pub enum DuplicateAuthoredRectanglePageErrorV1 {
     ForeignOrUnprovenMembership,
+    SourceIdentityInvalid,
     SourceShapeCountMismatch,
     SourceShapeInvalid,
     SourceStackMismatch,
@@ -74,6 +79,7 @@ fn state_id_v1(
         "protocol": DUPLICATE_AUTHORED_RECTANGLE_PAGE_PROTOCOL_V1,
         "document_id": document_id,
         "document_pages": state.document_pages,
+        "source_identity": state.source_identity,
         "pages": state.pages,
         "authored_shapes": state.authored_shapes,
         "source_stack": state.source_stack,
@@ -138,6 +144,11 @@ pub fn plan_duplicate_authored_rectangle_page_v1(
     if has_foreign_or_unproven_membership {
         return Err(Error::ForeignOrUnprovenMembership);
     }
+    if state.source_identity.page_id != source_page_id
+        || validate_authored_page_identity_v1(&state.source_identity).is_err()
+    {
+        return Err(Error::SourceIdentityInvalid);
+    }
     validate_authored_stack_v1(&state.source_stack).map_err(Error::Stack)?;
     validate_authored_stack_v1(&state.destination_stack).map_err(Error::Stack)?;
     if state.source_stack.page_id != source_page_id {
@@ -156,6 +167,11 @@ pub fn plan_duplicate_authored_rectangle_page_v1(
         || source_shape.shape_kind != AuthoredShapeKindV1::Rectangle
         || validate_authored_shape_runtime_v1(source_shape).is_err()
     {
+        return Err(Error::SourceShapeInvalid);
+    }
+    // The shape registry key is also authority; a foreign key must not
+    // smuggle a copied NodeId into an apparently valid source lane.
+    if state.authored_shapes.get(&source_shape.node_id) != Some(*source_shape) {
         return Err(Error::SourceShapeInvalid);
     }
     if state.source_stack.members.as_slice() != [source_shape.node_id] {
@@ -394,6 +410,10 @@ mod tests {
         (
             document,
             DuplicateAuthoredRectanglePageStateV1 {
+                source_identity: AuthoredPageIdentityV1 {
+                    page_id: source,
+                    provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+                },
                 document_pages: vec![first, service, source, last],
                 pages: BTreeMap::from([
                     (first, raw_page(first)),
@@ -554,6 +574,34 @@ mod tests {
         assert_eq!(
             plan(document, &occupied_destination, &customers),
             Err(DuplicateAuthoredRectanglePageErrorV1::DestinationStackNotEmpty)
+        );
+    }
+
+    #[test]
+    fn refuses_unproven_authored_source_and_forged_shape_registry_key() {
+        let (document, state, customers) = fixture();
+        let mut unproven = state.clone();
+        unproven.source_identity.provenance = AuthoredEntityProvenanceV1::SourceBacked;
+        assert_eq!(
+            plan(document, &unproven, &customers),
+            Err(DuplicateAuthoredRectanglePageErrorV1::SourceIdentityInvalid)
+        );
+
+        let mut wrong_page = state.clone();
+        wrong_page.source_identity.page_id = identity().page_id;
+        assert_eq!(
+            plan(document, &wrong_page, &customers),
+            Err(DuplicateAuthoredRectanglePageErrorV1::SourceIdentityInvalid)
+        );
+
+        let mut foreign_key = state.clone();
+        foreign_key.authored_shapes = BTreeMap::from([(
+            node(0x44),
+            source_shape(page(0x77, true)),
+        )]);
+        assert_eq!(
+            plan(document, &foreign_key, &customers),
+            Err(DuplicateAuthoredRectanglePageErrorV1::SourceShapeInvalid)
         );
     }
 

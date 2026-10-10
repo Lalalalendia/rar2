@@ -74,8 +74,7 @@ pub use duplicate_authored_rectangle_page_v1::{
     DUPLICATE_AUTHORED_RECTANGLE_PAGE_PROTOCOL_V1, DuplicateAuthoredRectanglePageErrorV1,
     DuplicateAuthoredRectanglePageStateV1, DuplicateAuthoredRectanglePageTransitionV1,
     apply_duplicate_authored_rectangle_page_forward_v1,
-    apply_duplicate_authored_rectangle_page_inverse_v1,
-    plan_duplicate_authored_rectangle_page_v1,
+    apply_duplicate_authored_rectangle_page_inverse_v1, plan_duplicate_authored_rectangle_page_v1,
 };
 pub use duplicate_blank_page_v1::{
     DUPLICATE_BLANK_PAGE_PROTOCOL_V1, DuplicateBlankPageErrorV1, DuplicateBlankPageTransitionV1,
