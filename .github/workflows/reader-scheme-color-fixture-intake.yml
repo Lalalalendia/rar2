@@ -88,6 +88,9 @@ jobs:
           fills = receipt["officeart"]["scheme_fills"]
           assert len(fills) == 8, fills
           assert [fill["scheme_ordinal"] for fill in fills] == expected["ordinals"], fills
+          # DUMMY slot 0 has bounded effective-black semantics.
+          assert expected["raw_slot_rgb"][0] == expected["effective_slot_0_rgb"]
+          assert [fill["resolved_rgb"] for fill in fills] == expected["raw_slot_rgb"], fills
           PY
 
       - name: Exercise real Reader Viewer open path
@@ -131,6 +134,11 @@ jobs:
               assert parity_status == 0, parity_log
               assert reader["paint_node_count"] >= expected["minimum_paint_node_count"], reader
               assert reader["solid_fill_count"] >= expected["minimum_solid_fill_count"], reader
+              parity_lines = [line for line in parity_log.splitlines() if line.startswith("PAINT_BRIDGE_PARITY\t")]
+              assert len(parity_lines) == 1, parity_log
+              fields = dict(part.split("=", 1) for part in parity_lines[0].split("\t")[1:])
+              counts = {name: int(fields[name]) for name in ("compared", "mismatches", "unexpected")}
+              assert counts == {"compared": 8, "mismatches": 0, "unexpected": 0}, counts
           else:
               assert reader["open_error_kind"] == expected["open_error_kind"], reader
               assert reader["open_error_signature_sha256"] == expected["open_error_signature_sha256"], reader
@@ -138,6 +146,24 @@ jobs:
               for fragment in expected["diagnostic_fragments"]:
                   assert fragment in parity_log, (fragment, parity_log)
           PY
+
+      - name: Reject unsupported scheme COLORREF and slot cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Filtered tests must execute exactly once, not silently match zero cases.
+          manifest="vendor/producer-a/Cargo.toml"
+          run_one() {
+            local package="$1" test_filter="$2" output
+            output="$(cargo test --manifest-path "$manifest" -p "$package" --lib "$test_filter" -- --nocapture 2>&1)"
+            printf '%s\n' "$output"
+            grep -Eq 'test result: ok\. 1 passed; 0 failed;' <<< "$output"
+          }
+          run_one pub-reader direct_officeart_rgb_accepts_only_unflagged_colorref
+          run_one pub-reader officeart_scheme_index_resolves_only_in_range_non_dummy_slots
+          run_one pub-reader quill_scheme_text_color_resolves_only_through_publication_scheme
+          run_one pub-contents parses_ordered_scheme_slots_and_resolves_dummy_as_implicit_black
+          run_one pub-contents rejects_declared_count_that_would_shift_slot_identity
 
       - name: Print receipts
         if: always()
