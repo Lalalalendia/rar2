@@ -223,8 +223,36 @@ def json_request(path: str, *, method: str = "GET", body=None):
         return json.load(response)
 
 
-def interactive_smoke() -> None:
+def interactive_smoke(*, pinned_abel_demo: bool = False) -> None:
     baseline_scene = json_request("/v1/scenes/current")
+    font_environment = json_request("/v1/editor/font-environment")
+    font_admission = json_request("/v1/editor/font-authoring-admission")
+    for label, descriptor in (("environment", font_environment), ("admission", font_admission)):
+        if (descriptor.get("revision_id") != baseline_scene["revision_id"]
+                or descriptor.get("scene_snapshot_id") != baseline_scene["snapshot_id"]
+                or descriptor.get("font_set_fingerprint")
+                != baseline_scene["layout_environment"]["font_set_fingerprint"]):
+            raise RuntimeError(f"stale {label} font scope in actual PUB Editor")
+    if pinned_abel_demo:
+        if (len(font_environment["fonts"]) != 1
+                or font_environment["fonts"][0]["delivery"] != "deliver_exact"
+                or len(font_admission["resources"]) != 1):
+            raise RuntimeError("real pinned full-font admission is missing")
+        descriptor = font_environment["fonts"][0]
+        if descriptor["resource_id"] != font_admission["resources"][0]["resource_id"]:
+            raise RuntimeError("font delivery and admission identities differ")
+        with urllib.request.urlopen(urllib.request.Request(
+            API + "/v1/editor/font-resource/" + descriptor["fetch_handle"],
+            headers={"x-chaptera-principal-id": "synthetic-editor"},
+        ), timeout=5) as response:
+            if (response.status != 200 or response.headers.get("content-type") != "font/ttf"
+                    or hashlib.sha256(response.read()).hexdigest() != descriptor["content_hash"]):
+                raise RuntimeError("actual PUB Editor did not deliver exact OpenType bytes")
+        print(json.dumps({"real_pub_admitted_font": descriptor["resource_id"],
+                          "content_hash": descriptor["content_hash"]}, sort_keys=True))
+    elif font_environment["fonts"] or font_admission["resources"]:
+        raise RuntimeError("implicit font authoring grant in default-disabled service")
+
     capabilities = json_request("/v1/editor/capabilities")
     editable_story_ids = capabilities.get("editable_story_ids")
     if (
@@ -280,6 +308,16 @@ def interactive_smoke() -> None:
         receipt["accepted"]["canonical_operation"]["before"]["y"] + 50800
     )
     accepted = json_request("/v1/commit", method="POST", body=request)
+    if pinned_abel_demo:
+        # Any old exact font handle must be rejected immediately when the
+        # accepted Editor Scene advances, regardless of resource byte identity.
+        try:
+            json_request("/v1/editor/font-resource/" + font_environment["fonts"][0]["fetch_handle"])
+        except urllib.error.HTTPError as error:
+            if error.code != 409:
+                raise RuntimeError("stale font handle returned wrong status")
+        else:
+            raise RuntimeError("stale font handle survived current revision")
     if accepted.get("protocol_version") != "chaptera.commit-accepted.v1":
         raise RuntimeError(f"interactive MoveNode was not accepted: {accepted}")
 
@@ -310,7 +348,13 @@ def interactive_smoke() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--pinned-abel-demo", action="store_true",
+                        help="enable one exact developer-only OFL font in real PUB Editor")
+    parser.add_argument("--browser-smoke", action="store_true",
+                        help="prove exact resource selection in real Chromium")
     args = parser.parse_args()
+    if args.browser_smoke and (not args.smoke or not args.pinned_abel_demo):
+        parser.error("--browser-smoke requires --smoke --pinned-abel-demo")
 
     STATE.mkdir(parents=True, exist_ok=True)
     WORK.mkdir(parents=True, exist_ok=True)
@@ -322,6 +366,7 @@ def main() -> int:
             str(python),
             "services/editor-api/web_real_acceptance_service.py",
             "--interactive",
+            *(["--pinned-abel-demo"] if args.pinned_abel_demo else []),
             "--port",
             str(API_PORT),
             "--fixture",
@@ -363,7 +408,12 @@ def main() -> int:
         )
         print(f"LOCAL_EDITOR_READY {EDITOR_URL}", flush=True)
         if args.smoke:
-            interactive_smoke()
+            interactive_smoke(pinned_abel_demo=args.pinned_abel_demo)
+            if args.browser_smoke:
+                subprocess.run(
+                    ["node", "tools/verify_live_font_ui_browser.mjs", EDITOR_URL],
+                    cwd=ROOT, check=True, timeout=120,
+                )
             return 0
         while True:
             if service.poll() is not None:
