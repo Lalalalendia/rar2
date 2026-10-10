@@ -629,6 +629,219 @@ impl ViewerApp {
         Ok(identity.page_id)
     }
 
+    /// Read-only admission for two to eight independent AuthorCreated
+    /// Rectangles on one active AuthorCreated customer Page.
+    fn page_duplicate_rectangles_capability_v1(&self) -> bool {
+        let (Some(editor), Some(visual)) = (self.editor.as_ref(), self.visual.as_ref()) else {
+            return false;
+        };
+        let Some(source_page_id) = visual
+            .document
+            .pages
+            .get(self.selected_page)
+            .map(|page| page.id)
+        else {
+            return false;
+        };
+        editor.can_duplicate_authored_rectangles_page_v1(
+            &self.source_customer_page_ids,
+            source_page_id,
+        )
+    }
+
+    /// One real GUI command -> one canonical v0.31 Page+N-Rectangle+stack
+    /// history operation. Viewer membership is preflighted on clones before
+    /// the live Editor or Viewer is committed.
+    fn duplicate_selected_authored_rectangles_page_v1(&mut self) -> Result<PageId, String> {
+        let editor = self
+            .editor
+            .as_ref()
+            .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+        let visual = self
+            .visual
+            .as_ref()
+            .ok_or_else(|| "Document page projection is unavailable.".to_owned())?;
+        let source_page_id = visual
+            .document
+            .pages
+            .get(self.selected_page)
+            .map(|page| page.id)
+            .ok_or_else(|| "Selected source PageId is unavailable.".to_owned())?;
+        let before_page_ids = editor
+            .effective_customer_page_order_v1(&self.source_customer_page_ids)
+            .map_err(|error| {
+                format!(
+                    "Multi-Rectangle Page duplicate is unavailable: {} ({})",
+                    error,
+                    error.code()
+                )
+            })?;
+        let source_index = before_page_ids
+            .iter()
+            .position(|id| *id == source_page_id)
+            .ok_or_else(|| "Selected PageId is not active customer membership.".to_owned())?;
+        if !editor.can_duplicate_authored_rectangles_page_v1(
+            &self.source_customer_page_ids,
+            source_page_id,
+        ) {
+            return Err(
+                "Only a Page with 2-8 independent AuthorCreated Rectangles can use this duplicate command."
+                    .to_owned(),
+            );
+        }
+        let source_node_ids = editor
+            .authored_stack(source_page_id)
+            .map(|stack| stack.members.clone())
+            .ok_or_else(|| "Source authored Rectangle stack is unavailable.".to_owned())?;
+        let operations_before = editor.operations().len();
+        let identity = AuthoredPageIdentityV1 {
+            page_id: PageId::from_canonical(pub_model::new_editor_canonical_id()),
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        let destination_node_ids = source_node_ids
+            .iter()
+            .map(|_| pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id()))
+            .collect::<Vec<_>>();
+        let mut candidate = editor.clone();
+        candidate
+            .duplicate_authored_rectangles_page_v1(
+                self.source_customer_page_ids.clone(),
+                source_page_id,
+                identity,
+                destination_node_ids.clone(),
+            )
+            .map_err(|error| {
+                format!(
+                    "Multi-Rectangle Page duplicate rejected: {} ({})",
+                    error,
+                    error.code()
+                )
+            })?;
+
+        let transition = match candidate.operations().last() {
+            Some(pub_editor::EditOperation::DuplicateAuthoredRectanglesPageV1 { transition })
+                if candidate.operations().len() == operations_before + 1
+                    && transition.page.source_page_id == source_page_id
+                    && transition.page.destination_identity == identity
+                    && transition.page.before_customer_page_ids == before_page_ids
+                    && transition
+                        .source_shapes
+                        .iter()
+                        .map(|shape| shape.node_id)
+                        .collect::<Vec<_>>()
+                        == source_node_ids
+                    && transition
+                        .destination_shapes
+                        .iter()
+                        .map(|shape| shape.node_id)
+                        .collect::<Vec<_>>()
+                        == destination_node_ids =>
+            {
+                transition
+            }
+            _ => {
+                return Err(
+                    "Duplicate Multi-Rectangle Page must append exactly one canonical v0.31 operation."
+                        .to_owned(),
+                );
+            }
+        };
+        for ((source_node_id, destination_node_id), (source_before, destination_after)) in
+            source_node_ids
+                .iter()
+                .zip(&destination_node_ids)
+                .zip(transition.source_shapes.iter().zip(&transition.destination_shapes))
+        {
+            let source_shape = editor
+                .authored_shape(*source_node_id)
+                .ok_or_else(|| "Source authored Rectangle disappeared before commit.".to_owned())?;
+            let duplicated_shape = candidate
+                .authored_shape(*destination_node_id)
+                .ok_or_else(|| "Duplicated Rectangle is absent from Editor authority.".to_owned())?;
+            if source_before != source_shape
+                || duplicated_shape != destination_after
+                || duplicated_shape.bounds != source_shape.bounds
+                || duplicated_shape.paint != source_shape.paint
+                || duplicated_shape.page_id != identity.page_id
+                || duplicated_shape.parent_id != identity.page_id
+            {
+                return Err(
+                    "Duplicated multi-Rectangle geometry, paint, identity or source order differs."
+                        .to_owned(),
+                );
+            }
+        }
+        if candidate
+            .authored_stack(identity.page_id)
+            .is_none_or(|stack| stack.members != destination_node_ids)
+        {
+            return Err(
+                "Duplicated multi-Rectangle authored stack differs from source paint order."
+                    .to_owned(),
+            );
+        }
+
+        let after_page_ids = candidate
+            .effective_customer_page_order_v1(&self.source_customer_page_ids)
+            .map_err(|error| {
+                format!(
+                    "Multi-Rectangle Page membership unavailable: {} ({})",
+                    error,
+                    error.code()
+                )
+            })?;
+        let mut expected_page_ids = before_page_ids;
+        expected_page_ids.insert(source_index + 1, identity.page_id);
+        if after_page_ids != expected_page_ids {
+            return Err(
+                "Multi-Rectangle Page duplicate did not insert immediately after source.".to_owned(),
+            );
+        }
+
+        let mut visual_candidate = visual.clone();
+        visual_candidate
+            .refresh_page_membership_from_resolved(candidate.graph(), &after_page_ids)
+            .map_err(|error| {
+                format!("Multi-Rectangle Page Viewer projection rejected before commit: {error}")
+            })?;
+        let destination_index = source_index + 1;
+        if visual_candidate
+            .document
+            .pages
+            .iter()
+            .map(|page| page.id)
+            .collect::<Vec<_>>()
+            != after_page_ids
+            || visual_candidate
+                .document
+                .pages
+                .get(destination_index)
+                .map(|page| page.id)
+                != Some(identity.page_id)
+            || !visual_candidate
+                .scene
+                .surfaces
+                .iter()
+                .any(|surface| surface.origin == identity.page_id)
+        {
+            return Err(
+                "Multi-Rectangle Page Viewer projection failed to preserve exact Page membership."
+                    .to_owned(),
+            );
+        }
+
+        self.editor = Some(candidate);
+        self.visual = Some(visual_candidate);
+        self.selected_page = destination_index;
+        self.canvas_selection.clear();
+        self.canvas_drag = None;
+        self.canvas_resize = None;
+        self.finish_authoring_change(
+            "Duplicated one Chaptera-created multi-Rectangle Page as a single Undo unit. Source PUB bytes were not written.",
+        );
+        Ok(identity.page_id)
+    }
+
     /// Insert a new blank customer Page after the selected *stable* PageId.
     ///
     /// The selected page may already own content. Only its physical page
@@ -1294,6 +1507,22 @@ impl ViewerApp {
         if !can_duplicate_rectangle {
             rectangle_duplicate_response.on_disabled_hover_text(
                 "Select an active Chaptera-created Page with exactly one direct independent authored Rectangle. Imported, linked and multi-object Pages are unsupported.",
+            );
+        }
+
+        let can_duplicate_rectangles = self.page_duplicate_rectangles_capability_v1();
+        let rectangles_duplicate_response = ui.add_enabled(
+            can_duplicate_rectangles,
+            egui::Button::new("Duplicate Multi-Rectangle Page"),
+        );
+        if rectangles_duplicate_response.clicked()
+            && let Err(error) = self.duplicate_selected_authored_rectangles_page_v1()
+        {
+            self.edit_status = Some(error);
+        }
+        if !can_duplicate_rectangles {
+            rectangles_duplicate_response.on_disabled_hover_text(
+                "Select an active Chaptera-created Page with 2-8 direct independent authored Rectangles. Imported, linked, mixed-object and larger Pages are unsupported.",
             );
         }
 
