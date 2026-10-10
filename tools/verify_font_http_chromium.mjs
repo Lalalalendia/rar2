@@ -243,6 +243,75 @@ try {
     throw new Error("real Publisher Story text painted outside unshaped source frame: "+
                     JSON.stringify(clip));
   }
+  // The real user now applies one admitted physical font to the ENTIRE
+  // source Story, including any terminal Publisher CR, without guessing
+  // textarea offset mappings. This makes full line-fit reachable in Chromium.
+  const wholeButton=page.locator("#apply-font-story");
+  if(!await wholeButton.isEnabled()){
+    await page.locator("#font-story-target").selectOption(storyId);
+  }
+  if(!await wholeButton.isEnabled()){
+    throw new Error("whole Story font authoring not reachable in real inspector");
+  }
+  await wholeButton.click();
+  const storyScalars=originalCoverage.unknown;
+  await page.waitForFunction(total=>{
+    const glyphs=document.querySelector("#font-metrics");
+    const flow=document.querySelector("#font-flow");
+    return glyphs?.dataset.exactScalars===String(total) &&
+      glyphs.dataset.unresolvedScalars==="0" &&
+      flow?.dataset.flowState==="physical_line_fit_preview" &&
+      flow.dataset.sourceGapScalars==="0";
+  },storyScalars,{timeout:60_000});
+  const fullStory=await page.evaluate(()=>({
+    exact:Number(document.querySelector("#font-metrics")?.dataset.exactScalars),
+    unresolved:Number(document.querySelector("#font-metrics")?.dataset.unresolvedScalars),
+    state:document.querySelector("#font-flow")?.dataset.flowState,
+    lines:Number(document.querySelector("#font-flow")?.dataset.lineCount),
+    glyphMessage:document.querySelector("#font-metrics")?.textContent,
+    lineMessage:document.querySelector("#font-flow")?.textContent,
+    fontMessage:document.querySelector("#font-message")?.textContent,
+    pubDisabled:document.querySelector("#save-pub")?.disabled,
+    bad:document.querySelector("#state")?.classList.contains("bad"),
+  }));
+  if(fullStory.bad||fullStory.exact!==storyScalars||fullStory.unresolved!==0||
+     fullStory.state!=="physical_line_fit_preview"||fullStory.lines<1||
+     !fullStory.lineMessage?.includes("Publisher-native layout and PDF remain unverified")||
+     !fullStory.fontMessage?.includes("Entire Story font")||!fullStory.pubDisabled){
+    throw new Error("full Story user authoring did not reach physical font line-fit: "+
+                    JSON.stringify(fullStory));
+  }
+  const wholeRevision=await current();
+  if(wholeRevision.revision_id===after.revision_id||
+     wholeRevision.fidelity.state!=="partial"){
+    throw new Error("full Story font change did not create a new Partial revision");
+  }
+  const wholeNative=await fetch(api+"/v1/pub-save/preview",{headers}).then(r=>r.json());
+  if(wholeNative.can_download||wholeNative.can_serialize){
+    throw new Error("physical-font line-fit preview illegally authorized a native PUB");
+  }
+  await page.locator("#undo").click();
+  await page.waitForFunction(()=>document.querySelector("#font-metrics")?.dataset.exactScalars==="1" &&
+    document.querySelector("#font-flow")?.dataset.flowState==="source_font_unresolved",null,{timeout:60_000});
+  await page.locator("#redo").click();
+  await page.waitForFunction(total=>document.querySelector("#font-metrics")?.dataset.exactScalars===String(total) &&
+    document.querySelector("#font-flow")?.dataset.flowState==="physical_line_fit_preview",
+    storyScalars,{timeout:60_000});
+  const redoRevision=await current();
+  if(redoRevision.revision_id===after.revision_id){
+    throw new Error("redo did not restore complete current physical Story");
+  }
+  await Promise.all([
+    page.waitForResponse(r=>r.url().endsWith("/v1/harness/reopen")&&r.request().method()==="POST",{timeout:60_000}),
+    page.locator("#reopen").click(),
+  ]);
+  await page.waitForFunction(total=>document.querySelector("#font-metrics")?.dataset.exactScalars===String(total) &&
+    document.querySelector("#font-flow")?.dataset.flowState==="physical_line_fit_preview",
+    storyScalars,{timeout:60_000});
+  const reopenedRevision=await current();
+  if(reopenedRevision.revision_id!==redoRevision.revision_id){
+    throw new Error("fresh project reopen lost the complete font Story revision");
+  }
   fs.mkdirSync("target/font-http-acceptance",{recursive:true});
   const evidence={
     receipt_kind:"chaptera.real-chromium-font-range-apply.v1",
@@ -266,6 +335,10 @@ try {
     real_glyph_spans_consumed:true,
     physical_line_fit_before:sourceFlow,
     physical_line_fit_after:afterFlow,
+    full_story_browser_font_apply:true,
+    whole_story_physical_line_fit:fullStory,
+    whole_story_undo_redo_and_reopen:true,
+    reopened_revision_id:reopenedRevision.revision_id,
     no_invented_lines_without_source_fonts:true,
     page_errors:errors,
   };

@@ -120,6 +120,7 @@ h1{font-size:19px;font-weight:740;line-height:1.15;letter-spacing:-.45px;margin:
         </select>
         <label for="font-choice">Admitted font</label>
         <select id="font-choice" disabled><option value="">No admitted fonts</option></select>
+        <button id="apply-font-story" disabled>Apply font to entire Story</button>
         <button id="preview-physical-font" disabled>Verify font preview</button>
         <span id="font-sample" aria-label="Font preview sample">Aa Bb 123</span>
         <span id="font-message" role="status">Browser preview only; not an Editor font change.</span>
@@ -170,6 +171,7 @@ const savePubButton=document.querySelector("#save-pub");
 const textTools=document.querySelector("#text-tools");
 const textValue=document.querySelector("#text-value");
 const applyFontButton=document.querySelector("#apply-font");
+const applyFontStoryButton=document.querySelector("#apply-font-story");
 const fontChoice=document.querySelector("#font-choice");
 const fontStoryTarget=document.querySelector("#font-story-target");
 const previewFontButton=document.querySelector("#preview-physical-font");
@@ -217,6 +219,11 @@ function syncTextControls(){
   applyFontButton.disabled=!editingStory||!fontStoryMap.has(editingStory.story_id)||
     !currentFontContext||fontScopeRevision!==shell?.snapshot?.revision_id||
     currentFontContext.scene_snapshot_id!==shell?.snapshot?.snapshot_id;
+  applyFontStoryButton.disabled=!selected||!fontStoryMap.has(selected.story.story_id)||
+    !currentFontContext||fontScopeRevision!==shell?.snapshot?.revision_id||
+    currentFontContext.scene_snapshot_id!==shell?.snapshot?.snapshot_id||
+    (editingStory?.story_id===selected.story.story_id &&
+     textValue.value!==editingStory.text_at_open);
   if(editingStory && (!selected || selected.story.story_id!==editingStory.story_id)){
     editingStory=null;
     textTools.hidden=true;
@@ -634,10 +641,46 @@ async function applySelectedFont(){
   if(start>=end||end>scope.story_scalar_len){
     throw new Error("selected font range exceeds actual Publisher Story");
   }
+  await commitAdmittedPhysicalFontRange({
+    storyId:editingStory.story_id,start,end,entireStory:false,
+  });
+}
+
+// Whole-Story authoring is an explicit user command. It uses Rust's exact
+// Unicode-scalar Story extent rather than textarea offsets (which omit the
+// terminal Publisher CR and normalize CRLF). No inferred source-font bytes.
+async function applyEntireStoryFont(){
+  const selected=selectedStory();
+  if(!selected) throw new Error("choose a source-authorized text Story");
+  const scalarLen=Array.from(selected.story.text).length;
+  await commitAdmittedPhysicalFontRange({
+    storyId:selected.story.story_id,start:0,end:scalarLen,entireStory:true,
+  });
+}
+
+async function commitAdmittedPhysicalFontRange({storyId,start,end,entireStory}){
+  const snapshot=shell?.snapshot;
+  const selected=selectedStory();
+  const scope=fontStoryMap.get(storyId);
+  if(!snapshot||!selected||selected.story.story_id!==storyId||!scope||
+     fontScopeRevision!==snapshot.revision_id||
+     currentFontContext?.scene_snapshot_id!==snapshot.snapshot_id||
+     Array.from(selected.story.text).length!==scope.story_scalar_len||
+     !Number.isInteger(start)||!Number.isInteger(end)||
+     start<0||end<=start||end>scope.story_scalar_len||
+     (entireStory&&(start!==0||end!==scope.story_scalar_len))){
+    throw new Error("physical-font authoring requires exact current Story extent");
+  }
+  if(editingStory && (editingStory.story_id!==storyId||
+      editingStory.original_text!==selected.story.text||
+      textValue.value!==editingStory.text_at_open)){
+    throw new Error("finish or cancel pending source text changes before applying font");
+  }
   const candidate=chooseAdmittedFontCandidate(
     snapshot,currentFontContext.environment,currentFontContext.admission,fontChoice.value
   );
   applyFontButton.disabled=true;
+  applyFontStoryButton.disabled=true;
   savePubButton.disabled=true;
   try{
     const response=await service.commit({
@@ -648,7 +691,7 @@ async function applySelectedFont(){
       client_operation_id:opId("font"),
       command:{
         kind:"set_admitted_font_resource",
-        story_id:editingStory.story_id,
+        story_id:storyId,
         start_scalar:start,end_scalar:end,
         expected_state_hash:scope.expected_state_hash,
         candidate,
@@ -657,15 +700,19 @@ async function applySelectedFont(){
     if(response.protocol_version!=="chaptera.commit-accepted.v1"||
        response.canonical_operation?.kind!=="set_text_format_property"||
        response.canonical_operation?.property!=="font_resource"||
+       response.canonical_operation?.story_id!==storyId||
+       response.canonical_operation?.start_scalar!==start||
+       response.canonical_operation?.end_scalar!==end||
        response.consequences?.[0]?.state!=="partial"){
-      throw new Error("server did not commit a verified partially rendered font override");
+      throw new Error("server did not commit exact physical-font Story range");
     }
     const scene=await service.sceneForRevision(response.revision_id);
     closeTextEditor();
     shell.loadSnapshot(scene,{preserveSelection:true});
     await disclosure();
     fontMessage.className="warn";
-    fontMessage.textContent="Font saved in canonical Project; layout and fixed PDF remain blocked.";
+    fontMessage.textContent=(entireStory?"Entire Story font":"Selected range font")+
+      " saved in canonical Project; Publisher-native layout and fixed PDF remain blocked.";
   }finally{
     syncTextControls();
   }
@@ -736,6 +783,8 @@ async function start(){
   editTextButton.onclick=()=>{try{openTextEditor()}catch(error){showError(error)}};
   document.querySelector("#apply-text").onclick=()=>applyTextEdit().catch(showError);
   applyFontButton.onclick=()=>applySelectedFont().catch(showError);
+  applyFontStoryButton.onclick=()=>applyEntireStoryFont().catch(showError);
+  textValue.addEventListener("input",syncTextControls);
   document.querySelector("#cancel-text").onclick=()=>closeTextEditor();
   previewFontButton.onclick=()=>previewSelectedFont().catch(error=>{
     fontMessage.className="bad";
