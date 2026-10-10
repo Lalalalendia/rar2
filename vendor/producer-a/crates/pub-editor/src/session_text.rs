@@ -5,6 +5,11 @@
 //! and generic history replay remain outside this module.
 
 use super::*;
+use chaptera_text_format_overlay::{
+    FontAuthoringScopeV1, FontReplacementCandidateV1, ServerFontResourceV1,
+    replay_recorded_font_resource_v1 as replay_font_history_v1,
+    set_admitted_font_resource_v1 as overlay_admit_font_v1,
+};
 
 impl EditorSession {
     fn validate_story_text_session_capability(
@@ -146,6 +151,74 @@ impl EditorSession {
         Ok(operation)
     }
 
+    /// Admit an exact physical font into the canonical Story format history.
+    ///
+    /// The caller supplies independent, policy-approved full font bytes from
+    /// its trusted resource registry; a browser candidate alone has no write
+    /// authority. This commits text-format state only. Layout/PDF and fresh
+    /// EditorProject re-admission require their own authoritative consumers.
+    pub fn set_admitted_font_resource_v1(
+        &mut self,
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        candidate: &FontReplacementCandidateV1,
+        scope: &FontAuthoringScopeV1,
+        server_resource: &ServerFontResourceV1<'_>,
+        expected_state_hash: &str,
+    ) -> Result<EditOperation, EditorError> {
+        let before = self.current_text_format_overlay_v1(story_id)?;
+        let before_hash = state_hash_v1(&before).map_err(|error| {
+            EditorError::TextFormatStateInvalid {
+                story_id,
+                message: error.to_string(),
+            }
+        })?;
+        if before_hash != expected_state_hash {
+            return Err(EditorError::StaleOperation { story_id });
+        }
+        let receipt = overlay_admit_font_v1(
+            &before,
+            start_scalar,
+            end_scalar,
+            candidate,
+            scope,
+            server_resource,
+            expected_state_hash,
+        )
+        .map_err(|error| EditorError::TextFormatStateInvalid {
+            story_id,
+            message: error.to_string(),
+        })?;
+        if receipt.command.before_state_hash == receipt.command.after_state_hash {
+            return Err(EditorError::NoChange { story_id });
+        }
+        let operation = EditOperation::SetTextFormatProperty {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property: FormatPropertyV1::FontResource,
+            value: receipt
+                .command
+                .value
+                .clone()
+                .expect("admitted font set always carries its exact identity"),
+            before_state_hash: receipt.command.before_state_hash,
+            after_state_hash: receipt.command.after_state_hash,
+        };
+        let replayed = apply_text_format_history_operation_v1(&before, &operation)?;
+        if replayed != receipt.after_state {
+            return Err(EditorError::TextFormatStateInvalid {
+                story_id,
+                message: "admitted font history differs from canonical receipt".to_owned(),
+            });
+        }
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
     pub fn replace_story_text(
         &mut self,
         story_id: StoryId,
@@ -199,6 +272,39 @@ pub(super) fn is_scoped_text_format_operation_v1(operation: &EditOperation) -> b
     )
 }
 
+/// This validates an operation already in admitted session history, never a
+/// new client edit. The generic editor setter and fresh project replay still
+/// reject an unsigned font-resource candidate without trusted original bytes.
+fn replay_existing_text_format_set_v1(
+    state: &TextFormatOverlayStateV1,
+    start_scalar: u32,
+    end_scalar: u32,
+    property: FormatPropertyV1,
+    value: FormatValueV1,
+    expected_state_hash: &str,
+) -> chaptera_text_format_overlay::Result<chaptera_text_format_overlay::TextFormatOperationReceiptV1> {
+    if let (FormatPropertyV1::FontResource, FormatValueV1::FontResource(identity)) =
+        (property, &value)
+    {
+        replay_font_history_v1(
+            state,
+            start_scalar,
+            end_scalar,
+            identity,
+            expected_state_hash,
+        )
+    } else {
+        overlay_set_text_format_property_v1(
+            state,
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            expected_state_hash,
+        )
+    }
+}
+
 pub(super) fn apply_text_format_history_operation_semantic_v1(
     state: &TextFormatOverlayStateV1,
     operation: &EditOperation,
@@ -230,7 +336,7 @@ pub(super) fn apply_text_format_history_operation_semantic_v1(
             property,
             value,
             ..
-        } => overlay_set_text_format_property_v1(
+        } => replay_existing_text_format_set_v1(
             state,
             *start_scalar,
             *end_scalar,
@@ -291,7 +397,7 @@ pub(super) fn apply_text_format_history_operation_v1(
             *story_id,
             before_state_hash,
             after_state_hash,
-            overlay_set_text_format_property_v1(
+            replay_existing_text_format_set_v1(
                 state,
                 *start_scalar,
                 *end_scalar,
