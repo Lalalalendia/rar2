@@ -28,6 +28,29 @@ try {
     return select && !select.disabled && select.options.length===1 &&
       !document.querySelector("#state")?.textContent?.includes("connecting");
   },null,{timeout:60_000});
+  // The user-facing inspector is the primary font entry surface.
+  // Diagnostics must not cover the workspace or masquerade as product UI.
+  const userSurface=await page.evaluate(()=>{
+    const workspace=document.querySelector("#workspace")?.getBoundingClientRect();
+    const inspector=document.querySelector("#inspector")?.getBoundingClientRect();
+    const canvas=document.querySelector("#host-wrap")?.getBoundingClientRect();
+    const diagnostics=document.querySelector("#disclosure");
+    return {
+      asideVisible:!!inspector && inspector.width>=300 && inspector.height>=350,
+      canvasVisible:!!canvas && canvas.width>500,
+      separated:!!inspector && !!canvas && inspector.left>=canvas.right-2,
+      diagnosticsCollapsed:diagnostics?.open===false,
+      fidelitySummary:document.querySelector("#summary-fidelity")?.textContent??"",
+      workspaceHeight:workspace?.height??0,
+    };
+  });
+  if(!userSurface.asideVisible||!userSurface.canvasVisible||
+     !userSurface.separated||!userSurface.diagnosticsCollapsed||
+     !userSurface.fidelitySummary.includes("Partial")||
+     userSurface.workspaceHeight<500){
+    throw new Error("real font editor does not present a usable inspector and stage: "+
+                    JSON.stringify(userSurface));
+  }
   const frames=before.story_frames.filter(f=>f.story_id===storyId);
   if(!frames.length) throw new Error("real Editor has no canvas frame for chosen Story");
   let selected=false;
@@ -144,6 +167,8 @@ try {
     accepted_revision_id:after.revision_id,
     native_output_blocked:true,
     original_story_text_unchanged:true,
+    user_typography_inspector:true,
+    diagnostics_collapsed_by_default:true,
     page_errors:errors,
   };
   if(errors.length)throw Error("Chromium page errors: "+errors.join("; "));
