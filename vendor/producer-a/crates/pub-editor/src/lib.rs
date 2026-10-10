@@ -37,8 +37,9 @@ use session_image::{
 pub use session_text::EditorProjectFontReopenGrantV1;
 use session_text::{
     apply_text_format_history_operation_semantic_v1, apply_text_format_history_operation_v1,
-    is_scoped_text_format_operation_v1, replay_project_operation_with_font_grants_v1 as replay_font,
-    text_format_operation_property_v1, text_format_operation_story_id_v1,
+    is_scoped_text_format_operation_v1,
+    replay_project_operation_with_font_grants_v1 as replay_font, text_format_operation_property_v1,
+    text_format_operation_story_id_v1,
 };
 mod table_rowcol_graph_v1;
 mod table_rowcol_history_v1;
@@ -4111,7 +4112,6 @@ impl EditorSession {
         {
             return Err(EditorProjectError::SessionNotEmpty);
         }
-
         if project.schema_version == EDITOR_PROJECT_VERSION_V0_11
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
