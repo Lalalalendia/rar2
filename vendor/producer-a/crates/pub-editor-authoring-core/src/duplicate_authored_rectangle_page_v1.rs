@@ -595,10 +595,8 @@ mod tests {
         );
 
         let mut foreign_key = state.clone();
-        foreign_key.authored_shapes = BTreeMap::from([(
-            node(0x44),
-            source_shape(page(0x77, true)),
-        )]);
+        foreign_key.authored_shapes =
+            BTreeMap::from([(node(0x44), source_shape(page(0x77, true)))]);
         assert_eq!(
             plan(document, &foreign_key, &customers),
             Err(DuplicateAuthoredRectanglePageErrorV1::SourceShapeInvalid)
