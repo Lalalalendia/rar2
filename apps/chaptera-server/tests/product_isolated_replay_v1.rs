@@ -6,7 +6,9 @@
 use std::{path::PathBuf, str::FromStr, time::Duration};
 
 use chaptera_server::{
-    product_replay_worker::{IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer},
+    product_replay_worker::{
+        IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer, IsolatedReaderSceneIntentV1,
+    },
     revision_materializer::{
         EditorReplayEngine, PubEditorReplayEngine, cloud_revision_project, project_sha256,
     },
@@ -121,8 +123,10 @@ async fn pinned_sample3_exact_project_replays_in_real_seccomp_worker() {
             &source_bytes,
             &project,
             &project_hash,
-            "revision-sample3-baseline",
-            "revision-sample3-baseline",
+            &IsolatedReaderSceneIntentV1 {
+                revision_id: "revision-sample3-baseline".into(),
+                baseline_revision_id: "revision-sample3-baseline".into(),
+            },
         )
         .await
         .unwrap();
@@ -240,8 +244,10 @@ async fn pinned_sample3_exact_project_replays_in_real_seccomp_worker() {
             &source_bytes,
             &edited_project,
             &edited_sha,
-            "revision-sample3-moved",
-            "revision-sample3-baseline",
+            &IsolatedReaderSceneIntentV1 {
+                revision_id: "revision-sample3-moved".into(),
+                baseline_revision_id: "revision-sample3-baseline".into(),
+            },
         )
         .await
         .unwrap();
