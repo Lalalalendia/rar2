@@ -9,7 +9,9 @@ use chaptera_server::{
     product_replay_worker::{
         IsolatedProductMaterializationProducer, IsolatedProductReplayProducer,
     },
-    revision_materializer::{EditorReplayEngine, PubEditorReplayEngine, project_sha256},
+    revision_materializer::{
+        AuthorizedDocumentSource, EditorReplayEngine, PubEditorReplayEngine, project_sha256,
+    },
     source_baseline::SourceBaselineProducerConfig,
     sqlite_store::RevisionEdge,
 };
@@ -136,16 +138,17 @@ async fn pinned_sample3_baseline_materializes_in_real_seccomp_worker() {
     })
     .unwrap();
 
+    let source = AuthorizedDocumentSource {
+        tenant_id: "tenant-sample3".into(),
+        document_id: "document-sample3-materialized".into(),
+        binding_id: "binding-sample3".into(),
+        source_sha256: source_sha256.clone(),
+        byte_len: source_bytes.len() as u64,
+        baseline_revision_id: "revision-baseline".into(),
+        baseline_cursor: 0,
+    };
     let receipt = producer
-        .materialize_exact_project(
-            "document-sample3-materialized",
-            &source_sha256,
-            &source_bytes,
-            "revision-baseline",
-            0,
-            "revision-baseline",
-            &[],
-        )
+        .materialize_exact_project(&source, &source_bytes, "revision-baseline", &[])
         .await
         .unwrap();
     assert_eq!(receipt.project, expected);
@@ -169,15 +172,7 @@ async fn pinned_sample3_baseline_materializes_in_real_seccomp_worker() {
         committed_at_ms: 1,
     };
     let denied = producer
-        .materialize_exact_project(
-            "document-sample3-materialized",
-            &source_sha256,
-            &source_bytes,
-            "revision-baseline",
-            0,
-            "revision-next",
-            &[malformed],
-        )
+        .materialize_exact_project(&source, &source_bytes, "revision-next", &[malformed])
         .await
         .unwrap_err();
     assert_eq!(denied.code, "product_materialization_chain_invalid");
