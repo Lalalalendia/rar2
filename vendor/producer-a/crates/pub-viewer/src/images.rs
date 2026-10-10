@@ -5,7 +5,7 @@
 //! OfficeArt preview materialization remain outside this module.
 
 use anyhow::Result;
-use pub_model::{NodeId, PageId, ResourceId};
+use pub_model::{NodeId, PageId, ResourceId, Sha256Digest};
 use pub_reader::{PubExplicitImageCropSource, PubExplicitImageRecolorSource, PubResolvedGraph};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -54,6 +54,11 @@ pub struct ViewerEmbeddedImage {
     pub node_ids: Vec<NodeId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub placements: Vec<ViewerImagePlacementV1>,
+    /// SHA-256 from the independent Reader asset manifest and materialization check.
+    /// Never derive this proof from the bytes at a Desktop decode call site.
+    /// Not accepted from serialized/browser-owned Viewer payloads.
+    #[serde(skip)]
+    pub verified_source_sha256: Option<Sha256Digest>,
     #[serde(skip)]
     pub bytes: Vec<u8>,
 }
@@ -69,6 +74,7 @@ impl ViewerEmbeddedImage {
             resource_id,
             mime: "image/png".to_owned(),
             source_exact: false,
+            verified_source_sha256: None,
             node_ids,
             placements,
             bytes,
@@ -81,12 +87,14 @@ impl ViewerEmbeddedImage {
         mime: String,
         node_ids: Vec<NodeId>,
         placements: Vec<ViewerImagePlacementV1>,
+        verified_source_sha256: Sha256Digest,
         bytes: Vec<u8>,
     ) -> Self {
         Self {
             resource_id,
             mime,
             source_exact: true,
+            verified_source_sha256: Some(verified_source_sha256),
             node_ids,
             placements,
             bytes,
