@@ -491,7 +491,9 @@ impl IntoResponse for ProductExportHttpError {
                     | "job_payload_scope_mismatch"
                     | "export_artifact_not_ready"
                     | "export_artifact_not_visible" => StatusCode::CONFLICT,
-                    "grant_missing" | "authz_denied" | "authz_expired" => StatusCode::FORBIDDEN,
+                    "grant_missing" | "grant_expired" | "capability_denied" => {
+                        StatusCode::FORBIDDEN
+                    }
                     "invalid_client_request_id" | "invalid_operation_id" => StatusCode::BAD_REQUEST,
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
                 };
@@ -522,6 +524,26 @@ impl IntoResponse for ProductExportHttpError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_export_job_denials_are_forbidden_not_server_errors() {
+        // JobsRuntimeError propagates the exact SqliteAuthzAuthority denial
+        // code; the HTTP layer must not mask an ordinary 403 as a broken 500.
+        for code in ["grant_missing", "grant_expired", "capability_denied"] {
+            let response = ProductExportHttpError::Jobs(JobsRuntimeError {
+                code,
+                message: "denied".into(),
+            })
+            .into_response();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{code}");
+        }
+        let internal = ProductExportHttpError::Jobs(JobsRuntimeError {
+            code: "sqlite_authz_error",
+            message: "internal".into(),
+        })
+        .into_response();
+        assert_eq!(internal.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     #[test]
     fn loss_report_download_request_rejects_artifact_authority() {
