@@ -47,6 +47,23 @@ export function productEditorStatusView(state, readerScene = null) {
       fidelity,
     };
   }
+  if (state.reason === "history_sent") {
+    return { status: "Undoing change…", kind: "pending", fidelity };
+  }
+  if (state.reason === "history_error") {
+    return {
+      status: "Undo not confirmed — reload to reconcile before retrying",
+      kind: "error",
+      fidelity,
+    };
+  }
+  if (state.reason === "history_rejected") {
+    return {
+      status: "Undo rejected — current revision was not changed",
+      kind: "error",
+      fidelity,
+    };
+  }
   return {
     status: "Revision " + revision + (state.selected_node_id ? " · selected" : ""),
     kind: state.revision_id ? "ok" : "",
@@ -101,7 +118,9 @@ export async function bootProductEditor({
   shell=new RichReaderEditorShellV1({
     host,
     service,
+    keyboardTarget:documentObject,
     operationIdFactory:()=> "product-move-"+cryptoObject.randomUUID(),
+    historyOperationIdFactory:()=> "product-undo-"+cryptoObject.randomUUID(),
     onState:(state)=>{
       const view=productEditorStatusView(state,shell?.readerScene);
       statusText(status,view.status,view.kind);
