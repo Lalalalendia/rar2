@@ -75,8 +75,8 @@ jobs:
             "AutoShapeType",
             "Nodes",
             "ZOrderPosition",
-            "coordinates_emitted = $false",
-            "raw_crop_values_emitted = $false",
+            'coordinates_emitted = $false',
+            'raw_crop_values_emitted = $false',
             "Compress-Archive",
             "PUBLISHER_CROP_NATIVE_034_053_RETURN"
           )) {
