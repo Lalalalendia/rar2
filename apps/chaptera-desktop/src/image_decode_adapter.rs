@@ -7,6 +7,8 @@ use chaptera_image_decode_contract::{
     DecodeLimitsV1, DecodePolicyV1, DecodedImageV1, decode_image_v1,
 };
 use eframe::egui;
+use pub_model::Sha256Digest;
+use pub_viewer::ViewerEmbeddedImage;
 use sha2::{Digest, Sha256};
 use std::fmt;
 
@@ -42,6 +44,47 @@ pub struct AdmittedTextureImage {
 
 pub fn exact_sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+// The Reader manifest validated the exact extracted source bytes already.
+// This function must NOT hash those bytes to invent its own expected value.
+// The single actual-byte integrity hash remains in decode_image_v1.
+//
+// Non-exact WMF/OLE preview PNGs have no independent source-PNG hash; keep
+// their previous bounded compatibility path instead of promoting preview
+// identity into exact-image authority.
+fn expected_viewer_image_sha256_with_v1(
+    source_exact: bool,
+    verified_source_sha256: Option<Sha256Digest>,
+    bytes: &[u8],
+    derive_preview_sha256: impl FnOnce(&[u8]) -> String,
+) -> Result<String, DesktopImageDecodeError> {
+    match (source_exact, verified_source_sha256) {
+        (true, Some(digest)) => Ok(digest.to_string()),
+        (true, None) => Err(DesktopImageDecodeError {
+            code: "missing_verified_source_image_hash".to_owned(),
+            detail: "source-exact Viewer image has no independently verified Reader SHA-256"
+                .to_owned(),
+        }),
+        (false, Some(_)) => Err(DesktopImageDecodeError {
+            code: "preview_claims_verified_source_hash".to_owned(),
+            detail: "derived Viewer preview cannot carry exact source-image hash authority"
+                .to_owned(),
+        }),
+        (false, None) => Ok(derive_preview_sha256(bytes)),
+    }
+}
+
+pub fn decode_viewer_embedded_texture_v1(
+    image: &ViewerEmbeddedImage,
+) -> Result<AdmittedTextureImage, DesktopImageDecodeError> {
+    let expected_sha256 = expected_viewer_image_sha256_with_v1(
+        image.source_exact,
+        image.verified_source_sha256,
+        &image.bytes,
+        exact_sha256_hex,
+    )?;
+    decode_texture_image_v1(&image.bytes, &image.mime, &expected_sha256)
 }
 
 pub fn decode_texture_image_v1(
@@ -259,6 +302,57 @@ mod tests {
             admit_decoded_image_v1(&decoded("rgb", 8, "metadata_only_non_normal", vec![0; 6]))
                 .expect_err("orientation metadata must not be silently ignored");
         assert_eq!(error.code, "desktop_orientation_unsupported");
+    }
+
+    #[test]
+    fn exact_viewer_image_reuses_reader_hash_without_a_predecode_sha256_pass() {
+        use std::cell::Cell;
+
+        let actual_bytes = b"not the manifest resource";
+        let verified = Sha256Digest::from_bytes([0x22; 32]);
+        let extra_hash_passes = Cell::new(0);
+        let expected = expected_viewer_image_sha256_with_v1(
+            true,
+            Some(verified),
+            actual_bytes,
+            |bytes| {
+                extra_hash_passes.set(extra_hash_passes.get() + 1);
+                exact_sha256_hex(bytes)
+            },
+        )
+        .expect("source-exact must carry Reader proof");
+        assert_eq!(extra_hash_passes.get(), 0, "no self-issued predecode hash");
+        assert_eq!(expected, "22".repeat(32));
+
+        let mismatch = decode_texture_image_v1(actual_bytes, "image/png", &expected)
+            .expect_err("decoder must still hash actual bytes and fail closed");
+        assert_eq!(mismatch.code, "resource_hash_mismatch");
+
+        let missing = expected_viewer_image_sha256_with_v1(
+            true, None, actual_bytes,
+            |_| panic!("missing trusted SHA must not hash/accept source bytes"),
+        )
+        .expect_err("no Reader authority means no exact admission");
+        assert_eq!(missing.code, "missing_verified_source_image_hash");
+
+        let bad_preview = expected_viewer_image_sha256_with_v1(
+            false, Some(verified), actual_bytes,
+            |_| panic!("preview cannot gain exact source authority"),
+        )
+        .expect_err("preview cannot impersonate a validated source resource");
+        assert_eq!(bad_preview.code, "preview_claims_verified_source_hash");
+
+        let preview_hash_passes = Cell::new(0);
+        let preview = expected_viewer_image_sha256_with_v1(
+            false, None, actual_bytes,
+            |bytes| {
+                preview_hash_passes.set(preview_hash_passes.get() + 1);
+                exact_sha256_hex(bytes)
+            },
+        )
+        .expect("legacy preview uses derived PNG identity only");
+        assert_eq!(preview_hash_passes.get(), 1);
+        assert_eq!(preview, exact_sha256_hex(actual_bytes));
     }
 
     #[test]
