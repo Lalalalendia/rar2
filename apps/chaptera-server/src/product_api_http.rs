@@ -677,13 +677,14 @@ async fn accepted_from_receipt(
         decode_editor_revision_event_v1(&receipt.edge).map_err(ProductApiError::Materializer)?;
     let child = state
         .materializer
-        .materialize(
+        .materialize_state(
             &source.tenant_id,
             &receipt.edge.document_id,
             &receipt.edge.child_revision,
         )
         .await
-        .map_err(ProductApiError::Materializer)?;
+        .map_err(ProductApiError::Materializer)?
+        .receipt;
 
     let identities = derive_commit_revision_identities(
         &receipt.edge.document_id,
