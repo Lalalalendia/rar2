@@ -39,9 +39,10 @@ from validate_export_preview import validate_schema as validate_export_preview_s
 from validate_export_preview import validate_semantics as validate_export_preview_semantics
 from verify_editable_export_geometry import RectEmu, verify_export
 
+from font_authoring_admission_v1 import issue_font_authoring_admission_v1
 from revision_store import RevisionKernel
 from story_range_v1 import replace_story_range_v1
-from security.authz_v1 import AuthzDenied, AuthzKernel, CAP_EXPORT, CAP_VIEW
+from security.authz_v1 import AuthzDenied, AuthzKernel, CAP_EDIT_TEXT, CAP_EXPORT, CAP_VIEW
 from security.authorized_revision_gateway import AuthorizedRevisionGateway
 
 PINNED_SHA = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
@@ -637,6 +638,38 @@ class RealAcceptanceState:
             rect,
         )
 
+    def font_authoring_admission(self) -> dict:
+        """Read-only, exact-revision picker admission; default is no licensed fonts.
+
+        This task-local real-PUB harness has no independently provisioned,
+        parser-verified full-file font registry. Do not promote source-family
+        labels or OS fallback fonts into Editor authoring permission. A
+        production provider must inject an explicit trusted registry and
+        validated deliver_exact FontEnvironment before admitting any option.
+        """
+        revision_id = self.kernel.current_revision(self.document_id).revision_id
+        scene = self.scenes[revision_id]
+        layout = scene.get("layout_environment")
+        if not isinstance(layout, dict):
+            raise RuntimeError("font admission requires current Scene layout environment")
+        environment = {
+            "protocol_version": "chaptera.font-environment.v1",
+            "document_id": scene["document_id"],
+            "revision_id": revision_id,
+            "scene_snapshot_id": scene["snapshot_id"],
+            "layout_environment_id": layout["environment_id"],
+            "font_set_fingerprint": layout["font_set_fingerprint"],
+            "preview_authority": "server_frame_geometry_only",
+            "fonts": [],
+            "diagnostics": [],
+        }
+        return issue_font_authoring_admission_v1(
+            tenant_id=self.tenant_id,
+            scene=scene,
+            font_environment=environment,
+            trusted_resources=(),
+        )
+
     def editor_capabilities(self) -> dict:
         current = self.kernel.current_revision(self.document_id)
         record = self.kernel.read_revision(
@@ -950,6 +983,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._authorize(CAP_EXPORT)
                 target = query.get("target", [""])[0]
                 self._json(STATE.export_preview(target))
+                return
+            if path == "/v1/editor/font-authoring-admission":
+                # Capability is not derived from font delivery/visibility.
+                # Viewers cannot request authoring options; no client-supplied
+                # resource IDs or bytes influence this read-only response.
+                self._authorize(CAP_EDIT_TEXT)
+                self._json(STATE.font_authoring_admission())
                 return
             if path == "/v1/editor/capabilities":
                 self._authorize(CAP_VIEW)
