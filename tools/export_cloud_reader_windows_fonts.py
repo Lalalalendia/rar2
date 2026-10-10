@@ -344,8 +344,8 @@ def read_private_source_requirements(path: Path) -> tuple[list[str], dict]:
         story = entry.get("story_id")
         start, end = entry.get("scalar_start"), entry.get("scalar_end")
         value = entry.get("source_font_binding_id")
-        if (family not in indices_by_family or type(index) is not int
-                or index not in indices_by_family[family]
+        if (not isinstance(family, str) or family not in indices_by_family
+                or type(index) is not int or index not in indices_by_family[family]
                 or not isinstance(story, str) or not _STORY_ID_RE.fullmatch(story)
                 or type(start) is not int or type(end) is not int
                 or not 0 <= start < end <= 0xFFFFFFFF
