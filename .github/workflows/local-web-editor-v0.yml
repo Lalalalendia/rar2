@@ -111,6 +111,9 @@ jobs:
             target/local-font-ui/chromium.png
             target/local-font-ui/pinned-font-apply-receipt.json
             target/local-font-ui/pinned-font-edited.project.json
+            target/local-font-ui/pinned-font-physical-glyph-spans.json
+            target/local-font-ui/pinned-font-line-fit-receipt.json
+            target/local-font-ui/pinned-font-full-Story.project.json
             target/font-http-acceptance/receipt.json
             target/font-http-acceptance/browser.json
             target/font-http-acceptance/browser.png
