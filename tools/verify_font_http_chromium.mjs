@@ -90,6 +90,10 @@ try {
      after.snapshot_id===before.snapshot_id) {
     throw new Error("browser font Apply did not create a new real server Scene revision");
   }
+  if(after.fidelity.state!=="partial"||
+     !after.fidelity.reasons.includes("font_resource_layout_not_implemented")) {
+    throw new Error("actual browser font change must remain fidelity Partial");
+  }
   const scope=await fetch(api+"/v1/editor/font-format-scope",{headers}).then(r=>r.json());
   if(!scope.stories.some(x=>x.story_id===storyId)) {
     throw new Error("fresh browser FontResource override missing from actual Rust Story");
