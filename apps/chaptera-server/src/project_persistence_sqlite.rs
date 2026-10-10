@@ -202,15 +202,19 @@ impl SqliteProjectPersistence {
         rows.iter()
             .map(|row| {
                 let name: String = row.try_get("name").map_err(sqlite_error)?;
-                if name.is_empty() || name.len() > 512 {
+                if name.is_empty() || name.chars().count() > 512 {
                     return Err(IngressError::new(
                         "project_persistence_row_corrupt",
                         "project catalog name is invalid",
                     ));
                 }
+                let project_id = blob_text(row, "project_id")?;
+                let document_id = blob_text(row, "document_id")?;
+                require_ident(&project_id, "project_id")?;
+                require_ident(&document_id, "document_id")?;
                 Ok(ProjectCatalogEntry {
-                    project_id: blob_text(row, "project_id")?,
-                    document_id: blob_text(row, "document_id")?,
+                    project_id,
+                    document_id,
                     name,
                     created_at_ms: row.try_get("created_at_ms").map_err(sqlite_error)?,
                 })
