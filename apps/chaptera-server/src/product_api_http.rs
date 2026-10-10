@@ -1487,7 +1487,7 @@ mod tests {
                 restarted_authz.clone(),
                 restarted_revisions.clone(),
                 Arc::new(FixtureSourceLoader {
-                    bytes: Arc::new(source_bytes),
+                    bytes: Arc::new(source_bytes.clone()),
                     source_sha256: source_sha256.clone(),
                 }),
             )
