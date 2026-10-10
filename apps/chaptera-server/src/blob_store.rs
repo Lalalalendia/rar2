@@ -506,6 +506,14 @@ impl BlobStoreService {
                 "resource binding belongs to another tenant",
             ));
         }
+        // Raw PUB bindings are for server-side isolated parsing and native
+        // writing, never for browser-visible signed download handles.
+        if binding.resource_kind == ResourceKind::PubSource {
+            return Err(BlobStoreError::new(
+                "raw_source_browser_delivery_forbidden",
+                "raw PUB source is not an approved downloadable representation",
+            ));
+        }
         if binding.lifecycle_state != BindingLifecycle::Active {
             return Err(BlobStoreError::new(
                 "binding_not_active",
@@ -1932,6 +1940,57 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code, "direct_upload_size_fence_unproven");
+    }
+
+    #[tokio::test]
+    async fn raw_pub_source_can_be_verified_internally_but_never_signed_for_browser() {
+        let provider = Arc::new(FakeProvider::new(capabilities()));
+        let (service, _repo) = service(provider);
+        let bytes = b"private-raw-pub";
+        let mut input = Cursor::new(bytes.to_vec());
+        let source = service
+            .create_canonical_binding(create_request("tenant-a", bytes), &mut input)
+            .await
+            .unwrap();
+
+        // Authorized internal parsing must continue to access the exact PUB.
+        let mut verified = Vec::new();
+        service
+            .stream_binding_verified("tenant-a", &source.binding_id, &mut verified)
+            .await
+            .unwrap();
+        assert_eq!(verified, bytes);
+
+        // Even a same-tenant caller must not receive a raw PUB download URL.
+        let denied = service
+            .issue_download_grant("tenant-a", &source.binding_id, 100, 200)
+            .await
+            .unwrap_err();
+        assert_eq!(denied.code, "raw_source_browser_delivery_forbidden");
+        let cross_tenant = service
+            .issue_download_grant("tenant-b", &source.binding_id, 100, 200)
+            .await
+            .unwrap_err();
+        assert_eq!(cross_tenant.code, "cross_tenant_binding");
+
+        // The normal authorized export path remains usable.
+        let export_bytes = b"derived-export";
+        let mut request = create_request("tenant-a", export_bytes);
+        request.resource_kind = ResourceKind::ExportArtifact;
+        request.validation_profile = "export-v1".into();
+        request.canonical_mime = Some("application/octet-stream".into());
+        let mut export_input = Cursor::new(export_bytes.to_vec());
+        let export = service
+            .create_canonical_binding(request, &mut export_input)
+            .await
+            .unwrap();
+        let grant = service
+            .issue_download_grant("tenant-a", &export.binding_id, 100, 200)
+            .await
+            .unwrap();
+        assert_eq!(grant.tenant_id, "tenant-a");
+        assert_eq!(grant.binding_id, export.binding_id);
+        assert!(grant.opaque_url.starts_with("fake://"));
     }
 
     #[tokio::test]
