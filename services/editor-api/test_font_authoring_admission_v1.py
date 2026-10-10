@@ -210,6 +210,65 @@ class ServerFontAdmissionTests(unittest.TestCase):
             result["resources"][1]["content_hash"],
         )
 
+    def test_non_boolean_policy_values_are_never_authority(self):
+        self.assertEqual(issue(resources=[
+            replace(trusted(), authoring_admitted=1)
+        ])["resources"], [])
+        self.assertEqual(issue(resources=[
+            replace(trusted(), parser_verified=1)
+        ])["resources"], [])
+        self.assertEqual(issue(resources=[
+            replace(trusted(), is_full_resource=1)
+        ])["resources"], [])
+
+    def test_http_endpoint_requires_edit_text_capability_and_returns_no_fake_fonts(self):
+        """The fixture HTTP surface cannot expose any unprovisioned fonts."""
+        import json
+        import threading
+        from http.server import ThreadingHTTPServer
+        from urllib.error import HTTPError
+        from urllib.request import Request, urlopen
+
+        import web_real_acceptance_service as service
+
+        class Authz:
+            def authorize(self, *, capability, principal_id, **kwargs):
+                if capability != service.CAP_EDIT_TEXT or principal_id != "editor":
+                    raise service.AuthzDenied("font_edit_forbidden")
+
+        class TestState:
+            tenant_id = TENANT
+            document_id = DOC
+            authz = Authz()
+
+            def font_authoring_admission(self):
+                return issue(resources=[])
+
+        original_state = service.STATE
+        service.STATE = TestState()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), service.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/v1/editor/font-authoring-admission"
+            for principal in (None, "viewer"):
+                headers = {} if principal is None else {"x-chaptera-principal-id": principal}
+                with self.assertRaises(HTTPError) as failed:
+                    urlopen(Request(url, headers=headers), timeout=5)
+                self.assertEqual(failed.exception.code, 403)
+            req = Request(url, headers={"x-chaptera-principal-id": "editor"})
+            with urlopen(req, timeout=5) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(
+                    json.load(response),
+                    issue(resources=[]),
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+            service.STATE = original_state
+
     def test_duplicates_invalid_shape_and_missing_font_are_fail_closed(self):
         self.assertDenied(
             "duplicate_delivered_font_resource",
