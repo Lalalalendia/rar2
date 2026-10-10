@@ -3177,7 +3177,7 @@ mod authored_page_append_tests {
             stack_requirements,
             vec![
                 destination_node_a.into_canonical(),
-                destination_node_b.into_canonical()
+                destination_node_b.into_canonical(),
             ],
             "native persistence must preserve exact copied paint-stack order"
         );
