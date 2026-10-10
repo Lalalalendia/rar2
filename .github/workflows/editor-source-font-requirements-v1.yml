@@ -5,6 +5,8 @@ on:
     paths:
       - "tools/pub_source_font_requirements_v1.py"
       - "tools/export_cloud_reader_windows_fonts.py"
+      - "tools/audit_private_source_font_styles_v1.py"
+      - "tools/ci/test_private_source_font_styles_v1.py"
       - "tools/ci/test_pub_source_font_requirements_v1.py"
       - "tools/ci/test_export_cloud_reader_windows_fonts.py"
       - "docs/cloud-reader-font-resources-v1.md"
@@ -41,3 +43,5 @@ jobs:
         run: python tools/ci/test_pub_source_font_requirements_v1.py
       - name: Verify private licensed-font exporter and incomplete-style protection
         run: python tools/ci/test_export_cloud_reader_windows_fonts.py
+      - name: Prove private source face/style coverage cannot authorize native output
+        run: python tools/ci/test_private_source_font_styles_v1.py
