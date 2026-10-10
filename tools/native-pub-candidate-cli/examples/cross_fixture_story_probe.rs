@@ -217,6 +217,7 @@ fn probe_fixture(label: &str, encoded: &str) -> Result<Value> {
     }
 
     let mut last_blocker = "not_evaluated";
+    let mut last_writer_code: Option<String> = None;
     for (story_id, before) in options {
         let Some((index, _)) = before.char_indices().find(|(_, c)| c.is_ascii_alphanumeric())
         else {
@@ -239,11 +240,28 @@ fn probe_fixture(label: &str, encoded: &str) -> Result<Value> {
                 result["candidate"] = receipt;
                 return Ok(result);
             }
-            Err(error) => last_blocker = safe_error_class(&error.to_string()),
+            Err(error) => {
+                let reason = error.to_string();
+                last_blocker = safe_error_class(&reason);
+                // Only the static machine-defined Writer error code crosses the
+                // source-safe boundary. Never emit payload text or error details.
+                last_writer_code = reason
+                    .strip_prefix("writer_blocked:")
+                    .or_else(|| reason.strip_prefix("replay_writer_blocked:"))
+                    .filter(|code| {
+                        !code.is_empty()
+                            && code.len() <= 64
+                            && code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+                    })
+                    .map(str::to_owned);
+            }
         }
     }
     result["result"] = json!("hosted_candidate_blocked");
     result["blocker_class"] = json!(last_blocker);
+    if let Some(code) = last_writer_code {
+        result["writer_blocker_code"] = json!(code);
+    }
     Ok(result)
 }
 
