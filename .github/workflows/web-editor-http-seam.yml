@@ -17,6 +17,10 @@ on:
       - "apps/web/rich-reader-editor-shell-v1.mjs"
       - "apps/web/rich-reader-editor-shell-v1.test.mjs"
       - "apps/web/rich-reader-editor-harness.html"
+      - "apps/web/product-editor.html"
+      - "apps/web/product-editor.css"
+      - "apps/web/product-editor-entry-v1.mjs"
+      - "apps/web/product-editor-entry-v1.test.mjs"
       - "tools/run_rich_reader_editor_harness.mjs"
       - "services/editor-api/web_shell_http_harness.py"
       - "services/editor-api/observability.py"
@@ -59,6 +63,7 @@ jobs:
           node --test apps/web/observability-v1.test.mjs
           node --test apps/web/reader-scene-editor-interaction-v1.test.mjs
           node --test apps/web/rich-reader-editor-shell-v1.test.mjs
+          node --test apps/web/product-editor-entry-v1.test.mjs
       - name: Install Playwright
         run: npm install --no-save playwright@1.55.0
       - name: Install Chromium

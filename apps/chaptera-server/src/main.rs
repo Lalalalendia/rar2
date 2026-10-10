@@ -18,6 +18,7 @@ use chaptera_server::{
         self, IsolatedMigrationEditableRouteProducer, MigrationEditableRouteHttpState,
     },
     product_api_http::{self, ProductApiHttpState},
+    product_editor_assets,
     product_export_http::{self, ProductExportHttpState},
     project_persistence_sqlite::SqliteProjectPersistence,
     revision_materializer::BlobStoreExactSourceLoader,
@@ -272,7 +273,8 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                             source_ingress_http::router(source_state)
                                 .merge(product_api_http::router(product_state))
                                 .merge(product_export_http::router(export_state))
-                                .merge(migration_editable_route::router(migration_route_state)),
+                                .merge(migration_editable_route::router(migration_route_state))
+                                .merge(product_editor_assets::router()),
                         )
                     } else {
                         None

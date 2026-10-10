@@ -1,0 +1,86 @@
+import { BrowserObservabilityV1 } from "./observability-v1.mjs";
+import { ChapteraProductEditorServiceV1 } from "./chaptera-product-editor-service-v1.mjs";
+import { RichReaderEditorShellV1 } from "./rich-reader-editor-shell-v1.mjs";
+
+const UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+export function documentIdFromEditorPath(pathname){
+  if(typeof pathname!=="string") return null;
+  const match=pathname.match(/^\/editor\/doc\/([^/]+)\/?$/);
+  if(!match) return null;
+  const value=decodeURIComponent(match[1]);
+  return UUID_RE.test(value)?value:null;
+}
+
+export function loginUrlForReturnPath(returnPath){
+  if(typeof returnPath!=="string"||!returnPath.startsWith("/")||returnPath.startsWith("//")){
+    throw new TypeError("local return path is required");
+  }
+  return "/v1/auth/login?return_path="+encodeURIComponent(returnPath);
+}
+
+function statusText(element,text,kind=""){
+  element.textContent=text;
+  element.className="status"+(kind?" "+kind:"");
+}
+
+export async function bootProductEditor({
+  locationObject=globalThis.location,
+  documentObject=globalThis.document,
+  cryptoObject=globalThis.crypto,
+}={}){
+  if(!locationObject||!documentObject) throw new TypeError("browser location/document are required");
+  const documentId=documentIdFromEditorPath(locationObject.pathname);
+  if(!documentId) throw new Error("invalid Chaptera Editor document URL");
+
+  const status=documentObject.querySelector("#status");
+  const fidelity=documentObject.querySelector("#fidelity");
+  const identity=documentObject.querySelector("#document");
+  const host=documentObject.querySelector("#canvas");
+  if(!status||!fidelity||!identity||!host) throw new Error("Chaptera Editor shell DOM is incomplete");
+  identity.textContent=documentId;
+
+  let seq=0;
+  const observability=new BrowserObservabilityV1({
+    sessionIncarnation:"session:product-editor",
+    browserFamily:navigator.userAgent.includes("Firefox")?"firefox":"chromium",
+    idFactory:(prefix)=>prefix+":editor-"+String(++seq).padStart(6,"0"),
+  });
+  const service=new ChapteraProductEditorServiceV1(locationObject.origin,{
+    documentId,
+    observability,
+  });
+
+  try{
+    await service.session();
+  }catch(error){
+    if(/request failed: 401\b/.test(String(error?.message??error))){
+      const returnPath=locationObject.pathname+locationObject.search;
+      locationObject.assign(loginUrlForReturnPath(returnPath));
+      return {kind:"login_redirect",document_id:documentId};
+    }
+    throw error;
+  }
+
+  const shell=new RichReaderEditorShellV1({
+    host,
+    service,
+    operationIdFactory:()=> "product-move-"+cryptoObject.randomUUID(),
+    onState:(state)=>{
+      statusText(status,"Revision "+(state.revision_id??"unknown")+(state.selected_node_id?" · selected":""),
+        state.revision_id?"ok":"");
+    },
+  });
+  await shell.start();
+  const scene=shell.readerScene;
+  fidelity.textContent="Fidelity: "+(scene?.fidelity?.state??"unknown")+
+    ((scene?.fidelity?.reasons?.length??0)?" — "+scene.fidelity.reasons.join(", "):"");
+  return {kind:"ready",document_id:documentId,shell,service};
+}
+
+if(typeof window!=="undefined"&&typeof document!=="undefined"){
+  bootProductEditor().catch((error)=>{
+    const status=document.querySelector("#status");
+    if(status) statusText(status,String(error?.message??error),"error");
+  });
+}
