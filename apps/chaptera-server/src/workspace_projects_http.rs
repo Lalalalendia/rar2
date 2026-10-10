@@ -382,10 +382,7 @@ mod tests {
         assert_eq!(visible["projects"][0]["lifecycle_state"], "active");
         assert_eq!(visible["projects"][0]["lifecycle_generation"], 0);
         assert_eq!(visible["projects"][0]["metadata_version"], 0);
-        assert_eq!(
-            visible["projects"][0]["workspace_id"],
-            context.workspace_id
-        );
+        assert_eq!(visible["projects"][0]["workspace_id"], context.workspace_id);
         assert_eq!(
             visible["projects"][0]["current_revision_id"],
             genesis_revision
