@@ -12,5 +12,9 @@ publish = false
 [dependencies]
 anyhow = "1"
 pub-editor = { path = "../../vendor/producer-a/crates/pub-editor" }
+pub-cfb = { path = "../../vendor/producer-a/crates/pub-cfb" }
+pub-core = { path = "../../vendor/producer-a/crates/pub-core" }
+pub-quill = { path = "../../vendor/producer-a/crates/pub-quill" }
+pub-reader = { path = "../../vendor/producer-a/crates/pub-reader" }
 serde_json = "1"
 sha2 = "0.10"

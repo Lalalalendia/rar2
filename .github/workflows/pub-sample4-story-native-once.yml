@@ -1,0 +1,231 @@
+name: PUB Sample4 Story Writer native cross-fixture admission (once)
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-sample4-story-native-once.yml"
+      - "tools/native-pub-candidate-cli/examples/native_sample4_handoff.rs"
+      - "tools/native-pub-candidate-cli/Cargo.toml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/pub-sample4-story-native-once.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pub-sample4-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate-transport:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Parse existing Publisher guarded scripts (no COM)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($relative in @(
+            'tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1',
+            'tools/windows/pub-runtime/run_story_native_roundtrip.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $relative).Path, [ref]$tokens, [ref]$errors
+            )
+            if ($errors.Count -ne 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              throw 'native_sample4_powershell_parse_failed'
+            }
+          }
+          $wrapper = Get-Content -LiteralPath 'tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1' -Raw
+          if (-not $wrapper.Contains('pwsh7_portable_path_not_allowlisted') -or
+              -not $wrapper.Contains('pwsh7_portable_version_or_arch_mismatch') -or
+              -not $wrapper.Contains('7.6.5')) {
+            throw 'portable_native_sample4_runner_guard_missing'
+          }
+
+  prepare-sample4-handoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Generate exact Sample4 original and Writer candidate privately, without Publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cargo run --manifest-path tools/native-pub-candidate-cli/Cargo.toml \
+            --example native_sample4_handoff -- \
+            --output-dir out/sample4-native-handoff
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- verify \
+            --pub out/sample4-native-handoff/control/candidate.pub \
+            --manifest out/sample4-native-handoff/control/handoff.json
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- verify \
+            --pub out/sample4-native-handoff/candidate/candidate.pub \
+            --manifest out/sample4-native-handoff/candidate/handoff.json
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          base = Path("out/sample4-native-handoff")
+          report = json.loads((base / "source-safe-receipt.json").read_text())
+          assert report["schema"] == "chaptera.sample4.native-oracle-handoff.v1"
+          assert report["source_sha256"] == "42195f7ad23d911219fea3ec88e66e867e9b9a6821a16dd1b535e2aa9d57a11b"
+          assert report["candidate_sha256"] == "2f7795a3c4307716565c7accf4636a80b7947f8921c60a87b51e1a48ee529509"
+          assert report["publisher_native_acceptance"] == "not_evaluated"
+          assert report["product_pub_download_authority"] is False
+          for name in ("control", "candidate"):
+              arm = base / name
+              manifest = json.loads((arm / "handoff.json").read_text())
+              assert manifest["schema"] == "chaptera.pub-native-story-handoff.v1"
+              assert manifest["source_sha256"] == report["source_sha256"]
+              assert hashlib.sha256((arm / "source.pub").read_bytes()).hexdigest() == report["source_sha256"]
+              assert hashlib.sha256((arm / "candidate.pub").read_bytes()).hexdigest() == manifest["candidate_sha256"]
+              assert len((arm / "candidate.pub").read_bytes()) == 72192
+          assert (base / "control/candidate.pub").read_bytes() == (base / "candidate/source.pub").read_bytes()
+          assert (base / "candidate/candidate.pub").read_bytes() != (base / "candidate/source.pub").read_bytes()
+          print({"sample4_source": "exact_pinned", "candidate": "reader_reopen_and_manifest_pass",
+                 "native_publisher": "not_evaluated", "download_pub": False})
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sample4-hosted-private-free-receipt-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 14
+          path: out/sample4-native-handoff/source-safe-receipt.json
+
+  native-sample4:
+    needs: [validate-transport, prepare-sample4-handoff]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Lalalalendia/rar2' }}
+    runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
+    timeout-minutes: 29
+    concurrency:
+      group: pub-re-native-publisher-oracle
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Supply Git Bash to trusted Rust verifier
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $gitBashDir = 'C:\Program Files\Git\bin'
+          if (-not (Test-Path -LiteralPath (Join-Path $gitBashDir 'bash.exe') -PathType Leaf)) {
+            throw 'git_bash_unavailable'
+          }
+          $gitBashDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Regenerate exact source + control + candidate only on trusted Windows, verify
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7'
+          New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+          $bundle = Join-Path $root 'sample4-input'
+          cargo run --manifest-path tools/native-pub-candidate-cli/Cargo.toml --example native_sample4_handoff -- --output-dir $bundle
+          if ($LASTEXITCODE -ne 0) { throw 'sample4_handoff_regeneration_failed' }
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-writer --bin pub_story_native_handoff
+          if ($LASTEXITCODE -ne 0) { throw 'current_reader_verifier_build_failed' }
+          foreach ($arm in @('control', 'candidate')) {
+            $path = Join-Path $bundle $arm
+            cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-writer --bin pub_story_native_handoff -- verify --pub (Join-Path $path 'candidate.pub') --manifest (Join-Path $path 'handoff.json')
+            if ($LASTEXITCODE -ne 0) { throw ('sample4_{0}_reader_reopen_failed' -f $arm) }
+          }
+
+      - name: Stage exact approved PowerShell 7.6.5 portable x64 (same transport as Sample3)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          $root = Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7'
+          $portable = Join-Path $root 'portable'
+          $zip = Join-Path $root 'PowerShell-7.6.5-win-x64.zip'
+          if (Test-Path -LiteralPath $portable) { throw 'portable_pwsh7_destination_already_exists' }
+          $url = 'https://github.com/PowerShell/PowerShell/releases/download/v7.6.5/PowerShell-7.6.5-win-x64.zip'
+          $expected = '32eb8f6cdce08f86e987d625a2733e54ac3e289ae7e1621b14c0b5bcec2434ea'
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -ErrorAction Stop
+          $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -cne $expected) { throw 'portable_pwsh7_archive_sha256_mismatch' }
+          New-Item -ItemType Directory -Path $portable -ErrorAction Stop | Out-Null
+          Expand-Archive -LiteralPath $zip -DestinationPath $portable -Force
+          $exe = Join-Path $portable 'pwsh.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'portable_pwsh7_executable_missing' }
+          $version = @(& $exe -NoLogo -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.ToString()')
+          if ($LASTEXITCODE -ne 0 -or $version.Count -ne 1 -or [string]$version[0] -ne '7.6.5') {
+            throw 'portable_pwsh7_version_mismatch'
+          }
+          Remove-Item -LiteralPath $zip -Force
+
+      - name: Matched native source SaveAs control on isolated PowerShell7 process
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7'
+          & tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1 `
+            -BundleDir (Join-Path $root 'sample4-input/control') `
+            -OutputRoot (Join-Path $root 'private-sample4-control') `
+            -TimeoutSeconds 360 `
+            -ChildPowerShell PowerShell7 `
+            -PinnedPwsh7Executable (Join-Path (Join-Path $root 'portable') 'pwsh.exe')
+          if (-not $?) { throw 'sample4_noop_native_control_failed_or_not_evaluated' }
+
+      - name: One exact Sample4 Writer candidate SaveAs and fresh Publisher reopen
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7'
+          & tools/windows/pub-runtime/Invoke-StoryNativeRoundtripGuarded.ps1 `
+            -BundleDir (Join-Path $root 'sample4-input/candidate') `
+            -OutputRoot (Join-Path $root 'private-sample4-candidate') `
+            -TimeoutSeconds 360 `
+            -ChildPowerShell PowerShell7 `
+            -PinnedPwsh7Executable (Join-Path (Join-Path $root 'portable') 'pwsh.exe')
+          if (-not $?) { throw 'sample4_candidate_native_persistence_failed' }
+
+      - name: Upload only source-safe native control and candidate receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sample4-publisher2019-crossfixture-receipt-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            ${{ runner.temp }}/chaptera-story-pwsh7/private-sample4-control/native-roundtrip-status.json
+            ${{ runner.temp }}/chaptera-story-pwsh7/private-sample4-control/native-roundtrip-stage.json
+            ${{ runner.temp }}/chaptera-story-pwsh7/private-sample4-control/native-roundtrip-receipt.json
+            ${{ runner.temp }}/chaptera-story-pwsh7/private-sample4-candidate/native-roundtrip-status.json
+            ${{ runner.temp }}/chaptera-story-pwsh7/private-sample4-candidate/native-roundtrip-stage.json
+            ${{ runner.temp }}/chaptera-story-pwsh7/private-sample4-candidate/native-roundtrip-receipt.json
+
+      - name: Remove private PUB inputs, Publisher SaveAs output, runtime and child logs
+        if: always()
+        shell: powershell
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'chaptera-story-pwsh7'
+          if (Test-Path -LiteralPath $root) {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
+          }
