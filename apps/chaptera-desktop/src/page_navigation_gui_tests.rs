@@ -2672,7 +2672,7 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
                 .pages
                 .iter()
                 .map(|page| page.id)
-                .last(),
+                .next_back(),
             Some(destination_page_id)
         );
     }
