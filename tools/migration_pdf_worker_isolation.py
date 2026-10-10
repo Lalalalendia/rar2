@@ -234,6 +234,11 @@ def _validate_publish_tree(root: pathlib.Path) -> tuple[str, ...]:
             continue
         if not stat.S_ISREG(st.st_mode):
             raise RuntimeError(f"worker output is not a regular file: {rel}")
+        # A hard link has regular-file mode but can reference an inode from
+        # outside this staging root (including private server-side files).
+        # The worker must not promote such existing inodes into public output.
+        if st.st_nlink != 1:
+            raise RuntimeError(f"worker output hard link is not publishable: {rel}")
         outputs.append(rel.as_posix())
     if not outputs:
         raise RuntimeError("successful worker produced no output files")
