@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 chaptera-caret-layout-feed = { path = "../chaptera-caret-layout-feed" }
 chaptera-scene-instance = { path = "../chaptera-scene-instance" }
 chaptera-text-caret-map-adapter = { path = "../chaptera-text-caret-map-adapter" }
+chaptera-text-format-overlay = { path = "../chaptera-text-format-overlay" }
 chaptera-viewer-render-plan = { path = "../chaptera-viewer-render-plan", features = ["projected-scene-instances"] }
 pub-editor = { path = "../../vendor/producer-a/crates/pub-editor" }
 pub-layout = { path = "../../vendor/producer-a/crates/pub-layout" }
