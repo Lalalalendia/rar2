@@ -35,8 +35,8 @@ use crate::{
         AuthzError, CAP_VIEW, SqliteAuthorizedRevisionCommitter, SqliteAuthzAuthority,
     },
     product_replay_worker::{
-        IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer,
-        IsolatedReaderSceneIntentV1, ProductReplayWorkerError,
+        IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer, IsolatedReaderSceneIntentV1,
+        ProductReplayWorkerError,
     },
     reader_scene_v1::{ReaderSceneV1, from_viewer_geometry},
     revision_materializer::{
