@@ -90,6 +90,8 @@ def synthetic_controls() -> None:
     assert {x["source_family"] for x in out["families"]} == {"Example Serif", "Supplement Sans"}
     example = next(x for x in out["families"] if x["source_family"] == "Example Serif")
     assert example["source_font_index_candidates"] == [7]
+    assert example["source_quill_index_proven"] is True
+    assert out["source_families_without_quill_index_count"] == 0
     assert example["source_script_slots"] == [2]
     assert example["effective_style_run_counts"] == {"bold": 1, "regular": 1}
     assert example["needs_non_regular_style"] is True
@@ -127,7 +129,12 @@ def real_publisher() -> None:
     assert out["visible_story_count"] > 0
     assert out["source_story_count"] >= out["visible_story_count"]
     assert all(item["physical_face_authorized"] is False for item in out["families"])
-    assert all(item["source_font_index_candidates"] for item in out["families"])
+    assert any(item["source_font_index_candidates"] for item in out["families"])
+    assert any(not item["source_font_index_candidates"] for item in out["families"])
+    assert out["source_families_without_quill_index_count"] == sum(
+        not family["source_quill_index_proven"] for family in out["families"]
+    )
+    assert out["source_families_without_quill_index_count"] > 0
     rockwell = next(x for x in out["families"] if x["source_family"] == "Rockwell Condensed")
     assert rockwell["source_font_index_candidates"] == [18]
     assert rockwell["source_typography_run_count"] > 0
@@ -150,6 +157,7 @@ def real_publisher() -> None:
         "Rockwell_Quill_index": rockwell["source_font_index_candidates"],
         "source_stories": out["source_story_count"],
         "visible_stories": out["visible_story_count"],
+        "source_families_without_quill_index": out["source_families_without_quill_index_count"],
         "physical_fonts_admitted": False,
         "fixed_pdf_allowed": False,
     }, sort_keys=True))
