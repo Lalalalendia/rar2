@@ -138,6 +138,7 @@ try {
         created?.document_id !== input.document_id ||
         created?.revision_id !== input.revision_id ||
         created?.target_profile !== "idml:bounded-editable" ||
+        created?.layout_environment_id !== input.layout_environment_id ||
         !created?.job_id) {
       throw new Error("exact revision export create failed: " +
         JSON.stringify({ status: createResponse.status, created }));
@@ -158,6 +159,7 @@ try {
         if (status.document_id !== input.document_id ||
             status.revision_id !== input.revision_id ||
             status.target_profile !== "idml:bounded-editable" ||
+            status.layout_environment_id !== input.layout_environment_id ||
             !status.artifact_id || !status.loss_report_id) {
           throw new Error("ready export identity differs from edited revision: " +
             JSON.stringify(status));
