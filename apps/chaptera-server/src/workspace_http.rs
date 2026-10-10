@@ -97,7 +97,6 @@ impl From<WorkspaceContextError> for WorkspaceHttpError {
 
 impl axum::response::IntoResponse for WorkspaceHttpError {
     fn into_response(self) -> axum::response::Response {
-        use axum::response::IntoResponse;
         match self {
             Self::Auth(error) => error.into_response(),
             Self::Workspace(error) => {
