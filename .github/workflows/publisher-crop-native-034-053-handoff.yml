@@ -1,0 +1,149 @@
+name: Publisher crop native 034 053 handoff
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/publisher-crop-native-034-053-handoff.yml"
+      - "tools/windows/run_publisher_crop_native_034_053_direct.ps1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publisher-crop-native-034-053-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Parse direct native probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = "tools/windows/run_publisher_crop_native_034_053_direct.ps1"
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $path).Path,
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "PowerShell parser rejected native crop probe."
+          }
+
+      - name: Enforce bounded read-only source-safe contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $text = Get-Content "tools/windows/run_publisher_crop_native_034_053_direct.ps1" -Raw
+          foreach ($forbidden in @(
+            "Invoke-WebRequest",
+            "Start-BitsTransfer",
+            "curl.exe",
+            ".Save(",
+            ".SaveAs(",
+            ".ExportAsFixedFormat(",
+            ".PrintOut(",
+            ".Run(",
+            ".Duplicate(",
+            ".Delete("
+          )) {
+            if ($text.Contains($forbidden)) {
+              throw "Forbidden capability in native crop probe: $forbidden"
+            }
+          }
+          foreach ($required in @(
+            "0d2278960a0101ced0a1ba6d5922f5a26ea37b76b3ab00ef21e21873359d4a5a",
+            "1019904",
+            "70f21e6856945d091469fd79f815674128e1cbf7e160e352aa0e80968ae924f8",
+            "631296",
+            '$doc = $app.Open($target.path, $true, $false)',
+            "PictureFormat",
+            "CropLeft",
+            "CropTop",
+            "CropRight",
+            "CropBottom",
+            "AutoShapeType",
+            "Nodes",
+            "ZOrderPosition",
+            "coordinates_emitted = $false",
+            "raw_crop_values_emitted = $false",
+            "Compress-Archive",
+            "PUBLISHER_CROP_NATIVE_034_053_RETURN"
+          )) {
+            if (-not $text.Contains($required)) {
+              throw "Missing bounded native-crop marker: $required"
+            }
+          }
+          $shaCheck = $text.IndexOf('source SHA mismatch')
+          $publisherActivation = $text.IndexOf('$publisher = Get-PubPublisherIdentity')
+          if ($shaCheck -lt 0 -or $publisherActivation -lt 0 -or $shaCheck -gt $publisherActivation) {
+            throw "Exact source admission must precede Publisher activation."
+          }
+
+      - name: Prove wrong 034 fails before Publisher activation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fake034 = Join-Path $env:RUNNER_TEMP ("publisher-034-wrong-" + [guid]::NewGuid().ToString() + ".pub")
+          $fake053 = Join-Path $env:RUNNER_TEMP ("publisher-053-wrong-" + [guid]::NewGuid().ToString() + ".pub")
+          $output = Join-Path $env:RUNNER_TEMP ("publisher-crop-wrong-out-" + [guid]::NewGuid().ToString())
+          [IO.File]::WriteAllBytes($fake034, [byte[]]@(0, 1, 2, 3))
+          [IO.File]::WriteAllBytes($fake053, [byte[]]@(0, 1, 2, 3))
+          try {
+            $ErrorActionPreference = "Continue"
+            $text = (& pwsh -NoProfile -File tools/windows/run_publisher_crop_native_034_053_direct.ps1 `
+              -Input034 $fake034 -Input053 $fake053 -OutputRoot $output 2>&1 |
+              ForEach-Object { [string]$_ }) -join "`n"
+            $exitCode = $LASTEXITCODE
+            $ErrorActionPreference = "Stop"
+            if ($exitCode -eq 0 -or -not $text.Contains("034 source size mismatch")) {
+              throw "Wrong-source control did not fail at exact 034 admission: $text"
+            }
+            if (Test-Path -LiteralPath $output) {
+              throw "Rejected source created output before Publisher activation."
+            }
+          } finally {
+            Remove-Item -LiteralPath $fake034 -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $fake053 -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $output -Force -Recurse -ErrorAction SilentlyContinue
+          }
+          Write-Host "Wrong 034 rejected before Publisher activation; no output created."
+          exit 0
+
+      - name: Emit local execution handoff
+        shell: pwsh
+        run: |
+          $handoff = @"
+          PUBLISHER-CROP-NATIVE-034-053-01
+
+          Exact sources:
+            034 SHA-256 0d2278960a0101ced0a1ba6d5922f5a26ea37b76b3ab00ef21e21873359d4a5a bytes 1019904
+            053 SHA-256 70f21e6856945d091469fd79f815674128e1cbf7e160e352aa0e80968ae924f8 bytes 631296
+
+          Run locally on the pinned Publisher 2019 lab machine:
+            pwsh -NoProfile -File tools/windows/run_publisher_crop_native_034_053_direct.ps1 -Input034 "<exact-034.pub>" -Input053 "<exact-053.pub>" -OutputRoot "<empty-output-dir>"
+
+          Return only:
+            publisher-crop-native-034-053-return.zip
+
+          The return contains source-safe Publisher metadata only; no PUB bytes, text, coordinates, or raw crop values.
+          "@
+          Set-Content -LiteralPath "publisher-crop-native-034-053-handoff.txt" -Value $handoff -Encoding utf8
+          Get-Content -LiteralPath "publisher-crop-native-034-053-handoff.txt"
+
+      - name: Upload handoff
+        uses: actions/upload-artifact@v4
+        with:
+          name: publisher-crop-native-034-053-handoff-${{ github.run_id }}
+          path: publisher-crop-native-034-053-handoff.txt
+          retention-days: 30
