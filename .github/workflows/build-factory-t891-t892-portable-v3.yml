@@ -414,4 +414,4 @@ jobs:
           name: pub-factory-t891-t892-native-portable-windows-v3
           path: ${{ runner.temp }}/PUB_FACTORY_NATIVE_PORTABLE_T891_T892_V3.zip
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
