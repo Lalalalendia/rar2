@@ -4,10 +4,6 @@ on:
   pull_request:
     paths:
       - "apps/chaptera-desktop/src/editor_project_store.rs"
-      - "apps/chaptera-desktop/src/main.rs"
-      - "apps/chaptera-desktop/Cargo.toml"
-      - "crates/chaptera-suite-handoff/**"
-      - "vendor/producer-a/crates/pub-editor/**"
       - ".github/workflows/editor-project-durability.yml"
   workflow_dispatch:
 
