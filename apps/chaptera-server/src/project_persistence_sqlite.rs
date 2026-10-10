@@ -30,6 +30,14 @@ pub struct ProjectBaselineIdentity {
     pub canonical_authoring_revision_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProjectCatalogEntry {
+    pub project_id: String,
+    pub document_id: String,
+    pub name: String,
+    pub created_at_ms: i64,
+}
+
 pub fn plan_project_identity(
     request: &ConsumeUploadRequest,
 ) -> Result<PlannedProjectIdentity, IngressError> {
@@ -121,6 +129,93 @@ impl SqliteProjectPersistence {
     ) -> Result<ProjectCreateResult, IngressError> {
         self.create_project_from_upload_inner(request, baseline, CommitFailpoint::None)
             .await
+    }
+
+    /// Workspace catalog is read from the existing durable projects/documents,
+    /// not a second product index. Recheck live membership AND per-document
+    /// CAP_VIEW-compatible grant in the same SELECT: a revoked member, disabled
+    /// principal or expired grant never receives another project's metadata.
+    ///
+    /// V1 is deliberately bounded: refuse lists larger than 100 rather than
+    /// silently omit entries or allow unbounded materialization.
+    pub async fn list_visible_active_projects(
+        &self,
+        principal_id: &str,
+        tenant_id: &str,
+        workspace_id: &str,
+        now_ms: i64,
+    ) -> Result<Vec<ProjectCatalogEntry>, IngressError> {
+        require_ident(principal_id, "principal_id")?;
+        require_ident(tenant_id, "tenant_id")?;
+        require_ident(workspace_id, "workspace_id")?;
+        if now_ms < 0 {
+            return Err(IngressError::new(
+                "project_catalog_clock_invalid",
+                "project catalog clock must be nonnegative",
+            ));
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT p.project_id, d.document_id, p.name, p.created_at_ms
+            FROM projects AS p
+            JOIN documents AS d
+              ON d.project_id = p.project_id AND d.tenant_id = p.tenant_id
+            JOIN workspaces AS w
+              ON w.workspace_id = p.workspace_id AND w.tenant_id = p.tenant_id
+            JOIN workspace_memberships AS wm
+              ON wm.workspace_id = p.workspace_id
+             AND wm.principal_id = ?
+            JOIN principals AS principal
+              ON principal.principal_id = wm.principal_id
+            JOIN authz_principal_grants AS grant
+              ON grant.tenant_id = d.tenant_id
+             AND grant.document_id = d.document_id
+             AND grant.principal_id = wm.principal_id
+            WHERE p.tenant_id = ?
+              AND p.workspace_id = ?
+              AND p.lifecycle_state = 'active'
+              AND p.deleted = 0
+              AND w.lifecycle_state = 'active'
+              AND wm.membership_state = 'active'
+              AND wm.revoked_at_ms IS NULL
+              AND principal.disabled_at_ms IS NULL
+              AND (grant.expires_at_ms IS NULL OR grant.expires_at_ms > ?)
+            ORDER BY p.created_at_ms DESC, p.project_id DESC
+            LIMIT 101
+            "#,
+        )
+        .bind(principal_id.as_bytes())
+        .bind(tenant_id.as_bytes())
+        .bind(workspace_id.as_bytes())
+        .bind(now_ms)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+
+        if rows.len() > 100 {
+            return Err(IngressError::new(
+                "project_catalog_pagination_required",
+                "this workspace has more than 100 visible projects; pagination is required",
+            ));
+        }
+        rows.iter()
+            .map(|row| {
+                let name: String = row.try_get("name").map_err(sqlite_error)?;
+                if name.is_empty() || name.len() > 512 {
+                    return Err(IngressError::new(
+                        "project_persistence_row_corrupt",
+                        "project catalog name is invalid",
+                    ));
+                }
+                Ok(ProjectCatalogEntry {
+                    project_id: blob_text(row, "project_id")?,
+                    document_id: blob_text(row, "document_id")?,
+                    name,
+                    created_at_ms: row.try_get("created_at_ms").map_err(sqlite_error)?,
+                })
+            })
+            .collect()
     }
 
     /// Reconcile an already-committed CreateProjectFromUpload without invoking
