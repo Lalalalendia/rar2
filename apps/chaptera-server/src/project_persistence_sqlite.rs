@@ -250,16 +250,18 @@ impl SqliteProjectPersistence {
                         "project catalog returned a non-active lifecycle row",
                     ));
                 }
-                let lifecycle_generation =
-                    row.try_get::<i64, _>("lifecycle_generation").map_err(sqlite_error)?;
+                let lifecycle_generation = row
+                    .try_get::<i64, _>("lifecycle_generation")
+                    .map_err(sqlite_error)?;
                 let lifecycle_generation = u64::try_from(lifecycle_generation).map_err(|_| {
                     IngressError::new(
                         "project_persistence_row_corrupt",
                         "project lifecycle generation is negative",
                     )
                 })?;
-                let metadata_version =
-                    row.try_get::<i64, _>("metadata_version").map_err(sqlite_error)?;
+                let metadata_version = row
+                    .try_get::<i64, _>("metadata_version")
+                    .map_err(sqlite_error)?;
                 let metadata_version = u64::try_from(metadata_version).map_err(|_| {
                     IngressError::new(
                         "project_persistence_row_corrupt",
