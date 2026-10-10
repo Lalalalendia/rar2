@@ -747,17 +747,22 @@ impl ViewerApp {
             }
         };
         for ((source_node_id, destination_node_id), (source_before, destination_after)) in
-            source_node_ids
-                .iter()
-                .zip(&destination_node_ids)
-                .zip(transition.source_shapes.iter().zip(&transition.destination_shapes))
+            source_node_ids.iter().zip(&destination_node_ids).zip(
+                transition
+                    .source_shapes
+                    .iter()
+                    .zip(&transition.destination_shapes),
+            )
         {
             let source_shape = editor
                 .authored_shape(*source_node_id)
                 .ok_or_else(|| "Source authored Rectangle disappeared before commit.".to_owned())?;
-            let duplicated_shape = candidate
-                .authored_shape(*destination_node_id)
-                .ok_or_else(|| "Duplicated Rectangle is absent from Editor authority.".to_owned())?;
+            let duplicated_shape =
+                candidate
+                    .authored_shape(*destination_node_id)
+                    .ok_or_else(|| {
+                        "Duplicated Rectangle is absent from Editor authority.".to_owned()
+                    })?;
             if source_before != source_shape
                 || duplicated_shape != destination_after
                 || duplicated_shape.bounds != source_shape.bounds
@@ -794,7 +799,8 @@ impl ViewerApp {
         expected_page_ids.insert(source_index + 1, identity.page_id);
         if after_page_ids != expected_page_ids {
             return Err(
-                "Multi-Rectangle Page duplicate did not insert immediately after source.".to_owned(),
+                "Multi-Rectangle Page duplicate did not insert immediately after source."
+                    .to_owned(),
             );
         }
 
