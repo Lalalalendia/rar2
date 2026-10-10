@@ -851,17 +851,17 @@ mod tests {
 
     #[test]
     fn export_filename_is_safe_for_hostile_and_unicode_stems() {
-        let hostile = format!("..//CON\\\\bad\\r\\n{}", "Книга");
+        let hostile = format!("..//CON\\bad\r\n{}", "Книга");
         let (ascii, encoded) = safe_export_filename(&hostile, "idml");
         assert!(ascii.starts_with("chaptera-"));
         assert!(ascii.ends_with(".idml"));
         assert!(!ascii.contains('/'));
-        assert!(!ascii.contains('\\\\'));
-        assert!(!ascii.contains('\\r'));
-        assert!(!ascii.contains('\\n'));
+        assert!(!ascii.contains('\\'));
+        assert!(!ascii.contains('\r'));
+        assert!(!ascii.contains('\n'));
         assert!(!ascii.contains('"'));
         assert!(!encoded.contains('/'));
-        assert!(!encoded.contains('\\\\'));
+        assert!(!encoded.contains('\\'));
         assert!(encoded.contains("%D0%9A"));
         assert!(encoded.ends_with(".idml"));
     }
