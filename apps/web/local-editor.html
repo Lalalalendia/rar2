@@ -196,7 +196,7 @@ async function disclosure(){
   ).sort();
   for(const [index,id] of keys.entries()){
     const story=visibleStories.get(id);
-    const preview=story.text.slice(0,36).replace(/[\\r\\n]/g," ").trim();
+    const preview=story.text.slice(0,36).replace(/\s+/g," ").trim();
     fontStoryTarget.append(new Option(
       "Story "+(index+1)+" · "+id.slice(0,8)+
       (preview?" · "+preview:""),id
