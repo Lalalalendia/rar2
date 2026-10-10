@@ -7,6 +7,9 @@ on:
       - "services/editor-api/web_real_acceptance_service.py"
       - "services/editor-api/font_authoring_admission_v1.py"
       - "services/editor-api/test_font_authoring_admission_v1.py"
+      - "services/editor-api/pinned_opentype_resource_v1.py"
+      - "services/editor-api/test_pinned_opentype_resource_v1.py"
+      - "assets/fonts/ofl/abel/**"
       - "tools/run_local_real_editor.py"
       - "tools/run_local_full_stack.py"
       - "apps/chaptera-server/assets/local-dashboard.html"
@@ -37,10 +40,12 @@ jobs:
           python -m py_compile services/editor-api/web_real_acceptance_service.py
           python -m py_compile services/editor-api/font_authoring_admission_v1.py
           python -m py_compile services/editor-api/test_font_authoring_admission_v1.py
+          python -m py_compile services/editor-api/pinned_opentype_resource_v1.py
+          python -m py_compile services/editor-api/test_pinned_opentype_resource_v1.py
       - name: Install pinned HTTP schema validation dependency
         run: python -m pip install "jsonschema==4.23.0"
       - name: Validate trusted font authoring catalog and HTTP authority
         working-directory: services/editor-api
-        run: python -m unittest -v test_font_authoring_admission_v1.py
+        run: python -m unittest -v test_font_authoring_admission_v1.py test_pinned_opentype_resource_v1.py
       - name: Prove arbitrary interactive MoveNode + Scene + Undo
         run: python tools/run_local_real_editor.py --smoke
