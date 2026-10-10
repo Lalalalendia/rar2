@@ -36,7 +36,6 @@ pub struct ViewerTypographyRun {
     pub source_story_text_sha256: Sha256Digest,
 }
 
-
 #[cfg(test)]
 mod viewer_source_font_index_provenance_tests {
     use super::ViewerTypographyRun;
@@ -63,14 +62,19 @@ mod viewer_source_font_index_provenance_tests {
         assert_eq!(stored["source_font_name"], "Rockwell Condensed");
         // Old persisted Viewer receipts remain parseable, but contain no
         // independent direct-index evidence. Never fill from a family name.
-        source.as_object_mut().expect("json object").remove("source_font_index");
+        source
+            .as_object_mut()
+            .expect("json object")
+            .remove("source_font_index");
         let legacy: ViewerTypographyRun = serde_json::from_value(source)
             .expect("old Viewer receipt without direct source Quill index");
         assert_eq!(legacy.source_font_index, None);
-        assert!(serde_json::to_value(&legacy)
-            .expect("serialize old record")
-            .get("source_font_index")
-            .is_none());
+        assert!(
+            serde_json::to_value(&legacy)
+                .expect("serialize old record")
+                .get("source_font_index")
+                .is_none()
+        );
     }
 }
 
