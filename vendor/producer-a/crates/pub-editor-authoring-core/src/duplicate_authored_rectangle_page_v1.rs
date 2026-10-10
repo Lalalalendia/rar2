@@ -11,9 +11,9 @@
 //! Publisher serialization or a customer-facing Duplicate Page action.
 
 use crate::{
-    AuthoredPageIdentityV1, AuthoredShapeKindV1, AuthoredShapeRuntimeV1, AuthoredStackLifecycleErrorV1,
-    AuthoredStackLifecycleTransitionV1, AuthoredStackV1, DuplicateBlankPageErrorV1,
-    DuplicateBlankPageTransitionV1, NodeId, PageId,
+    AuthoredPageIdentityV1, AuthoredShapeKindV1, AuthoredShapeRuntimeV1,
+    AuthoredStackLifecycleErrorV1, AuthoredStackLifecycleTransitionV1, AuthoredStackV1,
+    DuplicateBlankPageErrorV1, DuplicateBlankPageTransitionV1, NodeId, PageId,
     apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
     apply_duplicate_blank_page_forward_v1, apply_duplicate_blank_page_inverse_v1,
     is_editor_created_uuid_v7_node_id, plan_create_shape_append_v1, plan_duplicate_blank_page_v1,
@@ -200,13 +200,7 @@ pub fn plan_duplicate_authored_rectangle_page_v1(
     let stack = plan_create_shape_append_v1(&state.destination_stack, &destination_shape)
         .map_err(Error::Stack)?;
 
-    let after = apply_candidate_forward_v1(
-        document_id,
-        state,
-        &page,
-        &destination_shape,
-        &stack,
-    )?;
+    let after = apply_candidate_forward_v1(document_id, state, &page, &destination_shape, &stack)?;
     Ok(DuplicateAuthoredRectanglePageTransitionV1 {
         page: page.clone(),
         source_shape: (**source_shape).clone(),
@@ -249,11 +243,8 @@ pub fn apply_duplicate_authored_rectangle_page_forward_v1(
         &transition.destination_shape,
         &transition.stack,
     )?;
-    if state_id_v1(
-        document_id,
-        &next,
-        &transition.page.after_customer_page_ids,
-    ) != transition.after_state_id
+    if state_id_v1(document_id, &next, &transition.page.after_customer_page_ids)
+        != transition.after_state_id
     {
         return Err(Error::AfterStateMismatch);
     }
@@ -389,7 +380,11 @@ mod tests {
             provenance: AuthoredEntityProvenanceV1::AuthorCreated,
         }
     }
-    fn fixture() -> (DocumentId, DuplicateAuthoredRectanglePageStateV1, Vec<PageId>) {
+    fn fixture() -> (
+        DocumentId,
+        DuplicateAuthoredRectanglePageStateV1,
+        Vec<PageId>,
+    ) {
         let document = DocumentId::from_canonical(id_bytes(0xaa, false));
         let source = page(0x77, true);
         let first = page(0x11, false);
@@ -440,12 +435,26 @@ mod tests {
         let transition = plan(document, &state, &customers).expect("plan");
         assert_eq!(
             transition.page.after_customer_page_ids,
-            vec![page(0x11, false), page(0x77, true), identity().page_id, page(0x33, false)]
+            vec![
+                page(0x11, false),
+                page(0x77, true),
+                identity().page_id,
+                page(0x33, false)
+            ]
         );
         assert_eq!(transition.page.insertion_index, 3);
-        assert_eq!(transition.destination_shape.bounds, transition.source_shape.bounds);
-        assert_eq!(transition.destination_shape.paint, transition.source_shape.paint);
-        assert_ne!(transition.destination_shape.node_id, transition.source_shape.node_id);
+        assert_eq!(
+            transition.destination_shape.bounds,
+            transition.source_shape.bounds
+        );
+        assert_eq!(
+            transition.destination_shape.paint,
+            transition.source_shape.paint
+        );
+        assert_ne!(
+            transition.destination_shape.node_id,
+            transition.source_shape.node_id
+        );
         apply_duplicate_authored_rectangle_page_forward_v1(
             document,
             &mut state,
@@ -467,7 +476,10 @@ mod tests {
         assert_eq!(state.authored_shapes.len(), 2);
         assert_eq!(state.source_stack, original.source_stack);
         assert_eq!(state.destination_stack.members, vec![node(0x66)]);
-        assert_eq!(state.pages[&identity().page_id].size, state.pages[&page(0x77, true)].size);
+        assert_eq!(
+            state.pages[&identity().page_id].size,
+            state.pages[&page(0x77, true)].size
+        );
         apply_duplicate_authored_rectangle_page_inverse_v1(
             document,
             &mut state,
@@ -483,11 +495,22 @@ mod tests {
         let (document, mut state, customers) = fixture();
         assert_eq!(
             plan_duplicate_authored_rectangle_page_v1(
-                document, &state, &customers, page(0x77, true), identity(), node(0x66), true,
+                document,
+                &state,
+                &customers,
+                page(0x77, true),
+                identity(),
+                node(0x66),
+                true,
             ),
             Err(DuplicateAuthoredRectanglePageErrorV1::ForeignOrUnprovenMembership)
         );
-        state.pages.get_mut(&page(0x77, true)).unwrap().children.push(node(0x55));
+        state
+            .pages
+            .get_mut(&page(0x77, true))
+            .unwrap()
+            .children
+            .push(node(0x55));
         assert_eq!(
             plan(document, &state, &customers),
             Err(DuplicateAuthoredRectanglePageErrorV1::Page(
@@ -500,14 +523,19 @@ mod tests {
     fn rejects_extra_content_source_backed_shape_and_foreign_stacks() {
         let (document, state, customers) = fixture();
         let mut extra = state.clone();
-        extra.authored_shapes.insert(node(0x44), source_shape(page(0x77, true)));
+        extra
+            .authored_shapes
+            .insert(node(0x44), source_shape(page(0x77, true)));
         assert_eq!(
             plan(document, &extra, &customers),
             Err(DuplicateAuthoredRectanglePageErrorV1::SourceShapeCountMismatch)
         );
         let mut source_backed = state.clone();
-        source_backed.authored_shapes.get_mut(&node(0x55)).unwrap().provenance =
-            AuthoredEntityProvenanceV1::SourceBacked;
+        source_backed
+            .authored_shapes
+            .get_mut(&node(0x55))
+            .unwrap()
+            .provenance = AuthoredEntityProvenanceV1::SourceBacked;
         assert_eq!(
             plan(document, &source_backed, &customers),
             Err(DuplicateAuthoredRectanglePageErrorV1::SourceShapeInvalid)
@@ -519,7 +547,10 @@ mod tests {
             Err(DuplicateAuthoredRectanglePageErrorV1::SourceStackMismatch)
         );
         let mut occupied_destination = state.clone();
-        occupied_destination.destination_stack.members.push(node(0x66));
+        occupied_destination
+            .destination_stack
+            .members
+            .push(node(0x66));
         assert_eq!(
             plan(document, &occupied_destination, &customers),
             Err(DuplicateAuthoredRectanglePageErrorV1::DestinationStackNotEmpty)
@@ -531,19 +562,32 @@ mod tests {
         let (document, state, customers) = fixture();
         assert_eq!(
             plan_duplicate_authored_rectangle_page_v1(
-                document, &state, &customers, page(0x77, true), identity(), node(0x55), false
+                document,
+                &state,
+                &customers,
+                page(0x77, true),
+                identity(),
+                node(0x55),
+                false
             ),
             Err(DuplicateAuthoredRectanglePageErrorV1::DestinationNodeInvalid)
         );
         assert_eq!(
             plan_duplicate_authored_rectangle_page_v1(
-                document, &state, &customers, page(0x77, true), identity(),
-                NodeId::from_canonical(id_bytes(0x66, false)), false
+                document,
+                &state,
+                &customers,
+                page(0x77, true),
+                identity(),
+                NodeId::from_canonical(id_bytes(0x66, false)),
+                false
             ),
             Err(DuplicateAuthoredRectanglePageErrorV1::DestinationNodeInvalid)
         );
         let mut collision = state.clone();
-        collision.pages.insert(identity().page_id, raw_page(identity().page_id));
+        collision
+            .pages
+            .insert(identity().page_id, raw_page(identity().page_id));
         assert_eq!(
             plan(document, &collision, &customers),
             Err(DuplicateAuthoredRectanglePageErrorV1::Page(
@@ -559,11 +603,21 @@ mod tests {
         let (document, state, customers) = fixture();
         let transition = plan(document, &state, &customers).expect("plan");
         let mut stale = state.clone();
-        stale.authored_shapes.get_mut(&node(0x55)).unwrap().paint.stroke.width_emu += 1;
+        stale
+            .authored_shapes
+            .get_mut(&node(0x55))
+            .unwrap()
+            .paint
+            .stroke
+            .width_emu += 1;
         let unchanged = stale.clone();
         assert_eq!(
             apply_duplicate_authored_rectangle_page_forward_v1(
-                document, &mut stale, &customers, false, &transition
+                document,
+                &mut stale,
+                &customers,
+                false,
+                &transition
             ),
             Err(DuplicateAuthoredRectanglePageErrorV1::TransitionMismatch)
         );
@@ -574,7 +628,11 @@ mod tests {
         let mut candidate = state.clone();
         assert_eq!(
             apply_duplicate_authored_rectangle_page_forward_v1(
-                document, &mut candidate, &customers, false, &tampered
+                document,
+                &mut candidate,
+                &customers,
+                false,
+                &tampered
             ),
             Err(DuplicateAuthoredRectanglePageErrorV1::TransitionMismatch)
         );
@@ -586,14 +644,27 @@ mod tests {
         let (document, mut state, customers) = fixture();
         let transition = plan(document, &state, &customers).expect("plan");
         apply_duplicate_authored_rectangle_page_forward_v1(
-            document, &mut state, &customers, false, &transition,
+            document,
+            &mut state,
+            &customers,
+            false,
+            &transition,
         )
         .expect("forward");
-        state.authored_shapes.get_mut(&node(0x66)).unwrap().paint.stroke.width_emu += 1;
+        state
+            .authored_shapes
+            .get_mut(&node(0x66))
+            .unwrap()
+            .paint
+            .stroke
+            .width_emu += 1;
         let tampered = state.clone();
         assert_eq!(
             apply_duplicate_authored_rectangle_page_inverse_v1(
-                document, &mut state, &transition.page.after_customer_page_ids, &transition
+                document,
+                &mut state,
+                &transition.page.after_customer_page_ids,
+                &transition
             ),
             Err(DuplicateAuthoredRectanglePageErrorV1::AfterStateMismatch)
         );
