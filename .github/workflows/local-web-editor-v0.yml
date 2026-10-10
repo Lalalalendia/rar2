@@ -14,6 +14,9 @@ on:
       - "services/editor-api/test_pinned_opentype_resource_v1.py"
       - "services/editor-api/live_font_delivery_v1.py"
       - "services/editor-api/test_live_font_delivery_v1.py"
+      - "services/editor-api/font_resource_intent_v1.py"
+      - "services/editor-api/test_font_resource_intent_v1.py"
+      - "services/editor-api/security/authorized_revision_gateway.py"
       - "tools/verify_live_font_ui_browser.mjs"
       - "tools/native-pub-candidate-cli/tests/real_pinned_font_resource_v1.rs"
       - "tools/native-pub-candidate-cli/src/bin/pinned_font_authoring_v1.rs"
@@ -58,11 +61,13 @@ jobs:
           python -m py_compile services/editor-api/test_pinned_opentype_resource_v1.py
           python -m py_compile services/editor-api/live_font_delivery_v1.py
           python -m py_compile services/editor-api/test_live_font_delivery_v1.py
+          python -m py_compile services/editor-api/font_resource_intent_v1.py
+          python -m py_compile services/editor-api/test_font_resource_intent_v1.py
       - name: Install pinned HTTP schema validation dependency
         run: python -m pip install "jsonschema==4.23.0"
       - name: Validate trusted font authoring catalog and HTTP authority
         working-directory: services/editor-api
-        run: python -m unittest -v test_font_authoring_admission_v1.py test_pinned_opentype_resource_v1.py test_live_font_delivery_v1.py
+        run: python -m unittest -v test_font_authoring_admission_v1.py test_pinned_opentype_resource_v1.py test_live_font_delivery_v1.py test_font_resource_intent_v1.py
       - name: Prove physical byte client and existing picker negatives
         run: node --test apps/web/editor-service-client-font.test.mjs apps/web/font-environment-v1.test.mjs
       - name: Install real Chromium for local Editor reachability

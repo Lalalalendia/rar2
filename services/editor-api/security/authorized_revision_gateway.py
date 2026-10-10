@@ -60,6 +60,13 @@ class AuthorizedRevisionGateway:
                 raise ValueError("authoritative executor required")
             capability = CAP_EDIT_TEXT
             callback = lambda _decision: self.kernel.commit_story_range(request, executor)
+        elif protocol == "chaptera.font-resource-intent.v1":
+            if executor is None or not hasattr(self.kernel, "commit_admitted_font_resource"):
+                raise ValueError("authenticated font authoring executor unavailable")
+            capability = CAP_EDIT_TEXT
+            callback = lambda _decision: self.kernel.commit_admitted_font_resource(
+                request, executor
+            )
         elif protocol == "chaptera.story-edit-transaction-intent.v1":
             capability = CAP_EDIT_TEXT
             callback = (
