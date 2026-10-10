@@ -244,8 +244,7 @@ def render(data):
         f"- Очередь job created→started: {fmt(t['ci']['queue_per_job'])}.",
         f"- Первая полезная проверка от первого run creation: {fmt(t['ci']['first_feedback'])}.",
         f"- До required-ci SUCCESS от первого run creation: {fmt(t['ci']['required_ci'])}.",
-        f"- Fanout workflow runs на PR: {fmt(t['ci']['workflow_fanout_per_pr'])}. "
-        "Указанные единицы — запуски, не секунды.",
+        f"- Fanout workflow runs на PR: median {t['ci']['workflow_fanout_per_pr']['median_s']} / p90 {t['ci']['workflow_fanout_per_pr']['p90_s']} зап.; n={t['ci']['workflow_fanout_per_pr']['n']}.",
         f"- Дополнительные попытки (нижняя оценка по run_attempt): {t['ci']['observed_extra_run_attempts_lower_bound']}.",
         f"За {prev}: {p['ci']['sample_count']} из {p['merged_count']} merged PR.",
         f"- Очередь: {fmt(p['ci']['queue_per_job'])}; первая полезная проверка: "
