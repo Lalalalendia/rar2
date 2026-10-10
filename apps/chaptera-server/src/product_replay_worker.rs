@@ -1412,4 +1412,131 @@ mod tests {
             assert!(require_sha256(&hash).is_err());
         }
     }
+
+    fn project_for_source(source_sha256: &str) -> EditorProject {
+        serde_json::from_value(serde_json::json!({
+            "schema_version": "pub-editor-v0.2",
+            "source_hash": source_sha256,
+            "operations": []
+        }))
+        .unwrap()
+    }
+
+    fn materialization_receipt_for(
+        project: EditorProject,
+        project_sha256: String,
+    ) -> ProductMaterializationWorkerReceiptV1 {
+        ProductMaterializationWorkerReceiptV1 {
+            protocol_version: PRODUCT_MATERIALIZATION_WORKER_V1.to_owned(),
+            document_id: "document-a".to_owned(),
+            source_sha256: "a".repeat(64),
+            source_byte_len: 512,
+            baseline_revision_id: "revision-baseline".to_owned(),
+            baseline_cursor: 0,
+            requested_revision_id: "revision-current".to_owned(),
+            replayed_edges: 0,
+            project_sha256,
+            authoring_root_hash: None,
+            project,
+            filesystem_confinement: true,
+        }
+    }
+
+    fn source_authority_for(source_sha256: &str, baseline_revision_id: &str) -> crate::revision_materializer::AuthorizedDocumentSource {
+        crate::revision_materializer::AuthorizedDocumentSource {
+            tenant_id: "tenant-a".to_owned(),
+            document_id: "document-a".to_owned(),
+            binding_id: "binding-source".to_owned(),
+            source_sha256: source_sha256.to_owned(),
+            byte_len: 512,
+            baseline_revision_id: baseline_revision_id.to_owned(),
+            baseline_cursor: 0,
+        }
+    }
+
+    fn revision_identity(canonical_revision_id: String) -> RevisionIdentityBinding {
+        RevisionIdentityBinding {
+            document_id: "document-a".to_owned(),
+            service_revision_id: "revision-current".to_owned(),
+            canonical_schema_version: "chaptera.authoring-revision.v1".to_owned(),
+            canonical_revision_id,
+            bound_at_ms: 1,
+        }
+    }
+
+    #[test]
+    fn host_rejects_isolated_project_bound_to_another_source() {
+        let source = source_authority_for(&"a".repeat(64), "revision-baseline");
+        let project = project_for_source(&"b".repeat(64));
+        let receipt = materialization_receipt_for(
+            project.clone(),
+            project_sha256(&project).unwrap(),
+        );
+        let error = validate_host_materialization_binding(
+            &source,
+            &[],
+            &revision_identity("c".repeat(64)),
+            &receipt,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "product_materialization_project_source_mismatch");
+    }
+
+    #[test]
+    fn host_rejects_self_consistent_project_that_disagrees_with_durable_edge_state() {
+        let source = source_authority_for(&"a".repeat(64), "revision-baseline");
+        let project = project_for_source(&"a".repeat(64));
+        let receipt = materialization_receipt_for(
+            project.clone(),
+            project_sha256(&project).unwrap(),
+        );
+        let edge = RevisionEdge {
+            document_id: "document-a".to_owned(),
+            parent_revision: "revision-baseline".to_owned(),
+            parent_cursor: 0,
+            operation_id: "operation-a".to_owned(),
+            request_hash: "d".repeat(64),
+            canonical_event: Vec::new(),
+            child_revision: "revision-current".to_owned(),
+            child_cursor: 1,
+            resulting_state_hash: "e".repeat(64),
+            authoring_root_hash: None,
+            semantic_schema_version: 1,
+            committed_at_ms: 1,
+        };
+        let error = validate_host_materialization_binding(
+            &source,
+            &[edge],
+            &revision_identity("c".repeat(64)),
+            &receipt,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "product_materialization_state_hash_mismatch");
+    }
+
+    #[test]
+    fn host_rejects_baseline_project_with_wrong_canonical_revision_binding() {
+        let source_hash = "a".repeat(64);
+        let project = project_for_source(&source_hash);
+        let baseline = derive_import_baseline_identities(
+            "document-a",
+            &source_hash,
+            &project.schema_version,
+            &project,
+        )
+        .unwrap();
+        let source = source_authority_for(&source_hash, &baseline.service_revision_id);
+        let receipt = materialization_receipt_for(project, baseline.project_hash);
+        let error = validate_host_materialization_binding(
+            &source,
+            &[],
+            &revision_identity("f".repeat(64)),
+            &receipt,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.code,
+            "product_materialization_baseline_identity_mismatch"
+        );
+    }
 }
