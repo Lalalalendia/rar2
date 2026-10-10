@@ -2725,7 +2725,7 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
             editor
                 .authored_shape(destination_node_id)
                 .map(|s| (s.bounds, s.paint.clone())),
-            Some((source_shape.bounds, source_shape.paint))
+            Some((source_shape.bounds, source_shape.paint.clone()))
         );
         assert_eq!(
             app.visual
