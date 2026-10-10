@@ -1,0 +1,60 @@
+name: CI daily product evidence scoreboard
+
+on:
+  schedule:
+    - cron: "17 10 * * *"
+  workflow_dispatch:
+    inputs:
+      day:
+        description: "New York calendar date YYYY-MM-DD; empty = yesterday"
+        required: false
+        type: string
+  pull_request:
+    paths:
+      - "tools/ci/daily_evidence_report.py"
+      - "tools/ci/daily_verified_evidence.json"
+      - "tools/ci/test_daily_evidence_report.py"
+      - ".github/workflows/ci-daily-evidence.yml"
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+concurrency:
+  group: ci-daily-evidence-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Offline unit controls
+        run: python -m unittest tools.ci.test_daily_evidence_report -v
+      - name: Read-only two-day evidence and sampled latency
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT_DAY: ${{ inputs.day }}
+        run: |
+          if [ -n "$REPORT_DAY" ]; then
+            python tools/ci/daily_evidence_report.py --repo "${{ github.repository }}" --day "$REPORT_DAY" --sample 8
+          else
+            python tools/ci/daily_evidence_report.py --repo "${{ github.repository }}" --sample 8
+          fi
+      - name: Attach source-backed JSON and Russian report
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rar2-daily-evidence
+          path: target/ci-daily-evidence/
+          retention-days: 90
+          if-no-files-found: error
+      - name: Add report to Actions summary
+        if: ${{ github.event_name != 'pull_request' }}
+        run: cat target/ci-daily-evidence/report.md >> "$GITHUB_STEP_SUMMARY"
