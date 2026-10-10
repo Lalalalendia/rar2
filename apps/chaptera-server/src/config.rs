@@ -80,6 +80,8 @@ pub struct StorageConfig {
     pub provider: String,
     pub quarantine_namespace: String,
     pub private_namespace: String,
+    #[serde(default)]
+    pub expected_bucket_owner: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -409,6 +411,7 @@ impl ChapteraConfig {
                 provider: "s3-compatible".to_owned(),
                 quarantine_namespace: "chaptera-dev-quarantine".to_owned(),
                 private_namespace: "chaptera-dev-private".to_owned(),
+                expected_bucket_owner: None,
             },
             limits: LimitsConfig {
                 worker_spool_bytes: 4 * 1024 * 1024 * 1024,
@@ -1525,6 +1528,21 @@ client_secret = {secret_source}
         config.validate().unwrap();
         assert_eq!(config.environment, EnvironmentMode::Prod);
         assert_eq!(config.runtime_config().listen, DEFAULT_LISTEN);
+    }
+
+    #[test]
+    fn parses_optional_expected_s3_bucket_owner() {
+        let source = prod_toml(r#"{ source = "env", name = "OIDC_SECRET" }"#).replace(
+            "private_namespace = \"chaptera-private\"",
+            "private_namespace = \"chaptera-private\"\nexpected_bucket_owner = \"123456789012\"",
+        );
+        let config: ChapteraConfig = toml::from_str(&source).unwrap();
+
+        config.validate().unwrap();
+        assert_eq!(
+            config.storage.expected_bucket_owner.as_deref(),
+            Some("123456789012")
+        );
     }
 
     #[test]
