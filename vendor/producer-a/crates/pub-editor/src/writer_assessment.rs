@@ -422,6 +422,7 @@ impl EditorSession {
                 | EditOperation::DuplicateBlankPageV1 { .. }
                 | EditOperation::InsertBlankPageAfterV1 { .. }
                 | EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+                | EditOperation::DeleteAuthoredRectanglesPageV1 { .. }
                 | EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
                 | EditOperation::DuplicateAuthoredRectanglesPageV1 { .. }
                 | EditOperation::SetTextFormatProperty { .. }
@@ -542,6 +543,7 @@ impl EditorSession {
                 | EditOperation::DuplicateBlankPageV1 { .. }
                 | EditOperation::InsertBlankPageAfterV1 { .. }
                 | EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+                | EditOperation::DeleteAuthoredRectanglesPageV1 { .. }
                 | EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
                 | EditOperation::DuplicateAuthoredRectanglesPageV1 { .. }
                 | EditOperation::SetTextFormatProperty { .. }
