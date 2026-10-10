@@ -36,6 +36,19 @@ pub struct ViewerTypographyRun {
     pub source_story_text_sha256: Sha256Digest,
 }
 
+impl ViewerTypographyRun {
+    pub fn applies_to_story_text(&self, text: &str) -> bool {
+        self.source_story_text_sha256 == viewer_story_text_sha256(text)
+    }
+}
+
+pub fn viewer_story_text_sha256(text: &str) -> Sha256Digest {
+    let digest = Sha256::digest(text.as_bytes());
+    let mut bytes = [0_u8; 32];
+    bytes.copy_from_slice(&digest);
+    Sha256Digest::from_bytes(bytes)
+}
+
 #[cfg(test)]
 mod viewer_source_font_index_provenance_tests {
     use super::ViewerTypographyRun;
@@ -76,17 +89,4 @@ mod viewer_source_font_index_provenance_tests {
                 .is_none()
         );
     }
-}
-
-impl ViewerTypographyRun {
-    pub fn applies_to_story_text(&self, text: &str) -> bool {
-        self.source_story_text_sha256 == viewer_story_text_sha256(text)
-    }
-}
-
-pub fn viewer_story_text_sha256(text: &str) -> Sha256Digest {
-    let digest = Sha256::digest(text.as_bytes());
-    let mut bytes = [0_u8; 32];
-    bytes.copy_from_slice(&digest);
-    Sha256Digest::from_bytes(bytes)
 }
