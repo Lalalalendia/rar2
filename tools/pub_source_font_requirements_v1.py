@@ -176,6 +176,7 @@ def source_font_requirements_v1(viewer: dict) -> dict:
             "visible_typography_run_count": item["visible_typography_run_count"],
             "script_map_reference_count": item["script_map_reference_count"],
             "source_font_index_candidates": sorted(item["source_font_index_candidates"]),
+            "source_quill_index_proven": bool(item["source_font_index_candidates"]),
             "source_script_slots": sorted(item["script_slots"]),
             "visible_story_count": len(item["visible_story_ids"]),
             "effective_style_run_counts": styles,
@@ -200,6 +201,9 @@ def source_font_requirements_v1(viewer: dict) -> dict:
         "unresolved_source_family_run_count": missing_labels,
         "unknown_effective_style_run_count": unknown_effective_styles,
         "unresolved_script_font_entry_count": unresolved_script_entries,
+        "source_families_without_quill_index_count": sum(
+            not item["source_quill_index_proven"] for item in families
+        ),
         "families": families,
     }
 
@@ -228,6 +232,7 @@ def main(argv: list[str] | None = None) -> int:
         "visible_stories": plan["visible_story_count"],
         "unresolved_source_labels": plan["unresolved_source_family_run_count"],
         "non_regular_families": sum(bool(f["needs_non_regular_style"]) for f in plan["families"]),
+        "families_without_quill_index": plan["source_families_without_quill_index_count"],
         "native_publisher_layout_authoritative": False,
     }, sort_keys=True))
     return 0
