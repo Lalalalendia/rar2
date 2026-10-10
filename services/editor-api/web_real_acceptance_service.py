@@ -537,6 +537,10 @@ class RealAcceptanceState:
             raise ValueError("editor command must be an object")
 
         kind = command.get("kind")
+        if self.fixture_profile == "newsletter-font" and kind != "set_admitted_font_resource":
+            # Geometry and native Story text consumers cannot replay mixed
+            # font-resource authoring. Reject BEFORE RevisionKernel mutates.
+            raise ValueError("font-only authoring mode forbids unproved mixed edits")
         if kind == "set_admitted_font_resource":
             if self.fixture_profile != "newsletter-font":
                 raise ValueError("only the exact real-PUB font demo can commit")
