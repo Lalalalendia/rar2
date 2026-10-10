@@ -3167,6 +3167,20 @@ mod authored_page_append_tests {
                 vec![destination_node_a, destination_node_b],
             )
             .expect("one canonical Page and two-Rectangle duplication");
+        let stack_requirements = operation
+            .persistence_requirements()
+            .into_iter()
+            .filter(|requirement| requirement.feature == "node.authored_stack_order")
+            .map(|requirement| requirement.origin.expect("stack requirement node"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            stack_requirements,
+            vec![
+                destination_node_a.into_canonical(),
+                destination_node_b.into_canonical()
+            ],
+            "native persistence must preserve exact copied paint-stack order"
+        );
         assert!(matches!(
             operation,
             EditOperation::DuplicateAuthoredRectanglesPageV1 { .. }
