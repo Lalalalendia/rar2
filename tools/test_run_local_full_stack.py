@@ -41,7 +41,9 @@ class LocalStartupOrderTest(TestCase):
         failures: list[str] = []
         with TemporaryDirectory(prefix="chaptera-launch-order-") as directory:
             root = Path(directory) / "repo"
-            binary = root / "target" / "debug" / "chaptera"
+            binary = root / "target" / "debug" / (
+                "chaptera.exe" if local.os.name == "nt" else "chaptera"
+            )
             binary.parent.mkdir(parents=True)
             binary.touch()
             state = root / ".chaptera-local"
