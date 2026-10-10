@@ -341,6 +341,16 @@ def run_isolated_worker(
                     pass
                 exit_code = process.wait()
 
+            # A successful or failed leader can still leave children alive in
+            # its worker process group. Stop them before verifying/renaming
+            # staging: otherwise they could mutate files after publication.
+            # This is not a substitute for an OS sandbox/cgroup that also
+            # contains descendants deliberately moved into new sessions.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
         stderr_tail = _read_tail(stderr_path)
 
         if timed_out:
