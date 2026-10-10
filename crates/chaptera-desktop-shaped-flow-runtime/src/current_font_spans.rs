@@ -36,7 +36,7 @@ pub enum CurrentPhysicalFontSpanV1 {
         end_scalar: u32,
         identity: FontResourceIdentityV1,
         font_size_emu: LengthEmu,
-        shaped: BoundedShapedText,
+        shaped: Box<BoundedShapedText>,
     },
 }
 
@@ -58,11 +58,11 @@ fn blocked(code: &'static str, reason: impl Into<String>) -> DesktopShapedFlowRu
     DesktopShapedFlowRuntimeError::new(code, reason)
 }
 
-fn covering<'a>(
-    segments: &'a [EffectivePropertySegmentV1],
+fn covering(
+    segments: &[EffectivePropertySegmentV1],
     start: u32,
     end: u32,
-) -> Result<&'a EffectivePropertySegmentV1, DesktopShapedFlowRuntimeError> {
+) -> Result<&EffectivePropertySegmentV1, DesktopShapedFlowRuntimeError> {
     segments
         .iter()
         .find(|part| part.start_scalar <= start && end <= part.end_scalar)
@@ -243,7 +243,7 @@ fn project_exact_font_spans_from_overlay_v1(
                     end_scalar: end,
                     identity: current.clone(),
                     font_size_emu: LengthEmu::new(size_emu),
-                    shaped,
+                    shaped: Box::new(shaped),
                 });
             }
             _ => {
