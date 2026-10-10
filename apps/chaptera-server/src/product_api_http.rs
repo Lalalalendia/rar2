@@ -1612,6 +1612,32 @@ mod tests {
         assert_eq!(forbidden.headers()[CACHE_CONTROL], "no-store");
         assert_eq!(json_body(forbidden).await["error"]["code"], "grant_missing");
 
+        let mut denial_receipts = Vec::new();
+        for (index, source_hash) in [source_sha256.clone(), "0".repeat(64)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut attempt = body.clone();
+            attempt["client_operation_id"] = json!(format!("rejected-source-check-{index}"));
+            attempt["source_hash"] = json!(source_hash);
+            let denied = restarted_app
+                .clone()
+                .oneshot(authenticated_request(
+                    "POST",
+                    &format!("/v1/documents/{document_id}/commit"),
+                    &other.session_token,
+                    Some(&other.csrf_token),
+                    Some(attempt),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+            assert_eq!(denied.headers()[CACHE_CONTROL], "no-store");
+            denial_receipts.push(json_body(denied).await);
+        }
+        assert_eq!(denial_receipts[0], denial_receipts[1]);
+        assert_eq!(denial_receipts[0]["error"]["code"], "grant_missing");
+
         // A real Viewer grant allows reading the same reopened document but
         // never authorizes a MoveNode mutation. This tests the canonical
         // capability_denied error, not a mocked policy decision.
