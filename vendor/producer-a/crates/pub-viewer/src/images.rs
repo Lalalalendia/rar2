@@ -253,6 +253,7 @@ mod tests {
                 resource_id: first_resource,
                 mime: "image/png".to_owned(),
                 source_exact: true,
+                verified_source_sha256: None,
                 node_ids: vec![admitted, excluded],
                 placements: vec![
                     ViewerImagePlacementV1 {
@@ -277,6 +278,7 @@ mod tests {
                 resource_id: second_resource,
                 mime: "image/jpeg".to_owned(),
                 source_exact: true,
+                verified_source_sha256: None,
                 node_ids: vec![excluded_only],
                 placements: vec![ViewerImagePlacementV1 {
                     node_id: excluded_only,
@@ -290,6 +292,7 @@ mod tests {
                 resource_id: third_resource,
                 mime: "image/png".to_owned(),
                 source_exact: true,
+                verified_source_sha256: None,
                 node_ids: vec![unresolved],
                 placements: vec![ViewerImagePlacementV1 {
                     node_id: unresolved,
