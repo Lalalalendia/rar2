@@ -180,6 +180,54 @@ async function main() {
       }
     }
 
+    // The old fallback painted 120 unshaped characters as a free-running
+    // SVG text line, crossing actual Publisher frames. Assert in BOTH
+    // browser engines that this never becomes an unbounded text surface.
+    const unresolvedFixture = JSON.parse(readFixture("simple-text.json"));
+    unresolvedFixture.stories[0].text =
+      "Chaptera unshaped frame excerpt. ".repeat(30);
+    await page.evaluate(async (payloadText) => {
+      await window.renderForScreenshot(payloadText, "svg", {
+        focus_first_populated_page: true,
+        include_overlay: false
+      });
+    }, JSON.stringify(unresolvedFixture));
+    const clipProof = await page.evaluate(() => {
+      const viewports = [...document.querySelectorAll(
+        '#host [data-text-viewport="unshaped-source-frame"]'
+      )];
+      const detail = viewports.map((viewport) => ({
+        overflow: viewport.getAttribute("overflow"),
+        width: Number(viewport.getAttribute("width")),
+        height: Number(viewport.getAttribute("height")),
+        layout_verified: viewport.getAttribute("data-layout-verified"),
+        preview_reason: viewport.getAttribute("data-preview-reason"),
+        line_text: viewport.querySelector("text")?.textContent ?? "",
+      }));
+      const escaped = [...document.querySelectorAll(
+        '#host text[data-preview-reason="story_text_layout_not_implemented"]'
+      )].filter((node) => !node.closest(
+        '[data-text-viewport="unshaped-source-frame"]'
+      )).length;
+      return { count: viewports.length, escaped, detail };
+    });
+    if (
+      clipProof.count < 1 ||
+      clipProof.escaped !== 0 ||
+      !clipProof.detail.every((v) =>
+        v.overflow === "hidden" &&
+        v.width > 0 && v.height > 0 &&
+        v.layout_verified === "false" &&
+        v.preview_reason === "story_text_layout_not_implemented"
+      )
+    ) {
+      throw new Error("unverified Story text leaked outside its source frame: " +
+        JSON.stringify(clipProof));
+    }
+    await page.locator("#host").screenshot({
+      path: path.join(TARGET, BROWSER_NAME + "-unshaped-source-frame-clip.png")
+    });
+
     const realPub = Boolean(REAL_SCENE_PATH);
     const receipt = {
       receipt_kind: realPub
@@ -194,6 +242,7 @@ async function main() {
         : "Protocol fixtures and synthetic stress only. Do not use this receipt as the final WEB-RENDER-01 technology decision.",
       reader_picture_contract: readerPictureContract,
       reader_table_contract: readerTableContract,
+      unshaped_story_clip: clipProof,
       cases
     };
     fs.writeFileSync(

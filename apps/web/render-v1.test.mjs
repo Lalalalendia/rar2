@@ -16,6 +16,7 @@ import {
   imageRecolorPaintPlan,
   resolvedEditorImagePlan,
   resolvedEditorTablePlan,
+  unresolvedTextPreviewFrameV1,
   tableBorderPaintPlan,
   tableCellFillPaintPlan,
   tableCellPaintGeometry
@@ -119,6 +120,40 @@ test("text is explicitly browser-preview-only", () => {
   assert.equal(node.story.text, "Hello, Publisher");
   assert.equal(node.story.authority, "browser_preview_only");
   assert.equal(node.story.text_fidelity, "partial");
+});
+
+test("unshaped Story summary is source-frame bounded, explicitly non-authoritative", () => {
+  const scene = fixture("simple-text.json");
+  const original = structuredClone(scene);
+  scene.stories[0].text = "Paragraph one.\r\nParagraph two.\tLong tail ".repeat(8);
+  const plan = buildRenderPlan(scene, VIEW);
+  const node = plan.pages[0].nodes[0];
+  assert.equal(node.story.resolved_text, null);
+  const preview = unresolvedTextPreviewFrameV1(node);
+  assert.deepEqual(
+    [preview.x, preview.y, preview.width, preview.height],
+    [node.x, node.y, node.width, node.height],
+  );
+  assert.equal(preview.layout_verified, false);
+  assert.equal(preview.authority, "browser_preview_only");
+  assert.equal(preview.preview_reason, "story_text_layout_not_implemented");
+  assert.ok(preview.text.includes("Paragraph one. Paragraph two."));
+  assert.equal(/[\r\n\t]/u.test(preview.text), false);
+  assert.ok(preview.text.length <= 120);
+  assert.deepEqual(original.nodes, scene.nodes);
+  assert.equal(unresolvedTextPreviewFrameV1({...node, width: 0}), null);
+  assert.equal(unresolvedTextPreviewFrameV1({...node, height: -1}), null);
+  assert.equal(unresolvedTextPreviewFrameV1({ ...node, story: null }), null);
+});
+
+test("resolved lines are not relabeled as verified by fallback renderer", () => {
+  const scene = fixture("simple-text.json");
+  const node = buildRenderPlan(scene, VIEW).pages[0].nodes[0];
+  const preview = unresolvedTextPreviewFrameV1({
+    ...node, story: { ...node.story, resolved_text: { lines: [] } },
+  });
+  assert.equal(preview.preview_reason, "backend_cannot_paint_resolved_line_layout");
+  assert.equal(preview.layout_verified, false);
 });
 
 test("resource availability is carried without source bytes", () => {
