@@ -49,6 +49,7 @@ button:disabled{cursor:not-allowed;opacity:.45}
     <label for="font-choice">Admitted font</label>
     <select id="font-choice" disabled><option value="">No admitted fonts</option></select>
     <button id="preview-physical-font" disabled>Preview bytes</button>
+    <button id="apply-physical-font" disabled title="One Unicode scalar; authoritative layout and PDF remain blocked">Apply first character (Partial)</button>
     <span id="font-message" role="status">Browser preview only; not an Editor font change.</span>
     <span id="font-sample" aria-label="Font preview sample">Aa Bb 123</span>
   </div>
@@ -73,9 +74,11 @@ const textTools=document.querySelector("#text-tools");
 const textValue=document.querySelector("#text-value");
 const fontChoice=document.querySelector("#font-choice");
 const previewFontButton=document.querySelector("#preview-physical-font");
+const applyFontButton=document.querySelector("#apply-physical-font");
 const fontMessage=document.querySelector("#font-message");
 const fontSample=document.querySelector("#font-sample");
 let currentFontContext=null;
+let fontEditableStoryIds=new Set();
 let editingStory=null;
 let editableStoryIds=new Set();
 let seq=0;
@@ -104,10 +107,20 @@ function syncTextControls(){
     textTools.hidden=true;
   }
 }
+function syncFontApply(){
+  const selected=selectedStory();
+  applyFontButton.disabled=!currentFontContext||
+    !shell?.snapshot||
+    shell.snapshot.snapshot_id!==currentFontContext.scene_snapshot_id||
+    !selected||
+    !fontEditableStoryIds.has(selected.story.story_id)||
+    Array.from(selected.story.text).length===0;
+}
 function showState(state){
   stateEl.className="";
   stateEl.textContent="revision "+state.revision_id+(state.selected_node_id?" · selected "+state.selected_node_id:"");
   syncTextControls();
+  syncFontApply();
 }
 
 async function disclosure(){
@@ -133,8 +146,10 @@ async function disclosure(){
     throw new Error("PUB capability refresh is stale relative to current Editor revision");
   }
   editableStoryIds=new Set(editorCaps.editable_story_ids??[]);
+  fontEditableStoryIds=new Set(editorCaps.font_editable_story_ids??[]);
   showFontChoices(scene,fontResult);
   syncTextControls();
+  syncFontApply();
   const caps=scene.capabilities ?? [];
   document.querySelector("#fidelity").textContent="Fidelity: "+scene.fidelity.state+
     (scene.fidelity.reasons?.length?" — "+scene.fidelity.reasons.join(", "):"");
@@ -167,6 +182,7 @@ function showFontChoices(scene, fontResult){
   fontChoice.replaceChildren(new Option("No admitted fonts", ""));
   fontChoice.disabled=true;
   previewFontButton.disabled=true;
+  applyFontButton.disabled=true;
   fontSample.style.fontFamily="";
   fontMessage.className="warn";
   fontMessage.textContent="No physical font permitted for browser preview.";
@@ -195,7 +211,8 @@ function showFontChoices(scene, fontResult){
     currentFontContext={environment,admission,scene_snapshot_id:scene.snapshot_id};
     fontChoice.disabled=false;
     previewFontButton.disabled=false;
-    fontMessage.textContent="Exact font available for preview. No document edit or PDF relayout yet.";
+    syncFontApply();
+    fontMessage.textContent="Exact resource available. Apply stores format history; geometry and PDF remain unverified.";
   }catch(error){
     fontMessage.className="bad";
     fontMessage.textContent="Font picker blocked: "+String(error?.message??error);
@@ -238,6 +255,57 @@ async function previewSelectedFont(){
     previewFontButton.disabled=!currentFontContext ||
       shell.snapshot.snapshot_id!==currentFontContext.scene_snapshot_id;
   }
+}
+
+async function applySelectedFont(){
+  if(!currentFontContext||!shell?.snapshot) throw new Error("fresh admitted font required");
+  const snapshot=shell.snapshot;
+  if(snapshot.snapshot_id!==currentFontContext.scene_snapshot_id){
+    throw new Error("font selection belongs to stale Scene");
+  }
+  const selected=selectedStory();
+  if(!selected||!fontEditableStoryIds.has(selected.story.story_id)||
+     Array.from(selected.story.text).length===0){
+    throw new Error("selected Story cannot accept an admitted physical font");
+  }
+  const {environment,admission}=currentFontContext;
+  const candidate=chooseAdmittedFontCandidate(
+    snapshot,environment,admission,fontChoice.value
+  );
+  // V1 one-scalar bound; never implicit whole-document replacement.
+  // Server independently validates current Scene and original physical bytes.
+  const request={
+    protocol_version:"chaptera.font-resource-intent.v1",
+    document_id:snapshot.document_id,
+    source_hash:snapshot.source_hash,
+    base_revision_id:snapshot.revision_id,
+    client_operation_id:opId("font"),
+    command:{
+      kind:"set_admitted_font_resource",
+      story_id:selected.story.story_id,
+      start_scalar:0,
+      end_scalar:1,
+      candidate,
+    },
+  };
+  savePubButton.disabled=true;
+  applyFontButton.disabled=true;
+  const accepted=await service.commit(request);
+  if(accepted.protocol_version!=="chaptera.commit-accepted.v1"||
+     accepted.canonical_operation?.property!=="font_resource"){
+    throw new Error("font history was not accepted by Rust: "+JSON.stringify(accepted));
+  }
+  const scene=await service.sceneForRevision(accepted.revision_id);
+  if(scene.fidelity?.state!=="partial"||
+     !scene.fidelity.reasons?.includes("font_resource_authoring_present_layout_not_reshaped")){
+    throw new Error("font revision omitted mandatory Partial layout disclosure");
+  }
+  currentFontContext=null;
+  shell.loadSnapshot(scene,{preserveSelection:true});
+  await disclosure();
+  fontMessage.className="warn";
+  fontMessage.textContent="FontResource saved in EditorProject. Glyph geometry, overset and fixed PDF are NOT verified.";
+  return accepted;
 }
 
 function openTextEditor(){
@@ -364,6 +432,11 @@ async function start(){
   editTextButton.onclick=()=>{try{openTextEditor()}catch(error){showError(error)}};
   document.querySelector("#apply-text").onclick=()=>applyTextEdit().catch(showError);
   document.querySelector("#cancel-text").onclick=()=>closeTextEditor();
+  applyFontButton.onclick=()=>applySelectedFont().catch(error=>{
+    fontMessage.className="bad";
+    fontMessage.textContent=String(error?.message??error);
+    syncFontApply();
+  });
   previewFontButton.onclick=()=>previewSelectedFont().catch(error=>{
     fontMessage.className="bad";
     fontMessage.textContent=String(error?.message??error);
@@ -371,7 +444,8 @@ async function start(){
   fontChoice.onchange=()=>{
     fontSample.style.fontFamily="";
     fontMessage.className="warn";
-    fontMessage.textContent="Candidate selected; preview only. No Editor font change.";
+    fontMessage.textContent="Selected exact candidate; Apply changes one character and leaves geometry Partial.";
+    syncFontApply();
   };
   savePubButton.onclick=()=>downloadNativePub().catch(showError);
   document.querySelector("#host-wrap").scrollTop=2480;

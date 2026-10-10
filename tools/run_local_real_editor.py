@@ -15,6 +15,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 DEV_ROOT = pathlib.Path(__file__).resolve().parents[1]
 ROOT = pathlib.Path(os.environ.get("CHAPTERA_LOCAL_RUNTIME_ROOT", DEV_ROOT)).resolve()
@@ -345,14 +346,163 @@ def interactive_smoke(*, pinned_abel_demo: bool = False) -> None:
         raise RuntimeError(f"interactive Undo was not accepted: {undone}")
 
 
+def font_apply_smoke() -> None:
+    """HTTP Proof: real browser-format intent -> permission -> Rust -> revision.
+
+    Only persisted format state is admitted here. Real text shaping, overset,
+    native PUB save and fixed PDF must remain unavailable/Partial.
+    """
+    before = json_request("/v1/scenes/current")
+    environment = json_request("/v1/editor/font-environment")
+    admission = json_request("/v1/editor/font-authoring-admission")
+    capabilities = json_request("/v1/editor/capabilities")
+    assert len(environment["fonts"]) == 1 and len(admission["resources"]) == 1
+    assert environment["revision_id"] == admission["revision_id"] == before["revision_id"]
+    allowed = set(capabilities["font_editable_story_ids"])
+    visible = [story for story in before["stories"]
+               if story["story_id"] in allowed and len(story["text"]) >= 1]
+    if not visible:
+        raise RuntimeError("no visible real PUB Story has a complete font authoring base")
+    story = visible[0]
+    descriptor = environment["fonts"][0]
+    candidate = {
+        "protocol_version": "chaptera.font-replacement-candidate.v1",
+        "document_id": before["document_id"],
+        "expected_revision_id": before["revision_id"],
+        "scene_snapshot_id": before["snapshot_id"],
+        "layout_environment_id": environment["layout_environment_id"],
+        "font_set_fingerprint": environment["font_set_fingerprint"],
+        "resource_id": descriptor["resource_id"],
+        "font_fingerprint": descriptor["font_fingerprint"],
+        "content_hash": descriptor["content_hash"],
+        "face_index": descriptor["face_index"],
+        "authority": "candidate_only_server_validation_required",
+    }
+    request = {
+        "protocol_version": "chaptera.font-resource-intent.v1",
+        "document_id": before["document_id"],
+        "source_hash": before["source_hash"],
+        "base_revision_id": before["revision_id"],
+        "client_operation_id": "font-local-" + str(uuid.uuid4()),
+        "command": {"kind": "set_admitted_font_resource",
+                    "story_id": story["story_id"],
+                    "start_scalar": 0, "end_scalar": 1,
+                    "candidate": candidate},
+    }
+
+    def denied(payload: dict, principal: str, expected: int) -> None:
+        req = urllib.request.Request(
+            API + "/v1/commit",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"content-type": "application/json",
+                     "x-chaptera-principal-id": principal},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(req, timeout=10)
+        except urllib.error.HTTPError as error:
+            if error.code != expected:
+                raise RuntimeError(f"font authoring denied as {error.code}, expected {expected}")
+        else:
+            raise RuntimeError("untrusted font commit unexpectedly accepted")
+
+    denied(request, "synthetic-viewer", 403)
+    forged = copy.deepcopy(request)
+    forged["client_operation_id"] = "font-forged-" + str(uuid.uuid4())
+    forged["command"]["candidate"]["content_hash"] = "0" * 64
+    denied(forged, "synthetic-editor", 400)
+    if json_request("/v1/scenes/current") != before:
+        raise RuntimeError("denied font requests mutated current revision")
+
+    accepted = json_request("/v1/commit", method="POST", body=request)
+    if accepted.get("protocol_version") != "chaptera.commit-accepted.v1":
+        raise RuntimeError(f"font commit not accepted: {accepted}")
+    operation = accepted["canonical_operation"]
+    if (operation.get("kind") != "set_text_format_property"
+            or operation.get("property") != "font_resource"
+            or operation.get("value", {}).get("content_hash") != descriptor["content_hash"]):
+        raise RuntimeError("actual Rust font operation differs from admitted physical bytes")
+    after = json_request("/v1/scenes/current")
+    if (after["revision_id"] != accepted["revision_id"]
+            or after["fidelity"]["state"] != "partial"
+            or "font_resource_authoring_present_layout_not_reshaped"
+            not in after["fidelity"]["reasons"]):
+        raise RuntimeError("font commit lost the explicit Partial layout fence")
+    original_story = next(x for x in after["stories"] if x["story_id"] == story["story_id"])
+    if original_story["text"] != story["text"]:
+        raise RuntimeError("font edit rewrote immutable source Story text")
+    pub = json_request("/v1/pub-save/preview")
+    if (pub["can_download"] or pub["can_serialize"]
+            or pub["blocker_code"] != "font_resource_native_pub_output_not_admitted"):
+        raise RuntimeError("unshaped font illegally admitted native PUB Download")
+    try:
+        json_request("/v1/export/preview?target=idml")
+    except urllib.error.HTTPError as error:
+        if error.code != 409:
+            raise
+    else:
+        raise RuntimeError("unshaped font illegally admitted editable export")
+
+    stale = copy.deepcopy(request)
+    stale["client_operation_id"] = "font-stale-" + str(uuid.uuid4())
+    rejected = json_request("/v1/commit", method="POST", body=stale)
+    if rejected.get("code") != "stale_revision":
+        raise RuntimeError("stale font candidate was not rejected")
+
+    def transition(kind: str, revision: str) -> dict:
+        return json_request("/v1/commit", method="POST", body={
+            "protocol_version": "chaptera.history-transition-intent.v1",
+            "document_id": before["document_id"],
+            "source_hash": before["source_hash"],
+            "base_revision_id": revision,
+            "client_operation_id": "font-" + kind + "-" + str(uuid.uuid4()),
+            "command": {"kind": kind},
+        })
+
+    undo = transition("undo", after["revision_id"])
+    unshaped = json_request("/v1/scenes/current")
+    if (unshaped["revision_id"] != undo["revision_id"]
+            or "font_resource_authoring_present_layout_not_reshaped"
+            in unshaped["fidelity"]["reasons"]):
+        raise RuntimeError("Undo failed to restore source font geometry state")
+    redo = transition("redo", unshaped["revision_id"])
+    redone = json_request("/v1/scenes/current")
+    if (redone["revision_id"] != redo["revision_id"]
+            or redone["fidelity"]["state"] != "partial"):
+        raise RuntimeError("Redo failed to reapply admitted exact font history")
+    req = urllib.request.Request(
+        API + "/v1/harness/reopen", data=b"", method="POST",
+        headers={"x-chaptera-principal-id": "synthetic-editor"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as response:
+        reopened = json.load(response)
+    if reopened != redone:
+        raise RuntimeError("fresh independent font-project reopen diverged from current Scene")
+    if sha256(FIXTURE) != FIXTURE_SHA:
+        raise RuntimeError("font authoring changed original PUB bytes")
+    print(json.dumps({
+        "receipt_kind": "chaptera.real-pub-authenticated-font-format-commit.v1",
+        "source_sha256": FIXTURE_SHA, "font_sha256": descriptor["content_hash"],
+        "accepted_font_resource": operation["value"]["resource_id"],
+        "real_rust_operation": True, "revision_committed": True,
+        "authorization_denials": True, "undo_redo": True,
+        "independent_fresh_reopen": True, "original_pub_immutable": True,
+        "layout_reshaped": False, "fixed_pdf_allowed": False,
+    }, sort_keys=True))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--pinned-abel-demo", action="store_true",
                         help="enable one exact developer-only OFL font in real PUB Editor")
+    parser.add_argument("--font-apply-demo", action="store_true",
+                        help="commit actual font history in a pinned real PUB, mark layout Partial")
     parser.add_argument("--browser-smoke", action="store_true",
                         help="prove exact resource selection in real Chromium")
     args = parser.parse_args()
+    if args.font_apply_demo and not args.pinned_abel_demo:
+        parser.error("--font-apply-demo requires --pinned-abel-demo")
     if args.browser_smoke and (not args.smoke or not args.pinned_abel_demo):
         parser.error("--browser-smoke requires --smoke --pinned-abel-demo")
 
@@ -360,6 +510,34 @@ def main() -> int:
     WORK.mkdir(parents=True, exist_ok=True)
     python = ensure_python()
     producer = build_inputs()
+    font_cli = None
+    font_project = None
+    if args.font_apply_demo:
+        run_checked([
+            "cargo", "build", "--manifest-path",
+            "tools/native-pub-candidate-cli/Cargo.toml",
+        ])
+        executable = ("chaptera-native-pub-candidate-cli.exe" if os.name == "nt"
+                      else "chaptera-native-pub-candidate-cli")
+        font_cli = ROOT / "tools/native-pub-candidate-cli/target/debug" / executable
+        if not font_cli.is_file():
+            raise RuntimeError("pinned exact-font Rust authoring binary missing")
+        init = subprocess.run(
+            [str(font_cli), "font-initialize", str(FIXTURE)],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, check=False, cwd=ROOT,
+        )
+        if init.returncode != 0:
+            raise RuntimeError("cannot initialize genuine identity-bearing font EditorProject")
+        receipt = json.loads(init.stdout)
+        if (receipt.get("protocol_version") != "chaptera.pinned-font-project-init.v1"
+                or receipt.get("source_hash") != FIXTURE_SHA
+                or not isinstance(receipt.get("project"), dict)):
+            raise RuntimeError("font source-project identity receipt is invalid")
+        font_project = WORK / "pinned-font-baseline-project.json"
+        font_project.write_text(
+            json.dumps(receipt["project"], sort_keys=True), encoding="utf-8",
+        )
 
     service = subprocess.Popen(
         [
@@ -375,8 +553,13 @@ def main() -> int:
             str(GRAPH),
             "--viewer-receipt",
             str(VIEWER),
-            "--revision-receipt",
-            "packages/protocol/revision/v1/producer-receipts/sample-newsletter.real.json",
+            *(
+                ["--font-apply-demo", "--font-cli", str(font_cli),
+                 "--baseline-project", str(font_project), "--fixture-profile", "newsletter"]
+                if args.font_apply_demo else
+                ["--revision-receipt",
+                 "packages/protocol/revision/v1/producer-receipts/sample-newsletter.real.json"]
+            ),
             "--exporter",
             str(producer),
             "--work-dir",
@@ -408,7 +591,10 @@ def main() -> int:
         )
         print(f"LOCAL_EDITOR_READY {EDITOR_URL}", flush=True)
         if args.smoke:
-            interactive_smoke(pinned_abel_demo=args.pinned_abel_demo)
+            if args.font_apply_demo:
+                font_apply_smoke()
+            else:
+                interactive_smoke(pinned_abel_demo=args.pinned_abel_demo)
             if args.browser_smoke:
                 subprocess.run(
                     ["node", "tools/verify_live_font_ui_browser.mjs", EDITOR_URL],

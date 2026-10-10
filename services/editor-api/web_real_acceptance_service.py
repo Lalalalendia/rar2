@@ -45,7 +45,13 @@ from live_font_delivery_v1 import (
     issue_current_admission, read_current_exact_font,
 )
 from pinned_opentype_resource_v1 import ABEL_RESOURCE_ID, ABEL_SHA256, load_pinned_abel
-from revision_store import RevisionKernel
+from font_resource_intent_v1 import (
+    FontRevisionKernel, validate_server_font_scope_v1, validate_font_operation_v1,
+)
+from pinned_font_commit_backend_v1 import (
+    contains_font_history, unshaped_scene_project, partial_font_scene,
+    blocked_native_pub_preview, pinned_font_cli,
+)
 from story_range_v1 import replace_story_range_v1
 from security.authz_v1 import AuthzDenied, AuthzKernel, CAP_EDIT_TEXT, CAP_EXPORT, CAP_VIEW
 from security.authorized_revision_gateway import AuthorizedRevisionGateway
@@ -191,6 +197,8 @@ class RealAcceptanceState:
         baseline_project: pathlib.Path | None = None,
         fixture_profile: str = "newsletter",
         pinned_abel_demo: bool = False,
+        font_apply_demo: bool = False,
+        font_cli: pathlib.Path | None = None,
     ):
         self.fixture = fixture.resolve(strict=True)
         self.resolved_graph_path = resolved_graph.resolve(strict=True)
@@ -209,6 +217,10 @@ class RealAcceptanceState:
         if pinned_abel_demo and strict_acceptance:
             raise RuntimeError("pinned Abel is only available in explicit interactive demo mode")
         self.pinned_abel = load_pinned_abel() if pinned_abel_demo else None
+        if font_apply_demo and (strict_acceptance or not pinned_abel_demo or font_cli is None):
+            raise RuntimeError("font Apply is allowed only in explicit pinned-font developer mode")
+        self.font_apply_demo = font_apply_demo
+        self.font_cli = font_cli.resolve(strict=True) if font_cli is not None else None
         self.pinned_sha, self.pinned_len = PINNED_FIXTURE_PROFILES[fixture_profile]
         if (
             self.fixture.stat().st_size != self.pinned_len
@@ -235,6 +247,27 @@ class RealAcceptanceState:
             self.canonical_request = copy.deepcopy(self.revision_receipt["request"])
             self.target_node_id = self.canonical_operation["node_id"]
             self.target_after = copy.deepcopy(self.canonical_operation["after"])
+        elif self.font_apply_demo and fixture_profile == "newsletter":
+            # An identity-bearing project independently initialized by Rust,
+            # never a legacy Producer B project or client-provided identity.
+            if baseline_project is None or strict_acceptance:
+                raise RuntimeError("font Apply requires an identity-bearing exact baseline")
+            self.baseline_project = load_json(baseline_project.resolve(strict=True))
+            identity = self.baseline_project.get("identity")
+            if not isinstance(identity, dict) or not isinstance(identity.get("document_id"), str):
+                raise RuntimeError("font baseline project document identity missing")
+            if (self.baseline_project.get("source_hash") != self.pinned_sha
+                    or self.baseline_project.get("operations") != []):
+                raise RuntimeError("font baseline must be the unchanged source")
+            self.revision_receipt = None
+            self.document_id = identity["document_id"]
+            self.source_hash = self.pinned_sha
+            self.expected_baseline_revision = None
+            self.expected_accepted_revision = None
+            self.canonical_operation = None
+            self.canonical_request = None
+            self.target_node_id = None
+            self.target_after = None
         else:
             # An isolated, exact-source interactive scenario, not a fabricated
             # Producer B move receipt. The canonical baseline is real Rust EditorProject.
@@ -259,7 +292,7 @@ class RealAcceptanceState:
             self.target_node_id = None
             self.target_after = None
 
-        self.kernel = RevisionKernel()
+        self.kernel = FontRevisionKernel()
         baseline = self.kernel.register_baseline(
             document_id=self.document_id,
             source_hash=self.source_hash,
@@ -323,7 +356,11 @@ class RealAcceptanceState:
         require_viewer_equivalence: bool = False,
     ) -> dict:
         graph, viewer = self._fresh_graph_and_viewer()
-        current_graph = apply_project_to_resolved_graph(graph, project)
+        # Rust owns exact FontResource history. Do not project unshaped font
+        # substitutions into the Viewer; preserve source pixels and mark Partial.
+        has_font_history = contains_font_history(project)
+        projected = unshaped_scene_project(project) if has_font_history else project
+        current_graph = apply_project_to_resolved_graph(graph, projected)
         viewer_pages = viewer.get("document", {}).get("pages")
         if not isinstance(viewer_pages, list):
             raise ValueError("Viewer receipt document.pages must be an array")
@@ -385,7 +422,8 @@ class RealAcceptanceState:
             story["text"] = graph_story["text"]
 
         browser_scene = adapt_viewer_geometry(current_viewer, self.document_id, revision_id)
-        return bind_font_set_to_scene(browser_scene, self.pinned_abel)
+        scene = bind_font_set_to_scene(browser_scene, self.pinned_abel)
+        return partial_font_scene(scene) if has_font_history else scene
 
     def _run_editor_command(self, mode: str, project: dict, command: dict) -> dict:
         token = hashlib.sha256(
@@ -423,7 +461,6 @@ class RealAcceptanceState:
 
     def executor(self, project: dict, command: dict):
         self.executor_calls += 1
-        self.redo_stack.clear()
         if not isinstance(command, dict):
             raise ValueError("editor command must be an object")
 
@@ -433,6 +470,7 @@ class RealAcceptanceState:
             operation = result.get("operation")
             if not isinstance(operation, dict) or operation.get("kind") != "move_node":
                 raise RuntimeError("Rust editor returned non-MoveNode operation")
+            self.redo_stack.clear()
             self.last_operation = copy.deepcopy(operation)
             return (
                 copy.deepcopy(operation),
@@ -476,11 +514,50 @@ class RealAcceptanceState:
                         f"Rust/Python canonical Story operation differs at {field}"
                     )
 
+            self.redo_stack.clear()
             self.last_operation = copy.deepcopy(canonical.operation)
             return (
                 copy.deepcopy(canonical.operation),
                 copy.deepcopy(result["project"]),
                 [{"key": "story.text", "state": "supported", "note": None}],
+            )
+
+        if kind == "set_admitted_font_resource":
+            if not self.font_apply_demo or self.font_cli is None:
+                raise ValueError("actual font mutation is unavailable outside pinned developer mode")
+            current = self.kernel.current_revision(self.document_id)
+            scene = self.scenes[current.revision_id]
+            validate_server_font_scope_v1(
+                command, scene, self.font_authoring_admission(),
+            )
+            if sha256_path(self.fixture) != self.pinned_sha:
+                raise ValueError("real PUB source changed")
+            trusted_scope = {
+                "document_id": scene["document_id"],
+                "revision_id": scene["revision_id"],
+                "scene_snapshot_id": scene["snapshot_id"],
+                "layout_environment_id": scene["layout_environment"]["environment_id"],
+                "font_set_fingerprint": scene["layout_environment"]["font_set_fingerprint"],
+            }
+            result = pinned_font_cli(
+                mode="font-apply", cli=self.font_cli, source=self.fixture,
+                work_dir=self.work_dir, project=project, command=command,
+                scope=trusted_scope,
+            )
+            if (result.get("source_hash") != self.source_hash
+                    or result.get("source_text_unchanged") is not True
+                    or result.get("authoritative_relayout") is not False
+                    or result.get("fixed_pdf_allowed") is not False
+                    or not isinstance(result.get("project"), dict)):
+                raise ValueError("canonical Rust font receipt incomplete")
+            operation = result.get("operation")
+            validate_font_operation_v1(command, operation)
+            self.redo_stack.clear()
+            self.last_operation = copy.deepcopy(operation)
+            return (
+                copy.deepcopy(operation), copy.deepcopy(result["project"]),
+                [{"key": "story.font_resource", "state": "partial",
+                  "note": "authoritative_relayout_not_proven"}],
             )
 
         raise ValueError("unsupported real editor command")
@@ -534,6 +611,12 @@ class RealAcceptanceState:
                 principal_id=principal_id,
                 executor=self.executor,
             )
+        elif protocol == "chaptera.font-resource-intent.v1":
+            if not self.font_apply_demo:
+                raise ValueError("font Apply is disabled")
+            result = self.gateway.commit(
+                request, principal_id=principal_id, executor=self.executor,
+            )
         elif protocol == "chaptera.history-transition-intent.v1":
             result = self.gateway.commit(
                 request,
@@ -581,6 +664,8 @@ class RealAcceptanceState:
             document_id=self.document_id,
             revision_id=revision_id,
         )
+        if contains_font_history(record.project):
+            raise ValueError("font_resource_output_not_admitted")
         token = revision_id.removeprefix("sha256:")[:20]
         project_path = self.work_dir / f"{token}.project.json"
         artifact_path = self.work_dir / f"{token}.{target}"
@@ -642,6 +727,8 @@ class RealAcceptanceState:
 
     def export_preview(self, target: str) -> dict:
         current = self.kernel.current_revision(self.document_id)
+        if contains_font_history(current.project):
+            raise ValueError("font_resource_output_not_admitted")
         return copy.deepcopy(
             self._export_for_revision(current.revision_id, target)["preview"]
         )
@@ -692,6 +779,24 @@ class RealAcceptanceState:
             document_id=self.document_id,
             revision_id=current.revision_id,
         )
+        if self.font_apply_demo:
+            witness = pinned_font_cli(
+                mode="font-capabilities", cli=self.font_cli, source=self.fixture,
+                work_dir=self.work_dir, project=record.project,
+            )
+            story_ids = witness.get("font_editable_story_ids")
+            if (witness.get("source_hash") != self.source_hash
+                    or not isinstance(story_ids, list)
+                    or story_ids != sorted(set(story_ids))):
+                raise RuntimeError("Rust font capability receipt invalid")
+            return {
+                "protocol_version": "chaptera.editor-capabilities.v1",
+                "document_id": self.document_id,
+                "source_hash": self.source_hash,
+                "revision_id": current.revision_id,
+                "editable_story_ids": [],
+                "font_editable_story_ids": story_ids,
+            }
         token = current.revision_id.removeprefix("sha256:")[:20]
         project_path = self.work_dir / f"{token}.capabilities.project.json"
         project_path.write_bytes(canonical_json(record.project) + b"\n")
@@ -747,6 +852,14 @@ class RealAcceptanceState:
             document_id=self.document_id,
             revision_id=revision_id,
         )
+        if contains_font_history(record.project):
+            preview = blocked_native_pub_preview(
+                document_id=self.document_id, source_hash=self.source_hash,
+                revision_id=revision_id,
+            )
+            blocked = {"preview": preview, "artifact": None, "report": None}
+            self.native_pub_cache[revision_id] = blocked
+            return blocked
         token = revision_id.removeprefix("sha256:")[:20]
         project_path = self.work_dir / f"{token}.native-pub.project.json"
         artifact_path = self.work_dir / f"{token}.edited.pub"
@@ -884,6 +997,16 @@ class RealAcceptanceState:
             or sha256_path(self.fixture) != self.pinned_sha
         ):
             raise RuntimeError("immutable source changed before reopen")
+        if contains_font_history(record.project):
+            if not self.font_apply_demo or self.font_cli is None:
+                raise RuntimeError("font history cannot be independently readmitted")
+            receipt = pinned_font_cli(
+                mode="font-verify", cli=self.font_cli, source=self.fixture,
+                work_dir=self.work_dir, project=record.project,
+            )
+            if (receipt.get("source_hash") != self.source_hash
+                    or receipt.get("full_font_re_admitted") is not True):
+                raise RuntimeError("fresh real-PUB font grant failed")
         fresh = self._scene_from_project(record.project, current.revision_id)
         previous = self.scenes[current.revision_id]
         if fresh != previous:
@@ -1010,7 +1133,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/v1/export/preview":
                 self._authorize(CAP_EXPORT)
                 target = query.get("target", [""])[0]
-                self._json(STATE.export_preview(target))
+                try:
+                    self._json(STATE.export_preview(target))
+                except ValueError as exc:
+                    if str(exc) != "font_resource_output_not_admitted":
+                        raise
+                    self._json({"error": "font_resource_output_not_admitted"}, 409)
                 return
             if path == "/v1/editor/font-environment":
                 self._authorize(CAP_EDIT_TEXT)
@@ -1104,6 +1232,9 @@ def main():
     parser.add_argument("--exporter", required=True, type=pathlib.Path)
     parser.add_argument("--pinned-abel-demo", action="store_true",
                         help="explicit dev-only admitted full-font delivery; never enabled in acceptance mode")
+    parser.add_argument("--font-apply-demo", action="store_true",
+                        help="bounded developer-only font override; layout remains Partial")
+    parser.add_argument("--font-cli", type=pathlib.Path)
     parser.add_argument("--work-dir", required=True, type=pathlib.Path)
     parser.add_argument(
         "--interactive",
@@ -1123,6 +1254,8 @@ def main():
         baseline_project=args.baseline_project,
         fixture_profile=args.fixture_profile,
         pinned_abel_demo=args.pinned_abel_demo,
+        font_apply_demo=args.font_apply_demo,
+        font_cli=args.font_cli,
     )
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(
