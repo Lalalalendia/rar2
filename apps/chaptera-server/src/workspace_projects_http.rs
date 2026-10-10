@@ -259,6 +259,8 @@ mod tests {
         let project_id = b"project:catalog:alice";
         let document_id = b"document:catalog:alice";
         let sha = b"a".repeat(64);
+        let genesis_revision = format!("sha256:{}", "1".repeat(64));
+        let edited_revision = format!("sha256:{}", "2".repeat(64));
         sqlx::query(
             r#"
             INSERT INTO uploads (
@@ -303,7 +305,7 @@ mod tests {
             INSERT INTO documents (
                 document_id, tenant_id, project_id, source_upload_id,
                 durable_binding_id, source_sha256, genesis_revision_id, created_at_ms
-            ) VALUES (?, ?, ?, ?, 'binding:catalog', ?, 'revision:catalog', ?)
+            ) VALUES (?, ?, ?, ?, 'binding:catalog', ?, ?, ?)
             "#,
         )
         .bind(document_id.as_slice())
@@ -311,6 +313,7 @@ mod tests {
         .bind(project_id.as_slice())
         .bind(upload_id.as_slice())
         .bind(sha.as_slice())
+        .bind(genesis_revision.as_bytes())
         .bind(now)
         .execute(&pool)
         .await
@@ -376,8 +379,49 @@ mod tests {
             "document:catalog:alice"
         );
         assert_eq!(visible["projects"][0]["name"], "Catalog Test.pub");
+        assert_eq!(visible["projects"][0]["lifecycle_state"], "active");
+        assert_eq!(visible["projects"][0]["lifecycle_generation"], 0);
+        assert_eq!(visible["projects"][0]["metadata_version"], 0);
+        assert_eq!(
+            visible["projects"][0]["workspace_id"],
+            context.workspace_id
+        );
+        assert_eq!(
+            visible["projects"][0]["current_revision_id"],
+            genesis_revision
+        );
         assert!(visible.get("tenant_id").is_none());
         assert!(visible["projects"][0].get("principal_id").is_none());
+
+        sqlx::query(
+            r#"
+            INSERT INTO revision_edges (
+                document_id, parent_revision, parent_cursor, operation_id,
+                request_hash, canonical_event, child_revision, child_cursor,
+                resulting_state_hash, authoring_root_hash,
+                semantic_schema_version, committed_at_ms
+            ) VALUES (?, ?, 0, 'catalog-edit-1', ?, '{}', ?, 1, ?, NULL, 1, ?)
+            "#,
+        )
+        .bind(document_id.as_slice())
+        .bind(genesis_revision.as_bytes())
+        .bind(b"c".repeat(64))
+        .bind(edited_revision.as_bytes())
+        .bind(b"d".repeat(64))
+        .bind(now + 1)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let edited = app
+            .clone()
+            .oneshot(request(&context.workspace_id, Some(&alice.session_token)))
+            .await
+            .unwrap();
+        assert_eq!(edited.status(), StatusCode::OK);
+        assert_eq!(
+            parsed(edited).await["projects"][0]["current_revision_id"],
+            edited_revision
+        );
 
         sqlx::query("UPDATE authz_principal_grants SET expires_at_ms=? WHERE document_id=?")
             .bind(now - 1)
