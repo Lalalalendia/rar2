@@ -2776,7 +2776,6 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
     let _ = fs::remove_dir_all(root);
 }
 
-
 #[cfg(not(feature = "reader-only"))]
 #[test]
 #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
@@ -2944,7 +2943,12 @@ fn gui_duplicate_authored_rectangles_page_v031_click_undo_redo_reopen_real_pub()
                 .members
                 .clone(),
             editor.graph().pages[&authored_page_id].clone(),
-            app.visual.as_ref().expect("Viewer").document.source.source_hash,
+            app.visual
+                .as_ref()
+                .expect("Viewer")
+                .document
+                .source
+                .source_hash,
         )
     };
     assert_eq!(source_stack, vec![source_node_a, source_node_b]);
@@ -3096,9 +3100,7 @@ fn gui_duplicate_authored_rectangles_page_v031_click_undo_redo_reopen_real_pub()
             .build_page_frame_work(destination_index)
             .expect("production Desktop canvas render plan");
         assert_eq!(frame.render_plan.page_id, destination_page_id);
-        for (destination_node_id, source_shape) in
-            destination_node_ids.iter().zip(&source_shapes)
-        {
+        for (destination_node_id, source_shape) in destination_node_ids.iter().zip(&source_shapes) {
             let rendered = frame
                 .render_plan
                 .nodes
