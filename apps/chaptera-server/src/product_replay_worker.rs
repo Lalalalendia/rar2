@@ -480,6 +480,140 @@ pub fn run_product_replay_worker(
     })
 }
 
+pub fn run_product_materialization_worker(
+    document_id: &str,
+    expected_source_sha256: &str,
+    expected_source_byte_len: u64,
+    replay_json: &Path,
+) -> Result<(), ProductReplayWorkerError> {
+    require_document_id(document_id)?;
+    require_sha256(expected_source_sha256)?;
+    if expected_source_byte_len == 0 || expected_source_byte_len > MAX_SOURCE_BYTES {
+        return Err(ProductReplayWorkerError::new(
+            "product_materialization_input_limit",
+            "authorized PUB input length is out of range",
+        ));
+    }
+
+    let input_path = env::var("CHAPTERA_WORKER_INPUT").map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_materialization_environment_missing",
+            "worker input was not provided by isolation harness",
+        )
+    })?;
+    let output_root = env::var("CHAPTERA_WORKER_OUTPUT_DIR").map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_materialization_environment_missing",
+            "worker output was not provided by isolation harness",
+        )
+    })?;
+    let output_root = Path::new(&output_root);
+    fs::create_dir_all(output_root).map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_materialization_output_failed",
+            "worker output directory is unavailable",
+        )
+    })?;
+    let output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output_root.join("result.json"))
+        .map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_materialization_output_failed",
+                "worker result could not be created",
+            )
+        })?;
+
+    let source_bytes = read_bounded(Path::new(&input_path), expected_source_byte_len)?;
+    if source_bytes.len() as u64 != expected_source_byte_len
+        || sha256_hex(&source_bytes) != expected_source_sha256
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_materialization_source_mismatch",
+            "source bytes differ from the authorized immutable PUB identity",
+        ));
+    }
+
+    let replay_bytes = read_bounded(replay_json, MAX_REPLAY_CHAIN_BYTES)?;
+    let input: ProductMaterializationInputV1 =
+        serde_json::from_slice(&replay_bytes).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_materialization_input_invalid",
+                "isolated revision chain JSON is malformed",
+            )
+        })?;
+    validate_materialization_input(
+        &input,
+        document_id,
+        expected_source_sha256,
+        expected_source_byte_len,
+    )?;
+
+    install_post_read_filesystem_default_deny().map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_materialization_sandbox_failed",
+            "post-read filesystem default-deny could not be installed",
+        )
+    })?;
+
+    let (project, authoring_root_hash) = ExactRevisionMaterializer::replay_exact_chain(
+        &PubEditorReplayEngine,
+        &source_bytes,
+        &input.document_id,
+        &input.source_sha256,
+        &input.edges,
+    )
+    .map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_materialization_replay_failed",
+            "isolated exact revision replay failed",
+        )
+    })?;
+    let project_sha256 = project_sha256(&project).map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_materialization_replay_failed",
+            "isolated materialized project identity could not be derived",
+        )
+    })?;
+
+    let receipt = ProductMaterializationWorkerReceiptV1 {
+        protocol_version: PRODUCT_MATERIALIZATION_WORKER_V1.to_owned(),
+        document_id: input.document_id.clone(),
+        source_sha256: input.source_sha256.clone(),
+        source_byte_len: input.source_byte_len,
+        baseline_revision_id: input.baseline_revision_id.clone(),
+        baseline_cursor: input.baseline_cursor,
+        requested_revision_id: input.requested_revision_id.clone(),
+        replayed_edges: input.edges.len(),
+        project_sha256,
+        authoring_root_hash,
+        project,
+        filesystem_confinement: true,
+    };
+    validate_materialization_receipt(&receipt, &input)?;
+
+    let mut output = BufWriter::new(output);
+    serde_json::to_writer(&mut output, &receipt).map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_materialization_output_failed",
+            "isolated materialization receipt could not be written",
+        )
+    })?;
+    output.write_all(b"\n").map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_materialization_output_failed",
+            "isolated materialization receipt newline could not be written",
+        )
+    })?;
+    output.flush().map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_materialization_output_failed",
+            "isolated materialization receipt could not be flushed",
+        )
+    })
+}
+
 /// Production-side adapter. Inputs are selected and authorized by the main
 /// server; this adapter never resolves tenant, blob IDs, or access grants.
 #[derive(Clone)]
