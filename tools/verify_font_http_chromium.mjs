@@ -106,6 +106,30 @@ try {
   }
   if(!selected)throw new Error("real UI could not select font-editable Story through pointer or explicit list");
   await page.locator("#edit-text").click();
+  // Initial source font names/indices are not actual physical glyph grants.
+  await page.waitForFunction(()=>
+    document.querySelector("#font-metrics")?.dataset.exactScalars==="0",
+    null,{timeout:40_000}
+  );
+  const originalCoverage=await page.locator("#font-metrics").evaluate(el=>({
+    exact:Number(el.dataset.exactScalars),
+    unknown:Number(el.dataset.unresolvedScalars),
+    glyphs:Number(el.dataset.exactGlyphs),
+  }));
+  if(originalCoverage.unknown<1||originalCoverage.glyphs!==0){
+    throw new Error("unadmitted Publisher font was silently shaped: "+
+                    JSON.stringify(originalCoverage));
+  }
+  await page.waitForFunction(()=>document.querySelector("#font-flow")?.dataset.flowState==="source_font_unresolved",null,{timeout:40_000});
+  const sourceFlow=await page.locator("#font-flow").evaluate(el=>({
+    state:el.dataset.flowState,
+    gaps:Number(el.dataset.sourceGapScalars),
+    lines:Number(el.dataset.lineCount),
+  }));
+  if(sourceFlow.gaps!==originalCoverage.unknown||sourceFlow.lines!==0){
+    throw new Error("source font line fit invented geometry before authoring: "+
+                    JSON.stringify(sourceFlow));
+  }
   const textarea=page.locator("#text-value");
   await textarea.waitFor({state:"visible"});
   const previous=await textarea.inputValue();
@@ -136,6 +160,40 @@ try {
   }));
   if(ui.bad||!ui.message?.includes("layout and fixed PDF remain blocked")||
      !ui.pubDisabled)throw new Error("font UI cannot certify native format commit: "+JSON.stringify(ui));
+  await page.waitForFunction(()=>
+    document.querySelector("#font-metrics")?.dataset.exactScalars==="1",
+    null,{timeout:40_000}
+  );
+  const physicalCoverage=await page.locator("#font-metrics").evaluate(el=>({
+    admitted_scalars:Number(el.dataset.exactScalars),
+    unresolved_scalars:Number(el.dataset.unresolvedScalars),
+    exact_glyphs:Number(el.dataset.exactGlyphs),
+    message:el.textContent,
+  }));
+  if(physicalCoverage.admitted_scalars!==1||
+     physicalCoverage.unresolved_scalars!==originalCoverage.unknown-1||
+     physicalCoverage.exact_glyphs<1||
+     !physicalCoverage.message.includes("Native Publisher layout and PDF not verified")){
+    throw new Error("UI did not consume current native Rust glyph spans: "+
+                    JSON.stringify(physicalCoverage));
+  }
+  await page.waitForFunction(()=>{
+    const f=document.querySelector("#font-flow");
+    return f?.dataset.flowState==="source_font_unresolved" &&
+      f.dataset.sourceGapScalars!=="";
+  },null,{timeout:40_000});
+  const afterFlow=await page.locator("#font-flow").evaluate(el=>({
+    state:el.dataset.flowState,
+    gaps:Number(el.dataset.sourceGapScalars),
+    lines:Number(el.dataset.lineCount),
+    text:el.textContent,
+  }));
+  if(afterFlow.gaps!==physicalCoverage.unresolved_scalars||
+     afterFlow.lines!==0||
+     !afterFlow.text.includes("PDF blocked")){
+    throw new Error("partially admitted Story yielded fake line-fit geometry: "+
+                    JSON.stringify(afterFlow));
+  }
   const after=await current();
   if(after.revision_id===before.revision_id ||
      after.snapshot_id===before.snapshot_id) {
@@ -185,6 +243,89 @@ try {
     throw new Error("real Publisher Story text painted outside unshaped source frame: "+
                     JSON.stringify(clip));
   }
+  // The real user now applies one admitted physical font to the ENTIRE
+  // source Story, including any terminal Publisher CR, without guessing
+  // textarea offset mappings. This makes full line-fit reachable in Chromium.
+  const wholeButton=page.locator("#apply-font-story");
+  if(!await wholeButton.isEnabled()){
+    await page.locator("#font-story-target").selectOption(storyId);
+  }
+  if(!await wholeButton.isEnabled()){
+    throw new Error("whole Story font authoring not reachable in real inspector");
+  }
+  await wholeButton.click();
+  const storyScalars=originalCoverage.unknown;
+  await page.waitForFunction(total=>{
+    const glyphs=document.querySelector("#font-metrics");
+    const flow=document.querySelector("#font-flow");
+    return glyphs?.dataset.exactScalars===String(total) &&
+      glyphs.dataset.unresolvedScalars==="0" &&
+      flow?.dataset.flowState==="physical_line_fit_preview" &&
+      flow.dataset.sourceGapScalars==="0";
+  },storyScalars,{timeout:60_000});
+  const fullStory=await page.evaluate(()=>({
+    exact:Number(document.querySelector("#font-metrics")?.dataset.exactScalars),
+    unresolved:Number(document.querySelector("#font-metrics")?.dataset.unresolvedScalars),
+    state:document.querySelector("#font-flow")?.dataset.flowState,
+    lines:Number(document.querySelector("#font-flow")?.dataset.lineCount),
+    glyphMessage:document.querySelector("#font-metrics")?.textContent,
+    lineMessage:document.querySelector("#font-flow")?.textContent,
+    fontMessage:document.querySelector("#font-message")?.textContent,
+    pubDisabled:document.querySelector("#save-pub")?.disabled,
+    bad:document.querySelector("#state")?.classList.contains("bad"),
+  }));
+  if(fullStory.bad||fullStory.exact!==storyScalars||fullStory.unresolved!==0||
+     fullStory.state!=="physical_line_fit_preview"||fullStory.lines<1||
+     !fullStory.lineMessage?.includes("Publisher-native layout and PDF remain unverified")||
+     !fullStory.fontMessage?.includes("Entire Story font")||!fullStory.pubDisabled){
+    throw new Error("full Story user authoring did not reach physical font line-fit: "+
+                    JSON.stringify(fullStory));
+  }
+  const wholeRevision=await current();
+  if(wholeRevision.revision_id===after.revision_id||
+     wholeRevision.fidelity.state!=="partial"){
+    throw new Error("full Story font change did not create a new Partial revision");
+  }
+  const wholeNative=await fetch(api+"/v1/pub-save/preview",{headers}).then(r=>r.json());
+  if(wholeNative.can_download||wholeNative.can_serialize){
+    throw new Error("physical-font line-fit preview illegally authorized a native PUB");
+  }
+  // History deliberately clears canvas selection. Keep inspecting the
+  // same source-authorized Story through the user-facing Story chooser.
+  // This verifies Undo/Redo on the target Story, not stale inspector data.
+  await page.locator("#font-story-target").selectOption(storyId);
+  await page.locator("#undo").click();
+  await page.waitForFunction(()=>document.querySelector("#font-metrics")?.dataset.exactScalars==="1" &&
+    document.querySelector("#font-flow")?.dataset.flowState==="source_font_unresolved",null,{timeout:60_000});
+  await page.locator("#redo").click();
+  await page.waitForFunction(total=>document.querySelector("#font-metrics")?.dataset.exactScalars===String(total) &&
+    document.querySelector("#font-flow")?.dataset.flowState==="physical_line_fit_preview",
+    storyScalars,{timeout:60_000});
+  const redoRevision=await current();
+  if(redoRevision.revision_id===after.revision_id){
+    throw new Error("redo did not restore complete current physical Story");
+  }
+  await Promise.all([
+    page.waitForResponse(r=>r.url().endsWith("/v1/harness/reopen")&&r.request().method()==="POST",{timeout:60_000}),
+    page.locator("#reopen").click(),
+  ]);
+  await page.waitForFunction(total=>document.querySelector("#font-metrics")?.dataset.exactScalars===String(total) &&
+    document.querySelector("#font-flow")?.dataset.flowState==="physical_line_fit_preview",
+    storyScalars,{timeout:60_000});
+  const reopenedRevision=await current();
+  if(reopenedRevision.revision_id!==redoRevision.revision_id){
+    throw new Error("fresh project reopen lost the complete font Story revision");
+  }
+  // Fidelity and native-output authority must survive durable round-trip,
+  // not merely the live working session's preview-disable state.
+  const reopenedNative=await fetch(api+"/v1/pub-save/preview",{headers}).then(r=>r.json());
+  if(reopenedRevision.fidelity.state!=="partial"||
+     !reopenedRevision.fidelity.reasons.includes("font_resource_layout_not_implemented")||
+     reopenedNative.can_download||reopenedNative.can_serialize||
+     reopenedNative.blocker_code!=="font_layout_unverified"){
+    throw new Error("freshly reopened full-font Story falsely authorized native PUB: "+
+                    JSON.stringify({fidelity:reopenedRevision.fidelity,native:reopenedNative}));
+  }
   fs.mkdirSync("target/font-http-acceptance",{recursive:true});
   const evidence={
     receipt_kind:"chaptera.real-chromium-font-range-apply.v1",
@@ -203,6 +344,17 @@ try {
     diagnostics_collapsed_by_default:true,
     unresolved_story_frame_clip:clip,
     unshaped_layout_still_unverified:true,
+    physical_glyph_coverage:physicalCoverage,
+    source_unknown_before:originalCoverage.unknown,
+    real_glyph_spans_consumed:true,
+    physical_line_fit_before:sourceFlow,
+    physical_line_fit_after:afterFlow,
+    full_story_browser_font_apply:true,
+    whole_story_physical_line_fit:fullStory,
+    whole_story_undo_redo_and_reopen:true,
+    reopened_native_output_blocked:true,
+    reopened_revision_id:reopenedRevision.revision_id,
+    no_invented_lines_without_source_fonts:true,
     page_errors:errors,
   };
   if(errors.length)throw Error("Chromium page errors: "+errors.join("; "));

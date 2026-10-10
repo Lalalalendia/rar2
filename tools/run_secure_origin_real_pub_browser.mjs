@@ -8,8 +8,9 @@ const origin = process.env.CHAPTERA_SECURE_ORIGIN;
 const fixture = process.env.CHAPTERA_SOURCE_PUB_FIXTURE;
 const expectedHash = process.env.CHAPTERA_SOURCE_PUB_SHA256;
 const receiptPath = process.env.CHAPTERA_SECURE_RECEIPT;
-if (!origin || !fixture || !expectedHash || !receiptPath) {
-  throw new Error("real source browser requires secure origin, fixture, SHA and receipt path");
+const storageStatePath = process.env.CHAPTERA_BROWSER_STORAGE_STATE;
+if (!origin || !fixture || !expectedHash || !receiptPath || !storageStatePath) {
+  throw new Error("real source browser requires secure origin, fixture, SHA, receipt and storage-state paths");
 }
 const raw = await readFile(fixture);
 const hash = createHash("sha256").update(raw).digest("hex");
@@ -165,10 +166,6 @@ async function chooseRealMoveTarget(documentId) {
         const visual = document.elementFromPoint(screen.x, screen.y)
           ?.closest?.("[data-node-id]");
         if (visual?.getAttribute("data-node-id") !== candidate.node_id) continue;
-
-        // Four CSS-ish pixels at natural scale. The pointer path is converted
-        // through the same SVG matrix the real editor uses, not fabricated
-        // directly as a canonical MoveNode request.
         const endPoint = svg.createSVGPoint();
         endPoint.x = localX + 38100;
         endPoint.y = localY + 38100;
@@ -241,7 +238,18 @@ try {
 
   const documentId = decodeURIComponent(new URL(page.url()).pathname)
     .replace("/editor/doc/", "");
-  const current = await currentDocumentReceipt(documentId);
+  const current = await page.evaluate(async id => {
+    const response = await fetch("/v1/documents/" + encodeURIComponent(id) + "/current", {
+      credentials: "same-origin",
+    });
+    const data = await response.json().catch(() => null);
+    return {
+      status: response.status, document_id: data?.document_id ?? null,
+      revision_id: data?.revision_id ?? null,
+      protocol: data?.protocol_version ?? null,
+      error: data?.error ?? null,
+    };
+  }, documentId);
   if (current.status !== 200 || current.document_id !== documentId ||
       !current.revision_id) {
     throw new Error("real imported PUB did not materialize in Editor: " +
@@ -249,12 +257,33 @@ try {
   }
   const initialPaint = await verifyEditorPaint(current, "initial open");
 
-  // Drive the actual product shell with physical pointer events. Choose an
-  // untransformed, direct page-local node at a point that is geometrically
-  // unique and is the topmost visual DOM target. This mirrors the server's
-  // bounded MoveNode admission instead of posting a fabricated command.
+  // An actual page reload (no synthetic product snapshot) must retain the
+  // authoritative imported service revision. Server restart is a later gate.
+  await page.reload({ waitUntil: "domcontentloaded" });
+  const reopened = await page.evaluate(async id => {
+    const response = await fetch("/v1/documents/" + encodeURIComponent(id) + "/current", {
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    const data = await response.json().catch(() => null);
+    return {
+      status: response.status,
+      document_id: data?.document_id ?? null,
+      revision_id: data?.revision_id ?? null,
+    };
+  }, documentId);
+  if (reopened.status !== 200 || reopened.document_id !== documentId ||
+      reopened.revision_id !== current.revision_id) {
+    throw new Error("real project revision changed after browser reload: " +
+      JSON.stringify({ reopened, expected_revision: current.revision_id }));
+  }
+  const reopenedPaint = await verifyEditorPaint(reopened, "page reload");
+
+  // Drive the actual editor shell through physical pointer events. The target
+  // must be direct, identity-transformed, geometrically unique at the hit
+  // point, and the topmost DOM visual. No fabricated MoveNode POST is used.
   const moveTarget = await chooseRealMoveTarget(documentId);
-  if (!moveTarget || moveTarget.revision_id !== current.revision_id) {
+  if (!moveTarget || moveTarget.revision_id !== reopened.revision_id) {
     throw new Error("real imported PUB exposes no stable direct MoveNode target");
   }
   const commitResponsePromise = page.waitForResponse(response => {
@@ -273,13 +302,13 @@ try {
       accepted?.document_id !== documentId ||
       accepted?.replayed !== false ||
       !accepted?.revision_id ||
-      accepted.revision_id === current.revision_id) {
+      accepted.revision_id === reopened.revision_id) {
     throw new Error("real browser MoveNode did not receive a fresh durable revision ACK: " +
       JSON.stringify({ status: commitResponse.status(), accepted, moveTarget }));
   }
 
   const movedCurrent = await currentDocumentReceipt(documentId);
-  if (movedCurrent.status !== 200 ||
+  if (movedCurrent.status !== 200 || movedCurrent.document_id !== documentId ||
       movedCurrent.revision_id !== accepted.revision_id) {
     throw new Error("accepted browser MoveNode is not canonical current state: " +
       JSON.stringify({ movedCurrent, accepted }));
@@ -293,19 +322,34 @@ try {
   }
   const movedPaint = await verifyEditorPaint(movedCurrent, "after real pointer MoveNode");
 
-  // An actual page reload (no synthetic product snapshot) must retain the
-  // authoritative edited service revision. Server-process restart is a later gate.
   await page.reload({ waitUntil: "domcontentloaded" });
-  const reopened = await currentDocumentReceipt(documentId);
-  if (reopened.status !== 200 || reopened.document_id !== documentId ||
-      reopened.revision_id !== movedCurrent.revision_id) {
-    throw new Error("durable browser MoveNode changed after page reload: " +
-      JSON.stringify({ reopened, expected_revision: movedCurrent.revision_id }));
+  const edited = await currentDocumentReceipt(documentId);
+  if (edited.status !== 200 || edited.document_id !== documentId ||
+      edited.revision_id !== accepted.revision_id) {
+    throw new Error("physical MoveNode revision did not remain current after browser reload: " +
+      JSON.stringify({ edited, accepted }));
   }
-  const reopenedPaint = await verifyEditorPaint(reopened, "page reload");
+  const editedPaint = await verifyEditorPaint(edited, "after pointer MoveNode reload");
+  const moveCommit = {
+    node_id: moveTarget.node_id,
+    before: {
+      x_emu: moveTarget.before_bounds.x,
+      y_emu: moveTarget.before_bounds.y,
+    },
+    after: {
+      x_emu: movedNode.bounds.x,
+      y_emu: movedNode.bounds.y,
+    },
+    base_revision_id: reopened.revision_id,
+    revision_id: accepted.revision_id,
+    client_operation_id: null,
+    attempts: [{ node_id: moveTarget.node_id, status: commitResponse.status(), code: null }],
+  };
+
   if (process.env.CHAPTERA_SECURE_SCREENSHOT) {
     await page.screenshot({ path: process.env.CHAPTERA_SECURE_SCREENSHOT, fullPage: true });
   }
+  await context.storageState({ path: storageStatePath });
 
   for (const [method, path] of [
     ["GET", "/v1/session"],
@@ -322,7 +366,7 @@ try {
   }
   if (!calls.some(call => call.method === "POST" &&
       decodeURIComponent(call.path) === "/v1/documents/" + documentId + "/commit")) {
-    throw new Error("browser never issued the real canonical MoveNode commit");
+    throw new Error("browser never issued the canonical MoveNode through UI");
   }
   if (calls.some(call => call.forgedPrincipal || (call.method !== "GET" && !call.csrf))) {
     throw new Error("forged identity header or missing real CSRF");
@@ -335,23 +379,22 @@ try {
     real_pub_sha256: hash,
     real_source_worker: true,
     real_project_genesis_and_page_reload: true,
-    real_browser_pointer_move_node: true,
     reader_scene_reached_browser_paint: true,
+    real_browser_pointer_move_node: true,
     initial_editor_paint: initialPaint,
-    moved_editor_paint: movedPaint,
     reloaded_editor_paint: reopenedPaint,
-    moved_node_id: moveTarget.node_id,
-    moved_node_before_bounds: moveTarget.before_bounds,
-    moved_node_after_bounds: movedNode.bounds,
-    baseline_revision_id: current.revision_id,
-    edited_revision_id: movedCurrent.revision_id,
+    moved_editor_paint: movedPaint,
+    edited_editor_paint: editedPaint,
+    real_move_commit: true,
+    move_commit: moveCommit,
     server_restart_reopen_claim: false,
     storage_provider: "filesystem",
     s3_claim: false,
     native_pub_write_claim: false,
     move_and_export_claim: false,
     document_id: documentId,
-    current_revision_id: movedCurrent.revision_id,
+    imported_revision_id: current.revision_id,
+    current_revision_id: edited.revision_id,
     session_cookie_secure_http_only: true,
     steps: calls.map(call => call.method + " " + call.path),
     head_sha: process.env.CHAPTERA_HEAD_SHA ?? "unknown",

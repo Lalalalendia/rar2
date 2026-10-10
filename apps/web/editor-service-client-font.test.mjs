@@ -70,6 +70,75 @@ test("browser HTTP client fetches independent current-revision font catalogs", a
   ]);
 });
 
+test("current physical glyph scope requires an exact Story and current Scene identity", async () => {
+  const storyId = "15613e56-726e-5ae7-8c54-ec876c9bcfda";
+  const seen = [];
+  await withFetch(async (url, options) => {
+    const parsed = new URL(url);
+    seen.push(parsed.pathname);
+    assert.equal(parsed.pathname, "/v1/editor/font-glyph-spans");
+    assert.equal(parsed.searchParams.get("story_id"), storyId);
+    assert.equal(parsed.searchParams.get("revision_id"), REV);
+    assert.equal(parsed.searchParams.get("snapshot_id"), SNAP);
+    assert.equal(parsed.searchParams.size, 3);
+    assert.equal(options.headers["x-chaptera-principal-id"], "synthetic-editor");
+    return new Response(JSON.stringify({
+      protocol_version:"chaptera.current-physical-glyph-spans.v1",
+      story_id:storyId, revision_id:REV, scene_snapshot_id:SNAP,
+      admitted_scalar_count:1, source_unresolved_scalar_count:3,
+      shaped_glyph_count:1, authoritative_line_breaks:false,
+      fixed_pdf_allowed:false,
+    }),{headers:{"content-type":"application/json"}});
+  }, async () => {
+    const service = new HttpEditorServiceV1("http://127.0.0.1:18765");
+    const received=await service.currentPhysicalFontSpans({
+      story_id:storyId,revision_id:REV,snapshot_id:SNAP,
+    });
+    assert.equal(received.admitted_scalar_count,1);
+    assert.equal(received.authoritative_line_breaks,false);
+    assert.equal(received.fixed_pdf_allowed,false);
+  });
+  assert.deepEqual(seen,["/v1/editor/font-glyph-spans"]);
+  const service=new HttpEditorServiceV1("http://127.0.0.1:18765");
+  await withFetch(()=>{throw new Error("invalid query must never fetch");},async ()=>{
+    for(const props of [
+      {story_id:"Abel",revision_id:REV,snapshot_id:SNAP},
+      {story_id:storyId,revision_id:"main",snapshot_id:SNAP},
+      {story_id:storyId,revision_id:REV,snapshot_id:"sha256:short"},
+      {story_id:storyId+"?source=evil",revision_id:REV,snapshot_id:SNAP},
+    ]){
+      await assert.rejects(service.currentPhysicalFontSpans(props),TypeError);
+    }
+  });
+});
+
+test("source-bound physical line-fit HTTP client accepts only exact Story/Scene scope",async()=>{
+  const story="15613e56-726e-5ae7-8c54-ec876c9bcfda";
+  const service=new HttpEditorServiceV1("http://127.0.0.1:18765");
+  const old=globalThis.fetch;
+  let calls=0;
+  try{
+    globalThis.fetch=async(url)=>{
+      const parsed=new URL(url);
+      assert.equal(parsed.pathname,"/v1/editor/font-line-fit");
+      assert.equal(parsed.searchParams.get("story_id"),story);
+      assert.equal(parsed.searchParams.get("revision_id"),REV);
+      assert.equal(parsed.searchParams.get("snapshot_id"),SNAP);
+      calls++;
+      return new Response(JSON.stringify({state:"source_font_unresolved"}),
+        {headers:{"content-type":"application/json"}});
+    };
+    const response=await service.currentPhysicalFontLineFit({
+      story_id:story,revision_id:REV,snapshot_id:SNAP,
+    });
+    assert.equal(response.state,"source_font_unresolved");
+    await assert.rejects(service.currentPhysicalFontLineFit({
+      story_id:"unknown",revision_id:REV,snapshot_id:SNAP,
+    }),TypeError);
+    assert.equal(calls,1);
+  }finally{globalThis.fetch=old;}
+});
+
 test("name, relative unscoped route, host substitution and invalid candidate cannot deliver", async () => {
   const service = new HttpEditorServiceV1("http://127.0.0.1:18765");
   const alternatives = [
