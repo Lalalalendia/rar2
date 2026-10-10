@@ -1,0 +1,106 @@
+name: PUB PDF crop 034 spatial A B
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-pdf-crop-034-spatial-ab.yml"
+      - "tools/pub_pdf_crop_034_spatial_ab.py"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: pub-pdf-crop-034-spatial-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    if: github.event.pull_request.head.ref == 'measure/pub-pdf-crop-034-spatial-01'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Validate spatial analyzer
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir "PyMuPDF==1.26.7" "Pillow==12.3.0"
+          python -m py_compile tools/pub_pdf_crop_034_spatial_ab.py
+
+      - name: Acquire pinned exact-1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify exact 034 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="0d2278960a0101ced0a1ba6d5922f5a26ea37b76b3ab00ef21e21873359d4a5a"
+          src="out/pinned1050/materialized/native/$sha.pub"
+          test -s "$src"
+          test "$(stat -c %s "$src")" = "1019904"
+          test "$(sha256sum "$src" | awk '{print $1}')" = "$sha"
+
+      - name: Materialize pinned fallback font
+        run: |
+          cargo run -q -p chaptera-desktop-fallback-font-resource --bin materialize-fallback-font -- "$RUNNER_TEMP/chaptera-fallback.ttf"
+          test -s "$RUNNER_TEMP/chaptera-fallback.ttf"
+
+      - name: Build exact baseline and crop candidate CLIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/base" b0c5619e1af73743309c8741f3446470e0b561e7
+          git worktree add --detach "$RUNNER_TEMP/candidate" c99bbab3a651edca8bfd28772a00247f3beaaa02
+          cargo build --manifest-path "$RUNNER_TEMP/base/vendor/producer-a/Cargo.toml" -p pub-cli --bin pub --target-dir "$RUNNER_TEMP/base-target"
+          cargo build --manifest-path "$RUNNER_TEMP/candidate/vendor/producer-a/Cargo.toml" -p pub-cli --bin pub --target-dir "$RUNNER_TEMP/candidate-target"
+
+      - name: Convert exact 034 with both implementations
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="0d2278960a0101ced0a1ba6d5922f5a26ea37b76b3ab00ef21e21873359d4a5a"
+          src="out/pinned1050/materialized/native/$sha.pub"
+          out="target/pub-pdf-crop-034-spatial"
+          mkdir -p "$out"
+          "$RUNNER_TEMP/base-target/debug/pub" convert "$src" --to pdf --output "$out/base.pdf" --fallback-font "$RUNNER_TEMP/chaptera-fallback.ttf"
+          "$RUNNER_TEMP/candidate-target/debug/pub" convert "$src" --to pdf --output "$out/candidate.pdf" --fallback-font "$RUNNER_TEMP/chaptera-fallback.ttf"
+          test -s "$out/base.pdf"
+          test -s "$out/candidate.pdf"
+          test -s "$out/base.pdf.loss.json"
+          test -s "$out/candidate.pdf.loss.json"
+
+      - name: Classify regression-only cells relative to source-backed frame
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/pub_pdf_crop_034_spatial_ab.py \
+            --baseline-pdf target/pub-pdf-crop-034-spatial/base.pdf \
+            --candidate-pdf target/pub-pdf-crop-034-spatial/candidate.pdf \
+            --reference tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json \
+            --pub-sha256 0d2278960a0101ced0a1ba6d5922f5a26ea37b76b3ab00ef21e21873359d4a5a \
+            --page 1 \
+            --out target/pub-pdf-crop-034-spatial/receipt.json
+
+      - name: Upload source-safe spatial receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-pdf-crop-034-spatial-ab
+          path: target/pub-pdf-crop-034-spatial/receipt.json
+          retention-days: 30
