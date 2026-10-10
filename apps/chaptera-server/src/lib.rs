@@ -64,3 +64,4 @@ pub mod worker;
 pub mod worker_runtime;
 pub mod workspace_context;
 pub mod workspace_http;
+pub mod workspace_projects_http;
