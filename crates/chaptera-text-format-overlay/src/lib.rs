@@ -14,7 +14,7 @@ use std::fmt;
 mod font_resource_authoring_v1;
 pub use font_resource_authoring_v1::{
     FontAuthoringScopeV1, FontReplacementCandidateV1, FontResourceIdentityV1, ServerFontResourceV1,
-    set_admitted_font_resource_v1,
+    replay_recorded_font_resource_v1, set_admitted_font_resource_v1,
 };
 
 pub const OVERLAY_PROTOCOL_V1: &str = "chaptera.text-format-overlay.v1";
