@@ -2547,6 +2547,9 @@ fn open_mature_0x2c_bundle(
                     entry.mime.clone(),
                     entry.uses.iter().map(|usage| usage.node_id).collect(),
                     placements,
+                    // The Reader export bundle already cross-checked these
+                    // materialized bytes against the source asset manifest.
+                    entry.sha256,
                     file.bytes,
                 ));
             }
