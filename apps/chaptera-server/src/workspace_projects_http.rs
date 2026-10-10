@@ -146,3 +146,253 @@ impl IntoResponse for CatalogHttpError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, sync::atomic::{AtomicU64, Ordering}, time::Duration};
+
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, header::{COOKIE, HOST}},
+    };
+    use sqlx::SqlitePool;
+    use tower::ServiceExt;
+
+    use crate::{
+        auth_http::SESSION_COOKIE,
+        authn::SqliteAuthnStore,
+        authn_session::{SessionPolicy, issue_verified_login_session},
+        oidc_authn::OidcVerifiedIdentity,
+        schema_migration::SqliteMigrationRuntime,
+    };
+
+    use super::*;
+
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+
+    fn request(workspace_id: &str, session: Option<&str>) -> Request<Body> {
+        let mut builder = Request::builder()
+            .uri(format!("/v1/workspaces/{workspace_id}/projects"))
+            .header(HOST, "cloud.example.test");
+        if let Some(token) = session {
+            builder = builder.header(COOKIE, format!("{SESSION_COOKIE}={token}"));
+        }
+        builder.body(Body::empty()).unwrap()
+    }
+
+    async fn parsed(response: Response) -> serde_json::Value {
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn catalog_is_session_member_and_document_grant_scoped() {
+        let unique = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "chaptera-project-catalog-{}-{unique}.sqlite",
+            std::process::id()
+        ));
+        SqliteMigrationRuntime::new(&path, Duration::from_secs(2))
+            .unwrap()
+            .migrate_up()
+            .await
+            .unwrap();
+        let authn = SqliteAuthnStore::open(&path, 3, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let policy = SessionPolicy::new(
+            Duration::from_secs(600),
+            Duration::from_secs(3600),
+        )
+        .unwrap();
+        let now = i64::try_from(
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis(),
+        ).unwrap();
+        let alice = issue_verified_login_session(
+            &authn,
+            OidcVerifiedIdentity {
+                issuer: "https://issuer.example.test".into(),
+                subject: "catalog-alice".into(),
+                email_snapshot: None,
+                return_path: "/".into(),
+            },
+            now,
+            policy,
+        )
+        .await
+        .unwrap();
+        let bob = issue_verified_login_session(
+            &authn,
+            OidcVerifiedIdentity {
+                issuer: "https://issuer.example.test".into(),
+                subject: "catalog-bob".into(),
+                email_snapshot: None,
+                return_path: "/".into(),
+            },
+            now,
+            policy,
+        )
+        .await
+        .unwrap();
+        let workspace = SqliteWorkspaceContextResolver::open(
+            &path, 3, Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+        let context = workspace.ensure_personal(&alice.principal_id, now).await.unwrap();
+        let other = workspace.ensure_personal(&bob.principal_id, now).await.unwrap();
+        assert_ne!(context.tenant_id, other.tenant_id);
+
+        let pool = SqlitePool::connect(&format!("sqlite://{}", path.display()))
+            .await
+            .unwrap();
+        let upload_id = b"upload:catalog:alice";
+        let project_id = b"project:catalog:alice";
+        let document_id = b"document:catalog:alice";
+        let sha = b"a".repeat(64);
+        sqlx::query(
+            r#"
+            INSERT INTO uploads (
+                upload_id, tenant_id, principal_id, purpose, expected_byte_len,
+                physical_upload_ref, state, upload_generation, object_version,
+                object_etag, observed_byte_len, canonical_sha256, durable_binding_id,
+                created_at_ms, expires_at_ms, completed_at_ms,
+                idempotency_key, request_hash
+            ) VALUES (?, ?, ?, 'pub_source', 1, 'fixture/ref',
+                      'CONSUMED', 2, 'v1', 'etag', 1, ?, 'binding:catalog',
+                      ?, ?, ?, 'catalog-idempotency', ?)
+            "#,
+        )
+        .bind(upload_id.as_slice())
+        .bind(context.tenant_id.as_bytes())
+        .bind(alice.principal_id.as_bytes())
+        .bind(&sha)
+        .bind(now)
+        .bind(now + 86_400_000)
+        .bind(now)
+        .bind(b"b".repeat(64))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO projects (
+                project_id, tenant_id, workspace_id, name, lifecycle_state,
+                lifecycle_generation, metadata_version, deleted, created_at_ms
+            ) VALUES (?, ?, ?, 'Catalog Test.pub', 'active', 0, 0, 0, ?)
+            "#,
+        )
+        .bind(project_id.as_slice())
+        .bind(context.tenant_id.as_bytes())
+        .bind(context.workspace_id.as_bytes())
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO documents (
+                document_id, tenant_id, project_id, source_upload_id,
+                durable_binding_id, source_sha256, genesis_revision_id, created_at_ms
+            ) VALUES (?, ?, ?, ?, 'binding:catalog', ?, 'revision:catalog', ?)
+            "#,
+        )
+        .bind(document_id.as_slice())
+        .bind(context.tenant_id.as_bytes())
+        .bind(project_id.as_slice())
+        .bind(upload_id.as_slice())
+        .bind(&sha)
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO authz_documents (tenant_id, document_id, authz_version) VALUES (?, ?, 1)",
+        )
+        .bind(context.tenant_id.as_bytes())
+        .bind(document_id.as_slice())
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO authz_principal_grants (
+                tenant_id, document_id, principal_id, role, expires_at_ms, updated_at_ms
+            ) VALUES (?, ?, ?, 'owner', NULL, ?)
+            "#,
+        )
+        .bind(context.tenant_id.as_bytes())
+        .bind(document_id.as_slice())
+        .bind(alice.principal_id.as_bytes())
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let projects = SqliteProjectPersistence::open(&path, 3, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let auth =
+            AuthHttpState::api_test(authn.clone(), policy, "https://cloud.example.test").unwrap();
+        let app = router(WorkspaceProjectsHttpState::new(
+            auth, workspace.clone(), projects.clone(),
+        ));
+        let anonymous = app.clone().oneshot(request(&context.workspace_id, None))
+            .await.unwrap();
+        assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+        let cross = app.clone().oneshot(request(&context.workspace_id, Some(&bob.session_token)))
+            .await.unwrap();
+        assert_eq!(cross.status(), StatusCode::FORBIDDEN);
+        let visible = app.clone().oneshot(request(&context.workspace_id, Some(&alice.session_token)))
+            .await.unwrap();
+        assert_eq!(visible.status(), StatusCode::OK);
+        let visible = parsed(visible).await;
+        assert_eq!(visible["projects"][0]["project_id"], "project:catalog:alice");
+        assert_eq!(visible["projects"][0]["document_id"], "document:catalog:alice");
+        assert_eq!(visible["projects"][0]["name"], "Catalog Test.pub");
+        assert!(visible.get("tenant_id").is_none());
+        assert!(visible["projects"][0].get("principal_id").is_none());
+
+        sqlx::query("UPDATE authz_principal_grants SET expires_at_ms=? WHERE document_id=?")
+            .bind(now - 1).bind(document_id.as_slice()).execute(&pool).await.unwrap();
+        let expired = app.clone().oneshot(request(&context.workspace_id, Some(&alice.session_token)))
+            .await.unwrap();
+        assert_eq!(expired.status(), StatusCode::OK);
+        assert!(parsed(expired).await["projects"].as_array().unwrap().is_empty());
+
+        sqlx::query("UPDATE authz_principal_grants SET expires_at_ms=NULL WHERE document_id=?")
+            .bind(document_id.as_slice()).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE projects SET lifecycle_state='trashed' WHERE project_id=?")
+            .bind(project_id.as_slice()).execute(&pool).await.unwrap();
+        let trashed = app.clone().oneshot(request(&context.workspace_id, Some(&alice.session_token)))
+            .await.unwrap();
+        assert!(parsed(trashed).await["projects"].as_array().unwrap().is_empty());
+
+        sqlx::query("UPDATE projects SET lifecycle_state='active' WHERE project_id=?")
+            .bind(project_id.as_slice()).execute(&pool).await.unwrap();
+        sqlx::query(
+            r#"
+            UPDATE workspace_memberships
+            SET membership_state='revoked', membership_version=membership_version+1,
+                revoked_at_ms=?
+            WHERE workspace_id=? AND principal_id=?
+            "#,
+        )
+        .bind(now + 1)
+        .bind(context.workspace_id.as_bytes())
+        .bind(alice.principal_id.as_bytes())
+        .execute(&pool)
+        .await.unwrap();
+        let revoked = app.oneshot(request(&context.workspace_id, Some(&alice.session_token)))
+            .await.unwrap();
+        assert_eq!(revoked.status(), StatusCode::FORBIDDEN);
+
+        pool.close().await;
+        projects.close().await;
+        workspace.close().await;
+        authn.close().await;
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+}
