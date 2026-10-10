@@ -82,6 +82,12 @@ jobs:
           gui_duplicate_authored_rectangles_page_v031_click_undo_redo_reopen_real_pub
           -- --ignored --nocapture
 
+      - name: Prove real GUI multi-Rectangle Page delete and fresh v0.32 project reopen
+        run: >-
+          cargo test -p chaptera-desktop
+          gui_delete_authored_rectangles_page_v032_click_undo_redo_reopen_real_pub
+          -- --ignored --nocapture
+
       - name: Prove Ctrl PageUp PageDown page navigation
         run: >-
           cargo test -p chaptera-desktop

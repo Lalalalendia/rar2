@@ -3258,3 +3258,453 @@ fn gui_duplicate_authored_rectangles_page_v031_click_undo_redo_reopen_real_pub()
     );
     let _ = fs::remove_dir_all(root);
 }
+
+#[cfg(not(feature = "reader-only"))]
+#[test]
+#[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
+fn gui_delete_authored_rectangles_page_v032_click_undo_redo_reopen_real_pub() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let fixture_source = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
+        .map(PathBuf::from)
+        .expect("CHAPTERA_SAMPLE_NEWSLETTER must name the pinned Apache POI fixture");
+    let original = fs::read(&fixture_source).expect("read pinned SampleNewsletter source");
+    let root = std::env::temp_dir().join(format!(
+        "chaptera-gui-delete-multi-rectangle-page-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create GUI multi-delete temp directory");
+    let fixture = root.join("SampleNewsletter.pub");
+    fs::write(&fixture, &original).expect("copy immutable source PUB");
+
+    let path = fixture.clone();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 820.0))
+        .with_pixels_per_point(1.0)
+        .with_max_steps(220)
+        .build_eframe(move |cc| {
+            fallback_font::install(&cc.egui_ctx)
+                .expect("pinned Chaptera fallback font must validate");
+            ViewerApp::new_with_storage(Some(path), cc.storage)
+        });
+    harness.step();
+    harness.step();
+
+    let source_pages = harness.state().source_customer_page_ids.clone();
+    assert!(
+        !source_pages.is_empty(),
+        "real PUB must expose customer Pages"
+    );
+    assert!(
+        harness.get_by_label("Delete Rectangle Page").is_disabled(),
+        "source-backed Page must fail one-Rectangle Page deletion"
+    );
+    assert!(
+        harness
+            .get_by_label("Delete Multi-Rectangle Page")
+            .is_disabled(),
+        "source-backed Page must fail plural Page deletion"
+    );
+
+    harness.get_by_label("Add Page at End").click();
+    harness.step();
+    harness.step();
+    let authored_page_id = {
+        let app = harness.state();
+        match app.editor.as_ref().expect("editor").operations().last() {
+            Some(pub_editor::EditOperation::AppendBlankPageV1 { transition }) => {
+                transition.identity.page_id
+            }
+            other => panic!("expected canonical AppendBlankPageV1: {other:?}"),
+        }
+    };
+    assert!(
+        harness
+            .get_by_label("Delete Multi-Rectangle Page")
+            .is_disabled(),
+        "blank Page must not pass plural delete admission"
+    );
+
+    let node_a = pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
+    let node_b = pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
+    {
+        let app = harness.state_mut();
+        let size = app.editor.as_ref().expect("editor").graph().pages[&authored_page_id].size;
+        app.editor
+            .as_mut()
+            .expect("editor")
+            .create_shape(
+                node_a,
+                authored_page_id,
+                pub_editor::RectEmu::new(
+                    pub_editor::LengthEmu::new(size.width.get() / 7),
+                    pub_editor::LengthEmu::new(size.height.get() / 8),
+                    pub_editor::LengthEmu::new(size.width.get() / 5),
+                    pub_editor::LengthEmu::new(size.height.get() / 4),
+                ),
+                rectangle_creation::chaptera_rectangle_paint_v1(),
+            )
+            .expect("first direct AuthorCreated Rectangle");
+        app.finish_authoring_change("Seeded first Rectangle for plural Page delete.");
+    }
+    harness.step();
+    assert!(
+        !harness.get_by_label("Delete Rectangle Page").is_disabled(),
+        "one Rectangle must remain owned by the v0.29 command"
+    );
+    assert!(
+        harness
+            .get_by_label("Delete Multi-Rectangle Page")
+            .is_disabled(),
+        "one Rectangle must not enable the v0.32 command"
+    );
+
+    {
+        let app = harness.state_mut();
+        let size = app.editor.as_ref().expect("editor").graph().pages[&authored_page_id].size;
+        let mut paint_b = rectangle_creation::chaptera_rectangle_paint_v1();
+        paint_b.fill.color = pub_editor::Srgb8V1 {
+            r: 36,
+            g: 144,
+            b: 218,
+        };
+        paint_b.stroke.color = pub_editor::Srgb8V1 {
+            r: 201,
+            g: 64,
+            b: 47,
+        };
+        paint_b.stroke.width_emu = 25_400;
+        app.editor
+            .as_mut()
+            .expect("editor")
+            .create_shape(
+                node_b,
+                authored_page_id,
+                pub_editor::RectEmu::new(
+                    pub_editor::LengthEmu::new(size.width.get() / 2),
+                    pub_editor::LengthEmu::new(size.height.get() / 3),
+                    pub_editor::LengthEmu::new(size.width.get() / 6),
+                    pub_editor::LengthEmu::new(size.height.get() / 5),
+                ),
+                paint_b,
+            )
+            .expect("second direct AuthorCreated Rectangle");
+        app.finish_authoring_change("Seeded second Rectangle for plural Page delete.");
+    }
+    harness.step();
+    assert!(
+        harness.get_by_label("Delete Rectangle Page").is_disabled(),
+        "one-Rectangle command must fail closed on the two-object Page"
+    );
+    assert!(
+        !harness
+            .get_by_label("Delete Multi-Rectangle Page")
+            .is_disabled(),
+        "two independent authored Rectangles must enable the v0.32 command"
+    );
+
+    let (history_before, shapes_before, stack_before, source_hash) = {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("editor");
+        (
+            editor.operations().len(),
+            vec![
+                editor.authored_shape(node_a).expect("shape A").clone(),
+                editor.authored_shape(node_b).expect("shape B").clone(),
+            ],
+            editor
+                .authored_stack(authored_page_id)
+                .expect("plural authored stack")
+                .members
+                .clone(),
+            app.visual
+                .as_ref()
+                .expect("Viewer")
+                .document
+                .source
+                .source_hash,
+        )
+    };
+    assert_eq!(stack_before, vec![node_a, node_b]);
+
+    let assert_rectangles_are_painted = |app: &ViewerApp| {
+        let visual = app.visual.as_ref().expect("Viewer");
+        let page_index = visual
+            .document
+            .pages
+            .iter()
+            .position(|page| page.id == authored_page_id)
+            .expect("restored authored Page must be visible");
+        let frame = app
+            .build_page_frame_work(page_index)
+            .expect("production Desktop canvas render plan");
+        assert_eq!(frame.render_plan.page_id, authored_page_id);
+        for (node_id, shape) in [node_a, node_b].into_iter().zip(&shapes_before) {
+            let rendered = frame
+                .render_plan
+                .nodes
+                .iter()
+                .filter(|node| node.node_id == node_id)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                rendered.len(),
+                1,
+                "each authored Rectangle must appear exactly once in the production paint lane"
+            );
+            let painted = rendered[0];
+            assert_eq!(painted.bounds, shape.bounds);
+            assert_eq!(
+                painted.solid_fill_rgb,
+                shape.paint.fill.visible.then_some([
+                    shape.paint.fill.color.r,
+                    shape.paint.fill.color.g,
+                    shape.paint.fill.color.b,
+                ])
+            );
+            assert_eq!(
+                painted
+                    .solid_line
+                    .as_ref()
+                    .map(|line| (line.rgb, line.width_emu)),
+                shape.paint.stroke.visible.then_some((
+                    [
+                        shape.paint.stroke.color.r,
+                        shape.paint.stroke.color.g,
+                        shape.paint.stroke.color.b,
+                    ],
+                    shape.paint.stroke.width_emu,
+                ))
+            );
+            let instance_id = frame
+                .hit_index
+                .instance_for_node(node_id)
+                .expect("visible Rectangle must be selectable");
+            let hit = frame
+                .hit_index
+                .entry_for_instance(instance_id)
+                .expect("Rectangle hit instance");
+            assert_eq!(hit.node_id, node_id);
+            assert_eq!(hit.bounds, shape.bounds);
+        }
+    };
+    assert_rectangles_are_painted(harness.state());
+
+    // Viewer preflight mismatch must reject before live Editor commit.
+    let wrong_hash = if source_hash == pub_editor::Sha256Digest::from_bytes([0x73; 32]) {
+        pub_editor::Sha256Digest::from_bytes([0x37; 32])
+    } else {
+        pub_editor::Sha256Digest::from_bytes([0x73; 32])
+    };
+    harness
+        .state_mut()
+        .visual
+        .as_mut()
+        .expect("Viewer")
+        .document
+        .source
+        .source_hash = wrong_hash;
+    harness.get_by_label("Delete Multi-Rectangle Page").click();
+    harness.step();
+    harness.step();
+    assert_eq!(
+        harness.state().editor.as_ref().unwrap().operations().len(),
+        history_before,
+        "failed Viewer preflight must consume no plural delete history"
+    );
+    assert!(
+        harness
+            .state()
+            .editor
+            .as_ref()
+            .unwrap()
+            .graph()
+            .pages
+            .contains_key(&authored_page_id)
+    );
+    harness
+        .state_mut()
+        .visual
+        .as_mut()
+        .expect("Viewer")
+        .document
+        .source
+        .source_hash = source_hash;
+    harness.step();
+
+    harness.get_by_label("Delete Multi-Rectangle Page").click();
+    harness.step();
+    harness.step();
+
+    let after_history_len = {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("editor after plural delete");
+        assert_eq!(editor.operations().len(), history_before + 1);
+        let transition = match editor.operations().last() {
+            Some(pub_editor::EditOperation::DeleteAuthoredRectanglesPageV1 { transition }) => {
+                transition
+            }
+            other => panic!("real GUI click did not create canonical v0.32 operation: {other:?}"),
+        };
+        assert_eq!(transition.page.identity.page_id, authored_page_id);
+        assert_eq!(
+            transition
+                .shapes_before
+                .iter()
+                .map(|shape| shape.node_id)
+                .collect::<Vec<_>>(),
+            vec![node_a, node_b],
+            "v0.32 transition must preserve exact source paint order"
+        );
+        assert_eq!(transition.shapes_before, shapes_before);
+        assert!(!editor.graph().pages.contains_key(&authored_page_id));
+        assert!(editor.authored_shape(node_a).is_none());
+        assert!(editor.authored_shape(node_b).is_none());
+        assert!(editor.authored_stack(authored_page_id).is_none());
+
+        let visual = app.visual.as_ref().expect("Viewer after delete");
+        assert!(
+            visual
+                .document
+                .pages
+                .iter()
+                .all(|page| page.id != authored_page_id),
+            "deleted Page must leave Viewer membership"
+        );
+        assert!(
+            visual
+                .scene
+                .surfaces
+                .iter()
+                .all(|surface| surface.origin != authored_page_id),
+            "deleted Page must leave production Viewer surfaces"
+        );
+        editor.operations().len()
+    };
+
+    harness
+        .get_all_by_label("Undo")
+        .next()
+        .expect("Undo one Page+multi-Rectangle delete")
+        .click();
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("editor after Undo");
+        assert_eq!(editor.operations().len(), history_before);
+        assert!(editor.graph().pages.contains_key(&authored_page_id));
+        assert_eq!(editor.authored_shape(node_a), Some(&shapes_before[0]));
+        assert_eq!(editor.authored_shape(node_b), Some(&shapes_before[1]));
+        assert_eq!(
+            editor
+                .authored_stack(authored_page_id)
+                .expect("restored plural stack")
+                .members,
+            stack_before
+        );
+    }
+    assert_rectangles_are_painted(harness.state());
+
+    harness
+        .get_all_by_label("Redo")
+        .next()
+        .expect("Redo one Page+multi-Rectangle delete")
+        .click();
+    harness.step();
+    harness.step();
+    {
+        let editor = harness.state().editor.as_ref().expect("editor after Redo");
+        assert_eq!(editor.operations().len(), after_history_len);
+        assert!(!editor.graph().pages.contains_key(&authored_page_id));
+        assert!(editor.authored_shape(node_a).is_none());
+        assert!(editor.authored_shape(node_b).is_none());
+        assert!(editor.authored_stack(authored_page_id).is_none());
+    }
+
+    harness.get_by_label("Save Project").click();
+    harness.step();
+    harness.step();
+    harness.step();
+    {
+        let reopen = harness.get_by_label("Reopen Project");
+        assert!(
+            !reopen.is_disabled(),
+            "v0.32 plural delete project must reopen"
+        );
+        reopen.click();
+    }
+    harness.step();
+    harness.step();
+    harness.step();
+
+    {
+        let app = harness.state();
+        let editor = app.editor.as_ref().expect("fresh v0.32 Editor");
+        assert_eq!(
+            editor.project().schema_version,
+            pub_editor::EDITOR_PROJECT_VERSION_V0_32
+        );
+        assert_eq!(editor.operations().len(), after_history_len);
+        assert!(matches!(
+            editor.operations().last(),
+            Some(pub_editor::EditOperation::DeleteAuthoredRectanglesPageV1 { transition })
+                if transition.page.identity.page_id == authored_page_id
+                    && transition
+                        .shapes_before
+                        .iter()
+                        .map(|shape| shape.node_id)
+                        .collect::<Vec<_>>()
+                        == vec![node_a, node_b]
+        ));
+        assert!(!editor.graph().pages.contains_key(&authored_page_id));
+        assert!(editor.authored_shape(node_a).is_none());
+        assert!(editor.authored_shape(node_b).is_none());
+        assert!(editor.authored_stack(authored_page_id).is_none());
+        assert_eq!(app.source_customer_page_ids, source_pages);
+        assert!(
+            app.visual
+                .as_ref()
+                .expect("fresh Viewer")
+                .document
+                .pages
+                .iter()
+                .all(|page| page.id != authored_page_id)
+        );
+    }
+
+    // Fresh replay retains history. Undo must restore exact identities, z-order,
+    // paint and production hit testing without reallocating anything.
+    harness
+        .get_all_by_label("Undo")
+        .next()
+        .expect("Undo v0.32 delete after fresh reopen")
+        .click();
+    harness.step();
+    harness.step();
+    {
+        let editor = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor after reopen Undo");
+        assert_eq!(editor.operations().len(), history_before);
+        assert_eq!(editor.authored_shape(node_a), Some(&shapes_before[0]));
+        assert_eq!(editor.authored_shape(node_b), Some(&shapes_before[1]));
+        assert_eq!(
+            editor
+                .authored_stack(authored_page_id)
+                .expect("reopened restored stack")
+                .members,
+            stack_before
+        );
+    }
+    assert_rectangles_are_painted(harness.state());
+
+    assert_eq!(
+        fs::read(&fixture).expect("read native PUB after v0.32 Save/Reopen/Undo"),
+        original,
+        "Desktop v0.32 multi-Rectangle Page deletion must preserve native PUB bytes"
+    );
+    let _ = fs::remove_dir_all(root);
+}
