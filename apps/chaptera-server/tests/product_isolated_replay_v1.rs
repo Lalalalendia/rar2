@@ -112,7 +112,6 @@ async fn pinned_sample3_exact_project_replays_in_real_seccomp_worker() {
     assert_eq!(denied.code, "product_replay_project_hash_mismatch");
 }
 
-
 #[tokio::test]
 async fn pinned_sample3_baseline_materializes_in_real_seccomp_worker() {
     let source_bytes = sample3_pub();
