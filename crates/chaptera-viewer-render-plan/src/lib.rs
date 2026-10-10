@@ -42,8 +42,8 @@ use mixed_size_layout::{
     shape_mixed_line_candidate_v1,
 };
 use mixed_size_layout::{
-    MixedLineCandidateV1, admitted_font_size_emu, resolve_mixed_size_text_layout_v1,
-    scalar_text_range_v1,
+    MixedLineCandidateV1, admitted_font_size_emu, resolve_mixed_family_text_layout_v1,
+    resolve_mixed_size_text_layout_v1, scalar_text_range_v1, source_text_simple_ltr_v1,
 };
 pub use shared_layout_diagnostics::{
     SharedLayoutIncompleteCauseV1, classify_shared_layout_incomplete_cause_v1,
@@ -2567,7 +2567,7 @@ where
         &RenderTypographyRunV1,
     ) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
 {
-    if fragment.text.is_empty() || !fragment.text.is_ascii() || fragment.typography.len() < 2 {
+    if !source_text_simple_ltr_v1(&fragment.text) || fragment.typography.len() < 2 {
         return None;
     }
 
@@ -2709,8 +2709,8 @@ fn shape_mixed_family_line_candidate_v1(
             font_size_emu: LengthEmu::new(run.font_size_emu),
             font_bytes: run.font.bytes,
         };
-        let shaped = shape_bounded_ltr_segment(&span_text, span_start, &runtime)
-            .map_err(|_| RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+        let shaped = mixed_size_layout::shape_visible_v1(&span_text, span_start, &runtime)
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
         let span_width_emu = shaped.total_x_advance.get();
         spans.push(RenderResolvedTextSpanV1 {
             scalar_start: span_start,
@@ -2740,165 +2740,6 @@ fn shape_mixed_family_line_candidate_v1(
         measured_width_emu,
         line_height_emu,
         spans,
-    })
-}
-
-fn resolve_mixed_family_text_layout_v1<'a, G>(
-    visual: &ViewerGeometryDocument,
-    target: RenderTextLayoutTargetV1,
-    fragment: &RenderTextFragmentV1,
-    resolve_span_font: &mut G,
-) -> Option<RenderTextLayoutV1>
-where
-    G: FnMut(
-        &RenderTextFragmentV1,
-        &RenderTypographyRunV1,
-    ) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
-{
-    if target.projected_target_frame_node_id.is_some()
-        || target.bounds.width.get() <= 0
-        || target.bounds.height.get() <= 0
-    {
-        return None;
-    }
-
-    let story = visual
-        .document
-        .stories
-        .iter()
-        .find(|story| story.id == fragment.story_id)?;
-    let story_scalar_len = u32::try_from(story.text.chars().count()).ok()?;
-    if fragment.scalar_start != 0
-        || fragment.scalar_end != story_scalar_len
-        || !render_text_is_story_equivalent_for_layout_v1(
-            visual,
-            target.page_id,
-            target.node_id,
-            target.projected_target_frame_node_id,
-            &fragment.text,
-            &story.text,
-        )
-    {
-        return None;
-    }
-    admitted_layout_frame_ordinal(
-        visual,
-        fragment.story_id,
-        target.node_id,
-        target.projected_target_frame_node_id,
-    )
-    .ok()?;
-
-    let runs = admitted_mixed_family_typography_runs_v1(fragment, resolve_span_font)?;
-    let scalars: Vec<char> = fragment.text.chars().collect();
-
-    let mut policy_glyphs = Vec::new();
-    for run in &runs {
-        let run_text = scalar_text_range_v1(&scalars, run.scalar_start, run.scalar_end)?;
-        let runtime = BoundedShapingRuntime {
-            layout: BoundedLayoutEnvironment {
-                engine_revision: SHARED_TEXT_LAYOUT_REVISION_V1.to_owned(),
-                font_set_fingerprint: run.font_fingerprint_sha256.clone(),
-                resource_fingerprint: run.font.resource_id.to_owned(),
-            },
-            face_index: run.font.face_index,
-            font_size_emu: LengthEmu::new(run.font_size_emu),
-            font_bytes: run.font.bytes,
-        };
-        let shaped = shape_bounded_ltr_segment(&run_text, run.scalar_start, &runtime).ok()?;
-        policy_glyphs.extend(shaped.glyphs);
-    }
-    let policy = break_policy_for_shaped_text(&fragment.text, &policy_glyphs).ok()?;
-    let layout_fingerprint = mixed_family_layout_fingerprint_v1(&runs);
-
-    let mut cursor = fragment.scalar_start;
-    let mut used_height_emu = 0_i64;
-    let mut line_index = 0_u32;
-    let mut lines = Vec::new();
-
-    while cursor < fragment.scalar_end {
-        let mut chosen = None;
-        for candidate in policy
-            .candidates
-            .iter()
-            .filter(|candidate| candidate.scalar_boundary > cursor)
-        {
-            let evaluated = shape_mixed_family_line_candidate_v1(
-                &scalars,
-                cursor,
-                candidate.scalar_boundary,
-                candidate.kind,
-                &runs,
-            )
-            .ok()?;
-            let fits_width = evaluated.measured_width_emu <= target.bounds.width.get();
-            let fits_height = used_height_emu
-                .checked_add(evaluated.line_height_emu)
-                .is_some_and(|height| height <= target.bounds.height.get());
-            if fits_width && fits_height {
-                chosen = Some(evaluated);
-            }
-            if candidate.kind == BoundedBreakKind::Mandatory {
-                break;
-            }
-        }
-
-        let chosen = chosen?;
-        used_height_emu = used_height_emu.checked_add(chosen.line_height_emu)?;
-        let x_offset_emu = resolved_line_x_offset_emu_v1(
-            fragment,
-            target.node_id,
-            &target.bounds,
-            line_index,
-            cursor..chosen.scalar_end,
-            chosen.measured_width_emu,
-            &layout_fingerprint,
-        );
-        lines.push(RenderResolvedTextLineV1 {
-            line_index,
-            scalar_start: cursor,
-            scalar_end: chosen.scalar_end,
-            consumed_scalar_end: chosen.consumed_scalar_end,
-            text: chosen.text,
-            measured_width_emu: chosen.measured_width_emu,
-            line_height_emu: chosen.line_height_emu,
-            x_offset_emu,
-            spans: chosen.spans,
-            shaping: None,
-        });
-        cursor = chosen.consumed_scalar_end;
-        line_index = line_index.checked_add(1)?;
-    }
-
-    if cursor != fragment.scalar_end {
-        return None;
-    }
-
-    let first = runs.first()?;
-    let max_font_size_emu = runs
-        .iter()
-        .map(|run| run.font_size_emu)
-        .max()
-        .unwrap_or(first.font_size_emu);
-    let max_line_height_emu = lines
-        .iter()
-        .map(|line| line.line_height_emu)
-        .max()
-        .unwrap_or(first.font.default_line_height_emu);
-
-    Some(RenderTextLayoutV1 {
-        disposition: RenderTextLayoutDispositionV1::SharedResolved {
-            font_resource_id: first.font.resource_id.to_owned(),
-            font_fingerprint_sha256: first.font_fingerprint_sha256.clone(),
-            font_size_emu: max_font_size_emu,
-            line_height_emu: max_line_height_emu,
-        },
-        vertical_offset_emu: resolved_vertical_offset_emu_v1(
-            target.vertical_alignment,
-            target.bounds.height.get(),
-            used_height_emu,
-        ),
-        lines,
     })
 }
 
@@ -3078,7 +2919,7 @@ mod tests {
         assert!(layout_decorative_border_v1(&ambiguous, regular, 20, true).is_none());
     }
 
-    fn fixture() -> ViewerGeometryDocument {
+    pub(super) fn fixture() -> ViewerGeometryDocument {
         let page_id = PageId::from_canonical(canonical(1));
         let node_id = NodeId::from_canonical(canonical(2));
         let story_id = StoryId::from_canonical(canonical(3));
@@ -3193,7 +3034,7 @@ mod tests {
         }
     }
 
-    fn render_fragment(
+    pub(super) fn render_fragment(
         story_id: StoryId,
         text: &str,
         typography: Vec<RenderTypographyRunV1>,

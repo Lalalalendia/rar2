@@ -203,6 +203,13 @@ jobs:
           echo "supplemental_cargo_cache_hit=${SUPPLEMENTAL_CARGO_CACHE_HIT:-unknown}" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "supplemental_cargo_build_seconds=$elapsed" | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: Census exact082 p2 source styles (source-safe)
+        env:
+          CHAPTERA_READER_SCENE_PROBE_PUB: ${{ runner.temp }}/publisher-visual-supplemental/fixtures/082_2531deb3629797af.pub
+        run: |
+          set -euo pipefail
+          cargo test -p chaptera-server source_safe_exact082_terminal_style_coverage_probe -- --ignored --nocapture
+
       - name: Restore pinned Playwright Chromium cache
         id: playwright-chromium-cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
