@@ -7,15 +7,19 @@
 use super::*;
 use pub_editor_authoring_core::{
     DeleteAuthoredRectanglePageStateV1, DeleteAuthoredRectanglePageTransitionV1,
-    DuplicateAuthoredRectanglePageStateV1, DuplicateAuthoredRectanglePageTransitionV1,
-    DuplicateAuthoredRectanglesPageTransitionV1, MAX_DUPLICATED_AUTHORED_RECTANGLES_PAGE_V1,
-    apply_delete_authored_rectangle_page_forward_v1,
+    DeleteAuthoredRectanglesPageTransitionV1, DuplicateAuthoredRectanglePageStateV1,
+    DuplicateAuthoredRectanglePageTransitionV1,
+    DuplicateAuthoredRectanglesPageTransitionV1, MAX_DELETED_AUTHORED_RECTANGLES_PAGE_V1,
+    MAX_DUPLICATED_AUTHORED_RECTANGLES_PAGE_V1, apply_delete_authored_rectangle_page_forward_v1,
     apply_delete_authored_rectangle_page_inverse_v1,
+    apply_delete_authored_rectangles_page_forward_v1,
+    apply_delete_authored_rectangles_page_inverse_v1,
     apply_duplicate_authored_rectangle_page_forward_v1,
     apply_duplicate_authored_rectangle_page_inverse_v1,
     apply_duplicate_authored_rectangles_page_forward_v1,
     apply_duplicate_authored_rectangles_page_inverse_v1, plan_delete_authored_rectangle_page_v1,
-    plan_duplicate_authored_rectangle_page_v1, plan_duplicate_authored_rectangles_page_v1,
+    plan_delete_authored_rectangles_page_v1, plan_duplicate_authored_rectangle_page_v1,
+    plan_duplicate_authored_rectangles_page_v1,
 };
 use pub_editor_geometry_core::{
     GeometryNodeSnapshotV1, MoveNodesTransitionErrorV1, ResizeNodesTransitionErrorV1,
@@ -489,6 +493,9 @@ pub(super) fn authored_stack_operation_page_id_v1(operation: &EditOperation) -> 
         EditOperation::DeleteAuthoredRectanglePageV1 { transition } => {
             Some(transition.page.identity.page_id)
         }
+        EditOperation::DeleteAuthoredRectanglesPageV1 { transition } => {
+            Some(transition.page.identity.page_id)
+        }
         EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => {
             Some(transition.page.destination_identity.page_id)
         }
@@ -580,6 +587,18 @@ pub(super) fn apply_authored_stack_history_forward_v1(
             let after = apply_authored_stack_transition_forward_v1(&current, &transition.stack)
                 .map_err(|_| EditorError::StaleAuthoredStack { page_id })?;
             install_authored_stack_in_map_v1(stacks, after);
+        }
+        EditOperation::DeleteAuthoredRectanglesPageV1 { transition } => {
+            let page_id = transition.page.identity.page_id;
+            let mut current = stacks
+                .get(&page_id)
+                .cloned()
+                .unwrap_or_else(|| AuthoredStackV1::empty(page_id));
+            for stack in &transition.stacks {
+                current = apply_authored_stack_transition_forward_v1(&current, stack)
+                    .map_err(|_| EditorError::StaleAuthoredStack { page_id })?;
+            }
+            install_authored_stack_in_map_v1(stacks, current);
         }
         EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => {
             let page_id = transition.page.destination_identity.page_id;
@@ -872,6 +891,11 @@ pub(super) fn apply_page_lifecycle_graph_forward_v1(
                 message: "combined authored page/shape transition needs EditorSession".into(),
             })
         }
+        EditOperation::DeleteAuthoredRectanglesPageV1 { .. } => {
+            Err(EditorError::PageDeleteUnsupported {
+                message: "combined authored Page/multi-Rectangle delete needs EditorSession".into(),
+            })
+        }
         EditOperation::DuplicateAuthoredRectanglePageV1 { .. } => {
             Err(EditorError::PageDuplicateUnsupported {
                 message: "combined authored Page/Rectangle transition needs EditorSession".into(),
@@ -936,6 +960,11 @@ pub(super) fn apply_page_lifecycle_graph_inverse_v1(
         EditOperation::DeleteAuthoredRectanglePageV1 { .. } => {
             Err(EditorError::PageDeleteUnsupported {
                 message: "combined authored page/shape transition needs EditorSession".into(),
+            })
+        }
+        EditOperation::DeleteAuthoredRectanglesPageV1 { .. } => {
+            Err(EditorError::PageDeleteUnsupported {
+                message: "combined authored Page/multi-Rectangle delete needs EditorSession".into(),
             })
         }
         EditOperation::DuplicateAuthoredRectanglePageV1 { .. } => {
@@ -1043,6 +1072,9 @@ impl EditorSession {
                 EditOperation::DeleteAuthoredRectanglePageV1 { transition } => {
                     active.retain(|id| *id != transition.page.identity.page_id);
                 }
+                EditOperation::DeleteAuthoredRectanglesPageV1 { transition } => {
+                    active.retain(|id| *id != transition.page.identity.page_id);
+                }
                 _ => {}
             }
         }
@@ -1061,6 +1093,9 @@ impl EditorSession {
                     transition.identity.page_id == page_id
                 }
                 EditOperation::DeleteAuthoredRectanglePageV1 { transition } => {
+                    transition.page.identity.page_id == page_id
+                }
+                EditOperation::DeleteAuthoredRectanglesPageV1 { transition } => {
                     transition.page.identity.page_id == page_id
                 }
                 EditOperation::DuplicateBlankPageV1 { transition } => {
@@ -1487,6 +1522,160 @@ impl EditorSession {
         self.install_authored_stack_v1(expected.stack.after.clone());
         let operation = EditOperation::DeleteAuthoredRectanglePageV1 {
             transition: expected,
+        };
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    /// Read-only admission for two to eight direct independent authored Rectangles.
+    pub fn can_delete_authored_rectangles_page_v1(
+        &self,
+        source_qualified_page_ids: &[PageId],
+        page_id: PageId,
+    ) -> bool {
+        let count = self.current_authored_stack_v1(page_id).members.len();
+        (2..=MAX_DELETED_AUTHORED_RECTANGLES_PAGE_V1).contains(&count)
+            && self
+                .plan_delete_authored_rectangles_page_from_session_v1(
+                    source_qualified_page_ids,
+                    page_id,
+                )
+                .is_ok()
+    }
+
+    pub(super) fn plan_delete_authored_rectangles_page_from_session_v1(
+        &self,
+        source_qualified_page_ids: &[PageId],
+        page_id: PageId,
+    ) -> Result<DeleteAuthoredRectanglesPageTransitionV1, EditorError> {
+        self.validate_source_identity()?;
+        if self.project_identity.is_none() {
+            return Err(EditorError::PageDeleteUnsupported {
+                message: "durable project identity is required".to_owned(),
+            });
+        }
+        let identity = self
+            .authored_page_identities_v1()
+            .get(&page_id)
+            .copied()
+            .ok_or_else(|| EditorError::PageDeleteUnsupported {
+                message: "target PageId lacks active authored identity".to_owned(),
+            })?;
+        if !self.authored_customer_page_ids_v1().contains(&page_id) {
+            return Err(EditorError::PageDeleteUnsupported {
+                message: "target PageId is not active authored customer membership".to_owned(),
+            });
+        }
+
+        let shapes_on_target = self
+            .authored_shapes
+            .iter()
+            .filter_map(|(id, shape)| {
+                (shape.page_id == page_id || shape.parent_id == page_id).then_some(*id)
+            })
+            .collect::<BTreeSet<_>>();
+        let foreign_stack_reference = self.authored_stacks.iter().any(|(other_page, stack)| {
+            *other_page != page_id && stack.members.iter().any(|id| shapes_on_target.contains(id))
+        });
+        let dependent_graph_node = self.graph.nodes.values().any(|node| {
+            let mut parent = node.header.parent_id;
+            let mut visited = BTreeSet::new();
+            loop {
+                if parent == page_id.into_canonical()
+                    || shapes_on_target.contains(&NodeId::from_canonical(parent))
+                    || !visited.insert(parent)
+                {
+                    return true;
+                }
+                let Some(ancestor) = self.graph.nodes.get(&NodeId::from_canonical(parent)) else {
+                    return false;
+                };
+                parent = ancestor.header.parent_id;
+            }
+        });
+        let foreign_or_unproven_membership = self.page_has_resolved_node_membership_v1(page_id)
+            || dependent_graph_node
+            || foreign_stack_reference
+            || self
+                .authored_lines
+                .values()
+                .any(|line| line.page_id == page_id || line.parent_id == page_id);
+        let customer_pages = self.effective_customer_page_order_v1(source_qualified_page_ids)?;
+        let state = DeleteAuthoredRectanglePageStateV1 {
+            document_pages: self.graph.document.pages.clone(),
+            pages: self.graph.pages.clone(),
+            authored_shapes: self.authored_shapes.clone(),
+            authored_stack: self.current_authored_stack_v1(page_id),
+        };
+        plan_delete_authored_rectangles_page_v1(
+            self.graph.document.id,
+            &state,
+            &customer_pages,
+            identity,
+            foreign_or_unproven_membership,
+        )
+        .map_err(|error| EditorError::PageDeleteUnsupported {
+            message: format!("atomic multi-Rectangle Page admission rejected: {error:?}"),
+        })
+    }
+
+    pub fn delete_authored_rectangles_page_v1(
+        &mut self,
+        source_qualified_page_ids: Vec<PageId>,
+        page_id: PageId,
+    ) -> Result<EditOperation, EditorError> {
+        let planned = self.plan_delete_authored_rectangles_page_from_session_v1(
+            &source_qualified_page_ids,
+            page_id,
+        )?;
+        self.consume_canonical_delete_authored_rectangles_page_v1(planned)
+    }
+
+    pub(super) fn consume_canonical_delete_authored_rectangles_page_v1(
+        &mut self,
+        expected: DeleteAuthoredRectanglesPageTransitionV1,
+    ) -> Result<EditOperation, EditorError> {
+        let authored = self
+            .authored_customer_page_ids_v1()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let sources = expected
+            .page
+            .before_customer_page_ids
+            .iter()
+            .copied()
+            .filter(|page_id| !authored.contains(page_id))
+            .collect::<Vec<_>>();
+        let planned = self.plan_delete_authored_rectangles_page_from_session_v1(
+            &sources,
+            expected.page.identity.page_id,
+        )?;
+        if planned != expected {
+            return Err(EditorError::StalePageDelete);
+        }
+        let mut graph = self.graph.clone();
+        let mut shapes = self.authored_shapes.clone();
+        apply_authored_rectangles_page_history_candidate_v1(
+            &mut graph,
+            &mut shapes,
+            self.current_authored_stack_v1(expected.page.identity.page_id),
+            &expected,
+            true,
+        )?;
+        let final_stack = expected
+            .stacks
+            .last()
+            .map(|transition| transition.after.clone())
+            .ok_or_else(|| EditorError::PageDeleteUnsupported {
+                message: "multi-Rectangle delete transition has no stack hops".to_owned(),
+            })?;
+        self.graph = graph;
+        self.authored_shapes = shapes;
+        self.install_authored_stack_v1(final_stack);
+        let operation = EditOperation::DeleteAuthoredRectanglesPageV1 {
+            transition: Box::new(expected),
         };
         self.undo.push(operation.clone());
         self.redo.clear();
@@ -3957,6 +4146,44 @@ pub(super) fn apply_authored_rectangle_page_history_candidate_v1(
     Ok(())
 }
 
+pub(super) fn apply_authored_rectangles_page_history_candidate_v1(
+    graph: &mut PubResolvedGraph,
+    shapes: &mut BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
+    stack: AuthoredStackV1,
+    transition: &DeleteAuthoredRectanglesPageTransitionV1,
+    forward: bool,
+) -> Result<(), EditorError> {
+    let mut candidate = DeleteAuthoredRectanglePageStateV1 {
+        document_pages: graph.document.pages.clone(),
+        pages: graph.pages.clone(),
+        authored_shapes: shapes.clone(),
+        authored_stack: stack,
+    };
+    let result = if forward {
+        apply_delete_authored_rectangles_page_forward_v1(
+            graph.document.id,
+            &mut candidate,
+            &transition.page.before_customer_page_ids,
+            false,
+            transition,
+        )
+    } else {
+        apply_delete_authored_rectangles_page_inverse_v1(
+            graph.document.id,
+            &mut candidate,
+            &transition.page.after_customer_page_ids,
+            transition,
+        )
+    };
+    result.map_err(|error| EditorError::PageDeleteUnsupported {
+        message: format!("atomic multi-Rectangle Page transition rejected: {error:?}"),
+    })?;
+    graph.document.pages = candidate.document_pages;
+    graph.pages = candidate.pages;
+    *shapes = candidate.authored_shapes;
+    Ok(())
+}
+
 /// Apply the same pure candidate against independently held Page + shape
 /// authorities. Authored-stack history is owned by EditorSession's lane map.
 pub(super) fn apply_authored_rectangle_page_duplicate_history_candidate_v1(
@@ -4224,6 +4451,54 @@ impl EditorSession {
             return Err(EditorError::StalePageDelete);
         }
         apply_authored_rectangle_page_history_candidate_v1(
+            graph,
+            shapes,
+            self.current_authored_stack_v1(transition.page.identity.page_id),
+            transition,
+            true,
+        )
+    }
+
+    pub(super) fn undo_delete_rectangles_page_candidate_v1(
+        &self,
+        graph: &mut PubResolvedGraph,
+        shapes: &mut BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
+        transition: &DeleteAuthoredRectanglesPageTransitionV1,
+    ) -> Result<(), EditorError> {
+        apply_authored_rectangles_page_history_candidate_v1(
+            graph,
+            shapes,
+            self.current_authored_stack_v1(transition.page.identity.page_id),
+            transition,
+            false,
+        )
+    }
+
+    pub(super) fn redo_delete_rectangles_page_candidate_v1(
+        &self,
+        graph: &mut PubResolvedGraph,
+        shapes: &mut BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
+        transition: &DeleteAuthoredRectanglesPageTransitionV1,
+    ) -> Result<(), EditorError> {
+        let authored = self
+            .authored_customer_page_ids_v1()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let sources = transition
+            .page
+            .before_customer_page_ids
+            .iter()
+            .copied()
+            .filter(|id| !authored.contains(id))
+            .collect::<Vec<_>>();
+        let fresh = self.plan_delete_authored_rectangles_page_from_session_v1(
+            &sources,
+            transition.page.identity.page_id,
+        )?;
+        if fresh != *transition {
+            return Err(EditorError::StalePageDelete);
+        }
+        apply_authored_rectangles_page_history_candidate_v1(
             graph,
             shapes,
             self.current_authored_stack_v1(transition.page.identity.page_id),
