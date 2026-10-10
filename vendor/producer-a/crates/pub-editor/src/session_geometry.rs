@@ -3118,6 +3118,158 @@ mod authored_page_append_tests {
     }
 
     #[test]
+    fn delete_authored_rectangles_page_v032_is_one_reversible_project_operation() {
+        let source = page_id("22222222-2222-4222-8222-222222222222");
+        let identity = authored_identity();
+        let base = source_graph(vec![source]);
+        let mut session = EditorSession::new(base.clone()).expect("session");
+        let original_hash = session.source_hash();
+        session
+            .append_blank_page_v1(
+                vec![source],
+                identity,
+                Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                None,
+                None,
+            )
+            .expect("append authored page");
+
+        let node_a = NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        let node_b = NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        let paint_a = crate::AuthoredShapePaintV1 {
+            fill: crate::AuthoredSolidFillV1 {
+                visible: true,
+                color: crate::Srgb8V1 { r: 30, g: 40, b: 50 },
+            },
+            stroke: crate::AuthoredSolidStrokeV1 {
+                visible: true,
+                color: crate::Srgb8V1 { r: 1, g: 2, b: 3 },
+                width_emu: 12_700,
+            },
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        let paint_b = crate::AuthoredShapePaintV1 {
+            fill: crate::AuthoredSolidFillV1 {
+                visible: true,
+                color: crate::Srgb8V1 { r: 90, g: 80, b: 70 },
+            },
+            stroke: crate::AuthoredSolidStrokeV1 {
+                visible: true,
+                color: crate::Srgb8V1 { r: 5, g: 6, b: 7 },
+                width_emu: 25_400,
+            },
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        session
+            .create_shape(
+                node_a,
+                identity.page_id,
+                RectEmu::new(
+                    LengthEmu::new(100_000),
+                    LengthEmu::new(150_000),
+                    LengthEmu::new(200_000),
+                    LengthEmu::new(300_000),
+                ),
+                paint_a,
+            )
+            .expect("first authored Rectangle");
+        assert!(
+            !session.can_delete_authored_rectangles_page_v1(&[source], identity.page_id),
+            "one Rectangle stays owned by the v0.29 delete command"
+        );
+        session
+            .create_shape(
+                node_b,
+                identity.page_id,
+                RectEmu::new(
+                    LengthEmu::new(500_000),
+                    LengthEmu::new(550_000),
+                    LengthEmu::new(250_000),
+                    LengthEmu::new(350_000),
+                ),
+                paint_b,
+            )
+            .expect("second authored Rectangle");
+
+        let before_graph = session.graph().clone();
+        let before_shapes = session.authored_shapes.clone();
+        let before_stack = session.current_authored_stack_v1(identity.page_id);
+        let history_len = session.operations().len();
+        assert_eq!(before_stack.members, vec![node_a, node_b]);
+        assert!(!session.can_delete_authored_rectangle_page_v1(&[source], identity.page_id));
+        assert!(session.can_delete_authored_rectangles_page_v1(&[source], identity.page_id));
+        assert_eq!(session.operations().len(), history_len);
+
+        let operation = session
+            .delete_authored_rectangles_page_v1(vec![source], identity.page_id)
+            .expect("one canonical Page + two-Rectangle delete");
+        let deleted_nodes = operation
+            .persistence_requirements()
+            .into_iter()
+            .filter(|requirement| requirement.feature == "node.deleted_identity")
+            .map(|requirement| requirement.origin.expect("deleted NodeId requirement"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            deleted_nodes,
+            vec![node_a.into_canonical(), node_b.into_canonical()],
+            "deleted NodeId persistence requirements preserve source paint order"
+        );
+        assert!(matches!(
+            operation,
+            EditOperation::DeleteAuthoredRectanglesPageV1 { .. }
+        ));
+        assert_eq!(session.operations().len(), history_len + 1);
+        assert_eq!(session.graph().document.pages, vec![source]);
+        assert!(!session.graph().pages.contains_key(&identity.page_id));
+        assert!(!session.authored_shapes.contains_key(&node_a));
+        assert!(!session.authored_shapes.contains_key(&node_b));
+        assert!(!session.authored_stacks.contains_key(&identity.page_id));
+        assert_eq!(session.source_hash(), original_hash);
+
+        let deleted_graph = session.graph().clone();
+        let project = session.project();
+        assert_eq!(project.schema_version, crate::EDITOR_PROJECT_VERSION_V0_32);
+        let encoded = serde_json::to_vec(&project).expect("encode v0.32");
+        let decoded: EditorProject = serde_json::from_slice(&encoded).expect("decode v0.32");
+        let mut reopened = EditorSession::new(base.clone()).expect("fresh v0.32 session");
+        reopened
+            .apply_project(&decoded)
+            .expect("fresh v0.32 EditorProject replay");
+        assert_eq!(reopened.graph(), &deleted_graph);
+        assert_eq!(reopened.authored_shapes, session.authored_shapes);
+        assert_eq!(reopened.authored_stacks, session.authored_stacks);
+        assert_eq!(reopened.operations(), decoded.operations.as_slice());
+        assert_eq!(reopened.source_hash(), original_hash);
+
+        session.undo().expect("one plural delete Undo");
+        assert_eq!(session.graph(), &before_graph);
+        assert_eq!(session.authored_shapes, before_shapes);
+        assert_eq!(
+            session.current_authored_stack_v1(identity.page_id),
+            before_stack
+        );
+        assert_eq!(session.operations().len(), history_len);
+
+        session.redo().expect("same plural delete Redo");
+        assert_eq!(session.graph(), &deleted_graph);
+        assert!(!session.authored_shapes.contains_key(&node_a));
+        assert!(!session.authored_shapes.contains_key(&node_b));
+        assert!(!session.authored_stacks.contains_key(&identity.page_id));
+
+        let mut forged_legacy = decoded;
+        forged_legacy.schema_version = crate::EDITOR_PROJECT_VERSION_V0_31.into();
+        let mut legacy_reopen = EditorSession::new(base).expect("legacy fresh session");
+        assert!(matches!(
+            legacy_reopen.apply_project(&forged_legacy),
+            Err(
+                crate::EditorProjectError::LegacyProjectCarriesDeleteAuthoredRectanglesPageOperation {
+                    ..
+                }
+            )
+        ));
+    }
+
+    #[test]
     fn duplicate_authored_rectangle_page_v030_is_one_reversible_project_operation() {
         let source = page_id("22222222-2222-4222-8222-222222222222");
         let identity = authored_identity();
