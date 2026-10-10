@@ -132,7 +132,11 @@ async fn pinned_sample3_exact_project_replays_in_real_seccomp_worker() {
         .unwrap();
     let edited_project = cloud_revision_project(&expected.project());
     let intent = IsolatedMoveNodeIntentV1 {
-        node_id: serde_json::to_value(node_id).unwrap().as_str().unwrap().to_owned(),
+        node_id: serde_json::to_value(node_id)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned(),
         x_emu,
         y_emu,
     };
