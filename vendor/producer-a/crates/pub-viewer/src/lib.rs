@@ -1021,6 +1021,10 @@ pub struct ViewerTypographyRun {
     pub scalar_start: u32,
     pub scalar_end: u32,
     pub source_font_name: String,
+    /// Exact Quill font ordinal when parsed from a source typography run.
+    /// This is a source identity, not an admitted physical font resource.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_font_index: Option<u32>,
     pub text_size_emu: u32,
     pub font_inherited: bool,
     pub size_inherited: bool,
@@ -1033,6 +1037,44 @@ pub struct ViewerTypographyRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub italic: Option<ViewerTypographyBooleanV1>,
     pub source_story_text_sha256: Sha256Digest,
+}
+
+
+#[cfg(test)]
+mod viewer_source_font_index_provenance_tests {
+    use super::ViewerTypographyRun;
+
+    #[test]
+    fn viewer_typography_direct_index_roundtrip_v1() {
+        let mut source = serde_json::json!({
+            "story_id": "15613e56-726e-5ae7-8c54-ec876c9bcfda",
+            "scalar_start": 0,
+            "scalar_end": 22,
+            "source_font_name": "Rockwell Condensed",
+            "source_font_index": 18,
+            "text_size_emu": 228600,
+            "font_inherited": false,
+            "size_inherited": true,
+            "source_story_text_sha256":
+                "58f537aade9b4a15df4537c5010aee92092642f048d38099696af46c3bb5daa6"
+        });
+        let current: ViewerTypographyRun = serde_json::from_value(source.clone())
+            .expect("source-bound exact Quill typography run");
+        assert_eq!(current.source_font_index, Some(18));
+        let stored = serde_json::to_value(&current).expect("serialize Viewer typography");
+        assert_eq!(stored["source_font_index"], 18);
+        assert_eq!(stored["source_font_name"], "Rockwell Condensed");
+        // Old persisted Viewer receipts remain parseable, but contain no
+        // independent direct-index evidence. Never fill from a family name.
+        source.as_object_mut().expect("json object").remove("source_font_index");
+        let legacy: ViewerTypographyRun = serde_json::from_value(source)
+            .expect("old Viewer receipt without direct source Quill index");
+        assert_eq!(legacy.source_font_index, None);
+        assert!(serde_json::to_value(&legacy)
+            .expect("serialize old record")
+            .get("source_font_index")
+            .is_none());
+    }
 }
 
 impl ViewerTypographyRun {
@@ -2277,6 +2319,7 @@ fn open_mature_0x2c_bundle(
                 scalar_start: run.story_scalar_start,
                 scalar_end: run.story_scalar_end,
                 source_font_name: run.source_font_name.clone(),
+                source_font_index: Some(run.source_font_index),
                 text_size_emu: run.text_size_emu,
                 font_inherited: run.font_inherited,
                 size_inherited: run.size_inherited,
@@ -2308,6 +2351,7 @@ fn open_mature_0x2c_bundle(
                     scalar_start: run.story_scalar_start,
                     scalar_end: run.story_scalar_end,
                     source_font_name: String::new(),
+                    source_font_index: None,
                     text_size_emu: run.text_size_emu,
                     font_inherited: false,
                     size_inherited: run.size_inherited,

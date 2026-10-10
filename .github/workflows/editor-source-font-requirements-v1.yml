@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "tools/pub_source_font_requirements_v1.py"
+      - "vendor/producer-a/crates/pub-viewer/src/lib.rs"
       - "tools/export_cloud_reader_windows_fonts.py"
       - "tools/ci/test_pub_source_font_requirements_v1.py"
       - "tools/ci/test_export_cloud_reader_windows_fonts.py"
@@ -28,6 +29,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@1.94.1
+      - name: Prove Reader preserves the exact source Quill font index
+        run: cargo test --manifest-path vendor/producer-a/crates/pub-viewer/Cargo.toml --lib viewer_typography_direct_index_roundtrip_v1
       - name: Compile source-font planning and licensed-file helper
         run: |
           python -m py_compile tools/pub_source_font_requirements_v1.py
