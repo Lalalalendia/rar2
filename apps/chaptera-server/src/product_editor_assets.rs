@@ -16,12 +16,10 @@ const EDITOR_CSS: &[u8] = include_bytes!("../../web/product-editor.css");
 const EDITOR_ENTRY: &[u8] = include_bytes!("../../web/product-editor-entry-v1.mjs");
 const PRODUCT_SERVICE: &[u8] = include_bytes!("../../web/chaptera-product-editor-service-v1.mjs");
 const RICH_SHELL: &[u8] = include_bytes!("../../web/rich-reader-editor-shell-v1.mjs");
-const INTERACTION_SCENE: &[u8] =
-    include_bytes!("../../web/reader-scene-editor-interaction-v1.mjs");
+const INTERACTION_SCENE: &[u8] = include_bytes!("../../web/reader-scene-editor-interaction-v1.mjs");
 const INTERACTION: &[u8] = include_bytes!("../../web/interaction-v1.mjs");
 const OBSERVABILITY: &[u8] = include_bytes!("../../web/observability-v1.mjs");
-const READER_ADAPTER: &[u8] =
-    include_bytes!("../../web/reader-scene-editor-adapter-v1.mjs");
+const READER_ADAPTER: &[u8] = include_bytes!("../../web/reader-scene-editor-adapter-v1.mjs");
 const READER_RENDER: &[u8] = include_bytes!("../../cloud-reader/render-v1.mjs");
 
 const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'";
@@ -98,10 +96,7 @@ where
             "/editor/chaptera-product-editor-service-v1.mjs",
             get(product_service),
         )
-        .route(
-            "/editor/rich-reader-editor-shell-v1.mjs",
-            get(rich_shell),
-        )
+        .route("/editor/rich-reader-editor-shell-v1.mjs", get(rich_shell))
         .route(
             "/editor/reader-scene-editor-interaction-v1.mjs",
             get(interaction_scene),
@@ -188,7 +183,10 @@ fn asset_response(asset: &EmbeddedAsset) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::{Body, to_bytes}, http::Request};
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
     use tower::ServiceExt;
 
     const DOC: &str = "10000000-0000-7000-8000-000000000001";
@@ -205,11 +203,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers()["content-type"], "text/html; charset=utf-8");
-        assert!(response.headers()["content-security-policy"]
-            .to_str()
-            .unwrap()
-            .contains("frame-ancestors 'none'"));
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/html; charset=utf-8"
+        );
+        assert!(
+            response.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("frame-ancestors 'none'")
+        );
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let html = std::str::from_utf8(&bytes).unwrap();
         assert!(html.contains("/editor/product-editor-entry-v1.mjs"));

@@ -200,9 +200,27 @@ try {
   }]);
   const page = await context.newPage();
   const pageErrors = [];
+  const failedRequests = [];
+  const badResponses = [];
   page.on("pageerror", (err) => pageErrors.push(err.message));
+  page.on("requestfailed", (req) => failedRequests.push(req.url() + ": " + (req.failure()?.errorText ?? "failed")));
+  page.on("response", (response) => {
+    if (response.status() >= 400) badResponses.push(response.status() + " " + response.url());
+  });
   await page.goto(origin + "/editor/doc/" + DOC);
-  await page.locator('[data-node-id="' + DIRECT + '"]').waitFor();
+  try {
+    await page.locator('[data-node-id="' + DIRECT + '"]').waitFor({ timeout: 8_000 });
+  } catch (error) {
+    const ui = await page.evaluate(() => ({
+      status: document.querySelector("#status")?.textContent ?? null,
+      document_id: document.querySelector("#document")?.textContent ?? null,
+      fidelity: document.querySelector("#fidelity")?.textContent ?? null,
+      module_script: document.querySelector("script[type=module]")?.getAttribute("src") ?? null,
+    }));
+    throw new Error("Product Editor did not boot: " + JSON.stringify({
+      ui, pageErrors, failedRequests, badResponses, reason: String(error),
+    }));
+  }
   await page.waitForFunction((base) =>
     document.querySelector("#status")?.textContent?.includes(base), BASE);
 
