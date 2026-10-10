@@ -316,6 +316,16 @@ try {
   if(reopenedRevision.revision_id!==redoRevision.revision_id){
     throw new Error("fresh project reopen lost the complete font Story revision");
   }
+  // Fidelity and native-output authority must survive durable round-trip,
+  // not merely the live working session's preview-disable state.
+  const reopenedNative=await fetch(api+"/v1/pub-save/preview",{headers}).then(r=>r.json());
+  if(reopenedRevision.fidelity.state!=="partial"||
+     !reopenedRevision.fidelity.reasons.includes("font_resource_layout_not_implemented")||
+     reopenedNative.can_download||reopenedNative.can_serialize||
+     reopenedNative.blocker_code!=="font_layout_unverified"){
+    throw new Error("freshly reopened full-font Story falsely authorized native PUB: "+
+                    JSON.stringify({fidelity:reopenedRevision.fidelity,native:reopenedNative}));
+  }
   fs.mkdirSync("target/font-http-acceptance",{recursive:true});
   const evidence={
     receipt_kind:"chaptera.real-chromium-font-range-apply.v1",
@@ -342,6 +352,7 @@ try {
     full_story_browser_font_apply:true,
     whole_story_physical_line_fit:fullStory,
     whole_story_undo_redo_and_reopen:true,
+    reopened_native_output_blocked:true,
     reopened_revision_id:reopenedRevision.revision_id,
     no_invented_lines_without_source_fonts:true,
     page_errors:errors,
