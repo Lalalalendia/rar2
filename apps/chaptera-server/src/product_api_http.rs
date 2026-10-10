@@ -1109,7 +1109,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn http_open_move_retry_stale_and_auth_csrf_are_authoritative() {
+    async fn http_open_move_retry_stale_restart_and_auth_csrf_are_authoritative() {
         let path = std::env::temp_dir().join(format!(
             "chaptera-product-api-http-{}-{}.sqlite",
             std::process::id(),
@@ -1417,7 +1417,7 @@ mod tests {
         assert_eq!(retry["revision_id"], child_revision);
         assert_eq!(retry["replayed"], true);
 
-        let mut stale_body = body;
+        let mut stale_body = body.clone();
         stale_body["client_operation_id"] = json!("move-sample3-stale");
         let stale = app
             .clone()
@@ -1451,11 +1451,151 @@ mod tests {
         assert_eq!(reopened_node["header"]["bounds"]["x"], x_emu);
         assert_eq!(reopened_node["header"]["bounds"]["y"], y_emu);
 
+        // A second HTTP request through the same router is NOT a durability
+        // proof. Close all original stores, reopen new SQLite pools and rebuild
+        // the Product API, including its source authority and replay engine.
         pool.close().await;
         authn.close().await;
         authz.close().await;
         source.close().await;
         revisions.close().await;
+
+        let restarted_authn = SqliteAuthnStore::open(&path, 4, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let restarted_authz = SqliteAuthzAuthority::open(&path, 4, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let restarted_source = SqliteDocumentSourceAuthority::open(
+            &path,
+            4,
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+        let restarted_revisions =
+            SqliteRevisionStore::open(&path, 4, Duration::from_secs(2))
+                .await
+                .unwrap();
+        let restarted_auth =
+            AuthHttpState::api_test(restarted_authn.clone(), policy, "https://cloud.example.test")
+                .unwrap();
+        let restarted_app = router(
+            ProductApiHttpState::with_source_loader(
+                restarted_auth,
+                restarted_source.clone(),
+                restarted_authz.clone(),
+                restarted_revisions.clone(),
+                Arc::new(FixtureSourceLoader {
+                    bytes: Arc::new(source_bytes),
+                    source_sha256: source_sha256.clone(),
+                }),
+            )
+            .unwrap(),
+        );
+
+        // The original OIDC-issued cookie must still work after the original
+        // AuthN and revision connections are gone: no in-memory project state
+        // or authorization grants are re-seeded for this reopened application.
+        let durable = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/documents/{document_id}/current"),
+                &issued.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(durable.status(), StatusCode::OK);
+        let durable = json_body(durable).await;
+        assert_eq!(durable["revision_id"], child_revision);
+        assert_eq!(
+            durable["canonical_authoring_revision_id"],
+            reopened["canonical_authoring_revision_id"]
+        );
+        assert_eq!(
+            durable["authoring_graph"]["nodes"][node_id.as_str()]["header"]["bounds"]["x"],
+            x_emu
+        );
+        assert_eq!(
+            durable["authoring_graph"]["nodes"][node_id.as_str()]["header"]["bounds"]["y"],
+            y_emu
+        );
+
+        let scene_after_restart = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/reader/documents/{document_id}/scene"),
+                &issued.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(scene_after_restart.status(), StatusCode::OK);
+        let scene_after_restart = json_body(scene_after_restart).await;
+        assert_eq!(scene_after_restart["revision_id"], child_revision);
+        let moved_node = scene_after_restart["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["node_id"] == node_id)
+            .expect("Reader must recover edited node from persisted revision");
+        assert_eq!(moved_node["bounds"]["x"], x_emu);
+        assert_eq!(moved_node["bounds"]["y"], y_emu);
+
+        // Lost commit ACKs must remain idempotent across the connection
+        // restart, not append another revision on replay.
+        let replay_after_restart = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/commit"),
+                &issued.session_token,
+                Some(&issued.csrf_token),
+                Some(body),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(replay_after_restart.status(), StatusCode::OK);
+        let replay_after_restart = json_body(replay_after_restart).await;
+        assert_eq!(replay_after_restart["replayed"], true);
+        assert_eq!(replay_after_restart["revision_id"], child_revision);
+
+        // An independently authenticated principal does not gain access to
+        // the recovered document simply by knowing the DocumentId.
+        let other = issue_verified_login_session(
+            &restarted_authn,
+            OidcVerifiedIdentity {
+                issuer: "https://issuer.example.test".to_owned(),
+                subject: "subject-product-api-unrelated".to_owned(),
+                email_snapshot: None,
+                return_path: "/".to_owned(),
+            },
+            now_ms().unwrap(),
+            policy,
+        )
+        .await
+        .unwrap();
+        let forbidden = restarted_app
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/documents/{document_id}/current"),
+                &other.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+        restarted_authn.close().await;
+        restarted_authz.close().await;
+        restarted_source.close().await;
+        restarted_revisions.close().await;
         for suffix in ["", "-wal", "-shm"] {
             let _ = fs::remove_file(format!("{}{}", path.display(), suffix));
         }
