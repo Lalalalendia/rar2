@@ -37,3 +37,48 @@ export function restoreStoryTextFromTextarea(value, sourceProfile) {
   const newline = kind === "crlf" ? "\r\n" : kind === "cr" ? "\r" : "\n";
   return value.replace(/\n/g, newline) + (sourceProfile.terminal_cr ? "\r" : "");
 }
+
+
+/**
+ * Convert exact, unmodified textarea UTF-16 selection offsets to canonical
+ * Publisher Story Unicode-scalar offsets. CRLF is one textarea newline but TWO
+ * source scalars; terminal source CR is intentionally absent from textarea.
+ * Never infer source content or authorize an edit from an altered textarea.
+ */
+export function mapUnchangedTextareaSelectionToSourceScalarRange(
+  originalStory, sourceProfile, textareaValue, startUtf16, endUtf16,
+) {
+  const projected = prepareStoryTextForTextarea(originalStory);
+  if (!sourceProfile || projected.terminal_cr !== sourceProfile.terminal_cr ||
+      projected.line_ending_kind !== sourceProfile.line_ending_kind ||
+      projected.value !== textareaValue ||
+      restoreStoryTextFromTextarea(textareaValue, sourceProfile) !== originalStory) {
+    throw new Error("font range needs the unchanged exact Publisher Story and separator profile");
+  }
+  if (!Number.isInteger(startUtf16) || !Number.isInteger(endUtf16) ||
+      startUtf16 < 0 || endUtf16 > textareaValue.length || startUtf16 >= endUtf16) {
+    throw new Error("choose a nonempty exact text range");
+  }
+  for (const offset of [startUtf16, endUtf16]) {
+    const left = textareaValue.charCodeAt(offset - 1);
+    const right = textareaValue.charCodeAt(offset);
+    if (offset > 0 && offset < textareaValue.length &&
+        left >= 0xd800 && left <= 0xdbff &&
+        right >= 0xdc00 && right <= 0xdfff) {
+      throw new Error("font range cannot split a Unicode surrogate pair");
+    }
+  }
+  const toScalar = offset => {
+    const prefix = textareaValue.slice(0, offset);
+    const restoredPrefix = sourceProfile.line_ending_kind === "crlf"
+      ? prefix.replace(/\n/g, "\r\n")
+      : sourceProfile.line_ending_kind === "cr"
+        ? prefix.replace(/\n/g, "\r")
+        : prefix;
+    return Array.from(restoredPrefix).length;
+  };
+  return {
+    start_scalar: toScalar(startUtf16),
+    end_scalar: toScalar(endUtf16),
+  };
+}

@@ -90,6 +90,21 @@ export class HttpEditorServiceV1 {
     );
   }
 
+  async currentPhysicalFontLineFit({story_id, revision_id, snapshot_id}) {
+    const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
+    const revision = /^sha256:[0-9a-f]{64}$/;
+    if (!uuid.test(story_id) || !revision.test(revision_id) ||
+        !revision.test(snapshot_id)) {
+      throw new TypeError("line fit requires exact current Story/Scene identities");
+    }
+    const query = new URLSearchParams({story_id, revision_id, snapshot_id});
+    const context = this.#context("scene_read");
+    return this.#json(
+      "/v1/editor/font-line-fit?" + query.toString(),
+      {}, context, "browser.current_physical_line_fit_http",
+    );
+  }
+
   async fontAuthoringAdmission() {
     const context = this.#context("scene_read");
     return this.#json(

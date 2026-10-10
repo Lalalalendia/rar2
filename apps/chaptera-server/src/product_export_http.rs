@@ -716,10 +716,7 @@ impl IntoResponse for ProductExportHttpError {
                     | "job_payload_scope_mismatch"
                     | "export_artifact_not_ready"
                     | "export_artifact_not_visible" => StatusCode::CONFLICT,
-                    "grant_missing"
-                    | "grant_expired"
-                    | "capability_denied"
-                    | "authz_denied"
+                    "grant_missing" | "grant_expired" | "capability_denied" | "authz_denied"
                     | "authz_expired" => StatusCode::FORBIDDEN,
                     "invalid_client_request_id" | "invalid_operation_id" => StatusCode::BAD_REQUEST,
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
@@ -838,10 +835,7 @@ mod tests {
     fn browser_download_representation_is_exact_target_derived() {
         let idml = target_download_representation(IDML_BOUNDED_EDITABLE_PROFILE).unwrap();
         assert_eq!(idml.extension, "idml");
-        assert_eq!(
-            idml.mime,
-            "application/vnd.adobe.indesign-idml-package"
-        );
+        assert_eq!(idml.mime, "application/vnd.adobe.indesign-idml-package");
 
         let odg = target_download_representation(ODG_BOUNDED_EDITABLE_PROFILE).unwrap();
         assert_eq!(odg.extension, "odg");

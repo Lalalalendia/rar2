@@ -6,7 +6,8 @@
 //! No native PUB/PDF output or authoritative text relayout is provided.
 use anyhow::{Context, Result, bail, ensure};
 use chaptera_desktop_shaped_flow_runtime::{
-    CurrentPhysicalFontSpanV1, shape_current_exact_font_override_spans_v1,
+    CurrentMixedFontFlowStateV1, CurrentPhysicalFontSpanV1,
+    build_current_story_mixed_font_flow_preview_v1, shape_current_exact_font_override_spans_v1,
 };
 use chaptera_text_format_overlay::{
     FontAuthoringScopeV1, FontReplacementCandidateV1, FontResourceIdentityV1,
@@ -16,6 +17,7 @@ use pub_editor::{
     EditorProject, EditorProjectFontReopenGrantV1, Sha256Digest, StoryId,
     open_mature_0x2c_editor,
 };
+use pub_model::LengthEmu;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, env, fs, path::PathBuf};
@@ -324,6 +326,77 @@ fn emit_current_glyph_spans(
     Ok(())
 }
 
+/// Existing Publisher visual typography remains unresolved until exact
+/// licensed source bytes are independently admitted. A complete intentional
+/// Story replacement can, however, yield deterministic UAX14/linked-frame
+/// *preview* lines, never native Publisher or PDF authority.
+fn emit_current_line_fit(
+    source_path: &str,
+    project_path: &str,
+    target_story_id: &str,
+) -> Result<()> {
+    let (source, digest) = read_source(source_path)?;
+    let project = read_project(project_path)?;
+    let bytes = font_bytes()?;
+    let id = font_identity();
+    let session = open_project(&source, digest, &project, &id, &bytes)?;
+    let story_id: StoryId = serde_json::from_value(json!(target_story_id))
+        .context("canonical font-layout StoryId required")?;
+    let story = session.graph().stories.get(&story_id)
+        .context("font-layout StoryId missing from original Publisher document")?;
+    ensure!(!story.text.is_empty() && story.text.chars().count() <= 8192,
+        "current line-fit Story exceeds bounded preview scope");
+    let spans = shape_current_exact_font_override_spans_v1(
+        &session, story_id, &grant(&id, &bytes),
+    ).context("current glyph stream must be independently admitted")?;
+    // Explicit preview line step only, NOT Publisher's line-height or native
+    // vertical placement authority. Browser may not choose these metrics.
+    const PREVIEW_LINE_ADVANCE_EMU: i64 = 152_400;
+    let flow = build_current_story_mixed_font_flow_preview_v1(
+        &session, story_id, &grant(&id, &bytes),
+        LengthEmu::new(PREVIEW_LINE_ADVANCE_EMU),
+    ).context("current exact-font bounded line-fit refused")?;
+    ensure!(flow.story_id == spans.story_id &&
+            flow.story_format_state_hash == spans.story_format_state_hash &&
+            flow.story_scalar_len == spans.story_scalar_len,
+        "current physical glyphs and line-fit revision differ");
+    let source_ranges = spans.spans.iter().filter_map(|part| match part {
+        CurrentPhysicalFontSpanV1::SourceUnresolved {
+            start_scalar, end_scalar, source_font_binding_id,
+        } => Some((*start_scalar, *end_scalar, source_font_binding_id.as_str())),
+        CurrentPhysicalFontSpanV1::AdmittedExact { .. } => None,
+    }).collect::<Vec<_>>();
+    let gaps = flow.source_gaps.iter().map(|gap| {
+        (gap.start_scalar, gap.end_scalar, gap.source_font_binding_id.as_str())
+    }).collect::<Vec<_>>();
+    ensure!(gaps == source_ranges,
+        "line-fit source gaps differ from canonical physical glyph segmentation");
+    if flow.state == CurrentMixedFontFlowStateV1::SourceFontUnresolved {
+        ensure!(!gaps.is_empty() && !spans.all_scalars_shaped &&
+                flow.lines.is_empty() && flow.overset_start_scalar.is_none() &&
+                !flow.unicode_breaks_evaluated,
+            "original source font was silently borrowed to make a line");
+    } else {
+        ensure!(flow.state == CurrentMixedFontFlowStateV1::PhysicalLineFitPreview &&
+                gaps.is_empty() && spans.all_scalars_shaped &&
+                flow.unicode_breaks_evaluated &&
+                (!flow.lines.is_empty() || flow.overset_start_scalar.is_some()),
+            "complete physical font runs did not yield exact line-fit preview");
+    }
+    ensure!(!flow.native_publisher_layout_authoritative && !flow.fixed_pdf_allowed,
+        "preview line-fit does not authorize Publisher parity or PDF output");
+    println!("{}", json!({
+        "protocol_version": "chaptera.local-current-physical-line-fit.v1",
+        "source_hash": SOURCE_SHA,
+        "project_state_id": session.project().state_id_v1(),
+        "story_id": story_id,
+        "story_format_state_hash": flow.story_format_state_hash,
+        "story_scalar_len": flow.story_scalar_len,
+        "flow": flow,
+    }));
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let mut args = env::args().skip(1);
     let mode = args.next().context("init/probe/apply mode required")?;
@@ -350,6 +423,12 @@ fn main() -> Result<()> {
             let story_id = args.next().context("target StoryId required")?;
             ensure!(args.next().is_none(), "unexpected glyph-spans arguments");
             emit_current_glyph_spans(&source, &project, &story_id)
+        }
+        "line-fit" => {
+            let project = args.next().context("EditorProject path required")?;
+            let story_id = args.next().context("target StoryId required")?;
+            ensure!(args.next().is_none(), "unexpected line-fit arguments");
+            emit_current_line_fit(&source, &project, &story_id)
         }
         _ => bail!("unsupported local font mode"),
     }
