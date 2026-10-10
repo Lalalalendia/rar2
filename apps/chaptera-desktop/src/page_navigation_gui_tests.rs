@@ -2355,13 +2355,15 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
         });
     harness.step();
     harness.step();
-    let source_pages = harness
-        .state()
-        .source_customer_page_ids
-        .clone();
-    assert!(!source_pages.is_empty(), "real PUB must expose customer Pages");
+    let source_pages = harness.state().source_customer_page_ids.clone();
     assert!(
-        harness.get_by_label("Duplicate Rectangle Page").is_disabled(),
+        !source_pages.is_empty(),
+        "real PUB must expose customer Pages"
+    );
+    assert!(
+        harness
+            .get_by_label("Duplicate Rectangle Page")
+            .is_disabled(),
         "imported source-backed Page must fail admission at the real button"
     );
 
@@ -2378,12 +2380,13 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
         }
     };
     assert!(
-        harness.get_by_label("Duplicate Rectangle Page").is_disabled(),
+        harness
+            .get_by_label("Duplicate Rectangle Page")
+            .is_disabled(),
         "blank authored Page is handled by the separate Duplicate Blank Page command"
     );
 
-    let authored_node_id =
-        pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
+    let authored_node_id = pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
     {
         let app = harness.state_mut();
         let size = app.editor.as_ref().expect("editor").graph().pages[&authored_page_id].size;
@@ -2406,7 +2409,9 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
     }
     harness.step();
     assert!(
-        !harness.get_by_label("Duplicate Rectangle Page").is_disabled(),
+        !harness
+            .get_by_label("Duplicate Rectangle Page")
+            .is_disabled(),
         "one authored Rectangle enables the actual Duplicate Rectangle Page command"
     );
     assert!(
@@ -2438,7 +2443,9 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
     }
     harness.step();
     assert!(
-        harness.get_by_label("Duplicate Rectangle Page").is_disabled(),
+        harness
+            .get_by_label("Duplicate Rectangle Page")
+            .is_disabled(),
         "multi-object Page cannot advertise one-Rectangle duplicate"
     );
     harness
@@ -2449,7 +2456,9 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
     harness.step();
     harness.step();
     assert!(
-        !harness.get_by_label("Duplicate Rectangle Page").is_disabled(),
+        !harness
+            .get_by_label("Duplicate Rectangle Page")
+            .is_disabled(),
         "Undo restores one-Rectangle admission"
     );
 
@@ -2491,7 +2500,14 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
         "Viewer projection mismatch must consume no history operation"
     );
     assert_eq!(
-        harness.state().visual.as_ref().unwrap().document.pages.len(),
+        harness
+            .state()
+            .visual
+            .as_ref()
+            .unwrap()
+            .document
+            .pages
+            .len(),
         source_pages.len() + 1,
         "rejected transaction must preserve visible customer membership"
     );
@@ -2556,10 +2572,18 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
         );
         let visual = app.visual.as_ref().expect("post-click Viewer");
         assert_eq!(
-            visual.document.pages.iter().map(|p| p.id).collect::<Vec<_>>(),
+            visual
+                .document
+                .pages
+                .iter()
+                .map(|p| p.id)
+                .collect::<Vec<_>>(),
             expected
         );
-        assert_eq!(visual.document.pages[app.selected_page].id, destination_page_id);
+        assert_eq!(
+            visual.document.pages[app.selected_page].id,
+            destination_page_id
+        );
         assert!(
             visual
                 .scene
@@ -2568,7 +2592,11 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
                 .any(|surface| surface.origin == destination_page_id),
             "new Page must have a real Viewer surface"
         );
-        (destination_page_id, destination_node_id, editor.operations().len())
+        (
+            destination_page_id,
+            destination_node_id,
+            editor.operations().len(),
+        )
     };
     assert!(
         !harness.get_by_label("Delete Rectangle Page").is_disabled(),
@@ -2618,7 +2646,10 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
     {
         let app = harness.state();
         let editor = app.editor.as_ref().expect("fresh v0.30 session");
-        assert_eq!(editor.project().schema_version, pub_editor::EDITOR_PROJECT_VERSION_V0_30);
+        assert_eq!(
+            editor.project().schema_version,
+            pub_editor::EDITOR_PROJECT_VERSION_V0_30
+        );
         assert_eq!(editor.operations().len(), after_history_len);
         assert!(matches!(
             editor.operations().last(),
@@ -2628,7 +2659,9 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
         ));
         assert_eq!(editor.authored_shape(authored_node_id), Some(&source_shape));
         assert_eq!(
-            editor.authored_shape(destination_node_id).map(|s| (s.bounds, s.paint)),
+            editor
+                .authored_shape(destination_node_id)
+                .map(|s| (s.bounds, s.paint)),
             Some((source_shape.bounds, source_shape.paint))
         );
         assert_eq!(
@@ -2661,7 +2694,9 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
             assert_eq!(preview.target, pub_editor::EditorEditableTarget::Idml);
         } else {
             assert!(
-                app.edit_status.as_deref().is_some_and(|status| status.contains("Could not preview")),
+                app.edit_status
+                    .as_deref()
+                    .is_some_and(|status| status.contains("Could not preview")),
                 "unsupported export must report a concrete error, not silently succeed"
             );
         }
