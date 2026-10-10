@@ -32,13 +32,15 @@ use crate::{
     authz_runtime::{
         AuthzError, CAP_VIEW, SqliteAuthorizedRevisionCommitter, SqliteAuthzAuthority,
     },
-    product_replay_worker::{IsolatedProductReplayProducer, ProductReplayWorkerError},
+    product_replay_worker::{
+        IsolatedExactRevisionMaterializer, IsolatedProductReplayProducer, ProductReplayWorkerError,
+    },
     reader_scene_v1::{ReaderSceneV1, from_viewer_geometry},
     revision_materializer::{
         BlobStoreExactSourceLoader, EDITOR_REVISION_EVENT_SCHEMA_V1,
         EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION, EditorRevisionEventV1,
-        ExactRevisionMaterializer, ExactSourceLoader, PubEditorReplayEngine,
-        RevisionMaterializerError, decode_editor_revision_event_v1,
+        ExactRevisionMaterializer, ExactRevisionMaterializerPort, ExactSourceLoader,
+        PubEditorReplayEngine, RevisionMaterializerError, decode_editor_revision_event_v1,
         encode_editor_revision_event_v1, project_sha256,
     },
     source_authority::{SourceAuthorityError, SqliteDocumentSourceAuthority},
@@ -59,7 +61,8 @@ pub struct ProductApiHttpState {
     authz: SqliteAuthzAuthority,
     revisions: SqliteRevisionStore,
     committer: SqliteAuthorizedRevisionCommitter,
-    materializer: Arc<ExactRevisionMaterializer>,
+    materializer: Arc<dyn ExactRevisionMaterializerPort>,
+    source_loader: Arc<dyn ExactSourceLoader>,
     isolated_replay: Option<IsolatedProductReplayProducer>,
 }
 
@@ -84,7 +87,7 @@ impl ProductApiHttpState {
         let committer = SqliteAuthorizedRevisionCommitter::new(authz.clone(), revisions.clone())?;
         let materializer = Arc::new(ExactRevisionMaterializer::new(
             Arc::new(source.clone()),
-            source_loader,
+            source_loader.clone(),
             revisions.clone(),
             Arc::new(PubEditorReplayEngine),
         ));
@@ -95,16 +98,26 @@ impl ProductApiHttpState {
             revisions,
             committer,
             materializer,
+            source_loader,
             isolated_replay: None,
         })
     }
 
-    /// Production must configure this at startup; tests using an injected
-    /// in-process source loader retain their existing isolated test scope.
+    /// Production must configure this at startup. It replaces exact revision
+    /// PUB replay with the same confined worker authority used for the final
+    /// authoring-graph projection. Manually injected tests retain the legacy
+    /// in-process materializer for deterministic comparison only.
     pub fn with_isolated_replay(
         mut self,
         config: SourceBaselineProducerConfig,
     ) -> Result<Self, ProductReplayWorkerError> {
+        let materializer = IsolatedExactRevisionMaterializer::new(
+            Arc::new(self.source.clone()),
+            self.source_loader.clone(),
+            self.revisions.clone(),
+            config.clone(),
+        )?;
+        self.materializer = Arc::new(materializer);
         self.isolated_replay = Some(IsolatedProductReplayProducer::new(config)?);
         Ok(self)
     }
