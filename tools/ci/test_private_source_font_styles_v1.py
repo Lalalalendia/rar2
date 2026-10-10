@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+import struct
 import tempfile
 from pathlib import Path
 
@@ -55,6 +56,27 @@ def record(result: dict, family: str, style: str) -> dict:
                 if item["source_family"] == family and item["requested_style"] == style)
 
 
+
+
+def font_with_os2(family: str, style: str, fs_type: int, *, version: int = 3) -> bytes:
+    """Source-free tiny synthetic SFNT with name and OS/2 tables."""
+    original = standalone_font(family, style)
+    names = original[28:]
+    size_by_version = {0: 68, 1: 86, 2: 96, 3: 96, 4: 96, 5: 100}
+    os2_data = bytearray(size_by_version.get(version, 100))
+    struct.pack_into(">H", os2_data, 0, version)
+    struct.pack_into(">H", os2_data, 4, 700 if "Bold" in style else 400)
+    struct.pack_into(">H", os2_data, 8, fs_type)
+    struct.pack_into(">H", os2_data, 62, 0x20 if "Bold" in style else 0)
+    offset_name = 12 + 2 * 16
+    offset_os2 = offset_name + len(names)
+    return (
+        original[:4] + struct.pack(">HHHH", 2, 0, 0, 0)
+        + b"name" + struct.pack(">III", 0, offset_name, len(names))
+        + b"OS/2" + struct.pack(">III", 0, offset_os2, len(os2_data))
+        + names + bytes(os2_data)
+    )
+
 def run() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
@@ -83,6 +105,25 @@ def run() -> None:
                          "fixed_pdf_allowed"):
                 assert item[gate] is False
         assert record(out, "Example Sans", "unknown")["status"] == "unknown_source_style"
+        assert out["oversized_local_font_files"] == 0
+        assert all(record(out, "Example Serif", style)["local_candidate"]
+                   ["os2_embedding_metadata"]["font_license_verified"] is False
+                   for style in audit.STYLES)
+        # Embedded-font editing restrictions are negative evidence, not
+        # a substitute for original publisher face or license verification.
+        (folder / "serif-Bold.ttf").write_bytes(
+            font_with_os2("Example Serif", "Bold", 0x0002)
+        )
+        restricted = record(audit.audit_style_coverage(req, folder), "Example Serif", "bold")
+        assert restricted["status"] == "single_local_candidate_unverified"
+        assert restricted["local_candidate"]["os2_embedding_metadata"][
+            "os2_embedding_signal"
+        ] == "restricted_license_indicated"
+        assert restricted["local_candidate"]["os2_embedding_metadata"][
+            "editable_embedding_not_indicated"
+        ] is True
+        assert restricted["fixed_pdf_allowed"] is False
+        (folder / "serif-Bold.ttf").write_bytes(standalone_font("Example Serif", "Bold"))
         # An installed SemiBold face may NOT fill an exact Bold requirement.
         (folder / "serif-Bold.ttf").unlink()
         (folder / "serif-SemiBold.ttf").write_bytes(
