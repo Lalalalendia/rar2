@@ -11,7 +11,8 @@ use pub_editor::{
     EDITOR_PROJECT_VERSION_V0_23, EDITOR_PROJECT_VERSION_V0_24, EDITOR_PROJECT_VERSION_V0_25,
     EDITOR_PROJECT_VERSION_V0_26, EDITOR_PROJECT_VERSION_V0_27, EDITOR_PROJECT_VERSION_V0_28,
     EDITOR_PROJECT_VERSION_V0_29, EDITOR_PROJECT_VERSION_V0_30, EDITOR_PROJECT_VERSION_V0_31,
-    EditOperation, EditorProject, Sha256Digest, open_mature_0x2c_editor,
+    EDITOR_PROJECT_VERSION_V0_32, EditOperation, EditorProject, Sha256Digest,
+    open_mature_0x2c_editor,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -657,6 +658,7 @@ fn cloud_replay_requires_local_identity(schema_version: &str) -> bool {
         EDITOR_PROJECT_VERSION_V0_29,
         EDITOR_PROJECT_VERSION_V0_30,
         EDITOR_PROJECT_VERSION_V0_31,
+        EDITOR_PROJECT_VERSION_V0_32,
     ]
     .contains(&schema_version)
 }
@@ -670,6 +672,7 @@ fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
 
     for operation in &project.operations {
         let operation_rank = match operation {
+            EditOperation::DeleteAuthoredRectanglesPageV1 { .. } => 32,
             EditOperation::DuplicateAuthoredRectanglesPageV1 { .. } => 31,
             EditOperation::DuplicateAuthoredRectanglePageV1 { .. } => 30,
             EditOperation::DeleteAuthoredRectanglePageV1 { .. } => 29,
@@ -1042,6 +1045,9 @@ mod replay_identity_tests {
         ));
         assert!(cloud_replay_requires_local_identity(
             EDITOR_PROJECT_VERSION_V0_31
+        ));
+        assert!(cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_32
         ));
     }
 }

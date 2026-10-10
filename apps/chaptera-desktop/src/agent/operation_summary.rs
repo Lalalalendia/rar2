@@ -338,6 +338,20 @@ pub(super) fn operation_summary(operation: &EditOperation) -> Value {
             "before_state_id": transition.before_state_id.as_str(),
             "after_state_id": transition.after_state_id.as_str(),
         }),
+        EditOperation::DeleteAuthoredRectanglesPageV1 { transition } => json!({
+            "kind": "delete_authored_rectangles_page_v1",
+            "document_id": transition.page.document_id.as_canonical().to_string(),
+            "page_id": transition.page.identity.page_id.as_canonical().to_string(),
+            "rectangle_node_ids": transition.shapes_before.iter()
+                .map(|shape| shape.node_id.as_canonical().to_string()).collect::<Vec<_>>(),
+            "removal_index": transition.page.removal_index,
+            "before_customer_page_ids": transition.page.before_customer_page_ids.iter()
+                .map(|id| id.as_canonical().to_string()).collect::<Vec<_>>(),
+            "after_customer_page_ids": transition.page.after_customer_page_ids.iter()
+                .map(|id| id.as_canonical().to_string()).collect::<Vec<_>>(),
+            "before_state_id": transition.before_state_id.as_str(),
+            "after_state_id": transition.after_state_id.as_str(),
+        }),
         EditOperation::DeleteAuthoredRectanglePageV1 { transition } => json!({
             "kind": "delete_authored_rectangle_page_v1",
             "document_id": transition.page.document_id.as_canonical().to_string(),
