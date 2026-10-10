@@ -91,6 +91,27 @@ fn main() -> ExitCode {
         };
     }
 
+    if let Command::ProductIsolatedMaterialize {
+        document_id,
+        expected_sha256,
+        expected_byte_len,
+        replay_json,
+    } = &cli.command
+    {
+        return match product_replay_worker::run_product_materialization_worker(
+            document_id,
+            expected_sha256,
+            *expected_byte_len,
+            replay_json,
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("chaptera: {}", error.code);
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     if let Command::SourceBaseline {
         document_id,
         expected_sha256,
@@ -427,6 +448,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         ),
         Command::ProductIsolatedReplay { .. } => unreachable!(
             "product-isolated-replay is dispatched synchronously before Tokio runtime creation"
+        ),
+        Command::ProductIsolatedMaterialize { .. } => unreachable!(
+            "product-isolated-materialize is dispatched synchronously before Tokio runtime creation"
         ),
         Command::SourceBaseline { .. } => unreachable!(
             "source-baseline is dispatched synchronously before Tokio runtime creation"
