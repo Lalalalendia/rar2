@@ -70,7 +70,7 @@ def source_font_binding_id_v1(source_hash: str, source_index: int, family: str) 
         f"quill-font-index:{source_index}:{family}".encode("utf-8"),
         b"chaptera.text-format.base-font-binding",
     )
-    name = b"\\x01" + bytes.fromhex(source_hash) + b"".join(
+    name = b"\x01" + bytes.fromhex(source_hash) + b"".join(
         struct.pack(">I", len(part)) + part for part in components
     )
     digest = hashlib.sha1(SOURCE_BINDING_NAMESPACE_V1.bytes + name).digest()
