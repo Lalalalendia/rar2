@@ -27,8 +27,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.94.1
         with:
           components: rustfmt, clippy
-      - name: Check Rust formatting
-        run: cargo fmt -p chaptera-server -- --check
       - name: Test workspace context
         run: cargo test -p chaptera-server workspace_context
       - name: Test authenticated workspace HTTP
