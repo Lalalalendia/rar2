@@ -446,7 +446,7 @@ class RealAcceptanceState:
         story_id: str | None = None,
     ) -> dict:
         if (self.fixture_profile != "newsletter-font" or self.font_worker is None
-                or self.pinned_abel is None or mode not in {"probe", "apply", "glyph-spans"}):
+                or self.pinned_abel is None or mode not in {"probe", "apply", "glyph-spans", "line-fit"}):
             raise ValueError("pinned real-PUB font worker is not admitted")
         token = hashlib.sha256(canonical_json(
             {"mode": mode, "project": project, "scene": scene, "intent": intent,
@@ -463,7 +463,7 @@ class RealAcceptanceState:
             scene_path.write_bytes(canonical_json(scene) + b"\n")
             intent_path.write_bytes(canonical_json(intent) + b"\n")
             args.extend((str(scene_path), str(intent_path)))
-        if mode == "glyph-spans":
+        if mode in {"glyph-spans", "line-fit"}:
             if not isinstance(story_id, str) or not re.fullmatch(
                 r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", story_id,
             ):
@@ -485,6 +485,7 @@ class RealAcceptanceState:
             "probe": "chaptera.local-font-format-probe.v1",
             "apply": "chaptera.local-pinned-font-apply.v1",
             "glyph-spans": "chaptera.local-current-exact-glyph-spans.v1",
+            "line-fit": "chaptera.local-current-physical-line-fit.v1",
         }[mode]
         if (not isinstance(result, dict)
                 or result.get("protocol_version") != expected
@@ -603,6 +604,74 @@ class RealAcceptanceState:
             "all_scalars_shaped": result["all_scalars_shaped"],
             "authoritative_line_breaks": False,
             "fixed_pdf_allowed": False,
+        }
+
+    def current_physical_line_fit(
+        self, story_id: str, expected_revision: str, expected_snapshot: str,
+    ) -> dict:
+        """Bounded Unicode line-fit, never Publisher/native PDF authority."""
+        physical = self.current_physical_glyph_spans(
+            story_id, expected_revision, expected_snapshot,
+        )
+        current = self.kernel.current_revision(self.document_id)
+        # The exact current project is the only source of physical spans,
+        # authoring overrides and reciprocal linked-frame geometry. No client
+        # supplied font metrics, line advance, Project or frame layout.
+        result = self._run_font_worker(
+            "line-fit", current.project, story_id=story_id,
+        )
+        preview = result.get("flow")
+        if (result.get("project_state_id") != physical["project_state_id"]
+                or result.get("story_id") != story_id
+                or result.get("story_scalar_len") != physical["story_scalar_len"]
+                or result.get("story_format_state_hash") != physical["story_format_state_hash"]
+                or not isinstance(preview, dict)
+                or preview.get("protocol_version") != "chaptera.current-mixed-font-line-fit.v1"
+                or preview.get("story_id") != story_id
+                or preview.get("story_format_state_hash") != physical["story_format_state_hash"]
+                or preview.get("story_scalar_len") != physical["story_scalar_len"]
+                or preview.get("native_publisher_layout_authoritative") is not False
+                or preview.get("fixed_pdf_allowed") is not False):
+            raise RuntimeError("Rust line-fit differs from admitted current glyph history")
+        gaps = preview.get("source_gaps")
+        if not isinstance(gaps, list):
+            raise RuntimeError("Rust current line-fit omitted source font gaps")
+        original_gaps = [
+            {
+                "start_scalar": part["start_scalar"],
+                "end_scalar": part["end_scalar"],
+                "source_font_binding_id": part["source_font_binding_id"],
+            }
+            for part in physical["spans"] if part["kind"] == "source_unresolved"
+        ]
+        if gaps != original_gaps:
+            raise RuntimeError("line-fit concealed original font source gap")
+        state = preview.get("state")
+        if state == "source_font_unresolved":
+            if (not gaps or physical["all_scalars_shaped"] is not False
+                    or preview.get("lines") != []
+                    or preview.get("overset_start_scalar") is not None
+                    or preview.get("unicode_breaks_evaluated") is not False):
+                raise RuntimeError("unresolved original font cannot produce preview lines")
+        elif state == "physical_line_fit_preview":
+            if (gaps or physical["all_scalars_shaped"] is not True
+                    or preview.get("unicode_breaks_evaluated") is not True
+                    or not isinstance(preview.get("lines"), list)
+                    or not (preview["lines"] or
+                            preview.get("overset_start_scalar") is not None)):
+                raise RuntimeError("unadmitted font silently marked full line fit")
+        else:
+            raise RuntimeError("unsupported current physical line-fit state")
+        return {
+            "protocol_version": "chaptera.current-physical-line-fit.v1",
+            "document_id": self.document_id,
+            "source_hash": self.source_hash,
+            "revision_id": expected_revision,
+            "scene_snapshot_id": expected_snapshot,
+            "story_id": story_id,
+            "project_state_id": physical["project_state_id"],
+            "story_format_state_hash": physical["story_format_state_hash"],
+            "flow": copy.deepcopy(preview),
         }
 
     def _run_editor_command(self, mode: str, project: dict, command: dict) -> dict:
@@ -1325,6 +1394,22 @@ class Handler(BaseHTTPRequestHandler):
                     # Do not leak opaque resource or legacy font internals
                     # to stale or differently authorized browser scopes.
                     self._json({"error": "font_glyph_projection_not_available"}, 409)
+                    return
+                self._json(result)
+                return
+            if path == "/v1/editor/font-line-fit":
+                self._authorize(CAP_EDIT_TEXT)
+                if (set(query) != {"story_id", "revision_id", "snapshot_id"}
+                        or any(len(values) != 1 for values in query.values())):
+                    self._json({"error": "invalid_font_line_fit_scope"}, 400)
+                    return
+                try:
+                    result = STATE.current_physical_line_fit(
+                        query["story_id"][0], query["revision_id"][0],
+                        query["snapshot_id"][0],
+                    )
+                except ValueError:
+                    self._json({"error": "font_line_fit_not_available"}, 409)
                     return
                 self._json(result)
                 return

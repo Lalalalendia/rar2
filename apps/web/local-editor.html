@@ -41,6 +41,7 @@ h1{font-size:19px;font-weight:740;line-height:1.15;letter-spacing:-.45px;margin:
 #font-sample{display:grid;place-items:center;min-height:74px;font-size:28px;letter-spacing:1px;background:#101724;border:1px solid #324052;border-radius:10px;color:#f2f5fa;white-space:nowrap;overflow:hidden}
 #font-message{font-size:11px;line-height:1.55;color:#b8c7dc;min-height:32px}
 #font-metrics{font-size:11px;line-height:1.55;color:#cbd5e5;padding:9px 11px;border-left:2px solid #788cb1;background:#192537;min-height:36px}
+#font-flow{font-size:11px;line-height:1.55;color:#cbd5e5;padding:9px 11px;border-left:2px solid #788cb1;background:#192537;min-height:36px}
 #text-tools{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}
 #text-tools[hidden]{display:none}
 #text-tools label{grid-column:1 / -1;font-size:11px;color:#bdcadd;font-weight:650}
@@ -123,6 +124,7 @@ h1{font-size:19px;font-weight:740;line-height:1.15;letter-spacing:-.45px;margin:
         <span id="font-sample" aria-label="Font preview sample">Aa Bb 123</span>
         <span id="font-message" role="status">Browser preview only; not an Editor font change.</span>
         <span id="font-metrics" role="status" aria-live="polite">Choose a Story to inspect actual physical glyph coverage.</span>
+        <span id="font-flow" role="status" aria-live="polite">Source-font admission is required before line-fit preview.</span>
       </div>
       <div id="text-tools" hidden>
         <label for="text-value">Selected Story text · select a range</label>
@@ -173,6 +175,7 @@ const fontStoryTarget=document.querySelector("#font-story-target");
 const previewFontButton=document.querySelector("#preview-physical-font");
 const fontMessage=document.querySelector("#font-message");
 const fontMetrics=document.querySelector("#font-metrics");
+const fontFlow=document.querySelector("#font-flow");
 const fontSample=document.querySelector("#font-sample");
 let currentFontContext=null;
 let editingStory=null;
@@ -245,6 +248,10 @@ async function refreshPhysicalGlyphCoverage(scene=shell?.snapshot){
   fontMetrics.dataset.exactScalars="";
   fontMetrics.dataset.unresolvedScalars="";
   fontMetrics.dataset.exactGlyphs="";
+  fontFlow.dataset.flowState="";
+  fontFlow.dataset.lineCount="";
+  fontFlow.dataset.sourceGapScalars="";
+  fontFlow.textContent="Current physical font line-fit preview not available.";
   const selected=selectedStory();
   if(!scene||!selected||!fontStoryMap.has(selected.story.story_id)){
     fontMetrics.className="";
@@ -294,7 +301,57 @@ async function refreshPhysicalGlyphCoverage(scene=shell?.snapshot){
       "Exact physical glyphs: "+packet.shaped_glyph_count+
       " for "+packet.admitted_scalar_count+" Story characters · "+
       "unresolved source-font characters: "+packet.source_unresolved_scalar_count+
-      ". Line placement, overset and PDF not verified.";
+      ". Native Publisher layout and PDF not verified.";
+    // The separate Rust line-fit consumer is read-only and uses a fixed
+    // server-owned preview advance. Its per-Story proof must agree with the
+    // glyph admission packet for the SAME exact source/revision/snapshot.
+    const linePacket=await service.currentPhysicalFontLineFit({
+      story_id:storyId,revision_id:scene.revision_id,snapshot_id:scene.snapshot_id,
+    });
+    if(shell.snapshot.revision_id!==scene.revision_id||
+       shell.snapshot.snapshot_id!==scene.snapshot_id||
+       selectedStory()?.story.story_id!==storyId) return;
+    const flow=linePacket.flow;
+    if(linePacket.protocol_version!=="chaptera.current-physical-line-fit.v1"||
+       linePacket.document_id!==packet.document_id||
+       linePacket.source_hash!==packet.source_hash||
+       linePacket.story_id!==packet.story_id||
+       linePacket.revision_id!==packet.revision_id||
+       linePacket.scene_snapshot_id!==packet.scene_snapshot_id||
+       linePacket.project_state_id!==packet.project_state_id||
+       linePacket.story_format_state_hash!==packet.story_format_state_hash||
+       !flow||flow.protocol_version!=="chaptera.current-mixed-font-line-fit.v1"||
+       flow.native_publisher_layout_authoritative!==false||
+       flow.fixed_pdf_allowed!==false||!Array.isArray(flow.source_gaps)||
+       !Array.isArray(flow.lines)){
+      throw new Error("physical line-fit differs from current admitted glyphs");
+    }
+    const gapScalars=flow.source_gaps.reduce((sum,part)=>
+      sum+part.end_scalar-part.start_scalar,0);
+    if(gapScalars!==packet.source_unresolved_scalar_count){
+      throw new Error("line-fit concealed original Publisher physical font gaps");
+    }
+    fontFlow.dataset.flowState=flow.state;
+    fontFlow.dataset.sourceGapScalars=String(gapScalars);
+    fontFlow.dataset.lineCount=String(flow.lines.length);
+    if(flow.state==="source_font_unresolved"){
+      if(gapScalars===0||flow.lines.length||
+         flow.overset_start_scalar!==null||flow.unicode_breaks_evaluated!==false){
+        throw new Error("unadmitted source font yielded fabricated frame lines");
+      }
+      fontFlow.className="warn";
+      fontFlow.textContent="Line-fit blocked: "+gapScalars+
+        " original font characters lack exact physical bytes. 0 invented lines; PDF blocked.";
+    }else if(flow.state==="physical_line_fit_preview"&&gapScalars===0&&
+             flow.unicode_breaks_evaluated===true){
+      fontFlow.className="warn";
+      fontFlow.textContent="Bounded physical-font line-fit: "+flow.lines.length+
+        " lines · preview overset start: "+
+        (flow.overset_start_scalar??"none")+
+        ". Publisher-native layout and PDF remain unverified.";
+    }else{
+      throw new Error("unsupported current line-fit authority state");
+    }
   }catch(_error){
     if(shell?.snapshot?.revision_id===scene.revision_id){
       fontMetrics.className="warn";
