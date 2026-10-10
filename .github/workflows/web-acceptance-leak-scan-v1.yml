@@ -1,0 +1,26 @@
+name: Web acceptance leak scan V1
+
+on:
+  pull_request:
+    paths:
+      - "tools/security_leak_scan_v1.py"
+      - "tools/test_security_leak_scan_v1.py"
+      - ".github/workflows/web-acceptance-leak-scan-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  leak-scan-tool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check scanner syntax
+        run: python -m py_compile tools/security_leak_scan_v1.py tools/test_security_leak_scan_v1.py
+      - name: Run leak scanner regressions
+        run: python -m unittest -v tools.test_security_leak_scan_v1
