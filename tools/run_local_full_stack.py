@@ -171,7 +171,6 @@ def main() -> int:
             run_checked([str(binary), "--config", str(CONFIG), "migrate", "up"], env)
 
             server_handle = SERVER_LOG.open("w", encoding="utf-8")
-            worker_handle = WORKER_LOG.open("w", encoding="utf-8")
             server = subprocess.Popen(
                 [str(binary), "--config", str(CONFIG), "serve"],
                 cwd=ROOT,
@@ -180,15 +179,6 @@ def main() -> int:
                 stderr=subprocess.STDOUT,
                 text=True,
             )
-            worker = subprocess.Popen(
-                [str(binary), "--config", str(CONFIG), "worker"],
-                cwd=ROOT,
-                env=env,
-                stdout=worker_handle,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-
             deadline = time.monotonic() + 30
             ready = None
             while time.monotonic() < deadline:
@@ -197,17 +187,32 @@ def main() -> int:
                         f"server exited during startup with code {server.returncode}\n"
                         f"--- server.log ---\n{tail(SERVER_LOG)}"
                     )
-                if worker.poll() is not None:
-                    raise RuntimeError(
-                        f"worker exited during startup with code {worker.returncode}\n"
-                        f"--- worker.log ---\n{tail(WORKER_LOG)}"
-                    )
                 ready = http_code(URL + "/ready")
                 if ready == 200:
                     break
                 time.sleep(0.25)
             if ready != 200:
                 raise RuntimeError(f"runtime did not reach /ready=200 (last status: {ready})")
+
+            # The server and worker both open SQLite pools in WAL mode. On
+            # Windows, starting them together after migrate can race their
+            # journal-mode connections and abort the server with SQLITE_BUSY.
+            # Wait for the server to finish its configured startup before
+            # opening the independent worker pools; never suppress a lock error.
+            worker_handle = WORKER_LOG.open("w", encoding="utf-8")
+            worker = subprocess.Popen(
+                [str(binary), "--config", str(CONFIG), "worker"],
+                cwd=ROOT,
+                env=env,
+                stdout=worker_handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            if worker.poll() is not None:
+                raise RuntimeError(
+                    f"worker exited during startup with code {worker.returncode}\n"
+                    f"--- worker.log ---\n{tail(WORKER_LOG)}"
+                )
 
             editor_handle = EDITOR_LOG.open("w", encoding="utf-8")
             editor_launcher = (
@@ -252,6 +257,16 @@ def main() -> int:
                     raise RuntimeError(
                         f"local editor smoke failed with code {editor_returncode}\n"
                         f"--- editor-service.log ---\n{tail(EDITOR_LOG)}"
+                    )
+                if server.poll() is not None:
+                    raise RuntimeError(
+                        f"server exited during editor smoke with code {server.returncode}\n"
+                        f"--- server.log ---\n{tail(SERVER_LOG)}"
+                    )
+                if worker.poll() is not None:
+                    raise RuntimeError(
+                        f"worker exited during editor smoke with code {worker.returncode}\n"
+                        f"--- worker.log ---\n{tail(WORKER_LOG)}"
                     )
                 editor = None
                 return 0
