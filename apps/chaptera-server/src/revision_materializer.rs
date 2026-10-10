@@ -838,7 +838,7 @@ fn canonical_json_bytes<T: Serialize>(
     })
 }
 
-fn append_event_operation(
+pub(crate) fn append_event_operation(
     mut project: EditorProject,
     operation: EditOperation,
 ) -> Result<EditorProject, RevisionMaterializerError> {
