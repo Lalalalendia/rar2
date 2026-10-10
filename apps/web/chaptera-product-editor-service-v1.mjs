@@ -1,5 +1,6 @@
 import { traceHeadersV1 } from "./observability-v1.mjs";
 import { adaptReaderSceneToEditorScene } from "./reader-scene-editor-adapter-v1.mjs";
+import { projectReaderSceneToEditorInteractionScene } from "./reader-scene-editor-interaction-v1.mjs";
 
 const COMMIT_REQUEST_V1 = "chaptera.commit-request.v1";
 const COMMIT_REJECTED_V1 = "chaptera.commit-rejected.v1";
@@ -161,6 +162,28 @@ export class ChapteraProductEditorServiceV1 {
       current_document: clone(current),
       visual_scene: clone(visual),
     };
+  }
+
+  // Reuse the current Product API's exact document/source/revision visual fence.
+  // The non-visual interaction projection is never a second paint authority.
+  async currentRichEditorState() {
+    const { current_document, visual_scene } = await this.currentVisualScene();
+    return {
+      current_document,
+      reader_scene: visual_scene,
+      interaction_scene: projectReaderSceneToEditorInteractionScene(visual_scene),
+    };
+  }
+
+  async readerSceneForRevision(revisionId) {
+    ident(revisionId, "revisionId");
+    const { current_document, visual_scene } = await this.currentVisualScene();
+    if (current_document.revision_id !== revisionId) {
+      throw new Error(
+        "canonical current revision advanced before exact rich Scene reconciliation",
+      );
+    }
+    return visual_scene;
   }
 
   async sceneForRevision(revisionId) {

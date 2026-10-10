@@ -306,6 +306,21 @@ pub(super) fn operation_summary(operation: &EditOperation) -> Value {
             "before_document_state_id": transition.before_document_state_id.as_str(),
             "after_document_state_id": transition.after_document_state_id.as_str(),
         }),
+        EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => json!({
+            "kind": "duplicate_authored_rectangle_page_v1",
+            "document_id": transition.page.document_id.as_canonical().to_string(),
+            "source_page_id": transition.page.source_page_id.as_canonical().to_string(),
+            "destination_page_id": transition.page.destination_identity.page_id.as_canonical().to_string(),
+            "source_rectangle_node_id": transition.source_shape.node_id.as_canonical().to_string(),
+            "destination_rectangle_node_id": transition.destination_shape.node_id.as_canonical().to_string(),
+            "insertion_index": transition.page.insertion_index,
+            "before_customer_page_ids": transition.page.before_customer_page_ids.iter()
+                .map(|id| id.as_canonical().to_string()).collect::<Vec<_>>(),
+            "after_customer_page_ids": transition.page.after_customer_page_ids.iter()
+                .map(|id| id.as_canonical().to_string()).collect::<Vec<_>>(),
+            "before_state_id": transition.before_state_id.as_str(),
+            "after_state_id": transition.after_state_id.as_str(),
+        }),
         EditOperation::DeleteAuthoredRectanglePageV1 { transition } => json!({
             "kind": "delete_authored_rectangle_page_v1",
             "document_id": transition.page.document_id.as_canonical().to_string(),
