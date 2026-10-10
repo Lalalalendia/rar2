@@ -2598,6 +2598,69 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
             editor.operations().len(),
         )
     };
+    // The authority test alone would pass if the copy had become an
+    // invisible object. This is the exact frame work consumed by the canvas
+    // and Page thumbnails: test fill, stroke, hit index and Page membership.
+    let assert_copied_rectangle_is_painted = |app: &ViewerApp| {
+        let visual = app.visual.as_ref().expect("real PUB Viewer");
+        let destination_index = visual
+            .document
+            .pages
+            .iter()
+            .position(|page| page.id == destination_page_id)
+            .expect("visible cloned customer Page");
+        let frame = app
+            .build_page_frame_work(destination_index)
+            .expect("production Desktop canvas render plan");
+        assert_eq!(frame.render_plan.page_id, destination_page_id);
+        let rendered = frame
+            .render_plan
+            .nodes
+            .iter()
+            .filter(|node| node.node_id == destination_node_id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rendered.len(),
+            1,
+            "the cloned authored Rectangle must appear exactly once in the painted Page lane"
+        );
+        let painted = rendered[0];
+        assert_eq!(painted.bounds, source_shape.bounds);
+        assert_eq!(
+            painted.solid_fill_rgb,
+            source_shape.paint.fill.visible.then_some([
+                source_shape.paint.fill.color.r,
+                source_shape.paint.fill.color.g,
+                source_shape.paint.fill.color.b,
+            ])
+        );
+        assert_eq!(
+            painted
+                .solid_line
+                .as_ref()
+                .map(|line| (line.rgb, line.width_emu)),
+            source_shape.paint.stroke.visible.then_some((
+                [
+                    source_shape.paint.stroke.color.r,
+                    source_shape.paint.stroke.color.g,
+                    source_shape.paint.stroke.color.b,
+                ],
+                source_shape.paint.stroke.width_emu,
+            ))
+        );
+        let instance_id = frame
+            .hit_index
+            .instance_for_node(destination_node_id)
+            .expect("the visible Rectangle must be selectable by canvas hit testing");
+        let hit = frame
+            .hit_index
+            .entry_for_instance(instance_id)
+            .expect("canvas instance must resolve to one hit entry");
+        assert_eq!(hit.node_id, destination_node_id);
+        assert_eq!(hit.bounds, source_shape.bounds);
+    };
+    assert_copied_rectangle_is_painted(harness.state());
+
     assert!(
         !harness.get_by_label("Delete Rectangle Page").is_disabled(),
         "cloned authored content must remain an actionable Page"
@@ -2662,7 +2725,7 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
             editor
                 .authored_shape(destination_node_id)
                 .map(|s| (s.bounds, s.paint.clone())),
-            Some((source_shape.bounds, source_shape.paint))
+            Some((source_shape.bounds, source_shape.paint.clone()))
         );
         assert_eq!(
             app.visual
@@ -2676,6 +2739,10 @@ fn gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub() 
             Some(destination_page_id)
         );
     }
+
+    // A fresh project replay must paint the copied Rectangle again, not
+    // merely deserialize Page/Node state without a renderable authored lane.
+    assert_copied_rectangle_is_painted(harness.state());
 
     // Export must bind the *current* complete revision, never silently
     // materialize a source-only copy under an unrelated preview receipt.

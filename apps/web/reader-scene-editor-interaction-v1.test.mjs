@@ -112,3 +112,17 @@ test("source-private fields fail closed before interaction projection", () => {
     /forbidden source field source_path/,
   );
 });
+
+test("UUIDv7 authored PageId and NodeId are admitted without editing projected instances", () => {
+  const rich = scene();
+  const newPage = "20000000-0000-7000-8000-000000000001";
+  const newDirect = "30000000-0000-7000-8000-000000000001";
+  rich.pages[0].page_id = newPage;
+  rich.nodes.forEach((node) => { node.page_id = newPage; });
+  rich.nodes[0].node_id = newDirect;
+  rich.nodes[1].parent_node_id = newDirect;
+  const interaction = projectReaderSceneToEditorInteractionScene(rich);
+  assert.deepEqual(interaction.nodes.map((node) => node.node_id), [newDirect]);
+  assert.equal(interaction.pages[0].page_id, newPage);
+  assert.equal(hitTestSnapshot(interaction, newPage, { x_emu: 1600, y_emu: 2600 }).node_id, newDirect);
+});
