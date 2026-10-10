@@ -5,7 +5,7 @@
 //! OfficeArt preview materialization remain outside this module.
 
 use anyhow::Result;
-use pub_model::{NodeId, PageId, ResourceId};
+use pub_model::{NodeId, PageId, ResourceId, Sha256Digest};
 use pub_reader::{PubExplicitImageCropSource, PubExplicitImageRecolorSource, PubResolvedGraph};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -54,6 +54,11 @@ pub struct ViewerEmbeddedImage {
     pub node_ids: Vec<NodeId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub placements: Vec<ViewerImagePlacementV1>,
+    /// SHA-256 from the independent Reader asset manifest and materialization check.
+    /// Never derive this proof from the bytes at a Desktop decode call site.
+    /// Not accepted from serialized/browser-owned Viewer payloads.
+    #[serde(skip)]
+    pub verified_source_sha256: Option<Sha256Digest>,
     #[serde(skip)]
     pub bytes: Vec<u8>,
 }
@@ -69,13 +74,16 @@ impl ViewerEmbeddedImage {
             resource_id,
             mime: "image/png".to_owned(),
             source_exact: false,
+            verified_source_sha256: None,
             node_ids,
             placements,
             bytes,
         }
     }
 
-    /// Construct an exact admitted embedded image resource.
+    /// Construct exact image bytes without independently verified source SHA.
+    /// Used by synthetic Viewer consumers; Desktop refuses source-exact decode
+    /// until the Reader asset manifest has verified the original resource.
     pub fn exact(
         resource_id: ResourceId,
         mime: String,
@@ -87,10 +95,25 @@ impl ViewerEmbeddedImage {
             resource_id,
             mime,
             source_exact: true,
+            verified_source_sha256: None,
             node_ids,
             placements,
             bytes,
         }
+    }
+
+    /// Only the independently verified Reader export may promote original bytes.
+    pub fn exact_with_verified_source_sha256(
+        resource_id: ResourceId,
+        mime: String,
+        node_ids: Vec<NodeId>,
+        placements: Vec<ViewerImagePlacementV1>,
+        verified_source_sha256: Sha256Digest,
+        bytes: Vec<u8>,
+    ) -> Self {
+        let mut image = Self::exact(resource_id, mime, node_ids, placements, bytes);
+        image.verified_source_sha256 = Some(verified_source_sha256);
+        image
     }
 }
 
@@ -230,6 +253,7 @@ mod tests {
                 resource_id: first_resource,
                 mime: "image/png".to_owned(),
                 source_exact: true,
+                verified_source_sha256: None,
                 node_ids: vec![admitted, excluded],
                 placements: vec![
                     ViewerImagePlacementV1 {
@@ -254,6 +278,7 @@ mod tests {
                 resource_id: second_resource,
                 mime: "image/jpeg".to_owned(),
                 source_exact: true,
+                verified_source_sha256: None,
                 node_ids: vec![excluded_only],
                 placements: vec![ViewerImagePlacementV1 {
                     node_id: excluded_only,
@@ -267,6 +292,7 @@ mod tests {
                 resource_id: third_resource,
                 mime: "image/png".to_owned(),
                 source_exact: true,
+                verified_source_sha256: None,
                 node_ids: vec![unresolved],
                 placements: vec![ViewerImagePlacementV1 {
                     node_id: unresolved,

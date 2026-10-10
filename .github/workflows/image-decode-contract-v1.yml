@@ -8,6 +8,10 @@ on:
       - ".github/workflows/image-decode-contract-v1.yml"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -27,6 +31,19 @@ jobs:
         run: cargo clippy -p chaptera-image-decode-contract --all-targets -- -D warnings
       - name: Run deterministic decode contract tests
         run: cargo test -p chaptera-image-decode-contract
+      - name: Prove exact Viewer-to-Desktop hash-once admission and tamper rejection
+        shell: bash
+        # Decoder Clippy above remains strict; the Desktop binary has independent
+        # legacy dead-code/unused warnings unrelated to image hash admission.
+        env:
+          RUSTFLAGS: ""
+        run: |
+          set -euo pipefail
+          output="$(mktemp)"
+          cargo test -p chaptera-desktop --bin chaptera-editor \
+            image_decode_adapter::tests::exact_viewer_image_reuses_reader_hash_without_a_predecode_sha256_pass \
+            -- --exact --nocapture 2>&1 | tee "$output"
+          grep -Eq 'test result: ok\. 1 passed; 0 failed;' "$output"
       - name: Emit decode receipt
         run: mkdir -p target/image-decode-contract && cargo run -q -p chaptera-image-decode-contract --bin decode_receipt | tee target/image-decode-contract/receipt.json
       - uses: actions/upload-artifact@v4
