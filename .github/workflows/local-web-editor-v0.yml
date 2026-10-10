@@ -8,6 +8,10 @@ on:
       - "apps/web/editor-service-client-font.test.mjs"
       - "apps/web/font-environment-v1.mjs"
       - "services/editor-api/web_real_acceptance_service.py"
+      - "services/editor-api/revision_store.py"
+      - "services/editor-api/security/authorized_revision_gateway.py"
+      - "tools/verify_authenticated_font_http.py"
+      - "tools/verify_font_http_chromium.mjs"
       - "services/editor-api/font_authoring_admission_v1.py"
       - "services/editor-api/test_font_authoring_admission_v1.py"
       - "services/editor-api/pinned_opentype_resource_v1.py"
@@ -50,6 +54,9 @@ jobs:
         run: |
           python -m py_compile tools/run_local_real_editor.py
           python -m py_compile tools/run_pinned_font_authoring_real.py
+          python -m py_compile tools/verify_authenticated_font_http.py
+          python -m py_compile services/editor-api/revision_store.py
+          python -m py_compile services/editor-api/security/authorized_revision_gateway.py
           python -m py_compile tools/run_local_full_stack.py
           python -m py_compile services/editor-api/web_real_acceptance_service.py
           python -m py_compile services/editor-api/font_authoring_admission_v1.py
@@ -64,7 +71,9 @@ jobs:
         working-directory: services/editor-api
         run: python -m unittest -v test_font_authoring_admission_v1.py test_pinned_opentype_resource_v1.py test_live_font_delivery_v1.py
       - name: Prove physical byte client and existing picker negatives
-        run: node --test apps/web/editor-service-client-font.test.mjs apps/web/font-environment-v1.test.mjs
+        run: |
+          node --check tools/verify_font_http_chromium.mjs
+          node --test apps/web/editor-service-client-font.test.mjs apps/web/font-environment-v1.test.mjs
       - name: Install real Chromium for local Editor reachability
         run: |
           npm install --no-save playwright@1.55.0
@@ -85,6 +94,13 @@ jobs:
           python tools/run_pinned_font_authoring_real.py \
             --fixture "${{ github.workspace }}/.chaptera-local/editor/SampleNewsletter.pub" \
             --viewer "${{ github.workspace }}/.chaptera-local/editor/viewer-geometry.json"
+      - name: Prove capability-authorized real PUB font commit, native Rust history, live Chromium Apply and output block
+        run: |
+          python tools/verify_authenticated_font_http.py \
+            --fixture "${{ github.workspace }}/.chaptera-local/editor/SampleNewsletter.pub" \
+            --resolved-graph "${{ github.workspace }}/.chaptera-local/editor/resolved-graph.json" \
+            --viewer "${{ github.workspace }}/.chaptera-local/editor/viewer-geometry.json" \
+            --browser
       - uses: actions/upload-artifact@v4
         with:
           name: local-editor-pinned-font-chromium
@@ -95,3 +111,6 @@ jobs:
             target/local-font-ui/chromium.png
             target/local-font-ui/pinned-font-apply-receipt.json
             target/local-font-ui/pinned-font-edited.project.json
+            target/font-http-acceptance/receipt.json
+            target/font-http-acceptance/browser.json
+            target/font-http-acceptance/browser.png
