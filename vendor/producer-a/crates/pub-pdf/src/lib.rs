@@ -58,12 +58,20 @@ pub struct FixedNodePaint {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FixedImageSourceWindow {
+    pub left_q16: i64,
+    pub top_q16: i64,
+    pub right_q16: i64,
+    pub bottom_q16: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FixedImagePlacement {
     pub node_id: NodeId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_rotation_degrees: Option<i16>,
-    #[serde(default)]
-    pub source_window_present: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_window: Option<FixedImageSourceWindow>,
     #[serde(default)]
     pub recolor_present: bool,
 }
@@ -501,18 +509,51 @@ pub fn render_bounded_pdf(
             match prepared {
                 PreparedImage::Rgb { .. } => {
                     match image_placement {
+                        Some(placement) if placement.recolor_present => {
+                            diagnostics.push(PdfDiagnostic {
+                                code: "pdf.image.recolor_unsupported".into(),
+                                severity: PdfDiagnosticSeverity::FidelityWarning,
+                                origin: node.origin.into_canonical(),
+                                message: "image recolor is outside the bounded fixed-PDF slice"
+                                    .into(),
+                            });
+                            image_partial = true;
+                        }
                         Some(placement)
-                            if placement.source_window_present || placement.recolor_present =>
+                            if placement.source_window.is_some()
+                                && placement.content_rotation_degrees.unwrap_or(0) != 0 =>
                         {
                             diagnostics.push(PdfDiagnostic {
                                 code: "pdf.image.placement_combination_unsupported".into(),
                                 severity: PdfDiagnosticSeverity::FidelityWarning,
                                 origin: node.origin.into_canonical(),
                                 message:
-                                    "image crop or recolor is outside the bounded fixed-PDF slice"
+                                    "combined image source-window crop and content rotation is outside the bounded fixed-PDF slice"
                                         .into(),
                             });
                             image_partial = true;
+                        }
+                        Some(placement) if placement.source_window.is_some() => {
+                            if append_image_source_window(
+                                content,
+                                node,
+                                resource_id,
+                                placement
+                                    .source_window
+                                    .as_ref()
+                                    .expect("source-window branch requires source window"),
+                            ) {
+                                image_painted = true;
+                            } else {
+                                diagnostics.push(PdfDiagnostic {
+                                    code: "pdf.image.source_window_invalid".into(),
+                                    severity: PdfDiagnosticSeverity::FidelityWarning,
+                                    origin: node.origin.into_canonical(),
+                                    message: "fixed image source window has non-positive extent"
+                                        .into(),
+                                });
+                                image_partial = true;
+                            }
                         }
                         Some(placement) => match placement.content_rotation_degrees.unwrap_or(0) {
                             0 => {
@@ -777,6 +818,59 @@ fn append_image(content: &mut String, node: &ResolvedPhysicalNode, resource_id: 
         image_name(resource_id)
     ));
     content.push_str("Q\n");
+}
+
+fn append_image_source_window(
+    content: &mut String,
+    node: &ResolvedPhysicalNode,
+    resource_id: ResourceId,
+    window: &FixedImageSourceWindow,
+) -> bool {
+    const Q16_ONE: i128 = 1_i128 << 16;
+
+    let source_width_q16 = window.right_q16 - window.left_q16;
+    let source_height_q16 = window.bottom_q16 - window.top_q16;
+    if source_width_q16 <= 0 || source_height_q16 <= 0 {
+        return false;
+    }
+
+    let source_width_q16 = i128::from(source_width_q16);
+    let source_height_q16 = i128::from(source_height_q16);
+    let width_emu = i128::from(node.bounds.width.get());
+    let height_emu = i128::from(node.bounds.height.get());
+    let x_emu = i128::from(node.bounds.x.get());
+    let y_emu = i128::from(node.bounds.y.get());
+    let left_q16 = i128::from(window.left_q16);
+    let top_q16 = i128::from(window.top_q16);
+    let emu_per_point = i128::from(EMU_PER_POINT);
+
+    let scale_x = format_ratio(width_emu * Q16_ONE, source_width_q16 * emu_per_point, 9);
+    let scale_y = format_ratio(height_emu * Q16_ONE, source_height_q16 * emu_per_point, 9);
+    let translate_x = format_ratio(
+        x_emu * source_width_q16 - width_emu * left_q16,
+        source_width_q16 * emu_per_point,
+        9,
+    );
+    let translate_y = format_ratio(
+        (y_emu + height_emu) * source_height_q16 + height_emu * top_q16,
+        source_height_q16 * emu_per_point,
+        9,
+    );
+
+    content.push_str("q\n");
+    content.push_str(&format!(
+        "{} {} {} {} re\nW n\n",
+        format_points(node.bounds.x.get()),
+        format_points(node.bounds.y.get()),
+        format_points(node.bounds.width.get()),
+        format_points(node.bounds.height.get())
+    ));
+    content.push_str(&format!(
+        "{scale_x} 0 0 -{scale_y} {translate_x} {translate_y} cm\n/{} Do\n",
+        image_name(resource_id)
+    ));
+    content.push_str("Q\n");
+    true
 }
 
 fn append_image_cardinal(
@@ -1456,7 +1550,7 @@ mod tests {
                 placements: vec![FixedImagePlacement {
                     node_id: node_id(10),
                     content_rotation_degrees: Some(90),
-                    source_window_present: false,
+                    source_window: None,
                     recolor_present: false,
                 }],
                 bytes: png,
@@ -1484,7 +1578,7 @@ mod tests {
     }
 
     #[test]
-    fn source_window_only_image_placement_remains_fail_closed() {
+    fn source_window_only_image_placement_clips_and_maps_exact_window() {
         let png = vec![
             0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
             0x44, 0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
@@ -1502,7 +1596,12 @@ mod tests {
                 placements: vec![FixedImagePlacement {
                     node_id: node_id(10),
                     content_rotation_degrees: None,
-                    source_window_present: true,
+                    source_window: Some(FixedImageSourceWindow {
+                        left_q16: 1 << 14,
+                        top_q16: 0,
+                        right_q16: 3 << 14,
+                        bottom_q16: 1 << 16,
+                    }),
                     recolor_present: false,
                 }],
                 bytes: png,
@@ -1518,21 +1617,44 @@ mod tests {
         .unwrap();
 
         let text = String::from_utf8_lossy(&output.bytes);
-        assert!(!text.contains(" Do\n"));
-        assert!(
-            output
-                .report
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == "pdf.image.placement_combination_unsupported")
-        );
+        assert!(text.contains("10 20 100 50 re\nW n\n"));
+        assert!(text.contains("200 0 0 -50 -40 70 cm"));
         assert!(
             output
                 .report
                 .nodes
                 .iter()
-                .any(|node| node.code == "pdf.node.resource_unsupported")
+                .any(|node| node.code == "pdf.node.painted_exact_image")
         );
+        assert!(
+            output
+                .report
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != "pdf.image.placement_combination_unsupported")
+        );
+    }
+
+    #[test]
+    fn source_window_fit_pan_outside_image_keeps_frame_clip_without_clamping() {
+        let node = &scene().nodes[0];
+        let window = FixedImageSourceWindow {
+            left_q16: -(1 << 14),
+            top_q16: 0,
+            right_q16: 5 << 14,
+            bottom_q16: 1 << 16,
+        };
+        let mut content = String::new();
+
+        assert!(append_image_source_window(
+            &mut content,
+            node,
+            resource_id(48),
+            &window,
+        ));
+
+        assert!(content.contains("10 20 100 50 re\nW n\n"));
+        assert!(content.contains("66.666666667 0 0 -50 26.666666667 70 cm"));
     }
 
     #[test]
