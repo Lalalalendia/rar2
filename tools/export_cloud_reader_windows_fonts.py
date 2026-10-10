@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 import struct
@@ -226,14 +227,108 @@ def _toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+REQUIREMENTS_PROTOCOL = "chaptera.pub-source-font-requirements.v1"
+PUB_SHA = re.compile(r"^[0-9a-f]{64}$")
+
+
+def read_private_source_requirements(path: Path) -> tuple[list[str], dict]:
+    """Read source-declared, *non-authorizing* Writer/Reader requirements."""
+    try:
+        packet = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FontPacketError("cannot read verified private source-font requirements") from exc
+    if (not isinstance(packet, dict)
+            or packet.get("protocol_version") != REQUIREMENTS_PROTOCOL
+            or not isinstance(packet.get("document_source_sha256"), str)
+            or not PUB_SHA.fullmatch(packet["document_source_sha256"])
+            or packet.get("source_declared_families_only") is not True
+            or packet.get("requires_private_licensed_physical_bytes") is not True
+            or packet.get("physical_font_bytes_included") is not False
+            or packet.get("original_publisher_layout_authoritative") is not False
+            or packet.get("fixed_pdf_allowed") is not False):
+        raise FontPacketError("invalid or falsely authorized Publisher source-font requirements")
+    items = packet.get("families")
+    if not isinstance(items, list) or not items or len(items) > 512:
+        raise FontPacketError("bounded source family requirements are missing")
+    families: list[str] = []
+    lower_names = set()
+    incomplete_styles = False
+    missing_quill_indices = 0
+    for item in items:
+        if not isinstance(item, dict):
+            raise FontPacketError("malformed source family requirement")
+        family = item.get("source_family")
+        if (not isinstance(family, str) or family != family.strip()
+                or not family or len(family) > 128
+                or any(ord(ch) < 32 for ch in family)
+                or item.get("physical_face_authorized") is not False):
+            raise FontPacketError("source family is missing or falsely treated as a physical font")
+        key = normalize_name(family)
+        if key in lower_names:
+            raise FontPacketError("ambiguous normalized family names in source requirements")
+        lower_names.add(key)
+        indices = item.get("source_font_index_candidates")
+        if (not isinstance(indices, list) or any(
+            type(index) is not int or not 0 <= index <= 65535 for index in indices
+        ) or indices != sorted(set(indices))):
+            raise FontPacketError("source Quill font index candidates are malformed")
+        if item.get("source_quill_index_proven") is not bool(indices):
+            raise FontPacketError("source font index proof contradicted by source family requirements")
+        missing_quill_indices += not bool(indices)
+        styles = item.get("effective_style_run_counts")
+        if not isinstance(styles, dict):
+            raise FontPacketError("source run style counts are required")
+        if any(
+            name not in {"regular", "bold", "italic", "bold_italic", "unknown"}
+            or type(count) is not int or count < 0
+            for name, count in styles.items()
+        ):
+            raise FontPacketError("unsupported or malformed source font style counts")
+        needs_non_regular = bool(
+            styles.get("bold", 0) or styles.get("italic", 0) or styles.get("bold_italic", 0)
+        )
+        if item.get("needs_non_regular_style") is not needs_non_regular:
+            raise FontPacketError("source font style requirements contradict Reader evidence")
+        incomplete_styles |= needs_non_regular or bool(styles.get("unknown", 0)) or not bool(indices)
+        families.append(family)
+    if (type(packet.get("source_families_without_quill_index_count")) is not int
+            or packet["source_families_without_quill_index_count"] != missing_quill_indices):
+        raise FontPacketError("source Quill-index gap count disagrees with family requirements")
+    if (type(packet.get("unresolved_source_family_run_count")) is not int
+            or packet["unresolved_source_family_run_count"] < 0
+            or type(packet.get("unknown_effective_style_run_count")) is not int
+            or packet["unknown_effective_style_run_count"] < 0):
+        raise FontPacketError("unresolved source font counters are not trustworthy")
+    incomplete_styles |= bool(packet["unresolved_source_family_run_count"])
+    incomplete_styles |= bool(packet["unknown_effective_style_run_count"])
+    return families, {
+        "source_sha256": packet["document_source_sha256"],
+        "source_family_requirements_only": True,
+        "partial_style_or_source_coverage": incomplete_styles,
+        "native_publisher_layout_authoritative": False,
+        "fixed_pdf_allowed": False,
+    }
+
+
 def build_packet(
     families: list[str],
     font_dir: Path,
     output_dir: Path,
     cloud_font_dir: str,
+    *,
+    source_requirements: dict | None = None,
+    allow_incomplete_styles: bool = False,
 ) -> dict:
     if not families:
-        raise FontPacketError("at least one --family is required")
+        raise FontPacketError("at least one source family is required")
+    if source_requirements:
+        if (source_requirements["partial_style_or_source_coverage"]
+                and not allow_incomplete_styles):
+            raise FontPacketError(
+                "source PUB needs styled or unresolved fonts; Regular-only packet cannot "
+                "satisfy them. Pass --allow-incomplete-styles to export a clearly "
+                "marked partial private packet; do not certify visual parity."
+            )
     normalized = [normalize_name(family) for family in families]
     if len(set(normalized)) != len(normalized):
         raise FontPacketError("duplicate --family values are not allowed")
@@ -295,6 +390,15 @@ def build_packet(
         "font_bytes_must_not_be_committed_or_uploaded_to_public_ci": True,
         "cloud_font_dir": cloud_font_dir,
         "resources": resources,
+        "publisher_source_requirements": (
+            {
+                **source_requirements,
+                "regular_only_packet": True,
+                "private_licensed_source_face_mapping_unverified": True,
+                "publisher_visual_parity_verified": False,
+            }
+            if source_requirements else None
+        ),
     }
     (output_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -329,6 +433,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         description="Build a private Cloud Reader configured-font packet from exact local Windows font files."
     )
     parser.add_argument("--family", action="append", default=[], help="source family to export; repeatable")
+    parser.add_argument("--requirements", type=Path,
+                        help="private source-font requirement plan from pub_source_font_requirements_v1.py")
+    parser.add_argument("--allow-incomplete-styles", action="store_true",
+                        help="explicitly export partial Regular-only packet when PUB needs bold/italic/unknown styles")
     parser.add_argument("--font-dir", type=Path, help="font directory; defaults to %%WINDIR%%\\Fonts")
     parser.add_argument("--output-dir", type=Path, required=True, help="new/empty private packet directory")
     parser.add_argument(
@@ -343,7 +451,24 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
         font_dir = args.font_dir if args.font_dir is not None else default_windows_font_dir()
-        manifest = build_packet(args.family, font_dir, args.output_dir, args.cloud_font_dir)
+        required, provenance = (
+            read_private_source_requirements(args.requirements)
+            if args.requirements is not None else ([], None)
+        )
+        seen = set()
+        families = []
+        for family in required + args.family:
+            normalized = normalize_name(family)
+            if normalized not in seen:
+                families.append(family)
+                seen.add(normalized)
+            elif family not in required:
+                raise FontPacketError("duplicate/ambiguous manual --family value")
+        manifest = build_packet(
+            families, font_dir, args.output_dir, args.cloud_font_dir,
+            source_requirements=provenance,
+            allow_incomplete_styles=args.allow_incomplete_styles,
+        )
     except (OSError, FontPacketError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
