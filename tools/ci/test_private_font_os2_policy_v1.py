@@ -50,6 +50,17 @@ def run() -> None:
     assert inspect_os2_embedding_signal(
         standalone_font("Example Serif")
     )["os2_embedding_signal"] == "missing_or_malformed"
+    # A forgeable first ten bytes are not a complete OS/2 table. Unknown
+    # future OS/2 versions must not be interpreted as 'installable'.
+    assert inspect_os2_embedding_signal(
+        font_with_os2("Example Serif", "Regular", 0x0000, version=6)
+    )["os2_embedding_signal"] == "missing_or_malformed"
+    short = bytearray(font_with_os2("Example Serif", "Regular", 0x0000))
+    # The second SFNT table record is OS/2; shorten its claimed length.
+    short[12 + 16 + 12:12 + 16 + 16] = (10).to_bytes(4, "big")
+    assert inspect_os2_embedding_signal(bytes(short))[
+        "os2_embedding_signal"
+    ] == "missing_or_malformed"
     ttc = collection_font([
         ("Other", "Regular", "Other"),
         ("Example Serif", "Bold", "ExampleSerifBold"),

@@ -62,7 +62,8 @@ def font_with_os2(family: str, style: str, fs_type: int, *, version: int = 3) ->
     """Source-free tiny synthetic SFNT with name and OS/2 tables."""
     original = standalone_font(family, style)
     names = original[28:]
-    os2_data = bytearray(64)
+    size_by_version = {0: 68, 1: 86, 2: 96, 3: 96, 4: 96, 5: 100}
+    os2_data = bytearray(size_by_version.get(version, 100))
     struct.pack_into(">H", os2_data, 0, version)
     struct.pack_into(">H", os2_data, 4, 700 if "Bold" in style else 400)
     struct.pack_into(">H", os2_data, 8, fs_type)

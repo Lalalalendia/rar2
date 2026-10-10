@@ -15,6 +15,10 @@ PERMISSION_LABELS = {
     0x4: "preview_print_only_indicated",
     0x8: "editable_embedding_indicated",
 }
+# OS/2 table versions 0-5. Some early v0 fonts have the documented
+# shortened 68-byte legacy form; every other version needs its complete
+# defined table to be treated as readable embedding evidence.
+OS2_MIN_BYTES = {0: 68, 1: 86, 2: 96, 3: 96, 4: 96, 5: 100}
 
 
 def _u16(data: bytes, offset: int) -> int:
@@ -65,6 +69,8 @@ def inspect_os2_embedding_signal(data: bytes, face_index: int = 0) -> dict:
         if table_size < 10 or table_offset + table_size > len(data):
             return missing
         version = _u16(data, table_offset)
+        if version not in OS2_MIN_BYTES or table_size < OS2_MIN_BYTES[version]:
+            return missing
         fs_type = _u16(data, table_offset + 8)
         permissions = fs_type & 0x000F
         label = PERMISSION_LABELS.get(
