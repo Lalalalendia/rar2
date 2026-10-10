@@ -781,5 +781,8 @@ mod replay_identity_tests {
         assert!(cloud_replay_requires_local_identity(
             EDITOR_PROJECT_VERSION_V0_31
         ));
+        assert!(cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_32
+        ));
     }
 }
