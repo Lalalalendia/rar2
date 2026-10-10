@@ -617,6 +617,58 @@ function svgNode(tag, attrs) {
   return node;
 }
 
+// A diagnostic is not a shaped paragraph. Never allow unresolved text
+// to paint beyond the *source* frame, even if a user Story is much longer.
+export function unresolvedTextPreviewFrameV1(node) {
+  if (!node?.story) return null;
+  const { x, y, width, height } = node;
+  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
+    return null;
+  }
+  return Object.freeze({
+    x, y, width, height,
+    text: String(node.story.text ?? "").slice(0, 120).replace(/\s+/gu, " ").trim(),
+    font_size_css_px: node.story.style.font_size_css_px,
+    fill: node.story.style.fill,
+    authority: node.story.authority,
+    preview_reason: node.story.resolved_text
+      ? "backend_cannot_paint_resolved_line_layout"
+      : "story_text_layout_not_implemented",
+    layout_verified: false,
+  });
+}
+
+function appendUnresolvedSvgText(root, node) {
+  const frame = unresolvedTextPreviewFrameV1(node);
+  if (!frame) return false;
+  const viewport = svgNode("svg", {
+    x: frame.x, y: frame.y, width: frame.width, height: frame.height,
+    viewBox: "0 0 " + frame.width + " " + frame.height,
+    overflow: "hidden",
+    "data-text-viewport": "unshaped-source-frame",
+    "data-text-authority": frame.authority,
+    "data-preview-reason": frame.preview_reason,
+    "data-layout-verified": "false",
+  });
+  const title = svgNode("title", {});
+  title.textContent = "Unshaped Story text preview; clipped to source frame";
+  viewport.appendChild(title);
+  if (frame.text && frame.width >= 4 && frame.height >= 4) {
+    const label = svgNode("text", {
+      x: 2, y: 1,
+      "font-size": frame.font_size_css_px,
+      "dominant-baseline": "text-before-edge",
+      fill: frame.fill,
+      "data-text-authority": frame.authority,
+      "data-preview-reason": frame.preview_reason,
+    });
+    label.textContent = frame.text;
+    viewport.appendChild(label);
+  }
+  root.appendChild(viewport);
+  return true;
+}
+
 function appendResolvedSvgTable(root, table) {
   if (!table) return false;
   let painted = false;
@@ -648,9 +700,17 @@ function appendResolvedSvgTable(root, table) {
   }
   for (const cell of table.cells) {
     if (!cell.text) continue;
+    if (cell.width <= 0 || cell.height <= 0) continue;
+    const viewport = svgNode("svg", {
+      x: cell.x, y: cell.y, width: cell.width, height: cell.height,
+      viewBox: "0 0 " + cell.width + " " + cell.height,
+      overflow: "hidden",
+      "data-table-text-viewport": "cell-frame",
+      "data-table-cell-id": cell.cell_id,
+    });
     const label = svgNode("text", {
-      x: cell.x + 2,
-      y: cell.y + 12,
+      x: 2, y: 1,
+      "dominant-baseline": "text-before-edge",
       "font-size": 10,
       "data-table-cell-id": cell.cell_id,
       "data-table-row": cell.row,
@@ -658,10 +718,11 @@ function appendResolvedSvgTable(root, table) {
       "data-table-row-span": cell.row_span,
       "data-table-column-span": cell.column_span,
       "data-text-authority": cell.text_authority,
-      "data-preview-reason": "table_cell_preview"
+      "data-preview-reason": "table_cell_preview_clipped"
     });
-    label.textContent = cell.text.slice(0, 120);
-    root.appendChild(label);
+    label.textContent = cell.text.slice(0, 120).replace(/\s+/gu, " ").trim();
+    viewport.appendChild(label);
+    root.appendChild(viewport);
     painted = true;
   }
   return painted;
@@ -839,18 +900,7 @@ class SvgRenderer {
           paintedGenericImage = true;
         }
         if (node.story && !appendResolvedSvgText(this.root, node.story)) {
-          const label = svgNode("text", {
-            x: node.x + 2,
-            y: node.y + node.story.style.font_size_css_px,
-            "font-size": node.story.style.font_size_css_px,
-            fill: node.story.style.fill,
-            "data-text-authority": node.story.authority,
-            "data-preview-reason": node.visual_authority === "reader_scene"
-              ? "shared_plan_or_font_unavailable"
-              : "browser_scene_preview"
-          });
-          label.textContent = node.story.text.slice(0, 120);
-          this.root.appendChild(label);
+          appendUnresolvedSvgText(this.root, node);
         } else if (
           node.resource &&
           !paintedResolvedImage &&
@@ -948,9 +998,18 @@ class Canvas2dRenderer {
         context.lineWidth = Math.max(0.5, node.paint.stroke_width_css_px || 0.5);
         context.strokeRect(node.x, node.y, node.width, node.height);
         if (node.story) {
-          context.fillStyle = "rgba(0,0,0,0.9)";
-          context.font = "12px sans-serif";
-          context.fillText(node.story.text.slice(0, 120), node.x + 2, node.y + 14);
+          const preview = unresolvedTextPreviewFrameV1(node);
+          if (preview) {
+            context.save();
+            context.beginPath();
+            context.rect(preview.x, preview.y, preview.width, preview.height);
+            context.clip();
+            context.fillStyle = preview.fill;
+            context.font = preview.font_size_css_px + "px sans-serif";
+            context.textBaseline = "top";
+            context.fillText(preview.text, preview.x + 2, preview.y + 1);
+            context.restore();
+          }
         } else if (node.resource) {
           context.fillStyle = "rgba(0,0,0,0.7)";
           context.font = "10px sans-serif";
@@ -1022,13 +1081,20 @@ class WebGl2HybridRenderer {
           label.dataset.nodeId = node.node_id;
           label.dataset.textAuthority = node.story?.authority ?? "none";
           label.style.position = "absolute";
-          label.style.left = (node.x + 2) + "px";
-          label.style.top = (node.y + 2) + "px";
-          label.style.maxWidth = Math.max(1, node.width - 4) + "px";
+          const preview = unresolvedTextPreviewFrameV1(node);
+          label.style.left = node.x + "px";
+          label.style.top = node.y + "px";
+          label.style.width = Math.max(0, node.width) + "px";
+          label.style.height = Math.max(0, node.height) + "px";
           label.style.overflow = "hidden";
           label.style.whiteSpace = "nowrap";
           label.style.font = "11px sans-serif";
-          label.textContent = node.story?.text.slice(0, 120) ??
+          label.style.padding = "1px 2px";
+          if (preview) {
+            label.dataset.layoutVerified = "false";
+            label.dataset.previewReason = preview.preview_reason;
+          }
+          label.textContent = preview?.text ??
             (node.resource ? "image:" + node.resource.availability : "diagnostic");
           this.textLayer.appendChild(label);
         }
