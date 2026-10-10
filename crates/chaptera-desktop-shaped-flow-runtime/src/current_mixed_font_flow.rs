@@ -690,7 +690,7 @@ mod tests {
 
     #[test]
     fn unicode_breaks_reflow_exact_widths_across_reciprocal_linked_frames_and_report_overset() {
-        let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let bytes = include_bytes!("../../../assets/fonts/ofl/abel/Abel-Regular.ttf");
         let identity = identity(bytes);
         let resource = ServerFontResourceV1 {
             identity: &identity,
@@ -772,7 +772,7 @@ mod tests {
 
     #[test]
     fn physical_spans_with_different_effective_sizes_remain_distinct_inside_one_line() {
-        let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let bytes = include_bytes!("../../../assets/fonts/ofl/abel/Abel-Regular.ttf");
         let identity = identity(bytes);
         let trust = ServerFontResourceV1 {
             identity: &identity,
@@ -818,7 +818,7 @@ mod tests {
 
     #[test]
     fn missing_source_font_and_altered_full_bytes_never_fabricate_line_flow() {
-        let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let bytes = include_bytes!("../../../assets/fonts/ofl/abel/Abel-Regular.ttf");
         let identity = identity(bytes);
         let resource = ServerFontResourceV1 {
             identity: &identity,
