@@ -35,6 +35,11 @@ pub struct ProjectCatalogEntry {
     pub project_id: String,
     pub document_id: String,
     pub name: String,
+    pub lifecycle_state: String,
+    pub lifecycle_generation: u64,
+    pub metadata_version: u64,
+    pub workspace_id: String,
+    pub current_revision_id: String,
     pub created_at_ms: i64,
 }
 
@@ -157,7 +162,25 @@ impl SqliteProjectPersistence {
 
         let rows = sqlx::query(
             r#"
-            SELECT p.project_id, d.document_id, p.name, p.created_at_ms
+            SELECT
+                p.project_id,
+                d.document_id,
+                p.name,
+                p.lifecycle_state,
+                p.lifecycle_generation,
+                p.metadata_version,
+                p.workspace_id,
+                COALESCE(
+                    (
+                        SELECT re.child_revision
+                        FROM revision_edges AS re
+                        WHERE re.document_id = d.document_id
+                        ORDER BY re.child_cursor DESC
+                        LIMIT 1
+                    ),
+                    d.genesis_revision_id
+                ) AS current_revision_id,
+                p.created_at_ms
             FROM projects AS p
             JOIN documents AS d
               ON d.project_id = p.project_id AND d.tenant_id = p.tenant_id
@@ -210,12 +233,47 @@ impl SqliteProjectPersistence {
                 }
                 let project_id = blob_text(row, "project_id")?;
                 let document_id = blob_text(row, "document_id")?;
+                let workspace_id = blob_text(row, "workspace_id")?;
+                let current_revision_id = blob_text(row, "current_revision_id")?;
                 require_ident(&project_id, "project_id")?;
                 require_ident(&document_id, "document_id")?;
+                require_ident(&workspace_id, "workspace_id")?;
+                require_ident(&current_revision_id, "current_revision_id")?;
+
+                let lifecycle_state: String =
+                    row.try_get("lifecycle_state").map_err(sqlite_error)?;
+                if lifecycle_state != "active" {
+                    return Err(IngressError::new(
+                        "project_persistence_row_corrupt",
+                        "project catalog returned a non-active lifecycle row",
+                    ));
+                }
+                let lifecycle_generation =
+                    row.try_get::<i64, _>("lifecycle_generation").map_err(sqlite_error)?;
+                let lifecycle_generation = u64::try_from(lifecycle_generation).map_err(|_| {
+                    IngressError::new(
+                        "project_persistence_row_corrupt",
+                        "project lifecycle generation is negative",
+                    )
+                })?;
+                let metadata_version =
+                    row.try_get::<i64, _>("metadata_version").map_err(sqlite_error)?;
+                let metadata_version = u64::try_from(metadata_version).map_err(|_| {
+                    IngressError::new(
+                        "project_persistence_row_corrupt",
+                        "project metadata version is negative",
+                    )
+                })?;
+
                 Ok(ProjectCatalogEntry {
                     project_id,
                     document_id,
                     name,
+                    lifecycle_state,
+                    lifecycle_generation,
+                    metadata_version,
+                    workspace_id,
+                    current_revision_id,
                     created_at_ms: row.try_get("created_at_ms").map_err(sqlite_error)?,
                 })
             })
