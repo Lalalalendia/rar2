@@ -480,10 +480,7 @@ mod tests {
     };
     use tower::ServiceExt;
 
-    use crate::{
-        oidc_authn::OidcVerifiedIdentity,
-        schema_migration::SqliteMigrationRuntime,
-    };
+    use crate::{oidc_authn::OidcVerifiedIdentity, schema_migration::SqliteMigrationRuntime};
 
     use super::*;
 
