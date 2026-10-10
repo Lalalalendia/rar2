@@ -442,10 +442,10 @@ pub fn plan_delete_authored_rectangles_page_v1(
     let mut current_stack = state.authored_stack.clone();
     let mut stacks = Vec::with_capacity(count);
     for shape in &shapes_before {
-        let transition = plan_delete_shape_remove_v1(&current_stack, shape).map_err(Error::Stack)?;
-        current_stack =
-            apply_authored_stack_transition_forward_v1(&current_stack, &transition)
-                .map_err(Error::Stack)?;
+        let transition =
+            plan_delete_shape_remove_v1(&current_stack, shape).map_err(Error::Stack)?;
+        current_stack = apply_authored_stack_transition_forward_v1(&current_stack, &transition)
+            .map_err(Error::Stack)?;
         stacks.push(transition);
     }
     if !current_stack.members.is_empty() {
@@ -568,9 +568,10 @@ pub fn apply_delete_authored_rectangles_page_inverse_v1(
     }
     let page_id = transition.page.identity.page_id;
     if state.pages.contains_key(&page_id)
-        || state.authored_shapes.values().any(|shape| {
-            shape.page_id == page_id || shape.parent_id == page_id
-        })
+        || state
+            .authored_shapes
+            .values()
+            .any(|shape| shape.page_id == page_id || shape.parent_id == page_id)
     {
         return Err(Error::IdentityCollision);
     }
@@ -1291,5 +1292,4 @@ mod tests {
         );
         assert_eq!(collision, unchanged);
     }
-
 }
