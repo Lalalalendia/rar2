@@ -126,13 +126,27 @@ async fn pinned_sample3_exact_project_replays_in_real_seccomp_worker() {
         )
         .await
         .unwrap();
-    assert_eq!(baseline_scene["protocol_version"], "chaptera.reader-scene.v1");
+    assert_eq!(
+        baseline_scene["protocol_version"],
+        "chaptera.reader-scene.v1"
+    );
     assert_eq!(baseline_scene["document_id"], "document-sample3-isolated");
     assert_eq!(baseline_scene["source_hash"], source_sha256);
     assert_eq!(baseline_scene["revision_id"], "revision-sample3-baseline");
-    assert_eq!(baseline_scene["scene_authority"], "server_viewer_projection");
-    assert!(baseline_scene["pages"].as_array().is_some_and(|pages| !pages.is_empty()));
-    assert!(baseline_scene["nodes"].as_array().is_some_and(|nodes| !nodes.is_empty()));
+    assert_eq!(
+        baseline_scene["scene_authority"],
+        "server_viewer_projection"
+    );
+    assert!(
+        baseline_scene["pages"]
+            .as_array()
+            .is_some_and(|pages| !pages.is_empty())
+    );
+    assert!(
+        baseline_scene["nodes"]
+            .as_array()
+            .is_some_and(|nodes| !nodes.is_empty())
+    );
     assert!(baseline_scene.get("project").is_none());
     assert!(baseline_scene.get("authoring_graph").is_none());
 
