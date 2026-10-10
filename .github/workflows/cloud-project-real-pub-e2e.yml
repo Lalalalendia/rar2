@@ -1,0 +1,96 @@
+name: CLOUD-B02 real PUB project HTTP acceptance
+
+on:
+  pull_request:
+    paths:
+      - "apps/web/chaptera-cloud-source-ingress-v1.mjs"
+      - "apps/web/cloud-project-new-v1.mjs"
+      - "apps/web/cloud-project-new.html"
+      - "tools/run_secure_origin_real_pub.py"
+      - "tools/run_secure_origin_oidc_acceptance.py"
+      - "tools/run_secure_origin_real_pub_browser.mjs"
+      - ".github/workflows/cloud-project-real-pub-e2e.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  authenticated-real-pub:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FIXTURE_SHA256: 6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf
+      FIXTURE_BYTES: "291840"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@1.94.1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check runner, Docker and native sandbox
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/run_secure_origin_real_pub.py tools/chaptera_local_oidc.py tools/migration_pdf_worker_isolation.py
+          node --check tools/run_secure_origin_real_pub_browser.mjs
+          python - <<'PY'
+          import ctypes.util
+          assert ctypes.util.find_library("seccomp"), "libseccomp required by isolated PUB scan"
+          PY
+          docker version
+
+      - name: Fetch pinned real Publisher fixture
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/chaptera-real-pub"
+          curl --fail --location --retry 4 --retry-delay 2 \
+            "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub" \
+            --output "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub"
+          printf '%s  %s\n' "$FIXTURE_SHA256" "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub" | sha256sum -c -
+          test "$(stat -c %s "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub")" = "$FIXTURE_BYTES"
+
+      - name: Build canonical HTTP service and real isolated workers
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Install Playwright Chromium
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Real OIDC HTTPS PUB upload, validation and project open
+        env:
+          CHAPTERA_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python tools/run_secure_origin_real_pub.py \
+            --binary target/debug/chaptera \
+            --browser-script tools/run_secure_origin_real_pub_browser.mjs \
+            --fixture "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub" \
+            --fixture-sha256 "$FIXTURE_SHA256" \
+            --caddy-image caddy:2.10.2-alpine
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cloud-b02-real-pub-source-http
+          path: |
+            target/cloud-real-pub-ingress/receipt.json
+            target/cloud-real-pub-ingress/server.log
+            target/cloud-real-pub-ingress/worker.log
+            target/cloud-real-pub-ingress/browser.log
+            target/cloud-real-pub-ingress/caddy.log
+            target/cloud-real-pub-ingress/Caddyfile
+          if-no-files-found: warn
+          retention-days: 14
