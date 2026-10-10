@@ -335,17 +335,16 @@ pub fn run_product_replay_worker(
             "MoveNode requires an authorized exact source-bound project",
         ));
     }
-    if let Some(scene) = &reader_scene_intent {
-        if project_path.is_none()
+    if let Some(scene) = &reader_scene_intent
+        && (project_path.is_none()
             || move_node_intent.is_some()
             || !valid_revision_id(&scene.revision_id)
-            || !valid_revision_id(&scene.baseline_revision_id)
-        {
-            return Err(ProductReplayWorkerError::new(
-                "product_replay_identity_invalid",
-                "Reader scene requires an exact project and exclusive revision identities",
-            ));
-        }
+            || !valid_revision_id(&scene.baseline_revision_id))
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_identity_invalid",
+            "Reader scene requires an exact project and exclusive revision identities",
+        ));
     }
     if expected_source_byte_len == 0 || expected_source_byte_len > MAX_SOURCE_BYTES {
         return Err(ProductReplayWorkerError::new(
@@ -800,10 +799,11 @@ impl IsolatedProductReplayProducer {
         source_bytes: &[u8],
         project: &EditorProject,
         expected_project_sha256: &str,
-        revision_id: &str,
-        baseline_revision_id: &str,
+        intent: &IsolatedReaderSceneIntentV1,
     ) -> Result<Value, ProductReplayWorkerError> {
-        if !valid_revision_id(revision_id) || !valid_revision_id(baseline_revision_id) {
+        if !valid_revision_id(&intent.revision_id)
+            || !valid_revision_id(&intent.baseline_revision_id)
+        {
             return Err(ProductReplayWorkerError::new(
                 "product_reader_scene_invalid",
                 "Reader scene revision identity is invalid",
@@ -828,10 +828,6 @@ impl IsolatedProductReplayProducer {
                 "Reader Scene input is not the exact authorized revision project",
             ));
         }
-        let intent = IsolatedReaderSceneIntentV1 {
-            revision_id: revision_id.to_owned(),
-            baseline_revision_id: baseline_revision_id.to_owned(),
-        };
         let receipt = self
             .invoke_job(
                 document_id,
@@ -839,7 +835,7 @@ impl IsolatedProductReplayProducer {
                 source_bytes,
                 Some((&project_bytes, expected_project_sha256)),
                 None,
-                Some(&intent),
+                Some(intent),
             )
             .await?;
         validate_product_replay_receipt(
@@ -861,9 +857,9 @@ impl IsolatedProductReplayProducer {
                 "Reader scene worker did not return an exact scene",
             )
         })?;
-        if scene.revision_id != revision_id
-            || scene.baseline_revision_id != baseline_revision_id
-            || scene.scene["revision_id"] != revision_id
+        if scene.revision_id != intent.revision_id
+            || scene.baseline_revision_id != intent.baseline_revision_id
+            || scene.scene["revision_id"] != intent.revision_id
             || scene.scene["document_id"] != document_id
             || scene.scene["source_hash"] != source_sha256
         {
