@@ -417,7 +417,11 @@ fn apply_multiple_rectangles_candidate_v1(
     )
     .map_err(Error::Page)?;
     for (shape, stack) in transition.destination_shapes.iter().zip(&transition.stacks) {
-        if next.authored_shapes.insert(shape.node_id, shape.clone()).is_some() {
+        if next
+            .authored_shapes
+            .insert(shape.node_id, shape.clone())
+            .is_some()
+        {
             return Err(Error::DestinationNodeCollision);
         }
         next.destination_stack =
@@ -480,7 +484,10 @@ pub fn plan_duplicate_authored_rectangles_page_v1(
     }) {
         return Err(Error::DestinationPageAlreadyOwned);
     }
-    let unique_destination_ids = destination_node_ids.iter().copied().collect::<BTreeSet<_>>();
+    let unique_destination_ids = destination_node_ids
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
     if unique_destination_ids.len() != source_count {
         return Err(Error::DestinationNodeCollision);
     }
@@ -529,8 +536,7 @@ pub fn plan_duplicate_authored_rectangles_page_v1(
             parent_id: destination_identity.page_id,
             ..source.clone()
         };
-        validate_authored_shape_runtime_v1(&duplicate)
-            .map_err(|_| Error::SourceShapeInvalid)?;
+        validate_authored_shape_runtime_v1(&duplicate).map_err(|_| Error::SourceShapeInvalid)?;
         let transition =
             plan_create_shape_append_v1(&current_stack, &duplicate).map_err(Error::Stack)?;
         current_stack = apply_authored_stack_transition_forward_v1(&current_stack, &transition)
@@ -543,19 +549,12 @@ pub fn plan_duplicate_authored_rectangles_page_v1(
         source_shapes,
         destination_shapes,
         stacks,
-        before_state_id: multiple_rectangles_state_id_v1(
-            document_id,
-            state,
-            customer_page_ids,
-        ),
+        before_state_id: multiple_rectangles_state_id_v1(document_id, state, customer_page_ids),
         after_state_id: String::new(),
     };
     let next = apply_multiple_rectangles_candidate_v1(document_id, state, &planned)?;
-    planned.after_state_id = multiple_rectangles_state_id_v1(
-        document_id,
-        &next,
-        &planned.page.after_customer_page_ids,
-    );
+    planned.after_state_id =
+        multiple_rectangles_state_id_v1(document_id, &next, &planned.page.after_customer_page_ids);
     Ok(planned)
 }
 
@@ -591,11 +590,8 @@ pub fn apply_duplicate_authored_rectangles_page_forward_v1(
         return Err(Error::BeforeStateMismatch);
     }
     let next = apply_multiple_rectangles_candidate_v1(document_id, state, transition)?;
-    if multiple_rectangles_state_id_v1(
-        document_id,
-        &next,
-        &transition.page.after_customer_page_ids,
-    ) != transition.after_state_id
+    if multiple_rectangles_state_id_v1(document_id, &next, &transition.page.after_customer_page_ids)
+        != transition.after_state_id
     {
         return Err(Error::AfterStateMismatch);
     }
@@ -1139,7 +1135,10 @@ mod tests {
         assert_eq!(transition.stacks[0].before.members.len(), 0);
         assert_eq!(transition.stacks[0].after.members, vec![node(0x66)]);
         assert_eq!(transition.stacks[1].before.members, vec![node(0x66)]);
-        assert_eq!(transition.stacks[1].after.members, vec![node(0x66), node(0x67)]);
+        assert_eq!(
+            transition.stacks[1].after.members,
+            vec![node(0x66), node(0x67)]
+        );
 
         apply_duplicate_authored_rectangles_page_forward_v1(
             document,
@@ -1161,7 +1160,10 @@ mod tests {
         );
         assert_eq!(state.authored_shapes.len(), 4);
         assert_eq!(state.source_stack, original.source_stack);
-        assert_eq!(state.destination_stack.members, vec![node(0x66), node(0x67)]);
+        assert_eq!(
+            state.destination_stack.members,
+            vec![node(0x66), node(0x67)]
+        );
         assert_eq!(
             state.pages[&identity().page_id].size,
             state.pages[&page(0x77, true)].size
@@ -1191,7 +1193,9 @@ mod tests {
             Err(DuplicateAuthoredRectanglesPageErrorV1::SourceShapeInvalid)
         );
         let mut hidden = state.clone();
-        hidden.authored_shapes.insert(node(0x43), source_shape(page(0x77, true)));
+        hidden
+            .authored_shapes
+            .insert(node(0x43), source_shape(page(0x77, true)));
         assert_eq!(
             multi_plan(document, &hidden, &customers),
             Err(DuplicateAuthoredRectanglesPageErrorV1::SourceRegistryMismatch)
@@ -1288,7 +1292,13 @@ mod tests {
         let (document, state, customers) = multi_rectangle_fixture();
         let transition = multi_plan(document, &state, &customers).expect("two-shape plan");
         let mut stale = state.clone();
-        stale.authored_shapes.get_mut(&node(0x44)).unwrap().paint.stroke.width_emu += 1;
+        stale
+            .authored_shapes
+            .get_mut(&node(0x44))
+            .unwrap()
+            .paint
+            .stroke
+            .width_emu += 1;
         let unchanged = stale.clone();
         assert_eq!(
             apply_duplicate_authored_rectangles_page_forward_v1(
@@ -1338,5 +1348,4 @@ mod tests {
         );
         assert_eq!(before, incorrect_after);
     }
-
 }
