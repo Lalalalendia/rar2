@@ -119,6 +119,33 @@ def main() -> None:
         json.dumps(result["project"], ensure_ascii=False, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    # Consume canonical Rust glyph coverage from the actually edited
+    # Publisher Story. Only the replacement character has independently
+    # admitted full physical bytes; every source-font scalar remains unknown.
+    packet = worker(
+        "glyph-spans", str(source), str(project_after), selected["story_id"],
+    )
+    assert packet["protocol_version"] == "chaptera.local-current-exact-glyph-spans.v1"
+    assert packet["project_state_id"] == result["project_state_id"]
+    assert packet["story_format_state_hash"] == result["format_state_hash"]
+    assert packet["story_scalar_len"] == selected["story_scalar_len"]
+    assert packet["admitted_scalar_count"] == 1
+    assert packet["source_unresolved_scalar_count"] == selected["story_scalar_len"] - 1
+    assert packet["shaped_glyph_count"] >= 1
+    assert packet["all_scalars_shaped"] is False
+    assert packet["authoritative_line_breaks"] is False
+    assert packet["fixed_pdf_allowed"] is False
+    exact = [span for span in packet["spans"] if span["kind"] == "admitted_exact"]
+    unresolved = [span for span in packet["spans"] if span["kind"] == "source_unresolved"]
+    assert exact and unresolved
+    assert exact[0]["start_scalar"] == 0 and exact[0]["end_scalar"] == 1
+    assert exact[0]["identity"]["content_hash"] == ABEL_SHA256
+    assert all(glyph["cluster"] == 0 for glyph in exact[0]["shaped"]["glyphs"])
+    assert all(span["source_font_binding_id"] for span in unresolved)
+    (output / "pinned-font-physical-glyph-spans.json").write_text(
+        json.dumps(packet, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     # Stale revision/snapshot, wrong physical identity and incorrect overlay
     # hash are each independently rejected by the canonical Rust worker.
     for kind in ("stale", "wrong_resource", "wrong_hash"):
@@ -144,6 +171,10 @@ def main() -> None:
         "denials": ["stale", "wrong_resource", "wrong_hash"],
         "source_unchanged": True,
         "layout_authority": result["layout_authority"],
+        "exact_physical_glyphs": packet["shaped_glyph_count"],
+        "exact_physical_scalars": packet["admitted_scalar_count"],
+        "source_unresolved_scalars": packet["source_unresolved_scalar_count"],
+        "line_breaks_verified": False,
         "fixed_output_eligible": False,
     }
     (output / "pinned-font-apply-receipt.json").write_text(

@@ -12,6 +12,7 @@ publish = false
 [dependencies]
 anyhow = "1"
 chaptera-text-format-overlay = { path = "../../crates/chaptera-text-format-overlay" }
+chaptera-desktop-shaped-flow-runtime = { path = "../../crates/chaptera-desktop-shaped-flow-runtime" }
 pub-editor = { path = "../../vendor/producer-a/crates/pub-editor" }
 pub-cfb = { path = "../../vendor/producer-a/crates/pub-cfb" }
 pub-core = { path = "../../vendor/producer-a/crates/pub-core" }
