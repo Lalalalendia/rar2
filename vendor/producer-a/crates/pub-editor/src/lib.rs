@@ -18,18 +18,14 @@ mod session_table;
 use session_table::apply_table_cell_state;
 mod session_text;
 use session_geometry::{
-    append_blank_page_error_to_editor_v1, apply_authored_line_inverse,
-    apply_authored_shape_delete_forward, apply_authored_shape_delete_inverse,
-    apply_authored_shape_inverse, apply_authored_stack_history_forward_v1,
-    authored_line_from_operation, authored_shape_from_operation,
-    authored_stack_operation_page_id_v1, delete_blank_authored_page_error_to_editor_v1,
+    apply_authored_line_inverse, apply_authored_shape_delete_forward,
+    apply_authored_shape_delete_inverse, apply_authored_shape_inverse,
+    apply_authored_stack_history_forward_v1, apply_page_lifecycle_graph_forward_v1,
+    apply_page_lifecycle_graph_inverse_v1, authored_line_from_operation,
+    authored_shape_from_operation, authored_stack_operation_page_id_v1,
     derive_authored_stacks_from_operations_v1, display_page_append_error_v1,
-    display_page_delete_error_v1, page_order_error_to_editor_v1, validate_move_nodes_transition,
-    validate_resize_nodes_transition,
-};
-use session_geometry::{
-    display_page_duplicate_error_v1, display_page_insert_error_v1,
-    duplicate_blank_page_error_to_editor_v1, insert_blank_page_after_error_to_editor_v1,
+    display_page_delete_error_v1, display_page_duplicate_error_v1, display_page_insert_error_v1,
+    validate_move_nodes_transition, validate_resize_nodes_transition,
 };
 use session_image::{
     apply_crop_forward, apply_crop_inverse, apply_image_forward, apply_image_inverse,
@@ -46,7 +42,7 @@ mod table_rowcol_history_v1;
 mod text_format_property_base_v1;
 mod writer_assessment;
 use writer_assessment::{
-    minimum_identity_project_schema_v1, reject_legacy_page_lifecycle_schemas_v030,
+    minimum_identity_project_schema_v1, reject_legacy_page_lifecycle_schemas_v031,
     required_editor_asset_refs_v1,
 };
 
@@ -99,7 +95,9 @@ pub use pub_editor_authoring_core::{
     validate_authored_stack_v1, validate_create_table_runtime_v1,
 };
 pub use pub_editor_authoring_core::{
-    DUPLICATE_AUTHORED_RECTANGLE_PAGE_PROTOCOL_V1, DuplicateAuthoredRectanglePageTransitionV1,
+    DUPLICATE_AUTHORED_RECTANGLE_PAGE_PROTOCOL_V1, DUPLICATE_AUTHORED_RECTANGLES_PAGE_PROTOCOL_V1,
+    DuplicateAuthoredRectanglePageTransitionV1, DuplicateAuthoredRectanglesPageTransitionV1,
+    MAX_DUPLICATED_AUTHORED_RECTANGLES_PAGE_V1,
 };
 pub use pub_editor_authoring_core::{
     DUPLICATE_BLANK_PAGE_PROTOCOL_V1, DuplicateBlankPageErrorV1, DuplicateBlankPageTransitionV1,
@@ -239,6 +237,7 @@ pub const EDITOR_PROJECT_VERSION_V0_27: &str = "pub-editor-v0.27";
 pub const EDITOR_PROJECT_VERSION_V0_28: &str = "pub-editor-v0.28";
 pub const EDITOR_PROJECT_VERSION_V0_29: &str = "pub-editor-v0.29";
 pub const EDITOR_PROJECT_VERSION_V0_30: &str = "pub-editor-v0.30";
+pub const EDITOR_PROJECT_VERSION_V0_31: &str = "pub-editor-v0.31";
 pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_23;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
 pub const PUB_MATURE_0X2C_SCHEMA_FENCE: &str = "pub-family-0x2c";
@@ -435,6 +434,9 @@ pub enum EditOperation {
     },
     DuplicateAuthoredRectanglePageV1 {
         transition: Box<DuplicateAuthoredRectanglePageTransitionV1>,
+    },
+    DuplicateAuthoredRectanglesPageV1 {
+        transition: Box<DuplicateAuthoredRectanglesPageTransitionV1>,
     },
     DuplicateBlankPageV1 {
         transition: DuplicateBlankPageTransitionV1,
@@ -2049,6 +2051,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesDuplicateAuthoredRectanglePageOperation {
         index: usize,
     },
+    LegacyProjectCarriesDuplicateAuthoredRectanglesPageOperation {
+        index: usize,
+    },
     LegacyProjectCarriesTextFormatOperation {
         index: usize,
     },
@@ -2109,7 +2114,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, {EDITOR_PROJECT_VERSION_V0_18:?}, {EDITOR_PROJECT_VERSION_V0_19:?}, {EDITOR_PROJECT_VERSION_V0_20:?}, {EDITOR_PROJECT_VERSION_V0_21:?}, {EDITOR_PROJECT_VERSION_V0_22:?}, {EDITOR_PROJECT_VERSION_V0_23:?}, {EDITOR_PROJECT_VERSION_V0_24:?}, {EDITOR_PROJECT_VERSION_V0_25:?}, {EDITOR_PROJECT_VERSION_V0_26:?}, {EDITOR_PROJECT_VERSION_V0_27:?}, or {EDITOR_PROJECT_VERSION_V0_28:?}, or {EDITOR_PROJECT_VERSION_V0_29:?}, or {EDITOR_PROJECT_VERSION_V0_30:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, {EDITOR_PROJECT_VERSION_V0_18:?}, {EDITOR_PROJECT_VERSION_V0_19:?}, {EDITOR_PROJECT_VERSION_V0_20:?}, {EDITOR_PROJECT_VERSION_V0_21:?}, {EDITOR_PROJECT_VERSION_V0_22:?}, {EDITOR_PROJECT_VERSION_V0_23:?}, {EDITOR_PROJECT_VERSION_V0_24:?}, {EDITOR_PROJECT_VERSION_V0_25:?}, {EDITOR_PROJECT_VERSION_V0_26:?}, {EDITOR_PROJECT_VERSION_V0_27:?}, or {EDITOR_PROJECT_VERSION_V0_28:?}, or {EDITOR_PROJECT_VERSION_V0_29:?}, or {EDITOR_PROJECT_VERSION_V0_30:?}, or {EDITOR_PROJECT_VERSION_V0_31:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -2204,6 +2209,10 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesDuplicateAuthoredRectanglePageOperation { index } => write!(
                 formatter,
                 "legacy editor project cannot carry DuplicateAuthoredRectanglePageV1 at index {index}"
+            ),
+            Self::LegacyProjectCarriesDuplicateAuthoredRectanglesPageOperation { index } => write!(
+                formatter,
+                "legacy editor project cannot carry DuplicateAuthoredRectanglesPageV1 at index {index}"
             ),
             Self::LegacyProjectCarriesAuthoredPageIdentityOperation { index } => write!(
                 formatter,
@@ -3481,11 +3490,12 @@ impl EditorSession {
     ) -> Result<(), EditorProjectError> {
         self.validate_source_identity()
             .map_err(EditorProjectError::Session)?;
-        // v0.28-v0.30 preserve v0.27 admissions; each adds a fenced operation.
+        // v0.28-v0.31 preserve v0.27 admissions; each adds a fenced operation.
         let legacy_compatible_schema: &str = if project.schema_version
             == EDITOR_PROJECT_VERSION_V0_28
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_29
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_30
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_31
         {
             EDITOR_PROJECT_VERSION_V0_27
         } else {
@@ -4068,7 +4078,7 @@ impl EditorSession {
         {
             return Err(EditorProjectError::MissingProjectIdentity);
         }
-        reject_legacy_page_lifecycle_schemas_v030(project, legacy_compatible_schema)?;
+        reject_legacy_page_lifecycle_schemas_v031(project, legacy_compatible_schema)?;
         if project.source_hash != self.source_hash {
             return Err(EditorProjectError::SourceHashMismatch {
                 expected: self.source_hash,
@@ -5785,6 +5795,13 @@ impl EditorSession {
                             transition.as_ref(),
                         )?;
                     }
+                    EditOperation::DuplicateAuthoredRectanglesPageV1 { transition } => {
+                        self.undo_duplicate_rectangles_page_candidate_v1(
+                            &mut candidate_graph,
+                            &mut candidate_shapes,
+                            transition.as_ref(),
+                        )?;
+                    }
                     EditOperation::ReorderAuthoredStack { .. } => {}
                     _ => unreachable!("authored-stack page helper only admits lane operations"),
                 }
@@ -5931,6 +5948,13 @@ impl EditorSession {
                     }
                     EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => {
                         self.redo_duplicate_rectangle_page_candidate_v1(
+                            &mut candidate_graph,
+                            &mut candidate_shapes,
+                            transition.as_ref(),
+                        )?;
+                    }
+                    EditOperation::DuplicateAuthoredRectanglesPageV1 { transition } => {
+                        self.redo_duplicate_rectangles_page_candidate_v1(
                             &mut candidate_graph,
                             &mut candidate_shapes,
                             transition.as_ref(),
@@ -6264,6 +6288,9 @@ fn replay_canonical_operation(
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => session
             .consume_canonical_duplicate_authored_rectangle_page_v1(transition.as_ref().clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::DuplicateAuthoredRectanglesPageV1 { transition } => session
+            .consume_canonical_duplicate_authored_rectangles_page_v1(transition.as_ref().clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::SetTextFormatProperty {
             story_id,
@@ -7428,62 +7455,16 @@ fn apply_forward(
         EditOperation::ReorderAuthoredStack { .. } => {
             unreachable!("ReorderAuthoredStack is applied to the authored lane overlay state")
         }
-        EditOperation::RegisterAuthoredPageIdentityV1 { .. } => {
-            // Authored Page identity is derived from durable history only.
-        }
-        EditOperation::AppendBlankPageV1 { transition } => {
-            apply_append_blank_page_forward_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                &mut graph.pages,
-                transition,
-            )
-            .map_err(append_blank_page_error_to_editor_v1)?;
-        }
-        EditOperation::DeleteAuthoredRectanglePageV1 { .. } => {
-            return Err(EditorError::PageDeleteUnsupported {
-                message: "combined authored page/shape transition needs EditorSession".into(),
-            });
-        }
-        EditOperation::DuplicateAuthoredRectanglePageV1 { .. } => {
-            return Err(EditorError::PageDuplicateUnsupported {
-                message: "combined authored Page/Rectangle transition needs EditorSession".into(),
-            });
-        }
-        EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
-            apply_delete_blank_authored_page_forward_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                &mut graph.pages,
-                transition,
-            )
-            .map_err(delete_blank_authored_page_error_to_editor_v1)?;
-        }
-        EditOperation::DuplicateBlankPageV1 { transition } => {
-            apply_duplicate_blank_page_forward_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                &mut graph.pages,
-                transition,
-            )
-            .map_err(duplicate_blank_page_error_to_editor_v1)?;
-        }
-        EditOperation::InsertBlankPageAfterV1 { transition } => {
-            apply_insert_blank_page_after_forward_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                &mut graph.pages,
-                transition,
-            )
-            .map_err(insert_blank_page_after_error_to_editor_v1)?;
-        }
-        EditOperation::ReorderPagesV1 { transition } => {
-            apply_page_order_transition_forward_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                transition,
-            )
-            .map_err(page_order_error_to_editor_v1)?;
+        EditOperation::RegisterAuthoredPageIdentityV1 { .. }
+        | EditOperation::AppendBlankPageV1 { .. }
+        | EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+        | EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
+        | EditOperation::DuplicateAuthoredRectanglesPageV1 { .. }
+        | EditOperation::DeleteBlankAuthoredPageV1 { .. }
+        | EditOperation::DuplicateBlankPageV1 { .. }
+        | EditOperation::InsertBlankPageAfterV1 { .. }
+        | EditOperation::ReorderPagesV1 { .. } => {
+            return apply_page_lifecycle_graph_forward_v1(graph, operation);
         }
         EditOperation::SetTextFormatProperty { .. }
         | EditOperation::ClearTextFormatPropertyOverride { .. }
@@ -7740,62 +7721,16 @@ fn apply_inverse(
         EditOperation::ReorderAuthoredStack { .. } => {
             unreachable!("ReorderAuthoredStack is reverted in the authored lane overlay state")
         }
-        EditOperation::RegisterAuthoredPageIdentityV1 { .. } => {
-            // Undo removes the declaration from active history; SourceGraph stays immutable.
-        }
-        EditOperation::AppendBlankPageV1 { transition } => {
-            apply_append_blank_page_inverse_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                &mut graph.pages,
-                transition,
-            )
-            .map_err(append_blank_page_error_to_editor_v1)?;
-        }
-        EditOperation::DeleteAuthoredRectanglePageV1 { .. } => {
-            return Err(EditorError::PageDeleteUnsupported {
-                message: "combined authored page/shape transition needs EditorSession".into(),
-            });
-        }
-        EditOperation::DuplicateAuthoredRectanglePageV1 { .. } => {
-            return Err(EditorError::PageDuplicateUnsupported {
-                message: "combined authored Page/Rectangle transition needs EditorSession".into(),
-            });
-        }
-        EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
-            apply_delete_blank_authored_page_inverse_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                &mut graph.pages,
-                transition,
-            )
-            .map_err(delete_blank_authored_page_error_to_editor_v1)?;
-        }
-        EditOperation::DuplicateBlankPageV1 { transition } => {
-            apply_duplicate_blank_page_inverse_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                &mut graph.pages,
-                transition,
-            )
-            .map_err(duplicate_blank_page_error_to_editor_v1)?;
-        }
-        EditOperation::InsertBlankPageAfterV1 { transition } => {
-            apply_insert_blank_page_after_inverse_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                &mut graph.pages,
-                transition,
-            )
-            .map_err(insert_blank_page_after_error_to_editor_v1)?;
-        }
-        EditOperation::ReorderPagesV1 { transition } => {
-            apply_page_order_transition_inverse_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                transition,
-            )
-            .map_err(page_order_error_to_editor_v1)?;
+        EditOperation::RegisterAuthoredPageIdentityV1 { .. }
+        | EditOperation::AppendBlankPageV1 { .. }
+        | EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+        | EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
+        | EditOperation::DuplicateAuthoredRectanglesPageV1 { .. }
+        | EditOperation::DeleteBlankAuthoredPageV1 { .. }
+        | EditOperation::DuplicateBlankPageV1 { .. }
+        | EditOperation::InsertBlankPageAfterV1 { .. }
+        | EditOperation::ReorderPagesV1 { .. } => {
+            return apply_page_lifecycle_graph_inverse_v1(graph, operation);
         }
         EditOperation::SetTextFormatProperty { .. }
         | EditOperation::ClearTextFormatPropertyOverride { .. }
