@@ -45,6 +45,26 @@ pub struct ProjectCatalogEntry {
     pub created_at_ms: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenameProjectRequest {
+    pub tenant_id: String,
+    pub project_id: String,
+    pub expected_lifecycle_generation: u64,
+    pub expected_metadata_version: u64,
+    pub name: String,
+    pub client_request_id: String,
+    pub now_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProjectRenameReceipt {
+    pub project_id: String,
+    pub lifecycle_generation: u64,
+    pub metadata_version: u64,
+    pub name: String,
+    pub replayed: bool,
+}
+
 pub fn plan_project_identity(
     request: &ConsumeUploadRequest,
 ) -> Result<PlannedProjectIdentity, IngressError> {
@@ -136,6 +156,218 @@ impl SqliteProjectPersistence {
     ) -> Result<ProjectCreateResult, IngressError> {
         self.create_project_from_upload_inner(request, baseline, CommitFailpoint::None)
             .await
+    }
+
+
+    /// Rename only project metadata. The source, document identity and
+    /// RevisionStream are untouched. Exact request replay is durable so a lost
+    /// ACK cannot turn a successful rename into a stale-version false negative.
+    pub async fn rename_project(
+        &self,
+        request: RenameProjectRequest,
+    ) -> Result<ProjectRenameReceipt, IngressError> {
+        validate_rename_request(&request)?;
+        let request_hash = rename_request_hash(&request)?;
+        let mut tx = self.pool.begin().await.map_err(sqlite_error)?;
+
+        let prior = sqlx::query(
+            r#"
+            SELECT project_id, operation, request_hash,
+                   result_lifecycle_generation, result_metadata_version, result_name
+            FROM project_mutations
+            WHERE tenant_id = ? AND request_id = ?
+            LIMIT 2
+            "#,
+        )
+        .bind(request.tenant_id.as_bytes())
+        .bind(request.client_request_id.as_bytes())
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(sqlite_error)?;
+
+        if prior.len() > 1 {
+            return Err(IngressError::new(
+                "project_mutation_row_ambiguous",
+                "project mutation idempotency identity resolved to multiple rows",
+            ));
+        }
+        if let Some(row) = prior.first() {
+            let project_id = blob_text(row, "project_id")?;
+            let operation: String = row.try_get("operation").map_err(sqlite_error)?;
+            let stored_hash = blob_text(row, "request_hash")?;
+            if project_id != request.project_id
+                || operation != "rename"
+                || stored_hash != request_hash
+            {
+                return Err(IngressError::new(
+                    "idempotency_conflict",
+                    "project mutation request id was reused with different input",
+                ));
+            }
+            let lifecycle_generation =
+                u64::try_from(row.try_get::<i64, _>("result_lifecycle_generation").map_err(sqlite_error)?)
+                    .map_err(|_| IngressError::new(
+                        "project_mutation_row_corrupt",
+                        "stored lifecycle generation is negative",
+                    ))?;
+            let metadata_version =
+                u64::try_from(row.try_get::<i64, _>("result_metadata_version").map_err(sqlite_error)?)
+                    .map_err(|_| IngressError::new(
+                        "project_mutation_row_corrupt",
+                        "stored metadata version is negative",
+                    ))?;
+            let name: String = row.try_get("result_name").map_err(sqlite_error)?;
+            tx.commit().await.map_err(sqlite_error)?;
+            return Ok(ProjectRenameReceipt {
+                project_id,
+                lifecycle_generation,
+                metadata_version,
+                name,
+                replayed: true,
+            });
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT lifecycle_state, lifecycle_generation, metadata_version, deleted
+            FROM projects
+            WHERE tenant_id = ? AND project_id = ?
+            LIMIT 2
+            "#,
+        )
+        .bind(request.tenant_id.as_bytes())
+        .bind(request.project_id.as_bytes())
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(sqlite_error)?;
+
+        if rows.is_empty() {
+            return Err(IngressError::new(
+                "project_not_found",
+                "project does not exist in the authenticated tenant",
+            ));
+        }
+        if rows.len() != 1 {
+            return Err(IngressError::new(
+                "project_persistence_row_ambiguous",
+                "project identity resolved to multiple rows",
+            ));
+        }
+        let row = &rows[0];
+        let lifecycle_state: String = row.try_get("lifecycle_state").map_err(sqlite_error)?;
+        let deleted: i64 = row.try_get("deleted").map_err(sqlite_error)?;
+        if lifecycle_state != "active" || deleted != 0 {
+            return Err(IngressError::new(
+                "project_not_active",
+                "only active projects may be renamed",
+            ));
+        }
+        let lifecycle_generation =
+            u64::try_from(row.try_get::<i64, _>("lifecycle_generation").map_err(sqlite_error)?)
+                .map_err(|_| IngressError::new(
+                    "project_persistence_row_corrupt",
+                    "project lifecycle generation is negative",
+                ))?;
+        let metadata_version =
+            u64::try_from(row.try_get::<i64, _>("metadata_version").map_err(sqlite_error)?)
+                .map_err(|_| IngressError::new(
+                    "project_persistence_row_corrupt",
+                    "project metadata version is negative",
+                ))?;
+
+        if lifecycle_generation != request.expected_lifecycle_generation {
+            return Err(IngressError::new(
+                "stale_project_lifecycle_generation",
+                "project lifecycle generation changed before rename",
+            ));
+        }
+        if metadata_version != request.expected_metadata_version {
+            return Err(IngressError::new(
+                "stale_project_metadata_version",
+                "project metadata version changed before rename",
+            ));
+        }
+
+        let next_metadata = metadata_version.checked_add(1).ok_or_else(|| {
+            IngressError::new(
+                "project_metadata_version_overflow",
+                "project metadata version cannot advance",
+            )
+        })?;
+        if next_metadata > MAX_WEB_SAFE_INTEGER {
+            return Err(IngressError::new(
+                "project_metadata_version_out_of_range",
+                "project metadata version exceeds the web integer contract",
+            ));
+        }
+
+        let updated = sqlx::query(
+            r#"
+            UPDATE projects
+            SET name = ?, metadata_version = ?
+            WHERE tenant_id = ?
+              AND project_id = ?
+              AND lifecycle_state = 'active'
+              AND deleted = 0
+              AND lifecycle_generation = ?
+              AND metadata_version = ?
+            "#,
+        )
+        .bind(&request.name)
+        .bind(to_i64(next_metadata, "metadata_version")?)
+        .bind(request.tenant_id.as_bytes())
+        .bind(request.project_id.as_bytes())
+        .bind(to_i64(lifecycle_generation, "lifecycle_generation")?)
+        .bind(to_i64(metadata_version, "metadata_version")?)
+        .execute(&mut *tx)
+        .await
+        .map_err(sqlite_error)?;
+
+        if updated.rows_affected() != 1 {
+            return Err(IngressError::new(
+                "stale_project_metadata_version",
+                "project changed concurrently before rename commit",
+            ));
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO project_mutations (
+                tenant_id, project_id, request_id, operation, request_hash,
+                result_lifecycle_generation, result_metadata_version,
+                result_name, committed_at_ms
+            ) VALUES (?, ?, ?, 'rename', ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(request.tenant_id.as_bytes())
+        .bind(request.project_id.as_bytes())
+        .bind(request.client_request_id.as_bytes())
+        .bind(request_hash.as_bytes())
+        .bind(to_i64(lifecycle_generation, "lifecycle_generation")?)
+        .bind(to_i64(next_metadata, "metadata_version")?)
+        .bind(&request.name)
+        .bind(request.now_ms)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| {
+            if is_unique_violation(&error) {
+                IngressError::new(
+                    "idempotency_conflict",
+                    "project mutation request identity was committed concurrently",
+                )
+            } else {
+                sqlite_error(error)
+            }
+        })?;
+
+        tx.commit().await.map_err(sqlite_error)?;
+        Ok(ProjectRenameReceipt {
+            project_id: request.project_id,
+            lifecycle_generation,
+            metadata_version: next_metadata,
+            name: request.name,
+            replayed: false,
+        })
     }
 
     /// Workspace catalog is read from the existing durable projects/documents,
@@ -640,6 +872,7 @@ impl SqliteProjectPersistence {
             "authz_documents",
             "authz_principal_grants",
             "authz_audit_events",
+            "project_mutations",
         ] {
             let count: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?",
@@ -842,6 +1075,59 @@ fn validate_request(request: &ConsumeUploadRequest) -> Result<(), IngressError> 
         ));
     }
     Ok(())
+}
+
+fn validate_rename_request(request: &RenameProjectRequest) -> Result<(), IngressError> {
+    require_ident(&request.tenant_id, "tenant_id")?;
+    require_ident(&request.project_id, "project_id")?;
+    require_ident(&request.client_request_id, "client_request_id")?;
+    if request.expected_lifecycle_generation > MAX_WEB_SAFE_INTEGER
+        || request.expected_metadata_version > MAX_WEB_SAFE_INTEGER
+    {
+        return Err(IngressError::new(
+            "project_version_out_of_range",
+            "project concurrency versions exceed the web integer contract",
+        ));
+    }
+    if request.name.is_empty()
+        || request.name.len() > 512
+        || request.name.chars().any(char::is_control)
+    {
+        return Err(IngressError::new(
+            "invalid_project_name",
+            "project name must be bounded, non-empty and free of control characters",
+        ));
+    }
+    if request.now_ms < 0 {
+        return Err(IngressError::new(
+            "invalid_now",
+            "project mutation timestamp must be nonnegative",
+        ));
+    }
+    Ok(())
+}
+
+fn rename_request_hash(request: &RenameProjectRequest) -> Result<String, IngressError> {
+    #[derive(Serialize)]
+    struct Fingerprint<'a> {
+        protocol: &'static str,
+        tenant_id: &'a str,
+        project_id: &'a str,
+        expected_lifecycle_generation: u64,
+        expected_metadata_version: u64,
+        name: &'a str,
+    }
+
+    let bytes = serde_json::to_vec(&Fingerprint {
+        protocol: "chaptera.project-rename.v1",
+        tenant_id: &request.tenant_id,
+        project_id: &request.project_id,
+        expected_lifecycle_generation: request.expected_lifecycle_generation,
+        expected_metadata_version: request.expected_metadata_version,
+        name: &request.name,
+    })
+    .map_err(|error| IngressError::new("request_hash_failed", error.to_string()))?;
+    Ok(hex_lower(Sha256::digest(bytes)))
 }
 
 fn consumption_request_hash(request: &ConsumeUploadRequest) -> Result<String, IngressError> {
