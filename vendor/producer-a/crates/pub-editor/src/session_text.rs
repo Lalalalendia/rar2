@@ -918,6 +918,132 @@ mod font_resource_session_tests {
     }
 
     #[test]
+    fn exact_admitted_project_font_survives_serialized_fresh_reopen_and_undo_redo() {
+        let bytes = b"independently-server-owned-full-font-bytes-for-reopen";
+        let (scope, identity, candidate) = scoped_identity(bytes);
+        let resource = ServerFontResourceV1 {
+            identity: &identity,
+            full_font_bytes: bytes,
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: true,
+        };
+        let mut editor = session();
+        let source = editor.current_text_format_overlay_v1(story_id()).unwrap();
+        editor.set_admitted_font_resource_v1(
+            story_id(), 0, 11, &candidate, &scope, &resource,
+            &state_hash_v1(&source).unwrap(),
+        ).expect("original font admission");
+        let edited = editor.current_text_format_overlay_v1(story_id()).unwrap();
+        let project = editor.project();
+        let disk = serde_json::to_vec(&project).unwrap();
+        let loaded: EditorProject = serde_json::from_slice(&disk).unwrap();
+        let grant = EditorProjectFontReopenGrantV1 {
+            source_hash: loaded.source_hash,
+            project_document_id: &loaded.identity.as_ref().unwrap().document_id,
+            resource: ServerFontResourceV1 {
+                identity: &identity,
+                full_font_bytes: bytes,
+                face_count: 1,
+                is_full_resource: true,
+                authoring_admitted: true,
+            },
+        };
+        let mut fresh = session();
+        fresh.apply_project_with_admitted_font_resources_v1(
+            &loaded, &BTreeMap::new(), &[grant],
+        ).expect("trusted resource re-admission on a fresh EditorSession");
+        assert_eq!(fresh.current_text_format_overlay_v1(story_id()).unwrap(), edited);
+        assert_eq!(fresh.project().state_id_v1(), project.state_id_v1());
+        assert_eq!(fresh.source_hash(), editor.source_hash());
+        assert_eq!(fresh.graph().stories[&story_id()].text, "Hello world");
+        fresh.undo().expect("fresh Undo");
+        assert_eq!(fresh.current_text_format_overlay_v1(story_id()).unwrap(), source);
+        fresh.redo().expect("fresh Redo");
+        assert_eq!(fresh.current_text_format_overlay_v1(story_id()).unwrap(), edited);
+    }
+
+    #[test]
+    fn recorded_font_reopen_rejects_wrong_context_missing_bytes_and_duplicate_grants_atomically() {
+        let bytes = b"exact-reopen-resource";
+        let (scope, identity, candidate) = scoped_identity(bytes);
+        let mut author = session();
+        author.set_admitted_font_resource_v1(
+            story_id(), 2, 8, &candidate, &scope,
+            &ServerFontResourceV1 {
+                identity: &identity, full_font_bytes: bytes, face_count: 1,
+                is_full_resource: true, authoring_admitted: true,
+            },
+            &author.current_text_format_state_hash_v1(story_id()).unwrap(),
+        ).expect("author canonical resource");
+        let project = author.project();
+        let project_doc_id = project.identity.as_ref().unwrap().document_id.as_str();
+        let original_source = session().current_text_format_overlay_v1(story_id()).unwrap();
+
+        macro_rules! rejected_without_mutation {
+            ($grants:expr) => {{
+                let mut reopened = session();
+                assert!(reopened.apply_project_with_admitted_font_resources_v1(
+                    &project, &BTreeMap::new(), $grants
+                ).is_err());
+                assert!(reopened.operations().is_empty());
+                assert_eq!(
+                    reopened.current_text_format_overlay_v1(story_id()).unwrap(),
+                    original_source
+                );
+            }};
+        }
+        rejected_without_mutation!(&[]);
+        let valid = || EditorProjectFontReopenGrantV1 {
+            source_hash: project.source_hash,
+            project_document_id: project_doc_id,
+            resource: ServerFontResourceV1 {
+                identity: &identity, full_font_bytes: bytes, face_count: 1,
+                is_full_resource: true, authoring_admitted: true,
+            },
+        };
+        rejected_without_mutation!(&[valid(), valid()]);
+        rejected_without_mutation!(&[EditorProjectFontReopenGrantV1 {
+            source_hash: Sha256Digest::from_bytes([0x99; 32]),
+            ..valid()
+        }]);
+        rejected_without_mutation!(&[EditorProjectFontReopenGrantV1 {
+            project_document_id: "other-project-document",
+            ..valid()
+        }]);
+        rejected_without_mutation!(&[EditorProjectFontReopenGrantV1 {
+            resource: ServerFontResourceV1 {
+                full_font_bytes: b"different-font-bytes",
+                ..valid().resource
+            },
+            ..valid()
+        }]);
+        rejected_without_mutation!(&[EditorProjectFontReopenGrantV1 {
+            resource: ServerFontResourceV1 {
+                authoring_admitted: false,
+                ..valid().resource
+            },
+            ..valid()
+        }]);
+        rejected_without_mutation!(&[EditorProjectFontReopenGrantV1 {
+            resource: ServerFontResourceV1 {
+                is_full_resource: false,
+                ..valid().resource
+            },
+            ..valid()
+        }]);
+        let other_identity = FontResourceIdentityV1 {
+            content_hash: "a".repeat(64), ..identity.clone()
+        };
+        rejected_without_mutation!(&[EditorProjectFontReopenGrantV1 {
+            resource: ServerFontResourceV1 {
+                identity: &other_identity, ..valid().resource
+            },
+            ..valid()
+        }]);
+    }
+
+    #[test]
     fn stale_scope_untrusted_bytes_and_wrong_face_do_not_commit_history() {
         let bytes = b"synthetic-resource-for-negative-controls";
         let (scope, id, candidate) = scoped_identity(bytes);
