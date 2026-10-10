@@ -22,7 +22,13 @@ use sha2::{Digest, Sha256};
 use rand::{RngCore, rngs::OsRng};
 use tokio::{fs as async_fs, io::AsyncWriteExt, process::Command, time::timeout};
 
-use crate::{revision_materializer::project_sha256, source_baseline::SourceBaselineProducerConfig};
+use crate::{
+    revision_materializer::{
+        EditorReplayEngine, PubEditorReplayEngine, cloud_replay_requires_local_identity,
+        project_sha256,
+    },
+    source_baseline::SourceBaselineProducerConfig,
+};
 
 pub const PRODUCT_REPLAY_WORKER_V1: &str = "chaptera.product-isolated-replay.v1";
 const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
@@ -59,6 +65,9 @@ pub struct ProductReplayWorkerReceiptV1 {
     pub project_sha256: String,
     pub authoring_graph_sha256: String,
     pub authoring_graph: Value,
+    /// Present only for the isolated baseline derivation mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_project: Option<EditorProject>,
     pub filesystem_confinement: bool,
 }
 
@@ -151,6 +160,21 @@ pub fn validate_product_replay_receipt(
             "isolated graph does not match its bounded SHA-256 evidence",
         ));
     }
+    if let Some(project) = &receipt.baseline_project {
+        if project.source_hash.to_string() != source_sha256
+            || project_sha256(project).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "isolated baseline project could not be verified",
+                )
+            })? != expected_project_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "isolated baseline project does not match its source/project identity",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -161,12 +185,20 @@ pub fn run_product_replay_worker(
     document_id: &str,
     expected_source_sha256: &str,
     expected_source_byte_len: u64,
-    project_path: &Path,
-    expected_project_sha256: &str,
+    project_path: Option<&Path>,
+    expected_project_sha256: Option<&str>,
 ) -> Result<(), ProductReplayWorkerError> {
     require_document_id(document_id)?;
     require_sha256(expected_source_sha256)?;
-    require_sha256(expected_project_sha256)?;
+    if project_path.is_some() != expected_project_sha256.is_some() {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_identity_invalid",
+            "project input and expected SHA-256 must be supplied together",
+        ));
+    }
+    if let Some(expected_project_sha256) = expected_project_sha256 {
+        require_sha256(expected_project_sha256)?;
+    }
     if expected_source_byte_len == 0 || expected_source_byte_len > MAX_SOURCE_BYTES {
         return Err(ProductReplayWorkerError::new(
             "product_replay_input_limit",
@@ -214,31 +246,33 @@ pub fn run_product_replay_worker(
         ));
     }
 
-    let project_bytes = read_bounded(project_path, MAX_PROJECT_BYTES)?;
-    let project: EditorProject = serde_json::from_slice(&project_bytes).map_err(|_| {
-        ProductReplayWorkerError::new(
-            "product_replay_project_invalid",
-            "canonical project JSON is invalid",
-        )
-    })?;
-    if project.source_hash.to_string() != expected_source_sha256 {
-        return Err(ProductReplayWorkerError::new(
-            "product_replay_project_source_mismatch",
-            "canonical project is bound to a different immutable PUB",
-        ));
-    }
-    let actual_project_hash = project_sha256(&project).map_err(|_| {
-        ProductReplayWorkerError::new(
-            "product_replay_project_invalid",
-            "canonical project identity could not be derived",
-        )
-    })?;
-    if actual_project_hash != expected_project_sha256 {
-        return Err(ProductReplayWorkerError::new(
-            "product_replay_project_hash_mismatch",
-            "canonical project differs from the authorized revision",
-        ));
-    }
+    let project = match (project_path, expected_project_sha256) {
+        (Some(project_path), Some(expected_sha)) => {
+            let project_bytes = read_bounded(project_path, MAX_PROJECT_BYTES)?;
+            let project: EditorProject = serde_json::from_slice(&project_bytes).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_project_invalid",
+                    "canonical project JSON is invalid",
+                )
+            })?;
+            if project.source_hash.to_string() != expected_source_sha256
+                || project_sha256(&project).map_err(|_| {
+                    ProductReplayWorkerError::new(
+                        "product_replay_project_invalid",
+                        "canonical project identity could not be derived",
+                    )
+                })? != expected_sha
+            {
+                return Err(ProductReplayWorkerError::new(
+                    "product_replay_project_hash_mismatch",
+                    "project/source identity differs from authorized revision",
+                ));
+            }
+            Some(project)
+        }
+        (None, None) => None,
+        _ => unreachable!("paired project input validated before read"),
+    };
 
     // No further filesystem operations are permitted after this point.
     // The outer harness also installs syscall network deny and hard limits.
@@ -248,6 +282,49 @@ pub fn run_product_replay_worker(
             "post-read filesystem default-deny could not be installed",
         )
     })?;
+
+    let replay_engine = PubEditorReplayEngine;
+    let (project, baseline_mode) = if let Some(project) = project {
+        let replayed = replay_engine
+            .replay_project(&source_bytes, expected_source_sha256, &project)
+            .map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_operation_rejected",
+                    "canonical EditorSession did not reproduce the exact project",
+                )
+            })?;
+        if replayed != project {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_operation_rejected",
+                "isolated EditorSession replay differs from authorized project",
+            ));
+        }
+        (project, false)
+    } else {
+        let baseline = replay_engine
+            .baseline_project(&source_bytes, expected_source_sha256)
+            .map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_source_unsupported",
+                    "isolated EditorSession could not derive a baseline from PUB",
+                )
+            })?;
+        (baseline, true)
+    };
+    let actual_project_hash = project_sha256(&project).map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_replay_project_invalid",
+            "isolated project identity could not be derived",
+        )
+    })?;
+    if let Some(expected_sha) = expected_project_sha256 {
+        if actual_project_hash != expected_sha {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_project_hash_mismatch",
+                "isolated replay returned an unexpected canonical project",
+            ));
+        }
+    }
 
     let source_hash = Sha256Digest::from_str(expected_source_sha256).map_err(|_| {
         ProductReplayWorkerError::new(
@@ -261,7 +338,15 @@ pub fn run_product_replay_worker(
             "isolated EditorSession could not open this PUB",
         )
     })?;
-    session.apply_project(&project).map_err(|_| {
+    let mut local_replay = project.clone();
+    if local_replay.identity.is_none()
+        && cloud_replay_requires_local_identity(&local_replay.schema_version)
+    {
+        // Apply precisely the same version-gated local identity law as the
+        // authoritative replay engine. Old schema versions retain None.
+        local_replay.identity = session.project().identity;
+    }
+    session.apply_project(&local_replay).map_err(|_| {
         ProductReplayWorkerError::new(
             "product_replay_operation_rejected",
             "isolated EditorSession rejected canonical project replay",
@@ -292,9 +377,10 @@ pub fn run_product_replay_worker(
         document_id: document_id.to_owned(),
         source_sha256: expected_source_sha256.to_owned(),
         source_byte_len: expected_source_byte_len,
-        project_sha256: actual_project_hash,
+        project_sha256: actual_project_hash.clone(),
         authoring_graph_sha256: sha256_hex(&graph_bytes),
         authoring_graph: graph,
+        baseline_project: if baseline_mode { Some(project) } else { None },
         filesystem_confinement: true,
     };
     validate_product_replay_receipt(
@@ -302,7 +388,7 @@ pub fn run_product_replay_worker(
         document_id,
         expected_source_sha256,
         expected_source_byte_len,
-        expected_project_sha256,
+        &actual_project_hash,
     )?;
 
     let mut output = BufWriter::new(output);
@@ -384,40 +470,111 @@ impl IsolatedProductReplayProducer {
             ));
         }
 
+        let receipt = self
+            .invoke_job(
+                document_id,
+                source_sha256,
+                source_bytes,
+                Some((&project_bytes, expected_project_sha256)),
+            )
+            .await?;
+        validate_product_replay_receipt(
+            &receipt,
+            document_id,
+            source_sha256,
+            source_bytes.len() as u64,
+            expected_project_sha256,
+        )?;
+        if receipt.baseline_project.is_some() {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "projection worker unexpectedly returned a baseline project",
+            ));
+        }
+        require_typed_graph(receipt.authoring_graph)
+    }
+
+    /// First canonical source projection: the host must never parse PUB in
+    /// order to manufacture a baseline EditorProject.
+    pub async fn baseline_project(
+        &self,
+        document_id: &str,
+        source_sha256: &str,
+        source_bytes: &[u8],
+    ) -> Result<EditorProject, ProductReplayWorkerError> {
+        let receipt = self
+            .invoke_job(document_id, source_sha256, source_bytes, None)
+            .await?;
+        let project = receipt.baseline_project.as_ref().ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "baseline worker did not return a canonical project",
+            )
+        })?;
+        let expected_project_hash = project_sha256(project).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "baseline project hash could not be derived",
+            )
+        })?;
+        validate_product_replay_receipt(
+            &receipt,
+            document_id,
+            source_sha256,
+            source_bytes.len() as u64,
+            &expected_project_hash,
+        )?;
+        let _ = require_typed_graph(receipt.authoring_graph)?;
+        if !project.assets.is_empty() {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_asset_unsupported",
+                "baseline project references external unresolved asset data",
+            ));
+        }
+        Ok(project.clone())
+    }
+
+    /// Executes only the existing per-file isolation harness. The host may
+    /// serialize verified bytes but must not interpret the source PUB.
+    async fn invoke_job(
+        &self,
+        document_id: &str,
+        source_sha256: &str,
+        source_bytes: &[u8],
+        project: Option<(&[u8], &str)>,
+    ) -> Result<ProductReplayWorkerReceiptV1, ProductReplayWorkerError> {
+        require_document_id(document_id)?;
+        require_sha256(source_sha256)?;
+        if source_bytes.is_empty()
+            || source_bytes.len() as u64 > MAX_SOURCE_BYTES
+            || sha256_hex(source_bytes) != source_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_source_mismatch",
+                "verified source differs from worker request",
+            ));
+        }
+        if let Some((bytes, expected_hash)) = project {
+            require_sha256(expected_hash)?;
+            if bytes.len() as u64 > MAX_PROJECT_BYTES {
+                return Err(ProductReplayWorkerError::new(
+                    "product_replay_input_limit",
+                    "canonical project exceeds worker input limits",
+                ));
+            }
+        }
+
         let temp = PrivateReplayTemp::create(&self.config.temp_root)?;
         let source_path = temp.path.join("source.pub");
         let project_path = temp.path.join("project.json");
         let result_dir = temp.path.join("worker-result");
-        for (path, bytes) in [
-            (&source_path, source_bytes),
-            (&project_path, project_bytes.as_slice()),
-        ] {
-            let mut file = async_fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path)
-                .await
-                .map_err(|_| {
-                    ProductReplayWorkerError::new(
-                        "product_replay_temp_failed",
-                        "private worker input could not be created",
-                    )
-                })?;
-            file.write_all(bytes).await.map_err(|_| {
-                ProductReplayWorkerError::new(
-                    "product_replay_temp_failed",
-                    "private worker input write failed",
-                )
-            })?;
-            file.sync_all().await.map_err(|_| {
-                ProductReplayWorkerError::new(
-                    "product_replay_temp_failed",
-                    "private worker input sync failed",
-                )
-            })?;
+        write_private_replay_input(&source_path, source_bytes).await?;
+        if let Some((project_bytes, _)) = project {
+            write_private_replay_input(&project_path, project_bytes).await?;
         }
 
-        let worker = Command::new(&self.config.isolation_python)
+        let mut command = Command::new(&self.config.isolation_python);
+        command
             .arg(&self.config.isolation_harness)
             .arg("run")
             .arg("--output-dir")
@@ -443,29 +600,30 @@ impl IsolatedProductReplayProducer {
             .arg("--expected-sha256")
             .arg(source_sha256)
             .arg("--expected-byte-len")
-            .arg(source_bytes.len().to_string())
-            .arg("--project-json")
-            .arg(&project_path)
-            .arg("--expected-project-sha256")
-            .arg(expected_project_sha256)
-            .kill_on_drop(true)
-            .output();
-        let max_wall = self
+            .arg(source_bytes.len().to_string());
+        if let Some((_, expected_hash)) = project {
+            command
+                .arg("--project-json")
+                .arg(&project_path)
+                .arg("--expected-project-sha256")
+                .arg(expected_hash);
+        }
+        let deadline = self
             .config
             .worker_wall_timeout
             .checked_add(std::time::Duration::from_secs(5))
             .ok_or_else(|| {
                 ProductReplayWorkerError::new(
                     "product_replay_config_invalid",
-                    "worker deadline overflowed",
+                    "isolated worker deadline overflowed",
                 )
             })?;
-        let output = timeout(max_wall, worker)
+        let status = timeout(deadline, command.kill_on_drop(true).output())
             .await
             .map_err(|_| {
                 ProductReplayWorkerError::new(
                     "product_replay_worker_timeout",
-                    "isolated worker exceeded parent deadline",
+                    "isolated worker exceeded the parent deadline",
                 )
             })?
             .map_err(|_| {
@@ -474,56 +632,75 @@ impl IsolatedProductReplayProducer {
                     "isolated worker could not be launched",
                 )
             })?;
-        if !output.status.success() {
+        if !status.status.success() {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_worker_failed",
-                "isolated worker failed without a usable graph receipt",
+                "isolated worker failed without a usable receipt",
             ));
         }
+
         let receipt_path = result_dir.join("result.json");
         let metadata = async_fs::metadata(&receipt_path).await.map_err(|_| {
             ProductReplayWorkerError::new(
                 "product_replay_receipt_missing",
-                "isolated graph receipt is unavailable",
+                "isolated worker receipt is unavailable",
             )
         })?;
-        if !metadata.is_file()
-            || metadata.len() == 0
-            || metadata.len() > MAX_GRAPH_BYTES as u64 + 1024 * 1024
-        {
+        let limit = MAX_GRAPH_BYTES as u64 + MAX_PROJECT_BYTES + 1024 * 1024;
+        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > limit {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
-                "isolated graph receipt is outside bounded size",
+                "isolated worker receipt exceeds bounded file limits",
             ));
         }
         let payload = async_fs::read(&receipt_path).await.map_err(|_| {
             ProductReplayWorkerError::new(
                 "product_replay_receipt_missing",
-                "isolated graph receipt could not be read",
+                "isolated worker receipt could not be read",
             )
         })?;
-        if payload.len() > MAX_GRAPH_BYTES + 1024 * 1024 {
+        if payload.len() as u64 > limit {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
-                "isolated graph receipt exceeded size after read",
+                "isolated worker receipt grew beyond size limits",
             ));
         }
-        let receipt: ProductReplayWorkerReceiptV1 =
-            serde_json::from_slice(&payload).map_err(|_| {
-                ProductReplayWorkerError::new(
-                    "product_replay_receipt_invalid",
-                    "isolated graph receipt is malformed",
-                )
-            })?;
-        validate_product_replay_receipt(
-            &receipt,
-            document_id,
-            source_sha256,
-            source_bytes.len() as u64,
-            expected_project_sha256,
-        )?;
-        require_typed_graph(receipt.authoring_graph)
+        serde_json::from_slice(&payload).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "isolated worker receipt is malformed",
+            )
+        })
     }
+}
+
+async fn write_private_replay_input(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(), ProductReplayWorkerError> {
+    let mut file = async_fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .await
+        .map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_replay_temp_failed",
+                "private worker input could not be created",
+            )
+        })?;
+    file.write_all(bytes).await.map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_replay_temp_failed",
+            "private worker input write failed",
+        )
+    })?;
+    file.sync_all().await.map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_replay_temp_failed",
+            "private worker input sync failed",
+        )
+    })
 }
 
 fn require_typed_graph(graph: Value) -> Result<PubResolvedGraph, ProductReplayWorkerError> {
@@ -593,6 +770,7 @@ mod tests {
             project_sha256: "b".repeat(64),
             authoring_graph_sha256: sha256_hex(&serde_json::to_vec(&graph).unwrap()),
             authoring_graph: graph,
+            baseline_project: None,
             filesystem_confinement: true,
         }
     }
