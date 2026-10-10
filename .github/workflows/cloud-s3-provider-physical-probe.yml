@@ -1,0 +1,63 @@
+name: CLOUD-BLOB real S3 provider physical probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.CHAPTERA_S3_PROBE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.CHAPTERA_S3_PROBE_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.CHAPTERA_S3_PROBE_SESSION_TOKEN }}
+      AWS_REGION: ${{ vars.CHAPTERA_S3_PROBE_REGION }}
+      AWS_ENDPOINT_URL_S3: ${{ vars.CHAPTERA_S3_PROBE_ENDPOINT_URL }}
+      CHAPTERA_S3_QUARANTINE_BUCKET: ${{ vars.CHAPTERA_S3_PROBE_QUARANTINE_BUCKET }}
+      CHAPTERA_S3_PRIVATE_BUCKET: ${{ vars.CHAPTERA_S3_PROBE_PRIVATE_BUCKET }}
+      CHAPTERA_S3_EXPECTED_BUCKET_OWNER: ${{ vars.CHAPTERA_S3_PROBE_EXPECTED_BUCKET_OWNER }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@1.94.1
+
+      - name: Require ephemeral provider authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
+          test -n "$AWS_REGION"
+          test -n "$CHAPTERA_S3_QUARANTINE_BUCKET"
+          test -n "$CHAPTERA_S3_PRIVATE_BUCKET"
+
+      - name: Run current-adapter physical probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/cloud-s3-provider-probe
+          cargo run -p chaptera-server --bin cloud_blob_provider_probe --quiet             > target/cloud-s3-provider-probe/receipt.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("target/cloud-s3-provider-probe/receipt.json")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          assert receipt["protocol_version"] == "chaptera.cloud-blob-provider-receipt.v1"
+          assert receipt["core_adapter_probe_passed"] is True
+          prohibited = ("url", "secret", "access_key", "account_id", "object_locator")
+          serialized = json.dumps(receipt, sort_keys=True).lower()
+          for token in prohibited:
+              assert token not in serialized, token
+          PY
+
+      - name: Upload sanitized receipt only
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloud-s3-provider-physical-receipt
+          path: target/cloud-s3-provider-probe/receipt.json
+          if-no-files-found: error
+          retention-days: 14
