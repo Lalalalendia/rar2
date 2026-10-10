@@ -5,6 +5,11 @@
 //! and generic history replay remain outside this module.
 
 use super::*;
+use chaptera_text_format_overlay::{
+    FontAuthoringScopeV1, FontReplacementCandidateV1, ServerFontResourceV1,
+    replay_recorded_font_resource_v1 as replay_font_history_v1,
+    set_admitted_font_resource_v1 as overlay_admit_font_v1,
+};
 
 impl EditorSession {
     fn validate_story_text_session_capability(
@@ -146,6 +151,73 @@ impl EditorSession {
         Ok(operation)
     }
 
+    /// Admit an exact physical font into the canonical Story format history.
+    ///
+    /// The caller supplies independent, policy-approved full font bytes from
+    /// its trusted resource registry; a browser candidate alone has no write
+    /// authority. This commits text-format state only. Layout/PDF and fresh
+    /// EditorProject re-admission require their own authoritative consumers.
+    pub fn set_admitted_font_resource_v1(
+        &mut self,
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        candidate: &FontReplacementCandidateV1,
+        scope: &FontAuthoringScopeV1,
+        server_resource: &ServerFontResourceV1<'_>,
+        expected_state_hash: &str,
+    ) -> Result<EditOperation, EditorError> {
+        let before = self.current_text_format_overlay_v1(story_id)?;
+        let before_hash =
+            state_hash_v1(&before).map_err(|error| EditorError::TextFormatStateInvalid {
+                story_id,
+                message: error.to_string(),
+            })?;
+        if before_hash != expected_state_hash {
+            return Err(EditorError::StaleOperation { story_id });
+        }
+        let receipt = overlay_admit_font_v1(
+            &before,
+            start_scalar,
+            end_scalar,
+            candidate,
+            scope,
+            server_resource,
+            expected_state_hash,
+        )
+        .map_err(|error| EditorError::TextFormatStateInvalid {
+            story_id,
+            message: error.to_string(),
+        })?;
+        if receipt.command.before_state_hash == receipt.command.after_state_hash {
+            return Err(EditorError::NoChange { story_id });
+        }
+        let operation = EditOperation::SetTextFormatProperty {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property: FormatPropertyV1::FontResource,
+            value: receipt
+                .command
+                .value
+                .clone()
+                .expect("admitted font set always carries its exact identity"),
+            before_state_hash: receipt.command.before_state_hash,
+            after_state_hash: receipt.command.after_state_hash,
+        };
+        let replayed = apply_text_format_history_operation_v1(&before, &operation)?;
+        if replayed != receipt.after_state {
+            return Err(EditorError::TextFormatStateInvalid {
+                story_id,
+                message: "admitted font history differs from canonical receipt".to_owned(),
+            });
+        }
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
     pub fn replace_story_text(
         &mut self,
         story_id: StoryId,
@@ -199,6 +271,40 @@ pub(super) fn is_scoped_text_format_operation_v1(operation: &EditOperation) -> b
     )
 }
 
+/// This validates an operation already in admitted session history, never a
+/// new client edit. The generic editor setter and fresh project replay still
+/// reject an unsigned font-resource candidate without trusted original bytes.
+fn replay_existing_text_format_set_v1(
+    state: &TextFormatOverlayStateV1,
+    start_scalar: u32,
+    end_scalar: u32,
+    property: FormatPropertyV1,
+    value: FormatValueV1,
+    expected_state_hash: &str,
+) -> chaptera_text_format_overlay::Result<chaptera_text_format_overlay::TextFormatOperationReceiptV1>
+{
+    if let (FormatPropertyV1::FontResource, FormatValueV1::FontResource(identity)) =
+        (property, &value)
+    {
+        replay_font_history_v1(
+            state,
+            start_scalar,
+            end_scalar,
+            identity,
+            expected_state_hash,
+        )
+    } else {
+        overlay_set_text_format_property_v1(
+            state,
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            expected_state_hash,
+        )
+    }
+}
+
 pub(super) fn apply_text_format_history_operation_semantic_v1(
     state: &TextFormatOverlayStateV1,
     operation: &EditOperation,
@@ -230,7 +336,7 @@ pub(super) fn apply_text_format_history_operation_semantic_v1(
             property,
             value,
             ..
-        } => overlay_set_text_format_property_v1(
+        } => replay_existing_text_format_set_v1(
             state,
             *start_scalar,
             *end_scalar,
@@ -291,7 +397,7 @@ pub(super) fn apply_text_format_history_operation_v1(
             *story_id,
             before_state_hash,
             after_state_hash,
-            overlay_set_text_format_property_v1(
+            replay_existing_text_format_set_v1(
                 state,
                 *start_scalar,
                 *end_scalar,
@@ -345,4 +451,392 @@ pub(super) fn apply_text_format_history_operation_v1(
         });
     }
     Ok(receipt.after_state)
+}
+
+#[cfg(test)]
+mod font_resource_session_tests {
+    use super::*;
+    use chaptera_text_format_overlay::{
+        FontAuthoringScopeV1, FontReplacementCandidateV1, FontResourceIdentityV1, FormatPropertyV1,
+        FormatValueV1, ServerFontResourceV1,
+    };
+    use pub_model::{
+        Affine2D, CanonicalId, Document, DocumentId, LengthEmu, Node, NodeHeader, NodeId, NodeKind,
+        Page, PageId, RectEmu, ResolvedGraph, Sha256Digest, Size2D, SourceDescriptor, Story,
+        StoryId,
+    };
+    use pub_reader::{
+        PubExplicitShapePaintSource, PubResolvedGraph, PubResolvedNodePayload,
+        PubResolvedStoryFrame, PubTypographyBooleanV1, PubTypographyRun,
+    };
+    use std::collections::BTreeMap;
+
+    fn canonical(byte: u8) -> CanonicalId {
+        CanonicalId::from_bytes([byte; 16])
+    }
+
+    fn document_id() -> DocumentId {
+        DocumentId::from_canonical(canonical(0x10))
+    }
+
+    fn page_id() -> PageId {
+        PageId::from_canonical(canonical(0x20))
+    }
+
+    fn frame_id() -> NodeId {
+        NodeId::from_canonical(canonical(0x30))
+    }
+
+    fn story_id() -> StoryId {
+        StoryId::from_canonical(canonical(0x40))
+    }
+
+    fn source_hash() -> Sha256Digest {
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            .parse()
+            .expect("valid source hash")
+    }
+
+    fn graph() -> PubResolvedGraph {
+        let page_id = page_id();
+        let frame_id = frame_id();
+        let story_id = story_id();
+        let source_hash = source_hash();
+
+        let frame = Node {
+            kind: NodeKind::TextFrame,
+            header: NodeHeader {
+                id: frame_id,
+                parent_id: page_id.into_canonical(),
+                bounds: RectEmu::new(
+                    LengthEmu::new(100_000),
+                    LengthEmu::new(100_000),
+                    LengthEmu::new(800_000),
+                    LengthEmu::new(300_000),
+                ),
+                transform: Affine2D::identity(),
+                source_refs: Vec::new(),
+                extensions: Vec::new(),
+            },
+            payload: PubResolvedNodePayload {
+                contents_seq_num: 1,
+                officeart_shape_type: Some(202),
+                officeart_spid: Some(1),
+                image_slot: None,
+                legacy_ole: None,
+                explicit_image_crop: None,
+                explicit_image_cardinal_rotation_degrees: None,
+                explicit_paint: PubExplicitShapePaintSource::default(),
+                effective_paint: None,
+                story_frame: Some(PubResolvedStoryFrame {
+                    story_id: Some(story_id),
+                    ordinal: 0,
+                    previous_frame: None,
+                    next_frame: None,
+                    vertical_alignment: None,
+                }),
+                text_frame_inset: None,
+                table_story: None,
+                table: None,
+            },
+        };
+
+        ResolvedGraph {
+            cdm_version: "0.1".into(),
+            resolver_version: "story-text-session-test".into(),
+            source: SourceDescriptor {
+                format: "pub".into(),
+                format_version: Some("0x2c".into()),
+                adapter_version: "pub-rs/test".into(),
+                source_hash,
+            },
+            document: Document {
+                id: document_id(),
+                format_origin: "pub".into(),
+                source_hash,
+                pages: vec![page_id],
+                resources: Vec::new(),
+                styles: Vec::new(),
+            },
+            pages: BTreeMap::from([(
+                page_id,
+                Page {
+                    id: page_id,
+                    size: Size2D::new(LengthEmu::new(4_000_000), LengthEmu::new(2_000_000)),
+                    bleed: None,
+                    margins: None,
+                    children: vec![frame_id],
+                    extensions: Vec::new(),
+                },
+            )]),
+            nodes: BTreeMap::from([(frame_id, frame)]),
+            stories: BTreeMap::from([(
+                story_id,
+                Story {
+                    id: story_id,
+                    text: "Hello world".into(),
+                    paragraphs: Vec::new(),
+                    runs: Vec::new(),
+                    fields: Vec::new(),
+                    hyperlinks: Vec::new(),
+                    source_refs: Vec::new(),
+                },
+            )]),
+            paragraphs: BTreeMap::new(),
+            text_runs: BTreeMap::new(),
+            resources: BTreeMap::new(),
+            styles: BTreeMap::new(),
+            extensions: BTreeMap::new(),
+        }
+    }
+
+    fn session() -> EditorSession {
+        let mut editor = EditorSession::new(graph()).expect("source-backed EditorSession");
+        let normal = PubTypographyBooleanV1 {
+            local_toggle: false,
+            inherited_value: false,
+            effective_value: false,
+        };
+        editor.source_typography_runs.push(PubTypographyRun {
+            story_id: story_id(),
+            story_utf16_start: 0,
+            story_utf16_end: 11,
+            story_scalar_start: 0,
+            story_scalar_end: 11,
+            source_font_index: 1,
+            source_font_name: "Source Family".to_owned(),
+            text_size_emu: 12000,
+            font_inherited: false,
+            size_inherited: false,
+            color_rgb: Some([0, 0, 0]),
+            color_scheme_slot: None,
+            color_inherited: false,
+            bold: Some(normal),
+            italic: Some(normal),
+        });
+        editor
+    }
+
+    fn scoped_identity(
+        bytes: &[u8],
+    ) -> (
+        FontAuthoringScopeV1,
+        FontResourceIdentityV1,
+        FontReplacementCandidateV1,
+    ) {
+        let scope = FontAuthoringScopeV1 {
+            document_id: document_id().as_canonical().to_string(),
+            revision_id: format!("sha256:{}", "1".repeat(64)),
+            scene_snapshot_id: format!("sha256:{}", "2".repeat(64)),
+            layout_environment_id: format!("sha256:{}", "3".repeat(64)),
+            font_set_fingerprint: format!("sha256:{}", "4".repeat(64)),
+        };
+        let identity = FontResourceIdentityV1 {
+            resource_id: "82222222-2222-4222-8222-222222222222".to_owned(),
+            font_fingerprint: format!("sha256:{}", "b".repeat(64)),
+            content_hash: Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+            face_index: 0,
+        };
+        let candidate = FontReplacementCandidateV1 {
+            protocol_version: "chaptera.font-replacement-candidate.v1".to_owned(),
+            document_id: scope.document_id.clone(),
+            expected_revision_id: scope.revision_id.clone(),
+            scene_snapshot_id: scope.scene_snapshot_id.clone(),
+            layout_environment_id: scope.layout_environment_id.clone(),
+            font_set_fingerprint: scope.font_set_fingerprint.clone(),
+            resource_id: identity.resource_id.clone(),
+            font_fingerprint: identity.font_fingerprint.clone(),
+            content_hash: identity.content_hash.clone(),
+            face_index: identity.face_index,
+            authority: "candidate_only_server_validation_required".to_owned(),
+        };
+        (scope, identity, candidate)
+    }
+
+    #[test]
+    fn admitted_font_resource_enters_real_editor_history_with_undo_redo_and_clear() {
+        // Synthetic bytes prove the admission/EditorSession plumbing, NOT that
+        // the bytes parse as a real font or are permitted for fixed output.
+        let bytes = b"synthetic-server-owned-font-resource";
+        let (scope, id, candidate) = scoped_identity(bytes);
+        let resource = ServerFontResourceV1 {
+            identity: &id,
+            full_font_bytes: bytes,
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: true,
+        };
+        let mut editor = session();
+        let before = editor
+            .current_text_format_overlay_v1(story_id())
+            .expect("source format state");
+        let hash = state_hash_v1(&before).expect("source format hash");
+
+        // Existing generic history cannot be used by an untrusted client.
+        assert!(
+            editor
+                .set_text_format_property_v1(
+                    story_id(),
+                    1,
+                    5,
+                    FormatPropertyV1::FontResource,
+                    FormatValueV1::FontResource(id.clone()),
+                    &hash,
+                )
+                .is_err()
+        );
+        assert!(editor.operations().is_empty());
+
+        let operation = editor
+            .set_admitted_font_resource_v1(story_id(), 1, 5, &candidate, &scope, &resource, &hash)
+            .expect("independently admitted exact-byte font operation");
+        assert!(matches!(
+            &operation,
+            EditOperation::SetTextFormatProperty {
+                property: FormatPropertyV1::FontResource,
+                value: FormatValueV1::FontResource(actual),
+                ..
+            } if actual == &id
+        ));
+        assert_eq!(editor.operations().len(), 1);
+        assert_eq!(editor.graph().stories[&story_id()].text, "Hello world");
+
+        let replaced = editor
+            .current_text_format_overlay_v1(story_id())
+            .expect("effective font override");
+        assert_ne!(replaced, before);
+        assert_eq!(replaced.overrides.len(), 1);
+        editor.undo().expect("undo admitted font");
+        assert_eq!(
+            editor.current_text_format_overlay_v1(story_id()).unwrap(),
+            before
+        );
+        editor.redo().expect("redo admitted font");
+        assert_eq!(
+            editor.current_text_format_overlay_v1(story_id()).unwrap(),
+            replaced
+        );
+
+        // Project persistence must not silently admit a font without trusted
+        // original bytes at the next host. Current project replay fails closed.
+        let project = editor.project();
+        assert_eq!(project.operations.len(), 1);
+        let serialized = serde_json::to_vec(&project).unwrap();
+        let loaded: EditorProject = serde_json::from_slice(&serialized).unwrap();
+        assert_eq!(project, loaded);
+        let mut fresh = session();
+        assert!(fresh.apply_project(&loaded).is_err());
+        assert!(fresh.operations().is_empty());
+        assert_eq!(
+            fresh.current_text_format_overlay_v1(story_id()).unwrap(),
+            before
+        );
+
+        let cleared = editor
+            .clear_text_format_property_override_v1(
+                story_id(),
+                1,
+                5,
+                FormatPropertyV1::FontResource,
+                &state_hash_v1(&replaced).unwrap(),
+            )
+            .expect("clear font override reveals immutable source");
+        assert!(matches!(
+            cleared,
+            EditOperation::ClearTextFormatPropertyOverride {
+                property: FormatPropertyV1::FontResource,
+                ..
+            }
+        ));
+        assert_eq!(
+            editor.current_text_format_overlay_v1(story_id()).unwrap(),
+            before
+        );
+        editor.undo().expect("undo clear restores admitted font");
+        assert_eq!(
+            editor.current_text_format_overlay_v1(story_id()).unwrap(),
+            replaced
+        );
+    }
+
+    #[test]
+    fn stale_scope_untrusted_bytes_and_wrong_face_do_not_commit_history() {
+        let bytes = b"synthetic-resource-for-negative-controls";
+        let (scope, id, candidate) = scoped_identity(bytes);
+        let mut editor = session();
+        let hash = editor
+            .current_text_format_state_hash_v1(story_id())
+            .unwrap();
+        let good = ServerFontResourceV1 {
+            identity: &id,
+            full_font_bytes: bytes,
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: true,
+        };
+        let mut stale = candidate.clone();
+        stale.layout_environment_id = format!("sha256:{}", "9".repeat(64));
+        assert!(
+            editor
+                .set_admitted_font_resource_v1(story_id(), 0, 11, &stale, &scope, &good, &hash)
+                .is_err()
+        );
+        let corrupt = ServerFontResourceV1 {
+            identity: &id,
+            full_font_bytes: b"different bytes",
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: true,
+        };
+        assert!(
+            editor
+                .set_admitted_font_resource_v1(
+                    story_id(),
+                    0,
+                    11,
+                    &candidate,
+                    &scope,
+                    &corrupt,
+                    &hash
+                )
+                .is_err()
+        );
+        let denied = ServerFontResourceV1 {
+            identity: &id,
+            full_font_bytes: bytes,
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: false,
+        };
+        assert!(
+            editor
+                .set_admitted_font_resource_v1(
+                    story_id(),
+                    0,
+                    11,
+                    &candidate,
+                    &scope,
+                    &denied,
+                    &hash
+                )
+                .is_err()
+        );
+        let mut wrong_face = candidate.clone();
+        wrong_face.face_index = 1;
+        assert!(
+            editor
+                .set_admitted_font_resource_v1(story_id(), 0, 11, &wrong_face, &scope, &good, &hash)
+                .is_err()
+        );
+        assert!(editor.operations().is_empty());
+        assert_eq!(
+            editor
+                .current_text_format_state_hash_v1(story_id())
+                .unwrap(),
+            hash
+        );
+    }
 }

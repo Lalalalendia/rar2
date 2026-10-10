@@ -182,6 +182,31 @@ pub fn set_admitted_font_resource_v1(
     )
 }
 
+/// Reconstruct a font operation already admitted by a trusted EditorSession.
+///
+/// This is *history validation*, not independent authoring permission. A new
+/// command must pass set_admitted_font_resource_v1 with original server-owned
+/// bytes. An EditorProject loaded from disk must revalidate that grant at its
+/// replay boundary before recording this operation in live session history.
+pub fn replay_recorded_font_resource_v1(
+    state: &TextFormatOverlayStateV1,
+    start_scalar: u32,
+    end_scalar: u32,
+    identity: &FontResourceIdentityV1,
+    expected_state_hash: &str,
+) -> Result<TextFormatOperationReceiptV1> {
+    validate_font_resource_identity_v1(identity)?;
+    apply_format_operation_v1(
+        state,
+        TextFormatOperationKindV1::SetTextFormatProperty,
+        start_scalar,
+        end_scalar,
+        FormatPropertyV1::FontResource,
+        Some(FormatValueV1::FontResource(identity.clone())),
+        expected_state_hash,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
