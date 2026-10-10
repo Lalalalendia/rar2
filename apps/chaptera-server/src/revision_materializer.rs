@@ -357,7 +357,7 @@ impl ExactRevisionMaterializer {
             self.editor.as_ref(),
             &source_bytes,
             &source.document_id,
-            source_sha256,
+            &source.source_sha256,
             &edges,
         )?;
 
@@ -944,7 +944,7 @@ pub(crate) fn validate_authorized_source(
     }
     require_identifier(&source.binding_id, "binding_id")?;
     require_identifier(&source.baseline_revision_id, "baseline_revision_id")?;
-    require_sha256(source_sha256, "source_sha256")?;
+    require_sha256(&source.source_sha256, "source_sha256")?;
     if source.byte_len == 0 {
         return Err(RevisionMaterializerError::new(
             "source_length_invalid",
