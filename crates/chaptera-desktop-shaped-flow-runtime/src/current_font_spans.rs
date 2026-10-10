@@ -277,7 +277,7 @@ mod tests {
     fn fixture_identity(font: &[u8]) -> FontResourceIdentityV1 {
         let sha = font_fingerprint_sha256(font);
         FontResourceIdentityV1 {
-            resource_id: "f27a8036-8492-480f-8fa6-d2e775cc9bcfda".to_owned(),
+            resource_id: "f27a8036-8492-480f-8fa6-d2e775cc9f12".to_owned(),
             font_fingerprint: format!("sha256:{sha}"),
             content_hash: sha,
             face_index: 0,
