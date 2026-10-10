@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Chaptera Editor</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/editor/product-editor.css">
+<header class="topbar">
+  <div>
+    <strong>Chaptera Editor</strong>
+    <span id="document" class="muted"></span>
+  </div>
+  <div id="status" class="status" role="status">Opening…</div>
+</header>
+<main>
+  <aside class="notice">
+    <strong>Bounded editor</strong>
+    <span>Direct page objects can be moved. Projected and nested visual content stays read-only.</span>
+    <span id="fidelity"></span>
+  </aside>
+  <section id="canvas-wrap" aria-label="Publication canvas">
+    <div id="canvas"></div>
+  </section>
+</main>
+<script type="module" src="/editor/product-editor-entry-v1.mjs"></script>
