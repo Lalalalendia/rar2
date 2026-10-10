@@ -211,6 +211,12 @@ fn main() -> Result<()> {
         fs::create_dir(out_dir).context("create unused private native root")?;
         write_handoff(out_dir, "control", &source, &source, original_manifest)?;
         write_handoff(out_dir, "candidate", &source, &candidate.bytes, edited_manifest)?;
+        // Browser acceptance consumes the same real Rust EditorProject baseline.
+        // It stays private inside the hosted work directory and is never uploaded.
+        write_new(
+            &out_dir.join("baseline-project.json"),
+            &serde_json::to_vec_pretty(&opened.project())?,
+        )?;
         let receipt = json!({
             "schema": "chaptera.sample4.native-oracle-handoff.v1",
             "fixture": "Sample4",

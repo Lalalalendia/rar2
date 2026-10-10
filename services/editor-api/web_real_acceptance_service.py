@@ -49,16 +49,22 @@ PINNED_SHA = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
 PINNED_LEN = 291840
 SAMPLE3_SHA = "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc"
 SAMPLE3_LEN = 72192
+SAMPLE4_SHA = "42195f7ad23d911219fea3ec88e66e867e9b9a6821a16dd1b535e2aa9d57a11b"
+SAMPLE4_LEN = 72192
 # This is a source fixture admission list, not a Writer/Publisher approval list.
 PINNED_FIXTURE_PROFILES = {
     "newsletter": (PINNED_SHA, PINNED_LEN),
     "sample3": (SAMPLE3_SHA, SAMPLE3_LEN),
+    "sample4": (SAMPLE4_SHA, SAMPLE4_LEN),
 }
 
 # Native Publisher 2019 Open -> SaveAs -> fresh Reopen -> Reader evidence:
 # six-unit Story deletion: protected-main #37982376097 (receipt 11641486612);
 # one-unit Story deletion: protected-main #37987117653 (receipt 11644202672).
 # Both apply to exact Sample3 input bytes; no other Story mutation is approved.
+# Sample4 cross-fixture Story candidate was independently accepted by the
+# paired original/candidate Publisher 2019 SaveAs + fresh Reopen on
+# protected main Actions #38052655117 (source-safe artifact 11669902218).
 # This is exact-byte authorization, NEVER arbitrary Reader-green PUB output.
 NATIVE_PUBLISHER_ACCEPTED_SHA_PAIRS_V1 = frozenset({
     (
@@ -68,6 +74,10 @@ NATIVE_PUBLISHER_ACCEPTED_SHA_PAIRS_V1 = frozenset({
     (
         "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc",
         "b9b789f35a34e016faceb27acf50bf0621273a7d612762ecc17c56ca450fe715",
+    ),
+    (
+        SAMPLE4_SHA,
+        "2f7795a3c4307716565c7accf4636a80b7947f8921c60a87b51e1a48ee529509",
     ),
 })
 
@@ -220,13 +230,17 @@ class RealAcceptanceState:
             # An isolated, exact-source interactive scenario, not a fabricated
             # Producer B move receipt. The canonical baseline is real Rust EditorProject.
             if (
-                fixture_profile != "sample3"
+                fixture_profile not in {"sample3", "sample4"}
                 or strict_acceptance
                 or baseline_project is None
             ):
-                raise RuntimeError("Sample3 requires interactive exact baseline Project")
+                raise RuntimeError("pinned Story fixture requires interactive exact baseline Project")
             self.revision_receipt = None
-            self.document_id = "a75950c7-cfb5-4b6c-925b-27a8d8b3d102"
+            self.document_id = (
+                "c8cb238d-0d7f-4ddd-81cc-6f7a142da066"
+                if fixture_profile == "sample4" else
+                "a75950c7-cfb5-4b6c-925b-27a8d8b3d102"
+            )
             self.source_hash = self.pinned_sha
             self.baseline_project = load_json(baseline_project.resolve(strict=True))
             self.expected_baseline_revision = None
@@ -309,8 +323,8 @@ class RealAcceptanceState:
             if not isinstance(page, dict) or not isinstance(page.get("id"), str):
                 raise ValueError(f"Viewer receipt document.pages[{index}].id is required")
             viewer_page_ids.append(page["id"])
-        if self.fixture_profile == "sample3":
-            # The legacy Sample3 Viewer has a real additional Page/surface that
+        if self.fixture_profile in {"sample3", "sample4"}:
+            # The legacy Sample3/Sample4 Viewer may have a Page/surface that
             # is not in resolved_graph.document.pages. A Story-only edit cannot
             # legitimately re-project/omit that surface to satisfy the newer
             # mature-0x2C Scene bridge. Keep the actual Reader Viewer geometry,
@@ -321,7 +335,7 @@ class RealAcceptanceState:
                 not isinstance(op, dict) or op.get("kind") != "replace_story_range"
                 for op in operations
             ):
-                raise RuntimeError("Sample3 Viewer Story projection forbids geometry edits")
+                raise RuntimeError("pinned legacy Viewer Story projection forbids geometry edits")
             if current_graph.get("document", {}).get("source_hash") != self.source_hash:
                 raise RuntimeError("resolved graph source identity changed")
             if viewer.get("document", {}).get("source", {}).get("source_hash") != self.source_hash:
@@ -494,7 +508,7 @@ class RealAcceptanceState:
             # Identity-bearing canonical Rust EditorProjects cannot be
             # downgraded below v0.11. Preserve schema across history changes.
             # In this fixture-constrained acceptance service these are the
-            # exact-source interactive Sample3 projects.
+            # exact-source interactive Sample3 and Sample4 projects.
             if self.fixture_profile == "newsletter":
                 raise RuntimeError("Newsletter unexpectedly gained a project identity")
         return project, [{"key": "history." + transition_kind, "state": "supported", "note": None}]
@@ -1057,7 +1071,7 @@ def main():
     parser.add_argument("--revision-receipt", type=pathlib.Path)
     parser.add_argument("--baseline-project", type=pathlib.Path)
     parser.add_argument(
-        "--fixture-profile", choices=("newsletter", "sample3"), default="newsletter"
+        "--fixture-profile", choices=("newsletter", "sample3", "sample4"), default="newsletter"
     )
     parser.add_argument("--exporter", required=True, type=pathlib.Path)
     parser.add_argument("--work-dir", required=True, type=pathlib.Path)
