@@ -17,6 +17,8 @@ use crate::{
     sqlite_store::AUTHORING_REVISION_SCHEMA_V1,
 };
 
+const MAX_WEB_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedProjectIdentity {
     pub project_id: String,
@@ -264,6 +266,14 @@ impl SqliteProjectPersistence {
                         "project metadata version is negative",
                     )
                 })?;
+                if lifecycle_generation > MAX_WEB_SAFE_INTEGER
+                    || metadata_version > MAX_WEB_SAFE_INTEGER
+                {
+                    return Err(IngressError::new(
+                        "project_catalog_version_out_of_range",
+                        "project catalog concurrency versions exceed the web integer contract",
+                    ));
+                }
 
                 Ok(ProjectCatalogEntry {
                     project_id,
