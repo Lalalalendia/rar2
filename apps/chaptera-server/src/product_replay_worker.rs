@@ -245,9 +245,7 @@ pub fn validate_product_replay_receipt(
             || scene.scene["document_id"] != document_id
             || scene.scene["source_hash"] != source_sha256
             || scene.scene["revision_id"] != scene.revision_id
-            || !scene.scene["pages"].is_array()
-            || !scene.scene["nodes"].is_array()
-            || !scene.scene["stories"].is_array()
+            || !approved_reader_scene_shape(&scene.scene)
             || payload.len() > MAX_SCENE_BYTES
             || sha256_hex(&payload) != scene.scene_sha256
         {
@@ -258,6 +256,46 @@ pub fn validate_product_replay_receipt(
         }
     }
     Ok(())
+}
+
+/// Treat worker JSON as an untrusted wire envelope. In particular, never
+/// forward a newly invented top-level key that could carry editor projects,
+/// original PUB bytes, provider credentials or internal diagnostics.
+fn approved_reader_scene_shape(scene: &Value) -> bool {
+    let Some(object) = scene.as_object() else {
+        return false;
+    };
+    const APPROVED: &[&str] = &[
+        "protocol_version",
+        "document_id",
+        "source_hash",
+        "revision_id",
+        "scene_authority",
+        "stacking_fidelity",
+        "fidelity",
+        "pages",
+        "nodes",
+        "stories",
+        "resources",
+        "fonts",
+        "text_layout_fallback_counts",
+        "diagnostics",
+    ];
+    if object.keys().any(|key| !APPROVED.contains(&key.as_str())) {
+        return false;
+    }
+    scene["stacking_fidelity"].is_string()
+        && scene["fidelity"]["state"].is_string()
+        && scene["fidelity"]["reasons"].is_array()
+        && scene["pages"].is_array()
+        && scene["nodes"].is_array()
+        && scene["stories"].is_array()
+        && scene.get("resources").is_none_or(Value::is_array)
+        && scene.get("fonts").is_none_or(Value::is_array)
+        && scene
+            .get("text_layout_fallback_counts")
+            .is_none_or(Value::is_object)
+        && scene.get("diagnostics").is_none_or(Value::is_array)
 }
 
 fn valid_revision_id(value: &str) -> bool {
@@ -1287,6 +1325,8 @@ mod tests {
             "document_id": "document-a",
             "source_hash": "a".repeat(64),
             "revision_id": "revision-a",
+            "stacking_fidelity": "source",
+            "fidelity": {"state": "Exact", "reasons": []},
             "pages": [],
             "nodes": [],
             "stories": []
@@ -1310,6 +1350,17 @@ mod tests {
         assert_eq!(
             validate_product_replay_receipt(
                 &other_revision, "document-a", &"a".repeat(64), 512, &"b".repeat(64)
+            ).unwrap_err().code,
+            "product_replay_receipt_invalid"
+        );
+
+        let mut leaked = expected.clone();
+        let leak = leaked.reader_scene.as_mut().unwrap();
+        leak.scene["project"] = serde_json::json!({"source_file": "should-not-leak"});
+        leak.scene_sha256 = sha256_hex(&serde_json::to_vec(&leak.scene).unwrap());
+        assert_eq!(
+            validate_product_replay_receipt(
+                &leaked, "document-a", &"a".repeat(64), 512, &"b".repeat(64)
             ).unwrap_err().code,
             "product_replay_receipt_invalid"
         );
