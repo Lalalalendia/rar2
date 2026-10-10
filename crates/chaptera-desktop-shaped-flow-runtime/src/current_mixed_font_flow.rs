@@ -320,6 +320,17 @@ fn place_current_exact_mixed_font_spans_v1(
             CurrentPhysicalFontSpanV1::SourceUnresolved { .. } => Vec::new(),
         })
         .collect::<Vec<_>>();
+    if full_glyphs.iter().any(|glyph| {
+        glyph.glyph_id == 0
+            && !chars
+                .get(glyph.cluster as usize)
+                .is_some_and(|ch| matches!(*ch, '\r' | '\n'))
+    }) {
+        return Err(blocked(
+            "mixed_font_glyph_unavailable",
+            "exact physical font lacks at least one required glyph; no fallback is authorized",
+        ));
+    }
     let policy = break_policy_for_shaped_text(text, &full_glyphs)
         .map_err(|error| blocked("mixed_font_unicode_break_policy_blocked", error.to_string()))?;
     let mut current = 0_usize;
@@ -500,6 +511,12 @@ fn reshape_physical_line_fragments_v1(
             &runtime,
         )
         .map_err(|error| blocked("mixed_font_break_reshaping_failed", error.to_string()))?;
+        if shaped.glyphs.iter().any(|glyph| glyph.glyph_id == 0) {
+            return Err(blocked(
+                "mixed_font_glyph_unavailable",
+                "a line-boundary reshape produced a missing glyph; no fallback is authorized",
+            ));
+        }
         let end = u32::try_from(hi)
             .map_err(|_| blocked("mixed_font_span_overflow", "fragment end overflow"))?;
         let start = u32::try_from(lo)
@@ -861,6 +878,27 @@ mod tests {
             .unwrap_err()
             .code,
             "mixed_font_exact_resource_changed"
+        );
+        // A syntactically valid but unavailable glyph must not silently inherit
+        // an ambient host font or claim valid frame allocation.
+        let mut unavailable = all.clone();
+        if let CurrentPhysicalFontSpanV1::AdmittedExact { shaped, .. } =
+            &mut unavailable.spans[0]
+        {
+            shaped.glyphs[0].glyph_id = 0;
+        }
+        assert_eq!(
+            place_current_exact_mixed_font_spans_v1(
+                text,
+                story_id(),
+                &unavailable,
+                &resource,
+                &projected,
+                LengthEmu::new(120_000),
+            )
+            .unwrap_err()
+            .code,
+            "mixed_font_glyph_unavailable"
         );
     }
 
