@@ -17,6 +17,7 @@ button{cursor:pointer}button:hover{background:#303845}
 #text-value{min-height:84px;max-height:220px;resize:vertical;border:1px solid #394352;background:#101318;color:#eef1f5;border-radius:7px;padding:8px;font:13px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace}
 #font-tools{display:flex;gap:9px;align-items:center;width:100%;flex-wrap:wrap;font-size:12px;color:#b8c1cc}
 #font-choice{max-width:230px}
+#font-story-target{max-width:290px}
 #font-message{flex:1;min-width:180px}
 #font-sample{font-size:22px;padding:2px 9px;border:1px solid #394352;background:#252b34;color:#eee;white-space:nowrap}
 button:disabled{cursor:not-allowed;opacity:.45}
@@ -46,7 +47,11 @@ button:disabled{cursor:not-allowed;opacity:.45}
     <button id="apply-font" disabled>Apply font to selection</button>
     <button id="cancel-text">Cancel</button>
   </div>
-  <div id="font-tools" role="group" aria-label="Physical font preview">
+  <div id="font-tools" role="group" aria-label="Physical font authoring">
+    <label for="font-story-target">Text Story</label>
+    <select id="font-story-target" disabled aria-label="Choose font-editable text Story">
+      <option value="">Select Story...</option>
+    </select>
     <label for="font-choice">Admitted font</label>
     <select id="font-choice" disabled><option value="">No admitted fonts</option></select>
     <button id="preview-physical-font" disabled>Preview bytes</button>
@@ -74,6 +79,7 @@ const textTools=document.querySelector("#text-tools");
 const textValue=document.querySelector("#text-value");
 const applyFontButton=document.querySelector("#apply-font");
 const fontChoice=document.querySelector("#font-choice");
+const fontStoryTarget=document.querySelector("#font-story-target");
 const previewFontButton=document.querySelector("#preview-physical-font");
 const fontMessage=document.querySelector("#font-message");
 const fontSample=document.querySelector("#font-sample");
@@ -94,7 +100,17 @@ let shell=null;
 function opId(kind){return "local-"+kind+"-"+crypto.randomUUID();}
 function showError(error){stateEl.className="bad";stateEl.textContent=String(error?.message??error);}
 function selectedStory(){
-  if(!shell?.snapshot || !shell.selection.nodeId) return null;
+  if(!shell?.snapshot) return null;
+  // Explicit author-authorized Story choice resolves otherwise ambiguous
+  // pointer hits without pretending an unknown z-order is authoritative.
+  const explicit=fontStoryTarget.value;
+  if(explicit && fontStoryMap.has(explicit) &&
+     fontScopeRevision===shell.snapshot.revision_id){
+    const frame=shell.snapshot.story_frames.find(x=>x.story_id===explicit);
+    const story=shell.snapshot.stories.find(x=>x.story_id===explicit);
+    if(frame&&story) return {node_id:frame.node_id,frame,story};
+  }
+  if(!shell.selection.nodeId) return null;
   const frame=shell.snapshot.story_frames.find(x=>x.node_id===shell.selection.nodeId);
   if(!frame) return null;
   const story=shell.snapshot.stories.find(x=>x.story_id===frame.story_id);
@@ -113,6 +129,17 @@ function syncTextControls(){
   }
 }
 function showState(state){
+  if(state.reason==="gesture_started" && fontStoryTarget.value){
+    // Real canvas selection supersedes an earlier explicit Story choice.
+    const frame=shell?.snapshot?.story_frames.find(
+      x=>x.node_id===state.selected_node_id
+    );
+    if(frame && fontStoryMap.has(frame.story_id)) fontStoryTarget.value="";
+  }
+  if(state.reason==="hit_test_ambiguous"&&!fontStoryTarget.value){
+    fontMessage.className="warn";
+    fontMessage.textContent="Overlapping objects: choose the exact text Story from the list.";
+  }
   stateEl.className="";
   stateEl.textContent="revision "+state.revision_id+(state.selected_node_id?" · selected "+state.selected_node_id:"");
   syncTextControls();
@@ -160,6 +187,23 @@ async function disclosure(){
     }
     fontScopeRevision=scope.revision_id;
   }
+  const oldStoryChoice=fontStoryTarget.value;
+  fontStoryTarget.replaceChildren(new Option("Select Story...", ""));
+  const visibleStories=new Map(scene.stories.map(story=>[story.story_id,story]));
+  const framedStories=new Set(scene.story_frames.map(frame=>frame.story_id));
+  const keys=[...fontStoryMap.keys()].filter(
+    id=>framedStories.has(id)&&visibleStories.has(id)
+  ).sort();
+  for(const [index,id] of keys.entries()){
+    const story=visibleStories.get(id);
+    const preview=story.text.slice(0,36).replace(/[\\r\\n]/g," ").trim();
+    fontStoryTarget.append(new Option(
+      "Story "+(index+1)+" · "+id.slice(0,8)+
+      (preview?" · "+preview:""),id
+    ));
+  }
+  fontStoryTarget.disabled=keys.length===0;
+  fontStoryTarget.value=keys.includes(oldStoryChoice)?oldStoryChoice:"";
   showFontChoices(scene,fontResult);
   syncTextControls();
   const caps=scene.capabilities ?? [];
@@ -472,6 +516,14 @@ async function start(){
     fontMessage.className="bad";
     fontMessage.textContent=String(error?.message??error);
   });
+  fontStoryTarget.onchange=()=>{
+    closeTextEditor();
+    syncTextControls();
+    if(fontStoryTarget.value){
+      fontMessage.className="warn";
+      fontMessage.textContent="Explicit Story selected; select text characters before applying the font.";
+    }
+  };
   fontChoice.onchange=()=>{
     fontSample.style.fontFamily="";
     fontMessage.className="warn";
