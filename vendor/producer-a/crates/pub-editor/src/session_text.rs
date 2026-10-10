@@ -308,7 +308,10 @@ impl EditorSession {
     /// EditorProject re-admission require their own authoritative consumers.
     // Exact scope, trusted bytes and story/hash inputs intentionally remain
     // separate; callers cannot forge server authorization from a browser token.
-    #[expect(clippy::too_many_arguments, reason = "admission trust inputs must remain explicit")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "admission trust inputs must remain explicit"
+    )]
     pub fn set_admitted_font_resource_v1(
         &mut self,
         story_id: StoryId,
