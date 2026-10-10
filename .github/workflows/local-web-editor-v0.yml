@@ -19,6 +19,9 @@ on:
       - "services/editor-api/security/authorized_revision_gateway.py"
       - "tools/verify_live_font_ui_browser.mjs"
       - "tools/native-pub-candidate-cli/tests/real_pinned_font_resource_v1.rs"
+      - "tools/native-pub-candidate-cli/src/font_authoring_v1.rs"
+      - "tools/native-pub-candidate-cli/src/main.rs"
+      - "tools/verify_pinned_font_cli_v1.py"
       - "tools/native-pub-candidate-cli/src/bin/pinned_font_authoring_v1.rs"
       - "tools/run_pinned_font_authoring_real.py"
       - "tools/native-pub-candidate-cli/Cargo.toml"
@@ -63,6 +66,7 @@ jobs:
           python -m py_compile services/editor-api/test_live_font_delivery_v1.py
           python -m py_compile services/editor-api/font_resource_intent_v1.py
           python -m py_compile services/editor-api/test_font_resource_intent_v1.py
+          python -m py_compile tools/verify_pinned_font_cli_v1.py
       - name: Install pinned HTTP schema validation dependency
         run: python -m pip install "jsonschema==4.23.0"
       - name: Validate trusted font authoring catalog and HTTP authority
@@ -90,6 +94,12 @@ jobs:
           python tools/run_pinned_font_authoring_real.py \
             --fixture "${{ github.workspace }}/.chaptera-local/editor/SampleNewsletter.pub" \
             --viewer "${{ github.workspace }}/.chaptera-local/editor/viewer-geometry.json"
+      - name: Prove real licensed font mutation through separate Rust CLI and fresh reopen
+        run: |
+          cargo build --manifest-path tools/native-pub-candidate-cli/Cargo.toml
+          python tools/verify_pinned_font_cli_v1.py \
+            --cli tools/native-pub-candidate-cli/target/debug/chaptera-native-pub-candidate-cli \
+            --source .chaptera-local/editor/SampleNewsletter.pub
       - uses: actions/upload-artifact@v4
         with:
           name: local-editor-pinned-font-chromium

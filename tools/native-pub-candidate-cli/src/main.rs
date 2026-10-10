@@ -1,4 +1,6 @@
 //! Internal source-hash-bound PUB candidate probe, not a public Save PUB action.
+mod font_authoring_v1;
+
 use anyhow::{Context, Result};
 use pub_editor::{EditorProject, Sha256Digest};
 use sha2::{Digest, Sha256};
@@ -302,6 +304,9 @@ mod native_candidate_cli_tests {
 fn main() -> Result<()> {
     let mut args = env::args().skip(1);
     let source = args.next().context("source PUB path missing")?;
+    if source.starts_with("font-") {
+        return font_authoring_v1::run(&source, args.collect());
+    }
     let project = args.next().context("EditorProject path missing")?;
     let output = args.next().context("candidate output path missing")?;
     let report = args.next().context("source-safe report path missing")?;
