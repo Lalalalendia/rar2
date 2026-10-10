@@ -187,6 +187,53 @@ try {
     layout_environment_id: layoutEnvironmentId,
   });
 
+  const downloadedArtifact = await page.evaluate(async input => {
+    const response = await fetch(
+      "/v1/exports/" + encodeURIComponent(input.job_id) +
+        "/artifacts/" + encodeURIComponent(input.artifact_id),
+      { credentials: "same-origin", cache: "no-store" },
+    );
+    const contentType = response.headers.get("content-type");
+    const disposition = response.headers.get("content-disposition");
+    const contentLengthRaw = response.headers.get("content-length");
+    const nosniff = response.headers.get("x-content-type-options");
+    const cacheControl = response.headers.get("cache-control");
+    const buffer = await response.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", buffer));
+    const sha256 = [...digest].map(byte => byte.toString(16).padStart(2, "0")).join("");
+    return {
+      status: response.status,
+      content_type: contentType,
+      content_disposition: disposition,
+      content_length: contentLengthRaw === null ? null : Number(contentLengthRaw),
+      nosniff,
+      cache_control: cacheControl,
+      byte_len: bytes.length,
+      sha256,
+      zip_magic: bytes.length >= 4 &&
+        bytes[0] === 0x50 && bytes[1] === 0x4b &&
+        bytes[2] === 0x03 && bytes[3] === 0x04,
+    };
+  }, {
+    job_id: exportResult.job_id,
+    artifact_id: exportResult.artifact_id,
+  });
+  if (downloadedArtifact.status !== 200 ||
+      downloadedArtifact.content_type !== "application/vnd.adobe.indesign-idml-package" ||
+      !downloadedArtifact.content_disposition?.startsWith("attachment;") ||
+      !downloadedArtifact.content_disposition.includes(".idml") ||
+      !Number.isSafeInteger(downloadedArtifact.content_length) ||
+      downloadedArtifact.content_length <= 0 ||
+      downloadedArtifact.content_length !== downloadedArtifact.byte_len ||
+      downloadedArtifact.nosniff !== "nosniff" ||
+      downloadedArtifact.cache_control !== "private, no-store" ||
+      !downloadedArtifact.zip_magic ||
+      !/^[0-9a-f]{64}$/.test(downloadedArtifact.sha256)) {
+    throw new Error("physical exact-revision artifact download failed representation/integrity checks: " +
+      JSON.stringify(downloadedArtifact));
+  }
+
   receipt.server_restart_reopen_claim = true;
   receipt.server_restart_reopen = {
     document_id: current.document_id,
@@ -200,11 +247,13 @@ try {
   };
   receipt.move_and_export_claim = true;
   receipt.exact_revision_export = exportResult;
-  receipt.export_download_claim = false;
+  receipt.export_download_claim = true;
+  receipt.exact_revision_export_download = downloadedArtifact;
   await writeFile(receiptPath, JSON.stringify(receipt, null, 2) + "\n");
   process.stdout.write(JSON.stringify({
     server_restart_reopen: receipt.server_restart_reopen,
     exact_revision_export: exportResult,
+    exact_revision_export_download: downloadedArtifact,
   }) + "\n");
 } finally {
   await browser.close();
