@@ -1479,10 +1479,29 @@ jobs:
           "PUB_FACTORY_WORK_ROOT=$work" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $bundle = Join-Path $work "bundle"
           Expand-Archive -LiteralPath $roots[0].FullName -DestinationPath $bundle -Force
-          $launchers = @(Get-ChildItem -LiteralPath $bundle -Recurse -File -Filter "RUN_NATIVE.cmd")
-          if ($launchers.Count -ne 1) { throw "factory_v3_launcher_not_unique" }
-          "PUB_FACTORY_LAUNCH_DIR=$($launchers[0].DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Verified exact Factory V3 payload and unique launcher; no private files published."
+          # The V3 CMD wrapper ends with an interactive "pause". Never invoke
+          # it from a self-hosted Actions job: the noninteractive .ps1 is authoritative.
+          $launchers = @(Get-ChildItem -LiteralPath $bundle -Recurse -File -Filter "run-native.ps1")
+          if ($launchers.Count -ne 1) { throw "factory_v3_script_not_unique" }
+          $launchDir = $launchers[0].DirectoryName
+          $manifestPath = Join-Path $launchDir "bundle-manifest.json"
+          if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+            throw "factory_v3_bundle_manifest_missing"
+          }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          if ([string]$manifest.schema -ne "chaptera.pub.factory-native-portable.v1" -or
+              [string]$manifest.source_main_sha -ne "3bd4497003e02f7f48a91e14da25a89a201dcf87" -or
+              [string]$manifest.inventory_sha256 -ne "a13d86edc1622b7f3cba6524cba7a4553e120864889e59038712061a05003b5c" -or
+              [string]$manifest.publisher_version_prefix -ne "16.0.12527.") {
+            throw "factory_v3_bundle_authority_mismatch"
+          }
+          $expectedExperiments = @("PUB-TLB-SHAPE-EFFECTS-BATCH01", "PUB-OPALG-T840-STYLE-FILL-01")
+          if (@($manifest.experiment_ids).Count -ne 2 -or
+              @($manifest.experiment_ids | Where-Object { $_ -notin $expectedExperiments }).Count -ne 0) {
+            throw "factory_v3_unexpected_experiments"
+          }
+          "PUB_FACTORY_LAUNCH_DIR=$launchDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Verified Factory V3 digest, provenance and exact two-experiment manifest."
 
       - name: Run bounded T891 then T892 in native Publisher
         shell: powershell
@@ -1490,10 +1509,20 @@ jobs:
           $ErrorActionPreference = "Stop"
           $private = Join-Path $env:PUB_FACTORY_WORK_ROOT "private-logs"
           New-Item -ItemType Directory -Force -Path $private | Out-Null
-          $proc = Start-Process -FilePath $env:ComSpec -ArgumentList @("/d", "/c", "RUN_NATIVE.cmd") `
-            -WorkingDirectory $env:PUB_FACTORY_LAUNCH_DIR -Wait -PassThru `
+          $script = Join-Path $env:PUB_FACTORY_LAUNCH_DIR "run-native.ps1"
+          $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          $argv = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $script
+          $proc = Start-Process -FilePath $powershell -ArgumentList $argv `
+            -WorkingDirectory $env:PUB_FACTORY_LAUNCH_DIR -PassThru `
             -RedirectStandardOutput (Join-Path $private "stdout.txt") `
             -RedirectStandardError (Join-Path $private "stderr.txt")
+          # Keep the native experiment strictly bounded, even if Publisher COM hangs.
+          $completed = $proc.WaitForExit(6000000)
+          if (-not $completed) {
+            & taskkill.exe /F /T /PID $proc.Id | Out-Null
+            throw "factory_v3_native_watchdog_timeout"
+          }
+          $proc.Refresh()
           Write-Host ("factory_v3_native_exit_code={0}" -f $proc.ExitCode)
           if ($proc.ExitCode -ne 0) { throw "factory_v3_native_failed" }
           "PUB_FACTORY_NATIVE_SUCCESS=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
