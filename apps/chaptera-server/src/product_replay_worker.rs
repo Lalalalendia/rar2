@@ -35,8 +35,7 @@ use crate::{
 };
 
 pub const PRODUCT_REPLAY_WORKER_V1: &str = "chaptera.product-isolated-replay.v1";
-pub const PRODUCT_MATERIALIZATION_WORKER_V1: &str =
-    "chaptera.product-isolated-materialize.v1";
+pub const PRODUCT_MATERIALIZATION_WORKER_V1: &str = "chaptera.product-isolated-materialize.v1";
 const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PROJECT_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
@@ -283,12 +282,13 @@ fn validate_materialization_input(
         if edge.document_id != input.document_id
             || edge.parent_revision != expected_parent
             || edge.parent_cursor != expected_cursor
-            || edge.child_cursor != expected_cursor.checked_add(1).ok_or_else(|| {
-                ProductReplayWorkerError::new(
-                    "product_materialization_chain_invalid",
-                    "revision cursor overflowed isolated replay policy",
-                )
-            })?
+            || edge.child_cursor
+                != expected_cursor.checked_add(1).ok_or_else(|| {
+                    ProductReplayWorkerError::new(
+                        "product_materialization_chain_invalid",
+                        "revision cursor overflowed isolated replay policy",
+                    )
+                })?
         {
             return Err(ProductReplayWorkerError::new(
                 "product_materialization_chain_invalid",
@@ -1065,8 +1065,8 @@ impl IsolatedProductMaterializationProducer {
                 "isolated materialization receipt exceeded size after read",
             ));
         }
-        let receipt: ProductMaterializationWorkerReceiptV1 =
-            serde_json::from_slice(&payload).map_err(|_| {
+        let receipt: ProductMaterializationWorkerReceiptV1 = serde_json::from_slice(&payload)
+            .map_err(|_| {
                 ProductReplayWorkerError::new(
                     "product_materialization_receipt_invalid",
                     "isolated materialization receipt is malformed",
