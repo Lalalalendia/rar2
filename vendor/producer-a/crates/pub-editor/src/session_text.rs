@@ -634,7 +634,10 @@ mod font_resource_session_tests {
         let identity = FontResourceIdentityV1 {
             resource_id: "82222222-2222-4222-8222-222222222222".to_owned(),
             font_fingerprint: format!("sha256:{}", "b".repeat(64)),
-            content_hash: format!("{:x}", Sha256::digest(bytes)),
+            content_hash: Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
             face_index: 0,
         };
         let candidate = FontReplacementCandidateV1 {
