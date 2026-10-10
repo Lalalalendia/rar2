@@ -113,6 +113,12 @@ pub struct SourceBaselineReceiptV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthoringStateIdentityDerivation {
+    pub project_hash: String,
+    pub state_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaselineIdentityDerivation {
     pub project_hash: String,
     pub state_id: String,
@@ -163,6 +169,30 @@ struct WebHistoryTransitionV1<'a> {
     base_revision_id: &'a str,
     base_state_id: &'a str,
     resulting_state_id: &'a str,
+}
+
+pub fn derive_authoring_state_identity<G: Serialize + ?Sized>(
+    document_id: &str,
+    source_sha256: &str,
+    project_schema_version: &str,
+    project: &G,
+) -> Result<AuthoringStateIdentityDerivation, SourceBaselineError> {
+    require_ident(document_id, "document_id")?;
+    require_sha256(source_sha256, "source_sha256")?;
+    require_ident(project_schema_version, "project_schema_version")?;
+
+    let project_hash = web_hash_id(project)?;
+    let state_id = web_hash_id(&WebAuthoringStateV1 {
+        protocol_version: "chaptera.authoring-state.v1",
+        document_id,
+        source_hash: source_sha256,
+        project_schema_version,
+        project_hash: &project_hash,
+    })?;
+    Ok(AuthoringStateIdentityDerivation {
+        project_hash,
+        state_id,
+    })
 }
 
 pub fn derive_import_baseline_identities<G: Serialize + ?Sized>(
@@ -806,6 +836,32 @@ mod tests {
             ids.canonical_authoring_revision_id,
             "5e246c364ec168c876ed07306a1ff99d5b2eb78913f5bd36777bc2863a5360f3"
         );
+    }
+
+    #[test]
+    fn shared_authoring_state_helper_matches_baseline_identity() {
+        let project = json!({
+            "operations": [],
+            "schema_version": "pub-editor-v0.2",
+            "source_hash": SOURCE_SHA,
+        });
+        let baseline = derive_import_baseline_identities(
+            DOCUMENT_ID,
+            SOURCE_SHA,
+            "pub-editor-v0.2",
+            &project,
+        )
+        .unwrap();
+        let state = derive_authoring_state_identity(
+            DOCUMENT_ID,
+            SOURCE_SHA,
+            "pub-editor-v0.2",
+            &project,
+        )
+        .unwrap();
+
+        assert_eq!(state.project_hash, baseline.project_hash);
+        assert_eq!(state.state_id, baseline.state_id);
     }
 
     #[test]
