@@ -6,9 +6,12 @@
 use std::{path::PathBuf, str::FromStr, time::Duration};
 
 use chaptera_server::{
-    product_replay_worker::IsolatedProductReplayProducer,
+    product_replay_worker::{
+        IsolatedProductMaterializationProducer, IsolatedProductReplayProducer,
+    },
     revision_materializer::{EditorReplayEngine, PubEditorReplayEngine, project_sha256},
     source_baseline::SourceBaselineProducerConfig,
+    sqlite_store::RevisionEdge,
 };
 use pub_editor::{Sha256Digest, open_mature_0x2c_editor};
 use sha2::{Digest, Sha256};
@@ -107,4 +110,76 @@ async fn pinned_sample3_exact_project_replays_in_real_seccomp_worker() {
         .await
         .unwrap_err();
     assert_eq!(denied.code, "product_replay_project_hash_mismatch");
+}
+
+
+#[tokio::test]
+async fn pinned_sample3_baseline_materializes_in_real_seccomp_worker() {
+    let source_bytes = sample3_pub();
+    let source_sha256 = format!("{:x}", Sha256::digest(&source_bytes));
+    let editor = PubEditorReplayEngine;
+    let expected = editor
+        .baseline_project(&source_bytes, &source_sha256)
+        .unwrap();
+
+    let harness = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tools/migration_pdf_worker_isolation.py");
+    let producer = IsolatedProductMaterializationProducer::new(SourceBaselineProducerConfig {
+        isolation_python: PathBuf::from("python3"),
+        isolation_harness: harness,
+        worker_binary: PathBuf::from(env!("CARGO_BIN_EXE_chaptera")),
+        worker_wall_timeout: Duration::from_secs(45),
+        worker_address_space_mb: 2048,
+        worker_cpu_seconds: 40,
+        worker_open_files: 64,
+        worker_output_file_mb: 64,
+        temp_root: std::env::temp_dir(),
+    })
+    .unwrap();
+
+    let receipt = producer
+        .materialize_exact_project(
+            "document-sample3-materialized",
+            &source_sha256,
+            &source_bytes,
+            "revision-baseline",
+            0,
+            "revision-baseline",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.project, expected);
+    assert_eq!(receipt.project_sha256, project_sha256(&expected).unwrap());
+    assert_eq!(receipt.replayed_edges, 0);
+    assert_eq!(receipt.authoring_root_hash, None);
+    assert!(receipt.filesystem_confinement);
+
+    let malformed = RevisionEdge {
+        document_id: "document-sample3-materialized".into(),
+        parent_revision: "wrong-parent".into(),
+        parent_cursor: 0,
+        operation_id: "op-1".into(),
+        request_hash: "c".repeat(64),
+        canonical_event: Vec::new(),
+        child_revision: "revision-next".into(),
+        child_cursor: 1,
+        resulting_state_hash: "d".repeat(64),
+        authoring_root_hash: None,
+        semantic_schema_version: 1,
+        committed_at_ms: 1,
+    };
+    let denied = producer
+        .materialize_exact_project(
+            "document-sample3-materialized",
+            &source_sha256,
+            &source_bytes,
+            "revision-baseline",
+            0,
+            "revision-next",
+            &[malformed],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(denied.code, "product_materialization_chain_invalid");
 }
