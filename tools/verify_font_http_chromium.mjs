@@ -120,6 +120,16 @@ try {
     throw new Error("unadmitted Publisher font was silently shaped: "+
                     JSON.stringify(originalCoverage));
   }
+  await page.waitForFunction(()=>document.querySelector("#font-flow")?.dataset.flowState==="source_font_unresolved",null,{timeout:40_000});
+  const sourceFlow=await page.locator("#font-flow").evaluate(el=>({
+    state:el.dataset.flowState,
+    gaps:Number(el.dataset.sourceGapScalars),
+    lines:Number(el.dataset.lineCount),
+  }));
+  if(sourceFlow.gaps!==originalCoverage.unknown||sourceFlow.lines!==0){
+    throw new Error("source font line fit invented geometry before authoring: "+
+                    JSON.stringify(sourceFlow));
+  }
   const textarea=page.locator("#text-value");
   await textarea.waitFor({state:"visible"});
   const previous=await textarea.inputValue();
@@ -166,6 +176,23 @@ try {
      !physicalCoverage.message.includes("Line placement, overset and PDF not verified")){
     throw new Error("UI did not consume current native Rust glyph spans: "+
                     JSON.stringify(physicalCoverage));
+  }
+  await page.waitForFunction(()=>{
+    const f=document.querySelector("#font-flow");
+    return f?.dataset.flowState==="source_font_unresolved" &&
+      f.dataset.sourceGapScalars!=="";
+  },null,{timeout:40_000});
+  const afterFlow=await page.locator("#font-flow").evaluate(el=>({
+    state:el.dataset.flowState,
+    gaps:Number(el.dataset.sourceGapScalars),
+    lines:Number(el.dataset.lineCount),
+    text:el.textContent,
+  }));
+  if(afterFlow.gaps!==physicalCoverage.unresolved_scalars||
+     afterFlow.lines!==0||
+     !afterFlow.text.includes("PDF blocked")){
+    throw new Error("partially admitted Story yielded fake line-fit geometry: "+
+                    JSON.stringify(afterFlow));
   }
   const after=await current();
   if(after.revision_id===before.revision_id ||
@@ -237,6 +264,9 @@ try {
     physical_glyph_coverage:physicalCoverage,
     source_unknown_before:originalCoverage.unknown,
     real_glyph_spans_consumed:true,
+    physical_line_fit_before:sourceFlow,
+    physical_line_fit_after:afterFlow,
+    no_invented_lines_without_source_fonts:true,
     page_errors:errors,
   };
   if(errors.length)throw Error("Chromium page errors: "+errors.join("; "));
