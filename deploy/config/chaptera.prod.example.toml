@@ -30,6 +30,10 @@ quota_background_cap = 1
 provider = "s3-compatible"
 quarantine_namespace = "chaptera-quarantine"
 private_namespace = "chaptera-private"
+# AWS S3 deployments should pin the owning account to fail closed if bucket
+# names resolve into the wrong account. Leave unset for providers that do not
+# implement the x-amz-expected-bucket-owner contract.
+# expected_bucket_owner = "123456789012"
 
 [limits]
 worker_spool_bytes = 4294967296

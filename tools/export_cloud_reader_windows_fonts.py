@@ -10,11 +10,31 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 import struct
 import sys
+import uuid
 from typing import Iterable
 
 TOOL_SCHEMA = "chaptera.cloud-reader-private-font-packet.v1"
 REGULAR_STYLE_NAMES = {"", "regular", "roman", "normal", "book", "plain"}
 SUPPORTED_SUFFIXES = {".ttf", ".otf", ".ttc", ".otc"}
+
+
+
+_SOURCE_BINDING_NAMESPACE = uuid.UUID("c02ce21c-d044-56b2-95d9-25a9289c1d1f")
+_STORY_ID_RE = re.compile(r"^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$")
+
+
+def _editor_source_binding_id(source_sha: str, source_index: int, family: str) -> str:
+    """Exact binary UUIDv5 framing from pub-model (not a physical resource grant)."""
+    components = (
+        b"pub-editor",
+        f"quill-font-index:{source_index}:{family}".encode("utf-8"),
+        b"chaptera.text-format.base-font-binding",
+    )
+    identity_name = b"\x01" + bytes.fromhex(source_sha) + b"".join(
+        struct.pack(">I", len(part)) + part for part in components
+    )
+    digest = hashlib.sha1(_SOURCE_BINDING_NAMESPACE.bytes + identity_name).digest()
+    return "pub-source-font:" + str(uuid.UUID(bytes=digest[:16], version=5))
 
 
 class FontPacketError(RuntimeError):
@@ -252,6 +272,7 @@ def read_private_source_requirements(path: Path) -> tuple[list[str], dict]:
         raise FontPacketError("bounded source family requirements are missing")
     families: list[str] = []
     lower_names = set()
+    direct_indices_by_family: dict[str, set[int]] = {}
     incomplete_styles = False
     missing_quill_indices = 0
     for item in items:
@@ -275,6 +296,16 @@ def read_private_source_requirements(path: Path) -> tuple[list[str], dict]:
         if item.get("source_quill_index_proven") is not bool(indices):
             raise FontPacketError("source font index proof contradicted by source family requirements")
         missing_quill_indices += not bool(indices)
+        direct_indices = item.get("direct_run_source_font_indices", [])
+        if (not isinstance(direct_indices, list) or any(
+            type(index) is not int or not 0 <= index <= 65535
+            for index in direct_indices
+        ) or direct_indices != sorted(set(direct_indices))
+                or not set(direct_indices).issubset(indices)):
+            raise FontPacketError("direct Quill index evidence contradicts source candidate index list")
+        # Script-font alternatives may contribute to family candidates, but
+        # only an actual typography run proves a *direct* Editor binding.
+        direct_indices_by_family[family] = set(direct_indices)
         styles = item.get("effective_style_run_counts")
         if not isinstance(styles, dict):
             raise FontPacketError("source run style counts are required")
@@ -301,9 +332,61 @@ def read_private_source_requirements(path: Path) -> tuple[list[str], dict]:
         raise FontPacketError("unresolved source font counters are not trustworthy")
     incomplete_styles |= bool(packet["unresolved_source_family_run_count"])
     incomplete_styles |= bool(packet["unknown_effective_style_run_count"])
+
+    # A direct typography run can prove an Editor source binding identity, but
+    # never that a local Windows file is the original Publisher face/style.
+    # Validate each binding against the immutable source SHA and Quill index
+    # before exposing even an explicitly unverified file candidate.
+    records = packet.get("direct_source_bindings", [])
+    count = packet.get("direct_source_binding_count", 0)
+    if (not isinstance(records, list) or len(records) > 100_000
+            or type(count) is not int or count != len(records)
+            or (records and packet.get("direct_source_bindings_only_source_identity") is not True)):
+        raise FontPacketError("untrusted Publisher direct source-binding inventory")
+    unique_ranges = set()
+    links: dict[str, dict] = {}
+    for entry in records:
+        if not isinstance(entry, dict):
+            raise FontPacketError("source font binding record must be an object")
+        family = entry.get("source_family")
+        index = entry.get("source_font_index")
+        story = entry.get("story_id")
+        start, end = entry.get("scalar_start"), entry.get("scalar_end")
+        value = entry.get("source_font_binding_id")
+        if (not isinstance(family, str) or family not in direct_indices_by_family
+                or type(index) is not int
+                or index not in direct_indices_by_family[family]
+                or not isinstance(story, str) or not _STORY_ID_RE.fullmatch(story)
+                or type(start) is not int or type(end) is not int
+                or not 0 <= start < end <= 0xFFFFFFFF
+                or not isinstance(value, str)
+                or value != _editor_source_binding_id(
+                    packet["document_source_sha256"], index, family
+                )):
+            raise FontPacketError("direct Quill font binding is not canonical source evidence")
+        key = (story, start, end)
+        if key in unique_ranges:
+            raise FontPacketError("duplicate direct Quill source interval")
+        unique_ranges.add(key)
+        if value not in links:
+            links[value] = {
+                "source_font_binding_id": value,
+                "source_font_index": index,
+                "source_family": family,
+                "source_run_count": 0,
+            }
+        elif (links[value]["source_font_index"] != index
+                or links[value]["source_family"] != family):
+            raise FontPacketError("source binding collides across exact Quill identities")
+        links[value]["source_run_count"] += 1
+    inventory = sorted(
+        links.values(),
+        key=lambda item: (item["source_family"], item["source_font_index"]),
+    )
     return families, {
         "source_sha256": packet["document_source_sha256"],
         "source_family_requirements_only": True,
+        "direct_binding_identity_candidates": inventory,
         "partial_style_or_source_coverage": incomplete_styles,
         "native_publisher_layout_authoritative": False,
         "fixed_pdf_allowed": False,
@@ -383,6 +466,28 @@ def build_packet(
             ]
         )
 
+
+    # These are operator-only candidate links. Exact source family matching
+    # does NOT prove byte-for-byte identity, style, Publisher layout or legal
+    # rights. No Editor authoring grant can consume this metadata directly.
+    packet_by_family = {item["source_family"]: item for item in resources}
+    source_binding_file_candidates = []
+    if source_requirements:
+        for binding in source_requirements.get("direct_binding_identity_candidates", []):
+            physical = packet_by_family.get(binding["source_family"])
+            if physical is None:
+                raise FontPacketError("direct source binding refers to missing packet family")
+            source_binding_file_candidates.append({
+                **binding,
+                "packet_file": physical["packet_file"],
+                "packet_sha256": physical["sha256"],
+                "face_index": physical["face_index"],
+                "source_to_physical_face_verified": False,
+                "editor_authoring_admitted": False,
+                "native_publisher_layout_authoritative": False,
+                "fixed_pdf_allowed": False,
+            })
+
     manifest = {
         "schema": TOOL_SCHEMA,
         "private_operator_packet": True,
@@ -390,6 +495,7 @@ def build_packet(
         "font_bytes_must_not_be_committed_or_uploaded_to_public_ci": True,
         "cloud_font_dir": cloud_font_dir,
         "resources": resources,
+        "source_binding_file_candidates": source_binding_file_candidates,
         "publisher_source_requirements": (
             {
                 **source_requirements,
