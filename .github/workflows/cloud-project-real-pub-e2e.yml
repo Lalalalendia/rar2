@@ -3,6 +3,7 @@ name: CLOUD-B02 real PUB project HTTP acceptance
 on:
   pull_request:
     paths:
+      - "apps/web/chaptera-cloud-workspace-session-v1.mjs"
       - "apps/web/chaptera-cloud-source-ingress-v1.mjs"
       - "apps/web/cloud-project-new-v1.mjs"
       - "apps/web/cloud-project-new.html"
