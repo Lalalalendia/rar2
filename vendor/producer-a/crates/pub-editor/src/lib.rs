@@ -96,13 +96,12 @@ pub use pub_editor_authoring_core::{
     validate_authored_stack_v1, validate_create_table_runtime_v1,
 };
 pub use pub_editor_authoring_core::{
+    DUPLICATE_AUTHORED_RECTANGLE_PAGE_PROTOCOL_V1, DuplicateAuthoredRectanglePageTransitionV1,
+};
+pub use pub_editor_authoring_core::{
     DUPLICATE_BLANK_PAGE_PROTOCOL_V1, DuplicateBlankPageErrorV1, DuplicateBlankPageTransitionV1,
     apply_duplicate_blank_page_forward_v1, apply_duplicate_blank_page_inverse_v1,
     duplicate_blank_page_document_state_id_v1, plan_duplicate_blank_page_v1,
-};
-pub use pub_editor_authoring_core::{
-    DUPLICATE_AUTHORED_RECTANGLE_PAGE_PROTOCOL_V1,
-    DuplicateAuthoredRectanglePageTransitionV1,
 };
 pub use pub_editor_authoring_core::{
     INSERT_BLANK_PAGE_AFTER_PROTOCOL_V1, InsertBlankPageAfterErrorV1,

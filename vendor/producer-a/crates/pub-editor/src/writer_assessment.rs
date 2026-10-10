@@ -976,7 +976,13 @@ impl PersistenceRequirements for EditOperation {
             Self::DuplicateAuthoredRectanglePageV1 { transition } => vec![
                 PersistenceRequirement {
                     feature: "page.created_identity".into(),
-                    origin: Some(transition.page.destination_identity.page_id.into_canonical()),
+                    origin: Some(
+                        transition
+                            .page
+                            .destination_identity
+                            .page_id
+                            .into_canonical(),
+                    ),
                     property_path: Some("page.identity".into()),
                 },
                 PersistenceRequirement {
@@ -986,7 +992,13 @@ impl PersistenceRequirements for EditOperation {
                 },
                 PersistenceRequirement {
                     feature: "page.geometry".into(),
-                    origin: Some(transition.page.destination_identity.page_id.into_canonical()),
+                    origin: Some(
+                        transition
+                            .page
+                            .destination_identity
+                            .page_id
+                            .into_canonical(),
+                    ),
                     property_path: Some("page.size".into()),
                 },
                 PersistenceRequirement {

@@ -11,8 +11,8 @@ use pub_editor_authoring_core::{
     apply_delete_authored_rectangle_page_forward_v1,
     apply_delete_authored_rectangle_page_inverse_v1,
     apply_duplicate_authored_rectangle_page_forward_v1,
-    apply_duplicate_authored_rectangle_page_inverse_v1,
-    plan_delete_authored_rectangle_page_v1, plan_duplicate_authored_rectangle_page_v1,
+    apply_duplicate_authored_rectangle_page_inverse_v1, plan_delete_authored_rectangle_page_v1,
+    plan_duplicate_authored_rectangle_page_v1,
 };
 use pub_editor_geometry_core::{
     GeometryNodeSnapshotV1, MoveNodesTransitionErrorV1, ResizeNodesTransitionErrorV1,
@@ -1377,7 +1377,10 @@ impl EditorSession {
             .ok_or_else(|| EditorError::PageDuplicateUnsupported {
                 message: "source Page is not an independently proven AuthorCreated Page".to_owned(),
             })?;
-        if !self.authored_customer_page_ids_v1().contains(&source_page_id) {
+        if !self
+            .authored_customer_page_ids_v1()
+            .contains(&source_page_id)
+        {
             return Err(EditorError::PageDuplicateUnsupported {
                 message: "source Page is not active authored customer membership".to_owned(),
             });
@@ -1401,8 +1404,9 @@ impl EditorSession {
                 .any(|stack| stack.members.contains(&destination_node_id))
         {
             return Err(EditorError::PageDuplicateUnsupported {
-                message: "destination NodeId already belongs to an existing source or authored object"
-                    .to_owned(),
+                message:
+                    "destination NodeId already belongs to an existing source or authored object"
+                        .to_owned(),
             });
         }
 
@@ -1415,8 +1419,7 @@ impl EditorSession {
             })
             .collect::<BTreeSet<_>>();
         let foreign_stack_reference = self.authored_stacks.iter().any(|(page, stack)| {
-            *page != source_page_id
-                && stack.members.iter().any(|id| source_shapes.contains(id))
+            *page != source_page_id && stack.members.iter().any(|id| source_shapes.contains(id))
         });
         let dependent_graph_node = self.graph.nodes.values().any(|node| {
             let mut parent = node.header.parent_id;
@@ -1428,22 +1431,21 @@ impl EditorSession {
                 {
                     return true;
                 }
-                let Some(ancestor) = self.graph.nodes.get(&NodeId::from_canonical(parent))
-                else {
+                let Some(ancestor) = self.graph.nodes.get(&NodeId::from_canonical(parent)) else {
                     return false;
                 };
                 parent = ancestor.header.parent_id;
             }
         });
-        let foreign_or_unproven_membership = self.page_has_resolved_node_membership_v1(source_page_id)
+        let foreign_or_unproven_membership = self
+            .page_has_resolved_node_membership_v1(source_page_id)
             || dependent_graph_node
             || foreign_stack_reference
             || self
                 .authored_lines
                 .values()
                 .any(|line| line.page_id == source_page_id || line.parent_id == source_page_id);
-        let customer_pages =
-            self.effective_customer_page_order_v1(source_qualified_page_ids)?;
+        let customer_pages = self.effective_customer_page_order_v1(source_qualified_page_ids)?;
         let state = DuplicateAuthoredRectanglePageStateV1 {
             source_identity,
             document_pages: self.graph.document.pages.clone(),
@@ -2619,10 +2621,15 @@ mod authored_page_append_tests {
         assert_eq!(copied.bounds, before_shape.bounds);
         assert_eq!(copied.paint, before_shape.paint);
         assert_eq!(
-            session.current_authored_stack_v1(destination.page_id).members,
+            session
+                .current_authored_stack_v1(destination.page_id)
+                .members,
             vec![destination_node_id]
         );
-        assert_eq!(session.authored_shapes.get(&source_node_id), Some(&before_shape));
+        assert_eq!(
+            session.authored_shapes.get(&source_node_id),
+            Some(&before_shape)
+        );
         assert_eq!(session.source_hash(), original_hash);
 
         let duplicated_graph = session.graph().clone();
@@ -2642,7 +2649,10 @@ mod authored_page_append_tests {
 
         session.undo().expect("one duplicate Undo");
         assert_eq!(session.graph(), &before_graph);
-        assert_eq!(session.authored_shapes.get(&source_node_id), Some(&before_shape));
+        assert_eq!(
+            session.authored_shapes.get(&source_node_id),
+            Some(&before_shape)
+        );
         assert!(!session.authored_shapes.contains_key(&destination_node_id));
         assert!(!session.authored_stacks.contains_key(&destination.page_id));
         assert_eq!(
