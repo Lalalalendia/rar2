@@ -290,6 +290,10 @@ try {
   if(wholeNative.can_download||wholeNative.can_serialize){
     throw new Error("physical-font line-fit preview illegally authorized a native PUB");
   }
+  // History deliberately clears canvas selection. Keep inspecting the
+  // same source-authorized Story through the user-facing Story chooser.
+  // This verifies Undo/Redo on the target Story, not stale inspector data.
+  await page.locator("#font-story-target").selectOption(storyId);
   await page.locator("#undo").click();
   await page.waitForFunction(()=>document.querySelector("#font-metrics")?.dataset.exactScalars==="1" &&
     document.querySelector("#font-flow")?.dataset.flowState==="source_font_unresolved",null,{timeout:60_000});
