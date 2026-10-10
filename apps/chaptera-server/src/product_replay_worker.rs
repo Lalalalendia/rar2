@@ -397,12 +397,13 @@ pub fn run_product_replay_worker(
     })?;
 
     let move_node = if let Some(intent) = move_node_intent {
-        let node_id: NodeId = serde_json::from_value(Value::String(intent.node_id)).map_err(|_| {
-            ProductReplayWorkerError::new(
-                "product_move_node_invalid",
-                "MoveNode target is not a canonical node identifier",
-            )
-        })?;
+        let node_id: NodeId =
+            serde_json::from_value(Value::String(intent.node_id)).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_move_node_invalid",
+                    "MoveNode target is not a canonical node identifier",
+                )
+            })?;
         let operation = session
             .move_node_to(
                 node_id,
@@ -422,8 +423,8 @@ pub fn run_product_replay_worker(
             ));
         }
         let resulting_project = cloud_revision_project(&session.project());
-        let expected_project = append_event_operation(project.clone(), operation.clone())
-            .map_err(|_| {
+        let expected_project =
+            append_event_operation(project.clone(), operation.clone()).map_err(|_| {
                 ProductReplayWorkerError::new(
                     "product_move_node_invalid",
                     "isolated MoveNode cannot be appended to canonical source project",
@@ -720,16 +721,15 @@ impl IsolatedProductReplayProducer {
                 ));
             }
         }
-        let expected_project = append_event_operation(
-            base_project.clone(),
-            mutation.operation.clone(),
-        )
-        .map_err(|_| {
-            ProductReplayWorkerError::new(
-                "product_replay_receipt_invalid",
-                "isolated MoveNode cannot form a canonical project transition",
-            )
-        })?;
+        let expected_project =
+            append_event_operation(base_project.clone(), mutation.operation.clone()).map_err(
+                |_| {
+                    ProductReplayWorkerError::new(
+                        "product_replay_receipt_invalid",
+                        "isolated MoveNode cannot form a canonical project transition",
+                    )
+                },
+            )?;
         if expected_project != mutation.resulting_project {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
