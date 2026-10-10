@@ -1557,7 +1557,7 @@ mod tests {
                 &format!("/v1/documents/{document_id}/commit"),
                 &issued.session_token,
                 Some(&issued.csrf_token),
-                Some(body),
+                Some(body.clone()),
             ))
             .await
             .unwrap();
@@ -1582,6 +1582,7 @@ mod tests {
         .await
         .unwrap();
         let forbidden = restarted_app
+            .clone()
             .oneshot(authenticated_request(
                 "GET",
                 &format!("/v1/documents/{document_id}/current"),
@@ -1592,6 +1593,83 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+        assert_eq!(json_body(forbidden).await["error"]["code"], "grant_missing");
+
+        // A real Viewer grant allows reading the same reopened document but
+        // never authorizes a MoveNode mutation. This tests the canonical
+        // capability_denied error, not a mocked policy decision.
+        restarted_authz
+            .set_role(
+                tenant_id,
+                document_id,
+                &other.principal_id,
+                DocumentRole::Viewer,
+                None,
+                "grant-restarted-viewer",
+                now_ms().unwrap(),
+            )
+            .await
+            .unwrap();
+        let viewer_read = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/documents/{document_id}/current"),
+                &other.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(viewer_read.status(), StatusCode::OK);
+
+        let mut viewer_body = body;
+        viewer_body["client_operation_id"] = json!("viewer-move-denied");
+        viewer_body["base_revision_id"] = json!(child_revision);
+        let viewer_commit = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/commit"),
+                &other.session_token,
+                Some(&other.csrf_token),
+                Some(viewer_body),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(viewer_commit.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            json_body(viewer_commit).await["error"]["code"],
+            "capability_denied"
+        );
+
+        // Expiring the existing Viewer grant must deny GET with 403 rather
+        // than turning a normal authorization decision into HTTP 500.
+        let current_time = now_ms().unwrap();
+        restarted_authz
+            .set_role(
+                tenant_id,
+                document_id,
+                &other.principal_id,
+                DocumentRole::Viewer,
+                Some(current_time - 1),
+                "grant-restarted-expired",
+                current_time,
+            )
+            .await
+            .unwrap();
+        let expired = restarted_app
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/documents/{document_id}/current"),
+                &other.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(expired.status(), StatusCode::FORBIDDEN);
+        assert_eq!(json_body(expired).await["error"]["code"], "grant_expired");
 
         restarted_authn.close().await;
         restarted_authz.close().await;
