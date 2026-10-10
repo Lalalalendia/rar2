@@ -6,12 +6,167 @@
 
 use super::*;
 use chaptera_text_format_overlay::{
-    FontAuthoringScopeV1, FontReplacementCandidateV1, ServerFontResourceV1,
+    FontAuthoringScopeV1, FontReplacementCandidateV1, FontResourceIdentityV1, ServerFontResourceV1,
+    replay_admitted_font_resource_v1 as overlay_readmit_font_v1,
     replay_recorded_font_resource_v1 as replay_font_history_v1,
     set_admitted_font_resource_v1 as overlay_admit_font_v1,
 };
 
+/// Trusted server-side reopen grant, never deserialized from EditorProject.
+/// A caller must independently obtain original full bytes and authoring
+/// permission for this exact source/project; file and browser metadata cannot
+/// populate this struct as a policy authority.
+#[derive(Debug)]
+pub struct EditorProjectFontReopenGrantV1<'a> {
+    pub source_hash: Sha256Digest,
+    pub project_document_id: &'a str,
+    pub resource: ServerFontResourceV1<'a>,
+}
+
+fn denied_project_font_reopen(
+    index: usize,
+    story_id: StoryId,
+    reason: &str,
+) -> EditorProjectError {
+    EditorProjectError::Operation {
+        index,
+        error: EditorError::TextFormatStateInvalid {
+            story_id,
+            message: reason.to_owned(),
+        },
+    }
+}
+
+pub(super) fn replay_project_operation_with_font_grants_v1(
+    session: &mut EditorSession,
+    expected: &EditOperation,
+    index: usize,
+    project: &EditorProject,
+    grants: &[EditorProjectFontReopenGrantV1<'_>],
+) -> Result<EditOperation, EditorProjectError> {
+    let EditOperation::SetTextFormatProperty {
+        story_id,
+        start_scalar,
+        end_scalar,
+        property: FormatPropertyV1::FontResource,
+        value: FormatValueV1::FontResource(identity),
+        before_state_hash,
+        ..
+    } = expected else {
+        return replay_canonical_operation(session, expected, index);
+    };
+
+    // Resource IDs and face indices select only exact entries. A mismatched
+    // physical identity is rejected, never substituted by family display name.
+    let mut matching = grants.iter().filter(|grant| {
+        grant.resource.identity.resource_id == identity.resource_id
+            && grant.resource.identity.face_index == identity.face_index
+    });
+    let grant = matching.next().ok_or_else(|| {
+        denied_project_font_reopen(index, *story_id, "trusted physical font grant unavailable")
+    })?;
+    if matching.next().is_some() {
+        return Err(denied_project_font_reopen(
+            index,
+            *story_id,
+            "ambiguous duplicate physical font grants",
+        ));
+    }
+    if grant.source_hash != project.source_hash
+        || project
+            .identity
+            .as_ref()
+            .is_none_or(|identity| identity.document_id != grant.project_document_id)
+    {
+        return Err(denied_project_font_reopen(
+            index,
+            *story_id,
+            "physical font grant is bound to another source or EditorProject",
+        ));
+    }
+    session
+        .replay_admitted_project_font_v1(
+            *story_id,
+            *start_scalar,
+            *end_scalar,
+            identity,
+            &grant.resource,
+            before_state_hash,
+        )
+        .map_err(|error| EditorProjectError::Operation { index, error })
+}
+
+
 impl EditorSession {
+
+    /// Standard reopen remains fail-closed for font overrides when the caller
+    /// has no independently admitted complete resource.
+    pub fn apply_project_with_assets(
+        &mut self,
+        project: &EditorProject,
+        asset_bytes: &BTreeMap<Sha256Digest, Vec<u8>>,
+    ) -> Result<(), EditorProjectError> {
+        self.apply_project_with_admitted_font_resources_v1(project, asset_bytes, &[])
+    }
+
+    /// Replay a recorded font override only after exact physical bytes, face
+    /// and document-bound authoring permission were independently re-admitted.
+    pub(super) fn replay_admitted_project_font_v1(
+        &mut self,
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        identity: &FontResourceIdentityV1,
+        resource: &ServerFontResourceV1<'_>,
+        expected_state_hash: &str,
+    ) -> Result<EditOperation, EditorError> {
+        let before = self.current_text_format_overlay_v1(story_id)?;
+        let current_hash = state_hash_v1(&before).map_err(|error| {
+            EditorError::TextFormatStateInvalid {
+                story_id,
+                message: error.to_string(),
+            }
+        })?;
+        if current_hash != expected_state_hash {
+            return Err(EditorError::StaleOperation { story_id });
+        }
+        let receipt = overlay_readmit_font_v1(
+            &before,
+            start_scalar,
+            end_scalar,
+            identity,
+            resource,
+            expected_state_hash,
+        )
+        .map_err(|error| EditorError::TextFormatStateInvalid {
+            story_id,
+            message: error.to_string(),
+        })?;
+        if receipt.command.before_state_hash == receipt.command.after_state_hash {
+            return Err(EditorError::NoChange { story_id });
+        }
+        let operation = EditOperation::SetTextFormatProperty {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property: FormatPropertyV1::FontResource,
+            value: FormatValueV1::FontResource(identity.clone()),
+            before_state_hash: receipt.command.before_state_hash,
+            after_state_hash: receipt.command.after_state_hash,
+        };
+        let replayed = apply_text_format_history_operation_v1(&before, &operation)?;
+        if replayed != receipt.after_state {
+            return Err(EditorError::TextFormatStateInvalid {
+                story_id,
+                message: "re-admitted font history differs from canonical receipt".to_owned(),
+            });
+        }
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
     fn validate_story_text_session_capability(
         &self,
         story_id: StoryId,
