@@ -1,3 +1,5 @@
+import { ChapteraCloudWorkspaceSessionV1 } from "./chaptera-cloud-workspace-session-v1.mjs";
+
 // Browser-to-Rust SourceIngress adapter. Only same-origin HTTP is authoritative.
 // The durable project/revision owner remains chaptera-server; this module stores no PUB bytes.
 const ID_RE = /^[a-zA-Z0-9._:-]{1,160}$/;
@@ -44,89 +46,40 @@ function delay(ms, signal) {
 export class ChapteraCloudSourceIngressV1 {
   constructor({
     fetchImpl = globalThis.fetch,
+    workspaceSession = null,
     sleep = delay,
     pollMs = 550,
     validationTimeoutMs = 120000,
   } = {}) {
-    if (typeof fetchImpl !== "function" || typeof sleep !== "function") {
-      throw new TypeError("fetch and sleep implementations are required");
+    if (typeof sleep !== "function") {
+      throw new TypeError("sleep implementation is required");
+    }
+    if (workspaceSession != null &&
+        (typeof workspaceSession.prepare !== "function" ||
+         typeof workspaceSession.request !== "function")) {
+      throw new TypeError("workspaceSession must implement prepare() and request()");
     }
     if (!Number.isInteger(pollMs) || pollMs < 0 ||
         !Number.isInteger(validationTimeoutMs) || validationTimeoutMs <= 0) {
       throw new TypeError("valid poll interval and timeout are required");
     }
-    // Browser native fetch requires its Window receiver; an unbound method
-    // called as this.fetchImpl(...) fails with Illegal invocation in Chromium.
-    this.fetchImpl = fetchImpl.bind(globalThis);
+    this.workspaceSession = workspaceSession ??
+      new ChapteraCloudWorkspaceSessionV1({ fetchImpl });
     this.sleep = sleep;
     this.pollMs = pollMs;
     this.validationTimeoutMs = validationTimeoutMs;
-    this.workspaceId = null;
-    this.csrfToken = null;
-    this.preparing = null;
     this.uploads = new Map();
   }
 
+  get workspaceId() { return this.workspaceSession.workspaceId ?? null; }
+  get csrfToken() { return this.workspaceSession.csrfToken ?? null; }
+
   async prepare({ signal } = {}) {
-    if (this.workspaceId && this.csrfToken) return this.workspaceId;
-    if (!this.preparing) {
-      this.preparing = (async () => {
-        // GET /session rotates the CSRF secret; obtain it once per active flow.
-        const session = await this.request("/v1/session", { signal });
-        if (typeof session.csrf_token !== "string" || !session.csrf_token) {
-          throw ingressError("session_csrf_missing");
-        }
-        this.csrfToken = session.csrf_token;
-        const personal = await this.request("/v1/workspaces/personal", {
-          method: "POST",
-          json: {},
-          signal,
-        });
-        this.workspaceId = requireId(personal.workspace_id, "workspace id");
-        return this.workspaceId;
-      })().finally(() => { this.preparing = null; });
-    }
-    return this.preparing;
+    return this.workspaceSession.prepare({ signal });
   }
 
-  async request(path, { method = "GET", json, body, signal } = {}) {
-    if (typeof path !== "string" || !path.startsWith("/v1/") || path.startsWith("//") ||
-        path.includes("?") || path.includes("#")) {
-      throw new TypeError("only bounded same-origin Chaptera API paths are supported");
-    }
-    const write = method !== "GET";
-    if (write && !this.csrfToken) throw ingressError("session_csrf_missing");
-    const headers = { accept: "application/json" };
-    if (write) headers["x-csrf-token"] = this.csrfToken;
-    if (json !== undefined) headers["content-type"] = "application/json";
-    let response;
-    try {
-      response = await this.fetchImpl(path, {
-        method,
-        credentials: "same-origin",
-        redirect: "error",
-        headers,
-        body: json !== undefined ? JSON.stringify(json) : body,
-        signal,
-      });
-    } catch (error) {
-      if (signal?.aborted || error?.name === "AbortError") throw abortError();
-      throw ingressError("network_error", true);
-    }
-    let result;
-    try {
-      result = await response.json();
-    } catch {
-      throw ingressError("invalid_ingress_response", false, response.status);
-    }
-    if (!response.ok) {
-      const code = typeof result?.error === "string" ? result.error : "ingress_http_error";
-      throw ingressError(code, response.status === 429 || response.status >= 500, response.status);
-    }
-    if (!result || typeof result !== "object" || Array.isArray(result)) {
-      throw ingressError("invalid_ingress_response");
-    }
-    return result;
+  async request(path, options = {}) {
+    return this.workspaceSession.request(path, options);
   }
 
   async beginUpload({ client_request_id, file_name, byte_length, mime, signal }) {
