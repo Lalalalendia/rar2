@@ -35,11 +35,22 @@ test("pending, rejected and uncertain edits are not presented as a saved revisio
   assert.match(pending.status, /Saving change/);
   assert.equal(pending.fidelity, "Fidelity: partial — missing_typeface");
   for (const reason of ["commit_error", "commit_rejected"]) {
-    const view = productEditorStatusView({ ...receipt, reason }, scene);
+    const view = productEditorStatusView(
+      { ...receipt, reason },
+      scene,
+      { trace_id: "trace:editor-000123" },
+    );
     assert.equal(view.kind, "error");
     assert.match(view.status, /reload/);
+    assert.match(view.status, /Ref trace:editor-000123/);
     assert.doesNotMatch(view.status, /Revision sha256:base/);
   }
+  const malformedTrace = productEditorStatusView(
+    { ...receipt, reason: "commit_error" },
+    scene,
+    { trace_id: "bad id with spaces" },
+  );
+  assert.doesNotMatch(malformedTrace.status, /Ref /);
   const confirmed = productEditorStatusView({
     reason: "commit_reconciled",
     revision_id: "sha256:child",
@@ -47,6 +58,7 @@ test("pending, rejected and uncertain edits are not presented as a saved revisio
   }, { fidelity: { state: "supported", reasons: [] } });
   assert.equal(confirmed.kind, "ok");
   assert.equal(confirmed.status, "Revision sha256:child · selected");
+  assert.doesNotMatch(confirmed.status, /Ref /);
   assert.equal(confirmed.fidelity, "Fidelity: supported");
 });
 
