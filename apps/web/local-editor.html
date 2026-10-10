@@ -40,6 +40,7 @@ h1{font-size:19px;font-weight:740;line-height:1.15;letter-spacing:-.45px;margin:
 #preview-physical-font{align-self:stretch;background:#33435c}
 #font-sample{display:grid;place-items:center;min-height:74px;font-size:28px;letter-spacing:1px;background:#101724;border:1px solid #324052;border-radius:10px;color:#f2f5fa;white-space:nowrap;overflow:hidden}
 #font-message{font-size:11px;line-height:1.55;color:#b8c7dc;min-height:32px}
+#font-metrics{font-size:11px;line-height:1.55;color:#cbd5e5;padding:9px 11px;border-left:2px solid #788cb1;background:#192537;min-height:36px}
 #text-tools{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}
 #text-tools[hidden]{display:none}
 #text-tools label{grid-column:1 / -1;font-size:11px;color:#bdcadd;font-weight:650}
@@ -121,6 +122,7 @@ h1{font-size:19px;font-weight:740;line-height:1.15;letter-spacing:-.45px;margin:
         <button id="preview-physical-font" disabled>Verify font preview</button>
         <span id="font-sample" aria-label="Font preview sample">Aa Bb 123</span>
         <span id="font-message" role="status">Browser preview only; not an Editor font change.</span>
+        <span id="font-metrics" role="status" aria-live="polite">Choose a Story to inspect actual physical glyph coverage.</span>
       </div>
       <div id="text-tools" hidden>
         <label for="text-value">Selected Story text · select a range</label>
@@ -170,6 +172,7 @@ const fontChoice=document.querySelector("#font-choice");
 const fontStoryTarget=document.querySelector("#font-story-target");
 const previewFontButton=document.querySelector("#preview-physical-font");
 const fontMessage=document.querySelector("#font-message");
+const fontMetrics=document.querySelector("#font-metrics");
 const fontSample=document.querySelector("#font-sample");
 let currentFontContext=null;
 let editingStory=null;
@@ -231,6 +234,73 @@ function showState(state){
   stateEl.className="";
   stateEl.textContent="revision "+state.revision_id+(state.selected_node_id?" · selected "+state.selected_node_id:"");
   syncTextControls();
+  if(state.reason==="gesture_started"){
+    // A user who directly selects a nonoverlapping Story frame receives
+    // the same current Rust physical glyph coverage as the explicit picker.
+    refreshPhysicalGlyphCoverage().catch(showError);
+  }
+}
+
+async function refreshPhysicalGlyphCoverage(scene=shell?.snapshot){
+  fontMetrics.dataset.exactScalars="";
+  fontMetrics.dataset.unresolvedScalars="";
+  fontMetrics.dataset.exactGlyphs="";
+  const selected=selectedStory();
+  if(!scene||!selected||!fontStoryMap.has(selected.story.story_id)){
+    fontMetrics.className="";
+    fontMetrics.textContent="Choose a Story to inspect exact physical glyph coverage.";
+    return;
+  }
+  if(scene.revision_id!==fontScopeRevision){
+    fontMetrics.className="warn";
+    fontMetrics.textContent="Physical glyph evidence unavailable for this revision.";
+    return;
+  }
+  const storyId=selected.story.story_id;
+  fontMetrics.textContent="Verifying actual glyph runs from original font bytes…";
+  try{
+    const packet=await service.currentPhysicalFontSpans({
+      story_id:storyId,
+      revision_id:scene.revision_id,
+      snapshot_id:scene.snapshot_id,
+    });
+    if(shell.snapshot.revision_id!==scene.revision_id||
+       shell.snapshot.snapshot_id!==scene.snapshot_id||
+       selectedStory()?.story.story_id!==storyId) return;
+    const scope=fontStoryMap.get(storyId);
+    if(!scope||
+       packet.protocol_version!=="chaptera.current-physical-glyph-spans.v1"||
+       packet.source_hash!==scene.source_hash||
+       packet.document_id!==scene.document_id||
+       packet.story_id!==storyId||
+       packet.revision_id!==scene.revision_id||
+       packet.scene_snapshot_id!==scene.snapshot_id||
+       packet.story_scalar_len!==scope.story_scalar_len||
+       packet.story_format_state_hash!==scope.expected_state_hash||
+       packet.authoritative_line_breaks!==false||
+       packet.fixed_pdf_allowed!==false||
+       !Number.isInteger(packet.shaped_glyph_count)||
+       !Number.isInteger(packet.admitted_scalar_count)||
+       !Number.isInteger(packet.source_unresolved_scalar_count)||
+       packet.admitted_scalar_count+packet.source_unresolved_scalar_count!==
+         packet.story_scalar_len){
+      throw new Error("physical glyph packet disagrees with authoritative Story scope");
+    }
+    fontMetrics.dataset.exactScalars=String(packet.admitted_scalar_count);
+    fontMetrics.dataset.unresolvedScalars=String(packet.source_unresolved_scalar_count);
+    fontMetrics.dataset.exactGlyphs=String(packet.shaped_glyph_count);
+    fontMetrics.className=packet.source_unresolved_scalar_count===0?"ok":"warn";
+    fontMetrics.textContent=
+      "Exact physical glyphs: "+packet.shaped_glyph_count+
+      " for "+packet.admitted_scalar_count+" Story characters · "+
+      "unresolved source-font characters: "+packet.source_unresolved_scalar_count+
+      ". Line placement, overset and PDF not verified.";
+  }catch(_error){
+    if(shell?.snapshot?.revision_id===scene.revision_id){
+      fontMetrics.className="warn";
+      fontMetrics.textContent="Exact font glyph evidence unavailable; line layout and PDF blocked.";
+    }
+  }
 }
 
 async function disclosure(){
@@ -294,6 +364,7 @@ async function disclosure(){
   fontStoryTarget.value=keys.includes(oldStoryChoice)?oldStoryChoice:"";
   showFontChoices(scene,fontResult);
   syncTextControls();
+  await refreshPhysicalGlyphCoverage(scene);
   const caps=scene.capabilities ?? [];
   document.querySelector("#fidelity").textContent="Fidelity: "+scene.fidelity.state+
     (scene.fidelity.reasons?.length?" — "+scene.fidelity.reasons.join(", "):"");
@@ -616,6 +687,7 @@ async function start(){
   fontStoryTarget.onchange=()=>{
     closeTextEditor();
     syncTextControls();
+    refreshPhysicalGlyphCoverage().catch(showError);
     if(fontStoryTarget.value){
       fontMessage.className="warn";
       fontMessage.textContent="Explicit Story selected; select text characters before applying the font.";

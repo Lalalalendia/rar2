@@ -5,6 +5,7 @@ on:
     paths:
       - "apps/chaptera-server/migrations/0014_workspace_context.sql"
       - "apps/chaptera-server/src/workspace_context.rs"
+      - "apps/chaptera-server/src/workspace_http.rs"
       - "apps/chaptera-server/src/schema_migration.rs"
       - "tools/run_cloud_migration_receipt.py"
       - ".github/workflows/cloud-workspace-context-v1.yml"
@@ -28,5 +29,7 @@ jobs:
           components: rustfmt, clippy
       - name: Test workspace context
         run: cargo test -p chaptera-server workspace_context
+      - name: Test authenticated workspace HTTP
+        run: cargo test -p chaptera-server workspace_http::tests
       - name: Test migrations
         run: cargo test -p chaptera-server schema_migration
