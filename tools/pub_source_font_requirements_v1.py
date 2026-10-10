@@ -11,7 +11,9 @@ import argparse
 import hashlib
 import json
 import re
+import struct
 import sys
+import uuid
 from collections import defaultdict
 from pathlib import Path
 
@@ -49,6 +51,30 @@ def _family(value: object) -> str:
     if not name or len(name) > 128 or any(ord(ch) < 32 for ch in name):
         return ""
     return name
+
+
+
+# Same immutable v1 identity framing as pub-model::derive_source_canonical_id
+# and pub-editor::source_font_binding_id_v1. SHA/name/index are provenance,
+# never physical font bytes, an editor grant, or Publisher layout authority.
+SOURCE_BINDING_NAMESPACE_V1 = uuid.UUID("c02ce21c-d044-56b2-95d9-25a9289c1d1f")
+
+
+def source_font_binding_id_v1(source_hash: str, source_index: int, family: str) -> str:
+    if (not SOURCE_SHA_RE.fullmatch(source_hash)
+            or type(source_index) is not int or not 0 <= source_index <= 65535
+            or _family(family) != family):
+        raise SourceFontRequirementsError("exact source font binding needs canonical hash/index/name")
+    components = (
+        b"pub-editor",
+        f"quill-font-index:{source_index}:{family}".encode("utf-8"),
+        b"chaptera.text-format.base-font-binding",
+    )
+    name = b"\x01" + bytes.fromhex(source_hash) + b"".join(
+        struct.pack(">I", len(part)) + part for part in components
+    )
+    digest = hashlib.sha1(SOURCE_BINDING_NAMESPACE_V1.bytes + name).digest()
+    return "pub-source-font:" + str(uuid.UUID(bytes=digest[:16], version=5))
 
 
 def _range(entry: dict, story_by_id: dict[str, str], name: str) -> tuple[str, int, int]:
@@ -120,6 +146,7 @@ def source_font_requirements_v1(viewer: dict) -> dict:
                 "visible_typography_run_count": 0,
                 "script_map_reference_count": 0,
                 "source_font_index_candidates": set(),
+                "direct_run_source_font_indices": set(),
                 "script_slots": set(),
                 "visible_story_ids": set(),
                 "effective_styles": defaultdict(int),
@@ -128,15 +155,37 @@ def source_font_requirements_v1(viewer: dict) -> dict:
 
     missing_labels = 0
     unknown_effective_styles = 0
+    direct_binding_ranges = []
     for raw in _list(viewer.get("typography_runs"), "Publisher Viewer typography runs"):
         run = _object(raw, "source typography run")
         story_id, _start, _end = _range(run, story_by_id, "source typography run")
         family = _family(run.get("source_font_name"))
+        direct_index = run.get("source_font_index")
+        if direct_index is not None and (
+                type(direct_index) is not int or not 0 <= direct_index <= 65535):
+            raise SourceFontRequirementsError("invalid direct source Quill typography index")
+        if direct_index is not None and family and run.get("source_font_name") != family:
+            raise SourceFontRequirementsError("exact source font name cannot be silently trimmed")
         if not family:
             missing_labels += 1
             continue
         use = add_family(family)
         use["source_typography_run_count"] += 1
+        if direct_index is not None:
+            # Unlike a script-map alternative, the source typography record
+            # contains this *direct* Quill index, exactly as Rust Editor uses.
+            use["source_font_index_candidates"].add(direct_index)
+            use["direct_run_source_font_indices"].add(direct_index)
+            direct_binding_ranges.append({
+                "story_id": story_id,
+                "scalar_start": _start,
+                "scalar_end": _end,
+                "source_family": family,
+                "source_font_index": direct_index,
+                "source_font_binding_id": source_font_binding_id_v1(
+                    source_hash, direct_index, family,
+                ),
+            })
         if story_id in visible:
             use["visible_typography_run_count"] += 1
             use["visible_story_ids"].add(story_id)
@@ -176,6 +225,7 @@ def source_font_requirements_v1(viewer: dict) -> dict:
             "visible_typography_run_count": item["visible_typography_run_count"],
             "script_map_reference_count": item["script_map_reference_count"],
             "source_font_index_candidates": sorted(item["source_font_index_candidates"]),
+            "direct_run_source_font_indices": sorted(item["direct_run_source_font_indices"]),
             "source_quill_index_proven": bool(item["source_font_index_candidates"]),
             "source_script_slots": sorted(item["script_slots"]),
             "visible_story_count": len(item["visible_story_ids"]),
@@ -203,6 +253,15 @@ def source_font_requirements_v1(viewer: dict) -> dict:
         "unresolved_script_font_entry_count": unresolved_script_entries,
         "source_families_without_quill_index_count": sum(
             not item["source_quill_index_proven"] for item in families
+        ),
+        "direct_source_binding_count": len(direct_binding_ranges),
+        "direct_source_bindings_only_source_identity": True,
+        "direct_source_bindings": sorted(
+            direct_binding_ranges,
+            key=lambda run: (
+                run["story_id"], run["scalar_start"], run["scalar_end"],
+                run["source_font_index"], run["source_family"],
+            ),
         ),
         "families": families,
     }

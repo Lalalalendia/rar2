@@ -48,13 +48,17 @@ export function normalizeProjectCardV1({ project, thumbnail = null, recent = nul
 }
 
 export class WebProjectHomeControllerV1 {
-  constructor({ projections, lifecycle, requestIdFactory = null, onState = null }) {
-    for (const name of ["listRecent", "search", "thumbnailForProject"]) {
-      requireMethod(projections, name, "projections");
+  constructor({ catalog = null, projections = null, lifecycle = null, requestIdFactory = null, onState = null }) {
+    if (catalog != null) requireMethod(catalog, "listProjects", "catalog");
+    if (projections != null) {
+      for (const name of ["listRecent", "search", "thumbnailForProject"]) {
+        requireMethod(projections, name, "projections");
+      }
     }
-    for (const name of ["getProject", "renameProject", "forkProject", "trashProject", "restoreProject"]) {
-      requireMethod(lifecycle, name, "lifecycle");
+    if (catalog == null && projections == null) {
+      throw new TypeError("catalog or projections service is required");
     }
+    this.catalog = catalog;
     this.projections = projections;
     this.lifecycle = lifecycle;
     this.requestIdFactory = requestIdFactory ?? (() => crypto.randomUUID());
@@ -71,9 +75,24 @@ export class WebProjectHomeControllerV1 {
 
   state() { return clone(this._state); }
 
+  async loadProjects() {
+    this._set({ mode: "loading_projects", query: "", error_code: null });
+    try {
+      requireMethod(this.catalog, "listProjects", "catalog");
+      const rows = await this.catalog.listProjects();
+      const cards = await this._cards(rows, { thumbnails: false });
+      this._set({ mode: "projects", cards });
+      return this.state();
+    } catch (error) {
+      return this._fail(error);
+    }
+  }
+
   async loadRecent() {
     this._set({ mode: "loading_recent", query: "", error_code: null });
     try {
+      requireMethod(this.projections, "listRecent", "projections");
+      requireMethod(this.projections, "thumbnailForProject", "projections");
       const rows = await this.projections.listRecent();
       const cards = await this._cards(rows);
       this._set({ mode: "recent", cards });
@@ -88,6 +107,8 @@ export class WebProjectHomeControllerV1 {
     if (!q) return this.loadRecent();
     this._set({ mode: "searching", query: q, error_code: null });
     try {
+      requireMethod(this.projections, "search", "projections");
+      requireMethod(this.projections, "thumbnailForProject", "projections");
       const rows = await this.projections.search(q);
       const cards = await this._cards(rows);
       this._set({ mode: "search", query: q, cards });
@@ -100,6 +121,7 @@ export class WebProjectHomeControllerV1 {
   async rename(projectId, name) {
     const nextName = String(name ?? "").trim();
     if (!nextName) throw new TypeError("project name must be non-empty");
+    requireMethod(this.lifecycle, "renameProject", "lifecycle");
     return this._mutate(projectId, async (current, requestId) =>
       this.lifecycle.renameProject({
         project_id: current.project_id,
@@ -114,6 +136,8 @@ export class WebProjectHomeControllerV1 {
   async duplicate(projectId, { name = null } = {}) {
     this._set({ busy_project_id: projectId, error_code: null });
     try {
+      requireMethod(this.lifecycle, "getProject", "lifecycle");
+      requireMethod(this.lifecycle, "forkProject", "lifecycle");
       const current = requireProjectRow(await this.lifecycle.getProject(projectId));
       if (typeof current.current_revision_id !== "string" || !current.current_revision_id) {
         throw Object.assign(new Error("current revision required for fork"), { code: "missing_current_revision" });
@@ -137,6 +161,7 @@ export class WebProjectHomeControllerV1 {
   }
 
   async trash(projectId) {
+    requireMethod(this.lifecycle, "trashProject", "lifecycle");
     return this._mutate(projectId, async (current, requestId) =>
       this.lifecycle.trashProject({
         project_id: current.project_id,
@@ -147,6 +172,7 @@ export class WebProjectHomeControllerV1 {
   }
 
   async restore(projectId) {
+    requireMethod(this.lifecycle, "restoreProject", "lifecycle");
     return this._mutate(projectId, async (current, requestId) =>
       this.lifecycle.restoreProject({
         project_id: current.project_id,
@@ -159,6 +185,7 @@ export class WebProjectHomeControllerV1 {
   async _mutate(projectId, action) {
     this._set({ busy_project_id: projectId, error_code: null });
     try {
+      requireMethod(this.lifecycle, "getProject", "lifecycle");
       const current = requireProjectRow(await this.lifecycle.getProject(projectId));
       const result = requireProjectRow(await action(current, this._requestId("project")));
       this._set({ busy_project_id: null });
@@ -169,12 +196,14 @@ export class WebProjectHomeControllerV1 {
     }
   }
 
-  async _cards(rows) {
-    if (!Array.isArray(rows)) throw new TypeError("projection rows must be an array");
+  async _cards(rows, { thumbnails = true } = {}) {
+    if (!Array.isArray(rows)) throw new TypeError("project rows must be an array");
     const cards = [];
     for (const row of rows) {
       const project = requireProjectRow(row.project ?? row);
-      const thumbnail = await this.projections.thumbnailForProject(project);
+      const thumbnail = thumbnails
+        ? await this.projections.thumbnailForProject(project)
+        : null;
       cards.push(normalizeProjectCardV1({ project, thumbnail, recent: row.recent ?? row }));
     }
     return cards;

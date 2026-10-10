@@ -158,7 +158,7 @@ import {BrowserEditorShellV1} from "./editor-shell-v1.mjs";
 import {HttpEditorServiceV1} from "./editor-service-client-v1.mjs";
 import {projectAdmittedFontChoices,chooseAdmittedFontCandidate} from "./font-environment-v1.mjs";
 import {BrowserObservabilityV1} from "./observability-v1.mjs";
-import {prepareStoryTextForTextarea, restoreStoryTextFromTextarea} from "./story-line-endings-v1.mjs";
+import {prepareStoryTextForTextarea, restoreStoryTextFromTextarea, mapUnchangedTextareaSelectionToSourceScalarRange} from "./story-line-endings-v1.mjs";
 
 const params=new URLSearchParams(location.search);
 const api=params.get("api") ?? "http://127.0.0.1:18765";
@@ -619,25 +619,12 @@ async function applySelectedFont(){
      textValue.value!==editingStory.text_at_open){
     throw new Error("font selection may not alter Story source text");
   }
-  // Textareas collapse CRLF to LF, changing scalar positions. Never guess
-  // offsets for a mixed or CRLF source; a proper source-range mapper is P0.
-  if(editingStory.line_ending_kind==="crlf"){
-    throw new Error("CRLF source Story needs an exact UTF-16 range mapper");
-  }
-  const a=textValue.selectionStart,b=textValue.selectionEnd;
-  const value=textValue.value;
-  if(a===b||a<0||b>value.length){
-    throw new Error("select a nonempty exact Story text range");
-  }
-  for(const offset of [a,b]){
-    if(offset>0&&offset<value.length&&
-       value.charCodeAt(offset-1)>=0xd800&&value.charCodeAt(offset-1)<=0xdbff&&
-       value.charCodeAt(offset)>=0xdc00&&value.charCodeAt(offset)<=0xdfff){
-      throw new Error("font range cannot split a Unicode surrogate pair");
-    }
-  }
-  const start=Array.from(value.slice(0,a)).length;
-  const end=Array.from(value.slice(0,b)).length;
+  const range=mapUnchangedTextareaSelectionToSourceScalarRange(
+    story.text,editingStory,textValue.value,
+    textValue.selectionStart,textValue.selectionEnd,
+  );
+  const start=range.start_scalar;
+  const end=range.end_scalar;
   if(start>=end||end>scope.story_scalar_len){
     throw new Error("selected font range exceeds actual Publisher Story");
   }
