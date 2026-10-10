@@ -127,8 +127,9 @@ async function chooseRealMoveTarget(documentId) {
     if (!response.ok) throw new Error("Reader scene HTTP " + response.status);
     const scene = await response.json();
     const identityTransform = transform => !transform ||
-      (transform.a === 1 && transform.b === 0 && transform.c === 0 &&
-       transform.d === 1 && transform.tx === 0 && transform.ty === 0);
+      (Number(transform.a) === 1 && Number(transform.b) === 0 &&
+       Number(transform.c) === 0 && Number(transform.d) === 1 &&
+       transform.tx === 0 && transform.ty === 0);
     const direct = (scene.nodes ?? []).filter(node =>
       (node.origin_node_id === undefined || node.origin_node_id === null) &&
       (node.parent_node_id === undefined || node.parent_node_id === null) &&
