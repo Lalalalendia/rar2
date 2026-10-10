@@ -320,37 +320,57 @@ fn approved_reader_scene_shape(scene: &Value) -> bool {
         &scene["stories"],
         &["story_id", "text", "text_fidelity"],
         &["story_id", "text", "text_fidelity"],
-    ) || !scene.get("resources").is_none_or(|values| approved_scene_objects(
-        values,
-        &["resource_id", "mime", "availability", "inline_data_url"],
-        &["resource_id", "mime", "availability"],
-    )) || !scene.get("fonts").is_none_or(|values| approved_scene_objects(
-        values,
-        &[
-            "resource_id", "family_name", "mime", "expected_sha256",
-            "availability", "inline_data_url",
-        ],
-        &[
-            "resource_id", "family_name", "mime", "expected_sha256",
-            "availability", "inline_data_url",
-        ],
-    )) || !scene.get("diagnostics").is_none_or(|values| approved_scene_objects(
-        values,
-        &["code", "severity", "origin_id", "message"],
-        &["code", "severity", "message"],
-    )) {
+    ) || !scene.get("resources").is_none_or(|values| {
+        approved_scene_objects(
+            values,
+            &["resource_id", "mime", "availability", "inline_data_url"],
+            &["resource_id", "mime", "availability"],
+        )
+    }) || !scene.get("fonts").is_none_or(|values| {
+        approved_scene_objects(
+            values,
+            &[
+                "resource_id",
+                "family_name",
+                "mime",
+                "expected_sha256",
+                "availability",
+                "inline_data_url",
+            ],
+            &[
+                "resource_id",
+                "family_name",
+                "mime",
+                "expected_sha256",
+                "availability",
+                "inline_data_url",
+            ],
+        )
+    }) || !scene.get("diagnostics").is_none_or(|values| {
+        approved_scene_objects(
+            values,
+            &["code", "severity", "origin_id", "message"],
+            &["code", "severity", "message"],
+        )
+    }) {
         return false;
     }
     let Some(fidelity) = scene["fidelity"].as_object() else {
         return false;
     };
-    if fidelity.keys().any(|key| !["state", "reasons"].contains(&key.as_str()))
+    if fidelity
+        .keys()
+        .any(|key| !["state", "reasons"].contains(&key.as_str()))
         || !scene["fidelity"]["reasons"]
             .as_array()
             .is_some_and(|reasons| reasons.iter().all(Value::is_string))
-        || !scene.get("text_layout_fallback_counts").is_none_or(|value| {
-            value.as_object().is_some_and(|counts| counts.values().all(|n| n.as_u64().is_some()))
-        })
+        || !scene
+            .get("text_layout_fallback_counts")
+            .is_none_or(|value| {
+                value
+                    .as_object()
+                    .is_some_and(|counts| counts.values().all(|n| n.as_u64().is_some()))
+            })
     {
         return false;
     }
