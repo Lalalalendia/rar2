@@ -19,6 +19,7 @@ use session_table::apply_table_cell_state;
 mod session_text;
 use session_geometry::{
     append_blank_page_error_to_editor_v1, apply_authored_line_inverse,
+    apply_authored_rectangle_page_duplicate_history_candidate_v1,
     apply_authored_rectangle_page_history_candidate_v1, apply_authored_shape_delete_forward,
     apply_authored_shape_delete_inverse, apply_authored_shape_inverse,
     apply_authored_stack_history_forward_v1, authored_line_from_operation,
