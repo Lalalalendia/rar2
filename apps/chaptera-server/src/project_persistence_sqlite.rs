@@ -1822,6 +1822,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn project_rename_is_fenced_and_replays_after_reopen() {
+        let (path, adapter, pool) = setup("rename").await;
+        seed_upload(
+            &pool,
+            "upload-rename",
+            "tenant-a",
+            UploadState::ValidatedDurable,
+            3,
+            &"4".repeat(64),
+            "binding-rename",
+        )
+        .await;
+        let created = adapter
+            .create_project_from_upload(
+                request("upload-rename", "create-rename", 3),
+                baseline("upload-rename"),
+            )
+            .await
+            .unwrap();
+
+        let rename = RenameProjectRequest {
+            tenant_id: "tenant-a".into(),
+            project_id: created.project_id.clone(),
+            expected_lifecycle_generation: 0,
+            expected_metadata_version: 0,
+            name: "Renamed publication".into(),
+            client_request_id: "rename-request-0001".into(),
+            now_ms: 600,
+        };
+        let first = adapter.rename_project(rename.clone()).await.unwrap();
+        assert_eq!(first.project_id, created.project_id);
+        assert_eq!(first.lifecycle_generation, 0);
+        assert_eq!(first.metadata_version, 1);
+        assert_eq!(first.name, "Renamed publication");
+        assert!(!first.replayed);
+
+        adapter.close().await;
+        let reopened = SqliteProjectPersistence::open(&path, 4, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let replay = reopened.rename_project(rename.clone()).await.unwrap();
+        assert_eq!(replay.project_id, first.project_id);
+        assert_eq!(replay.lifecycle_generation, first.lifecycle_generation);
+        assert_eq!(replay.metadata_version, first.metadata_version);
+        assert_eq!(replay.name, first.name);
+        assert!(replay.replayed);
+
+        let mut conflict = rename.clone();
+        conflict.name = "Different replay payload".into();
+        assert_eq!(
+            reopened.rename_project(conflict).await.unwrap_err().code,
+            "idempotency_conflict"
+        );
+
+        let stale = RenameProjectRequest {
+            client_request_id: "rename-request-0002".into(),
+            name: "Must not apply".into(),
+            ..rename
+        };
+        assert_eq!(
+            reopened.rename_project(stale).await.unwrap_err().code,
+            "stale_project_metadata_version"
+        );
+
+        let stored: (String, i64, i64) = sqlx::query_as(
+            "SELECT name, lifecycle_generation, metadata_version FROM projects WHERE project_id=?",
+        )
+        .bind(created.project_id.as_bytes())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored, ("Renamed publication".into(), 0, 1));
+
+        let mutations: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM project_mutations WHERE tenant_id=? AND project_id=?",
+        )
+        .bind(b"tenant-a".as_slice())
+        .bind(created.project_id.as_bytes())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(mutations, 1);
+
+        reopened.close().await;
+        pool.close().await;
+        cleanup(&path);
+    }
+
+    #[tokio::test]
     async fn source_authority_resolves_exact_consumed_binding_hash_and_genesis() {
         let (path, adapter, pool) = setup("authority").await;
         let hash = "3".repeat(64);
