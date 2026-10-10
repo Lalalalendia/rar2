@@ -18,11 +18,17 @@ on:
       - "apps/web/rich-reader-editor-shell-v1.test.mjs"
       - "apps/web/rich-reader-editor-harness.html"
       - "apps/web/product-editor.html"
+      - "apps/web/cloud-project-new.html"
+      - "apps/web/cloud-project-new.css"
+      - "apps/web/cloud-project-new-v1.mjs"
+      - "apps/web/chaptera-cloud-source-ingress-v1.mjs"
+      - "apps/web/chaptera-cloud-source-ingress-v1.test.mjs"
       - "apps/web/product-editor.css"
       - "apps/web/product-editor-entry-v1.mjs"
       - "apps/web/product-editor-entry-v1.test.mjs"
       - "tools/run_rich_reader_editor_harness.mjs"
       - "tools/run_product_editor_entry_harness.mjs"
+      - "tools/run_cloud_project_new_harness.mjs"
       - "services/editor-api/web_shell_http_harness.py"
       - "services/editor-api/observability.py"
       - "services/editor-api/test_observability.py"
@@ -65,6 +71,8 @@ jobs:
           node --test apps/web/reader-scene-editor-interaction-v1.test.mjs
           node --test apps/web/rich-reader-editor-shell-v1.test.mjs
           node --test apps/web/product-editor-entry-v1.test.mjs
+          node --test apps/web/file-entry-v1.test.mjs
+          node --test apps/web/chaptera-cloud-source-ingress-v1.test.mjs
       - name: Install Playwright
         run: npm install --no-save playwright@1.55.0
       - name: Install Chromium
@@ -75,6 +83,8 @@ jobs:
         run: node tools/run_rich_reader_editor_harness.mjs
       - name: Smoke same-origin Product Editor entry with synthetic AuthN/Product API
         run: node tools/run_product_editor_entry_harness.mjs
+      - name: Smoke new PUB project file picker against synthetic SourceIngress transport
+        run: node tools/run_cloud_project_new_harness.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: web-editor-http-seam-chromium
@@ -82,4 +92,5 @@ jobs:
             target/web-editor-http/chromium-http-*
             target/web-editor-rich/chromium-rich-editor-smoke.json
             target/web-editor-product/chromium-product-editor-entry-smoke.json
+            target/web-editor-product/chromium-project-new-synthetic.json
           if-no-files-found: error
