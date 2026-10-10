@@ -150,7 +150,7 @@ function historyAccepted() {
     base_revision_id: CHILD,
     revision_id: UNDONE,
     state_id: "sha256:" + "f".repeat(64),
-    client_operation_id: "undo-1",
+    client_operation_id: "undo-test-1",
     transition_kind: "undo",
     canonical_operation: accepted().canonical_operation,
     project_schema_version: "pub-editor-v0.2",
@@ -324,7 +324,7 @@ test("Undo uses authenticated history route, CSRF, and supported commit telemetr
         document_id: DOC,
         source_hash: SOURCE,
         base_revision_id: CHILD,
-        client_operation_id: "undo-1",
+        client_operation_id: "undo-test-1",
         command: { kind: "undo" },
       });
       return json(historyAccepted());
@@ -346,7 +346,7 @@ test("Undo uses authenticated history route, CSRF, and supported commit telemetr
   const result = await service.undo({
     sourceHash: SOURCE,
     baseRevisionId: CHILD,
-    clientOperationId: "undo-1",
+    clientOperationId: "undo-test-1",
   });
 
   assert.equal(result.protocol_version, "chaptera.history-transition-accepted.v1");
