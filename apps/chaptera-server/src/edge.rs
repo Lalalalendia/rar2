@@ -441,12 +441,21 @@ fn apply_response_headers(
         "x-content-type-options",
         HeaderValue::from_static("nosniff"),
     );
-    headers.insert("referrer-policy", HeaderValue::from_static("same-origin"));
-    headers.insert(
-        "permissions-policy",
-        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
-    );
-    headers.insert("content-security-policy", HeaderValue::from_static("default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"));
+    // The edge provides fallback policies, not a downgrade of the stricter
+    // policies emitted by the embedded Cloud Reader or authenticated Editor.
+    // In particular, their default-src 'none' and no-referrer must survive
+    // this outer middleware rather than becoming default-src 'self'.
+    headers
+        .entry("referrer-policy")
+        .or_insert(HeaderValue::from_static("same-origin"));
+    headers
+        .entry("permissions-policy")
+        .or_insert(HeaderValue::from_static(
+            "camera=(), microphone=(), geolocation=()",
+        ));
+    headers
+        .entry("content-security-policy")
+        .or_insert(HeaderValue::from_static("default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"));
     if policy.require_https_proxy {
         headers.insert(
             "strict-transport-security",
@@ -540,6 +549,57 @@ mod tests {
             "127.0.0.1:43123".parse::<SocketAddr>().unwrap(),
         ));
         request
+    }
+
+    #[tokio::test]
+    async fn edge_preserves_product_specific_browser_isolation_headers() {
+        // Exercise the same outer edge composition used in serve.rs; the
+        // embedded asset unit tests alone cannot detect policy replacement.
+        let editor = crate::product_editor_assets::router::<()>().layer(
+            middleware::from_fn_with_state(EdgePolicy::test_prod(), enforce),
+        );
+        let response = editor
+            .oneshot(proxied(
+                Method::GET,
+                "/editor/doc/10000000-0000-7000-8000-000000000001",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let csp = response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap();
+        assert!(csp.contains("default-src 'none'"));
+        assert!(csp.contains("base-uri 'none'"));
+        assert!(csp.contains("img-src 'self' data: blob:"));
+        assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+        assert_eq!(response.headers()["cache-control"], "no-cache");
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+
+        let reader = crate::cloud_reader_assets::router::<()>().layer(
+            middleware::from_fn_with_state(EdgePolicy::test_prod(), enforce),
+        );
+        let response = reader.oneshot(proxied(Method::GET, "/")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let csp = response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap();
+        assert!(csp.contains("default-src 'none'"));
+        assert!(csp.contains("form-action 'none'"));
+        assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+
+        // Routes without their own response policy still get edge defaults.
+        let response = app()
+            .oneshot(proxied(Method::GET, "/v1/read"))
+            .await
+            .unwrap();
+        assert_eq!(response.headers()["referrer-policy"], "same-origin");
+        assert!(
+            response.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("default-src 'self'")
+        );
     }
 
     #[tokio::test]
