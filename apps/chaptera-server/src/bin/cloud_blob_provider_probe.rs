@@ -6,12 +6,10 @@ use std::{
 
 use aws_config::BehaviorVersion;
 use chaptera_server::{
-    blob_store::{
-        BlobProvider, GrantOperation, ProviderErrorKind, ProviderGrantRequest,
-    },
+    blob_store::{BlobProvider, GrantOperation, ProviderErrorKind, ProviderGrantRequest},
     s3_blob_provider::S3BlobProvider,
 };
-use rand::{rngs::OsRng, RngCore};
+use rand::{RngCore, rngs::OsRng};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
@@ -95,11 +93,7 @@ async fn run() -> Result<(ProviderReceiptV1, bool), String> {
     let byte_len = u64::try_from(payload.len()).map_err(|_| "payload length overflow")?;
 
     let created = provider
-        .create_immutable(
-            &locator,
-            byte_len,
-            Box::new(Cursor::new(payload.clone())),
-        )
+        .create_immutable(&locator, byte_len, Box::new(Cursor::new(payload.clone())))
         .await
         .map_err(|error| format!("initial immutable create failed: {}", error.code))?;
 
