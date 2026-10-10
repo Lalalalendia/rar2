@@ -1531,6 +1531,21 @@ client_secret = {secret_source}
     }
 
     #[test]
+    fn parses_optional_expected_s3_bucket_owner() {
+        let source = prod_toml(r#"{ source = "env", name = "OIDC_SECRET" }"#).replace(
+            "private_namespace = \"chaptera-private\"",
+            "private_namespace = \"chaptera-private\"\nexpected_bucket_owner = \"123456789012\"",
+        );
+        let config: ChapteraConfig = toml::from_str(&source).unwrap();
+
+        config.validate().unwrap();
+        assert_eq!(
+            config.storage.expected_bucket_owner.as_deref(),
+            Some("123456789012")
+        );
+    }
+
+    #[test]
     fn production_guest_reader_can_run_without_oidc() {
         let source = prod_toml(r#"{ source = "systemd", name = "oidc_client_secret" }"#);
         let auth_index = source.find("\n[auth]\n").unwrap();
