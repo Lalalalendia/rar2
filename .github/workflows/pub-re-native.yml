@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   gate:
@@ -87,7 +88,7 @@ jobs:
                   body,
               )
               research_match = re.fullmatch(
-                  r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?|val-xproj-01|val-xproj-independent-01|val-xproj-height-01|val-xproj-pathlen-01|quill-story-readonly-oracle-02|text-width-breakpoint-m1-01|text-width-breakpoint-m2-01|text-width-hyphenation-m3-audit-01|text-width-hyphenation-m3b-01|text-width-hyphenation-m4-cfb-01)",
+                  r"/pub-re-native research (paragraph-line-spacing-0p75(?:-mixed)?|val-xproj-01|val-xproj-independent-01|val-xproj-height-01|val-xproj-pathlen-01|quill-story-readonly-oracle-02|text-width-breakpoint-m1-01|text-width-breakpoint-m2-01|text-width-hyphenation-m3-audit-01|text-width-hyphenation-m3b-01|text-width-hyphenation-m4-cfb-01|factory-t891-t892-v3)",
                   body,
               )
               cancel_match = re.fullmatch(
@@ -130,7 +131,9 @@ jobs:
                       raise SystemExit("rotation delta must be nonzero and within 45 degrees")
               elif research_match is not None:
                   research_id = research_match.group(1)
-                  if research_id == "text-width-hyphenation-m4-cfb-01":
+                  if research_id == "factory-t891-t892-v3":
+                      command_mode = "research_factory_v3"
+                  elif research_id == "text-width-hyphenation-m4-cfb-01":
                       command_mode = "research_width_m4_cfb"
                   elif research_id == "text-width-hyphenation-m3b-01":
                       command_mode = "research_width_m3b"
@@ -155,7 +158,7 @@ jobs:
           if command_mode in {"snapshot_alias", "rotation_alias", "rotation_pair"} and alias_re.fullmatch(fixture_alias) is None:
               raise SystemExit("fixture alias is invalid")
 
-          native_timeout_minutes = "30" if command_mode in {"research_0p75", "research_t352", "research_quill_readonly", "research_width_m1", "research_width_m2", "research_width_m3_readonly", "research_width_m3b", "research_width_m4_cfb"} else "10" if command_mode == "rotation_pair" else "5"
+          native_timeout_minutes = "120" if command_mode == "research_factory_v3" else "30" if command_mode in {"research_0p75", "research_t352", "research_quill_readonly", "research_width_m1", "research_width_m2", "research_width_m3_readonly", "research_width_m3b", "research_width_m4_cfb"} else "10" if command_mode == "rotation_pair" else "5"
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"command_mode={command_mode}\n")
@@ -241,7 +244,7 @@ jobs:
 
   native:
     needs: gate
-    if: ${{ needs.gate.result == 'success' && needs.gate.outputs.command_mode != 'cancel_run' && needs.gate.outputs.command_mode != 'research_width_m1' && needs.gate.outputs.command_mode != 'research_width_m2' && needs.gate.outputs.command_mode != 'research_width_m3_readonly' && needs.gate.outputs.command_mode != 'research_width_m3b' && needs.gate.outputs.command_mode != 'research_width_m4_cfb' }}
+    if: ${{ needs.gate.result == 'success' && needs.gate.outputs.command_mode != 'cancel_run' && needs.gate.outputs.command_mode != 'research_width_m1' && needs.gate.outputs.command_mode != 'research_width_m2' && needs.gate.outputs.command_mode != 'research_width_m3_readonly' && needs.gate.outputs.command_mode != 'research_width_m3b' && needs.gate.outputs.command_mode != 'research_width_m4_cfb' && needs.gate.outputs.command_mode != 'research_factory_v3' }}
     runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
     timeout-minutes: ${{ fromJSON(needs.gate.outputs.native_timeout_minutes) }}
     concurrency:
@@ -1429,3 +1432,274 @@ jobs:
           if (Test-Path -LiteralPath $env:PUB_M1_OUTPUT) {
             Remove-Item -LiteralPath $env:PUB_M1_OUTPUT -Recurse -Force
           }
+
+  # A single immutable, reviewed Factory V3 payload: no free-form packet/script/path
+  # from an issue comment ever reaches the Publisher machine.
+  factory-v3-native:
+    needs: gate
+    if: ${{ needs.gate.result == 'success' && needs.gate.outputs.command_mode == 'research_factory_v3' }}
+    runs-on: [self-hosted, Windows, X64, chaptera-publisher-oracle]
+    timeout-minutes: 120
+    concurrency:
+      group: pub-re-native-publisher-oracle
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - name: Obtain immutable, source-reviewed Factory V3 artifact
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '11681117922'
+          run-id: '38083363171'
+          repository: Lalalalendia/rar2
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/pub-factory-v3-download
+
+      - name: Verify exact ZIP and prepare isolated Factory V3
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $download = Join-Path $env:RUNNER_TEMP "pub-factory-v3-download"
+          $roots = @(Get-ChildItem -LiteralPath $download -Recurse -File -Filter "PUB_FACTORY_NATIVE_PORTABLE_T891_T892_V3.zip")
+          if ($roots.Count -ne 1) { throw "factory_v3_inner_zip_not_unique" }
+          $expected = "a13f414ccf29440e69d6df9eb754af1be1018b901ae30d37e3f18b937116b1d4"
+          $actual = (Get-FileHash -LiteralPath $roots[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "factory_v3_inner_zip_sha256_mismatch" }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($roots[0].FullName)
+          try {
+            foreach ($entry in $archive.Entries) {
+              $name = $entry.FullName.Replace("\", "/")
+              if ($name.StartsWith("/") -or $name -match '^[A-Za-z]:' -or $name -match '(^|/)\.\.(/|$)') {
+                throw "factory_v3_zip_entry_outside_root"
+              }
+            }
+          } finally { $archive.Dispose() }
+          $work = Join-Path $env:RUNNER_TEMP ("pub-factory-v3-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          "PUB_FACTORY_WORK_ROOT=$work" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $bundle = Join-Path $work "bundle"
+          Expand-Archive -LiteralPath $roots[0].FullName -DestinationPath $bundle -Force
+          # The V3 CMD wrapper ends with an interactive "pause". Never invoke
+          # it from a self-hosted Actions job: the noninteractive .ps1 is authoritative.
+          $launchers = @(Get-ChildItem -LiteralPath $bundle -Recurse -File -Filter "run-native.ps1")
+          if ($launchers.Count -ne 1) { throw "factory_v3_script_not_unique" }
+          $launchDir = $launchers[0].DirectoryName
+          $manifestPath = Join-Path $launchDir "bundle-manifest.json"
+          if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+            throw "factory_v3_bundle_manifest_missing"
+          }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          if ([string]$manifest.schema -ne "chaptera.pub.factory-native-portable.v1" -or
+              [string]$manifest.source_main_sha -ne "3bd4497003e02f7f48a91e14da25a89a201dcf87" -or
+              [string]$manifest.inventory_sha256 -ne "a13d86edc1622b7f3cba6524cba7a4553e120864889e59038712061a05003b5c" -or
+              [string]$manifest.publisher_version_prefix -ne "16.0.12527." -or
+              [string]$manifest.publisher_exe_sha256 -ne "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb9f178df834ab20b") {
+            throw "factory_v3_bundle_authority_mismatch"
+          }
+          $expectedExperiments = @("PUB-TLB-SHAPE-EFFECTS-BATCH01", "PUB-OPALG-T840-STYLE-FILL-01")
+          if (@($manifest.experiment_ids).Count -ne 2 -or
+              @($manifest.experiment_ids | Where-Object { $_ -notin $expectedExperiments }).Count -ne 0) {
+            throw "factory_v3_unexpected_experiments"
+          }
+          "PUB_FACTORY_LAUNCH_DIR=$launchDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Verified Factory V3 digest, provenance and exact two-experiment manifest."
+
+      - name: Run bounded T891 then T892 in native Publisher
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $private = Join-Path $env:PUB_FACTORY_WORK_ROOT "private-logs"
+          New-Item -ItemType Directory -Force -Path $private | Out-Null
+          $script = Join-Path $env:PUB_FACTORY_LAUNCH_DIR "run-native.ps1"
+          $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          $argv = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $script
+          $proc = Start-Process -FilePath $powershell -ArgumentList $argv `
+            -WorkingDirectory $env:PUB_FACTORY_LAUNCH_DIR -PassThru `
+            -RedirectStandardOutput (Join-Path $private "stdout.txt") `
+            -RedirectStandardError (Join-Path $private "stderr.txt")
+          # Keep the native experiment strictly bounded, even if Publisher COM hangs.
+          $completed = $proc.WaitForExit(6000000)
+          if (-not $completed) {
+            & taskkill.exe /F /T /PID $proc.Id | Out-Null
+            throw "factory_v3_native_watchdog_timeout"
+          }
+          $proc.Refresh()
+          Write-Host ("factory_v3_native_exit_code={0}" -f $proc.ExitCode)
+          if ($proc.ExitCode -ne 0) { throw "factory_v3_native_failed" }
+          "PUB_FACTORY_NATIVE_SUCCESS=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+
+      - name: Stage classified, source-safe Factory evidence
+        if: ${{ always() }}
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = if ($env:PUB_FACTORY_WORK_ROOT) { $env:PUB_FACTORY_WORK_ROOT } else {
+            Join-Path $env:RUNNER_TEMP "pub-factory-v3-evidence-only"
+          }
+          $safe = Join-Path $root "upload-safe"
+          New-Item -ItemType Directory -Force -Path $safe | Out-Null
+          "PUB_FACTORY_SAFE_ROOT=$safe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          function Find-UniqueReceipt([string]$Name) {
+            if (-not $env:PUB_FACTORY_LAUNCH_DIR -or
+                -not (Test-Path -LiteralPath $env:PUB_FACTORY_LAUNCH_DIR -PathType Container)) { return $null }
+            $matches = @(Get-ChildItem -LiteralPath $env:PUB_FACTORY_LAUNCH_DIR -Recurse -File -Filter $Name)
+            if ($matches.Count -gt 1) { throw "factory_v3_ambiguous_receipt_$Name" }
+            if ($matches.Count -eq 0) { return $null }
+            if ($matches[0].Length -gt 2097152) { throw "factory_v3_receipt_oversize_$Name" }
+            return $matches[0].FullName
+          }
+          function CheckedLabel([object]$Value) {
+            $v = [string]$Value
+            if ($v -notmatch '^[a-zA-Z0-9_.-]{1,128}$') {
+              throw "factory_v3_unexpected_evidence_label"
+            }
+            return $v
+          }
+
+          $runSummaryPath = Find-UniqueReceipt "RUN-SUMMARY.json"
+          $t891Status = "not_started"
+          $t892Status = "not_started"
+          if ($runSummaryPath) {
+            $run = Get-Content -LiteralPath $runSummaryPath -Raw | ConvertFrom-Json
+            if ([string]$run.schema -ne "chaptera.pub.factory-native-portable-result.v1" -or
+                [string]$run.source_main_sha -ne "3bd4497003e02f7f48a91e14da25a89a201dcf87") {
+              throw "factory_v3_native_run_summary_identity_mismatch"
+            }
+            $t891Status = CheckedLabel $run.t891.status
+            $t892Status = CheckedLabel $run.t892.status
+            if ($t891Status -notin @("not_started","running","success","failed") -or
+                $t892Status -notin @("not_started","running","success","failed")) {
+              throw "factory_v3_native_unexpected_scientific_status"
+            }
+            [ordered]@{
+              schema = "chaptera.pub.factory-v3-source-safe-run.v1"
+              source_main_sha = "3bd4497003e02f7f48a91e14da25a89a201dcf87"
+              t891 = $t891Status
+              t892 = $t892Status
+              final_status = CheckedLabel $run.final_status
+              errors_redacted = $true
+            } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $safe "factory-v3-run.json") -Encoding utf8
+          }
+
+          $progressPath = Find-UniqueReceipt "tlb-shape-effects-progress.json"
+          if ($progressPath) {
+            $progress = Get-Content -LiteralPath $progressPath -Raw | ConvertFrom-Json
+            if ([string]$progress.schema -ne "chaptera.pub.t891-native-progress.v1") {
+              throw "factory_v3_progress_schema_mismatch"
+            }
+            [ordered]@{
+              schema = "chaptera.pub.factory-v3-source-safe-progress.v1"
+              sequence = [int]$progress.sequence
+              candidate_id = if ($progress.candidate_id) { CheckedLabel $progress.candidate_id } else { $null }
+              arm_name = if ($progress.arm) { CheckedLabel $progress.arm } else { $null }
+              step = CheckedLabel $progress.step
+            } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $safe "t891-progress.json") -Encoding utf8
+          }
+
+          $t891Ready = $false
+          $t891Path = Find-UniqueReceipt "t891-evidence-summary.json"
+          if ($t891Path) {
+            $e = Get-Content -LiteralPath $t891Path -Raw | ConvertFrom-Json
+            if ([string]$e.schema -ne "chaptera.pub.t891-evidence-summary.v1" -or
+                [string]$e.experiment_id -ne "PUB-TLB-SHAPE-EFFECTS-BATCH01" -or
+                [int]$e.candidate_count -ne 9 -or [int]$e.arm_count -ne 27 -or
+                @($e.candidate_summaries).Count -ne 9) {
+              throw "factory_v3_t891_scientific_receipt_incomplete"
+            }
+            $expected = @(
+              "GlowFormat.Radius","GlowFormat.Transparency","GlowFormat.Visible",
+              "ReflectionFormat.Type","ReflectionFormat.Transparency","ReflectionFormat.Size",
+              "ReflectionFormat.Offset","ReflectionFormat.Blur","ReflectionFormat.Visible"
+            )
+            $seen = @{}
+            $rows = @()
+            foreach ($entry in $e.candidate_summaries) {
+              $id = CheckedLabel $entry.candidate_id
+              if ($id -notin $expected -or $seen.ContainsKey($id)) {
+                throw "factory_v3_t891_candidate_identity_mismatch"
+              }
+              $seen[$id] = $true
+              $rows += [ordered]@{
+                candidate_id = $id
+                classification = CheckedLabel $entry.classification
+                evidence_state = CheckedLabel $entry.evidence_state
+                next_gate = CheckedLabel $entry.next_gate
+                runtime_changed = [bool]$entry.runtime_changed
+                same_value_side_effect = [bool]$entry.same_value_side_effect
+                same_value_changed_range_count = [int]$entry.same_vs_control.blast.changed_range_count
+                changed_value_changed_range_count = [int]$entry.changed_vs_control.blast.changed_range_count
+                changed_value_changed_stream_count = [int]$entry.changed_vs_control.blast.changed_stream_count
+              }
+            }
+            [ordered]@{
+              schema = "chaptera.pub.factory-v3-source-safe-t891.v1"
+              experiment_id = "PUB-TLB-SHAPE-EFFECTS-BATCH01"
+              source_main_sha = "3bd4497003e02f7f48a91e14da25a89a201dcf87"
+              candidate_count = 9
+              arm_count = 27
+              batch_state = CheckedLabel $e.batch_state
+              candidates = $rows
+              pub_laws_promoted = 0
+            } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $safe "t891-summary.json") -Encoding utf8
+            $t891Ready = $true
+          }
+
+          $t892Ready = $false
+          $t892Path = Find-UniqueReceipt "operation-algebra-t840-style-fill-01.json"
+          if ($t892Path) {
+            $e = Get-Content -LiteralPath $t892Path -Raw | ConvertFrom-Json
+            if ([string]$e.schema -ne "chaptera.pub.operation-algebra-native-result.v1" -or
+                [string]$e.experiment_id -ne "PUB-OPALG-T840-STYLE-FILL-01" -or
+                [string]$e.pair_id -ne "T840-STYLE-FILL-R2C2" -or
+                [string]$e.a -ne "ApplyTableStyle_CheckbookRegister" -or
+                [string]$e.b -ne "DirectCellFillOverride_R2C2") {
+              throw "factory_v3_t892_scientific_receipt_identity_mismatch"
+            }
+            [ordered]@{
+              schema = "chaptera.pub.factory-v3-source-safe-t892.v1"
+              experiment_id = "PUB-OPALG-T840-STYLE-FILL-01"
+              source_main_sha = "3bd4497003e02f7f48a91e14da25a89a201dcf87"
+              arms = @("AB","BA","A_only","B_only","control")
+              classification = CheckedLabel $e.comparison.classification
+              semantic_equal = [bool]$e.comparison.semantic_equal
+              persistence_equal = [bool]$e.comparison.persistence_equal
+              render_equal = [bool]$e.comparison.render_equal
+              pub_laws_promoted = 0
+            } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $safe "t892-summary.json") -Encoding utf8
+            $t892Ready = $true
+          }
+
+          $complete = ($t891Ready -and $t892Ready -and
+            $t891Status -eq "success" -and $t892Status -eq "success")
+          [ordered]@{
+            schema = "chaptera.pub.factory-v3-execution-stage.v1"
+            native_execution_succeeded = ($env:PUB_FACTORY_NATIVE_SUCCESS -eq "true")
+            t891_receipt_present = $t891Ready
+            t892_receipt_present = $t892Ready
+            terminal_batch_complete = [bool]$complete
+            format_law_promoted = $false
+          } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $safe "factory-v3-stage.json") -Encoding utf8
+          if ($env:PUB_FACTORY_NATIVE_SUCCESS -eq "true" -and -not $complete) {
+            throw "factory_v3_success_without_both_scientific_receipts"
+          }
+
+      - name: Upload Factory V3 source-safe JSON only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-factory-t891-t892-v3-source-safe
+          path: ${{ env.PUB_FACTORY_SAFE_ROOT }}\*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Erase temporary Factory V3 PUB/PDF and private output
+        if: ${{ always() }}
+        shell: powershell
+        run: |
+          if ($env:PUB_FACTORY_WORK_ROOT -and (Test-Path -LiteralPath $env:PUB_FACTORY_WORK_ROOT)) {
+            Remove-Item -LiteralPath $env:PUB_FACTORY_WORK_ROOT -Recurse -Force
+          }
+          $download = Join-Path $env:RUNNER_TEMP "pub-factory-v3-download"
+          if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download -Recurse -Force }

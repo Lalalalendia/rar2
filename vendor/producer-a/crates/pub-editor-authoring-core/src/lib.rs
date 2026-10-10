@@ -59,10 +59,15 @@ pub use create_table_runtime_v1::{
 };
 
 pub use delete_authored_rectangle_page_v1::{
-    DELETE_AUTHORED_RECTANGLE_PAGE_PROTOCOL_V1, DeleteAuthoredRectanglePageErrorV1,
-    DeleteAuthoredRectanglePageStateV1, DeleteAuthoredRectanglePageTransitionV1,
+    DELETE_AUTHORED_RECTANGLE_PAGE_PROTOCOL_V1, DELETE_AUTHORED_RECTANGLES_PAGE_PROTOCOL_V1,
+    DeleteAuthoredRectanglePageErrorV1, DeleteAuthoredRectanglePageStateV1,
+    DeleteAuthoredRectanglePageTransitionV1, DeleteAuthoredRectanglesPageErrorV1,
+    DeleteAuthoredRectanglesPageTransitionV1, MAX_DELETED_AUTHORED_RECTANGLES_PAGE_V1,
     apply_delete_authored_rectangle_page_forward_v1,
-    apply_delete_authored_rectangle_page_inverse_v1, plan_delete_authored_rectangle_page_v1,
+    apply_delete_authored_rectangle_page_inverse_v1,
+    apply_delete_authored_rectangles_page_forward_v1,
+    apply_delete_authored_rectangles_page_inverse_v1, plan_delete_authored_rectangle_page_v1,
+    plan_delete_authored_rectangles_page_v1,
 };
 pub use delete_blank_authored_page_v1::{
     DELETE_BLANK_AUTHORED_PAGE_PROTOCOL_V1, DeleteBlankAuthoredPageErrorV1,
