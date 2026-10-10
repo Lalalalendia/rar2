@@ -15,6 +15,8 @@ on:
       - "services/editor-api/live_font_delivery_v1.py"
       - "services/editor-api/test_live_font_delivery_v1.py"
       - "tools/verify_live_font_ui_browser.mjs"
+      - "tools/native-pub-candidate-cli/tests/real_pinned_font_resource_v1.rs"
+      - "tools/native-pub-candidate-cli/Cargo.toml"
       - "assets/fonts/ofl/abel/**"
       - "tools/run_local_real_editor.py"
       - "tools/run_local_full_stack.py"
@@ -66,6 +68,15 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Prove real PUB font delivery, stale denial, MoveNode and Chromium UI
         run: python tools/run_local_real_editor.py --smoke --pinned-abel-demo --browser-smoke
+      - name: Prove actual Publisher Story uses canonical Rust full-font mutation and fresh re-admission
+        env:
+          CHAPTERA_REAL_PUB_FONT_FIXTURE: ${{ github.workspace }}/.chaptera-local/editor/SampleNewsletter.pub
+        run: |
+          set -o pipefail
+          cargo test --manifest-path tools/native-pub-candidate-cli/Cargo.toml \
+            --test real_pinned_font_resource_v1 -- --nocapture \
+            | tee /tmp/chaptera-real-pub-font-history.log
+          grep -q 'REAL_PUB_FONT_HISTORY_OK' /tmp/chaptera-real-pub-font-history.log
       - uses: actions/upload-artifact@v4
         with:
           name: local-editor-pinned-font-chromium
