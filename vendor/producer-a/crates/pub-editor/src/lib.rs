@@ -34,9 +34,11 @@ use session_geometry::{
 use session_image::{
     apply_crop_forward, apply_crop_inverse, apply_image_forward, apply_image_inverse,
 };
+pub use session_text::EditorProjectFontReopenGrantV1;
 use session_text::{
     apply_text_format_history_operation_semantic_v1, apply_text_format_history_operation_v1,
-    is_scoped_text_format_operation_v1, text_format_operation_property_v1,
+    is_scoped_text_format_operation_v1,
+    replay_project_operation_with_font_grants_v1 as replay_font, text_format_operation_property_v1,
     text_format_operation_story_id_v1,
 };
 mod table_rowcol_graph_v1;
@@ -3454,14 +3456,14 @@ impl EditorSession {
         self.apply_project_with_assets(project, &BTreeMap::new())
     }
 
-    pub fn apply_project_with_assets(
+    pub fn apply_project_with_admitted_font_resources_v1(
         &mut self,
         project: &EditorProject,
         asset_bytes: &BTreeMap<Sha256Digest, Vec<u8>>,
+        font_grants: &[EditorProjectFontReopenGrantV1<'_>],
     ) -> Result<(), EditorProjectError> {
         self.validate_source_identity()
             .map_err(EditorProjectError::Session)?;
-
         // v0.28/v0.29 preserve v0.27 admissions; each adds a fenced operation.
         let legacy_compatible_schema: &str = if project.schema_version
             == EDITOR_PROJECT_VERSION_V0_28
@@ -3471,7 +3473,6 @@ impl EditorSession {
         } else {
             &project.schema_version
         };
-
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_22
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
@@ -4111,7 +4112,6 @@ impl EditorSession {
         {
             return Err(EditorProjectError::SessionNotEmpty);
         }
-
         if project.schema_version == EDITOR_PROJECT_VERSION_V0_11
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
@@ -4140,7 +4140,6 @@ impl EditorSession {
                 return Err(EditorProjectError::AssetReachabilityMismatch { expected, found });
             }
         }
-
         let mut candidate = self.clone();
         candidate.project_identity = project.identity.clone();
         for (index, metadata) in project.assets.iter().enumerate() {
@@ -4176,9 +4175,8 @@ impl EditorSession {
         if canonical_editor_asset_metadata(&candidate.replacement_assets) != project.assets {
             return Err(EditorProjectError::AssetMetadataNonCanonical);
         }
-
         for (index, expected) in project.operations.iter().enumerate() {
-            let actual = replay_canonical_operation(&mut candidate, expected, index)?;
+            let actual = replay_font(&mut candidate, expected, index, project, font_grants)?;
             if &actual != expected {
                 return Err(EditorProjectError::OperationMismatch { index });
             }

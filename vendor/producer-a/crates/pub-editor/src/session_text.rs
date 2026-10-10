@@ -6,12 +6,161 @@
 
 use super::*;
 use chaptera_text_format_overlay::{
-    FontAuthoringScopeV1, FontReplacementCandidateV1, ServerFontResourceV1,
+    FontAuthoringScopeV1, FontReplacementCandidateV1, FontResourceIdentityV1, ServerFontResourceV1,
+    replay_admitted_font_resource_v1 as overlay_readmit_font_v1,
     replay_recorded_font_resource_v1 as replay_font_history_v1,
     set_admitted_font_resource_v1 as overlay_admit_font_v1,
 };
 
+/// Trusted server-side reopen grant, never deserialized from EditorProject.
+/// A caller must independently obtain original full bytes and authoring
+/// permission for this exact source/project; file and browser metadata cannot
+/// populate this struct as a policy authority.
+#[derive(Debug)]
+pub struct EditorProjectFontReopenGrantV1<'a> {
+    pub source_hash: Sha256Digest,
+    pub project_document_id: &'a str,
+    pub resource: ServerFontResourceV1<'a>,
+}
+
+fn denied_project_font_reopen(index: usize, story_id: StoryId, reason: &str) -> EditorProjectError {
+    EditorProjectError::Operation {
+        index,
+        error: EditorError::TextFormatStateInvalid {
+            story_id,
+            message: reason.to_owned(),
+        },
+    }
+}
+
+pub(super) fn replay_project_operation_with_font_grants_v1(
+    session: &mut EditorSession,
+    expected: &EditOperation,
+    index: usize,
+    project: &EditorProject,
+    grants: &[EditorProjectFontReopenGrantV1<'_>],
+) -> Result<EditOperation, EditorProjectError> {
+    let EditOperation::SetTextFormatProperty {
+        story_id,
+        start_scalar,
+        end_scalar,
+        property: FormatPropertyV1::FontResource,
+        value: FormatValueV1::FontResource(identity),
+        before_state_hash,
+        ..
+    } = expected
+    else {
+        return replay_canonical_operation(session, expected, index);
+    };
+
+    // Resource IDs and face indices select only exact entries. A mismatched
+    // physical identity is rejected, never substituted by family display name.
+    let mut matching = grants.iter().filter(|grant| {
+        grant.resource.identity.resource_id == identity.resource_id
+            && grant.resource.identity.face_index == identity.face_index
+    });
+    let grant = matching.next().ok_or_else(|| {
+        denied_project_font_reopen(index, *story_id, "trusted physical font grant unavailable")
+    })?;
+    if matching.next().is_some() {
+        return Err(denied_project_font_reopen(
+            index,
+            *story_id,
+            "ambiguous duplicate physical font grants",
+        ));
+    }
+    if grant.source_hash != project.source_hash
+        || project
+            .identity
+            .as_ref()
+            .is_none_or(|identity| identity.document_id != grant.project_document_id)
+    {
+        return Err(denied_project_font_reopen(
+            index,
+            *story_id,
+            "physical font grant is bound to another source or EditorProject",
+        ));
+    }
+    session
+        .replay_admitted_project_font_v1(
+            *story_id,
+            *start_scalar,
+            *end_scalar,
+            identity,
+            &grant.resource,
+            before_state_hash,
+        )
+        .map_err(|error| EditorProjectError::Operation { index, error })
+}
+
 impl EditorSession {
+    /// Standard reopen remains fail-closed for font overrides when the caller
+    /// has no independently admitted complete resource.
+    pub fn apply_project_with_assets(
+        &mut self,
+        project: &EditorProject,
+        asset_bytes: &BTreeMap<Sha256Digest, Vec<u8>>,
+    ) -> Result<(), EditorProjectError> {
+        self.apply_project_with_admitted_font_resources_v1(project, asset_bytes, &[])
+    }
+
+    /// Replay a recorded font override only after exact physical bytes, face
+    /// and document-bound authoring permission were independently re-admitted.
+    pub(super) fn replay_admitted_project_font_v1(
+        &mut self,
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        identity: &FontResourceIdentityV1,
+        resource: &ServerFontResourceV1<'_>,
+        expected_state_hash: &str,
+    ) -> Result<EditOperation, EditorError> {
+        let before = self.current_text_format_overlay_v1(story_id)?;
+        let current_hash =
+            state_hash_v1(&before).map_err(|error| EditorError::TextFormatStateInvalid {
+                story_id,
+                message: error.to_string(),
+            })?;
+        if current_hash != expected_state_hash {
+            return Err(EditorError::StaleOperation { story_id });
+        }
+        let receipt = overlay_readmit_font_v1(
+            &before,
+            start_scalar,
+            end_scalar,
+            identity,
+            resource,
+            expected_state_hash,
+        )
+        .map_err(|error| EditorError::TextFormatStateInvalid {
+            story_id,
+            message: error.to_string(),
+        })?;
+        if receipt.command.before_state_hash == receipt.command.after_state_hash {
+            return Err(EditorError::NoChange { story_id });
+        }
+        let operation = EditOperation::SetTextFormatProperty {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property: FormatPropertyV1::FontResource,
+            value: FormatValueV1::FontResource(identity.clone()),
+            before_state_hash: receipt.command.before_state_hash,
+            after_state_hash: receipt.command.after_state_hash,
+        };
+        let replayed = apply_text_format_history_operation_v1(&before, &operation)?;
+        if replayed != receipt.after_state {
+            return Err(EditorError::TextFormatStateInvalid {
+                story_id,
+                message: "re-admitted font history differs from canonical receipt".to_owned(),
+            });
+        }
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
     fn validate_story_text_session_capability(
         &self,
         story_id: StoryId,
@@ -157,6 +306,12 @@ impl EditorSession {
     /// its trusted resource registry; a browser candidate alone has no write
     /// authority. This commits text-format state only. Layout/PDF and fresh
     /// EditorProject re-admission require their own authoritative consumers.
+    // Exact scope, trusted bytes and story/hash inputs intentionally remain
+    // separate; callers cannot forge server authorization from a browser token.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "admission trust inputs must remain explicit"
+    )]
     pub fn set_admitted_font_resource_v1(
         &mut self,
         story_id: StoryId,
@@ -760,6 +915,173 @@ mod font_resource_session_tests {
             editor.current_text_format_overlay_v1(story_id()).unwrap(),
             replaced
         );
+    }
+
+    #[test]
+    fn exact_admitted_project_font_survives_serialized_fresh_reopen_and_undo_redo() {
+        let bytes = b"independently-server-owned-full-font-bytes-for-reopen";
+        let (scope, identity, candidate) = scoped_identity(bytes);
+        let resource = ServerFontResourceV1 {
+            identity: &identity,
+            full_font_bytes: bytes,
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: true,
+        };
+        let mut editor = session();
+        let source = editor.current_text_format_overlay_v1(story_id()).unwrap();
+        editor
+            .set_admitted_font_resource_v1(
+                story_id(),
+                0,
+                11,
+                &candidate,
+                &scope,
+                &resource,
+                &state_hash_v1(&source).unwrap(),
+            )
+            .expect("original font admission");
+        let edited = editor.current_text_format_overlay_v1(story_id()).unwrap();
+        let project = editor.project();
+        let disk = serde_json::to_vec(&project).unwrap();
+        let loaded: EditorProject = serde_json::from_slice(&disk).unwrap();
+        let grant = EditorProjectFontReopenGrantV1 {
+            source_hash: loaded.source_hash,
+            project_document_id: &loaded.identity.as_ref().unwrap().document_id,
+            resource: ServerFontResourceV1 {
+                identity: &identity,
+                full_font_bytes: bytes,
+                face_count: 1,
+                is_full_resource: true,
+                authoring_admitted: true,
+            },
+        };
+        let mut fresh = session();
+        fresh
+            .apply_project_with_admitted_font_resources_v1(&loaded, &BTreeMap::new(), &[grant])
+            .expect("trusted resource re-admission on a fresh EditorSession");
+        assert_eq!(
+            fresh.current_text_format_overlay_v1(story_id()).unwrap(),
+            edited
+        );
+        assert_eq!(fresh.project().state_id_v1(), project.state_id_v1());
+        assert_eq!(fresh.source_hash(), editor.source_hash());
+        assert_eq!(fresh.graph().stories[&story_id()].text, "Hello world");
+        fresh.undo().expect("fresh Undo");
+        assert_eq!(
+            fresh.current_text_format_overlay_v1(story_id()).unwrap(),
+            source
+        );
+        fresh.redo().expect("fresh Redo");
+        assert_eq!(
+            fresh.current_text_format_overlay_v1(story_id()).unwrap(),
+            edited
+        );
+    }
+
+    #[test]
+    fn recorded_font_reopen_rejects_wrong_context_missing_bytes_and_duplicate_grants_atomically() {
+        let bytes = b"exact-reopen-resource";
+        let (scope, identity, candidate) = scoped_identity(bytes);
+        let mut author = session();
+        let original_hash = author
+            .current_text_format_state_hash_v1(story_id())
+            .unwrap();
+        author
+            .set_admitted_font_resource_v1(
+                story_id(),
+                2,
+                8,
+                &candidate,
+                &scope,
+                &ServerFontResourceV1 {
+                    identity: &identity,
+                    full_font_bytes: bytes,
+                    face_count: 1,
+                    is_full_resource: true,
+                    authoring_admitted: true,
+                },
+                &original_hash,
+            )
+            .expect("author canonical resource");
+        let project = author.project();
+        let project_doc_id = project.identity.as_ref().unwrap().document_id.as_str();
+        let original_source = session()
+            .current_text_format_overlay_v1(story_id())
+            .unwrap();
+
+        macro_rules! rejected_without_mutation {
+            ($grants:expr) => {{
+                let mut reopened = session();
+                assert!(
+                    reopened
+                        .apply_project_with_admitted_font_resources_v1(
+                            &project,
+                            &BTreeMap::new(),
+                            $grants
+                        )
+                        .is_err()
+                );
+                assert!(reopened.operations().is_empty());
+                assert_eq!(
+                    reopened.current_text_format_overlay_v1(story_id()).unwrap(),
+                    original_source
+                );
+            }};
+        }
+        rejected_without_mutation!(&[]);
+        let valid = || EditorProjectFontReopenGrantV1 {
+            source_hash: project.source_hash,
+            project_document_id: project_doc_id,
+            resource: ServerFontResourceV1 {
+                identity: &identity,
+                full_font_bytes: bytes,
+                face_count: 1,
+                is_full_resource: true,
+                authoring_admitted: true,
+            },
+        };
+        rejected_without_mutation!(&[valid(), valid()]);
+        rejected_without_mutation!(&[EditorProjectFontReopenGrantV1 {
+            source_hash: Sha256Digest::from_bytes([0x99; 32]),
+            ..valid()
+        }]);
+        rejected_without_mutation!(&[EditorProjectFontReopenGrantV1 {
+            project_document_id: "other-project-document",
+            ..valid()
+        }]);
+        rejected_without_mutation!(&[EditorProjectFontReopenGrantV1 {
+            resource: ServerFontResourceV1 {
+                full_font_bytes: b"different-font-bytes",
+                ..valid().resource
+            },
+            ..valid()
+        }]);
+        rejected_without_mutation!(&[EditorProjectFontReopenGrantV1 {
+            resource: ServerFontResourceV1 {
+                authoring_admitted: false,
+                ..valid().resource
+            },
+            ..valid()
+        }]);
+        rejected_without_mutation!(&[EditorProjectFontReopenGrantV1 {
+            resource: ServerFontResourceV1 {
+                is_full_resource: false,
+                ..valid().resource
+            },
+            ..valid()
+        }]);
+        let other_identity = FontResourceIdentityV1 {
+            content_hash: "a".repeat(64),
+            ..identity.clone()
+        };
+        rejected_without_mutation!(&[EditorProjectFontReopenGrantV1 {
+            resource: ServerFontResourceV1 {
+                identity: &other_identity,
+                ..valid().resource
+            },
+            ..valid()
+        }]);
     }
 
     #[test]

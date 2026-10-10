@@ -125,23 +125,13 @@ fn validate_scope(
     Ok(())
 }
 
-pub fn set_admitted_font_resource_v1(
-    state: &TextFormatOverlayStateV1,
-    start_scalar: u32,
-    end_scalar: u32,
-    candidate: &FontReplacementCandidateV1,
-    current_scope: &FontAuthoringScopeV1,
+// The same independent exact-byte/face/policy check is mandatory for both
+// new authoring and re-admission of recorded project history.
+fn validate_server_font_admission_v1(
+    identity: &FontResourceIdentityV1,
     server_resource: &ServerFontResourceV1<'_>,
-    expected_state_hash: &str,
-) -> Result<TextFormatOperationReceiptV1> {
-    validate_scope(current_scope, candidate)?;
-    let identity = FontResourceIdentityV1 {
-        resource_id: candidate.resource_id.clone(),
-        font_fingerprint: candidate.font_fingerprint.clone(),
-        content_hash: candidate.content_hash.clone(),
-        face_index: candidate.face_index,
-    };
-    validate_font_resource_identity_v1(&identity)?;
+) -> Result<()> {
+    validate_font_resource_identity_v1(identity)?;
     validate_font_resource_identity_v1(server_resource.identity)?;
     if !server_resource.authoring_admitted
         || !server_resource.is_full_resource
@@ -151,7 +141,7 @@ pub fn set_admitted_font_resource_v1(
             "font resource has no independent full-file authoring admission",
         ));
     }
-    if server_resource.identity != &identity {
+    if server_resource.identity != identity {
         return Err(TextFormatOverlayError::new(
             "requested font identity differs from server-owned resource",
         ));
@@ -169,6 +159,26 @@ pub fn set_admitted_font_resource_v1(
             "server font bytes disagree with admitted content SHA-256",
         ));
     }
+    Ok(())
+}
+
+pub fn set_admitted_font_resource_v1(
+    state: &TextFormatOverlayStateV1,
+    start_scalar: u32,
+    end_scalar: u32,
+    candidate: &FontReplacementCandidateV1,
+    current_scope: &FontAuthoringScopeV1,
+    server_resource: &ServerFontResourceV1<'_>,
+    expected_state_hash: &str,
+) -> Result<TextFormatOperationReceiptV1> {
+    validate_scope(current_scope, candidate)?;
+    let identity = FontResourceIdentityV1 {
+        resource_id: candidate.resource_id.clone(),
+        font_fingerprint: candidate.font_fingerprint.clone(),
+        content_hash: candidate.content_hash.clone(),
+        face_index: candidate.face_index,
+    };
+    validate_server_font_admission_v1(&identity, server_resource)?;
     // Reuse the canonical overlay operation/state/hash normalization. No
     // parallel format state, unvalidated property setter or CLI file lookup.
     apply_format_operation_v1(
@@ -178,6 +188,27 @@ pub fn set_admitted_font_resource_v1(
         end_scalar,
         FormatPropertyV1::FontResource,
         Some(FormatValueV1::FontResource(identity)),
+        expected_state_hash,
+    )
+}
+
+/// Re-admit persisted font history against independently supplied complete
+/// server bytes. Neither EditorProject JSON nor a browser candidate grants
+/// authoring rights; the trusted caller must supply the current policy record.
+pub fn replay_admitted_font_resource_v1(
+    state: &TextFormatOverlayStateV1,
+    start_scalar: u32,
+    end_scalar: u32,
+    identity: &FontResourceIdentityV1,
+    server_resource: &ServerFontResourceV1<'_>,
+    expected_state_hash: &str,
+) -> Result<TextFormatOperationReceiptV1> {
+    validate_server_font_admission_v1(identity, server_resource)?;
+    replay_recorded_font_resource_v1(
+        state,
+        start_scalar,
+        end_scalar,
+        identity,
         expected_state_hash,
     )
 }
