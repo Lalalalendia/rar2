@@ -35,11 +35,10 @@ use crate::{
     revision_materializer::{
         BlobStoreExactSourceLoader, EDITOR_HISTORY_EVENT_SCHEMA_V1,
         EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION, EDITOR_REVISION_EVENT_SCHEMA_V1,
-        EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION, EditorHistoryEventV1,
-        EditorRevisionEventV1, ExactRevisionMaterializer, ExactSourceLoader,
-        PubEditorReplayEngine, RevisionMaterializerError, decode_editor_history_event_v1,
-        decode_editor_revision_event_v1, encode_editor_history_event_v1,
-        encode_editor_revision_event_v1, project_sha256,
+        EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION, EditorHistoryEventV1, EditorRevisionEventV1,
+        ExactRevisionMaterializer, ExactSourceLoader, PubEditorReplayEngine,
+        RevisionMaterializerError, decode_editor_history_event_v1, decode_editor_revision_event_v1,
+        encode_editor_history_event_v1, encode_editor_revision_event_v1, project_sha256,
     },
     source_authority::{SourceAuthorityError, SqliteDocumentSourceAuthority},
     source_baseline::{
