@@ -20,7 +20,9 @@ use chaptera_cdm_model::{
 use chaptera_scene_instance::{
     GeometrySyncPolicyV1, direct_page_local_instance_v1, geometry_sync_policy_v1,
 };
-use pub_editor::{EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest, open_mature_0x2c_editor};
+use pub_editor::{
+    EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest, open_mature_0x2c_editor,
+};
 use pub_reader::PubResolvedGraph;
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde::{Deserialize, Serialize};
@@ -369,16 +371,13 @@ fn project_reader_scene_from_exact_source(
     source_bytes: &[u8],
     project: &EditorProject,
 ) -> Result<ReaderSceneV1, ProductApiError> {
-    let mut bundle = open_pub_bundle(
-        source_bytes,
-        viewer_geometry_environment_v0_1(),
-    )
-    .map_err(|_| {
-        ProductApiError::unprocessable(
-            "reader_scene_open_failed",
-            "source-neutral Viewer could not open this PUB source",
-        )
-    })?;
+    let mut bundle =
+        open_pub_bundle(source_bytes, viewer_geometry_environment_v0_1()).map_err(|_| {
+            ProductApiError::unprocessable(
+                "reader_scene_open_failed",
+                "source-neutral Viewer could not open this PUB source",
+            )
+        })?;
 
     if revision_id != baseline_revision_id {
         let source_hash = Sha256Digest::from_str(&source_sha256).map_err(|_| {
@@ -387,23 +386,18 @@ fn project_reader_scene_from_exact_source(
                 "durable source authority contains an invalid SHA-256 identity",
             )
         })?;
-        let mut session = open_mature_0x2c_editor(source_bytes, source_hash)
-            .map_err(|error| {
-                ProductApiError::internal(
-                    "reader_scene_editor_source_unsupported",
-                    format!(
-                        "canonical editor could not open durable source for scene replay: {error}"
-                    ),
-                )
-            })?;
-        session
-            .apply_project(project)
-            .map_err(|error| {
-                ProductApiError::internal(
-                    "reader_scene_editor_replay_failed",
-                    format!("canonical editor could not replay exact scene revision: {error}"),
-                )
-            })?;
+        let mut session = open_mature_0x2c_editor(source_bytes, source_hash).map_err(|error| {
+            ProductApiError::internal(
+                "reader_scene_editor_source_unsupported",
+                format!("canonical editor could not open durable source for scene replay: {error}"),
+            )
+        })?;
+        session.apply_project(project).map_err(|error| {
+            ProductApiError::internal(
+                "reader_scene_editor_replay_failed",
+                format!("canonical editor could not replay exact scene revision: {error}"),
+            )
+        })?;
 
         let mut moved_node_ids = Vec::new();
         for operation in &project.operations {
