@@ -40,6 +40,11 @@ from validate_export_preview import validate_semantics as validate_export_previe
 from verify_editable_export_geometry import RectEmu, verify_export
 
 from font_authoring_admission_v1 import issue_font_authoring_admission_v1
+from live_font_delivery_v1 import (
+    LiveFontDeliveryDenied, bind_font_set_to_scene, build_font_environment,
+    issue_current_admission, read_current_exact_font,
+)
+from pinned_opentype_resource_v1 import ABEL_RESOURCE_ID, ABEL_SHA256, load_pinned_abel
 from revision_store import RevisionKernel
 from story_range_v1 import replace_story_range_v1
 from security.authz_v1 import AuthzDenied, AuthzKernel, CAP_EDIT_TEXT, CAP_EXPORT, CAP_VIEW
@@ -185,6 +190,7 @@ class RealAcceptanceState:
         strict_acceptance: bool = True,
         baseline_project: pathlib.Path | None = None,
         fixture_profile: str = "newsletter",
+        pinned_abel_demo: bool = False,
     ):
         self.fixture = fixture.resolve(strict=True)
         self.resolved_graph_path = resolved_graph.resolve(strict=True)
@@ -200,6 +206,9 @@ class RealAcceptanceState:
         if fixture_profile not in PINNED_FIXTURE_PROFILES:
             raise RuntimeError("unrecognized pinned PUB fixture profile")
         self.fixture_profile = fixture_profile
+        if pinned_abel_demo and strict_acceptance:
+            raise RuntimeError("pinned Abel is only available in explicit interactive demo mode")
+        self.pinned_abel = load_pinned_abel() if pinned_abel_demo else None
         self.pinned_sha, self.pinned_len = PINNED_FIXTURE_PROFILES[fixture_profile]
         if (
             self.fixture.stat().st_size != self.pinned_len
@@ -375,7 +384,8 @@ class RealAcceptanceState:
                 raise RuntimeError("Viewer Story is missing from edited resolved graph")
             story["text"] = graph_story["text"]
 
-        return adapt_viewer_geometry(current_viewer, self.document_id, revision_id)
+        browser_scene = adapt_viewer_geometry(current_viewer, self.document_id, revision_id)
+        return bind_font_set_to_scene(browser_scene, self.pinned_abel)
 
     def _run_editor_command(self, mode: str, project: dict, command: dict) -> dict:
         token = hashlib.sha256(
@@ -652,36 +662,28 @@ class RealAcceptanceState:
             rect,
         )
 
-    def font_authoring_admission(self) -> dict:
-        """Read-only, exact-revision picker admission; default is no licensed fonts.
-
-        This task-local real-PUB harness has no independently provisioned,
-        parser-verified full-file font registry. Do not promote source-family
-        labels or OS fallback fonts into Editor authoring permission. A
-        production provider must inject an explicit trusted registry and
-        validated deliver_exact FontEnvironment before admitting any option.
-        """
+    def font_environment(self) -> dict:
         revision_id = self.kernel.current_revision(self.document_id).revision_id
-        scene = self.scenes[revision_id]
-        layout = scene.get("layout_environment")
-        if not isinstance(layout, dict):
-            raise RuntimeError("font admission requires current Scene layout environment")
-        environment = {
-            "protocol_version": "chaptera.font-environment.v1",
-            "document_id": scene["document_id"],
-            "revision_id": revision_id,
-            "scene_snapshot_id": scene["snapshot_id"],
-            "layout_environment_id": layout["environment_id"],
-            "font_set_fingerprint": layout["font_set_fingerprint"],
-            "preview_authority": "server_frame_geometry_only",
-            "fonts": [],
-            "diagnostics": [],
-        }
-        return issue_font_authoring_admission_v1(
+        return build_font_environment(self.scenes[revision_id], self.pinned_abel)
+
+    def font_authoring_admission(self) -> dict:
+        """Server-side exact resource grant, default-empty without opt-in."""
+        revision_id = self.kernel.current_revision(self.document_id).revision_id
+        return issue_current_admission(
+            scene=self.scenes[revision_id],
             tenant_id=self.tenant_id,
-            scene=scene,
-            font_environment=environment,
-            trusted_resources=(),
+            resource=self.pinned_abel,
+        )
+
+    def font_resource_bytes(self, fetch_handle: str) -> bytes:
+        revision = self.kernel.current_revision(self.document_id).revision_id
+        scene = self.scenes[revision]
+        return read_current_exact_font(
+            scene=scene, tenant_id=self.tenant_id,
+            resource=self.pinned_abel,
+            resource_id=ABEL_RESOURCE_ID,
+            revision_id=scene["revision_id"], snapshot_id=scene["snapshot_id"],
+            fetch_handle=fetch_handle,
         )
 
     def editor_capabilities(self) -> dict:
@@ -936,6 +938,18 @@ class Handler(BaseHTTPRequestHandler):
             json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
         )
 
+    def _font_file(self, data: bytes):
+        self.send_response(200)
+        self.send_header("content-type", "font/ttf")
+        self.send_header("content-length", str(len(data)))
+        self.send_header("x-content-type-options", "nosniff")
+        self.send_header("x-chaptera-font-content-sha256", ABEL_SHA256)
+        self.send_header("cache-control", "no-store")
+        self.send_header("access-control-allow-origin", "*")
+        self.send_header("access-control-expose-headers", "x-chaptera-font-content-sha256")
+        self.end_headers()
+        self.wfile.write(data)
+
     def _pub_file(self, path: pathlib.Path):
         data = path.read_bytes()
         self.send_response(200)
@@ -997,6 +1011,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._authorize(CAP_EXPORT)
                 target = query.get("target", [""])[0]
                 self._json(STATE.export_preview(target))
+                return
+            if path == "/v1/editor/font-environment":
+                self._authorize(CAP_EDIT_TEXT)
+                self._json(STATE.font_environment())
+                return
+            if path.startswith("/v1/editor/font-resource/"):
+                self._authorize(CAP_EDIT_TEXT)
+                fetch_handle = path.removeprefix("/v1/editor/font-resource/")
+                try:
+                    font_bytes = STATE.font_resource_bytes(fetch_handle)
+                except LiveFontDeliveryDenied:
+                    self._json({"error": "font_resource_not_available_or_stale"}, 409)
+                    return
+                self._font_file(font_bytes)
                 return
             if path == "/v1/editor/font-authoring-admission":
                 # Capability is not derived from font delivery/visibility.
@@ -1074,6 +1102,8 @@ def main():
         "--fixture-profile", choices=("newsletter", "sample3", "sample4"), default="newsletter"
     )
     parser.add_argument("--exporter", required=True, type=pathlib.Path)
+    parser.add_argument("--pinned-abel-demo", action="store_true",
+                        help="explicit dev-only admitted full-font delivery; never enabled in acceptance mode")
     parser.add_argument("--work-dir", required=True, type=pathlib.Path)
     parser.add_argument(
         "--interactive",
@@ -1092,6 +1122,7 @@ def main():
         strict_acceptance=not args.interactive,
         baseline_project=args.baseline_project,
         fixture_profile=args.fixture_profile,
+        pinned_abel_demo=args.pinned_abel_demo,
     )
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(

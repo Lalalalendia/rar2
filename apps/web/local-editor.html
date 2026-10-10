@@ -15,6 +15,10 @@ button{cursor:pointer}button:hover{background:#303845}
 #text-tools{display:grid;grid-template-columns:minmax(320px,1fr) auto auto;gap:8px;align-items:start;width:100%}
 #text-tools[hidden]{display:none}
 #text-value{min-height:84px;max-height:220px;resize:vertical;border:1px solid #394352;background:#101318;color:#eef1f5;border-radius:7px;padding:8px;font:13px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace}
+#font-tools{display:flex;gap:9px;align-items:center;width:100%;flex-wrap:wrap;font-size:12px;color:#b8c1cc}
+#font-choice{max-width:230px}
+#font-message{flex:1;min-width:180px}
+#font-sample{font-size:22px;padding:2px 9px;border:1px solid #394352;background:#252b34;color:#eee;white-space:nowrap}
 button:disabled{cursor:not-allowed;opacity:.45}
 #host-wrap{overflow:auto;background:#d9d9d9;position:relative}
 #host{width:1200px;height:3600px;position:relative;touch-action:none;background:#e9e9e9}
@@ -41,11 +45,19 @@ button:disabled{cursor:not-allowed;opacity:.45}
     <button id="apply-text">Apply text</button>
     <button id="cancel-text">Cancel</button>
   </div>
+  <div id="font-tools" role="group" aria-label="Physical font preview">
+    <label for="font-choice">Admitted font</label>
+    <select id="font-choice" disabled><option value="">No admitted fonts</option></select>
+    <button id="preview-physical-font" disabled>Preview bytes</button>
+    <span id="font-message" role="status">Browser preview only; not an Editor font change.</span>
+    <span id="font-sample" aria-label="Font preview sample">Aa Bb 123</span>
+  </div>
 </header>
 <div id="host-wrap"><div id="host" aria-label="Chaptera editor canvas"></div></div>
 <script type="module">
 import {BrowserEditorShellV1} from "./editor-shell-v1.mjs";
 import {HttpEditorServiceV1} from "./editor-service-client-v1.mjs";
+import {projectAdmittedFontChoices,chooseAdmittedFontCandidate} from "./font-environment-v1.mjs";
 import {BrowserObservabilityV1} from "./observability-v1.mjs";
 import {prepareStoryTextForTextarea, restoreStoryTextFromTextarea} from "./story-line-endings-v1.mjs";
 
@@ -59,6 +71,11 @@ const editTextButton=document.querySelector("#edit-text");
 const savePubButton=document.querySelector("#save-pub");
 const textTools=document.querySelector("#text-tools");
 const textValue=document.querySelector("#text-value");
+const fontChoice=document.querySelector("#font-choice");
+const previewFontButton=document.querySelector("#preview-physical-font");
+const fontMessage=document.querySelector("#font-message");
+const fontSample=document.querySelector("#font-sample");
+let currentFontContext=null;
 let editingStory=null;
 let editableStoryIds=new Set();
 let seq=0;
@@ -100,11 +117,14 @@ async function disclosure(){
   savePubButton.disabled=true;
   // Unsupported editable export must not suppress independent Story/PUB capability
   // facts or leave the editor without bound commands.
-  const [exportResult,pubPreview,editorCaps]=await Promise.all([
+  const [exportResult,pubPreview,editorCaps,fontResult]=await Promise.all([
     service.exportPreview(document.querySelector("#target").value)
       .then(value=>({ok:true,value}),()=>({ok:false})),
     service.nativePubPreview(),
     service.editorCapabilities(),
+    Promise.all([service.fontEnvironment(),service.fontAuthoringAdmission()])
+      .then(([environment,admission])=>({ok:true,value:{environment,admission}}),
+            error=>({ok:false,error})),
   ]);
   // Never admit a preview fetched for a different (possibly older) revision.
   if(shell.snapshot.revision_id!==scene.revision_id||
@@ -113,6 +133,7 @@ async function disclosure(){
     throw new Error("PUB capability refresh is stale relative to current Editor revision");
   }
   editableStoryIds=new Set(editorCaps.editable_story_ids??[]);
+  showFontChoices(scene,fontResult);
   syncTextControls();
   const caps=scene.capabilities ?? [];
   document.querySelector("#fidelity").textContent="Fidelity: "+scene.fidelity.state+
@@ -139,6 +160,84 @@ async function disclosure(){
       ?"Writer candidate only · Publisher not verified"
       :"Project-only · "+(pubPreview.blocker_code??"writer blocked"));
   savePubButton.disabled=pubPreview.can_download!==true;
+}
+
+function showFontChoices(scene, fontResult){
+  currentFontContext=null;
+  fontChoice.replaceChildren(new Option("No admitted fonts", ""));
+  fontChoice.disabled=true;
+  previewFontButton.disabled=true;
+  fontSample.style.fontFamily="";
+  fontMessage.className="warn";
+  fontMessage.textContent="No physical font permitted for browser preview.";
+  if(!fontResult.ok){
+    fontMessage.textContent="Font admission unavailable; no implicit substitution.";
+    return;
+  }
+  try{
+    const {environment,admission}=fontResult.value;
+    const choices=projectAdmittedFontChoices(scene,environment,admission);
+    // Only the same current Scene snapshot may produce an actionable choice.
+    if(shell.snapshot.revision_id!==scene.revision_id ||
+       shell.snapshot.snapshot_id!==scene.snapshot_id){
+      throw new Error("font picker response is stale");
+    }
+    if(!choices.length) return;
+    fontChoice.replaceChildren();
+    for(const choice of choices){
+      const option=new Option(
+        (choice.display_family??"Physical font")+" · "+
+        (choice.display_style??"Regular")+" · "+choice.resource_id.slice(0,8),
+        choice.resource_id
+      );
+      fontChoice.append(option);
+    }
+    currentFontContext={environment,admission,scene_snapshot_id:scene.snapshot_id};
+    fontChoice.disabled=false;
+    previewFontButton.disabled=false;
+    fontMessage.textContent="Exact font available for preview. No document edit or PDF relayout yet.";
+  }catch(error){
+    fontMessage.className="bad";
+    fontMessage.textContent="Font picker blocked: "+String(error?.message??error);
+  }
+}
+
+async function previewSelectedFont(){
+  if(!currentFontContext||!shell?.snapshot) return;
+  const scene=shell.snapshot;
+  if(scene.snapshot_id!==currentFontContext.scene_snapshot_id) {
+    throw new Error("selected font candidate belongs to a stale Scene");
+  }
+  const {environment,admission}=currentFontContext;
+  const candidate=chooseAdmittedFontCandidate(scene,environment,admission,fontChoice.value);
+  const physical=environment.fonts.find(
+    font=>font.resource_id===candidate.resource_id&&
+      font.content_hash===candidate.content_hash&&
+      font.face_index===candidate.face_index
+  );
+  if(!physical) throw new Error("selected font lacks exact delivery descriptor");
+  previewFontButton.disabled=true;
+  fontMessage.textContent="Checking exact physical font bytes…";
+  try{
+    const bytes=await service.exactFontResourceBytes(physical);
+    if(shell.snapshot.snapshot_id!==scene.snapshot_id ||
+       shell.snapshot.revision_id!==scene.revision_id) {
+      throw new Error("font delivery finished after the Scene changed");
+    }
+    const family="ChapteraPreview_"+candidate.content_hash.slice(0,16);
+    const fontFace=new FontFace(family,bytes,{style:"normal",weight:"400"});
+    await fontFace.load();
+    if(shell.snapshot.snapshot_id!==scene.snapshot_id) {
+      throw new Error("font preview became stale during font load");
+    }
+    document.fonts.add(fontFace);
+    fontSample.style.fontFamily='"'+family+'"';
+    fontMessage.className="warn";
+    fontMessage.textContent="Verified byte preview only — Story, layout, saved PUB and PDF unchanged.";
+  }finally{
+    previewFontButton.disabled=!currentFontContext ||
+      shell.snapshot.snapshot_id!==currentFontContext.scene_snapshot_id;
+  }
 }
 
 function openTextEditor(){
@@ -265,6 +364,15 @@ async function start(){
   editTextButton.onclick=()=>{try{openTextEditor()}catch(error){showError(error)}};
   document.querySelector("#apply-text").onclick=()=>applyTextEdit().catch(showError);
   document.querySelector("#cancel-text").onclick=()=>closeTextEditor();
+  previewFontButton.onclick=()=>previewSelectedFont().catch(error=>{
+    fontMessage.className="bad";
+    fontMessage.textContent=String(error?.message??error);
+  });
+  fontChoice.onchange=()=>{
+    fontSample.style.fontFamily="";
+    fontMessage.className="warn";
+    fontMessage.textContent="Candidate selected; preview only. No Editor font change.";
+  };
   savePubButton.onclick=()=>downloadNativePub().catch(showError);
   document.querySelector("#host-wrap").scrollTop=2480;
 }
