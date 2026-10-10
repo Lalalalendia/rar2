@@ -87,6 +87,7 @@ jobs:
           name: cloud-b02-real-pub-source-http
           path: |
             target/cloud-real-pub-ingress/receipt.json
+            target/cloud-real-pub-ingress/session.png
             target/cloud-real-pub-ingress/server.log
             target/cloud-real-pub-ingress/worker.log
             target/cloud-real-pub-ingress/browser.log
