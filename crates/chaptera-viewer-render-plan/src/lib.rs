@@ -3157,6 +3157,7 @@ mod tests {
                 scalar_start: 0,
                 scalar_end: 2,
                 source_font_name: "Source Font".into(),
+                source_font_index: None,
                 text_size_emu: 24 * 12_700,
                 font_inherited: false,
                 size_inherited: true,
@@ -3192,7 +3193,6 @@ mod tests {
             decorative_border_resources: Vec::new(),
         }
     }
-
     fn render_fragment(
         story_id: StoryId,
         text: &str,
@@ -4168,6 +4168,7 @@ mod tests {
                 scalar_start: 0,
                 scalar_end: 2,
                 source_font_name: "Family A".to_owned(),
+                source_font_index: None,
                 text_size_emu: 152_400,
                 font_inherited: false,
                 size_inherited: false,
@@ -4190,6 +4191,7 @@ mod tests {
                 scalar_start: 2,
                 scalar_end: 4,
                 source_font_name: "Family A".to_owned(),
+                source_font_index: None,
                 text_size_emu: 152_400,
                 font_inherited: false,
                 size_inherited: false,
@@ -4208,7 +4210,6 @@ mod tests {
                 source_story_text_sha256: viewer_story_text_sha256(text),
             },
         ];
-
         let regular_bytes: &[u8] = font_test_data::AHEM;
         let bold_bytes: &[u8] = font_test_data::TINOS_SUBSET;
         let regular_sha = font_fingerprint_sha256(regular_bytes);
@@ -4221,7 +4222,6 @@ mod tests {
             default_line_height_emu: 190_500,
             bytes: regular_bytes,
         };
-
         let plan = build_page_render_plan_with_text_layout_resolvers_v1(
             &visual,
             0,
@@ -5077,6 +5077,7 @@ mod tests {
             scalar_start: 0,
             scalar_end: 11,
             source_font_name: "Source Font".into(),
+            source_font_index: None,
             text_size_emu: 12 * 12_700,
             font_inherited: false,
             size_inherited: false,
@@ -5094,7 +5095,6 @@ mod tests {
             }),
             source_story_text_sha256: viewer_story_text_sha256(story_text),
         }];
-
         let mut fragment = RenderTextFragmentV1 {
             story_id,
             scalar_start: 0,
@@ -5221,6 +5221,7 @@ mod tests {
             scalar_start: 6,
             scalar_end: 11,
             source_font_name: "Source Font".to_owned(),
+            source_font_index: None,
             text_size_emu: 12 * 12_700,
             font_inherited: false,
             size_inherited: false,
@@ -5232,7 +5233,6 @@ mod tests {
         }];
         visual
     }
-
     #[test]
     fn exact_nonzero_multiframe_story_slice_uses_shared_layout_with_global_scalars() {
         let visual = exact_multiframe_slice_visual("world");
@@ -5377,6 +5377,7 @@ mod tests {
             scalar_start: 0,
             scalar_end: 11,
             source_font_name: "Family A".to_owned(),
+            source_font_index: None,
             text_size_emu: 152_400,
             font_inherited: false,
             size_inherited: false,
@@ -5394,7 +5395,6 @@ mod tests {
             }),
             source_story_text_sha256: viewer_story_text_sha256(story_text),
         }];
-
         let regular_bytes: &[u8] = font_test_data::AHEM;
         let bold_bytes: &[u8] = font_test_data::TINOS_SUBSET;
         let regular_sha = font_fingerprint_sha256(regular_bytes);

@@ -11,6 +11,9 @@ mod authoring_projection;
 mod borderart;
 mod images;
 mod tables;
+mod typography;
+
+pub use typography::{ViewerTypographyBooleanV1, ViewerTypographyRun, viewer_story_text_sha256};
 
 pub use authoring_projection::bounded_authoring_slice_from_resolved;
 pub use authoring_projection::bounded_authoring_slice_from_resolved_pages;
@@ -1006,46 +1009,6 @@ impl ViewerParagraphFlowRun {
     pub fn applies_to_story_text(&self, text: &str) -> bool {
         self.source_story_text_sha256 == viewer_story_text_sha256(text)
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ViewerTypographyBooleanV1 {
-    pub local_toggle: bool,
-    pub inherited_value: bool,
-    pub effective_value: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ViewerTypographyRun {
-    pub story_id: StoryId,
-    pub scalar_start: u32,
-    pub scalar_end: u32,
-    pub source_font_name: String,
-    pub text_size_emu: u32,
-    pub font_inherited: bool,
-    pub size_inherited: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color_rgb: Option<[u8; 3]>,
-    #[serde(default)]
-    pub color_inherited: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bold: Option<ViewerTypographyBooleanV1>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub italic: Option<ViewerTypographyBooleanV1>,
-    pub source_story_text_sha256: Sha256Digest,
-}
-
-impl ViewerTypographyRun {
-    pub fn applies_to_story_text(&self, text: &str) -> bool {
-        self.source_story_text_sha256 == viewer_story_text_sha256(text)
-    }
-}
-
-pub fn viewer_story_text_sha256(text: &str) -> Sha256Digest {
-    let digest = Sha256::digest(text.as_bytes());
-    let mut bytes = [0_u8; 32];
-    bytes.copy_from_slice(&digest);
-    Sha256Digest::from_bytes(bytes)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2277,6 +2240,7 @@ fn open_mature_0x2c_bundle(
                 scalar_start: run.story_scalar_start,
                 scalar_end: run.story_scalar_end,
                 source_font_name: run.source_font_name.clone(),
+                source_font_index: Some(run.source_font_index),
                 text_size_emu: run.text_size_emu,
                 font_inherited: run.font_inherited,
                 size_inherited: run.size_inherited,
@@ -2308,6 +2272,7 @@ fn open_mature_0x2c_bundle(
                     scalar_start: run.story_scalar_start,
                     scalar_end: run.story_scalar_end,
                     source_font_name: String::new(),
+                    source_font_index: None,
                     text_size_emu: run.text_size_emu,
                     font_inherited: false,
                     size_inherited: run.size_inherited,

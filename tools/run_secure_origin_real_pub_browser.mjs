@@ -102,6 +102,104 @@ async function verifyEditorPaint(current, stage) {
   return { ...paint, revision_id: current.revision_id, publisher_visual_equivalence_claim: false };
 }
 
+async function currentDocumentReceipt(documentId) {
+  return page.evaluate(async id => {
+    const response = await fetch("/v1/documents/" + encodeURIComponent(id) + "/current", {
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    const data = await response.json().catch(() => null);
+    return {
+      status: response.status,
+      document_id: data?.document_id ?? null,
+      revision_id: data?.revision_id ?? null,
+      protocol: data?.protocol_version ?? null,
+      error: data?.error ?? null,
+    };
+  }, documentId);
+}
+
+async function chooseRealMoveTarget(documentId) {
+  return page.evaluate(async id => {
+    const response = await fetch("/v1/reader/documents/" + encodeURIComponent(id) + "/scene", {
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error("Reader scene HTTP " + response.status);
+    const scene = await response.json();
+    const identityTransform = transform => !transform ||
+      (Number(transform.a) === 1 && Number(transform.b) === 0 &&
+       Number(transform.c) === 0 && Number(transform.d) === 1 &&
+       transform.tx === 0 && transform.ty === 0);
+    const direct = (scene.nodes ?? []).filter(node =>
+      (node.origin_node_id === undefined || node.origin_node_id === null) &&
+      (node.parent_node_id === undefined || node.parent_node_id === null) &&
+      node.bounds?.width > 0 && node.bounds?.height > 0 &&
+      identityTransform(node.transform));
+    const fractions = [
+      [0.5, 0.5], [0.25, 0.25], [0.75, 0.25],
+      [0.25, 0.75], [0.75, 0.75],
+    ];
+    const contains = (node, x, y) => x >= node.bounds.x && y >= node.bounds.y &&
+      x <= node.bounds.x + node.bounds.width &&
+      y <= node.bounds.y + node.bounds.height;
+    for (const candidate of direct) {
+      const visualGroup = [...document.querySelectorAll("#canvas g[data-node-id]")]
+        .find(node => node.getAttribute("data-node-id") === candidate.node_id);
+      if (!visualGroup) continue;
+      visualGroup.scrollIntoView({ block: "center", inline: "center" });
+      await new Promise(resolve =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const svg = [...document.querySelectorAll("#canvas svg.page[data-page-id]")]
+        .find(page => page.getAttribute("data-page-id") === candidate.page_id);
+      if (!svg?.getScreenCTM()) continue;
+      for (const [fx, fy] of fractions) {
+        const localX = Math.round(candidate.bounds.x + candidate.bounds.width * fx);
+        const localY = Math.round(candidate.bounds.y + candidate.bounds.height * fy);
+        const hits = direct.filter(node =>
+          node.page_id === candidate.page_id && contains(node, localX, localY));
+        if (hits.length !== 1 || hits[0].node_id !== candidate.node_id) continue;
+        const point = svg.createSVGPoint();
+        point.x = localX;
+        point.y = localY;
+        const screen = point.matrixTransform(svg.getScreenCTM());
+        const visual = document.elementFromPoint(screen.x, screen.y)
+          ?.closest?.("[data-node-id]");
+        if (visual?.getAttribute("data-node-id") !== candidate.node_id) continue;
+        const endPoint = svg.createSVGPoint();
+        endPoint.x = localX + 38100;
+        endPoint.y = localY + 38100;
+        const endScreen = endPoint.matrixTransform(svg.getScreenCTM());
+        return {
+          revision_id: scene.revision_id,
+          node_id: candidate.node_id,
+          page_id: candidate.page_id,
+          before_bounds: candidate.bounds,
+          start: { x: screen.x, y: screen.y },
+          end: { x: endScreen.x, y: endScreen.y },
+        };
+      }
+    }
+    return null;
+  }, documentId);
+}
+
+async function readerNodeReceipt(documentId, nodeId) {
+  return page.evaluate(async ({ id, nodeId }) => {
+    const response = await fetch("/v1/reader/documents/" + encodeURIComponent(id) + "/scene", {
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error("Reader scene HTTP " + response.status);
+    const scene = await response.json();
+    const node = (scene.nodes ?? []).find(candidate => candidate.node_id === nodeId);
+    return {
+      revision_id: scene.revision_id,
+      bounds: node?.bounds ?? null,
+    };
+  }, { id: documentId, nodeId });
+}
+
 try {
   // Anonymous page redirects to the real test OIDC provider, then returns
   // to the upload page with Chaptera's hardened same-origin session cookie.
@@ -181,123 +279,72 @@ try {
   }
   const reopenedPaint = await verifyEditorPaint(reopened, "page reload");
 
-  // Exercise the existing canonical Product API rather than a test-only edit path.
-  // Probe visible Reader nodes with a tiny bounded move until the canonical
-  // EditorSession admits one; rejected candidates do not create revisions.
-  const moveCommit = await page.evaluate(async id => {
-    const sessionResponse = await fetch("/v1/session", {
-      credentials: "same-origin", cache: "no-store",
-    });
-    const session = await sessionResponse.json().catch(() => null);
-    if (!sessionResponse.ok || !session?.csrf_token) {
-      throw new Error("real edit could not obtain CSRF session");
-    }
+  // Drive the actual editor shell through physical pointer events. The target
+  // must be direct, identity-transformed, geometrically unique at the hit
+  // point, and the topmost DOM visual. No fabricated MoveNode POST is used.
+  const moveTarget = await chooseRealMoveTarget(documentId);
+  if (!moveTarget || moveTarget.revision_id !== reopened.revision_id) {
+    throw new Error("real imported PUB exposes no stable direct MoveNode target");
+  }
+  const commitResponsePromise = page.waitForResponse(response => {
+    if (response.request().method() !== "POST") return false;
+    const path = decodeURIComponent(new URL(response.url()).pathname);
+    return path === "/v1/documents/" + documentId + "/commit";
+  }, { timeout: 30000 });
+  await page.mouse.move(moveTarget.start.x, moveTarget.start.y);
+  await page.mouse.down({ button: "left" });
+  await page.mouse.move(moveTarget.end.x, moveTarget.end.y, { steps: 4 });
+  await page.mouse.up({ button: "left" });
+  const commitResponse = await commitResponsePromise;
+  const accepted = await commitResponse.json().catch(() => null);
+  if (commitResponse.status() !== 200 ||
+      accepted?.protocol_version !== "chaptera.commit-accepted.v1" ||
+      accepted?.document_id !== documentId ||
+      accepted?.replayed !== false ||
+      !accepted?.revision_id ||
+      accepted.revision_id === reopened.revision_id) {
+    throw new Error("real browser MoveNode did not receive a fresh durable revision ACK: " +
+      JSON.stringify({ status: commitResponse.status(), accepted, moveTarget }));
+  }
 
-    const currentResponse = await fetch("/v1/documents/" + encodeURIComponent(id) + "/current", {
-      credentials: "same-origin", cache: "no-store",
-    });
-    const current = await currentResponse.json().catch(() => null);
-    const sceneResponse = await fetch("/v1/reader/documents/" + encodeURIComponent(id) + "/scene", {
-      credentials: "same-origin", cache: "no-store",
-    });
-    const scene = await sceneResponse.json().catch(() => null);
-    if (!currentResponse.ok || !sceneResponse.ok ||
-        current?.document_id !== id || scene?.document_id !== id ||
-        current?.revision_id !== scene?.revision_id || !current?.source_hash) {
-      throw new Error("real edit lacks exact current document/Reader identity");
-    }
-
-    const pages = new Map((scene.pages ?? []).map(item => [item.page_id, item]));
-    const attempts = [];
-    const step = 9525;
-    for (const [index, node] of (scene.nodes ?? []).entries()) {
-      if (!node?.node_id || !node?.page_id || !node?.bounds ||
-          node.bounds.width <= 0 || node.bounds.height <= 0) continue;
-      const pageInfo = pages.get(node.page_id);
-      if (!pageInfo) continue;
-
-      let x = node.bounds.x;
-      let y = node.bounds.y;
-      if (x + node.bounds.width + step <= pageInfo.width_emu) x += step;
-      else if (x >= step) x -= step;
-      else if (y + node.bounds.height + step <= pageInfo.height_emu) y += step;
-      else if (y >= step) y -= step;
-      else continue;
-
-      const clientOperationId = "real-pub-move-" + String(index).padStart(3, "0");
-      const response = await fetch("/v1/documents/" + encodeURIComponent(id) + "/commit", {
-        method: "POST",
-        credentials: "same-origin",
-        cache: "no-store",
-        headers: {
-          "content-type": "application/json",
-          "x-csrf-token": session.csrf_token,
-        },
-        body: JSON.stringify({
-          protocol_version: "chaptera.commit-request.v1",
-          document_id: id,
-          source_hash: current.source_hash,
-          base_revision_id: current.revision_id,
-          client_operation_id: clientOperationId,
-          command: {
-            kind: "move_node_to",
-            node_id: node.node_id,
-            x_emu: x,
-            y_emu: y,
-          },
-        }),
-      });
-      const data = await response.json().catch(() => null);
-      attempts.push({
-        node_id: node.node_id,
-        status: response.status,
-        code: data?.error?.code ?? data?.error ?? null,
-      });
-      if (response.ok) {
-        if (data?.protocol_version !== "chaptera.commit-accepted.v1" ||
-            data?.document_id !== id ||
-            data?.base_revision_id !== current.revision_id ||
-            !data?.revision_id ||
-            data.revision_id === current.revision_id) {
-          throw new Error("real edit returned an invalid commit receipt");
-        }
-        return {
-          node_id: node.node_id,
-          before: { x_emu: node.bounds.x, y_emu: node.bounds.y },
-          after: { x_emu: x, y_emu: y },
-          base_revision_id: current.revision_id,
-          revision_id: data.revision_id,
-          client_operation_id: clientOperationId,
-          attempts,
-        };
-      }
-      if (![400, 409].includes(response.status)) {
-        throw new Error("real edit failed unexpectedly: " +
-          JSON.stringify({ status: response.status, data, attempts }));
-      }
-    }
-    throw new Error("no visible Reader node admitted canonical MoveNode: " +
-      JSON.stringify(attempts));
-  }, documentId);
+  const movedCurrent = await currentDocumentReceipt(documentId);
+  if (movedCurrent.status !== 200 || movedCurrent.document_id !== documentId ||
+      movedCurrent.revision_id !== accepted.revision_id) {
+    throw new Error("accepted browser MoveNode is not canonical current state: " +
+      JSON.stringify({ movedCurrent, accepted }));
+  }
+  const movedNode = await readerNodeReceipt(documentId, moveTarget.node_id);
+  if (movedNode.revision_id !== movedCurrent.revision_id || !movedNode.bounds ||
+      (movedNode.bounds.x === moveTarget.before_bounds.x &&
+       movedNode.bounds.y === moveTarget.before_bounds.y)) {
+    throw new Error("Reader scene did not project the durable browser MoveNode: " +
+      JSON.stringify({ moveTarget, movedNode, movedCurrent }));
+  }
+  const movedPaint = await verifyEditorPaint(movedCurrent, "after real pointer MoveNode");
 
   await page.reload({ waitUntil: "domcontentloaded" });
-  const edited = await page.evaluate(async id => {
-    const response = await fetch("/v1/documents/" + encodeURIComponent(id) + "/current", {
-      credentials: "same-origin", cache: "no-store",
-    });
-    const data = await response.json().catch(() => null);
-    return {
-      status: response.status,
-      document_id: data?.document_id ?? null,
-      revision_id: data?.revision_id ?? null,
-    };
-  }, documentId);
+  const edited = await currentDocumentReceipt(documentId);
   if (edited.status !== 200 || edited.document_id !== documentId ||
-      edited.revision_id !== moveCommit.revision_id) {
-    throw new Error("canonical MoveNode revision did not become browser current: " +
-      JSON.stringify({ edited, moveCommit }));
+      edited.revision_id !== accepted.revision_id) {
+    throw new Error("physical MoveNode revision did not remain current after browser reload: " +
+      JSON.stringify({ edited, accepted }));
   }
-  const editedPaint = await verifyEditorPaint(edited, "after real MoveNode");
+  const editedPaint = await verifyEditorPaint(edited, "after pointer MoveNode reload");
+  const moveCommit = {
+    node_id: moveTarget.node_id,
+    before: {
+      x_emu: moveTarget.before_bounds.x,
+      y_emu: moveTarget.before_bounds.y,
+    },
+    after: {
+      x_emu: movedNode.bounds.x,
+      y_emu: movedNode.bounds.y,
+    },
+    base_revision_id: reopened.revision_id,
+    revision_id: accepted.revision_id,
+    client_operation_id: null,
+    attempts: [{ node_id: moveTarget.node_id, status: commitResponse.status(), code: null }],
+  };
 
   if (process.env.CHAPTERA_SECURE_SCREENSHOT) {
     await page.screenshot({ path: process.env.CHAPTERA_SECURE_SCREENSHOT, fullPage: true });
@@ -317,6 +364,10 @@ try {
   if (!calls.some(call => call.method === "PUT" && /\/content$/.test(call.path))) {
     throw new Error("browser never transmitted real PUB source bytes");
   }
+  if (!calls.some(call => call.method === "POST" &&
+      decodeURIComponent(call.path) === "/v1/documents/" + documentId + "/commit")) {
+    throw new Error("browser never issued the canonical MoveNode through UI");
+  }
   if (calls.some(call => call.forgedPrincipal || (call.method !== "GET" && !call.csrf))) {
     throw new Error("forged identity header or missing real CSRF");
   }
@@ -329,8 +380,10 @@ try {
     real_source_worker: true,
     real_project_genesis_and_page_reload: true,
     reader_scene_reached_browser_paint: true,
+    real_browser_pointer_move_node: true,
     initial_editor_paint: initialPaint,
     reloaded_editor_paint: reopenedPaint,
+    moved_editor_paint: movedPaint,
     edited_editor_paint: editedPaint,
     real_move_commit: true,
     move_commit: moveCommit,
@@ -341,7 +394,7 @@ try {
     move_and_export_claim: false,
     document_id: documentId,
     imported_revision_id: current.revision_id,
-    current_revision_id: moveCommit.revision_id,
+    current_revision_id: edited.revision_id,
     session_cookie_secure_http_only: true,
     steps: calls.map(call => call.method + " " + call.path),
     head_sha: process.env.CHAPTERA_HEAD_SHA ?? "unknown",
