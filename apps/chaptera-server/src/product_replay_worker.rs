@@ -284,6 +284,76 @@ fn approved_reader_scene_shape(scene: &Value) -> bool {
     if object.keys().any(|key| !APPROVED.contains(&key.as_str())) {
         return false;
     }
+    // A valid top-level envelope is not sufficient: a compromised worker
+    // could hide source paths, cookies or raw PUB data in an otherwise-valid
+    // node/resource/story object and recompute the entire scene checksum.
+    // Allow only the fields serialized by the public Reader Scene schema.
+    const NODE_FIELDS: &[&str] = &[
+        "node_id",
+        "origin_node_id",
+        "page_id",
+        "parent_node_id",
+        "kind",
+        "bounds",
+        "text_bounds",
+        "transform",
+        "paint",
+        "decorative_border",
+        "resource_id",
+        "image_source_window",
+        "image_content_rotation_degrees",
+        "image_recolor",
+        "table",
+        "text",
+        "text_layout",
+        "preview_text_style",
+    ];
+    if !approved_scene_objects(
+        &scene["pages"],
+        &["page_id", "order", "width_emu", "height_emu"],
+        &["page_id", "order", "width_emu", "height_emu"],
+    ) || !approved_scene_objects(
+        &scene["nodes"],
+        NODE_FIELDS,
+        &["node_id", "page_id", "kind", "bounds", "transform"],
+    ) || !approved_scene_objects(
+        &scene["stories"],
+        &["story_id", "text", "text_fidelity"],
+        &["story_id", "text", "text_fidelity"],
+    ) || !scene.get("resources").is_none_or(|values| approved_scene_objects(
+        values,
+        &["resource_id", "mime", "availability", "inline_data_url"],
+        &["resource_id", "mime", "availability"],
+    )) || !scene.get("fonts").is_none_or(|values| approved_scene_objects(
+        values,
+        &[
+            "resource_id", "family_name", "mime", "expected_sha256",
+            "availability", "inline_data_url",
+        ],
+        &[
+            "resource_id", "family_name", "mime", "expected_sha256",
+            "availability", "inline_data_url",
+        ],
+    )) || !scene.get("diagnostics").is_none_or(|values| approved_scene_objects(
+        values,
+        &["code", "severity", "origin_id", "message"],
+        &["code", "severity", "message"],
+    )) {
+        return false;
+    }
+    let Some(fidelity) = scene["fidelity"].as_object() else {
+        return false;
+    };
+    if fidelity.keys().any(|key| !["state", "reasons"].contains(&key.as_str()))
+        || !scene["fidelity"]["reasons"]
+            .as_array()
+            .is_some_and(|reasons| reasons.iter().all(Value::is_string))
+        || !scene.get("text_layout_fallback_counts").is_none_or(|value| {
+            value.as_object().is_some_and(|counts| counts.values().all(|n| n.as_u64().is_some()))
+        })
+    {
+        return false;
+    }
     scene["stacking_fidelity"].is_string()
         && scene["fidelity"]["state"].is_string()
         && scene["fidelity"]["reasons"].is_array()
@@ -296,6 +366,17 @@ fn approved_reader_scene_shape(scene: &Value) -> bool {
             .get("text_layout_fallback_counts")
             .is_none_or(Value::is_object)
         && scene.get("diagnostics").is_none_or(Value::is_array)
+}
+
+fn approved_scene_objects(value: &Value, allowed: &[&str], required: &[&str]) -> bool {
+    value.as_array().is_some_and(|items| {
+        items.iter().all(|item| {
+            item.as_object().is_some_and(|fields| {
+                fields.keys().all(|key| allowed.contains(&key.as_str()))
+                    && required.iter().all(|key| fields.contains_key(*key))
+            })
+        })
+    })
 }
 
 fn valid_revision_id(value: &str) -> bool {
