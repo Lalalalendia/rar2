@@ -1677,7 +1677,7 @@ mod tests {
         .unwrap();
         let restarted_app = router(
             ProductApiHttpState::with_source_loader(
-                restarted_auth,
+                restarted_auth.clone(),
                 restarted_source.clone(),
                 restarted_authz.clone(),
                 restarted_revisions.clone(),
@@ -1688,6 +1688,62 @@ mod tests {
             )
             .unwrap(),
         );
+
+        // An otherwise-authorized configured Product API must fail closed
+        // when its sandbox executable is missing. Neither current-document
+        // nor Reader scene may fall back to opening PUB in the Axum process.
+        let fail_closed_app = router(
+            ProductApiHttpState::with_source_loader(
+                restarted_auth,
+                restarted_source.clone(),
+                restarted_authz.clone(),
+                restarted_revisions.clone(),
+                Arc::new(FixtureSourceLoader {
+                    bytes: Arc::new(source_bytes.clone()),
+                    source_sha256: source_sha256.clone(),
+                }),
+            )
+            .unwrap()
+            .with_isolated_replay(SourceBaselineProducerConfig {
+                isolation_python: std::path::PathBuf::from(
+                    "/chaptera-security-missing-worker-runtime/python",
+                ),
+                isolation_harness: std::path::PathBuf::from(
+                    "/chaptera-security-missing-worker-runtime/isolation.py",
+                ),
+                worker_binary: std::path::PathBuf::from(
+                    "/chaptera-security-missing-worker-runtime/chaptera",
+                ),
+                worker_wall_timeout: Duration::from_secs(1),
+                worker_address_space_mb: 256,
+                worker_cpu_seconds: 1,
+                worker_open_files: 16,
+                worker_output_file_mb: 1,
+                temp_root: std::env::temp_dir(),
+            })
+            .unwrap(),
+        );
+        for route in [
+            format!("/v1/documents/{document_id}/current"),
+            format!("/v1/reader/documents/{document_id}/scene"),
+        ] {
+            let failed = fail_closed_app
+                .clone()
+                .oneshot(authenticated_request(
+                    "GET",
+                    &route,
+                    &issued.session_token,
+                    None,
+                    None,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(failed.headers()[CACHE_CONTROL], "no-store");
+            let failed = json_body(failed).await;
+            assert_eq!(failed["error"]["code"], "product_replay_worker_failed");
+            assert_eq!(failed["error"]["message"], "internal server error");
+        }
 
         // The original OIDC-issued cookie must still work after the original
         // AuthN and revision connections are gone: no in-memory project state
