@@ -140,11 +140,14 @@ mod tests {
         assert!(Cli::try_parse_from(invalid).is_err());
         let mut valid = base.to_vec();
         valid.extend([
-            "--project-json", "/tmp/project.json",
+            "--project-json",
+            "/tmp/project.json",
             "--expected-project-sha256",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            "--scene-revision-id", "revision-a",
-            "--scene-baseline-revision-id", "revision-a",
+            "--scene-revision-id",
+            "revision-a",
+            "--scene-baseline-revision-id",
+            "revision-a",
         ]);
         assert!(matches!(
             Cli::try_parse_from(valid).unwrap().command,
@@ -156,12 +159,20 @@ mod tests {
         ));
         let mut invalid_mix = base.to_vec();
         invalid_mix.extend([
-            "--project-json", "/tmp/project.json",
+            "--project-json",
+            "/tmp/project.json",
             "--expected-project-sha256",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            "--scene-revision-id", "revision-a",
-            "--scene-baseline-revision-id", "revision-a",
-            "--move-node-id", "node-id", "--move-x-emu", "0", "--move-y-emu", "0",
+            "--scene-revision-id",
+            "revision-a",
+            "--scene-baseline-revision-id",
+            "revision-a",
+            "--move-node-id",
+            "node-id",
+            "--move-x-emu",
+            "0",
+            "--move-y-emu",
+            "0",
         ]);
         assert!(Cli::try_parse_from(invalid_mix).is_err());
     }
