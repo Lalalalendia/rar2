@@ -64,7 +64,6 @@ struct ProjectsResponse {
     projects: Vec<ProjectCatalogEntry>,
 }
 
-
 #[derive(Deserialize)]
 struct RenameRequestBody {
     protocol_version: String,
@@ -109,7 +108,6 @@ async fn list(
         .await?;
     Ok(Json(ProjectsResponse { projects }))
 }
-
 
 async fn rename(
     State(state): State<WorkspaceProjectsHttpState>,
@@ -312,7 +310,6 @@ mod tests {
         let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
     }
-
 
     fn rename_request(
         project_id: &str,
