@@ -2,8 +2,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     Json, Router,
+    body::Body,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{
+        HeaderMap, HeaderName, HeaderValue, StatusCode,
+        header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
+    },
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -11,10 +15,13 @@ use axum_extra::extract::cookie::CookieJar;
 use chaptera_cdm_model::AUTHORING_REVISION_SCHEMA_V1;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
+use tokio::io::AsyncReadExt;
 
 use crate::{
     auth_http::{AuthHttpError, AuthHttpState},
     blob_store::{BlobStoreError, BlobStoreService},
+    export_executor::{IDML_BOUNDED_EDITABLE_PROFILE, ODG_BOUNDED_EDITABLE_PROFILE},
     jobs_runtime::{
         AuthorizedExportDownloadV1, CreateExportJobRequestV1, ExportJobSnapshotV1, JobsRuntime,
         JobsRuntimeError,
@@ -28,6 +35,9 @@ pub const EXPORT_JOB_HTTP_V1: &str = "chaptera.export-job-http.v1";
 pub const EXPORT_DOWNLOAD_V1: &str = "chaptera.export-download.v1";
 pub const EXPORT_LOSS_DOWNLOAD_V1: &str = "chaptera.export-loss-download.v1";
 const DOWNLOAD_GRANT_TTL_MS: u64 = 5 * 60 * 1000;
+const STREAMED_EXPORT_BUFFER_BYTES: usize = 64 * 1024;
+const MAX_STREAMED_EXPORT_BYTES: usize = 64 * 1024 * 1024;
+const X_CONTENT_TYPE_OPTIONS: HeaderName = HeaderName::from_static("x-content-type-options");
 
 #[derive(Clone)]
 pub struct ProductExportHttpState {
@@ -62,6 +72,10 @@ pub fn router(state: ProductExportHttpState) -> Router {
         .route("/v1/exports/{job_id}", get(export_status))
         .route("/v1/exports/{job_id}/cancel", post(cancel_export))
         .route("/v1/exports/{job_id}/download", post(authorize_download))
+        .route(
+            "/v1/exports/{job_id}/artifacts/{artifact_id}",
+            get(stream_export_artifact),
+        )
         .route(
             "/v1/exports/{job_id}/loss-report/download",
             post(authorize_loss_report_download),
@@ -453,6 +467,14 @@ impl ProductExportHttpError {
         }
     }
 
+    fn payload_too_large(code: &'static str, message: impl Into<String>) -> Self {
+        Self::Http {
+            status: StatusCode::PAYLOAD_TOO_LARGE,
+            code,
+            message: message.into(),
+        }
+    }
+
     fn internal(code: &'static str, message: impl Into<String>) -> Self {
         Self::Http {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -491,7 +513,11 @@ impl IntoResponse for ProductExportHttpError {
                     | "job_payload_scope_mismatch"
                     | "export_artifact_not_ready"
                     | "export_artifact_not_visible" => StatusCode::CONFLICT,
-                    "grant_missing" | "authz_denied" | "authz_expired" => StatusCode::FORBIDDEN,
+                    "grant_missing"
+                    | "grant_expired"
+                    | "capability_denied"
+                    | "authz_denied"
+                    | "authz_expired" => StatusCode::FORBIDDEN,
                     "invalid_client_request_id" | "invalid_operation_id" => StatusCode::BAD_REQUEST,
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
                 };
