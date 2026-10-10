@@ -10,6 +10,7 @@ use std::{
     io::{BufWriter, Write},
     path::Path,
     str::FromStr,
+    sync::Arc,
 };
 
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
@@ -22,12 +23,26 @@ use sha2::{Digest, Sha256};
 use rand::{RngCore, rngs::OsRng};
 use tokio::{fs as async_fs, io::AsyncWriteExt, process::Command, time::timeout};
 
-use crate::{revision_materializer::project_sha256, source_baseline::SourceBaselineProducerConfig};
+use crate::{
+    revision_materializer::{
+        DocumentSourceAuthority, ExactRevisionMaterializationReceipt,
+        ExactRevisionMaterializedState, ExactRevisionMaterializer, ExactRevisionMaterializerPort,
+        ExactSourceLoader, MATERIALIZATION_RECEIPT_SCHEMA_V1, PubEditorReplayEngine,
+        RevisionMaterializerError, project_sha256, validate_authorized_source,
+    },
+    source_baseline::SourceBaselineProducerConfig,
+    sqlite_store::{RevisionEdge, SqliteRevisionStore},
+};
 
 pub const PRODUCT_REPLAY_WORKER_V1: &str = "chaptera.product-isolated-replay.v1";
+pub const PRODUCT_MATERIALIZATION_WORKER_V1: &str =
+    "chaptera.product-isolated-materialize.v1";
 const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PROJECT_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
+const MAX_REPLAY_CHAIN_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_REPLAY_EDGES: usize = 4096;
+const MAX_MATERIALIZATION_RECEIPT_BYTES: u64 = MAX_PROJECT_BYTES + 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductReplayWorkerError {
@@ -59,6 +74,37 @@ pub struct ProductReplayWorkerReceiptV1 {
     pub project_sha256: String,
     pub authoring_graph_sha256: String,
     pub authoring_graph: Value,
+    pub filesystem_confinement: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProductMaterializationInputV1 {
+    pub protocol_version: String,
+    pub document_id: String,
+    pub source_sha256: String,
+    pub source_byte_len: u64,
+    pub baseline_revision_id: String,
+    pub baseline_cursor: i64,
+    pub requested_revision_id: String,
+    pub edges: Vec<RevisionEdge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProductMaterializationWorkerReceiptV1 {
+    pub protocol_version: String,
+    pub document_id: String,
+    pub source_sha256: String,
+    pub source_byte_len: u64,
+    pub baseline_revision_id: String,
+    pub baseline_cursor: i64,
+    pub requested_revision_id: String,
+    pub replayed_edges: usize,
+    pub project_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authoring_root_hash: Option<String>,
+    pub project: EditorProject,
     pub filesystem_confinement: bool,
 }
 
@@ -149,6 +195,114 @@ pub fn validate_product_replay_receipt(
         return Err(ProductReplayWorkerError::new(
             "product_replay_receipt_invalid",
             "isolated graph does not match its bounded SHA-256 evidence",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_materialization_input(
+    input: &ProductMaterializationInputV1,
+    document_id: &str,
+    source_sha256: &str,
+    source_byte_len: u64,
+) -> Result<(), ProductReplayWorkerError> {
+    if input.protocol_version != PRODUCT_MATERIALIZATION_WORKER_V1
+        || input.document_id != document_id
+        || input.source_sha256 != source_sha256
+        || input.source_byte_len != source_byte_len
+        || input.baseline_cursor < 0
+        || input.edges.len() > MAX_REPLAY_EDGES
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_materialization_input_identity_mismatch",
+            "isolated materialization input differs from authorized exact identity",
+        ));
+    }
+    require_document_id(&input.baseline_revision_id)?;
+    require_document_id(&input.requested_revision_id)?;
+
+    let mut expected_parent = input.baseline_revision_id.as_str();
+    let mut expected_cursor = input.baseline_cursor;
+    for edge in &input.edges {
+        if edge.document_id != input.document_id
+            || edge.parent_revision != expected_parent
+            || edge.parent_cursor != expected_cursor
+            || edge.child_cursor != expected_cursor.checked_add(1).ok_or_else(|| {
+                ProductReplayWorkerError::new(
+                    "product_materialization_chain_invalid",
+                    "revision cursor overflowed isolated replay policy",
+                )
+            })?
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_materialization_chain_invalid",
+                "revision chain is not contiguous from the authorized baseline",
+            ));
+        }
+        require_document_id(&edge.child_revision)?;
+        require_sha256(&edge.resulting_state_hash)?;
+        if let Some(root) = &edge.authoring_root_hash {
+            require_sha256(root)?;
+        }
+        expected_parent = edge.child_revision.as_str();
+        expected_cursor = edge.child_cursor;
+    }
+    if expected_parent != input.requested_revision_id {
+        return Err(ProductReplayWorkerError::new(
+            "product_materialization_chain_invalid",
+            "revision chain does not terminate at the requested revision",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_materialization_receipt(
+    receipt: &ProductMaterializationWorkerReceiptV1,
+    input: &ProductMaterializationInputV1,
+) -> Result<(), ProductReplayWorkerError> {
+    let expected_root = input
+        .edges
+        .last()
+        .and_then(|edge| edge.authoring_root_hash.clone());
+    if receipt.protocol_version != PRODUCT_MATERIALIZATION_WORKER_V1
+        || receipt.document_id != input.document_id
+        || receipt.source_sha256 != input.source_sha256
+        || receipt.source_byte_len != input.source_byte_len
+        || receipt.baseline_revision_id != input.baseline_revision_id
+        || receipt.baseline_cursor != input.baseline_cursor
+        || receipt.requested_revision_id != input.requested_revision_id
+        || receipt.replayed_edges != input.edges.len()
+        || receipt.authoring_root_hash != expected_root
+        || !receipt.filesystem_confinement
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_materialization_receipt_identity_mismatch",
+            "isolated materialization receipt differs from the authorized revision chain",
+        ));
+    }
+    require_sha256(&receipt.project_sha256)?;
+    if project_sha256(&receipt.project).map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_materialization_receipt_invalid",
+            "isolated materialized project hash could not be derived",
+        )
+    })? != receipt.project_sha256
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_materialization_receipt_invalid",
+            "isolated materialized project differs from its SHA-256 evidence",
+        ));
+    }
+    let project_bytes = serde_json::to_vec(&receipt.project).map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_materialization_receipt_invalid",
+            "isolated materialized project could not be serialized",
+        )
+    })?;
+    if project_bytes.len() as u64 > MAX_PROJECT_BYTES {
+        return Err(ProductReplayWorkerError::new(
+            "product_materialization_receipt_invalid",
+            "isolated materialized project exceeds output policy",
         ));
     }
     Ok(())
