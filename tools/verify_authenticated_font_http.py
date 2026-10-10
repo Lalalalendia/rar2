@@ -130,7 +130,7 @@ def run(fixture: pathlib.Path, graph: pathlib.Path, viewer: pathlib.Path, *, bro
         source_stories={story["story_id"]:story["text"] for story in scene["stories"]}
         chosen=next((s for s in scope["stories"] if s["story_id"] in available_frames
                      and s["story_scalar_len"]>0 and
-                     "\\r\\n" not in source_stories.get(s["story_id"], "") and
+                     "\r\n" not in source_stories.get(s["story_id"], "") and
                      source_stories.get(s["story_id"], "")[:1].isascii()),None)
         require(chosen is not None,"no visible real Story with admitted Rust text-format overlay")
         cand={
