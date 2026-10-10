@@ -5,7 +5,6 @@ use std::{
     time::Duration,
 };
 
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{
     Row, SqliteConnection, SqlitePool,
@@ -42,7 +41,7 @@ impl fmt::Display for SqliteStoreError {
 
 impl std::error::Error for SqliteStoreError {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevisionEdge {
     pub document_id: String,
     pub parent_revision: String,
