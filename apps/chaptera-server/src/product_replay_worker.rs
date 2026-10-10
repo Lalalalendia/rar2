@@ -682,6 +682,7 @@ impl IsolatedProductReplayProducer {
                 source_bytes,
                 Some((&project_bytes, expected_project_sha256)),
                 None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -691,7 +692,10 @@ impl IsolatedProductReplayProducer {
             source_bytes.len() as u64,
             expected_project_sha256,
         )?;
-        if receipt.baseline_project.is_some() || receipt.move_node.is_some() {
+        if receipt.baseline_project.is_some()
+            || receipt.move_node.is_some()
+            || receipt.reader_scene.is_some()
+        {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
                 "projection worker returned an unexpected baseline or mutation",
@@ -709,12 +713,12 @@ impl IsolatedProductReplayProducer {
         source_bytes: &[u8],
     ) -> Result<EditorProject, ProductReplayWorkerError> {
         let receipt = self
-            .invoke_job(document_id, source_sha256, source_bytes, None, None)
+            .invoke_job(document_id, source_sha256, source_bytes, None, None, None)
             .await?;
-        if receipt.move_node.is_some() {
+        if receipt.move_node.is_some() || receipt.reader_scene.is_some() {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
-                "baseline worker unexpectedly returned a MoveNode mutation",
+                "baseline worker unexpectedly returned a mutation or Reader scene",
             ));
         }
         let project = receipt.baseline_project.as_ref().ok_or_else(|| {
@@ -744,6 +748,91 @@ impl IsolatedProductReplayProducer {
             ));
         }
         Ok(project.clone())
+    }
+
+    /// Return the same rich Reader Scene envelope as the legacy source-neutral
+    /// Viewer. The caller has already authorized the source and selected the
+    /// exact current RevisionStream head; the host never parses a PUB here.
+    pub async fn project_reader_scene(
+        &self,
+        document_id: &str,
+        source_sha256: &str,
+        source_bytes: &[u8],
+        project: &EditorProject,
+        expected_project_sha256: &str,
+        revision_id: &str,
+        baseline_revision_id: &str,
+    ) -> Result<Value, ProductReplayWorkerError> {
+        if !valid_revision_id(revision_id) || !valid_revision_id(baseline_revision_id) {
+            return Err(ProductReplayWorkerError::new(
+                "product_reader_scene_invalid",
+                "Reader scene revision identity is invalid",
+            ));
+        }
+        let project_bytes = serde_json::to_vec(project).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_replay_project_invalid",
+                "canonical project cannot be serialized",
+            )
+        })?;
+        if project_bytes.len() as u64 > MAX_PROJECT_BYTES
+            || project_sha256(project).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_project_invalid",
+                    "canonical Reader project hash is invalid",
+                )
+            })? != expected_project_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_project_hash_mismatch",
+                "Reader Scene input is not the exact authorized revision project",
+            ));
+        }
+        let intent = IsolatedReaderSceneIntentV1 {
+            revision_id: revision_id.to_owned(),
+            baseline_revision_id: baseline_revision_id.to_owned(),
+        };
+        let receipt = self
+            .invoke_job(
+                document_id,
+                source_sha256,
+                source_bytes,
+                Some((&project_bytes, expected_project_sha256)),
+                None,
+                Some(&intent),
+            )
+            .await?;
+        validate_product_replay_receipt(
+            &receipt,
+            document_id,
+            source_sha256,
+            source_bytes.len() as u64,
+            expected_project_sha256,
+        )?;
+        if receipt.baseline_project.is_some() || receipt.move_node.is_some() {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "Reader scene worker returned baseline or geometry mutation",
+            ));
+        }
+        let scene = receipt.reader_scene.ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "Reader scene worker did not return an exact scene",
+            )
+        })?;
+        if scene.revision_id != revision_id
+            || scene.baseline_revision_id != baseline_revision_id
+            || scene.scene["revision_id"] != revision_id
+            || scene.scene["document_id"] != document_id
+            || scene.scene["source_hash"] != source_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_identity_mismatch",
+                "Reader scene receipt was replayed for another document or revision",
+            ));
+        }
+        Ok(scene.scene)
     }
 
     /// Exact geometry mutation is performed inside the confined worker.
@@ -784,6 +873,7 @@ impl IsolatedProductReplayProducer {
                 source_bytes,
                 Some((&project_bytes, expected_base_sha256)),
                 Some(intent),
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -793,10 +883,10 @@ impl IsolatedProductReplayProducer {
             source_bytes.len() as u64,
             expected_base_sha256,
         )?;
-        if receipt.baseline_project.is_some() {
+        if receipt.baseline_project.is_some() || receipt.reader_scene.is_some() {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
-                "isolated MoveNode response unexpectedly included a baseline",
+                "isolated MoveNode response unexpectedly included a baseline or Reader scene",
             ));
         }
         let mutation = receipt.move_node.ok_or_else(|| {
@@ -864,6 +954,7 @@ impl IsolatedProductReplayProducer {
         source_bytes: &[u8],
         project: Option<(&[u8], &str)>,
         move_node: Option<&IsolatedMoveNodeIntentV1>,
+        reader_scene: Option<&IsolatedReaderSceneIntentV1>,
     ) -> Result<ProductReplayWorkerReceiptV1, ProductReplayWorkerError> {
         require_document_id(document_id)?;
         require_sha256(source_sha256)?;
@@ -874,6 +965,14 @@ impl IsolatedProductReplayProducer {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_source_mismatch",
                 "verified source differs from worker request",
+            ));
+        }
+        if reader_scene.is_some()
+            && (project.is_none() || move_node.is_some())
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_reader_scene_invalid",
+                "Reader scene request must have an exact project without a mutation",
             ));
         }
         if move_node.is_some() && project.is_none() {
@@ -944,6 +1043,13 @@ impl IsolatedProductReplayProducer {
                 .arg(move_node.x_emu.to_string())
                 .arg("--move-y-emu")
                 .arg(move_node.y_emu.to_string());
+        }
+        if let Some(scene) = reader_scene {
+            command
+                .arg("--scene-revision-id")
+                .arg(&scene.revision_id)
+                .arg("--scene-baseline-revision-id")
+                .arg(&scene.baseline_revision_id);
         }
         let deadline = self
             .config
