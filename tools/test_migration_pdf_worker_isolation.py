@@ -74,6 +74,33 @@ os.link(os.environ["CHAPTERA_WORKER_INPUT"], out / "private-bytes.txt")
 """
 
 
+PROCESS_GROUP_ESCAPE_WORKER = r"""#!/usr/bin/env python3
+import errno
+import json
+import os
+import pathlib
+
+out = pathlib.Path(os.environ["CHAPTERA_WORKER_OUTPUT_DIR"])
+out.mkdir(parents=True, exist_ok=True)
+child = os.fork()
+if child == 0:
+    observations = {}
+    for name, call in [
+        ("setsid", os.setsid),
+        ("setpgid", lambda: os.setpgid(0, 0)),
+    ]:
+        try:
+            call()
+        except OSError as exc:
+            observations[name] = exc.errno
+        else:
+            observations[name] = 0
+    (out / "escape.json").write_text(json.dumps(observations), encoding="utf-8")
+    os._exit(0)
+os.waitpid(child, 0)
+"""
+
+
 SURVIVING_CHILD_WORKER = r"""#!/usr/bin/env python3
 import os
 import pathlib
@@ -266,6 +293,24 @@ class MigrationPdfWorkerIsolationTests(unittest.TestCase):
             self.assertTrue(result.timed_out)
             self.assertTrue(result.staging_cleaned)
             self.assertFalse(final.exists())
+
+    def test_forked_worker_cannot_detach_from_parent_process_group(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            worker = self.write_worker(tmp, "detach.py", PROCESS_GROUP_ESCAPE_WORKER)
+            final = tmp / "escape-result"
+            result = run_isolated_worker(
+                [sys.executable, str(worker)],
+                final_output_dir=final,
+                timeout_seconds=5,
+                limits=self.limits(),
+                inherit_environment=False,
+            )
+            self.assertTrue(result.succeeded, result.stderr_tail)
+            observations = json.loads((final / "escape.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                {"setsid": errno.EPERM, "setpgid": errno.EPERM}, observations
+            )
 
     def test_successful_leader_cannot_leave_child_to_mutate_published_tree(self):
         with tempfile.TemporaryDirectory() as tmp:
