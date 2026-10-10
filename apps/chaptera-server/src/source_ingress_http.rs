@@ -400,17 +400,37 @@ async fn put_upload_content(
             .await
             .map_err(|_| SourceIngressHttpError::bad_request("upload_body_write_failed"))
     };
-    let create = state.blob_store.create_quarantine_streamed(
-        &upload.tenant_id,
-        &upload.upload_id,
-        upload.expected_byte_len,
-        &mut reader,
-    );
-    let (create_result, pump_result) = tokio::join!(create, pump);
-    create_result.map_err(map_blob_error)?;
-    pump_result?;
+    let create = async {
+        state
+            .blob_store
+            .create_quarantine_streamed(
+                &upload.tenant_id,
+                &upload.upload_id,
+                upload.expected_byte_len,
+                &mut reader,
+            )
+            .await
+            .map_err(map_blob_error)
+    };
+    coordinate_streamed_upload(create, pump).await?;
 
     Ok(Json((&upload).into()))
+}
+
+// Cancel the other half of the duplex immediately if either the blob provider
+// or incoming browser body fails. Plain join! can deadlock: an early provider
+// rejection leaves an unread, still-open 64-KiB duplex reader while the body
+// pump blocks forever trying to write a larger upload.
+async fn coordinate_streamed_upload<Created, Create, Pump>(
+    create: Create,
+    pump: Pump,
+) -> Result<Created, SourceIngressHttpError>
+where
+    Create: std::future::Future<Output = Result<Created, SourceIngressHttpError>>,
+    Pump: std::future::Future<Output = Result<(), SourceIngressHttpError>>,
+{
+    let (created, ()) = tokio::try_join!(create, pump)?;
+    Ok(created)
 }
 
 async fn complete_upload(
@@ -1029,4 +1049,62 @@ mod tests {
         assert_eq!(object["upload_id"], "upload:test");
         assert_eq!(object["upload_generation"], 3);
     }
+
+    #[tokio::test]
+    async fn provider_refusal_cancels_large_body_pump_instead_of_deadlocking() {
+        // The browser body exceeds the duplex capacity. The provider refuses
+        // before reading; its reader stays open until the function returns.
+        let (mut writer, reader) = tokio::io::duplex(STREAM_BUFFER_BYTES);
+        let pump = async move {
+            writer
+                .write_all(&vec![0x5a; STREAM_BUFFER_BYTES * 4])
+                .await
+                .map_err(|_| SourceIngressHttpError::bad_request("upload_body_write_failed"))?;
+            writer
+                .shutdown()
+                .await
+                .map_err(|_| SourceIngressHttpError::bad_request("upload_body_write_failed"))
+        };
+        let provider = async {
+            Err::<(), SourceIngressHttpError>(SourceIngressHttpError::internal("provider_refused"))
+        };
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(1),
+            coordinate_streamed_upload(provider, pump),
+        )
+        .await;
+        drop(reader);
+        assert!(matches!(
+            outcome,
+            Ok(Err(SourceIngressHttpError::Api {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                code: "provider_refused",
+                ..
+            }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn failed_browser_body_cancels_a_pending_provider() {
+        let provider = std::future::pending::<Result<(), SourceIngressHttpError>>();
+        let pump = async {
+            Err::<(), SourceIngressHttpError>(SourceIngressHttpError::bad_request(
+                "upload_body_read_failed",
+            ))
+        };
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(1),
+            coordinate_streamed_upload(provider, pump),
+        )
+        .await;
+        assert!(matches!(
+            outcome,
+            Ok(Err(SourceIngressHttpError::Api {
+                status: StatusCode::BAD_REQUEST,
+                code: "upload_body_read_failed",
+                ..
+            }))
+        ));
+    }
+
 }
