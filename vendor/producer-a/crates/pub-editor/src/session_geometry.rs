@@ -1565,7 +1565,6 @@ impl EditorSession {
         Ok(operation)
     }
 
-
     /// Read-only admission for two to eight direct independent authored Rectangles.
     pub fn can_duplicate_authored_rectangles_page_v1(
         &self,
@@ -3848,7 +3847,6 @@ pub(super) fn apply_authored_rectangle_page_duplicate_history_candidate_v1(
     *shapes = candidate.authored_shapes;
     Ok(())
 }
-
 
 pub(super) fn apply_authored_rectangles_page_duplicate_history_candidate_v1(
     graph: &mut PubResolvedGraph,
