@@ -127,8 +127,11 @@ def run(fixture: pathlib.Path, graph: pathlib.Path, viewer: pathlib.Path, *, bro
             viewer_code,_=api(target,principal="synthetic-viewer")
             require(viewer_code==403,"viewer received font authoring capability")
         available_frames={x["story_id"] for x in scene["story_frames"]}
+        source_stories={story["story_id"]:story["text"] for story in scene["stories"]}
         chosen=next((s for s in scope["stories"] if s["story_id"] in available_frames
-                     and s["story_scalar_len"]>0),None)
+                     and s["story_scalar_len"]>0 and
+                     "\\r\\n" not in source_stories.get(s["story_id"], "") and
+                     source_stories.get(s["story_id"], "")[:1].isascii()),None)
         require(chosen is not None,"no visible real Story with admitted Rust text-format overlay")
         cand={
             "protocol_version":"chaptera.font-replacement-candidate.v1",
