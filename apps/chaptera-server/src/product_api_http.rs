@@ -35,7 +35,8 @@ use crate::{
         AuthzError, CAP_VIEW, SqliteAuthorizedRevisionCommitter, SqliteAuthzAuthority,
     },
     product_replay_worker::{
-        IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer, ProductReplayWorkerError,
+        IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer,
+        IsolatedReaderSceneIntentV1, ProductReplayWorkerError,
     },
     reader_scene_v1::{ReaderSceneV1, from_viewer_geometry},
     revision_materializer::{
@@ -337,8 +338,10 @@ async fn reader_scene(
                 &materialized.source_bytes,
                 &materialized.receipt.project,
                 &materialized.receipt.project_sha256,
-                &head.revision_id,
-                &source.baseline_revision_id,
+                &IsolatedReaderSceneIntentV1 {
+                    revision_id: head.revision_id.clone(),
+                    baseline_revision_id: source.baseline_revision_id.clone(),
+                },
             )
             .await
             .map_err(|error| ProductApiError::internal(error.code, error.message))?;
