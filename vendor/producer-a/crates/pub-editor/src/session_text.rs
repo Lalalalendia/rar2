@@ -968,13 +968,14 @@ mod font_resource_session_tests {
         let bytes = b"exact-reopen-resource";
         let (scope, identity, candidate) = scoped_identity(bytes);
         let mut author = session();
+        let original_hash = author.current_text_format_state_hash_v1(story_id()).unwrap();
         author.set_admitted_font_resource_v1(
             story_id(), 2, 8, &candidate, &scope,
             &ServerFontResourceV1 {
                 identity: &identity, full_font_bytes: bytes, face_count: 1,
                 is_full_resource: true, authoring_admitted: true,
             },
-            &author.current_text_format_state_hash_v1(story_id()).unwrap(),
+            &original_hash,
         ).expect("author canonical resource");
         let project = author.project();
         let project_doc_id = project.identity.as_ref().unwrap().document_id.as_str();
