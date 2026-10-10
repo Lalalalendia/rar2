@@ -8,9 +8,9 @@ use super::*;
 use pub_editor_authoring_core::{
     DeleteAuthoredRectanglePageStateV1, DeleteAuthoredRectanglePageTransitionV1,
     DeleteAuthoredRectanglesPageTransitionV1, DuplicateAuthoredRectanglePageStateV1,
-    DuplicateAuthoredRectanglePageTransitionV1,
-    DuplicateAuthoredRectanglesPageTransitionV1, MAX_DELETED_AUTHORED_RECTANGLES_PAGE_V1,
-    MAX_DUPLICATED_AUTHORED_RECTANGLES_PAGE_V1, apply_delete_authored_rectangle_page_forward_v1,
+    DuplicateAuthoredRectanglePageTransitionV1, DuplicateAuthoredRectanglesPageTransitionV1,
+    MAX_DELETED_AUTHORED_RECTANGLES_PAGE_V1, MAX_DUPLICATED_AUTHORED_RECTANGLES_PAGE_V1,
+    apply_delete_authored_rectangle_page_forward_v1,
     apply_delete_authored_rectangle_page_inverse_v1,
     apply_delete_authored_rectangles_page_forward_v1,
     apply_delete_authored_rectangles_page_inverse_v1,
@@ -3139,7 +3139,11 @@ mod authored_page_append_tests {
         let paint_a = crate::AuthoredShapePaintV1 {
             fill: crate::AuthoredSolidFillV1 {
                 visible: true,
-                color: crate::Srgb8V1 { r: 30, g: 40, b: 50 },
+                color: crate::Srgb8V1 {
+                    r: 30,
+                    g: 40,
+                    b: 50,
+                },
             },
             stroke: crate::AuthoredSolidStrokeV1 {
                 visible: true,
@@ -3151,7 +3155,11 @@ mod authored_page_append_tests {
         let paint_b = crate::AuthoredShapePaintV1 {
             fill: crate::AuthoredSolidFillV1 {
                 visible: true,
-                color: crate::Srgb8V1 { r: 90, g: 80, b: 70 },
+                color: crate::Srgb8V1 {
+                    r: 90,
+                    g: 80,
+                    b: 70,
+                },
             },
             stroke: crate::AuthoredSolidStrokeV1 {
                 visible: true,
