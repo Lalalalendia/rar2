@@ -1492,7 +1492,8 @@ jobs:
           if ([string]$manifest.schema -ne "chaptera.pub.factory-native-portable.v1" -or
               [string]$manifest.source_main_sha -ne "3bd4497003e02f7f48a91e14da25a89a201dcf87" -or
               [string]$manifest.inventory_sha256 -ne "a13d86edc1622b7f3cba6524cba7a4553e120864889e59038712061a05003b5c" -or
-              [string]$manifest.publisher_version_prefix -ne "16.0.12527.") {
+              [string]$manifest.publisher_version_prefix -ne "16.0.12527." -or
+              [string]$manifest.publisher_exe_sha256 -ne "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb9f178df834ab20b") {
             throw "factory_v3_bundle_authority_mismatch"
           }
           $expectedExperiments = @("PUB-TLB-SHAPE-EFFECTS-BATCH01", "PUB-OPALG-T840-STYLE-FILL-01")
@@ -1592,7 +1593,7 @@ jobs:
               schema = "chaptera.pub.factory-v3-source-safe-progress.v1"
               sequence = [int]$progress.sequence
               candidate_id = if ($progress.candidate_id) { CheckedLabel $progress.candidate_id } else { $null }
-              arm_name = if ($progress.arm_name) { CheckedLabel $progress.arm_name } else { $null }
+              arm_name = if ($progress.arm) { CheckedLabel $progress.arm } else { $null }
               step = CheckedLabel $progress.step
             } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $safe "t891-progress.json") -Encoding utf8
           }
