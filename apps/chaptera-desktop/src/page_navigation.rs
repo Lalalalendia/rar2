@@ -1144,8 +1144,10 @@ impl ViewerApp {
         else {
             return false;
         };
-        editor
-            .can_delete_authored_rectangles_page_v1(&self.source_customer_page_ids, selected_page_id)
+        editor.can_delete_authored_rectangles_page_v1(
+            &self.source_customer_page_ids,
+            selected_page_id,
+        )
     }
 
     /// One real GUI command -> one canonical v0.32 Page + N-Rectangle delete.
@@ -1182,9 +1184,7 @@ impl ViewerApp {
             &self.source_customer_page_ids,
             selected_page_id,
         ) {
-            return Err(
-                "Selected Page is not an admitted 2-8 authored Rectangle page.".to_owned(),
-            );
+            return Err("Selected Page is not an admitted 2-8 authored Rectangle page.".to_owned());
         }
         let source_node_ids = editor
             .authored_stack(selected_page_id)
@@ -1215,13 +1215,9 @@ impl ViewerApp {
                 if candidate.operations().len() == operations_before + 1
                     && transition.page.identity.page_id == selected_page_id
                     && transition.page.before_customer_page_ids == before_page_ids
-                    && transition
-                        .shapes_before
-                        .iter()
-                        .all(|shape| {
-                            shape.page_id == selected_page_id
-                                && shape.parent_id == selected_page_id
-                        }) =>
+                    && transition.shapes_before.iter().all(|shape| {
+                        shape.page_id == selected_page_id && shape.parent_id == selected_page_id
+                    }) =>
             {
                 transition
                     .shapes_before
