@@ -7483,7 +7483,8 @@ fn apply_forward(
         }
         EditOperation::DuplicateAuthoredRectanglesPageV1 { .. } => {
             return Err(EditorError::PageDuplicateUnsupported {
-                message: "combined authored Page/multi-Rectangle transition needs EditorSession".into(),
+                message: "combined authored Page/multi-Rectangle transition needs EditorSession"
+                    .into(),
             });
         }
         EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
