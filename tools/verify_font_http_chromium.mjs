@@ -53,7 +53,35 @@ try {
     }
     if(selected)break;
   }
-  if(!selected)throw new Error("real pointer click did not select a Story with admitted font range");
+  let selectionSurface="canvas_pointer";
+  if(!selected){
+    // Source stacking is deliberately unknown for this Publisher witness.
+    // Canvas hit-test refuses overlap; resolve identity through an actual
+    // user-facing native <select> that lists only server-authorized Stories.
+    const picker=page.locator("#font-story-target");
+    if(!await picker.isEnabled()){
+      throw new Error("overlapping Publisher frames lack an explicit Story selector");
+    }
+    const values=await picker.locator("option").evaluateAll(nodes=>
+      nodes.map(node=>node.value)
+    );
+    const targetIndex=values.indexOf(storyId);
+    if(targetIndex<1){
+      throw new Error("selected real Story missing from authorized chooser: "+JSON.stringify(values));
+    }
+    await picker.click();
+    await picker.press("Home");
+    for(let index=0;index<targetIndex;index++){
+      await picker.press("ArrowDown");
+    }
+    await picker.press("Enter");
+    if(await picker.inputValue()!==storyId){
+      throw new Error("real keyboard picker failed to select server-admitted Story");
+    }
+    selected=await page.locator("#edit-text").isEnabled();
+    selectionSurface="explicit_story_picker_for_ambiguous_canvas_hit";
+  }
+  if(!selected)throw new Error("real UI could not select font-editable Story through pointer or explicit list");
   await page.locator("#edit-text").click();
   const textarea=page.locator("#text-value");
   await textarea.waitFor({state:"visible"});
@@ -106,7 +134,9 @@ try {
   const evidence={
     receipt_kind:"chaptera.real-chromium-font-range-apply.v1",
     browser:"chromium",
-    user_pointer_selection:true,
+    user_pointer_selection:selectionSurface==="canvas_pointer",
+    user_explicit_story_picker:selectionSurface!=="canvas_pointer",
+    selection_surface:selectionSurface,
     user_keyboard_range_selection:true,
     story_id:storyId,
     selected_range:selection.end,
