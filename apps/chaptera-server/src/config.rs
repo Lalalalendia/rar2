@@ -80,6 +80,8 @@ pub struct StorageConfig {
     pub provider: String,
     pub quarantine_namespace: String,
     pub private_namespace: String,
+    #[serde(default)]
+    pub expected_bucket_owner: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -409,6 +411,7 @@ impl ChapteraConfig {
                 provider: "s3-compatible".to_owned(),
                 quarantine_namespace: "chaptera-dev-quarantine".to_owned(),
                 private_namespace: "chaptera-dev-private".to_owned(),
+                expected_bucket_owner: None,
             },
             limits: LimitsConfig {
                 worker_spool_bytes: 4 * 1024 * 1024 * 1024,
