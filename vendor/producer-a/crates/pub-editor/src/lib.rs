@@ -12,6 +12,7 @@ mod imported_paragraph_alignment_v1;
 mod imported_paragraph_flow_v1;
 mod imported_paragraphs_v1;
 mod link_text_frame_tail_v1;
+mod rectangle_page_history;
 mod session_geometry;
 mod session_image;
 mod session_table;
@@ -19,8 +20,7 @@ use session_table::apply_table_cell_state;
 mod session_text;
 use session_geometry::{
     append_blank_page_error_to_editor_v1, apply_authored_line_inverse,
-    apply_authored_rectangle_page_duplicate_history_candidate_v1,
-    apply_authored_rectangle_page_history_candidate_v1, apply_authored_shape_delete_forward,
+    apply_authored_shape_delete_forward,
     apply_authored_shape_delete_inverse, apply_authored_shape_inverse,
     apply_authored_stack_history_forward_v1, authored_line_from_operation,
     authored_shape_from_operation, authored_stack_operation_page_id_v1,
@@ -46,7 +46,10 @@ mod table_rowcol_graph_v1;
 mod table_rowcol_history_v1;
 mod text_format_property_base_v1;
 mod writer_assessment;
-use writer_assessment::{minimum_identity_project_schema_v1, required_editor_asset_refs_v1};
+use writer_assessment::{
+    minimum_identity_project_schema_v1, reject_legacy_page_lifecycle_schemas_v030,
+    required_editor_asset_refs_v1,
+};
 
 pub use authored_paragraph_alignment_v1::{
     AuthoredParagraphAlignmentValueV1, EffectiveParagraphAlignmentV1,
@@ -432,7 +435,7 @@ pub enum EditOperation {
         transition: DeleteAuthoredRectanglePageTransitionV1,
     },
     DuplicateAuthoredRectanglePageV1 {
-        transition: DuplicateAuthoredRectanglePageTransitionV1,
+        transition: Box<DuplicateAuthoredRectanglePageTransitionV1>,
     },
     DuplicateBlankPageV1 {
         transition: DuplicateBlankPageTransitionV1,
@@ -4066,68 +4069,7 @@ impl EditorSession {
         {
             return Err(EditorProjectError::MissingProjectIdentity);
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_26
-            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project.operations.iter().position(|operation| {
-                matches!(operation, EditOperation::DeleteBlankAuthoredPageV1 { .. })
-            }) {
-                return Err(
-                    EditorProjectError::LegacyProjectCarriesDeleteBlankPageOperation { index },
-                );
-            }
-        }
-        if legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27 {
-            if let Some(index) = project.operations.iter().position(|operation| {
-                matches!(operation, EditOperation::DuplicateBlankPageV1 { .. })
-            }) {
-                return Err(
-                    EditorProjectError::LegacyProjectCarriesDuplicateBlankPageOperation { index },
-                );
-            }
-        }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_28
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_29
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_30
-        {
-            if let Some(index) = project.operations.iter().position(|operation| {
-                matches!(operation, EditOperation::InsertBlankPageAfterV1 { .. })
-            }) {
-                return Err(
-                    EditorProjectError::LegacyProjectCarriesInsertBlankPageOperation { index },
-                );
-            }
-        }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_29
-            && project.schema_version != EDITOR_PROJECT_VERSION_V0_30
-        {
-            if let Some(index) = project.operations.iter().position(|operation| {
-                matches!(
-                    operation,
-                    EditOperation::DeleteAuthoredRectanglePageV1 { .. }
-                )
-            }) {
-                return Err(
-                    EditorProjectError::LegacyProjectCarriesDeleteAuthoredRectanglePageOperation {
-                        index,
-                    },
-                );
-            }
-        }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_30 {
-            if let Some(index) = project.operations.iter().position(|operation| {
-                matches!(
-                    operation,
-                    EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
-                )
-            }) {
-                return Err(
-                    EditorProjectError::LegacyProjectCarriesDuplicateAuthoredRectanglePageOperation {
-                        index,
-                    },
-                );
-            }
-        }
+        reject_legacy_page_lifecycle_schemas_v030(project, legacy_compatible_schema)?;
         if project.source_hash != self.source_hash {
             return Err(EditorProjectError::SourceHashMismatch {
                 expected: self.source_hash,
@@ -5831,29 +5773,17 @@ impl EditorSession {
                         apply_authored_shape_delete_inverse(&mut candidate_shapes, &operation)?;
                     }
                     EditOperation::DeleteAuthoredRectanglePageV1 { transition } => {
-                        apply_authored_rectangle_page_history_candidate_v1(
+                        self.undo_delete_rectangle_page_candidate_v1(
                             &mut candidate_graph,
                             &mut candidate_shapes,
-                            self.current_authored_stack_v1(transition.page.identity.page_id),
                             transition,
-                            false,
                         )?;
                     }
                     EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => {
-                        let source_id = transition.page.source_page_id;
-                        apply_authored_rectangle_page_duplicate_history_candidate_v1(
+                        self.undo_duplicate_rectangle_page_candidate_v1(
                             &mut candidate_graph,
                             &mut candidate_shapes,
-                            self.current_authored_stack_v1(source_id),
-                            self.current_authored_stack_v1(
-                                transition.page.destination_identity.page_id,
-                            ),
-                            self.authored_page_identities_v1()
-                                .get(&source_id)
-                                .copied()
-                                .ok_or(EditorError::StalePageDuplicate)?,
-                            transition,
-                            false,
+                            transition.as_ref(),
                         )?;
                     }
                     EditOperation::ReorderAuthoredStack { .. } => {}
@@ -5994,71 +5924,17 @@ impl EditorSession {
                         apply_authored_shape_delete_forward(&mut candidate_shapes, &operation)?;
                     }
                     EditOperation::DeleteAuthoredRectanglePageV1 { transition } => {
-                        // Undo history excludes the redo operation. Recompute the
-                        // exact live admission before applying its persisted transition.
-                        let authored = self
-                            .authored_customer_page_ids_v1()
-                            .into_iter()
-                            .collect::<BTreeSet<_>>();
-                        let sources = transition
-                            .page
-                            .before_customer_page_ids
-                            .iter()
-                            .copied()
-                            .filter(|id| !authored.contains(id))
-                            .collect::<Vec<_>>();
-                        let fresh = self.plan_delete_authored_rectangle_page_from_session_v1(
-                            &sources,
-                            transition.page.identity.page_id,
-                        )?;
-                        if fresh != *transition {
-                            return Err(EditorError::StalePageDelete);
-                        }
-                        apply_authored_rectangle_page_history_candidate_v1(
+                        self.redo_delete_rectangle_page_candidate_v1(
                             &mut candidate_graph,
                             &mut candidate_shapes,
-                            self.current_authored_stack_v1(transition.page.identity.page_id),
                             transition,
-                            true,
                         )?;
                     }
                     EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => {
-                        // The redo entry was popped before admission. Reprove
-                        // exact membership and fresh identities, then commit as
-                        // one combined Page/Rectangle/stack transition.
-                        let authored = self
-                            .authored_customer_page_ids_v1()
-                            .into_iter()
-                            .collect::<BTreeSet<_>>();
-                        let sources = transition
-                            .page
-                            .before_customer_page_ids
-                            .iter()
-                            .copied()
-                            .filter(|id| !authored.contains(id))
-                            .collect::<Vec<_>>();
-                        let fresh = self.plan_duplicate_authored_rectangle_page_from_session_v1(
-                            &sources,
-                            transition.page.source_page_id,
-                            transition.page.destination_identity,
-                            transition.destination_shape.node_id,
-                        )?;
-                        if fresh != *transition {
-                            return Err(EditorError::StalePageDuplicate);
-                        }
-                        apply_authored_rectangle_page_duplicate_history_candidate_v1(
+                        self.redo_duplicate_rectangle_page_candidate_v1(
                             &mut candidate_graph,
                             &mut candidate_shapes,
-                            self.current_authored_stack_v1(transition.page.source_page_id),
-                            self.current_authored_stack_v1(
-                                transition.page.destination_identity.page_id,
-                            ),
-                            self.authored_page_identities_v1()
-                                .get(&transition.page.source_page_id)
-                                .copied()
-                                .ok_or(EditorError::StalePageDuplicate)?,
-                            transition,
-                            true,
+                            transition.as_ref(),
                         )?;
                     }
                     EditOperation::ReorderAuthoredStack { .. } => {}
@@ -6388,7 +6264,7 @@ fn replay_canonical_operation(
             .consume_canonical_delete_authored_rectangle_page_v1(transition.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => session
-            .consume_canonical_duplicate_authored_rectangle_page_v1(transition.clone())
+            .consume_canonical_duplicate_authored_rectangle_page_v1(transition.as_ref().clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::SetTextFormatProperty {
             story_id,

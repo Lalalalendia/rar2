@@ -25,6 +25,73 @@ use std::fmt;
 
 pub const EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1: &str = "0.1";
 
+/// Source-neutral page-lifecycle schema fence. Keep the full version
+/// compatibility law out of the central EditOperation/session monolith.
+pub(super) fn reject_legacy_page_lifecycle_schemas_v030(
+    project: &super::EditorProject,
+    legacy_compatible_schema: &str,
+) -> Result<(), super::EditorProjectError> {
+    if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_26
+        && legacy_compatible_schema != super::EDITOR_PROJECT_VERSION_V0_27
+    {
+        if let Some(index) = project.operations.iter().position(|operation| {
+            matches!(operation, EditOperation::DeleteBlankAuthoredPageV1 { .. })
+        }) {
+            return Err(super::EditorProjectError::LegacyProjectCarriesDeleteBlankPageOperation {
+                index,
+            });
+        }
+    }
+    if legacy_compatible_schema != super::EDITOR_PROJECT_VERSION_V0_27 {
+        if let Some(index) = project.operations.iter().position(|operation| {
+            matches!(operation, EditOperation::DuplicateBlankPageV1 { .. })
+        }) {
+            return Err(
+                super::EditorProjectError::LegacyProjectCarriesDuplicateBlankPageOperation {
+                    index,
+                },
+            );
+        }
+    }
+    if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_28
+        && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_29
+        && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_30
+    {
+        if let Some(index) = project.operations.iter().position(|operation| {
+            matches!(operation, EditOperation::InsertBlankPageAfterV1 { .. })
+        }) {
+            return Err(super::EditorProjectError::LegacyProjectCarriesInsertBlankPageOperation {
+                index,
+            });
+        }
+    }
+    if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_29
+        && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_30
+    {
+        if let Some(index) = project.operations.iter().position(|operation| {
+            matches!(operation, EditOperation::DeleteAuthoredRectanglePageV1 { .. })
+        }) {
+            return Err(
+                super::EditorProjectError::LegacyProjectCarriesDeleteAuthoredRectanglePageOperation {
+                    index,
+                },
+            );
+        }
+    }
+    if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_30 {
+        if let Some(index) = project.operations.iter().position(|operation| {
+            matches!(operation, EditOperation::DuplicateAuthoredRectanglePageV1 { .. })
+        }) {
+            return Err(
+                super::EditorProjectError::LegacyProjectCarriesDuplicateAuthoredRectanglePageOperation {
+                    index,
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
     if operations.iter().any(|operation| {
         matches!(

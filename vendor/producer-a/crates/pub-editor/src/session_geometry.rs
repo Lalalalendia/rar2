@@ -1529,7 +1529,7 @@ impl EditorSession {
         self.authored_shapes = shapes;
         self.install_authored_stack_v1(expected.stack.after.clone());
         let operation = EditOperation::DuplicateAuthoredRectanglePageV1 {
-            transition: expected,
+            transition: Box::new(expected),
         };
         self.undo.push(operation.clone());
         self.redo.clear();
