@@ -1448,8 +1448,8 @@ jobs:
       - name: Obtain immutable, source-reviewed Factory V3 artifact
         uses: actions/download-artifact@v4
         with:
-          artifact-ids: '11276186975'
-          run-id: '37129031703'
+          artifact-ids: '11681117922'
+          run-id: '38083363171'
           repository: Lalalalendia/rar2
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/pub-factory-v3-download
@@ -1461,7 +1461,7 @@ jobs:
           $download = Join-Path $env:RUNNER_TEMP "pub-factory-v3-download"
           $roots = @(Get-ChildItem -LiteralPath $download -Recurse -File -Filter "PUB_FACTORY_NATIVE_PORTABLE_T891_T892_V3.zip")
           if ($roots.Count -ne 1) { throw "factory_v3_inner_zip_not_unique" }
-          $expected = "744627708ff1eb539d57f43939b795b9155e67ccc15836b770b4bcd066be599d"
+          $expected = "a13f414ccf29440e69d6df9eb754af1be1018b901ae30d37e3f18b937116b1d4"
           $actual = (Get-FileHash -LiteralPath $roots[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $expected) { throw "factory_v3_inner_zip_sha256_mismatch" }
           Add-Type -AssemblyName System.IO.Compression.FileSystem
