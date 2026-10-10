@@ -8,6 +8,7 @@ on:
       - "tools/audit_private_source_font_styles_v1.py"
       - "tools/private_font_os2_embedding_v1.py"
       - "tools/ci/test_private_font_os2_policy_v1.py"
+      - "vendor/producer-a/crates/pub-viewer/tests/pub_source_font_direct_real.rs"
       - "tools/ci/test_private_source_font_styles_v1.py"
       - "tools/ci/test_pub_source_font_requirements_v1.py"
       - "tools/ci/test_export_cloud_reader_windows_fonts.py"
@@ -35,6 +36,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.94.1
       - name: Prove Reader preserves the exact source Quill font index
         run: cargo test --manifest-path vendor/producer-a/crates/pub-viewer/Cargo.toml --lib viewer_typography_direct_index_roundtrip_v1
+      - name: Acquire exact public Apache POI SampleNewsletter source
+        shell: bash
+        run: |
+          set -euo pipefail
+          pub="$RUNNER_TEMP/SampleNewsletter.pub"
+          curl -fsSL --retry 3 "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub" -o "$pub"
+          test "$(sha256sum "$pub" | cut -d' ' -f1)" = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
+          test "$(wc -c < "$pub" | tr -d ' ')" = "291840"
+          echo "CHAPTERA_SAMPLE_NEWSLETTER=$pub" >> "$GITHUB_ENV"
+
+      - name: Prove actual Publisher PUB direct Quill index reached Reader Viewer
+        run: |
+          cargo test --manifest-path vendor/producer-a/crates/pub-viewer/Cargo.toml --test pub_source_font_direct_real -- --ignored --nocapture
+
       - name: Compile source-font planning and licensed-file helper
         run: |
           python -m py_compile tools/pub_source_font_requirements_v1.py
