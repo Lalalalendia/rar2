@@ -16,6 +16,8 @@ on:
       - "services/editor-api/test_live_font_delivery_v1.py"
       - "tools/verify_live_font_ui_browser.mjs"
       - "tools/native-pub-candidate-cli/tests/real_pinned_font_resource_v1.rs"
+      - "tools/native-pub-candidate-cli/src/bin/pinned_font_authoring_v1.rs"
+      - "tools/run_pinned_font_authoring_real.py"
       - "tools/native-pub-candidate-cli/Cargo.toml"
       - "assets/fonts/ofl/abel/**"
       - "tools/run_local_real_editor.py"
@@ -47,6 +49,7 @@ jobs:
       - name: Check Python syntax
         run: |
           python -m py_compile tools/run_local_real_editor.py
+          python -m py_compile tools/run_pinned_font_authoring_real.py
           python -m py_compile tools/run_local_full_stack.py
           python -m py_compile services/editor-api/web_real_acceptance_service.py
           python -m py_compile services/editor-api/font_authoring_admission_v1.py
@@ -77,6 +80,11 @@ jobs:
             --test real_pinned_font_resource_v1 -- --nocapture \
             | tee /tmp/chaptera-real-pub-font-history.log
           grep -q 'REAL_PUB_FONT_HISTORY_OK' /tmp/chaptera-real-pub-font-history.log
+      - name: Prove real selected Story font intent through pinned Rust worker and fresh project
+        run: |
+          python tools/run_pinned_font_authoring_real.py \
+            --fixture "${{ github.workspace }}/.chaptera-local/editor/SampleNewsletter.pub" \
+            --viewer "${{ github.workspace }}/.chaptera-local/editor/viewer-geometry.json"
       - uses: actions/upload-artifact@v4
         with:
           name: local-editor-pinned-font-chromium
@@ -85,3 +93,5 @@ jobs:
           path: |
             target/local-font-ui/chromium.json
             target/local-font-ui/chromium.png
+            target/local-font-ui/pinned-font-apply-receipt.json
+            target/local-font-ui/pinned-font-edited.project.json
