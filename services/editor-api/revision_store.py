@@ -1996,7 +1996,7 @@ class RevisionKernel:
         first, last = cmd["start_scalar"], cmd["end_scalar"]
         if any(type(x) is not int for x in (first, last)) or not (0 <= first < last <= 0xFFFFFFFF):
             raise ValueError("font scalar range must be nonempty and within u32")
-        if not isinstance(cmd["expected_state_hash"], str) or not sha.fullmatch(cmd["expected_state_hash"]):
+        if not isinstance(cmd["expected_state_hash"], str) or not raw_sha.fullmatch(cmd["expected_state_hash"]):
             raise ValueError("canonical font overlay state hash required")
         candidate = cmd["candidate"]
         if not isinstance(candidate, dict) or set(candidate) != {
@@ -2045,7 +2045,7 @@ class RevisionKernel:
         import re
         after = operation["after_state_hash"]
         if (not isinstance(after, str)
-                or re.fullmatch(r"sha256:[0-9a-f]{64}", after) is None
+                or re.fullmatch(r"[0-9a-f]{64}", after) is None
                 or after == operation["before_state_hash"]):
             raise ValueError("Rust canonical font operation did not change format state")
 
