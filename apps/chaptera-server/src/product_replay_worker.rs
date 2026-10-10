@@ -814,6 +814,335 @@ impl IsolatedProductReplayProducer {
     }
 }
 
+#[derive(Clone)]
+pub struct IsolatedProductMaterializationProducer {
+    config: SourceBaselineProducerConfig,
+}
+
+impl IsolatedProductMaterializationProducer {
+    pub fn new(config: SourceBaselineProducerConfig) -> Result<Self, ProductReplayWorkerError> {
+        config.validate().map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_materialization_config_invalid",
+                "isolated materialization worker configuration is invalid",
+            )
+        })?;
+        Ok(Self { config })
+    }
+
+    pub async fn materialize_exact_project(
+        &self,
+        document_id: &str,
+        source_sha256: &str,
+        source_bytes: &[u8],
+        baseline_revision_id: &str,
+        baseline_cursor: i64,
+        requested_revision_id: &str,
+        edges: &[RevisionEdge],
+    ) -> Result<ProductMaterializationWorkerReceiptV1, ProductReplayWorkerError> {
+        require_document_id(document_id)?;
+        require_sha256(source_sha256)?;
+        if source_bytes.is_empty()
+            || source_bytes.len() as u64 > MAX_SOURCE_BYTES
+            || sha256_hex(source_bytes) != source_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_materialization_source_mismatch",
+                "verified source differs from isolated materialization request",
+            ));
+        }
+
+        let input = ProductMaterializationInputV1 {
+            protocol_version: PRODUCT_MATERIALIZATION_WORKER_V1.to_owned(),
+            document_id: document_id.to_owned(),
+            source_sha256: source_sha256.to_owned(),
+            source_byte_len: source_bytes.len() as u64,
+            baseline_revision_id: baseline_revision_id.to_owned(),
+            baseline_cursor,
+            requested_revision_id: requested_revision_id.to_owned(),
+            edges: edges.to_vec(),
+        };
+        validate_materialization_input(
+            &input,
+            document_id,
+            source_sha256,
+            source_bytes.len() as u64,
+        )?;
+        let replay_bytes = serde_json::to_vec(&input).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_materialization_input_invalid",
+                "authorized revision chain could not be serialized",
+            )
+        })?;
+        if replay_bytes.len() as u64 > MAX_REPLAY_CHAIN_BYTES {
+            return Err(ProductReplayWorkerError::new(
+                "product_materialization_input_limit",
+                "authorized revision chain exceeds isolated worker input policy",
+            ));
+        }
+
+        let temp = PrivateReplayTemp::create(&self.config.temp_root)?;
+        let source_path = temp.path.join("source.pub");
+        let replay_path = temp.path.join("replay.json");
+        let result_dir = temp.path.join("worker-result");
+        for (path, bytes) in [
+            (&source_path, source_bytes),
+            (&replay_path, replay_bytes.as_slice()),
+        ] {
+            let mut file = async_fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .await
+                .map_err(|_| {
+                    ProductReplayWorkerError::new(
+                        "product_materialization_temp_failed",
+                        "private worker input could not be created",
+                    )
+                })?;
+            file.write_all(bytes).await.map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_materialization_temp_failed",
+                    "private worker input write failed",
+                )
+            })?;
+            file.sync_all().await.map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_materialization_temp_failed",
+                    "private worker input sync failed",
+                )
+            })?;
+        }
+
+        let worker = Command::new(&self.config.isolation_python)
+            .arg(&self.config.isolation_harness)
+            .arg("run")
+            .arg("--output-dir")
+            .arg(&result_dir)
+            .arg("--input")
+            .arg(&source_path)
+            .arg("--timeout")
+            .arg(self.config.worker_wall_timeout.as_secs_f64().to_string())
+            .arg("--address-space-mb")
+            .arg(self.config.worker_address_space_mb.to_string())
+            .arg("--cpu-seconds")
+            .arg(self.config.worker_cpu_seconds.to_string())
+            .arg("--open-files")
+            .arg(self.config.worker_open_files.to_string())
+            .arg("--output-file-mb")
+            .arg(self.config.worker_output_file_mb.to_string())
+            .arg("--clear-environment")
+            .arg("--")
+            .arg(&self.config.worker_binary)
+            .arg("product-isolated-materialize")
+            .arg("--document-id")
+            .arg(document_id)
+            .arg("--expected-sha256")
+            .arg(source_sha256)
+            .arg("--expected-byte-len")
+            .arg(source_bytes.len().to_string())
+            .arg("--replay-json")
+            .arg(&replay_path)
+            .kill_on_drop(true)
+            .output();
+        let max_wall = self
+            .config
+            .worker_wall_timeout
+            .checked_add(std::time::Duration::from_secs(5))
+            .ok_or_else(|| {
+                ProductReplayWorkerError::new(
+                    "product_materialization_config_invalid",
+                    "worker deadline overflowed",
+                )
+            })?;
+        let output = timeout(max_wall, worker)
+            .await
+            .map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_materialization_worker_timeout",
+                    "isolated materialization worker exceeded parent deadline",
+                )
+            })?
+            .map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_materialization_worker_failed",
+                    "isolated materialization worker could not be launched",
+                )
+            })?;
+        if !output.status.success() {
+            return Err(ProductReplayWorkerError::new(
+                "product_materialization_worker_failed",
+                "isolated materialization worker failed without a usable receipt",
+            ));
+        }
+
+        let receipt_path = result_dir.join("result.json");
+        let metadata = async_fs::metadata(&receipt_path).await.map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_materialization_receipt_missing",
+                "isolated materialization receipt is unavailable",
+            )
+        })?;
+        if !metadata.is_file()
+            || metadata.len() == 0
+            || metadata.len() > MAX_MATERIALIZATION_RECEIPT_BYTES
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_materialization_receipt_invalid",
+                "isolated materialization receipt is outside bounded size",
+            ));
+        }
+        let payload = async_fs::read(&receipt_path).await.map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_materialization_receipt_missing",
+                "isolated materialization receipt could not be read",
+            )
+        })?;
+        if payload.len() as u64 > MAX_MATERIALIZATION_RECEIPT_BYTES {
+            return Err(ProductReplayWorkerError::new(
+                "product_materialization_receipt_invalid",
+                "isolated materialization receipt exceeded size after read",
+            ));
+        }
+        let receipt: ProductMaterializationWorkerReceiptV1 =
+            serde_json::from_slice(&payload).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_materialization_receipt_invalid",
+                    "isolated materialization receipt is malformed",
+                )
+            })?;
+        validate_materialization_receipt(&receipt, &input)?;
+        Ok(receipt)
+    }
+}
+
+pub struct IsolatedExactRevisionMaterializer {
+    source_authority: Arc<dyn DocumentSourceAuthority>,
+    source_loader: Arc<dyn ExactSourceLoader>,
+    revision_store: SqliteRevisionStore,
+    producer: IsolatedProductMaterializationProducer,
+}
+
+impl IsolatedExactRevisionMaterializer {
+    pub fn new(
+        source_authority: Arc<dyn DocumentSourceAuthority>,
+        source_loader: Arc<dyn ExactSourceLoader>,
+        revision_store: SqliteRevisionStore,
+        config: SourceBaselineProducerConfig,
+    ) -> Result<Self, ProductReplayWorkerError> {
+        Ok(Self {
+            source_authority,
+            source_loader,
+            revision_store,
+            producer: IsolatedProductMaterializationProducer::new(config)?,
+        })
+    }
+}
+
+fn require_materializer_identifier(
+    value: &str,
+    field: &'static str,
+) -> Result<(), RevisionMaterializerError> {
+    if value.is_empty()
+        || value.len() > 160
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+    {
+        return Err(RevisionMaterializerError::new(
+            "invalid_identifier",
+            format!("{field} is not a bounded opaque identifier"),
+        ));
+    }
+    Ok(())
+}
+
+#[async_trait::async_trait]
+impl ExactRevisionMaterializerPort for IsolatedExactRevisionMaterializer {
+    async fn materialize_state(
+        &self,
+        tenant_id: &str,
+        document_id: &str,
+        requested_revision_id: &str,
+    ) -> Result<ExactRevisionMaterializedState, RevisionMaterializerError> {
+        require_materializer_identifier(tenant_id, "tenant_id")?;
+        require_materializer_identifier(document_id, "document_id")?;
+        require_materializer_identifier(requested_revision_id, "requested_revision_id")?;
+
+        let source = self
+            .source_authority
+            .resolve_document_source(tenant_id, document_id)
+            .await?;
+        validate_authorized_source(&source, tenant_id, document_id)?;
+
+        let source_bytes = self.source_loader.load_exact_source(&source).await?;
+        if source_bytes.len() as u64 != source.byte_len {
+            return Err(RevisionMaterializerError::new(
+                "source_length_mismatch",
+                "loaded immutable source does not match the authorized byte length",
+            ));
+        }
+        if sha256_hex(&source_bytes) != source.source_sha256 {
+            return Err(RevisionMaterializerError::new(
+                "source_hash_mismatch",
+                "loaded immutable source does not match the authorized SHA-256",
+            ));
+        }
+
+        let edges = self
+            .revision_store
+            .load_chain_to_revision(
+                document_id,
+                &source.baseline_revision_id,
+                source.baseline_cursor,
+                requested_revision_id,
+            )
+            .await
+            .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+
+        let isolated = self
+            .producer
+            .materialize_exact_project(
+                document_id,
+                &source.source_sha256,
+                &source_bytes,
+                &source.baseline_revision_id,
+                source.baseline_cursor,
+                requested_revision_id,
+                &edges,
+            )
+            .await
+            .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+
+        let identity = self
+            .revision_store
+            .require_revision_identity(document_id, requested_revision_id)
+            .await
+            .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+
+        let receipt = ExactRevisionMaterializationReceipt {
+            schema_version: MATERIALIZATION_RECEIPT_SCHEMA_V1.to_owned(),
+            tenant_id: tenant_id.to_owned(),
+            document_id: document_id.to_owned(),
+            source_binding_id: source.binding_id,
+            source_sha256: source.source_sha256,
+            baseline_revision_id: source.baseline_revision_id,
+            baseline_cursor: source.baseline_cursor,
+            requested_revision_id: requested_revision_id.to_owned(),
+            canonical_revision_schema_version: identity.canonical_schema_version,
+            canonical_authoring_revision_id: identity.canonical_revision_id,
+            replayed_edges: isolated.replayed_edges,
+            project_sha256: isolated.project_sha256,
+            authoring_root_hash: isolated.authoring_root_hash,
+            project: isolated.project,
+        };
+        Ok(ExactRevisionMaterializedState {
+            receipt,
+            source_bytes,
+        })
+    }
+}
+
 fn require_typed_graph(graph: Value) -> Result<PubResolvedGraph, ProductReplayWorkerError> {
     serde_json::from_value(graph).map_err(|_| {
         ProductReplayWorkerError::new(
