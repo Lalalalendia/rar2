@@ -40,6 +40,7 @@ use chaptera_server::{
     worker,
     worker_runtime::ConfiguredWorkerRuntime,
     workspace_context::SqliteWorkspaceContextResolver,
+    workspace_http::{self, WorkspaceHttpState},
 };
 use clap::Parser;
 
@@ -195,6 +196,10 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                             busy_timeout,
                         )
                         .await?;
+                        let workspace_router = workspace_http::router(WorkspaceHttpState::new(
+                            auth_http.clone(),
+                            workspace.clone(),
+                        ));
                         let admission = SqliteUploadAdmissionAuthority::open(
                             &config.sqlite.path,
                             config.sqlite.pool_max,
@@ -270,7 +275,8 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                             migration_route_producer,
                         );
                         Some(
-                            source_ingress_http::router(source_state)
+                            workspace_router
+                                .merge(source_ingress_http::router(source_state))
                                 .merge(product_api_http::router(product_state))
                                 .merge(product_export_http::router(export_state))
                                 .merge(migration_editable_route::router(migration_route_state))

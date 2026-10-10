@@ -4,6 +4,8 @@ use std::{
     time::Duration,
 };
 
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 use sqlx::{
     Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
@@ -14,6 +16,12 @@ pub struct WorkspaceContext {
     pub principal_id: String,
     pub workspace_id: String,
     pub tenant_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkspaceSummary {
+    pub workspace_id: String,
+    pub role: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,6 +154,187 @@ impl SqliteWorkspaceContextResolver {
         }
     }
 
+    /// Only active memberships are visible, and tenant identity is intentionally
+    /// never returned to the browser as a trusted input.
+    pub async fn list_active(
+        &self,
+        principal_id: &str,
+    ) -> Result<Vec<WorkspaceSummary>, WorkspaceContextError> {
+        require_ident(principal_id, "principal_id")?;
+        let rows = sqlx::query(
+            r#"
+            SELECT wm.workspace_id, wm.role
+            FROM workspace_memberships AS wm
+            JOIN workspaces AS w ON w.workspace_id = wm.workspace_id
+            JOIN principals AS p ON p.principal_id = wm.principal_id
+            WHERE wm.principal_id = ?
+              AND wm.membership_state = 'active'
+              AND wm.revoked_at_ms IS NULL
+              AND w.lifecycle_state = 'active'
+              AND p.disabled_at_ms IS NULL
+            ORDER BY wm.workspace_id
+            LIMIT 257
+            "#,
+        )
+        .bind(principal_id.as_bytes())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+
+        if rows.len() > 256 {
+            return Err(WorkspaceContextError::new(
+                "workspace_list_limit_exceeded",
+                "workspace listing requires pagination",
+            ));
+        }
+        rows.iter()
+            .map(|row| {
+                let role: String = row.try_get("role").map_err(sqlite_error)?;
+                if !matches!(role.as_str(), "owner" | "member") {
+                    return Err(WorkspaceContextError::new(
+                        "workspace_context_row_corrupt",
+                        "workspace role is invalid",
+                    ));
+                }
+                Ok(WorkspaceSummary {
+                    workspace_id: blob_text(row, "workspace_id")?,
+                    role,
+                })
+            })
+            .collect()
+    }
+
+    /// Idempotent, authenticated personal workspace admission. The caller must
+    /// already have a real AuthN principal; no tenant or owner is client-supplied.
+    /// Revoked/deleted workspaces are NOT silently reactivated on repeat calls.
+    pub async fn ensure_personal(
+        &self,
+        principal_id: &str,
+        now_ms: i64,
+    ) -> Result<WorkspaceContext, WorkspaceContextError> {
+        require_ident(principal_id, "principal_id")?;
+        if now_ms < 0 {
+            return Err(WorkspaceContextError::new(
+                "workspace_clock_invalid",
+                "timestamp must be nonnegative",
+            ));
+        }
+        let workspace_id = personal_identity("workspace", principal_id);
+        let tenant_id = personal_identity("tenant", principal_id);
+        let mut conn = self.pool.acquire().await.map_err(sqlite_error)?;
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *conn)
+            .await
+            .map_err(sqlite_error)?;
+
+        let outcome = async {
+            let active_principal: Option<i64> = sqlx::query_scalar(
+                "SELECT 1 FROM principals WHERE principal_id = ? AND disabled_at_ms IS NULL",
+            )
+            .bind(principal_id.as_bytes())
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(sqlite_error)?;
+            if active_principal.is_none() {
+                return Err(WorkspaceContextError::new(
+                    "workspace_principal_inactive",
+                    "personal workspace requires an active authenticated principal",
+                ));
+            }
+
+            sqlx::query(
+                r#"
+                INSERT INTO workspaces (
+                    workspace_id, tenant_id, lifecycle_state,
+                    lifecycle_generation, metadata_version, created_at_ms
+                ) VALUES (?, ?, 'active', 0, 0, ?)
+                ON CONFLICT(workspace_id) DO NOTHING
+                "#,
+            )
+            .bind(workspace_id.as_bytes())
+            .bind(tenant_id.as_bytes())
+            .bind(now_ms)
+            .execute(&mut *conn)
+            .await
+            .map_err(sqlite_error)?;
+
+            // The id is deterministic, but we still prove a collision cannot
+            // bind it to another tenant or revive a previously deleted scope.
+            let stored = sqlx::query(
+                "SELECT tenant_id, lifecycle_state FROM workspaces WHERE workspace_id = ?",
+            )
+            .bind(workspace_id.as_bytes())
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(sqlite_error)?;
+            let stored_tenant: Vec<u8> = stored.try_get("tenant_id").map_err(sqlite_error)?;
+            let lifecycle: String = stored.try_get("lifecycle_state").map_err(sqlite_error)?;
+            if stored_tenant != tenant_id.as_bytes() || lifecycle != "active" {
+                return Err(WorkspaceContextError::new(
+                    "personal_workspace_unavailable",
+                    "personal workspace is not active under the expected tenant",
+                ));
+            }
+
+            sqlx::query(
+                r#"
+                INSERT INTO workspace_memberships (
+                    workspace_id, principal_id, role, membership_state,
+                    membership_version, created_at_ms, revoked_at_ms
+                ) VALUES (?, ?, 'owner', 'active', 0, ?, NULL)
+                ON CONFLICT(workspace_id, principal_id) DO NOTHING
+                "#,
+            )
+            .bind(workspace_id.as_bytes())
+            .bind(principal_id.as_bytes())
+            .bind(now_ms)
+            .execute(&mut *conn)
+            .await
+            .map_err(sqlite_error)?;
+
+            let valid: Option<i64> = sqlx::query_scalar(
+                r#"
+                SELECT 1 FROM workspace_memberships
+                WHERE workspace_id = ? AND principal_id = ?
+                  AND role = 'owner' AND membership_state = 'active'
+                  AND revoked_at_ms IS NULL
+                "#,
+            )
+            .bind(workspace_id.as_bytes())
+            .bind(principal_id.as_bytes())
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(sqlite_error)?;
+            if valid.is_none() {
+                return Err(WorkspaceContextError::new(
+                    "personal_workspace_unavailable",
+                    "personal workspace owner membership is inactive",
+                ));
+            }
+
+            Ok(WorkspaceContext {
+                principal_id: principal_id.to_owned(),
+                workspace_id,
+                tenant_id,
+            })
+        }
+        .await;
+
+        match outcome {
+            Ok(context) => {
+                sqlx::query("COMMIT")
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(sqlite_error)?;
+                Ok(context)
+            }
+            Err(error) => {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                Err(error)
+            }
+        }
+    }
+
     pub async fn close(&self) {
         self.pool.close().await;
     }
@@ -168,6 +357,11 @@ impl SqliteWorkspaceContextResolver {
         }
         Ok(())
     }
+}
+
+fn personal_identity(kind: &str, principal_id: &str) -> String {
+    let hash = Sha256::digest(format!("chaptera.personal.{kind}.v1:{principal_id}").as_bytes());
+    format!("{kind}:personal:{hash:x}")
 }
 
 fn require_ident(value: &str, label: &str) -> Result<(), WorkspaceContextError> {
@@ -296,6 +490,126 @@ mod tests {
         .execute(&resolver.pool)
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn personal_workspace_provision_is_idempotent_and_survives_restart() {
+        let (path, resolver) = setup("personal-idempotent").await;
+        let first = resolver.ensure_personal("principal-a", 100).await.unwrap();
+        let again = resolver.ensure_personal("principal-a", 200).await.unwrap();
+        assert_eq!(first, again);
+        assert_ne!(first.workspace_id, first.tenant_id);
+        assert_eq!(
+            resolver
+                .resolve("principal-a", &first.workspace_id)
+                .await
+                .unwrap(),
+            first
+        );
+        assert_eq!(
+            resolver.list_active("principal-a").await.unwrap(),
+            vec![WorkspaceSummary {
+                workspace_id: first.workspace_id.clone(),
+                role: "owner".to_owned(),
+            }]
+        );
+
+        resolver.close().await;
+        let reopened = SqliteWorkspaceContextResolver::open(&path, 2, Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert_eq!(
+            reopened.ensure_personal("principal-a", 300).await.unwrap(),
+            first
+        );
+        reopened.close().await;
+        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn personal_workspaces_are_isolated_by_authenticated_principal() {
+        let (path, resolver) = setup("personal-isolation").await;
+        sqlx::query(
+            "INSERT INTO principals (principal_id, created_at_ms, disabled_at_ms) VALUES (?, 1, NULL)",
+        )
+        .bind(b"principal-b".as_slice())
+        .execute(&resolver.pool)
+        .await
+        .unwrap();
+
+        let a = resolver.ensure_personal("principal-a", 100).await.unwrap();
+        let b = resolver.ensure_personal("principal-b", 100).await.unwrap();
+        assert_ne!(a.workspace_id, b.workspace_id);
+        assert_ne!(a.tenant_id, b.tenant_id);
+        assert_eq!(
+            resolver
+                .resolve("principal-a", &b.workspace_id)
+                .await
+                .unwrap_err()
+                .code,
+            "workspace_membership_denied"
+        );
+        assert_eq!(resolver.list_active("principal-a").await.unwrap().len(), 1);
+        assert_eq!(resolver.list_active("principal-b").await.unwrap().len(), 1);
+        resolver.close().await;
+        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn personal_provision_never_revives_revoked_or_deleted_workspace() {
+        let (path, resolver) = setup("personal-revoke").await;
+        let context = resolver.ensure_personal("principal-a", 100).await.unwrap();
+        sqlx::query(
+            "UPDATE workspace_memberships SET membership_state='revoked', membership_version=1, revoked_at_ms=200 WHERE workspace_id=? AND principal_id=?",
+        )
+        .bind(context.workspace_id.as_bytes())
+        .bind(b"principal-a".as_slice())
+        .execute(&resolver.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            resolver
+                .ensure_personal("principal-a", 300)
+                .await
+                .unwrap_err()
+                .code,
+            "personal_workspace_unavailable"
+        );
+        assert!(
+            resolver
+                .list_active("principal-a")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        sqlx::query("UPDATE workspace_memberships SET membership_state='active', revoked_at_ms=NULL WHERE workspace_id=?")
+            .bind(context.workspace_id.as_bytes())
+            .execute(&resolver.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE workspaces SET lifecycle_state='deleted' WHERE workspace_id=?")
+            .bind(context.workspace_id.as_bytes())
+            .execute(&resolver.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            resolver
+                .ensure_personal("principal-a", 400)
+                .await
+                .unwrap_err()
+                .code,
+            "personal_workspace_unavailable"
+        );
+        assert!(
+            resolver
+                .list_active("principal-a")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        resolver.close().await;
+        cleanup(&path);
     }
 
     #[tokio::test]

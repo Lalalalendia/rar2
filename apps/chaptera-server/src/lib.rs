@@ -63,3 +63,4 @@ pub mod upload_admission;
 pub mod worker;
 pub mod worker_runtime;
 pub mod workspace_context;
+pub mod workspace_http;
