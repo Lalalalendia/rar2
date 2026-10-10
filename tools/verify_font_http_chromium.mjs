@@ -173,7 +173,7 @@ try {
   if(physicalCoverage.admitted_scalars!==1||
      physicalCoverage.unresolved_scalars!==originalCoverage.unknown-1||
      physicalCoverage.exact_glyphs<1||
-     !physicalCoverage.message.includes("Line placement, overset and PDF not verified")){
+     !physicalCoverage.message.includes("Native Publisher layout and PDF not verified")){
     throw new Error("UI did not consume current native Rust glyph spans: "+
                     JSON.stringify(physicalCoverage));
   }
