@@ -1086,6 +1086,7 @@ class WebGl2HybridRenderer {
           label.style.top = node.y + "px";
           label.style.width = Math.max(0, node.width) + "px";
           label.style.height = Math.max(0, node.height) + "px";
+          label.style.boxSizing = "border-box";
           label.style.overflow = "hidden";
           label.style.whiteSpace = "nowrap";
           label.style.font = "11px sans-serif";
