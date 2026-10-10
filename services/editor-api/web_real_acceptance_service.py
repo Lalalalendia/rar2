@@ -532,7 +532,6 @@ class RealAcceptanceState:
 
     def executor(self, project: dict, command: dict):
         self.executor_calls += 1
-        self.redo_stack.clear()
         if not isinstance(command, dict):
             raise ValueError("editor command must be an object")
 
@@ -564,6 +563,7 @@ class RealAcceptanceState:
                     or authored.get("identity") != project.get("identity")
                     or authored.get("source_hash") != self.source_hash):
                 raise RuntimeError("Rust font operation lacks durable independent replay proof")
+            self.redo_stack.clear()
             self.last_operation = copy.deepcopy(operation)
             return (
                 copy.deepcopy(operation), copy.deepcopy(authored),
@@ -575,6 +575,7 @@ class RealAcceptanceState:
             operation = result.get("operation")
             if not isinstance(operation, dict) or operation.get("kind") != "move_node":
                 raise RuntimeError("Rust editor returned non-MoveNode operation")
+            self.redo_stack.clear()
             self.last_operation = copy.deepcopy(operation)
             return (
                 copy.deepcopy(operation),
@@ -618,6 +619,7 @@ class RealAcceptanceState:
                         f"Rust/Python canonical Story operation differs at {field}"
                     )
 
+            self.redo_stack.clear()
             self.last_operation = copy.deepcopy(canonical.operation)
             return (
                 copy.deepcopy(canonical.operation),
