@@ -8,6 +8,7 @@ on:
       - "crates/chaptera-desktop-shaped-flow-runtime/src/font_resource.rs"
       - "crates/chaptera-desktop-shaped-flow-runtime/src/current_typography.rs"
       - "crates/chaptera-desktop-shaped-flow-runtime/src/current_font_spans.rs"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/current_mixed_font_flow.rs"
       - "crates/chaptera-caret-layout-feed/**"
       - "crates/chaptera-text-caret-map-adapter/**"
       - "vendor/producer-a/crates/pub-layout/**"
@@ -86,3 +87,10 @@ jobs:
             real_newsletter_font_history_shapes_only_admitted_scalar_and_survives_reopen -- --nocapture \
             | tee /tmp/chaptera-current-exact-font-spans.log
           grep -Fq 'REAL_PUB_FONT_SPANS_OK' /tmp/chaptera-current-exact-font-spans.log
+      - name: Real Publisher exact physical-font Unicode break and reciprocal frame fit
+        run: |
+          set -o pipefail
+          cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml \
+            real_publisher_full_physical_override_reflows_and_survives_fresh_project_reopen -- --nocapture \
+            | tee /tmp/chaptera-current-mixed-font-flow.log
+          grep -Fq 'REAL_PUB_MIXED_FONT_FLOW_OK' /tmp/chaptera-current-mixed-font-flow.log

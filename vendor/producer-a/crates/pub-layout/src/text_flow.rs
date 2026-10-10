@@ -438,6 +438,14 @@ fn paragraph_flow_break_before_fixed_v1(
     None
 }
 
+/// Reuse the single existing reciprocal linked-frame chain law in current
+/// physical-font flow; ordinal-only frames never imply a document connection.
+pub fn validated_projected_story_frame_chain_v1(
+    frames: &[&crate::ProjectedStoryFrame],
+) -> Result<Vec<NodeId>, &'static str> {
+    explicit_chain(frames)
+}
+
 pub(crate) fn explicit_chain(
     frames: &[&crate::ProjectedStoryFrame],
 ) -> Result<Vec<NodeId>, &'static str> {

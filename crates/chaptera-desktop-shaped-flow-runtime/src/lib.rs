@@ -1,4 +1,5 @@
 mod current_font_spans;
+mod current_mixed_font_flow;
 mod current_typography;
 mod fixed_pdf_pages;
 mod fixed_pdf_resources;
@@ -28,6 +29,11 @@ use std::{collections::BTreeMap, fmt};
 pub use current_font_spans::{
     CURRENT_FONT_SPANS_V1, CurrentPhysicalFontSpanV1, CurrentPhysicalFontSpansV1,
     shape_current_exact_font_override_spans_v1,
+};
+pub use current_mixed_font_flow::{
+    CURRENT_MIXED_FONT_FLOW_V1, CurrentMissingFontRangeV1, CurrentMixedFontFlowPreviewV1,
+    CurrentMixedFontFlowStateV1, CurrentMixedFontLineFragmentV1, CurrentMixedFontLineV1,
+    build_current_story_mixed_font_flow_preview_v1,
 };
 pub use current_typography::{
     DesktopCurrentBooleanTypographyRunV1, current_story_boolean_typography_v1,
