@@ -63,6 +63,16 @@ except OSError as exc:
 raise SystemExit(0 if blocked else 9)
 """
 
+HARDLINK_WORKER = r"""#!/usr/bin/env python3
+import os
+import pathlib
+
+out = pathlib.Path(os.environ["CHAPTERA_WORKER_OUTPUT_DIR"])
+out.mkdir(parents=True, exist_ok=True)
+os.link(os.environ["CHAPTERA_WORKER_INPUT"], out / "private-bytes.txt")
+"""
+
+
 FAIL_AFTER_PARTIAL = r"""#!/usr/bin/env python3
 import os
 import pathlib
@@ -233,6 +243,31 @@ class MigrationPdfWorkerIsolationTests(unittest.TestCase):
             self.assertTrue(result.timed_out)
             self.assertTrue(result.staging_cleaned)
             self.assertFalse(final.exists())
+
+    def test_hard_link_to_outside_input_is_never_published(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            private_source = tmp / "private-source.txt"
+            private_source.write_bytes(b"private source content - not a browser resource")
+            worker = self.write_worker(tmp, "hardlink.py", HARDLINK_WORKER)
+            final = tmp / "published"
+            with self.assertRaisesRegex(RuntimeError, "hard link"):
+                run_isolated_worker(
+                    [sys.executable, str(worker)],
+                    final_output_dir=final,
+                    input_path=private_source,
+                    timeout_seconds=5,
+                    limits=self.limits(),
+                    inherit_environment=False,
+                )
+
+            self.assertFalse(final.exists())
+            self.assertEqual(
+                private_source.read_bytes(),
+                b"private source content - not a browser resource",
+            )
+            self.assertEqual(private_source.stat().st_nlink, 1)
+            self.assertEqual(list(tmp.glob(".published.stage-*")), [])
 
     def test_failed_file_does_not_publish_partial_output_and_later_job_still_runs(self):
         with tempfile.TemporaryDirectory() as tmp:
