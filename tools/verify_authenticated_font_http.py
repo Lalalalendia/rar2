@@ -184,6 +184,9 @@ def run(fixture: pathlib.Path, graph: pathlib.Path, viewer: pathlib.Path, *, bro
         require(status==200 and changed["revision_id"]==result["revision_id"]
                 and changed["snapshot_id"]!=scene["snapshot_id"],
                 "committed font operation not reflected in a new Scene revision")
+        require(changed["fidelity"]["state"]=="partial" and
+                "font_resource_layout_not_implemented" in changed["fidelity"]["reasons"],
+                "unshaped font edit falsely marked Publisher-fidelity complete")
         require(api("/v1/editor/font-resource/"+descriptor["fetch_handle"])[0]==409,
                 "stale physical-resource fetch handle survived committed revision")
         status,post_scope=api("/v1/editor/font-format-scope")
