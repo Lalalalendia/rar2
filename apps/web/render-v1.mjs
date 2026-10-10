@@ -718,7 +718,7 @@ function appendResolvedSvgTable(root, table) {
       "data-table-row-span": cell.row_span,
       "data-table-column-span": cell.column_span,
       "data-text-authority": cell.text_authority,
-      "data-preview-reason": "table_cell_preview_clipped"
+      "data-preview-reason": "table_cell_preview"
     });
     label.textContent = cell.text.slice(0, 120).replace(/\s+/gu, " ").trim();
     viewport.appendChild(label);
