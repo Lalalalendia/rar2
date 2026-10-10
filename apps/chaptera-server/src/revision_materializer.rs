@@ -18,9 +18,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     blob_store::BlobStoreService,
-    source_baseline::{
-        derive_authoring_state_identity, derive_history_revision_identities,
-    },
+    source_baseline::{derive_authoring_state_identity, derive_history_revision_identities},
     sqlite_store::{
         RevisionEdge, SqliteRevisionStore, decode_canonical_event, encode_canonical_event,
     },
@@ -515,9 +513,9 @@ impl ExactRevisionMaterializer {
         }
 
         let candidate = undo_event_operation(current_project, &event.operation)?;
-        let replayed = self
-            .editor
-            .replay_project(source_bytes, &source.source_sha256, &candidate)?;
+        let replayed =
+            self.editor
+                .replay_project(source_bytes, &source.source_sha256, &candidate)?;
         if replayed != candidate {
             return Err(RevisionMaterializerError::new(
                 "editor_replay_mismatch",
