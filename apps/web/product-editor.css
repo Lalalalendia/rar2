@@ -15,3 +15,7 @@ main{min-height:0;display:grid;grid-template-columns:220px 1fr}
 .status.ok{color:#176b3a}
 .status.pending{color:#805200}
 @media(max-width:760px){main{grid-template-columns:1fr}.notice{border-right:0;border-bottom:1px solid #d9dde5}}
+
+.new-publication{margin-left:14px;white-space:nowrap;font-size:12px;font-weight:650;color:#284cb0;text-decoration:none}
+.new-publication:hover{text-decoration:underline}
+.new-publication:focus-visible{outline:2px solid #3669dd;outline-offset:3px}

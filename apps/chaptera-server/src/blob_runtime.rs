@@ -49,7 +49,7 @@ impl BlobStoreRuntime {
                     client,
                     config.storage.quarantine_namespace.clone(),
                     config.storage.private_namespace.clone(),
-                    None,
+                    config.storage.expected_bucket_owner.clone(),
                 )
                 .map_err(|error| {
                     BlobStoreError::new(

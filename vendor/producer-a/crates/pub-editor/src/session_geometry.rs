@@ -8,11 +8,14 @@ use super::*;
 use pub_editor_authoring_core::{
     DeleteAuthoredRectanglePageStateV1, DeleteAuthoredRectanglePageTransitionV1,
     DuplicateAuthoredRectanglePageStateV1, DuplicateAuthoredRectanglePageTransitionV1,
+    DuplicateAuthoredRectanglesPageTransitionV1, MAX_DUPLICATED_AUTHORED_RECTANGLES_PAGE_V1,
     apply_delete_authored_rectangle_page_forward_v1,
     apply_delete_authored_rectangle_page_inverse_v1,
     apply_duplicate_authored_rectangle_page_forward_v1,
-    apply_duplicate_authored_rectangle_page_inverse_v1, plan_delete_authored_rectangle_page_v1,
-    plan_duplicate_authored_rectangle_page_v1,
+    apply_duplicate_authored_rectangle_page_inverse_v1,
+    apply_duplicate_authored_rectangles_page_forward_v1,
+    apply_duplicate_authored_rectangles_page_inverse_v1, plan_delete_authored_rectangle_page_v1,
+    plan_duplicate_authored_rectangle_page_v1, plan_duplicate_authored_rectangles_page_v1,
 };
 use pub_editor_geometry_core::{
     GeometryNodeSnapshotV1, MoveNodesTransitionErrorV1, ResizeNodesTransitionErrorV1,
@@ -489,6 +492,9 @@ pub(super) fn authored_stack_operation_page_id_v1(operation: &EditOperation) -> 
         EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => {
             Some(transition.page.destination_identity.page_id)
         }
+        EditOperation::DuplicateAuthoredRectanglesPageV1 { transition } => {
+            Some(transition.page.destination_identity.page_id)
+        }
         _ => None,
     }
 }
@@ -584,6 +590,18 @@ pub(super) fn apply_authored_stack_history_forward_v1(
             let after = apply_authored_stack_transition_forward_v1(&current, &transition.stack)
                 .map_err(|_| EditorError::StaleAuthoredStack { page_id })?;
             install_authored_stack_in_map_v1(stacks, after);
+        }
+        EditOperation::DuplicateAuthoredRectanglesPageV1 { transition } => {
+            let page_id = transition.page.destination_identity.page_id;
+            let mut current = stacks
+                .get(&page_id)
+                .cloned()
+                .unwrap_or_else(|| AuthoredStackV1::empty(page_id));
+            for stack in &transition.stacks {
+                current = apply_authored_stack_transition_forward_v1(&current, stack)
+                    .map_err(|_| EditorError::StaleAuthoredStack { page_id })?;
+            }
+            install_authored_stack_in_map_v1(stacks, current);
         }
         EditOperation::ReorderAuthoredStack { transition } => {
             let current = stacks
@@ -836,6 +854,138 @@ pub(super) fn display_page_insert_error_v1(
     }
 }
 
+pub(super) fn apply_page_lifecycle_graph_forward_v1(
+    graph: &mut PubResolvedGraph,
+    operation: &EditOperation,
+) -> Result<(), EditorError> {
+    match operation {
+        EditOperation::RegisterAuthoredPageIdentityV1 { .. } => Ok(()),
+        EditOperation::AppendBlankPageV1 { transition } => apply_append_blank_page_forward_v1(
+            graph.document.id,
+            &mut graph.document.pages,
+            &mut graph.pages,
+            transition,
+        )
+        .map_err(append_blank_page_error_to_editor_v1),
+        EditOperation::DeleteAuthoredRectanglePageV1 { .. } => {
+            Err(EditorError::PageDeleteUnsupported {
+                message: "combined authored page/shape transition needs EditorSession".into(),
+            })
+        }
+        EditOperation::DuplicateAuthoredRectanglePageV1 { .. } => {
+            Err(EditorError::PageDuplicateUnsupported {
+                message: "combined authored Page/Rectangle transition needs EditorSession".into(),
+            })
+        }
+        EditOperation::DuplicateAuthoredRectanglesPageV1 { .. } => {
+            Err(EditorError::PageDuplicateUnsupported {
+                message: "combined authored Page/multi-Rectangle transition needs EditorSession"
+                    .into(),
+            })
+        }
+        EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
+            apply_delete_blank_authored_page_forward_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(delete_blank_authored_page_error_to_editor_v1)
+        }
+        EditOperation::DuplicateBlankPageV1 { transition } => {
+            apply_duplicate_blank_page_forward_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(duplicate_blank_page_error_to_editor_v1)
+        }
+        EditOperation::InsertBlankPageAfterV1 { transition } => {
+            apply_insert_blank_page_after_forward_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(insert_blank_page_after_error_to_editor_v1)
+        }
+        EditOperation::ReorderPagesV1 { transition } => apply_page_order_transition_forward_v1(
+            graph.document.id,
+            &mut graph.document.pages,
+            transition,
+        )
+        .map_err(page_order_error_to_editor_v1),
+        _ => unreachable!("page-lifecycle graph helper receives only page operations"),
+    }
+}
+
+pub(super) fn apply_page_lifecycle_graph_inverse_v1(
+    graph: &mut PubResolvedGraph,
+    operation: &EditOperation,
+) -> Result<(), EditorError> {
+    match operation {
+        EditOperation::RegisterAuthoredPageIdentityV1 { .. } => Ok(()),
+        EditOperation::AppendBlankPageV1 { transition } => apply_append_blank_page_inverse_v1(
+            graph.document.id,
+            &mut graph.document.pages,
+            &mut graph.pages,
+            transition,
+        )
+        .map_err(append_blank_page_error_to_editor_v1),
+        EditOperation::DeleteAuthoredRectanglePageV1 { .. } => {
+            Err(EditorError::PageDeleteUnsupported {
+                message: "combined authored page/shape transition needs EditorSession".into(),
+            })
+        }
+        EditOperation::DuplicateAuthoredRectanglePageV1 { .. } => {
+            Err(EditorError::PageDuplicateUnsupported {
+                message: "combined authored Page/Rectangle transition needs EditorSession".into(),
+            })
+        }
+        EditOperation::DuplicateAuthoredRectanglesPageV1 { .. } => {
+            Err(EditorError::PageDuplicateUnsupported {
+                message: "combined authored Page/multi-Rectangle transition needs EditorSession"
+                    .into(),
+            })
+        }
+        EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
+            apply_delete_blank_authored_page_inverse_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(delete_blank_authored_page_error_to_editor_v1)
+        }
+        EditOperation::DuplicateBlankPageV1 { transition } => {
+            apply_duplicate_blank_page_inverse_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(duplicate_blank_page_error_to_editor_v1)
+        }
+        EditOperation::InsertBlankPageAfterV1 { transition } => {
+            apply_insert_blank_page_after_inverse_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(insert_blank_page_after_error_to_editor_v1)
+        }
+        EditOperation::ReorderPagesV1 { transition } => apply_page_order_transition_inverse_v1(
+            graph.document.id,
+            &mut graph.document.pages,
+            transition,
+        )
+        .map_err(page_order_error_to_editor_v1),
+        _ => unreachable!("page-lifecycle graph helper receives only page operations"),
+    }
+}
+
 // Authored Page identity is an ordering-adjacent durable history primitive.
 impl EditorSession {
     pub fn authored_page_identities_v1(&self) -> BTreeMap<PageId, AuthoredPageIdentityV1> {
@@ -853,6 +1003,10 @@ impl EditorSession {
                     transition.destination_identity,
                 )),
                 EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => Some((
+                    transition.page.destination_identity.page_id,
+                    transition.page.destination_identity,
+                )),
+                EditOperation::DuplicateAuthoredRectanglesPageV1 { transition } => Some((
                     transition.page.destination_identity.page_id,
                     transition.page.destination_identity,
                 )),
@@ -875,6 +1029,9 @@ impl EditorSession {
                     active.push(transition.destination_identity.page_id);
                 }
                 EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => {
+                    active.push(transition.page.destination_identity.page_id);
+                }
+                EditOperation::DuplicateAuthoredRectanglesPageV1 { transition } => {
                     active.push(transition.page.destination_identity.page_id);
                 }
                 EditOperation::InsertBlankPageAfterV1 { transition } => {
@@ -910,6 +1067,9 @@ impl EditorSession {
                     transition.destination_identity.page_id == page_id
                 }
                 EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => {
+                    transition.page.destination_identity.page_id == page_id
+                }
+                EditOperation::DuplicateAuthoredRectanglesPageV1 { transition } => {
                     transition.page.destination_identity.page_id == page_id
                 }
                 EditOperation::InsertBlankPageAfterV1 { transition } => {
@@ -1529,6 +1689,233 @@ impl EditorSession {
         self.authored_shapes = shapes;
         self.install_authored_stack_v1(expected.stack.after.clone());
         let operation = EditOperation::DuplicateAuthoredRectanglePageV1 {
+            transition: Box::new(expected),
+        };
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    /// Read-only admission for two to eight direct independent authored Rectangles.
+    pub fn can_duplicate_authored_rectangles_page_v1(
+        &self,
+        source_qualified_page_ids: &[PageId],
+        source_page_id: PageId,
+    ) -> bool {
+        let count = self.current_authored_stack_v1(source_page_id).members.len();
+        if !(2..=MAX_DUPLICATED_AUTHORED_RECTANGLES_PAGE_V1).contains(&count) {
+            return false;
+        }
+        let destination = AuthoredPageIdentityV1 {
+            page_id: PageId::from_canonical(pub_model::new_editor_canonical_id()),
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        let destination_node_ids = (0..count)
+            .map(|_| NodeId::from_canonical(pub_model::new_editor_canonical_id()))
+            .collect::<Vec<_>>();
+        self.plan_duplicate_authored_rectangles_page_from_session_v1(
+            source_qualified_page_ids,
+            source_page_id,
+            destination,
+            &destination_node_ids,
+        )
+        .is_ok()
+    }
+
+    pub(super) fn plan_duplicate_authored_rectangles_page_from_session_v1(
+        &self,
+        source_qualified_page_ids: &[PageId],
+        source_page_id: PageId,
+        destination_identity: AuthoredPageIdentityV1,
+        destination_node_ids: &[NodeId],
+    ) -> Result<DuplicateAuthoredRectanglesPageTransitionV1, EditorError> {
+        self.validate_source_identity()?;
+        if self.project_identity.is_none() {
+            return Err(EditorError::PageDuplicateUnsupported {
+                message: "durable project identity is required".to_owned(),
+            });
+        }
+        let source_identity = self
+            .authored_page_identities_v1()
+            .get(&source_page_id)
+            .copied()
+            .ok_or_else(|| EditorError::PageDuplicateUnsupported {
+                message: "source Page is not an independently proven AuthorCreated Page".to_owned(),
+            })?;
+        if !self
+            .authored_customer_page_ids_v1()
+            .contains(&source_page_id)
+        {
+            return Err(EditorError::PageDuplicateUnsupported {
+                message: "source Page is not active authored customer membership".to_owned(),
+            });
+        }
+        if self.graph.pages.contains_key(&destination_identity.page_id)
+            || self
+                .authored_page_identities_v1()
+                .contains_key(&destination_identity.page_id)
+            || self.has_page_lifecycle_history_v1(destination_identity.page_id)
+        {
+            return Err(EditorError::AuthoredPageIdentityConflict {
+                page_id: destination_identity.page_id,
+            });
+        }
+        let unique_destinations = destination_node_ids
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if unique_destinations.len() != destination_node_ids.len() {
+            return Err(EditorError::PageDuplicateUnsupported {
+                message: "destination NodeIds must be unique".to_owned(),
+            });
+        }
+        for destination_node_id in destination_node_ids {
+            if self.graph.nodes.contains_key(destination_node_id)
+                || self.authored_shapes.contains_key(destination_node_id)
+                || self.authored_lines.contains_key(destination_node_id)
+                || self
+                    .authored_stacks
+                    .values()
+                    .any(|stack| stack.members.contains(destination_node_id))
+            {
+                return Err(EditorError::PageDuplicateUnsupported {
+                    message:
+                        "destination NodeId already belongs to an existing source or authored object"
+                            .to_owned(),
+                });
+            }
+        }
+
+        let source_shapes = self
+            .authored_shapes
+            .iter()
+            .filter_map(|(id, shape)| {
+                (shape.page_id == source_page_id || shape.parent_id == source_page_id)
+                    .then_some(*id)
+            })
+            .collect::<BTreeSet<_>>();
+        let foreign_stack_reference = self.authored_stacks.iter().any(|(page, stack)| {
+            *page != source_page_id && stack.members.iter().any(|id| source_shapes.contains(id))
+        });
+        let dependent_graph_node = self.graph.nodes.values().any(|node| {
+            let mut parent = node.header.parent_id;
+            let mut visited = BTreeSet::new();
+            loop {
+                if parent == source_page_id.into_canonical()
+                    || source_shapes.contains(&NodeId::from_canonical(parent))
+                    || !visited.insert(parent)
+                {
+                    return true;
+                }
+                let Some(ancestor) = self.graph.nodes.get(&NodeId::from_canonical(parent)) else {
+                    return false;
+                };
+                parent = ancestor.header.parent_id;
+            }
+        });
+        let foreign_or_unproven_membership = self
+            .page_has_resolved_node_membership_v1(source_page_id)
+            || dependent_graph_node
+            || foreign_stack_reference
+            || self
+                .authored_lines
+                .values()
+                .any(|line| line.page_id == source_page_id || line.parent_id == source_page_id);
+        let customer_pages = self.effective_customer_page_order_v1(source_qualified_page_ids)?;
+        let state = DuplicateAuthoredRectanglePageStateV1 {
+            source_identity,
+            document_pages: self.graph.document.pages.clone(),
+            pages: self.graph.pages.clone(),
+            authored_shapes: self.authored_shapes.clone(),
+            source_stack: self.current_authored_stack_v1(source_page_id),
+            destination_stack: self.current_authored_stack_v1(destination_identity.page_id),
+        };
+        plan_duplicate_authored_rectangles_page_v1(
+            self.graph.document.id,
+            &state,
+            &customer_pages,
+            source_page_id,
+            destination_identity,
+            destination_node_ids,
+            foreign_or_unproven_membership,
+        )
+        .map_err(|error| EditorError::PageDuplicateUnsupported {
+            message: format!("atomic authored multi-Rectangle Page admission rejected: {error:?}"),
+        })
+    }
+
+    /// Exactly one history entry creates Page, 2-8 Rectangles and destination stack.
+    pub fn duplicate_authored_rectangles_page_v1(
+        &mut self,
+        source_qualified_page_ids: Vec<PageId>,
+        source_page_id: PageId,
+        destination_identity: AuthoredPageIdentityV1,
+        destination_node_ids: Vec<NodeId>,
+    ) -> Result<EditOperation, EditorError> {
+        let transition = self.plan_duplicate_authored_rectangles_page_from_session_v1(
+            &source_qualified_page_ids,
+            source_page_id,
+            destination_identity,
+            &destination_node_ids,
+        )?;
+        self.consume_canonical_duplicate_authored_rectangles_page_v1(transition)
+    }
+
+    pub(super) fn consume_canonical_duplicate_authored_rectangles_page_v1(
+        &mut self,
+        expected: DuplicateAuthoredRectanglesPageTransitionV1,
+    ) -> Result<EditOperation, EditorError> {
+        let authored = self
+            .authored_customer_page_ids_v1()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let sources = expected
+            .page
+            .before_customer_page_ids
+            .iter()
+            .copied()
+            .filter(|id| !authored.contains(id))
+            .collect::<Vec<_>>();
+        let destinations = expected
+            .destination_shapes
+            .iter()
+            .map(|shape| shape.node_id)
+            .collect::<Vec<_>>();
+        let planned = self.plan_duplicate_authored_rectangles_page_from_session_v1(
+            &sources,
+            expected.page.source_page_id,
+            expected.page.destination_identity,
+            &destinations,
+        )?;
+        if planned != expected {
+            return Err(EditorError::StalePageDuplicate);
+        }
+        let mut graph = self.graph.clone();
+        let mut shapes = self.authored_shapes.clone();
+        apply_authored_rectangles_page_duplicate_history_candidate_v1(
+            &mut graph,
+            &mut shapes,
+            self.current_authored_stack_v1(expected.page.source_page_id),
+            self.current_authored_stack_v1(expected.page.destination_identity.page_id),
+            self.authored_page_identities_v1()
+                .get(&expected.page.source_page_id)
+                .copied()
+                .ok_or(EditorError::StalePageDuplicate)?,
+            &expected,
+            true,
+        )?;
+        let final_stack = expected
+            .stacks
+            .last()
+            .map(|transition| transition.after.clone())
+            .ok_or_else(|| EditorError::PageDuplicateUnsupported {
+                message: "multi-Rectangle transition has no destination stack hops".to_owned(),
+            })?;
+        self.graph = graph;
+        self.authored_shapes = shapes;
+        self.install_authored_stack_v1(final_stack);
+        let operation = EditOperation::DuplicateAuthoredRectanglesPageV1 {
             transition: Box::new(expected),
         };
         self.undo.push(operation.clone());
@@ -2680,6 +3067,193 @@ mod authored_page_append_tests {
     }
 
     #[test]
+    fn duplicate_authored_rectangles_page_v031_is_one_reversible_project_operation() {
+        let source = page_id("22222222-2222-4222-8222-222222222222");
+        let identity = authored_identity();
+        let destination = AuthoredPageIdentityV1 {
+            page_id: PageId::from_canonical(pub_model::new_editor_canonical_id()),
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        let source_node_a = NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        let source_node_b = NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        let destination_node_a = NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        let destination_node_b = NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        let base = source_graph(vec![source]);
+        let mut session = EditorSession::new(base.clone()).expect("session");
+        let original_hash = session.source_hash();
+        session
+            .append_blank_page_v1(
+                vec![source],
+                identity,
+                Size2D::new(LengthEmu::new(2_000_000), LengthEmu::new(3_000_000)),
+                None,
+                None,
+            )
+            .expect("append authored Page");
+        let paint_a = crate::AuthoredShapePaintV1 {
+            fill: crate::AuthoredSolidFillV1 {
+                visible: true,
+                color: crate::Srgb8V1 {
+                    r: 30,
+                    g: 40,
+                    b: 50,
+                },
+            },
+            stroke: crate::AuthoredSolidStrokeV1 {
+                visible: true,
+                color: crate::Srgb8V1 { r: 0, g: 0, b: 0 },
+                width_emu: 12_700,
+            },
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        let paint_b = crate::AuthoredShapePaintV1 {
+            fill: crate::AuthoredSolidFillV1 {
+                visible: true,
+                color: crate::Srgb8V1 {
+                    r: 90,
+                    g: 80,
+                    b: 70,
+                },
+            },
+            stroke: crate::AuthoredSolidStrokeV1 {
+                visible: true,
+                color: crate::Srgb8V1 { r: 5, g: 6, b: 7 },
+                width_emu: 25_400,
+            },
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        session
+            .create_shape(
+                source_node_a,
+                identity.page_id,
+                RectEmu::new(
+                    LengthEmu::new(100_000),
+                    LengthEmu::new(150_000),
+                    LengthEmu::new(200_000),
+                    LengthEmu::new(300_000),
+                ),
+                paint_a,
+            )
+            .expect("first authored Rectangle");
+        assert!(
+            !session.can_duplicate_authored_rectangles_page_v1(&[source], identity.page_id),
+            "one Rectangle stays on the v0.30 command"
+        );
+        session
+            .create_shape(
+                source_node_b,
+                identity.page_id,
+                RectEmu::new(
+                    LengthEmu::new(500_000),
+                    LengthEmu::new(550_000),
+                    LengthEmu::new(250_000),
+                    LengthEmu::new(350_000),
+                ),
+                paint_b,
+            )
+            .expect("second authored Rectangle");
+        let before_graph = session.graph().clone();
+        let before_shapes = session.authored_shapes.clone();
+        let before_stack = session.current_authored_stack_v1(identity.page_id);
+        let history_len = session.operations().len();
+        assert!(session.can_duplicate_authored_rectangles_page_v1(&[source], identity.page_id));
+        assert_eq!(session.operations().len(), history_len);
+
+        let operation = session
+            .duplicate_authored_rectangles_page_v1(
+                vec![source],
+                identity.page_id,
+                destination,
+                vec![destination_node_a, destination_node_b],
+            )
+            .expect("one canonical Page and two-Rectangle duplication");
+        let stack_requirements = operation
+            .persistence_requirements()
+            .into_iter()
+            .filter(|requirement| requirement.feature == "node.authored_stack_order")
+            .map(|requirement| requirement.origin.expect("stack requirement node"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            stack_requirements,
+            vec![
+                destination_node_a.into_canonical(),
+                destination_node_b.into_canonical(),
+            ],
+            "native persistence must preserve exact copied paint-stack order"
+        );
+        assert!(matches!(
+            operation,
+            EditOperation::DuplicateAuthoredRectanglesPageV1 { .. }
+        ));
+        assert_eq!(session.operations().len(), history_len + 1);
+        assert_eq!(
+            session.graph().document.pages,
+            vec![source, identity.page_id, destination.page_id]
+        );
+        assert_eq!(
+            session
+                .current_authored_stack_v1(destination.page_id)
+                .members,
+            vec![destination_node_a, destination_node_b]
+        );
+        for (source_id, destination_id) in [
+            (source_node_a, destination_node_a),
+            (source_node_b, destination_node_b),
+        ] {
+            let source_shape = &before_shapes[&source_id];
+            let copied = &session.authored_shapes[&destination_id];
+            assert_eq!(copied.page_id, destination.page_id);
+            assert_eq!(copied.parent_id, destination.page_id);
+            assert_eq!(copied.bounds, source_shape.bounds);
+            assert_eq!(copied.paint, source_shape.paint);
+        }
+        assert_eq!(session.source_hash(), original_hash);
+
+        let duplicated_graph = session.graph().clone();
+        let duplicated_shapes = session.authored_shapes.clone();
+        let duplicated_stacks = session.authored_stacks.clone();
+        let project = session.project();
+        assert_eq!(project.schema_version, crate::EDITOR_PROJECT_VERSION_V0_31);
+        let encoded = serde_json::to_vec(&project).expect("encode v0.31");
+        let decoded: EditorProject = serde_json::from_slice(&encoded).expect("decode v0.31");
+        let mut reopened = EditorSession::new(base.clone()).expect("fresh session");
+        reopened
+            .apply_project(&decoded)
+            .expect("fresh v0.31 EditorProject replay");
+        assert_eq!(reopened.graph(), &duplicated_graph);
+        assert_eq!(reopened.authored_shapes, duplicated_shapes);
+        assert_eq!(reopened.authored_stacks, duplicated_stacks);
+        assert_eq!(reopened.operations(), decoded.operations.as_slice());
+        assert_eq!(reopened.source_hash(), original_hash);
+
+        session.undo().expect("one multi-Rectangle duplicate Undo");
+        assert_eq!(session.graph(), &before_graph);
+        assert_eq!(session.authored_shapes, before_shapes);
+        assert_eq!(
+            session.current_authored_stack_v1(identity.page_id),
+            before_stack
+        );
+        assert!(!session.authored_stacks.contains_key(&destination.page_id));
+        assert_eq!(session.operations().len(), history_len);
+        session.redo().expect("same multi-Rectangle duplicate Redo");
+        assert_eq!(session.graph(), &duplicated_graph);
+        assert_eq!(session.authored_shapes, duplicated_shapes);
+        assert_eq!(session.authored_stacks, duplicated_stacks);
+
+        let mut forged_legacy = decoded;
+        forged_legacy.schema_version = crate::EDITOR_PROJECT_VERSION_V0_30.into();
+        let mut legacy_reopen = EditorSession::new(base).expect("legacy fresh session");
+        assert!(matches!(
+            legacy_reopen.apply_project(&forged_legacy),
+            Err(
+                crate::EditorProjectError::LegacyProjectCarriesDuplicateAuthoredRectanglesPageOperation {
+                    ..
+                }
+            )
+        ));
+    }
+
+    #[test]
     fn duplicate_authored_rectangle_page_rejects_source_and_node_collisions_without_history() {
         let source = page_id("22222222-2222-4222-8222-222222222222");
         let identity = authored_identity();
@@ -3427,6 +4001,48 @@ pub(super) fn apply_authored_rectangle_page_duplicate_history_candidate_v1(
     Ok(())
 }
 
+pub(super) fn apply_authored_rectangles_page_duplicate_history_candidate_v1(
+    graph: &mut PubResolvedGraph,
+    shapes: &mut BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
+    source_stack: AuthoredStackV1,
+    destination_stack: AuthoredStackV1,
+    source_identity: AuthoredPageIdentityV1,
+    transition: &DuplicateAuthoredRectanglesPageTransitionV1,
+    forward: bool,
+) -> Result<(), EditorError> {
+    let mut candidate = DuplicateAuthoredRectanglePageStateV1 {
+        source_identity,
+        document_pages: graph.document.pages.clone(),
+        pages: graph.pages.clone(),
+        authored_shapes: shapes.clone(),
+        source_stack,
+        destination_stack,
+    };
+    let result = if forward {
+        apply_duplicate_authored_rectangles_page_forward_v1(
+            graph.document.id,
+            &mut candidate,
+            &transition.page.before_customer_page_ids,
+            false,
+            transition,
+        )
+    } else {
+        apply_duplicate_authored_rectangles_page_inverse_v1(
+            graph.document.id,
+            &mut candidate,
+            &transition.page.after_customer_page_ids,
+            transition,
+        )
+    };
+    result.map_err(|error| EditorError::PageDuplicateUnsupported {
+        message: format!("atomic authored multi-Rectangle Page transition rejected: {error:?}"),
+    })?;
+    graph.document.pages = candidate.document_pages;
+    graph.pages = candidate.pages;
+    *shapes = candidate.authored_shapes;
+    Ok(())
+}
+
 // Canonical authored overlay replay helpers, extracted unchanged from lib.rs.
 pub(super) fn authored_shape_from_operation(
     operation: &EditOperation,
@@ -3666,6 +4282,72 @@ impl EditorSession {
             return Err(EditorError::StalePageDuplicate);
         }
         apply_authored_rectangle_page_duplicate_history_candidate_v1(
+            graph,
+            shapes,
+            self.current_authored_stack_v1(transition.page.source_page_id),
+            self.current_authored_stack_v1(transition.page.destination_identity.page_id),
+            self.authored_page_identities_v1()
+                .get(&transition.page.source_page_id)
+                .copied()
+                .ok_or(EditorError::StalePageDuplicate)?,
+            transition,
+            true,
+        )
+    }
+
+    pub(super) fn undo_duplicate_rectangles_page_candidate_v1(
+        &self,
+        graph: &mut PubResolvedGraph,
+        shapes: &mut BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
+        transition: &DuplicateAuthoredRectanglesPageTransitionV1,
+    ) -> Result<(), EditorError> {
+        let source_id = transition.page.source_page_id;
+        apply_authored_rectangles_page_duplicate_history_candidate_v1(
+            graph,
+            shapes,
+            self.current_authored_stack_v1(source_id),
+            self.current_authored_stack_v1(transition.page.destination_identity.page_id),
+            self.authored_page_identities_v1()
+                .get(&source_id)
+                .copied()
+                .ok_or(EditorError::StalePageDuplicate)?,
+            transition,
+            false,
+        )
+    }
+
+    pub(super) fn redo_duplicate_rectangles_page_candidate_v1(
+        &self,
+        graph: &mut PubResolvedGraph,
+        shapes: &mut BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
+        transition: &DuplicateAuthoredRectanglesPageTransitionV1,
+    ) -> Result<(), EditorError> {
+        let authored = self
+            .authored_customer_page_ids_v1()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let sources = transition
+            .page
+            .before_customer_page_ids
+            .iter()
+            .copied()
+            .filter(|id| !authored.contains(id))
+            .collect::<Vec<_>>();
+        let destinations = transition
+            .destination_shapes
+            .iter()
+            .map(|shape| shape.node_id)
+            .collect::<Vec<_>>();
+        let fresh = self.plan_duplicate_authored_rectangles_page_from_session_v1(
+            &sources,
+            transition.page.source_page_id,
+            transition.page.destination_identity,
+            &destinations,
+        )?;
+        if fresh != *transition {
+            return Err(EditorError::StalePageDuplicate);
+        }
+        apply_authored_rectangles_page_duplicate_history_candidate_v1(
             graph,
             shapes,
             self.current_authored_stack_v1(transition.page.source_page_id),
