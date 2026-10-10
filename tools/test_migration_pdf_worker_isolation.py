@@ -6,6 +6,7 @@ import pathlib
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from unittest import mock
 
@@ -70,6 +71,28 @@ import pathlib
 out = pathlib.Path(os.environ["CHAPTERA_WORKER_OUTPUT_DIR"])
 out.mkdir(parents=True, exist_ok=True)
 os.link(os.environ["CHAPTERA_WORKER_INPUT"], out / "private-bytes.txt")
+"""
+
+
+SURVIVING_CHILD_WORKER = r"""#!/usr/bin/env python3
+import os
+import pathlib
+import time
+
+out = pathlib.Path(os.environ["CHAPTERA_WORKER_OUTPUT_DIR"])
+out.mkdir(parents=True, exist_ok=True)
+(out / "approved.txt").write_bytes(b"approved")
+directory_fd = os.open(out, os.O_RDONLY | os.O_DIRECTORY)
+if os.fork() == 0:
+    # This directory FD remains valid after staging is renamed to published.
+    time.sleep(0.7)
+    late_fd = os.open(
+        "late.txt", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=directory_fd
+    )
+    os.write(late_fd, b"modified-after-publish")
+    os.close(late_fd)
+    os._exit(0)
+os.close(directory_fd)
 """
 
 
@@ -243,6 +266,29 @@ class MigrationPdfWorkerIsolationTests(unittest.TestCase):
             self.assertTrue(result.timed_out)
             self.assertTrue(result.staging_cleaned)
             self.assertFalse(final.exists())
+
+    def test_successful_leader_cannot_leave_child_to_mutate_published_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            worker = self.write_worker(tmp, "forked.py", SURVIVING_CHILD_WORKER)
+            final = tmp / "published"
+            result = run_isolated_worker(
+                [sys.executable, str(worker)],
+                final_output_dir=final,
+                timeout_seconds=5,
+                limits=self.limits(),
+                inherit_environment=False,
+            )
+
+            self.assertTrue(result.succeeded, result.stderr_tail)
+            self.assertEqual(("approved.txt",), result.outputs)
+            self.assertEqual(b"approved", (final / "approved.txt").read_bytes())
+            # The child had an open directory descriptor to the renamed
+            # staging tree. It must be killed BEFORE promotion, not only
+            # after a timeout or while the original leader is still alive.
+            time.sleep(1.0)
+            self.assertEqual(["approved.txt"], [p.name for p in final.iterdir()])
+            self.assertEqual(list(tmp.glob(".published.stage-*")), [])
 
     def test_hard_link_to_outside_input_is_never_published(self):
         with tempfile.TemporaryDirectory() as tmp:
