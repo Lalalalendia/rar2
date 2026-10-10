@@ -1,0 +1,40 @@
+name: Publisher source-font requirements and private exporter
+
+on:
+  pull_request:
+    paths:
+      - "tools/pub_source_font_requirements_v1.py"
+      - "tools/export_cloud_reader_windows_fonts.py"
+      - "tools/ci/test_pub_source_font_requirements_v1.py"
+      - "tools/ci/test_export_cloud_reader_windows_fonts.py"
+      - "docs/cloud-reader-font-resources-v1.md"
+      - "apps/web/acceptance/receipts/viewer-geometry.real.json"
+      - ".github/workflows/editor-source-font-requirements-v1.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  prove-source-family-and-private-packet-fences:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Compile source-font planning and licensed-file helper
+        run: |
+          python -m py_compile tools/pub_source_font_requirements_v1.py
+          python -m py_compile tools/export_cloud_reader_windows_fonts.py
+          python -m py_compile tools/ci/test_pub_source_font_requirements_v1.py
+          python -m py_compile tools/ci/test_export_cloud_reader_windows_fonts.py
+      - name: Verify actual Publisher Reader font-family/style/index provenance
+        run: python tools/ci/test_pub_source_font_requirements_v1.py
+      - name: Verify private licensed-font exporter and incomplete-style protection
+        run: python tools/ci/test_export_cloud_reader_windows_fonts.py
