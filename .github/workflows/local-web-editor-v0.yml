@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "apps/web/local-editor.html"
+      - "apps/web/story-line-endings-v1.mjs"
+      - "apps/web/story-line-endings-range-v1.test.mjs"
       - "apps/web/editor-service-client-v1.mjs"
       - "apps/web/editor-service-client-font.test.mjs"
       - "apps/web/font-environment-v1.mjs"
@@ -73,7 +75,7 @@ jobs:
       - name: Prove physical byte client and existing picker negatives
         run: |
           node --check tools/verify_font_http_chromium.mjs
-          node --test apps/web/editor-service-client-font.test.mjs apps/web/font-environment-v1.test.mjs
+          node --test apps/web/editor-service-client-font.test.mjs apps/web/font-environment-v1.test.mjs apps/web/story-line-endings-range-v1.test.mjs
       - name: Install real Chromium for local Editor reachability
         run: |
           npm install --no-save playwright@1.55.0
@@ -111,6 +113,9 @@ jobs:
             target/local-font-ui/chromium.png
             target/local-font-ui/pinned-font-apply-receipt.json
             target/local-font-ui/pinned-font-edited.project.json
+            target/local-font-ui/pinned-font-physical-glyph-spans.json
+            target/local-font-ui/pinned-font-line-fit-receipt.json
+            target/local-font-ui/pinned-font-full-Story.project.json
             target/font-http-acceptance/receipt.json
             target/font-http-acceptance/browser.json
             target/font-http-acceptance/browser.png

@@ -12,6 +12,12 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 const INDEX_HTML: &[u8] = include_bytes!("../../web/product-editor.html");
+const CREATE_HTML: &[u8] = include_bytes!("../../web/cloud-project-new.html");
+const CREATE_CSS: &[u8] = include_bytes!("../../web/cloud-project-new.css");
+const CREATE_ENTRY: &[u8] = include_bytes!("../../web/cloud-project-new-v1.mjs");
+const FILE_ENTRY: &[u8] = include_bytes!("../../web/file-entry-v1.mjs");
+const SOURCE_INGRESS_CLIENT: &[u8] =
+    include_bytes!("../../web/chaptera-cloud-source-ingress-v1.mjs");
 const EDITOR_CSS: &[u8] = include_bytes!("../../web/product-editor.css");
 const EDITOR_ENTRY: &[u8] = include_bytes!("../../web/product-editor-entry-v1.mjs");
 const PRODUCT_SERVICE: &[u8] = include_bytes!("../../web/chaptera-product-editor-service-v1.mjs");
@@ -31,11 +37,36 @@ struct EmbeddedAsset {
     bytes: &'static [u8],
 }
 
-const ASSETS: [EmbeddedAsset; 10] = [
+const ASSETS: [EmbeddedAsset; 15] = [
     EmbeddedAsset {
         name: "product-editor.html",
         content_type: "text/html; charset=utf-8",
         bytes: INDEX_HTML,
+    },
+    EmbeddedAsset {
+        name: "cloud-project-new.html",
+        content_type: "text/html; charset=utf-8",
+        bytes: CREATE_HTML,
+    },
+    EmbeddedAsset {
+        name: "cloud-project-new.css",
+        content_type: "text/css; charset=utf-8",
+        bytes: CREATE_CSS,
+    },
+    EmbeddedAsset {
+        name: "cloud-project-new-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: CREATE_ENTRY,
+    },
+    EmbeddedAsset {
+        name: "file-entry-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: FILE_ENTRY,
+    },
+    EmbeddedAsset {
+        name: "chaptera-cloud-source-ingress-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: SOURCE_INGRESS_CLIENT,
     },
     EmbeddedAsset {
         name: "product-editor.css",
@@ -90,6 +121,15 @@ where
 {
     Router::new()
         .route("/editor/doc/{document_id}", get(index))
+        .route("/editor", get(new_project))
+        .route("/editor/new", get(new_project))
+        .route("/editor/cloud-project-new.css", get(create_css))
+        .route("/editor/cloud-project-new-v1.mjs", get(create_entry))
+        .route("/editor/file-entry-v1.mjs", get(file_entry))
+        .route(
+            "/editor/chaptera-cloud-source-ingress-v1.mjs",
+            get(source_ingress_client),
+        )
         .route("/editor/product-editor.css", get(editor_css))
         .route("/editor/product-editor-entry-v1.mjs", get(editor_entry))
         .route(
@@ -127,32 +167,47 @@ pub fn version_manifest() -> Value {
 async fn index() -> Response {
     asset_response(&ASSETS[0])
 }
-async fn editor_css() -> Response {
+async fn new_project() -> Response {
     asset_response(&ASSETS[1])
 }
-async fn editor_entry() -> Response {
+async fn create_css() -> Response {
     asset_response(&ASSETS[2])
 }
-async fn product_service() -> Response {
+async fn create_entry() -> Response {
     asset_response(&ASSETS[3])
 }
-async fn rich_shell() -> Response {
+async fn file_entry() -> Response {
     asset_response(&ASSETS[4])
 }
-async fn interaction_scene() -> Response {
+async fn source_ingress_client() -> Response {
     asset_response(&ASSETS[5])
 }
-async fn interaction() -> Response {
+async fn editor_css() -> Response {
     asset_response(&ASSETS[6])
 }
-async fn observability() -> Response {
+async fn editor_entry() -> Response {
     asset_response(&ASSETS[7])
 }
-async fn reader_adapter() -> Response {
+async fn product_service() -> Response {
     asset_response(&ASSETS[8])
 }
-async fn reader_render() -> Response {
+async fn rich_shell() -> Response {
     asset_response(&ASSETS[9])
+}
+async fn interaction_scene() -> Response {
+    asset_response(&ASSETS[10])
+}
+async fn interaction() -> Response {
+    asset_response(&ASSETS[11])
+}
+async fn observability() -> Response {
+    asset_response(&ASSETS[12])
+}
+async fn reader_adapter() -> Response {
+    asset_response(&ASSETS[13])
+}
+async fn reader_render() -> Response {
+    asset_response(&ASSETS[14])
 }
 
 fn asset_response(asset: &EmbeddedAsset) -> Response {
@@ -254,6 +309,47 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(bytes.as_ref(), READER_RENDER);
+    }
+
+    #[tokio::test]
+    async fn cloud_pub_new_project_route_serves_embedded_modules() {
+        let routes = router::<()>();
+        for (uri, expected_type, bytes) in [
+            ("/editor/new", "text/html; charset=utf-8", CREATE_HTML),
+            (
+                "/editor/cloud-project-new.css",
+                "text/css; charset=utf-8",
+                CREATE_CSS,
+            ),
+            (
+                "/editor/cloud-project-new-v1.mjs",
+                "text/javascript; charset=utf-8",
+                CREATE_ENTRY,
+            ),
+            (
+                "/editor/file-entry-v1.mjs",
+                "text/javascript; charset=utf-8",
+                FILE_ENTRY,
+            ),
+            (
+                "/editor/chaptera-cloud-source-ingress-v1.mjs",
+                "text/javascript; charset=utf-8",
+                SOURCE_INGRESS_CLIENT,
+            ),
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            assert_eq!(response.headers()["content-type"], expected_type, "{uri}");
+            let response_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(response_bytes.as_ref(), bytes, "{uri}");
+        }
+        let html = std::str::from_utf8(CREATE_HTML).unwrap();
+        assert!(html.contains("/editor/cloud-project-new-v1.mjs"));
+        assert!(!html.contains("x-chaptera-principal-id"));
     }
 
     #[test]

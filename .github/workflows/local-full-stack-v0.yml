@@ -7,6 +7,7 @@ on:
       - "apps/chaptera-server/src/main.rs"
       - "apps/chaptera-server/assets/local-dashboard.html"
       - "tools/run_local_full_stack.py"
+      - "tools/test_run_local_full_stack.py"
       - "Start-Chaptera-Local.cmd"
       - ".github/workflows/local-full-stack-v0.yml"
       - "deploy/config/chaptera.prod.example.toml"
@@ -35,7 +36,9 @@ jobs:
       - name: Test runtime shell
         run: cargo test -p chaptera-server --test runtime_shell -- --nocapture
       - name: Check launcher syntax
-        run: python -m py_compile tools/run_local_full_stack.py
+        run: python -m py_compile tools/run_local_full_stack.py tools/test_run_local_full_stack.py
+      - name: Prove startup order and fail-closed child exits
+        run: python -m unittest discover -s tools -p "test_run_local_full_stack.py" -v
       - name: Smoke exact local launcher without browser
         run: python tools/run_local_full_stack.py --no-browser --smoke
 
@@ -48,6 +51,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - name: Prove Windows launcher process order
+        shell: pwsh
+        run: python -m unittest discover -s tools -p "test_run_local_full_stack.py" -v
       - name: Smoke the exact double-click launcher path
         shell: cmd
         run: Start-Chaptera-Local.cmd --no-browser --smoke

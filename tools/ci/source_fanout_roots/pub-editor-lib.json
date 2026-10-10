@@ -1,5 +1,5 @@
 {
   "schema": "chaptera.source-fanout-root.v1",
   "path": "vendor/producer-a/crates/pub-editor/src/lib.rs",
-  "max_lines": 7812
+  "max_lines": 7747
 }
