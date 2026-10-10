@@ -13,6 +13,7 @@ const assets = new Map([
   ["/editor/new", ["apps/web/cloud-project-new.html", "text/html"]],
   ["/editor/cloud-project-new.css", ["apps/web/cloud-project-new.css", "text/css"]],
   ["/editor/cloud-project-new-v1.mjs", ["apps/web/cloud-project-new-v1.mjs", "text/javascript"]],
+  ["/editor/chaptera-cloud-workspace-session-v1.mjs", ["apps/web/chaptera-cloud-workspace-session-v1.mjs", "text/javascript"]],
   ["/editor/chaptera-cloud-source-ingress-v1.mjs", ["apps/web/chaptera-cloud-source-ingress-v1.mjs", "text/javascript"]],
   ["/editor/file-entry-v1.mjs", ["apps/web/file-entry-v1.mjs", "text/javascript"]],
 ]);

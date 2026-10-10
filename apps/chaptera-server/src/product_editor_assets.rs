@@ -16,6 +16,8 @@ const CREATE_HTML: &[u8] = include_bytes!("../../web/cloud-project-new.html");
 const CREATE_CSS: &[u8] = include_bytes!("../../web/cloud-project-new.css");
 const CREATE_ENTRY: &[u8] = include_bytes!("../../web/cloud-project-new-v1.mjs");
 const FILE_ENTRY: &[u8] = include_bytes!("../../web/file-entry-v1.mjs");
+const WORKSPACE_SESSION_CLIENT: &[u8] =
+    include_bytes!("../../web/chaptera-cloud-workspace-session-v1.mjs");
 const SOURCE_INGRESS_CLIENT: &[u8] =
     include_bytes!("../../web/chaptera-cloud-source-ingress-v1.mjs");
 const EDITOR_CSS: &[u8] = include_bytes!("../../web/product-editor.css");
@@ -37,7 +39,7 @@ struct EmbeddedAsset {
     bytes: &'static [u8],
 }
 
-const ASSETS: [EmbeddedAsset; 15] = [
+const ASSETS: [EmbeddedAsset; 16] = [
     EmbeddedAsset {
         name: "product-editor.html",
         content_type: "text/html; charset=utf-8",
@@ -62,6 +64,11 @@ const ASSETS: [EmbeddedAsset; 15] = [
         name: "file-entry-v1.mjs",
         content_type: "text/javascript; charset=utf-8",
         bytes: FILE_ENTRY,
+    },
+    EmbeddedAsset {
+        name: "chaptera-cloud-workspace-session-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: WORKSPACE_SESSION_CLIENT,
     },
     EmbeddedAsset {
         name: "chaptera-cloud-source-ingress-v1.mjs",
@@ -127,6 +134,10 @@ where
         .route("/editor/cloud-project-new-v1.mjs", get(create_entry))
         .route("/editor/file-entry-v1.mjs", get(file_entry))
         .route(
+            "/editor/chaptera-cloud-workspace-session-v1.mjs",
+            get(workspace_session_client),
+        )
+        .route(
             "/editor/chaptera-cloud-source-ingress-v1.mjs",
             get(source_ingress_client),
         )
@@ -179,35 +190,38 @@ async fn create_entry() -> Response {
 async fn file_entry() -> Response {
     asset_response(&ASSETS[4])
 }
-async fn source_ingress_client() -> Response {
+async fn workspace_session_client() -> Response {
     asset_response(&ASSETS[5])
 }
-async fn editor_css() -> Response {
+async fn source_ingress_client() -> Response {
     asset_response(&ASSETS[6])
 }
-async fn editor_entry() -> Response {
+async fn editor_css() -> Response {
     asset_response(&ASSETS[7])
 }
-async fn product_service() -> Response {
+async fn editor_entry() -> Response {
     asset_response(&ASSETS[8])
 }
-async fn rich_shell() -> Response {
+async fn product_service() -> Response {
     asset_response(&ASSETS[9])
 }
-async fn interaction_scene() -> Response {
+async fn rich_shell() -> Response {
     asset_response(&ASSETS[10])
 }
-async fn interaction() -> Response {
+async fn interaction_scene() -> Response {
     asset_response(&ASSETS[11])
 }
-async fn observability() -> Response {
+async fn interaction() -> Response {
     asset_response(&ASSETS[12])
 }
-async fn reader_adapter() -> Response {
+async fn observability() -> Response {
     asset_response(&ASSETS[13])
 }
-async fn reader_render() -> Response {
+async fn reader_adapter() -> Response {
     asset_response(&ASSETS[14])
+}
+async fn reader_render() -> Response {
+    asset_response(&ASSETS[15])
 }
 
 fn asset_response(asset: &EmbeddedAsset) -> Response {
@@ -330,6 +344,11 @@ mod tests {
                 "/editor/file-entry-v1.mjs",
                 "text/javascript; charset=utf-8",
                 FILE_ENTRY,
+            ),
+            (
+                "/editor/chaptera-cloud-workspace-session-v1.mjs",
+                "text/javascript; charset=utf-8",
+                WORKSPACE_SESSION_CLIENT,
             ),
             (
                 "/editor/chaptera-cloud-source-ingress-v1.mjs",
