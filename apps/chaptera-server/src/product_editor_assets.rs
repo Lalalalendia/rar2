@@ -45,7 +45,7 @@ struct EmbeddedAsset {
     bytes: &'static [u8],
 }
 
-const ASSETS: [EmbeddedAsset; 16] = [
+const ASSETS: [EmbeddedAsset; 21] = [
     EmbeddedAsset {
         name: "product-editor.html",
         content_type: "text/html; charset=utf-8",
@@ -220,6 +220,21 @@ async fn index() -> Response {
 async fn new_project() -> Response {
     asset_response(&ASSETS[1])
 }
+async fn project_home() -> Response {
+    asset_response(&ASSETS[4])
+}
+async fn project_home_css() -> Response {
+    asset_response(&ASSETS[5])
+}
+async fn project_home_entry() -> Response {
+    asset_response(&ASSETS[6])
+}
+async fn project_home_controller() -> Response {
+    asset_response(&ASSETS[7])
+}
+async fn project_catalog_client() -> Response {
+    asset_response(&ASSETS[8])
+}
 async fn create_css() -> Response {
     asset_response(&ASSETS[2])
 }
@@ -227,40 +242,40 @@ async fn create_entry() -> Response {
     asset_response(&ASSETS[3])
 }
 async fn file_entry() -> Response {
-    asset_response(&ASSETS[4])
-}
-async fn workspace_session_client() -> Response {
-    asset_response(&ASSETS[5])
-}
-async fn source_ingress_client() -> Response {
-    asset_response(&ASSETS[6])
-}
-async fn editor_css() -> Response {
-    asset_response(&ASSETS[7])
-}
-async fn editor_entry() -> Response {
-    asset_response(&ASSETS[8])
-}
-async fn product_service() -> Response {
     asset_response(&ASSETS[9])
 }
-async fn rich_shell() -> Response {
+async fn workspace_session_client() -> Response {
     asset_response(&ASSETS[10])
 }
-async fn interaction_scene() -> Response {
+async fn source_ingress_client() -> Response {
     asset_response(&ASSETS[11])
 }
-async fn interaction() -> Response {
+async fn editor_css() -> Response {
     asset_response(&ASSETS[12])
 }
-async fn observability() -> Response {
+async fn editor_entry() -> Response {
     asset_response(&ASSETS[13])
 }
-async fn reader_adapter() -> Response {
+async fn product_service() -> Response {
     asset_response(&ASSETS[14])
 }
-async fn reader_render() -> Response {
+async fn rich_shell() -> Response {
     asset_response(&ASSETS[15])
+}
+async fn interaction_scene() -> Response {
+    asset_response(&ASSETS[16])
+}
+async fn interaction() -> Response {
+    asset_response(&ASSETS[17])
+}
+async fn observability() -> Response {
+    asset_response(&ASSETS[18])
+}
+async fn reader_adapter() -> Response {
+    asset_response(&ASSETS[19])
+}
+async fn reader_render() -> Response {
+    asset_response(&ASSETS[20])
 }
 
 fn asset_response(asset: &EmbeddedAsset) -> Response {
