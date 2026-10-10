@@ -892,13 +892,15 @@ pub(super) fn apply_page_lifecycle_graph_forward_v1(
             )
             .map_err(delete_blank_authored_page_error_to_editor_v1)
         }
-        EditOperation::DuplicateBlankPageV1 { transition } => apply_duplicate_blank_page_forward_v1(
-            graph.document.id,
-            &mut graph.document.pages,
-            &mut graph.pages,
-            transition,
-        )
-        .map_err(duplicate_blank_page_error_to_editor_v1),
+        EditOperation::DuplicateBlankPageV1 { transition } => {
+            apply_duplicate_blank_page_forward_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(duplicate_blank_page_error_to_editor_v1)
+        }
         EditOperation::InsertBlankPageAfterV1 { transition } => {
             apply_insert_blank_page_after_forward_v1(
                 graph.document.id,
@@ -956,13 +958,15 @@ pub(super) fn apply_page_lifecycle_graph_inverse_v1(
             )
             .map_err(delete_blank_authored_page_error_to_editor_v1)
         }
-        EditOperation::DuplicateBlankPageV1 { transition } => apply_duplicate_blank_page_inverse_v1(
-            graph.document.id,
-            &mut graph.document.pages,
-            &mut graph.pages,
-            transition,
-        )
-        .map_err(duplicate_blank_page_error_to_editor_v1),
+        EditOperation::DuplicateBlankPageV1 { transition } => {
+            apply_duplicate_blank_page_inverse_v1(
+                graph.document.id,
+                &mut graph.document.pages,
+                &mut graph.pages,
+                transition,
+            )
+            .map_err(duplicate_blank_page_error_to_editor_v1)
+        }
         EditOperation::InsertBlankPageAfterV1 { transition } => {
             apply_insert_blank_page_after_inverse_v1(
                 graph.document.id,
