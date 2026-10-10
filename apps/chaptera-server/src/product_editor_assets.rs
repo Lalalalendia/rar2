@@ -15,6 +15,12 @@ const INDEX_HTML: &[u8] = include_bytes!("../../web/product-editor.html");
 const CREATE_HTML: &[u8] = include_bytes!("../../web/cloud-project-new.html");
 const CREATE_CSS: &[u8] = include_bytes!("../../web/cloud-project-new.css");
 const CREATE_ENTRY: &[u8] = include_bytes!("../../web/cloud-project-new-v1.mjs");
+const HOME_HTML: &[u8] = include_bytes!("../../web/cloud-project-home.html");
+const HOME_CSS: &[u8] = include_bytes!("../../web/cloud-project-home.css");
+const HOME_ENTRY: &[u8] = include_bytes!("../../web/cloud-project-home-v1.mjs");
+const PROJECT_HOME_CONTROLLER: &[u8] = include_bytes!("../../web/project-home-v1.mjs");
+const PROJECT_CATALOG_CLIENT: &[u8] =
+    include_bytes!("../../web/chaptera-cloud-project-catalog-v1.mjs");
 const FILE_ENTRY: &[u8] = include_bytes!("../../web/file-entry-v1.mjs");
 const WORKSPACE_SESSION_CLIENT: &[u8] =
     include_bytes!("../../web/chaptera-cloud-workspace-session-v1.mjs");
@@ -59,6 +65,31 @@ const ASSETS: [EmbeddedAsset; 16] = [
         name: "cloud-project-new-v1.mjs",
         content_type: "text/javascript; charset=utf-8",
         bytes: CREATE_ENTRY,
+    },
+    EmbeddedAsset {
+        name: "cloud-project-home.html",
+        content_type: "text/html; charset=utf-8",
+        bytes: HOME_HTML,
+    },
+    EmbeddedAsset {
+        name: "cloud-project-home.css",
+        content_type: "text/css; charset=utf-8",
+        bytes: HOME_CSS,
+    },
+    EmbeddedAsset {
+        name: "cloud-project-home-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: HOME_ENTRY,
+    },
+    EmbeddedAsset {
+        name: "project-home-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: PROJECT_HOME_CONTROLLER,
+    },
+    EmbeddedAsset {
+        name: "chaptera-cloud-project-catalog-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: PROJECT_CATALOG_CLIENT,
     },
     EmbeddedAsset {
         name: "file-entry-v1.mjs",
@@ -128,8 +159,16 @@ where
 {
     Router::new()
         .route("/editor/doc/{document_id}", get(index))
-        .route("/editor", get(new_project))
+        .route("/editor", get(project_home))
+        .route("/editor/projects", get(project_home))
         .route("/editor/new", get(new_project))
+        .route("/editor/cloud-project-home.css", get(project_home_css))
+        .route("/editor/cloud-project-home-v1.mjs", get(project_home_entry))
+        .route("/editor/project-home-v1.mjs", get(project_home_controller))
+        .route(
+            "/editor/chaptera-cloud-project-catalog-v1.mjs",
+            get(project_catalog_client),
+        )
         .route("/editor/cloud-project-new.css", get(create_css))
         .route("/editor/cloud-project-new-v1.mjs", get(create_entry))
         .route("/editor/file-entry-v1.mjs", get(file_entry))
@@ -368,6 +407,32 @@ mod tests {
         }
         let html = std::str::from_utf8(CREATE_HTML).unwrap();
         assert!(html.contains("/editor/cloud-project-new-v1.mjs"));
+        assert!(!html.contains("x-chaptera-principal-id"));
+    }
+
+    #[tokio::test]
+    async fn cloud_project_home_route_serves_catalog_modules() {
+        let routes = router::<()>();
+        for (uri, expected_type, bytes) in [
+            ("/editor", "text/html; charset=utf-8", HOME_HTML),
+            ("/editor/projects", "text/html; charset=utf-8", HOME_HTML),
+            ("/editor/cloud-project-home.css", "text/css; charset=utf-8", HOME_CSS),
+            ("/editor/cloud-project-home-v1.mjs", "text/javascript; charset=utf-8", HOME_ENTRY),
+            ("/editor/project-home-v1.mjs", "text/javascript; charset=utf-8", PROJECT_HOME_CONTROLLER),
+            ("/editor/chaptera-cloud-project-catalog-v1.mjs", "text/javascript; charset=utf-8", PROJECT_CATALOG_CLIENT),
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            assert_eq!(response.headers()["content-type"], expected_type, "{uri}");
+            let response_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(response_bytes.as_ref(), bytes, "{uri}");
+        }
+        let html = std::str::from_utf8(HOME_HTML).unwrap();
+        assert!(html.contains("/editor/cloud-project-home-v1.mjs"));
         assert!(!html.contains("x-chaptera-principal-id"));
     }
 
