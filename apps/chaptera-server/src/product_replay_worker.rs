@@ -79,6 +79,62 @@ pub struct ProductReplayWorkerReceiptV1 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ProductRevisionEdgeV1 {
+    pub document_id: String,
+    pub parent_revision: String,
+    pub parent_cursor: i64,
+    pub operation_id: String,
+    pub request_hash: String,
+    pub canonical_event: Vec<u8>,
+    pub child_revision: String,
+    pub child_cursor: i64,
+    pub resulting_state_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authoring_root_hash: Option<String>,
+    pub semantic_schema_version: i64,
+    pub committed_at_ms: i64,
+}
+
+impl From<&RevisionEdge> for ProductRevisionEdgeV1 {
+    fn from(edge: &RevisionEdge) -> Self {
+        Self {
+            document_id: edge.document_id.clone(),
+            parent_revision: edge.parent_revision.clone(),
+            parent_cursor: edge.parent_cursor,
+            operation_id: edge.operation_id.clone(),
+            request_hash: edge.request_hash.clone(),
+            canonical_event: edge.canonical_event.clone(),
+            child_revision: edge.child_revision.clone(),
+            child_cursor: edge.child_cursor,
+            resulting_state_hash: edge.resulting_state_hash.clone(),
+            authoring_root_hash: edge.authoring_root_hash.clone(),
+            semantic_schema_version: edge.semantic_schema_version,
+            committed_at_ms: edge.committed_at_ms,
+        }
+    }
+}
+
+impl ProductRevisionEdgeV1 {
+    fn into_revision_edge(self) -> RevisionEdge {
+        RevisionEdge {
+            document_id: self.document_id,
+            parent_revision: self.parent_revision,
+            parent_cursor: self.parent_cursor,
+            operation_id: self.operation_id,
+            request_hash: self.request_hash,
+            canonical_event: self.canonical_event,
+            child_revision: self.child_revision,
+            child_cursor: self.child_cursor,
+            resulting_state_hash: self.resulting_state_hash,
+            authoring_root_hash: self.authoring_root_hash,
+            semantic_schema_version: self.semantic_schema_version,
+            committed_at_ms: self.committed_at_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProductMaterializationInputV1 {
     pub protocol_version: String,
     pub document_id: String,
@@ -87,7 +143,7 @@ pub struct ProductMaterializationInputV1 {
     pub baseline_revision_id: String,
     pub baseline_cursor: i64,
     pub requested_revision_id: String,
-    pub edges: Vec<RevisionEdge>,
+    pub edges: Vec<ProductRevisionEdgeV1>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -562,7 +618,12 @@ pub fn run_product_materialization_worker(
         &source_bytes,
         &input.document_id,
         &input.source_sha256,
-        &input.edges,
+        &input
+            .edges
+            .iter()
+            .cloned()
+            .map(ProductRevisionEdgeV1::into_revision_edge)
+            .collect::<Vec<_>>(),
     )
     .map_err(|_| {
         ProductReplayWorkerError::new(
@@ -860,7 +921,7 @@ impl IsolatedProductMaterializationProducer {
             baseline_revision_id: baseline_revision_id.to_owned(),
             baseline_cursor,
             requested_revision_id: requested_revision_id.to_owned(),
-            edges: edges.to_vec(),
+            edges: edges.iter().map(ProductRevisionEdgeV1::from).collect(),
         };
         validate_materialization_input(
             &input,
