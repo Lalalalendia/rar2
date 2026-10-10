@@ -541,8 +541,8 @@ async fn commit_move_node(
                 "durable source authority contains an invalid SHA-256 identity",
             )
         })?;
-        let mut session =
-            open_mature_0x2c_editor(&materialized.source_bytes, source_hash).map_err(|error| {
+        let mut session = open_mature_0x2c_editor(&materialized.source_bytes, source_hash)
+            .map_err(|error| {
                 ProductApiError::internal(
                     "editor_source_unsupported",
                     format!("canonical editor could not open durable source: {error}"),
