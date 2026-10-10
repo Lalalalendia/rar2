@@ -1527,45 +1527,156 @@ jobs:
           if ($proc.ExitCode -ne 0) { throw "factory_v3_native_failed" }
           "PUB_FACTORY_NATIVE_SUCCESS=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Stage only bounded source-safe Factory receipts
+
+      - name: Stage classified, source-safe Factory evidence
         if: ${{ always() }}
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
-          $stageRoot = if ($env:PUB_FACTORY_WORK_ROOT) { $env:PUB_FACTORY_WORK_ROOT } else {
+          $root = if ($env:PUB_FACTORY_WORK_ROOT) { $env:PUB_FACTORY_WORK_ROOT } else {
             Join-Path $env:RUNNER_TEMP "pub-factory-v3-evidence-only"
           }
-          $safe = Join-Path $stageRoot "upload-safe"
+          $safe = Join-Path $root "upload-safe"
           New-Item -ItemType Directory -Force -Path $safe | Out-Null
           "PUB_FACTORY_SAFE_ROOT=$safe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          $allowed = @{
-            "tlb-shape-effects-progress.json" = "chaptera.pub.t891-native-progress.v1"
-            "tlb-shape-effects-batch01.json" = "chaptera.pub.tlb-native-batch-result.v1"
-            "operation-algebra-t840-style-fill-01.json" = "chaptera.pub.operation-algebra-native-result.v1"
+
+          function Find-UniqueReceipt([string]$Name) {
+            if (-not $env:PUB_FACTORY_LAUNCH_DIR -or
+                -not (Test-Path -LiteralPath $env:PUB_FACTORY_LAUNCH_DIR -PathType Container)) { return $null }
+            $matches = @(Get-ChildItem -LiteralPath $env:PUB_FACTORY_LAUNCH_DIR -Recurse -File -Filter $Name)
+            if ($matches.Count -gt 1) { throw "factory_v3_ambiguous_receipt_$Name" }
+            if ($matches.Count -eq 0) { return $null }
+            if ($matches[0].Length -gt 2097152) { throw "factory_v3_receipt_oversize_$Name" }
+            return $matches[0].FullName
           }
-          $found = @{}
-          if ($env:PUB_FACTORY_LAUNCH_DIR -and (Test-Path -LiteralPath $env:PUB_FACTORY_LAUNCH_DIR)) {
-            foreach ($name in $allowed.Keys) {
-              $matches = @(Get-ChildItem -LiteralPath $env:PUB_FACTORY_LAUNCH_DIR -Recurse -File -Filter $name)
-              if ($matches.Count -gt 1) { throw "factory_v3_ambiguous_receipt_$name" }
-              if ($matches.Count -eq 0) { continue }
-              if ($matches[0].Length -gt 2097152) { throw "factory_v3_receipt_too_large_$name" }
-              $raw = Get-Content -LiteralPath $matches[0].FullName -Raw
-              if ($raw -match '(?i)[a-z]:\\' -or $raw -match '\\\\[^"\s]+\\' -or $raw -match '(?i)/Users/|/home/') {
-                throw "factory_v3_receipt_contains_local_path_$name"
-              }
-              $parsed = $raw | ConvertFrom-Json
-              if ([string]$parsed.schema -ne $allowed[$name]) { throw "factory_v3_receipt_schema_mismatch_$name" }
-              Copy-Item -LiteralPath $matches[0].FullName -Destination (Join-Path $safe $name)
-              $found[$name] = $true
+          function CheckedLabel([object]$Value) {
+            $v = [string]$Value
+            if ($v -notmatch '^[a-zA-Z0-9_.-]{1,128}$') {
+              throw "factory_v3_unexpected_evidence_label"
             }
+            return $v
           }
-          $complete = ($found.ContainsKey("tlb-shape-effects-batch01.json") -and $found.ContainsKey("operation-algebra-t840-style-fill-01.json"))
+
+          $runSummaryPath = Find-UniqueReceipt "RUN-SUMMARY.json"
+          $t891Status = "not_started"
+          $t892Status = "not_started"
+          if ($runSummaryPath) {
+            $run = Get-Content -LiteralPath $runSummaryPath -Raw | ConvertFrom-Json
+            if ([string]$run.schema -ne "chaptera.pub.factory-native-portable-result.v1" -or
+                [string]$run.source_main_sha -ne "3bd4497003e02f7f48a91e14da25a89a201dcf87") {
+              throw "factory_v3_native_run_summary_identity_mismatch"
+            }
+            $t891Status = CheckedLabel $run.t891.status
+            $t892Status = CheckedLabel $run.t892.status
+            if ($t891Status -notin @("not_started","running","success","failed") -or
+                $t892Status -notin @("not_started","running","success","failed")) {
+              throw "factory_v3_native_unexpected_scientific_status"
+            }
+            [ordered]@{
+              schema = "chaptera.pub.factory-v3-source-safe-run.v1"
+              source_main_sha = "3bd4497003e02f7f48a91e14da25a89a201dcf87"
+              t891 = $t891Status
+              t892 = $t892Status
+              final_status = CheckedLabel $run.final_status
+              errors_redacted = $true
+            } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $safe "factory-v3-run.json") -Encoding utf8
+          }
+
+          $progressPath = Find-UniqueReceipt "tlb-shape-effects-progress.json"
+          if ($progressPath) {
+            $progress = Get-Content -LiteralPath $progressPath -Raw | ConvertFrom-Json
+            if ([string]$progress.schema -ne "chaptera.pub.t891-native-progress.v1") {
+              throw "factory_v3_progress_schema_mismatch"
+            }
+            [ordered]@{
+              schema = "chaptera.pub.factory-v3-source-safe-progress.v1"
+              sequence = [int]$progress.sequence
+              candidate_id = if ($progress.candidate_id) { CheckedLabel $progress.candidate_id } else { $null }
+              arm_name = if ($progress.arm_name) { CheckedLabel $progress.arm_name } else { $null }
+              step = CheckedLabel $progress.step
+            } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $safe "t891-progress.json") -Encoding utf8
+          }
+
+          $t891Ready = $false
+          $t891Path = Find-UniqueReceipt "t891-evidence-summary.json"
+          if ($t891Path) {
+            $e = Get-Content -LiteralPath $t891Path -Raw | ConvertFrom-Json
+            if ([string]$e.schema -ne "chaptera.pub.t891-evidence-summary.v1" -or
+                [string]$e.experiment_id -ne "PUB-TLB-SHAPE-EFFECTS-BATCH01" -or
+                [int]$e.candidate_count -ne 9 -or [int]$e.arm_count -ne 27 -or
+                @($e.candidate_summaries).Count -ne 9) {
+              throw "factory_v3_t891_scientific_receipt_incomplete"
+            }
+            $expected = @(
+              "GlowFormat.Radius","GlowFormat.Transparency","GlowFormat.Visible",
+              "ReflectionFormat.Type","ReflectionFormat.Transparency","ReflectionFormat.Size",
+              "ReflectionFormat.Offset","ReflectionFormat.Blur","ReflectionFormat.Visible"
+            )
+            $seen = @{}
+            $rows = @()
+            foreach ($entry in $e.candidate_summaries) {
+              $id = CheckedLabel $entry.candidate_id
+              if ($id -notin $expected -or $seen.ContainsKey($id)) {
+                throw "factory_v3_t891_candidate_identity_mismatch"
+              }
+              $seen[$id] = $true
+              $rows += [ordered]@{
+                candidate_id = $id
+                classification = CheckedLabel $entry.classification
+                evidence_state = CheckedLabel $entry.evidence_state
+                next_gate = CheckedLabel $entry.next_gate
+                runtime_changed = [bool]$entry.runtime_changed
+                same_value_side_effect = [bool]$entry.same_value_side_effect
+                same_value_changed_range_count = [int]$entry.same_vs_control.blast.changed_range_count
+                changed_value_changed_range_count = [int]$entry.changed_vs_control.blast.changed_range_count
+                changed_value_changed_stream_count = [int]$entry.changed_vs_control.blast.changed_stream_count
+              }
+            }
+            [ordered]@{
+              schema = "chaptera.pub.factory-v3-source-safe-t891.v1"
+              experiment_id = "PUB-TLB-SHAPE-EFFECTS-BATCH01"
+              source_main_sha = "3bd4497003e02f7f48a91e14da25a89a201dcf87"
+              candidate_count = 9
+              arm_count = 27
+              batch_state = CheckedLabel $e.batch_state
+              candidates = $rows
+              pub_laws_promoted = 0
+            } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $safe "t891-summary.json") -Encoding utf8
+            $t891Ready = $true
+          }
+
+          $t892Ready = $false
+          $t892Path = Find-UniqueReceipt "operation-algebra-t840-style-fill-01.json"
+          if ($t892Path) {
+            $e = Get-Content -LiteralPath $t892Path -Raw | ConvertFrom-Json
+            if ([string]$e.schema -ne "chaptera.pub.operation-algebra-native-result.v1" -or
+                [string]$e.experiment_id -ne "PUB-OPALG-T840-STYLE-FILL-01" -or
+                [string]$e.pair_id -ne "T840-STYLE-FILL-R2C2" -or
+                [string]$e.a -ne "ApplyTableStyle_CheckbookRegister" -or
+                [string]$e.b -ne "DirectCellFillOverride_R2C2") {
+              throw "factory_v3_t892_scientific_receipt_identity_mismatch"
+            }
+            [ordered]@{
+              schema = "chaptera.pub.factory-v3-source-safe-t892.v1"
+              experiment_id = "PUB-OPALG-T840-STYLE-FILL-01"
+              source_main_sha = "3bd4497003e02f7f48a91e14da25a89a201dcf87"
+              arms = @("AB","BA","A_only","B_only","control")
+              classification = CheckedLabel $e.comparison.classification
+              semantic_equal = [bool]$e.comparison.semantic_equal
+              persistence_equal = [bool]$e.comparison.persistence_equal
+              render_equal = [bool]$e.comparison.render_equal
+              pub_laws_promoted = 0
+            } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $safe "t892-summary.json") -Encoding utf8
+            $t892Ready = $true
+          }
+
+          $complete = ($t891Ready -and $t892Ready -and
+            $t891Status -eq "success" -and $t892Status -eq "success")
           [ordered]@{
             schema = "chaptera.pub.factory-v3-execution-stage.v1"
             native_execution_succeeded = ($env:PUB_FACTORY_NATIVE_SUCCESS -eq "true")
-            t891_receipt_present = $found.ContainsKey("tlb-shape-effects-batch01.json")
-            t892_receipt_present = $found.ContainsKey("operation-algebra-t840-style-fill-01.json")
+            t891_receipt_present = $t891Ready
+            t892_receipt_present = $t892Ready
             terminal_batch_complete = [bool]$complete
             format_law_promoted = $false
           } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $safe "factory-v3-stage.json") -Encoding utf8
