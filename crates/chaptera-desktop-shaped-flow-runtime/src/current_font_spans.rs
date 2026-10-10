@@ -14,8 +14,8 @@ use chaptera_text_format_overlay::{
 };
 use pub_editor::EditorSession;
 use pub_layout::{
-    BoundedLayoutEnvironment, BoundedShapedText, BoundedShapingRuntime,
-    font_fingerprint_sha256, shape_bounded_ltr_segment,
+    BoundedLayoutEnvironment, BoundedShapedText, BoundedShapingRuntime, font_fingerprint_sha256,
+    shape_bounded_ltr_segment,
 };
 use pub_model::{LengthEmu, StoryId};
 use serde::{Deserialize, Serialize};
@@ -83,15 +83,19 @@ pub fn shape_current_exact_font_override_spans_v1(
     story_id: StoryId,
     trusted: &ServerFontResourceV1<'_>,
 ) -> Result<CurrentPhysicalFontSpansV1, DesktopShapedFlowRuntimeError> {
-    let story = editor.graph().stories.get(&story_id).ok_or_else(|| {
-        blocked("story_missing", "current EditorSession Story is missing")
-    })?;
-    let overlay = editor.current_text_format_overlay_v1(story_id).map_err(|error| {
-        blocked(
-            "current_font_overlay_unavailable",
-            format!("current Story format history is unavailable: {error}"),
-        )
-    })?;
+    let story = editor
+        .graph()
+        .stories
+        .get(&story_id)
+        .ok_or_else(|| blocked("story_missing", "current EditorSession Story is missing"))?;
+    let overlay = editor
+        .current_text_format_overlay_v1(story_id)
+        .map_err(|error| {
+            blocked(
+                "current_font_overlay_unavailable",
+                format!("current Story format history is unavailable: {error}"),
+            )
+        })?;
     project_exact_font_spans_from_overlay_v1(&overlay, &story.text, trusted)
 }
 
@@ -109,9 +113,8 @@ fn project_exact_font_spans_from_overlay_v1(
             "current Story text differs from canonical format scalar extent",
         ));
     }
-    let state_hash = state_hash_v1(state).map_err(|error| {
-        blocked("current_font_overlay_invalid", error.to_string())
-    })?;
+    let state_hash = state_hash_v1(state)
+        .map_err(|error| blocked("current_font_overlay_invalid", error.to_string()))?;
     if text_len == 0 {
         return Ok(CurrentPhysicalFontSpansV1 {
             protocol_version: CURRENT_FONT_SPANS_V1.to_owned(),
@@ -125,12 +128,12 @@ fn project_exact_font_spans_from_overlay_v1(
         });
     }
 
-    let resource_segments = effective_property_segments_v1(
-        state, FormatPropertyV1::FontResource, 0, text_len,
-    ).map_err(|error| blocked("current_font_resource_invalid", error.to_string()))?;
-    let size_segments = effective_property_segments_v1(
-        state, FormatPropertyV1::FontSizeEmu, 0, text_len,
-    ).map_err(|error| blocked("current_font_size_invalid", error.to_string()))?;
+    let resource_segments =
+        effective_property_segments_v1(state, FormatPropertyV1::FontResource, 0, text_len)
+            .map_err(|error| blocked("current_font_resource_invalid", error.to_string()))?;
+    let size_segments =
+        effective_property_segments_v1(state, FormatPropertyV1::FontSizeEmu, 0, text_len)
+            .map_err(|error| blocked("current_font_size_invalid", error.to_string()))?;
     let mut boundaries = BTreeSet::from([0, text_len]);
     for run in resource_segments.iter().chain(size_segments.iter()) {
         boundaries.insert(run.start_scalar);
@@ -182,8 +185,18 @@ fn project_exact_font_spans_from_overlay_v1(
             FormatValueV1::Integer(value) => i64::try_from(*value)
                 .ok()
                 .filter(|value| *value > 0)
-                .ok_or_else(|| blocked("current_font_size_invalid", "font size exceeds valid EMU domain"))?,
-            _ => return Err(blocked("current_font_size_invalid", "effective font size must be integer EMU")),
+                .ok_or_else(|| {
+                    blocked(
+                        "current_font_size_invalid",
+                        "font size exceeds valid EMU domain",
+                    )
+                })?,
+            _ => {
+                return Err(blocked(
+                    "current_font_size_invalid",
+                    "effective font size must be integer EMU",
+                ));
+            }
         };
 
         match (&property.source, &property.value) {
@@ -207,9 +220,8 @@ fn project_exact_font_spans_from_overlay_v1(
                 let start_index = usize::try_from(start).map_err(|_| {
                     blocked("story_extent_overflow", "invalid Unicode scalar start")
                 })?;
-                let end_index = usize::try_from(end).map_err(|_| {
-                    blocked("story_extent_overflow", "invalid Unicode scalar end")
-                })?;
+                let end_index = usize::try_from(end)
+                    .map_err(|_| blocked("story_extent_overflow", "invalid Unicode scalar end"))?;
                 let interval: String = scalars[start_index..end_index].iter().collect();
                 let runtime = BoundedShapingRuntime {
                     layout: BoundedLayoutEnvironment {
@@ -224,9 +236,8 @@ fn project_exact_font_spans_from_overlay_v1(
                     font_size_emu: LengthEmu::new(size_emu),
                     font_bytes: trusted.full_font_bytes,
                 };
-                let shaped = shape_bounded_ltr_segment(&interval, start, &runtime).map_err(
-                    |error| blocked("current_font_shaping_failed", error.to_string()),
-                )?;
+                let shaped = shape_bounded_ltr_segment(&interval, start, &runtime)
+                    .map_err(|error| blocked("current_font_shaping_failed", error.to_string()))?;
                 spans.push(CurrentPhysicalFontSpanV1::AdmittedExact {
                     start_scalar: start,
                     end_scalar: end,
@@ -259,9 +270,8 @@ fn project_exact_font_spans_from_overlay_v1(
 mod tests {
     use super::*;
     use chaptera_text_format_overlay::{
-        BaseCharacterFormatV1, BaseFormatRunV1, FontAuthoringScopeV1,
-        FontReplacementCandidateV1, TextFormatOverrideRunV1,
-        build_text_format_overlay_state_v1,
+        BaseCharacterFormatV1, BaseFormatRunV1, FontAuthoringScopeV1, FontReplacementCandidateV1,
+        TextFormatOverrideRunV1, build_text_format_overlay_state_v1,
     };
 
     fn fixture_identity(font: &[u8]) -> FontResourceIdentityV1 {
@@ -290,8 +300,16 @@ mod tests {
             "source-story-revision",
             4,
             vec![
-                BaseFormatRunV1 { start_scalar: 0, end_scalar: 2, format: base(120_000, "pub-source-font:first") },
-                BaseFormatRunV1 { start_scalar: 2, end_scalar: 4, format: base(240_000, "pub-source-font:second") },
+                BaseFormatRunV1 {
+                    start_scalar: 0,
+                    end_scalar: 2,
+                    format: base(120_000, "pub-source-font:first"),
+                },
+                BaseFormatRunV1 {
+                    start_scalar: 2,
+                    end_scalar: 4,
+                    format: base(240_000, "pub-source-font:second"),
+                },
             ],
             vec![TextFormatOverrideRunV1 {
                 start_scalar: start,
@@ -299,7 +317,8 @@ mod tests {
                 property: FormatPropertyV1::FontResource,
                 value: FormatValueV1::FontResource(identity.clone()),
             }],
-        ).expect("canonical mixed source and physical font history")
+        )
+        .expect("canonical mixed source and physical font history")
     }
 
     #[test]
@@ -307,8 +326,11 @@ mod tests {
         let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
         let identity = fixture_identity(bytes);
         let resource = ServerFontResourceV1 {
-            identity: &identity, full_font_bytes: bytes, face_count: 1,
-            is_full_resource: true, authoring_admitted: true,
+            identity: &identity,
+            full_font_bytes: bytes,
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: true,
         };
         let before = state(&identity, 1, 3);
         let result = project_exact_font_spans_from_overlay_v1(&before, "Aéfi", &resource)
@@ -318,21 +340,43 @@ mod tests {
         assert!(!result.authoritative_line_breaks);
         assert!(!result.fixed_pdf_allowed);
         assert_eq!(result.spans.len(), 4);
-        assert!(matches!(result.spans[0], CurrentPhysicalFontSpanV1::SourceUnresolved {start_scalar:0,end_scalar:1,..}));
-        assert!(matches!(result.spans[3], CurrentPhysicalFontSpanV1::SourceUnresolved {start_scalar:3,end_scalar:4,..}));
+        assert!(matches!(
+            result.spans[0],
+            CurrentPhysicalFontSpanV1::SourceUnresolved {
+                start_scalar: 0,
+                end_scalar: 1,
+                ..
+            }
+        ));
+        assert!(matches!(
+            result.spans[3],
+            CurrentPhysicalFontSpanV1::SourceUnresolved {
+                start_scalar: 3,
+                end_scalar: 4,
+                ..
+            }
+        ));
         for (position, expected_size) in [(1, 120_000_i64), (2, 240_000_i64)] {
             match &result.spans[position] {
                 CurrentPhysicalFontSpanV1::AdmittedExact {
-                    start_scalar, end_scalar, font_size_emu, shaped, identity: admitted,
+                    start_scalar,
+                    end_scalar,
+                    font_size_emu,
+                    shaped,
+                    identity: admitted,
                 } => {
                     assert_eq!(admitted, &identity);
                     assert_eq!(*start_scalar, position as u32);
                     assert_eq!(*end_scalar, position as u32 + 1);
                     assert_eq!(font_size_emu.get(), expected_size);
                     assert!(!shaped.glyphs.is_empty());
-                    assert!(shaped.glyphs.iter().all(|glyph|
-                        *start_scalar <= glyph.cluster && glyph.cluster < *end_scalar
-                    ));
+                    assert!(
+                        shaped
+                            .glyphs
+                            .iter()
+                            .all(|glyph| *start_scalar <= glyph.cluster
+                                && glyph.cluster < *end_scalar)
+                    );
                 }
                 _ => panic!("physical span was silently replaced by source font"),
             }
@@ -356,26 +400,40 @@ mod tests {
             (true, true, bytes, 0),
         ] {
             let grant = ServerFontResourceV1 {
-                identity: &identity, full_font_bytes: payload,
-                face_count, is_full_resource: full, authoring_admitted: allowed,
+                identity: &identity,
+                full_font_bytes: payload,
+                face_count,
+                is_full_resource: full,
+                authoring_admitted: allowed,
             };
-            assert!(
-                project_exact_font_spans_from_overlay_v1(&overlay, "Aéfi", &grant).is_err()
-            );
+            assert!(project_exact_font_spans_from_overlay_v1(&overlay, "Aéfi", &grant).is_err());
         }
         let wrong_identity = FontResourceIdentityV1 {
             resource_id: "00000000-0000-4000-8000-000000000000".to_owned(),
             ..identity.clone()
         };
         let wrong = ServerFontResourceV1 {
-            identity: &wrong_identity, full_font_bytes: bytes, face_count: 1,
-            is_full_resource: true, authoring_admitted: true,
+            identity: &wrong_identity,
+            full_font_bytes: bytes,
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: true,
         };
         assert!(project_exact_font_spans_from_overlay_v1(&overlay, "Aéfi", &wrong).is_err());
-        assert!(project_exact_font_spans_from_overlay_v1(&overlay, "Aé", &ServerFontResourceV1 {
-            identity: &identity, full_font_bytes: bytes, face_count: 1,
-            is_full_resource: true, authoring_admitted: true,
-        }).is_err());
+        assert!(
+            project_exact_font_spans_from_overlay_v1(
+                &overlay,
+                "Aé",
+                &ServerFontResourceV1 {
+                    identity: &identity,
+                    full_font_bytes: bytes,
+                    face_count: 1,
+                    is_full_resource: true,
+                    authoring_admitted: true,
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -383,25 +441,29 @@ mod tests {
         let bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
         let identity = fixture_identity(bytes);
         let trusted = ServerFontResourceV1 {
-            identity: &identity, full_font_bytes: bytes, face_count: 1,
-            is_full_resource: true, authoring_admitted: true,
+            identity: &identity,
+            full_font_bytes: bytes,
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: true,
         };
         let overlay = state(&identity, 0, 4);
         let result = project_exact_font_spans_from_overlay_v1(&overlay, "Aéfi", &trusted)
             .expect("all scalar ranges have an admitted physical font");
         assert!(result.all_scalars_shaped);
-        assert!(result.spans.iter().all(|span| matches!(
-            span, CurrentPhysicalFontSpanV1::AdmittedExact { .. }
-        )));
+        assert!(
+            result
+                .spans
+                .iter()
+                .all(|span| matches!(span, CurrentPhysicalFontSpanV1::AdmittedExact { .. }))
+        );
         assert!(!result.authoritative_line_breaks);
         assert!(!result.fixed_pdf_allowed);
     }
 
     #[test]
     fn real_newsletter_font_history_shapes_only_admitted_scalar_and_survives_reopen() {
-        use pub_editor::{
-            EditorProjectFontReopenGrantV1, Sha256Digest, open_mature_0x2c_editor,
-        };
+        use pub_editor::{EditorProjectFontReopenGrantV1, Sha256Digest, open_mature_0x2c_editor};
         use sha2::{Digest, Sha256};
         use std::{collections::BTreeMap, env, fs};
         let Some(path) = env::var_os("CHAPTERA_SAMPLE_NEWSLETTER") else {
@@ -412,20 +474,36 @@ mod tests {
         let source_hash = Sha256Digest::from_bytes(Sha256::digest(&source_bytes).into());
         let mut editor = open_mature_0x2c_editor(&source_bytes, source_hash)
             .expect("real source-backed EditorSession");
-        let story_id = editor.graph().stories.keys().copied().find(|id| {
-            editor.graph().stories[id].text.chars().count() >= 2
-                && editor.current_text_format_overlay_v1(*id).is_ok()
-        }).expect("real PUB Story with a fully bounded source typography base");
+        let story_id = editor
+            .graph()
+            .stories
+            .keys()
+            .copied()
+            .find(|id| {
+                editor.graph().stories[id].text.chars().count() >= 2
+                    && editor.current_text_format_overlay_v1(*id).is_ok()
+            })
+            .expect("real PUB Story with a fully bounded source typography base");
         let font_bytes = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"), "/../../assets/fonts/ofl/abel/Abel-Regular.ttf"
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/fonts/ofl/abel/Abel-Regular.ttf"
         ));
         let identity = fixture_identity(font_bytes);
         let grant = ServerFontResourceV1 {
-            identity: &identity, full_font_bytes: font_bytes, face_count: 1,
-            is_full_resource: true, authoring_admitted: true,
+            identity: &identity,
+            full_font_bytes: font_bytes,
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: true,
         };
         let scope = FontAuthoringScopeV1 {
-            document_id: editor.project().identity.as_ref().unwrap().document_id.clone(),
+            document_id: editor
+                .project()
+                .identity
+                .as_ref()
+                .unwrap()
+                .document_id
+                .clone(),
             revision_id: "sha256:".to_owned() + &"1".repeat(64),
             scene_snapshot_id: "sha256:".to_owned() + &"2".repeat(64),
             layout_environment_id: "sha256:".to_owned() + &"3".repeat(64),
@@ -447,19 +525,25 @@ mod tests {
         let original = shape_current_exact_font_override_spans_v1(&editor, story_id, &grant)
             .expect("source binding stays unresolved without physical bytes");
         assert!(!original.all_scalars_shaped);
-        assert!(original.spans.iter().all(|x| matches!(
-            x, CurrentPhysicalFontSpanV1::SourceUnresolved { .. }
-        )));
+        assert!(
+            original
+                .spans
+                .iter()
+                .all(|x| matches!(x, CurrentPhysicalFontSpanV1::SourceUnresolved { .. }))
+        );
         let before = editor.current_text_format_state_hash_v1(story_id).unwrap();
-        editor.set_admitted_font_resource_v1(
-            story_id, 0, 1, &candidate, &scope, &grant, &before,
-        ).expect("real authorized one-scalar font edit");
+        editor
+            .set_admitted_font_resource_v1(story_id, 0, 1, &candidate, &scope, &grant, &before)
+            .expect("real authorized one-scalar font edit");
         let edited = shape_current_exact_font_override_spans_v1(&editor, story_id, &grant)
             .expect("current exact font override must yield real glyph positions");
         assert!(!edited.all_scalars_shaped);
         assert!(edited.spans.iter().any(|x| matches!(
-            x, CurrentPhysicalFontSpanV1::AdmittedExact {
-                start_scalar:0,end_scalar:1, ..
+            x,
+            CurrentPhysicalFontSpanV1::AdmittedExact {
+                start_scalar: 0,
+                end_scalar: 1,
+                ..
             }
         )));
         let project = editor.project();
@@ -473,34 +557,40 @@ mod tests {
                 .expect("reapply exact glyphs"),
             edited,
         );
-        let mut fresh = open_mature_0x2c_editor(&source_bytes, source_hash)
-            .expect("fresh real PUB source");
+        let mut fresh =
+            open_mature_0x2c_editor(&source_bytes, source_hash).expect("fresh real PUB source");
         let reopen = EditorProjectFontReopenGrantV1 {
             source_hash,
             project_document_id: &project.identity.as_ref().unwrap().document_id,
             resource: ServerFontResourceV1 {
-                identity: &identity, full_font_bytes: font_bytes, face_count: 1,
-                is_full_resource: true, authoring_admitted: true,
+                identity: &identity,
+                full_font_bytes: font_bytes,
+                face_count: 1,
+                is_full_resource: true,
+                authoring_admitted: true,
             },
         };
-        fresh.apply_project_with_admitted_font_resources_v1(
-            &project, &BTreeMap::new(), &[reopen],
-        ).expect("fresh project re-admitted by independent exact byte grant");
+        fresh
+            .apply_project_with_admitted_font_resources_v1(&project, &BTreeMap::new(), &[reopen])
+            .expect("fresh project re-admitted by independent exact byte grant");
         assert_eq!(
             shape_current_exact_font_override_spans_v1(&fresh, story_id, &grant)
                 .expect("fresh reopened Story must yield same glyph spans"),
             edited,
         );
         assert_eq!(source_hash, editor.source_hash());
-        println!("REAL_PUB_FONT_SPANS_OK {}", serde_json::json!({
-            "protocol_version": CURRENT_FONT_SPANS_V1,
-            "real_source": true,
-            "exact_glyphs": true,
-            "one_scalar_only": true,
-            "undo_redo": true,
-            "fresh_reopen": true,
-            "line_breaks_verified": false,
-            "fixed_pdf_allowed": false,
-        }));
+        println!(
+            "REAL_PUB_FONT_SPANS_OK {}",
+            serde_json::json!({
+                "protocol_version": CURRENT_FONT_SPANS_V1,
+                "real_source": true,
+                "exact_glyphs": true,
+                "one_scalar_only": true,
+                "undo_redo": true,
+                "fresh_reopen": true,
+                "line_breaks_verified": false,
+                "fixed_pdf_allowed": false,
+            })
+        );
     }
 }

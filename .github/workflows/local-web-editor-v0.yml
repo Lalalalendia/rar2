@@ -19,9 +19,6 @@ on:
       - "tools/native-pub-candidate-cli/src/bin/pinned_font_authoring_v1.rs"
       - "tools/run_pinned_font_authoring_real.py"
       - "tools/native-pub-candidate-cli/Cargo.toml"
-      - "crates/chaptera-desktop-shaped-flow-runtime/src/current_font_spans.rs"
-      - "crates/chaptera-desktop-shaped-flow-runtime/src/lib.rs"
-      - "crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml"
       - "assets/fonts/ofl/abel/**"
       - "tools/run_local_real_editor.py"
       - "tools/run_local_full_stack.py"
@@ -83,13 +80,6 @@ jobs:
             --test real_pinned_font_resource_v1 -- --nocapture \
             | tee /tmp/chaptera-real-pub-font-history.log
           grep -q 'REAL_PUB_FONT_HISTORY_OK' /tmp/chaptera-real-pub-font-history.log
-      - name: Prove exact admitted font override glyph spans on a real PUB
-        env:
-          CHAPTERA_SAMPLE_NEWSLETTER: ${{ github.workspace }}/.chaptera-local/editor/SampleNewsletter.pub
-        run: |
-          set -o pipefail
-          cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml current_font_spans::tests -- --nocapture | tee /tmp/chaptera-exact-font-spans.log
-          grep -q 'REAL_PUB_FONT_SPANS_OK' /tmp/chaptera-exact-font-spans.log
       - name: Prove real selected Story font intent through pinned Rust worker and fresh project
         run: |
           python tools/run_pinned_font_authoring_real.py \

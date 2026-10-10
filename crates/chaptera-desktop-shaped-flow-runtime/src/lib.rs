@@ -1,5 +1,5 @@
-mod current_typography;
 mod current_font_spans;
+mod current_typography;
 mod fixed_pdf_pages;
 mod fixed_pdf_resources;
 mod font_resource;
