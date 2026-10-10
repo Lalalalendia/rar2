@@ -19,13 +19,13 @@ use session_table::apply_table_cell_state;
 mod session_text;
 use session_geometry::{
     append_blank_page_error_to_editor_v1, apply_authored_line_inverse,
-    apply_authored_shape_delete_forward,
-    apply_authored_shape_delete_inverse, apply_authored_shape_inverse,
-    apply_authored_stack_history_forward_v1, authored_line_from_operation,
-    authored_shape_from_operation, authored_stack_operation_page_id_v1,
-    delete_blank_authored_page_error_to_editor_v1, derive_authored_stacks_from_operations_v1,
-    display_page_append_error_v1, display_page_delete_error_v1, page_order_error_to_editor_v1,
-    validate_move_nodes_transition, validate_resize_nodes_transition,
+    apply_authored_shape_delete_forward, apply_authored_shape_delete_inverse,
+    apply_authored_shape_inverse, apply_authored_stack_history_forward_v1,
+    authored_line_from_operation, authored_shape_from_operation,
+    authored_stack_operation_page_id_v1, delete_blank_authored_page_error_to_editor_v1,
+    derive_authored_stacks_from_operations_v1, display_page_append_error_v1,
+    display_page_delete_error_v1, page_order_error_to_editor_v1, validate_move_nodes_transition,
+    validate_resize_nodes_transition,
 };
 use session_geometry::{
     display_page_duplicate_error_v1, display_page_insert_error_v1,
