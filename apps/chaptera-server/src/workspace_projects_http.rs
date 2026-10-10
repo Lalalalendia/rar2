@@ -11,15 +11,19 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use axum_extra::extract::cookie::CookieJar;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
     auth_http::{AuthHttpError, AuthHttpState},
-    project_persistence_sqlite::{ProjectCatalogEntry, SqliteProjectPersistence},
+    authz_runtime::{AuthzError, CAP_MEMBER_MANAGE, SqliteAuthzAuthority},
+    project_persistence_sqlite::{
+        ProjectCatalogEntry, ProjectRenameReceipt, RenameProjectRequest,
+        SqliteProjectPersistence,
+    },
     source_ingress::IngressError,
     workspace_context::{SqliteWorkspaceContextResolver, WorkspaceContextError},
 };
@@ -29,6 +33,7 @@ pub struct WorkspaceProjectsHttpState {
     auth: AuthHttpState,
     workspace: SqliteWorkspaceContextResolver,
     projects: SqliteProjectPersistence,
+    authz: SqliteAuthzAuthority,
 }
 
 impl WorkspaceProjectsHttpState {
@@ -36,11 +41,13 @@ impl WorkspaceProjectsHttpState {
         auth: AuthHttpState,
         workspace: SqliteWorkspaceContextResolver,
         projects: SqliteProjectPersistence,
+        authz: SqliteAuthzAuthority,
     ) -> Self {
         Self {
             auth,
             workspace,
             projects,
+            authz,
         }
     }
 }
@@ -48,12 +55,29 @@ impl WorkspaceProjectsHttpState {
 pub fn router(state: WorkspaceProjectsHttpState) -> Router {
     Router::new()
         .route("/v1/workspaces/{workspace_id}/projects", get(list))
+        .route("/v1/projects/{project_id}/rename", post(rename))
         .with_state(state)
 }
 
 #[derive(Serialize)]
 struct ProjectsResponse {
     projects: Vec<ProjectCatalogEntry>,
+}
+
+
+#[derive(Deserialize)]
+struct RenameRequestBody {
+    protocol_version: String,
+    expected_lifecycle_generation: u64,
+    expected_metadata_version: u64,
+    name: String,
+    client_request_id: String,
+}
+
+#[derive(Serialize)]
+struct RenameResponse {
+    protocol_version: &'static str,
+    receipt: ProjectRenameReceipt,
 }
 
 async fn list(
@@ -86,9 +110,80 @@ async fn list(
     Ok(Json(ProjectsResponse { projects }))
 }
 
+
+async fn rename(
+    State(state): State<WorkspaceProjectsHttpState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Json(body): Json<RenameRequestBody>,
+) -> Result<Json<RenameResponse>, CatalogHttpError> {
+    if body.protocol_version != "chaptera.project-rename.v1" {
+        return Err(CatalogHttpError::Persistence(IngressError::new(
+            "project_rename_protocol_invalid",
+            "project rename protocol version is unsupported",
+        )));
+    }
+
+    let principal = state
+        .auth
+        .authenticate_mutation_request(&headers, &jar)
+        .await?;
+    let identity = state.projects.project_lifecycle_identity(&project_id).await?;
+    let workspace = state
+        .workspace
+        .resolve(&principal.principal_id, &identity.workspace_id)
+        .await?;
+    if workspace.tenant_id != identity.tenant_id {
+        return Err(CatalogHttpError::Persistence(IngressError::new(
+            "project_workspace_tenant_mismatch",
+            "project identity does not match resolved workspace tenant",
+        )));
+    }
+
+    let now = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| CatalogHttpError::Clock)?
+            .as_millis(),
+    )
+    .map_err(|_| CatalogHttpError::Clock)?;
+
+    state
+        .authz
+        .authorize(
+            &identity.tenant_id,
+            &identity.document_id,
+            &principal.principal_id,
+            CAP_MEMBER_MANAGE,
+            &body.client_request_id,
+            now,
+        )
+        .await?;
+
+    let receipt = state
+        .projects
+        .rename_project(RenameProjectRequest {
+            tenant_id: identity.tenant_id,
+            project_id: identity.project_id,
+            expected_lifecycle_generation: body.expected_lifecycle_generation,
+            expected_metadata_version: body.expected_metadata_version,
+            name: body.name,
+            client_request_id: body.client_request_id,
+            now_ms: now,
+        })
+        .await?;
+
+    Ok(Json(RenameResponse {
+        protocol_version: "chaptera.project-rename-receipt.v1",
+        receipt,
+    }))
+}
+
 enum CatalogHttpError {
     Auth(AuthHttpError),
     Workspace(WorkspaceContextError),
+    Authz(AuthzError),
     Persistence(IngressError),
     Clock,
 }
@@ -102,6 +197,12 @@ impl From<AuthHttpError> for CatalogHttpError {
 impl From<WorkspaceContextError> for CatalogHttpError {
     fn from(value: WorkspaceContextError) -> Self {
         Self::Workspace(value)
+    }
+}
+
+impl From<AuthzError> for CatalogHttpError {
+    fn from(value: AuthzError) -> Self {
+        Self::Authz(value)
     }
 }
 
@@ -126,11 +227,33 @@ impl IntoResponse for CatalogHttpError {
                 };
                 (status, Json(json!({ "error": code }))).into_response()
             }
+            Self::Authz(error) => {
+                let code = error.code;
+                let status = match code {
+                    "grant_missing" | "grant_expired" | "capability_denied" => {
+                        StatusCode::FORBIDDEN
+                    }
+                    "invalid_identity" | "unknown_capability" | "invalid_now" => {
+                        StatusCode::BAD_REQUEST
+                    }
+                    _ => StatusCode::INTERNAL_SERVER_ERROR,
+                };
+                (status, Json(json!({ "error": code }))).into_response()
+            }
             Self::Persistence(error) => {
                 let code = error.code;
                 let status = match code {
-                    "project_catalog_pagination_required" => StatusCode::CONFLICT,
-                    "invalid_identifier" => StatusCode::BAD_REQUEST,
+                    "project_catalog_pagination_required"
+                    | "stale_project_lifecycle_generation"
+                    | "stale_project_metadata_version"
+                    | "project_not_active"
+                    | "idempotency_conflict" => StatusCode::CONFLICT,
+                    "project_not_found" => StatusCode::NOT_FOUND,
+                    "invalid_identifier"
+                    | "invalid_project_name"
+                    | "invalid_now"
+                    | "project_version_out_of_range"
+                    | "project_rename_protocol_invalid" => StatusCode::BAD_REQUEST,
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
                 };
                 (status, Json(json!({ "error": code }))).into_response()
