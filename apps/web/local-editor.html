@@ -711,8 +711,9 @@ async function commitAdmittedPhysicalFontRange({storyId,start,end,entireStory}){
     shell.loadSnapshot(scene,{preserveSelection:true});
     await disclosure();
     fontMessage.className="warn";
-    fontMessage.textContent=(entireStory?"Entire Story font":"Selected range font")+
-      " saved in canonical Project; Publisher-native layout and fixed PDF remain blocked.";
+    fontMessage.textContent=entireStory
+      ? "Entire Story font saved in canonical Project; Publisher-native layout and fixed PDF remain blocked."
+      : "Font saved in canonical Project; layout and fixed PDF remain blocked.";
   }finally{
     syncTextControls();
   }
