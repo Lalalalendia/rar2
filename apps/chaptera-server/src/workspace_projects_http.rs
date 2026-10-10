@@ -266,7 +266,7 @@ mod tests {
         .bind(upload_id.as_slice())
         .bind(context.tenant_id.as_bytes())
         .bind(alice.principal_id.as_bytes())
-        .bind(&sha)
+        .bind(sha.as_slice())
         .bind(now)
         .bind(now + 86_400_000)
         .bind(now)
@@ -301,7 +301,7 @@ mod tests {
         .bind(context.tenant_id.as_bytes())
         .bind(project_id.as_slice())
         .bind(upload_id.as_slice())
-        .bind(&sha)
+        .bind(sha.as_slice())
         .bind(now)
         .execute(&pool)
         .await
