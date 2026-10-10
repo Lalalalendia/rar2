@@ -306,6 +306,9 @@ impl EditorSession {
     /// its trusted resource registry; a browser candidate alone has no write
     /// authority. This commits text-format state only. Layout/PDF and fresh
     /// EditorProject re-admission require their own authoritative consumers.
+    // Exact scope, trusted bytes and story/hash inputs intentionally remain
+    // separate; callers cannot forge server authorization from a browser token.
+    #[expect(clippy::too_many_arguments, reason = "explicit trust-boundary inputs are not interchangeable")]
     pub fn set_admitted_font_resource_v1(
         &mut self,
         story_id: StoryId,
