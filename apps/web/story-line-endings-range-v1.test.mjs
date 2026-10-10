@@ -23,8 +23,8 @@ test("CRLF full textarea selection never consumes terminal Publisher CR",()=>{
 });
 
 test("CRLF scalar offset remains exact across multiple paragraphs",()=>{
-  assert.deepEqual(range("ab\r\ncd\r\nef",4,6),{start_scalar:4,end_scalar:6});
-  assert.deepEqual(range("ab\r\ncd\r\nef",6,8),{start_scalar:6,end_scalar:8});
+  assert.deepEqual(range("ab\r\ncd\r\nef",4,6),{start_scalar:5,end_scalar:8});
+  assert.deepEqual(range("ab\r\ncd\r\nef",6,8),{start_scalar:8,end_scalar:10});
 });
 
 test("bare CR, LF and no-separator Stories preserve ordinary scalar offsets",()=>{
