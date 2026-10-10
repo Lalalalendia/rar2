@@ -208,7 +208,10 @@ def test_private_requirements_regular_only_fence(tmp: Path) -> None:
             ],
         }],
     }
+    viewer["typography_runs"][0]["source_font_index"] = 7
+    viewer["typography_runs"][1]["source_font_index"] = 8
     requirements = module.source_font_requirements_v1(viewer)
+    assert requirements["direct_source_binding_count"] == 2
     plan = tmp / "requirements.json"
     plan.write_text(json.dumps(requirements), encoding="utf-8")
     font_dir = tmp / "installed-private-fonts"
@@ -242,8 +245,89 @@ def test_private_requirements_regular_only_fence(tmp: Path) -> None:
     assert metadata["private_licensed_source_face_mapping_unverified"] is True
     assert metadata["publisher_visual_parity_verified"] is False
     assert metadata["fixed_pdf_allowed"] is False
+    crosswalk = manifest["source_binding_file_candidates"]
+    assert len(crosswalk) == 2
+    expected_by_family = {
+        item["source_family"]: item for item in manifest["resources"]
+    }
+    for record in crosswalk:
+        expected = expected_by_family[record["source_family"]]
+        assert record["packet_file"] == expected["packet_file"]
+        assert record["packet_sha256"] == expected["sha256"]
+        assert record["face_index"] == 0
+        assert record["source_to_physical_face_verified"] is False
+        assert record["editor_authoring_admitted"] is False
+        assert record["native_publisher_layout_authoritative"] is False
+        assert record["fixed_pdf_allowed"] is False
+        assert record["source_font_binding_id"] == font_export._editor_source_binding_id(
+            source_sha, record["source_font_index"], record["source_family"]
+        )
+    assert font_export._editor_source_binding_id(
+        "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
+        18, "Rockwell Condensed",
+    ) == "pub-source-font:b402e726-72b4-5d52-bb0d-07a0c13dc05d"
     for record in manifest["resources"]:
         assert (out / record["packet_file"]).is_file()
+
+    # A script-font alternative can be a valid source candidate but does not
+    # authorize inventing a direct typography-run font index, even when the
+    # attacker can compute a self-consistent UUIDv5 identifier.
+    script_only = json.loads(plan.read_text(encoding="utf-8"))
+    serif = next(f for f in script_only["families"]
+                 if f["source_family"] == "Example Serif")
+    assert serif["direct_run_source_font_indices"] == [7]
+    serif["source_font_index_candidates"] = [7, 9]
+    script_only["direct_source_bindings"].append({
+        "story_id": story_id,
+        "scalar_start": 2,
+        "scalar_end": 3,
+        "source_family": "Example Serif",
+        "source_font_index": 9,
+        "source_font_binding_id": font_export._editor_source_binding_id(
+            source_sha, 9, "Example Serif",
+        ),
+    })
+    script_only["direct_source_binding_count"] += 1
+    plan.write_text(json.dumps(script_only), encoding="utf-8")
+    try:
+        font_export.read_private_source_requirements(plan)
+    except font_export.FontPacketError as exc:
+        assert "not canonical source evidence" in str(exc)
+    else:
+        raise AssertionError("script-only Quill alternative invented direct font identity")
+    serif["direct_run_source_font_indices"] = [7, 9]
+    plan.write_text(json.dumps(script_only), encoding="utf-8")
+    # Even an internally consistent but tampered packet cannot become Editor
+    # admission. This parser is explicitly non-authorizing.
+    recovered, provenance = font_export.read_private_source_requirements(plan)
+    assert len(provenance["direct_binding_identity_candidates"]) == 3
+    assert provenance["native_publisher_layout_authoritative"] is False
+    assert provenance["fixed_pdf_allowed"] is False
+    plan.write_text(json.dumps(requirements), encoding="utf-8")
+
+    forged = json.loads(plan.read_text(encoding="utf-8"))
+    forged["direct_source_bindings"][0]["source_font_binding_id"] = (
+        "pub-source-font:00000000-0000-5000-8000-000000000000"
+    )
+    plan.write_text(json.dumps(forged), encoding="utf-8")
+    try:
+        font_export.read_private_source_requirements(plan)
+    except font_export.FontPacketError as exc:
+        assert "not canonical source evidence" in str(exc)
+    else:
+        raise AssertionError("forged source-to-file candidate identity accepted")
+    forged["direct_source_bindings"][0]["source_font_binding_id"] = (
+        requirements["direct_source_bindings"][0]["source_font_binding_id"]
+    )
+    forged["direct_source_binding_count"] += 1
+    plan.write_text(json.dumps(forged), encoding="utf-8")
+    try:
+        font_export.read_private_source_requirements(plan)
+    except font_export.FontPacketError as exc:
+        assert "untrusted Publisher direct source-binding" in str(exc)
+    else:
+        raise AssertionError("invented source binding count accepted")
+    plan.write_text(json.dumps(requirements), encoding="utf-8")
 
     fake = json.loads(plan.read_text(encoding="utf-8"))
     fake["fixed_pdf_allowed"] = True

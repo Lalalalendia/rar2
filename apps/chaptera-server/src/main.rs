@@ -41,6 +41,7 @@ use chaptera_server::{
     worker_runtime::ConfiguredWorkerRuntime,
     workspace_context::SqliteWorkspaceContextResolver,
     workspace_http::{self, WorkspaceHttpState},
+    workspace_projects_http::{self, WorkspaceProjectsHttpState},
 };
 use clap::Parser;
 
@@ -231,6 +232,12 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                             busy_timeout,
                         )
                         .await?;
+                        let project_catalog_router =
+                            workspace_projects_http::router(WorkspaceProjectsHttpState::new(
+                                auth_http.clone(),
+                                workspace.clone(),
+                                projects.clone(),
+                            ));
                         let source_state = SourceIngressHttpState::new(
                             auth_http.clone(),
                             workspace,
@@ -276,6 +283,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                         );
                         Some(
                             workspace_router
+                                .merge(project_catalog_router)
                                 .merge(source_ingress_http::router(source_state))
                                 .merge(product_api_http::router(product_state))
                                 .merge(product_export_http::router(export_state))
