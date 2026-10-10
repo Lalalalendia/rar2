@@ -5,10 +5,12 @@ on:
     paths:
       - "Cargo.toml"
       - "crates/chaptera-image-decode-contract/**"
-      - "apps/chaptera-desktop/src/image_decode_adapter.rs"
-      - "vendor/producer-a/crates/pub-viewer/src/images.rs"
       - ".github/workflows/image-decode-contract-v1.yml"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
