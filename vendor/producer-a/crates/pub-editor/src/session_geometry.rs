@@ -1709,9 +1709,7 @@ impl EditorSession {
             foreign_or_unproven_membership,
         )
         .map_err(|error| EditorError::PageDuplicateUnsupported {
-            message: format!(
-                "atomic authored multi-Rectangle Page admission rejected: {error:?}"
-            ),
+            message: format!("atomic authored multi-Rectangle Page admission rejected: {error:?}"),
         })
     }
 
@@ -2936,7 +2934,6 @@ mod authored_page_append_tests {
         ));
     }
 
-
     #[test]
     fn duplicate_authored_rectangles_page_v031_is_one_reversible_project_operation() {
         let source = page_id("22222222-2222-4222-8222-222222222222");
@@ -2964,7 +2961,11 @@ mod authored_page_append_tests {
         let paint_a = crate::AuthoredShapePaintV1 {
             fill: crate::AuthoredSolidFillV1 {
                 visible: true,
-                color: crate::Srgb8V1 { r: 30, g: 40, b: 50 },
+                color: crate::Srgb8V1 {
+                    r: 30,
+                    g: 40,
+                    b: 50,
+                },
             },
             stroke: crate::AuthoredSolidStrokeV1 {
                 visible: true,
@@ -2976,7 +2977,11 @@ mod authored_page_append_tests {
         let paint_b = crate::AuthoredShapePaintV1 {
             fill: crate::AuthoredSolidFillV1 {
                 visible: true,
-                color: crate::Srgb8V1 { r: 90, g: 80, b: 70 },
+                color: crate::Srgb8V1 {
+                    r: 90,
+                    g: 80,
+                    b: 70,
+                },
             },
             stroke: crate::AuthoredSolidStrokeV1 {
                 visible: true,
@@ -3040,7 +3045,9 @@ mod authored_page_append_tests {
             vec![source, identity.page_id, destination.page_id]
         );
         assert_eq!(
-            session.current_authored_stack_v1(destination.page_id).members,
+            session
+                .current_authored_stack_v1(destination.page_id)
+                .members,
             vec![destination_node_a, destination_node_b]
         );
         for (source_id, destination_id) in [
