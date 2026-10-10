@@ -160,20 +160,19 @@ pub fn validate_product_replay_receipt(
             "isolated graph does not match its bounded SHA-256 evidence",
         ));
     }
-    if let Some(project) = &receipt.baseline_project {
-        if project.source_hash.to_string() != source_sha256
+    if let Some(project) = &receipt.baseline_project
+        && (project.source_hash.to_string() != source_sha256
             || project_sha256(project).map_err(|_| {
                 ProductReplayWorkerError::new(
                     "product_replay_receipt_invalid",
                     "isolated baseline project could not be verified",
                 )
-            })? != expected_project_sha256
-        {
-            return Err(ProductReplayWorkerError::new(
-                "product_replay_receipt_invalid",
-                "isolated baseline project does not match its source/project identity",
-            ));
-        }
+            })? != expected_project_sha256)
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_receipt_invalid",
+            "isolated baseline project does not match its source/project identity",
+        ));
     }
     Ok(())
 }
@@ -317,13 +316,13 @@ pub fn run_product_replay_worker(
             "isolated project identity could not be derived",
         )
     })?;
-    if let Some(expected_sha) = expected_project_sha256 {
-        if actual_project_hash != expected_sha {
-            return Err(ProductReplayWorkerError::new(
-                "product_replay_project_hash_mismatch",
-                "isolated replay returned an unexpected canonical project",
-            ));
-        }
+    if let Some(expected_sha) = expected_project_sha256
+        && actual_project_hash != expected_sha
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_project_hash_mismatch",
+            "isolated replay returned an unexpected canonical project",
+        ));
     }
 
     let source_hash = Sha256Digest::from_str(expected_source_sha256).map_err(|_| {
