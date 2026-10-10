@@ -484,10 +484,7 @@ mod tests {
                     && editor.current_text_format_overlay_v1(*id).is_ok()
             })
             .expect("real PUB Story with a fully bounded source typography base");
-        let font_bytes = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/fonts/ofl/abel/Abel-Regular.ttf"
-        ));
+        let font_bytes = include_bytes!("../../../assets/fonts/ofl/abel/Abel-Regular.ttf");
         let identity = fixture_identity(font_bytes);
         let grant = ServerFontResourceV1 {
             identity: &identity,
