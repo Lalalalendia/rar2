@@ -42,7 +42,7 @@ mod table_rowcol_history_v1;
 mod text_format_property_base_v1;
 mod writer_assessment;
 use writer_assessment::{
-    minimum_identity_project_schema_v1, reject_legacy_page_lifecycle_schemas_v031,
+    minimum_identity_project_schema_v1, reject_legacy_page_lifecycle_schemas_v032,
     required_editor_asset_refs_v1,
 };
 
@@ -78,7 +78,8 @@ pub use pub_editor_authoring_core::{
     AuthoredTableStoryRangesV1, CreateLineRuntimeValidationError,
     CreateShapeRuntimeValidationError, CreateTablePlanV1, CreateTableRuntimeV1,
     CreateTableRuntimeValidationError, DELETE_BLANK_AUTHORED_PAGE_PROTOCOL_V1,
-    DeleteAuthoredRectanglePageTransitionV1, DeleteBlankAuthoredPageErrorV1,
+    DeleteAuthoredRectanglePageTransitionV1, DeleteAuthoredRectanglesPageTransitionV1,
+    DeleteBlankAuthoredPageErrorV1,
     DeleteBlankAuthoredPageTransitionV1, LineGeometryV1, PAGE_ORDER_PROTOCOL_V1, PageOrderErrorV1,
     PageOrderTransitionV1, PointEmuV1, Srgb8V1, apply_append_blank_page_forward_v1,
     apply_append_blank_page_inverse_v1, apply_authored_stack_reorder_forward_v1,
@@ -95,8 +96,9 @@ pub use pub_editor_authoring_core::{
     validate_authored_stack_v1, validate_create_table_runtime_v1,
 };
 pub use pub_editor_authoring_core::{
-    DUPLICATE_AUTHORED_RECTANGLE_PAGE_PROTOCOL_V1, DUPLICATE_AUTHORED_RECTANGLES_PAGE_PROTOCOL_V1,
-    DuplicateAuthoredRectanglePageTransitionV1, DuplicateAuthoredRectanglesPageTransitionV1,
+    DELETE_AUTHORED_RECTANGLES_PAGE_PROTOCOL_V1, DUPLICATE_AUTHORED_RECTANGLE_PAGE_PROTOCOL_V1,
+    DUPLICATE_AUTHORED_RECTANGLES_PAGE_PROTOCOL_V1, DuplicateAuthoredRectanglePageTransitionV1,
+    DuplicateAuthoredRectanglesPageTransitionV1, MAX_DELETED_AUTHORED_RECTANGLES_PAGE_V1,
     MAX_DUPLICATED_AUTHORED_RECTANGLES_PAGE_V1,
 };
 pub use pub_editor_authoring_core::{
@@ -238,6 +240,7 @@ pub const EDITOR_PROJECT_VERSION_V0_28: &str = "pub-editor-v0.28";
 pub const EDITOR_PROJECT_VERSION_V0_29: &str = "pub-editor-v0.29";
 pub const EDITOR_PROJECT_VERSION_V0_30: &str = "pub-editor-v0.30";
 pub const EDITOR_PROJECT_VERSION_V0_31: &str = "pub-editor-v0.31";
+pub const EDITOR_PROJECT_VERSION_V0_32: &str = "pub-editor-v0.32";
 pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_23;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
 pub const PUB_MATURE_0X2C_SCHEMA_FENCE: &str = "pub-family-0x2c";
@@ -431,6 +434,9 @@ pub enum EditOperation {
     },
     DeleteAuthoredRectanglePageV1 {
         transition: DeleteAuthoredRectanglePageTransitionV1,
+    },
+    DeleteAuthoredRectanglesPageV1 {
+        transition: Box<DeleteAuthoredRectanglesPageTransitionV1>,
     },
     DuplicateAuthoredRectanglePageV1 {
         transition: Box<DuplicateAuthoredRectanglePageTransitionV1>,
@@ -2048,6 +2054,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesDeleteAuthoredRectanglePageOperation {
         index: usize,
     },
+    LegacyProjectCarriesDeleteAuthoredRectanglesPageOperation {
+        index: usize,
+    },
     LegacyProjectCarriesDuplicateAuthoredRectanglePageOperation {
         index: usize,
     },
@@ -2114,7 +2123,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, {EDITOR_PROJECT_VERSION_V0_18:?}, {EDITOR_PROJECT_VERSION_V0_19:?}, {EDITOR_PROJECT_VERSION_V0_20:?}, {EDITOR_PROJECT_VERSION_V0_21:?}, {EDITOR_PROJECT_VERSION_V0_22:?}, {EDITOR_PROJECT_VERSION_V0_23:?}, {EDITOR_PROJECT_VERSION_V0_24:?}, {EDITOR_PROJECT_VERSION_V0_25:?}, {EDITOR_PROJECT_VERSION_V0_26:?}, {EDITOR_PROJECT_VERSION_V0_27:?}, or {EDITOR_PROJECT_VERSION_V0_28:?}, or {EDITOR_PROJECT_VERSION_V0_29:?}, or {EDITOR_PROJECT_VERSION_V0_30:?}, or {EDITOR_PROJECT_VERSION_V0_31:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, {EDITOR_PROJECT_VERSION_V0_18:?}, {EDITOR_PROJECT_VERSION_V0_19:?}, {EDITOR_PROJECT_VERSION_V0_20:?}, {EDITOR_PROJECT_VERSION_V0_21:?}, {EDITOR_PROJECT_VERSION_V0_22:?}, {EDITOR_PROJECT_VERSION_V0_23:?}, {EDITOR_PROJECT_VERSION_V0_24:?}, {EDITOR_PROJECT_VERSION_V0_25:?}, {EDITOR_PROJECT_VERSION_V0_26:?}, {EDITOR_PROJECT_VERSION_V0_27:?}, or {EDITOR_PROJECT_VERSION_V0_28:?}, or {EDITOR_PROJECT_VERSION_V0_29:?}, or {EDITOR_PROJECT_VERSION_V0_30:?}, or {EDITOR_PROJECT_VERSION_V0_31:?}, or {EDITOR_PROJECT_VERSION_V0_32:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -2205,6 +2214,10 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesDeleteAuthoredRectanglePageOperation { index } => write!(
                 formatter,
                 "legacy editor project cannot carry DeleteAuthoredRectanglePageV1 at index {index}"
+            ),
+            Self::LegacyProjectCarriesDeleteAuthoredRectanglesPageOperation { index } => write!(
+                formatter,
+                "legacy editor project cannot carry DeleteAuthoredRectanglesPageV1 at index {index}"
             ),
             Self::LegacyProjectCarriesDuplicateAuthoredRectanglePageOperation { index } => write!(
                 formatter,
@@ -3490,12 +3503,13 @@ impl EditorSession {
     ) -> Result<(), EditorProjectError> {
         self.validate_source_identity()
             .map_err(EditorProjectError::Session)?;
-        // v0.28-v0.31 preserve v0.27 admissions; each adds a fenced operation.
+        // v0.28-v0.32 preserve v0.27 admissions; each adds a fenced operation.
         let legacy_compatible_schema: &str = if project.schema_version
             == EDITOR_PROJECT_VERSION_V0_28
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_29
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_30
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_31
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_32
         {
             EDITOR_PROJECT_VERSION_V0_27
         } else {
@@ -4078,7 +4092,7 @@ impl EditorSession {
         {
             return Err(EditorProjectError::MissingProjectIdentity);
         }
-        reject_legacy_page_lifecycle_schemas_v031(project, legacy_compatible_schema)?;
+        reject_legacy_page_lifecycle_schemas_v032(project, legacy_compatible_schema)?;
         if project.source_hash != self.source_hash {
             return Err(EditorProjectError::SourceHashMismatch {
                 expected: self.source_hash,
@@ -5788,6 +5802,13 @@ impl EditorSession {
                             transition,
                         )?;
                     }
+                    EditOperation::DeleteAuthoredRectanglesPageV1 { transition } => {
+                        self.undo_delete_rectangles_page_candidate_v1(
+                            &mut candidate_graph,
+                            &mut candidate_shapes,
+                            transition.as_ref(),
+                        )?;
+                    }
                     EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => {
                         self.undo_duplicate_rectangle_page_candidate_v1(
                             &mut candidate_graph,
@@ -5944,6 +5965,13 @@ impl EditorSession {
                             &mut candidate_graph,
                             &mut candidate_shapes,
                             transition,
+                        )?;
+                    }
+                    EditOperation::DeleteAuthoredRectanglesPageV1 { transition } => {
+                        self.redo_delete_rectangles_page_candidate_v1(
+                            &mut candidate_graph,
+                            &mut candidate_shapes,
+                            transition.as_ref(),
                         )?;
                     }
                     EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => {
@@ -6285,6 +6313,9 @@ fn replay_canonical_operation(
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::DeleteAuthoredRectanglePageV1 { transition } => session
             .consume_canonical_delete_authored_rectangle_page_v1(transition.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::DeleteAuthoredRectanglesPageV1 { transition } => session
+            .consume_canonical_delete_authored_rectangles_page_v1(transition.as_ref().clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => session
             .consume_canonical_duplicate_authored_rectangle_page_v1(transition.as_ref().clone())
@@ -7458,6 +7489,7 @@ fn apply_forward(
         EditOperation::RegisterAuthoredPageIdentityV1 { .. }
         | EditOperation::AppendBlankPageV1 { .. }
         | EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+        | EditOperation::DeleteAuthoredRectanglesPageV1 { .. }
         | EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
         | EditOperation::DuplicateAuthoredRectanglesPageV1 { .. }
         | EditOperation::DeleteBlankAuthoredPageV1 { .. }
@@ -7724,6 +7756,7 @@ fn apply_inverse(
         EditOperation::RegisterAuthoredPageIdentityV1 { .. }
         | EditOperation::AppendBlankPageV1 { .. }
         | EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+        | EditOperation::DeleteAuthoredRectanglesPageV1 { .. }
         | EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
         | EditOperation::DuplicateAuthoredRectanglesPageV1 { .. }
         | EditOperation::DeleteBlankAuthoredPageV1 { .. }
