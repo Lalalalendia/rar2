@@ -106,6 +106,20 @@ try {
   }
   if(!selected)throw new Error("real UI could not select font-editable Story through pointer or explicit list");
   await page.locator("#edit-text").click();
+  // Initial source font names/indices are not actual physical glyph grants.
+  await page.waitForFunction(()=>
+    document.querySelector("#font-metrics")?.dataset.exactScalars==="0",
+    null,{timeout:40_000}
+  );
+  const originalCoverage=await page.locator("#font-metrics").evaluate(el=>({
+    exact:Number(el.dataset.exactScalars),
+    unknown:Number(el.dataset.unresolvedScalars),
+    glyphs:Number(el.dataset.exactGlyphs),
+  }));
+  if(originalCoverage.unknown<1||originalCoverage.glyphs!==0){
+    throw new Error("unadmitted Publisher font was silently shaped: "+
+                    JSON.stringify(originalCoverage));
+  }
   const textarea=page.locator("#text-value");
   await textarea.waitFor({state:"visible"});
   const previous=await textarea.inputValue();
@@ -136,6 +150,23 @@ try {
   }));
   if(ui.bad||!ui.message?.includes("layout and fixed PDF remain blocked")||
      !ui.pubDisabled)throw new Error("font UI cannot certify native format commit: "+JSON.stringify(ui));
+  await page.waitForFunction(()=>
+    document.querySelector("#font-metrics")?.dataset.exactScalars==="1",
+    null,{timeout:40_000}
+  );
+  const physicalCoverage=await page.locator("#font-metrics").evaluate(el=>({
+    admitted_scalars:Number(el.dataset.exactScalars),
+    unresolved_scalars:Number(el.dataset.unresolvedScalars),
+    exact_glyphs:Number(el.dataset.exactGlyphs),
+    message:el.textContent,
+  }));
+  if(physicalCoverage.admitted_scalars!==1||
+     physicalCoverage.unresolved_scalars!==originalCoverage.unknown-1||
+     physicalCoverage.exact_glyphs<1||
+     !physicalCoverage.message.includes("Line placement, overset and PDF not verified")){
+    throw new Error("UI did not consume current native Rust glyph spans: "+
+                    JSON.stringify(physicalCoverage));
+  }
   const after=await current();
   if(after.revision_id===before.revision_id ||
      after.snapshot_id===before.snapshot_id) {
@@ -203,6 +234,9 @@ try {
     diagnostics_collapsed_by_default:true,
     unresolved_story_frame_clip:clip,
     unshaped_layout_still_unverified:true,
+    physical_glyph_coverage:physicalCoverage,
+    source_unknown_before:originalCoverage.unknown,
+    real_glyph_spans_consumed:true,
     page_errors:errors,
   };
   if(errors.length)throw Error("Chromium page errors: "+errors.join("; "));

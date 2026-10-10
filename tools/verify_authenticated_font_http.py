@@ -57,6 +57,14 @@ def check_denied(path, request, *, principal="synthetic-editor", code=403):
     require(status==code, f"expected HTTP {code}, received {status}: {response}")
     return response
 
+def physical_glyphs(scene: dict, story_id: str, principal="synthetic-editor"):
+    query=(
+        "/v1/editor/font-glyph-spans?story_id="+story_id+
+        "&revision_id="+scene["revision_id"]+
+        "&snapshot_id="+scene["snapshot_id"]
+    )
+    return api(query,principal=principal)
+
 def history(scene: dict, kind: str, seq: int):
     status, result=api("/v1/commit",{
         "protocol_version":"chaptera.history-transition-intent.v1",
@@ -157,6 +165,17 @@ def run(fixture: pathlib.Path, graph: pathlib.Path, viewer: pathlib.Path, *, bro
                 "candidate":cand,
             },
         }
+        status,initial_glyphs=physical_glyphs(scene,chosen["story_id"])
+        require(status==200 and initial_glyphs["story_scalar_len"]==chosen["story_scalar_len"]
+                and initial_glyphs["admitted_scalar_count"]==0
+                and initial_glyphs["source_unresolved_scalar_count"]==
+                  chosen["story_scalar_len"]
+                and initial_glyphs["shaped_glyph_count"]==0
+                and initial_glyphs["fixed_pdf_allowed"] is False
+                and initial_glyphs["authoritative_line_breaks"] is False,
+                "unmodified source binding silently attributed to Abel physical bytes")
+        require(physical_glyphs(scene,chosen["story_id"],"synthetic-viewer")[0]==403,
+                "viewer received privileged exact physical-glyph authoring scope")
         check_denied("/v1/commit",request,principal="synthetic-viewer")
         forged=copy.deepcopy(request)
         forged["command"]["full_font_bytes"]="forged-client-authority"
@@ -193,6 +212,28 @@ def run(fixture: pathlib.Path, graph: pathlib.Path, viewer: pathlib.Path, *, bro
         after_story=next(x for x in post_scope["stories"] if x["story_id"]==chosen["story_id"])
         require(status==200 and after_story["expected_state_hash"]!=chosen["expected_state_hash"],
                 "fresh Rust authoring overlay still reports original resource")
+        status,admitted=physical_glyphs(changed,chosen["story_id"])
+        require(status==200 and
+                admitted["protocol_version"]=="chaptera.current-physical-glyph-spans.v1"
+                and admitted["revision_id"]==changed["revision_id"]
+                and admitted["scene_snapshot_id"]==changed["snapshot_id"]
+                and admitted["story_format_state_hash"]==after_story["expected_state_hash"]
+                and admitted["admitted_scalar_count"]==1
+                and admitted["source_unresolved_scalar_count"]==chosen["story_scalar_len"]-1
+                and admitted["shaped_glyph_count"]>=1
+                and admitted["authoritative_line_breaks"] is False
+                and admitted["fixed_pdf_allowed"] is False,
+                "real Rust glyph shaping was not consumed by current HTTP revision")
+        exact=[part for part in admitted["spans"] if part["kind"]=="admitted_exact"]
+        source_part=[part for part in admitted["spans"] if part["kind"]=="source_unresolved"]
+        require(len(exact)==1 and exact[0]["start_scalar"]==0
+                and exact[0]["end_scalar"]==1 and
+                exact[0]["identity"]["content_hash"]==FONT_SHA
+                and all(g["cluster"]==0 for g in exact[0]["shaped"]["glyphs"])
+                and source_part,
+                "exact admitted glyph clusters or unresolved original font provenance was lost")
+        require(physical_glyphs(scene,chosen["story_id"])[0]==409,
+                "physical glyph endpoint accepted stale Scene after font revision")
         require(api("/v1/export/preview?target=idml")[0]==409,
                 "unshaped font IDML export must fail closed")
         require(api("/v1/pub-save/download")[0]==409,
@@ -210,11 +251,19 @@ def run(fixture: pathlib.Path, graph: pathlib.Path, viewer: pathlib.Path, *, bro
         undo_story=next(x for x in undo_scope["stories"] if x["story_id"]==chosen["story_id"])
         require(undo_story["expected_state_hash"]==chosen["expected_state_hash"],
                 "Undo did not restore original native Rust font overlay")
+        status,undo_glyphs=physical_glyphs(undo,chosen["story_id"])
+        require(status==200 and undo_glyphs["admitted_scalar_count"]==0 and
+                undo_glyphs["source_unresolved_scalar_count"]==chosen["story_scalar_len"],
+                "Undo did not restore unresolved Publisher source physical-font scope")
         redo=history(undo,"redo",2)
         status,redo_scope=api("/v1/editor/font-format-scope")
         redo_story=next(x for x in redo_scope["stories"] if x["story_id"]==chosen["story_id"])
         require(redo_story["expected_state_hash"]==after_story["expected_state_hash"],
                 "Redo did not restore admitted physical resource")
+        status,redo_glyphs=physical_glyphs(redo,chosen["story_id"])
+        require(status==200 and redo_glyphs["admitted_scalar_count"]==1
+                and redo_glyphs["spans"]==admitted["spans"],
+                "Redo did not reproduce canonical source-mixed exact physical glyph stream")
         before_browser=history(redo,"undo",3)
         require(hashlib.sha256(source.read_bytes()).hexdigest()==SOURCE_SHA,
                 "HTTP font commits changed original Publisher file")
@@ -240,6 +289,10 @@ def run(fixture: pathlib.Path, graph: pathlib.Path, viewer: pathlib.Path, *, bro
             "stale_viewer_forged_denials":True,
             "independent_rust_fresh_reopen":True,
             "fixed_output_eligible":False,
+            "admitted_physical_scalars":admitted["admitted_scalar_count"],
+            "unresolved_source_scalars":admitted["source_unresolved_scalar_count"],
+            "shaped_physical_glyphs":admitted["shaped_glyph_count"],
+            "glyphs_survive_undo_redo":True,
             "browser_selected_range":bool(chromium),
         }
         (work/"receipt.json").write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n",

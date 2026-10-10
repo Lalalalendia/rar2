@@ -5,6 +5,9 @@
 //! HTTP caller must authenticate, authorize and obtain the Scene independently.
 //! No native PUB/PDF output or authoritative text relayout is provided.
 use anyhow::{Context, Result, bail, ensure};
+use chaptera_desktop_shaped_flow_runtime::{
+    CurrentPhysicalFontSpanV1, shape_current_exact_font_override_spans_v1,
+};
 use chaptera_text_format_overlay::{
     FontAuthoringScopeV1, FontReplacementCandidateV1, FontResourceIdentityV1,
     ServerFontResourceV1,
@@ -227,6 +230,100 @@ fn emit_apply(
     Ok(())
 }
 
+/// Materialize the *actual current* physical glyph segmentation using only
+/// trusted pinned OpenType bytes and the source-bound Rust EditorProject.
+/// Source font identifiers without admitted exact bytes stay unresolved.
+/// This proves glyph IDs and per-run metrics, NOT line breaks, overset or PDF.
+fn emit_current_glyph_spans(
+    source_path: &str,
+    project_path: &str,
+    target_story_id: &str,
+) -> Result<()> {
+    let (source, digest) = read_source(source_path)?;
+    let project = read_project(project_path)?;
+    let font = font_bytes()?;
+    let id = font_identity();
+    let session = open_project(&source, digest, &project, &id, &font)?;
+    let story_id: StoryId = serde_json::from_value(json!(target_story_id))
+        .context("exact target StoryId required")?;
+    let story = session.graph().stories.get(&story_id)
+        .context("StoryId not found in original Publisher graph")?;
+    let scalars = story.text.chars().count();
+    // Bound CPU, stdout and HTTP JSON for this pinned local worker; do not
+    // silently truncate glyph buffers or claim the unmeasured tail is shaped.
+    ensure!(scalars > 0 && scalars <= 8_192,
+        "physical glyph projection exceeds pinned Story budget");
+    let spans = shape_current_exact_font_override_spans_v1(
+        &session, story_id, &grant(&id, &font),
+    ).context("exact full-font current Story glyph shaping refused")?;
+    ensure!(spans.story_id == target_story_id, "actual Rust Story identity mismatch");
+    ensure!(spans.story_scalar_len as usize == scalars,
+        "glyph projection lost canonical Story scalar extent");
+    ensure!(spans.story_format_state_hash ==
+        session.current_text_format_state_hash_v1(story_id)?,
+        "shaped font overlay hash differs from persisted EditorProject");
+    let mut next = 0_u32;
+    let mut admitted_scalars = 0_u32;
+    let mut unresolved_scalars = 0_u32;
+    let mut shaped_glyphs = 0_usize;
+    for span in &spans.spans {
+        let (start, end) = match span {
+            CurrentPhysicalFontSpanV1::SourceUnresolved {
+                start_scalar, end_scalar, ..
+            } | CurrentPhysicalFontSpanV1::AdmittedExact {
+                start_scalar, end_scalar, ..
+            } => (*start_scalar, *end_scalar),
+        };
+        ensure!(start == next && end > start && end <= spans.story_scalar_len,
+            "noncontiguous or empty physical glyph segment");
+        next = end;
+        match span {
+            CurrentPhysicalFontSpanV1::SourceUnresolved {
+                source_font_binding_id, ..
+            } => {
+                ensure!(!source_font_binding_id.is_empty(),
+                    "source font binding disappeared from unresolved span");
+                unresolved_scalars += end - start;
+            }
+            CurrentPhysicalFontSpanV1::AdmittedExact {
+                identity, shaped, ..
+            } => {
+                ensure!(*identity == id, "admitted glyph stream used a different physical font");
+                ensure!(shaped.glyphs.iter().all(|glyph|
+                    glyph.cluster >= start && glyph.cluster < end
+                ), "glyph cluster left its exact scalar range");
+                admitted_scalars += end - start;
+                shaped_glyphs += shaped.glyphs.len();
+            }
+        }
+    }
+    ensure!(next == spans.story_scalar_len, "physical glyph spans did not cover Story");
+    ensure!(admitted_scalars + unresolved_scalars == spans.story_scalar_len,
+        "shaped and unresolved scalar counts differ from original Story");
+    ensure!(spans.all_scalars_shaped == (unresolved_scalars == 0),
+        "physical glyph coverage flags inconsistent");
+    ensure!(!spans.authoritative_line_breaks && !spans.fixed_pdf_allowed,
+        "glyph-only witness must never authorize line breaks, overflow or PDF");
+    ensure!(shaped_glyphs <= scalars.saturating_mul(16) + 256,
+        "unbounded font glyph expansion in local authoring witness");
+    println!("{}", json!({
+        "protocol_version": "chaptera.local-current-exact-glyph-spans.v1",
+        "source_hash": SOURCE_SHA,
+        "project_state_id": session.project().state_id_v1(),
+        "story_id": story_id,
+        "story_format_state_hash": spans.story_format_state_hash,
+        "story_scalar_len": spans.story_scalar_len,
+        "spans": spans.spans,
+        "admitted_scalar_count": admitted_scalars,
+        "source_unresolved_scalar_count": unresolved_scalars,
+        "shaped_glyph_count": shaped_glyphs,
+        "all_scalars_shaped": spans.all_scalars_shaped,
+        "authoritative_line_breaks": false,
+        "fixed_pdf_allowed": false,
+    }));
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let mut args = env::args().skip(1);
     let mode = args.next().context("init/probe/apply mode required")?;
@@ -247,6 +344,12 @@ fn main() -> Result<()> {
             let intent = args.next().context("font candidate intent path required")?;
             ensure!(args.next().is_none(), "unexpected apply arguments");
             emit_apply(&source, &project, &scene, &intent)
+        }
+        "glyph-spans" => {
+            let project = args.next().context("EditorProject path required")?;
+            let story_id = args.next().context("target StoryId required")?;
+            ensure!(args.next().is_none(), "unexpected glyph-spans arguments");
+            emit_current_glyph_spans(&source, &project, &story_id)
         }
         _ => bail!("unsupported local font mode"),
     }

@@ -443,12 +443,14 @@ class RealAcceptanceState:
     def _run_font_worker(
         self, mode: str, project: dict, scene: dict | None = None,
         intent: dict | None = None,
+        story_id: str | None = None,
     ) -> dict:
         if (self.fixture_profile != "newsletter-font" or self.font_worker is None
-                or self.pinned_abel is None or mode not in {"probe", "apply"}):
+                or self.pinned_abel is None or mode not in {"probe", "apply", "glyph-spans"}):
             raise ValueError("pinned real-PUB font worker is not admitted")
         token = hashlib.sha256(canonical_json(
-            {"mode": mode, "project": project, "scene": scene, "intent": intent}
+            {"mode": mode, "project": project, "scene": scene, "intent": intent,
+             "story_id": story_id}
         )).hexdigest()[:24]
         project_path = self.work_dir / f"{token}.font.project.json"
         project_path.write_bytes(canonical_json(project) + b"\n")
@@ -461,6 +463,12 @@ class RealAcceptanceState:
             scene_path.write_bytes(canonical_json(scene) + b"\n")
             intent_path.write_bytes(canonical_json(intent) + b"\n")
             args.extend((str(scene_path), str(intent_path)))
+        if mode == "glyph-spans":
+            if not isinstance(story_id, str) or not re.fullmatch(
+                r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", story_id,
+            ):
+                raise ValueError("current physical glyph query requires canonical StoryId")
+            args.append(story_id)
         completed = subprocess.run(
             args, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, check=False, timeout=30,
@@ -473,8 +481,11 @@ class RealAcceptanceState:
             result = json.loads(completed.stdout)
         except json.JSONDecodeError as error:
             raise RuntimeError("Rust font worker returned invalid JSON") from error
-        expected = ("chaptera.local-font-format-probe.v1" if mode == "probe"
-                    else "chaptera.local-pinned-font-apply.v1")
+        expected = {
+            "probe": "chaptera.local-font-format-probe.v1",
+            "apply": "chaptera.local-pinned-font-apply.v1",
+            "glyph-spans": "chaptera.local-current-exact-glyph-spans.v1",
+        }[mode]
         if (not isinstance(result, dict)
                 or result.get("protocol_version") != expected
                 or result.get("source_hash") != self.source_hash):
@@ -494,6 +505,104 @@ class RealAcceptanceState:
             "revision_id": scene["revision_id"],
             "scene_snapshot_id": scene["snapshot_id"],
             "stories": stories,
+        }
+
+    def current_physical_glyph_spans(
+        self, story_id: str, expected_revision: str, expected_snapshot: str,
+    ) -> dict:
+        """Trusted current-Project glyph stream, not a text-flow or PDF grant."""
+        if self.fixture_profile != "newsletter-font":
+            raise ValueError("physical glyph projection unavailable outside pinned authoring demo")
+        current = self.kernel.current_revision(self.document_id)
+        scene = self.scenes[current.revision_id]
+        if (expected_revision != scene["revision_id"]
+                or expected_snapshot != scene["snapshot_id"]):
+            raise ValueError("stale_font_glyph_scene")
+        if not isinstance(story_id, str) or not re.fullmatch(
+            r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", story_id,
+        ):
+            raise ValueError("invalid StoryId for physical glyph projection")
+        probe = self._run_font_worker("probe", current.project)
+        current_story = next(
+            (entry for entry in probe["stories"] if entry["story_id"] == story_id),
+            None,
+        )
+        if current_story is None:
+            raise ValueError("target Story lacks admitted canonical format overlay")
+        result = self._run_font_worker(
+            "glyph-spans", current.project, story_id=story_id,
+        )
+        if (result.get("project_state_id") != probe["project_state_id"]
+                or result.get("story_id") != story_id
+                or result.get("story_scalar_len") != current_story["story_scalar_len"]
+                or result.get("story_format_state_hash") != current_story["expected_state_hash"]
+                or result.get("authoritative_line_breaks") is not False
+                or result.get("fixed_pdf_allowed") is not False):
+            raise RuntimeError("real Rust glyph stream lacks current Project/source authority")
+        parts = result.get("spans")
+        if not isinstance(parts, list):
+            raise RuntimeError("Rust glyph stream missing bounded segments")
+        cursor = 0
+        admitted = unresolved = glyphs = 0
+        for span in parts:
+            if (not isinstance(span, dict)
+                    or type(span.get("start_scalar")) is not int
+                    or type(span.get("end_scalar")) is not int
+                    or span["start_scalar"] != cursor
+                    or span["end_scalar"] <= cursor):
+                raise RuntimeError("Rust glyph span partition is invalid")
+            cursor = span["end_scalar"]
+            if span.get("kind") == "source_unresolved":
+                binding = span.get("source_font_binding_id")
+                if not isinstance(binding, str) or not binding:
+                    raise RuntimeError("unknown source font was concealed")
+                unresolved += span["end_scalar"] - span["start_scalar"]
+            elif span.get("kind") == "admitted_exact":
+                identity = span.get("identity")
+                shaped = span.get("shaped")
+                if (not isinstance(identity, dict)
+                        or identity.get("resource_id") != ABEL_RESOURCE_ID
+                        or identity.get("content_hash") != ABEL_SHA256
+                        or not isinstance(shaped, dict)
+                        or not isinstance(shaped.get("glyphs"), list)):
+                    raise RuntimeError("glyph spans no longer have admitted full physical bytes")
+                if any(
+                    type(glyph.get("cluster")) is not int
+                    or not span["start_scalar"] <= glyph["cluster"] < span["end_scalar"]
+                    for glyph in shaped["glyphs"]
+                    if isinstance(glyph, dict)
+                ) or any(not isinstance(glyph, dict) for glyph in shaped["glyphs"]):
+                    raise RuntimeError("shaped glyph escaped its canonical scalar interval")
+                admitted += span["end_scalar"] - span["start_scalar"]
+                glyphs += len(shaped["glyphs"])
+            else:
+                raise RuntimeError("unknown source/physical glyph distinction")
+        if (cursor != result["story_scalar_len"]
+                or admitted != result.get("admitted_scalar_count")
+                or unresolved != result.get("source_unresolved_scalar_count")
+                or glyphs != result.get("shaped_glyph_count")
+                or admitted + unresolved != cursor
+                or result.get("all_scalars_shaped") is not (unresolved == 0)):
+            raise RuntimeError("physical-glyph totals do not match canonical Story")
+        # Never infer Publisher line breaks from measured spans. Retain exact
+        # glyph positions for future real frame placement consumer.
+        return {
+            "protocol_version": "chaptera.current-physical-glyph-spans.v1",
+            "document_id": self.document_id,
+            "source_hash": self.source_hash,
+            "revision_id": scene["revision_id"],
+            "scene_snapshot_id": scene["snapshot_id"],
+            "story_id": story_id,
+            "project_state_id": result["project_state_id"],
+            "story_format_state_hash": result["story_format_state_hash"],
+            "story_scalar_len": cursor,
+            "spans": copy.deepcopy(parts),
+            "admitted_scalar_count": admitted,
+            "source_unresolved_scalar_count": unresolved,
+            "shaped_glyph_count": glyphs,
+            "all_scalars_shaped": result["all_scalars_shaped"],
+            "authoritative_line_breaks": False,
+            "fixed_pdf_allowed": False,
         }
 
     def _run_editor_command(self, mode: str, project: dict, command: dict) -> dict:
@@ -1200,6 +1309,24 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/v1/editor/font-format-scope":
                 self._authorize(CAP_EDIT_TEXT)
                 self._json(STATE.font_editing_scope())
+                return
+            if path == "/v1/editor/font-glyph-spans":
+                self._authorize(CAP_EDIT_TEXT)
+                if (set(query) != {"story_id", "revision_id", "snapshot_id"}
+                        or any(len(values) != 1 for values in query.values())):
+                    self._json({"error": "invalid_font_glyph_scope"}, 400)
+                    return
+                try:
+                    result = STATE.current_physical_glyph_spans(
+                        query["story_id"][0], query["revision_id"][0],
+                        query["snapshot_id"][0],
+                    )
+                except ValueError:
+                    # Do not leak opaque resource or legacy font internals
+                    # to stale or differently authorized browser scopes.
+                    self._json({"error": "font_glyph_projection_not_available"}, 409)
+                    return
+                self._json(result)
                 return
             if path == "/v1/editor/font-environment":
                 self._authorize(CAP_EDIT_TEXT)
