@@ -8,25 +8,60 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import {prepareStoryTextForTextarea, restoreStoryTextFromTextarea} from "../apps/web/story-line-endings-v1.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const SOURCE_SHA = "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc";
+const SAMPLE3_SHA = "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc";
+const SAMPLE4_SHA = "42195f7ad23d911219fea3ec88e66e867e9b9a6821a16dd1b535e2aa9d57a11b";
 const SIX_UNIT_SHA = "a92543b6f2b6ac3a8ae2481e15a2188a338ddc2a92832580f8987079fa4f70f8";
 const ONE_UNIT_SHA = "b9b789f35a34e016faceb27acf50bf0621273a7d612762ecc17c56ca450fe715";
+const SAMPLE4_ACCEPTED_SHA = "2f7795a3c4307716565c7accf4636a80b7947f8921c60a87b51e1a48ee529509";
 const MARKER = "345678";
 const args = process.argv.slice(2);
-const [source, baseline, graph, viewer, producer, output, variant = "--six-unit"] = args;
+const [source, baseline, graph, viewer, producer, output, variant = "--six-unit", manifestPath] = args;
+const isSample4 = variant === "--sample4-positive" || variant === "--sample4-negative";
 if (![source, baseline, graph, viewer, producer, output].every(Boolean) ||
-    args.length > 7 || !["--six-unit", "--one-unit", "--two-unit-negative"].includes(variant)) {
-  throw new Error("usage: node test_sample3_editor_ui_acceptance.mjs SOURCE BASELINE GRAPH VIEWER PRODUCER OUTPUT [--six-unit|--one-unit|--two-unit-negative]");
+    args.length > 8 ||
+    !["--six-unit", "--one-unit", "--two-unit-negative", "--sample4-positive", "--sample4-negative"].includes(variant) ||
+    (isSample4 && (!manifestPath || args.length !== 8)) || (!isSample4 && manifestPath)) {
+  throw new Error("usage: node test_sample3_editor_ui_acceptance.mjs SOURCE BASELINE GRAPH VIEWER PRODUCER OUTPUT [VARIANT] [SAMPLE4_MANIFEST]");
 }
+const SOURCE_SHA = isSample4 ? SAMPLE4_SHA : SAMPLE3_SHA;
+const OUTPUT_SHA = isSample4 ? SAMPLE4_ACCEPTED_SHA : variant === "--one-unit" ? ONE_UNIT_SHA : SIX_UNIT_SHA;
 const replacement = variant === "--one-unit" ? "34567"
   : variant === "--two-unit-negative" ? "3456" : "";
-const OUTPUT_SHA = variant === "--one-unit" ? ONE_UNIT_SHA : SIX_UNIT_SHA;
 fs.mkdirSync(output, { recursive: true });
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 if (digest(fs.readFileSync(source)) !== SOURCE_SHA) throw new Error("wrong source fixture");
+const sample4Manifest = isSample4 ? JSON.parse(fs.readFileSync(manifestPath, "utf8")) : null;
+if (isSample4 && (
+    sample4Manifest.schema !== "chaptera.pub-native-story-handoff.v1" ||
+    sample4Manifest.source_sha256 !== SAMPLE4_SHA ||
+    sample4Manifest.candidate_sha256 !== SAMPLE4_ACCEPTED_SHA ||
+    sample4Manifest.story_syid !== 1 ||
+    sample4Manifest.before_utf16_len !== 86 ||
+    sample4Manifest.after_utf16_len !== 85 ||
+    !/^[0-9a-f]{64}$/.test(sample4Manifest.before_text_sha256) ||
+    !/^[0-9a-f]{64}$/.test(sample4Manifest.after_text_sha256)
+)) throw new Error("Sample4 manifest identity mismatch");
 
+function editedText(before) {
+  if (!isSample4) return before.replace(MARKER, replacement);
+  const chars = Array.from(before);
+  const index = chars.findIndex((c) => /^[A-Za-z0-9]$/.test(c));
+  if (index < 0) throw new Error("Sample4 target lacks ASCII unit");
+  if (variant === "--sample4-negative") {
+    // Stay inside the known length-changing Writer class, but use a DIFFERENT
+    // target offset from the Publisher-accepted first ASCII deletion. A
+    // source-identical, Reader-accepted candidate is still not native-approved.
+    const other = chars.findIndex((c, j) => j > index && /^[A-Za-z0-9]$/.test(c));
+    if (other < 0) throw new Error("Sample4 control lacks second ASCII unit");
+    chars.splice(other, 1);
+  } else {
+    chars.splice(index, 1);
+  }
+  return chars.join("");
+}
 function startStatic() {
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
@@ -81,7 +116,7 @@ function framePoints(scene, frameNode) {
   return points;
 }
 
-async function selectByPointer(page, points) {
+async function selectByPointer(page, points, expectedTextarea = null) {
   for (const point of points) {
     const location = await page.evaluate((p) => {
       const wrap = document.getElementById("host-wrap");
@@ -99,7 +134,15 @@ async function selectByPointer(page, points) {
     // unrequested MoveNode mutation on pointer release.
     await page.locator("#host").dispatchEvent("pointercancel");
     await page.mouse.up();
-    if (selected) return true;
+    if (selected) {
+      if (expectedTextarea === null) return true;
+      // A valid TextFrame can overlap another. Verify the actual Story selected
+      // by real pointer input rather than accepting any enabled Edit text button.
+      await page.locator("#edit-text").click();
+      const actual = await page.locator("#text-value").inputValue();
+      if (actual === expectedTextarea) return true;
+      await page.locator("#cancel-text").click();
+    }
   }
   return false;
 }
@@ -108,7 +151,7 @@ async function main() {
   let stdout = "", stderr = "";
   const proc = spawn("python3", [
     "services/editor-api/web_real_acceptance_service.py",
-    "--port", "0", "--interactive", "--fixture-profile", "sample3",
+    "--port", "0", "--interactive", "--fixture-profile", isSample4 ? "sample4" : "sample3",
     "--fixture", source,
     "--baseline-project", baseline,
     "--resolved-graph", graph,
@@ -131,12 +174,16 @@ async function main() {
     };
     const pre = await read("/v1/pub-save/preview");
     if (pre.can_download || pre.can_serialize || pre.blocker_code !== "editor_pub_story_mutation_count") {
-      throw new Error("unedited Sample3 must not be downloadable: " + JSON.stringify(pre));
+      throw new Error("unedited pinned PUB must not be downloadable: " + JSON.stringify(pre));
     }
     const scene = await read("/v1/scenes/current");
     const caps = await read("/v1/editor/capabilities");
-    const stories = scene.stories.filter((s) => s.text.includes(MARKER));
-    if (stories.length !== 1 || stories[0].text.split(MARKER).length !== 2) {
+    const stories = scene.stories.filter((s) => isSample4
+      ? digest(Buffer.from(s.text, "utf8")) === sample4Manifest.before_text_sha256
+      : s.text.includes(MARKER));
+    if (stories.length !== 1 ||
+        (!isSample4 && stories[0].text.split(MARKER).length !== 2) ||
+        (isSample4 && Buffer.from(stories[0].text, "utf16le").length !== 172)) {
       throw new Error("no unique source-backed controlled Story");
     }
     const story = stories[0];
@@ -159,16 +206,31 @@ async function main() {
     await page.waitForFunction(() => document.getElementById("state").textContent.startsWith("revision "));
     if (await page.locator("#save-pub").isEnabled()) throw new Error("initial Download PUB must be disabled");
 
+    const sourceProfile = isSample4 ? prepareStoryTextForTextarea(story.text) : null;
     let selected = false;
     for (const frame of frames) {
-      if (await selectByPointer(page, framePoints(scene, frame))) { selected = true; break; }
+      if (await selectByPointer(page, framePoints(scene, frame),
+          isSample4 ? sourceProfile.value : null)) { selected = true; break; }
     }
-    if (!selected) throw new Error("real pointer cannot select canonical Story TextFrame");
-    await page.locator("#edit-text").click();
+    if (!selected) throw new Error("real pointer cannot select the exact canonical Story TextFrame");
+    if (!isSample4) await page.locator("#edit-text").click();
     const editor = page.locator("#text-value");
     const previous = await editor.inputValue();
-    if (previous.split(MARKER).length !== 2) throw new Error("real Story editor did not expose exact source text");
-    await editor.fill(previous.replace(MARKER, replacement));
+    if (isSample4) {
+      if (previous !== sourceProfile.value ||
+          digest(Buffer.from(story.text, "utf8")) !== sample4Manifest.before_text_sha256 ||
+          Buffer.from(story.text, "utf16le").length !== 172) {
+        throw new Error("Sample4 editor selected Story does not match exact Reader source");
+      }
+      const restored = restoreStoryTextFromTextarea(editedText(previous), sourceProfile);
+      if (variant === "--sample4-positive" &&
+          digest(Buffer.from(restored, "utf8")) !== sample4Manifest.after_text_sha256) {
+        throw new Error("Sample4 textarea mutation does not roundtrip to native-approved Story text");
+      }
+    } else if (previous.split(MARKER).length !== 2) {
+      throw new Error("real Story editor did not expose exact source text");
+    }
+    await editor.fill(editedText(previous));
     const revisionBefore = scene.revision_id;
     await page.locator("#apply-text").click();
     await page.waitForFunction((priorRevision) => {
@@ -197,7 +259,7 @@ async function main() {
         approved.native_publisher_authorized !== concurrent.native_publisher_authorized) {
       throw new Error("concurrent native PUB previews disagree on exact accepted bytes");
     }
-    if (variant === "--two-unit-negative") {
+    if (variant === "--two-unit-negative" || variant === "--sample4-negative") {
       if (approved.revision_id === revisionBefore ||
           approved.can_serialize !== true ||
           approved.chaptera_reopen_verified !== true ||
@@ -205,7 +267,8 @@ async function main() {
           approved.native_publisher_authorized !== false ||
           approved.download_blocker_code !== "publisher_exact_sha_evidence_missing" ||
           approved.output_hash === SIX_UNIT_SHA ||
-          approved.output_hash === ONE_UNIT_SHA) {
+          approved.output_hash === ONE_UNIT_SHA ||
+          approved.output_hash === SAMPLE4_ACCEPTED_SHA) {
         throw new Error("unapproved same-source Story mutation incorrectly admitted: " +
           JSON.stringify(approved));
       }
@@ -225,20 +288,21 @@ async function main() {
       }
       const current = await read("/v1/scenes/current");
       if (current.stories.find((s) => s.story_id === story.story_id)?.text !==
-          story.text.replace(MARKER, replacement)) {
+          editedText(story.text)) {
         throw new Error("unapproved edit did not reach canonical Story");
       }
       if (digest(fs.readFileSync(source)) !== SOURCE_SHA) throw new Error("original Sample3 mutated");
       const receipt = {
-        result: "PASS_unapproved_sample3_two_unit_download_denied",
-        variant: "two_unit_negative",
+        result: isSample4 ? "PASS_unapproved_sample4_same_source_download_denied"
+          : "PASS_unapproved_sample3_two_unit_download_denied",
+        variant: isSample4 ? "sample4_negative" : "two_unit_negative",
         source_sha256: SOURCE_SHA, candidate_sha256: approved.output_hash,
         chaptera_reopen_verified: approved.chaptera_reopen_verified,
         can_serialize: approved.can_serialize, can_download: approved.can_download,
         http_download_status: denied.status, immutable_source: true,
         release_ready: false,
       };
-      fs.writeFileSync(path.join(output, "sample3-negative-pub-download.json"),
+      fs.writeFileSync(path.join(output, isSample4 ? "sample4-negative-pub-download.json" : "sample3-negative-pub-download.json"),
         JSON.stringify(receipt, null, 2) + "\n");
       console.log(JSON.stringify(receipt));
       return;
@@ -275,7 +339,7 @@ async function main() {
     }
     const editedScene = await read("/v1/scenes/current");
     const editedStory = editedScene.stories.find((item) => item.story_id === story.story_id);
-    if (!editedStory || editedStory.text !== story.text.replace(MARKER, replacement)) {
+    if (!editedStory || editedStory.text !== editedText(story.text)) {
       throw new Error("Scene Story text differs from canonical accepted edit");
     }
 
@@ -284,7 +348,7 @@ async function main() {
     const download = await downloadWait;
     const bytes = fs.readFileSync(await download.path());
     if (bytes.length !== 72192 || digest(bytes) !== OUTPUT_SHA) {
-      throw new Error("actual Chromium downloaded file is not approved Sample3");
+      throw new Error("actual Chromium downloaded file is not exact Publisher-approved bytes");
     }
     fs.writeFileSync(path.join(output, "ui-edited.pub"), bytes);
 
@@ -358,8 +422,9 @@ async function main() {
 
     const receipt = {
       result: "PASS_real_ui_story_to_native_pub_download",
-      scope: "exact Sample3/Story deletion/Publisher-accepted SHA pair only",
-      variant: variant === "--one-unit" ? "one_unit" : "six_unit",
+      scope: isSample4 ? "exact Sample4/Story deletion/Publisher-accepted SHA pair only"
+        : "exact Sample3/Story deletion/Publisher-accepted SHA pair only",
+      variant: isSample4 ? "sample4_one_unit" : variant === "--one-unit" ? "one_unit" : "six_unit",
       source_sha256: SOURCE_SHA,
       pub_sha256: OUTPUT_SHA,
       byte_len: bytes.length,
@@ -373,7 +438,7 @@ async function main() {
       immutable_source: true,
       release_ready: false,
     };
-    fs.writeFileSync(path.join(output, "sample3-ui-pub-download.json"), JSON.stringify(receipt, null, 2) + "\n");
+    fs.writeFileSync(path.join(output, isSample4 ? "sample4-ui-pub-download.json" : "sample3-ui-pub-download.json"), JSON.stringify(receipt, null, 2) + "\n");
     console.log(JSON.stringify(receipt));
   } finally {
     if (browser) await browser.close();
@@ -382,7 +447,7 @@ async function main() {
       proc.kill("SIGTERM");
       await new Promise((done) => { proc.once("exit", done); setTimeout(done, 2000); });
     }
-    if (stderr.trim()) console.error("Sample3 service stderr:", stderr.slice(-10000));
+    if (stderr.trim()) console.error("Pinned Story service stderr:", stderr.slice(-10000));
   }
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

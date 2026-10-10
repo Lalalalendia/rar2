@@ -6,6 +6,8 @@ on:
       - ".github/workflows/sample3-browser-native-pub-download.yml"
       - "tools/native-pub-candidate-cli/examples/accepted_sample3_project.rs"
       - "tools/native-pub-candidate-cli/examples/cross_fixture_story_probe.rs"
+      - "tools/native-pub-candidate-cli/examples/native_sample4_handoff.rs"
+      - "tools/build_sample4_story_viewer_receipt.py"
       - "tools/test_sample3_browser_pub_download_service.py"
       - "tools/test_sample3_browser_pub_download.mjs"
       - "tools/test_sample3_editor_ui_acceptance.mjs"
@@ -320,6 +322,91 @@ jobs:
           assert receipt["http_download_status"] == 409
           PY
 
+      - name: Materialize independent Publisher-approved Sample4 source and exact Writer candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path tools/native-pub-candidate-cli/Cargo.toml \
+            --example native_sample4_handoff -- \
+            --output-dir .sample3-positive/sample4-native
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- verify \
+            --pub .sample3-positive/sample4-native/candidate/candidate.pub \
+            --manifest .sample3-positive/sample4-native/candidate/handoff.json
+
+      - name: Rebuild Sample4 current Reader/Viewer scene with explicit table-fidelity boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .sample3-positive/sample4-reader
+          vendor/producer-a/target/debug/chaptera-producer-a \
+            resolved-graph .sample3-positive/sample4-native/control/source.pub \
+            > .sample3-positive/sample4-reader/resolved-graph.json
+          vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/sample4-native/control/source.pub \
+            > .sample3-positive/sample4-reader/viewer-raw.json
+          python tools/build_sample4_story_viewer_receipt.py \
+            .sample3-positive/sample4-native/control/source.pub \
+            .sample3-positive/sample4-reader/resolved-graph.json \
+            .sample3-positive/sample4-reader/viewer-raw.json \
+            .sample3-positive/sample4-native/candidate/handoff.json \
+            .sample3-positive/sample4-reader/viewer-geometry.json \
+            .sample3-positive/sample4-reader/sample4-table-dependency.json
+          python tools/validate_viewer_geometry_receipt.py \
+            .sample3-positive/sample4-reader/viewer-geometry.json
+
+      - name: Prove real Sample4 Chromium Story edit → exact Publisher-approved Download and Undo/Redo/Reopen
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/test_sample3_editor_ui_acceptance.mjs \
+            .sample3-positive/sample4-native/control/source.pub \
+            .sample3-positive/sample4-native/baseline-project.json \
+            .sample3-positive/sample4-reader/resolved-graph.json \
+            .sample3-positive/sample4-reader/viewer-geometry.json \
+            vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/sample4-ui-positive \
+            --sample4-positive \
+            .sample3-positive/sample4-native/candidate/handoff.json
+          cmp .sample3-positive/sample4-ui-positive/ui-edited.pub \
+            .sample3-positive/sample4-native/candidate/candidate.pub
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          receipt = json.loads(Path(".sample3-positive/sample4-ui-positive/sample4-ui-pub-download.json").read_text())
+          assert receipt["result"] == "PASS_real_ui_story_to_native_pub_download"
+          assert receipt["variant"] == "sample4_one_unit"
+          assert receipt["source_sha256"] == "42195f7ad23d911219fea3ec88e66e867e9b9a6821a16dd1b535e2aa9d57a11b"
+          assert receipt["pub_sha256"] == "2f7795a3c4307716565c7accf4636a80b7947f8921c60a87b51e1a48ee529509"
+          assert receipt["byte_len"] == 72192
+          assert receipt["undo_revoked_download"] and receipt["redo_restored_exact_bytes"]
+          assert receipt["fresh_reopen"] and receipt["browser_reload_preserved_story"]
+          assert receipt["immutable_source"] and receipt["release_ready"] is False
+          PY
+
+      - name: Same-source Sample4 unapproved text variant must be HTTP409, not Reader authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/test_sample3_editor_ui_acceptance.mjs \
+            .sample3-positive/sample4-native/control/source.pub \
+            .sample3-positive/sample4-native/baseline-project.json \
+            .sample3-positive/sample4-reader/resolved-graph.json \
+            .sample3-positive/sample4-reader/viewer-geometry.json \
+            vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/sample4-ui-negative \
+            --sample4-negative \
+            .sample3-positive/sample4-native/candidate/handoff.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          receipt = json.loads(Path(".sample3-positive/sample4-ui-negative/sample4-negative-pub-download.json").read_text())
+          assert receipt["result"] == "PASS_unapproved_sample4_same_source_download_denied"
+          assert receipt["can_serialize"] and not receipt["can_download"]
+          assert receipt["http_download_status"] == 409
+          assert receipt["immutable_source"] and receipt["release_ready"] is False
+          PY
+
       - name: Prove pinned Newsletter still rejects unauthorized native PUB download
         run: python tools/run_local_real_editor.py --smoke
 
@@ -346,6 +433,10 @@ jobs:
             .sample3-positive/runtime-two-unit/sample3-negative-pub-download.json
             .sample3-positive/cross-fixture-story-preflight.json
             .sample3-positive/handoff-one-unit/handoff.json
+            .sample3-positive/sample4-native/source-safe-receipt.json
+            .sample3-positive/sample4-reader/sample4-table-dependency.json
+            .sample3-positive/sample4-ui-positive/sample4-ui-pub-download.json
+            .sample3-positive/sample4-ui-negative/sample4-negative-pub-download.json
             .sample3-positive/runtime/accepted.json
             .sample3-positive/runtime/baseline.json
             .sample3-positive/sample3-table-dependency.json
