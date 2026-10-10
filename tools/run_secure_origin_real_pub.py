@@ -207,6 +207,11 @@ def main() -> int:
         type=pathlib.Path,
         default=ROOT / "tools" / "run_secure_origin_real_pub_browser.mjs",
     )
+    parser.add_argument(
+        "--restart-browser-script",
+        type=pathlib.Path,
+        default=ROOT / "tools" / "run_secure_origin_real_pub_restart_browser.mjs",
+    )
     parser.add_argument("--caddy-image", default="caddy:2.10.2-alpine")
     parser.add_argument("--fixture", type=pathlib.Path, required=True)
     parser.add_argument("--fixture-sha256", required=True)
@@ -217,10 +222,13 @@ def main() -> int:
         raise SystemExit("real pinned PUB SHA does not match expected fixture")
     binary = args.binary.resolve()
     browser_script = args.browser_script.resolve()
+    restart_browser_script = args.restart_browser_script.resolve()
     if not binary.is_file():
         raise SystemExit(f"Chaptera binary not found: {binary}")
     if not browser_script.is_file():
         raise SystemExit(f"browser script not found: {browser_script}")
+    if not restart_browser_script.is_file():
+        raise SystemExit(f"restart browser script not found: {restart_browser_script}")
 
     TARGET.mkdir(parents=True, exist_ok=True)
     caddy_config = render_caddy()
@@ -239,6 +247,9 @@ def main() -> int:
     caddy_log = TARGET / "caddy.log"
     worker_log = TARGET / "worker.log"
     browser_log = TARGET / "browser.log"
+    restart_server_log = TARGET / "server-restart.log"
+    restart_worker_log = TARGET / "worker-restart.log"
+    restart_browser_log = TARGET / "browser-restart.log"
     server_handle = None
     caddy_handle = None
     worker_handle = None
@@ -351,6 +362,9 @@ def main() -> int:
                         "CHAPTERA_SECURE_SCREENSHOT": str(
                             (TARGET / "session.png").resolve()
                         ),
+                        "CHAPTERA_BROWSER_STORAGE_STATE": str(
+                            (TARGET / "browser-storage-state.json").resolve()
+                        ),
                     }
                 )
                 browser = subprocess.run(
@@ -375,6 +389,62 @@ def main() -> int:
                 if not (TARGET / "receipt.json").is_file():
                     raise RuntimeError(
                         "secure-origin Chromium acceptance emitted no receipt"
+                    )
+
+                # Prove persistence rather than page-local continuity: stop the
+                # canonical service and worker, then reopen the same SQLite DB
+                # and filesystem BlobStore with fresh processes.
+                terminate(worker)
+                worker = None
+                terminate(server)
+                server = None
+                if worker_handle is not None:
+                    worker_handle.close()
+                    worker_handle = None
+                if server_handle is not None:
+                    server_handle.close()
+                    server_handle = None
+
+                server_handle = restart_server_log.open("w", encoding="utf-8")
+                server = subprocess.Popen(
+                    [str(binary), "--config", str(config), "serve"],
+                    cwd=ROOT,
+                    env=env,
+                    stdout=server_handle,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                wait_live(server)
+                worker_handle = restart_worker_log.open("w", encoding="utf-8")
+                worker = subprocess.Popen(
+                    [str(binary), "--config", str(config), "worker"],
+                    cwd=ROOT,
+                    env=env,
+                    stdout=worker_handle,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+
+                restart_browser = subprocess.run(
+                    ["node", str(restart_browser_script)],
+                    cwd=ROOT,
+                    env=browser_env,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                restart_browser_log.write_text(
+                    restart_browser.stdout + "\n--- stderr ---\n" + restart_browser.stderr,
+                    encoding="utf-8",
+                )
+                if worker.poll() is not None:
+                    raise RuntimeError(
+                        f"restarted SourceValidation worker exited: {worker.returncode}"
+                    )
+                if restart_browser.returncode != 0:
+                    raise RuntimeError(
+                        "post-restart Chromium reopen failed; "
+                        f"see {restart_browser_log}"
                     )
     finally:
         terminate(worker)

@@ -46,6 +46,7 @@ jobs:
           set -euo pipefail
           python -m py_compile tools/run_secure_origin_real_pub.py tools/chaptera_local_oidc.py tools/migration_pdf_worker_isolation.py
           node --check tools/run_secure_origin_real_pub_browser.mjs
+          node --check tools/run_secure_origin_real_pub_restart_browser.mjs
           python - <<'PY'
           import ctypes.util
           assert ctypes.util.find_library("seccomp"), "libseccomp required by isolated PUB scan"
@@ -77,6 +78,7 @@ jobs:
           python tools/run_secure_origin_real_pub.py \
             --binary target/debug/chaptera \
             --browser-script tools/run_secure_origin_real_pub_browser.mjs \
+            --restart-browser-script tools/run_secure_origin_real_pub_restart_browser.mjs \
             --fixture "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub" \
             --fixture-sha256 "$FIXTURE_SHA256" \
             --caddy-image caddy:2.10.2-alpine
@@ -91,6 +93,9 @@ jobs:
             target/cloud-real-pub-ingress/server.log
             target/cloud-real-pub-ingress/worker.log
             target/cloud-real-pub-ingress/browser.log
+            target/cloud-real-pub-ingress/server-restart.log
+            target/cloud-real-pub-ingress/worker-restart.log
+            target/cloud-real-pub-ingress/browser-restart.log
             target/cloud-real-pub-ingress/caddy.log
             target/cloud-real-pub-ingress/Caddyfile
           if-no-files-found: warn
