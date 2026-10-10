@@ -75,10 +75,11 @@ pub enum Command {
         expected_sha256: String,
         #[arg(long)]
         expected_byte_len: u64,
-        #[arg(long)]
-        project_json: PathBuf,
-        #[arg(long)]
-        expected_project_sha256: String,
+        /// Omit both options to derive a baseline project in isolation.
+        #[arg(long, requires = "expected_project_sha256")]
+        project_json: Option<PathBuf>,
+        #[arg(long, requires = "project_json")]
+        expected_project_sha256: Option<String>,
     },
     #[command(hide = true)]
     GuestReaderScene {
@@ -183,6 +184,41 @@ mod tests {
             .command,
             Command::ProductIsolatedReplay { .. }
         ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "chaptera",
+                "product-isolated-replay",
+                "--document-id",
+                "document-one",
+                "--expected-sha256",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "--expected-byte-len",
+                "1024",
+            ])
+            .unwrap()
+            .command,
+            Command::ProductIsolatedReplay {
+                project_json: None,
+                expected_project_sha256: None,
+                ..
+            }
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "chaptera",
+                "product-isolated-replay",
+                "--document-id",
+                "document-one",
+                "--expected-sha256",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "--expected-byte-len",
+                "1024",
+                "--project-json",
+                "/tmp/project.json",
+            ])
+            .is_err()
+        );
+
         assert!(matches!(
             Cli::try_parse_from(["chaptera", "migrate", "status"])
                 .unwrap()
