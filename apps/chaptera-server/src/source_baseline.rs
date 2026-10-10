@@ -128,6 +128,14 @@ pub struct CommitIdentityDerivation {
     pub service_revision_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryIdentityDerivation {
+    pub project_hash: String,
+    pub state_id: String,
+    pub transition_hash: String,
+    pub service_revision_id: String,
+}
+
 #[derive(Serialize)]
 struct WebAuthoringStateV1<'a> {
     protocol_version: &'static str,
@@ -144,8 +152,17 @@ struct WebRevisionNodeV1<'a> {
     source_hash: &'a str,
     parent_revision_id: Option<&'a str>,
     state_id: &'a str,
-    transition_kind: &'static str,
+    transition_kind: &'a str,
     transition_hash: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct WebHistoryTransitionV1<'a> {
+    protocol_version: &'static str,
+    kind: &'a str,
+    base_revision_id: &'a str,
+    base_state_id: &'a str,
+    resulting_state_id: &'a str,
 }
 
 pub fn derive_import_baseline_identities<G: Serialize + ?Sized>(
@@ -225,6 +242,60 @@ pub fn derive_commit_revision_identities<G: Serialize + ?Sized, O: Serialize + ?
     })?;
 
     Ok(CommitIdentityDerivation {
+        project_hash,
+        state_id,
+        transition_hash,
+        service_revision_id,
+    })
+}
+
+pub fn derive_history_revision_identities<G: Serialize + ?Sized>(
+    document_id: &str,
+    source_sha256: &str,
+    project_schema_version: &str,
+    resulting_project: &G,
+    parent_revision_id: &str,
+    base_state_id: &str,
+    transition_kind: &str,
+) -> Result<HistoryIdentityDerivation, SourceBaselineError> {
+    require_ident(document_id, "document_id")?;
+    require_sha256(source_sha256, "source_sha256")?;
+    require_ident(project_schema_version, "project_schema_version")?;
+    require_prefixed_sha256(parent_revision_id, "parent_revision_id")?;
+    require_prefixed_sha256(base_state_id, "base_state_id")?;
+    if !matches!(transition_kind, "undo" | "redo") {
+        return Err(SourceBaselineError::new(
+            "source_baseline_history_transition_invalid",
+            "history transition kind must be undo or redo",
+        ));
+    }
+
+    let project_hash = web_hash_id(resulting_project)?;
+    let state_id = web_hash_id(&WebAuthoringStateV1 {
+        protocol_version: "chaptera.authoring-state.v1",
+        document_id,
+        source_hash: source_sha256,
+        project_schema_version,
+        project_hash: &project_hash,
+    })?;
+    let transition_hash = web_hash_id(&WebHistoryTransitionV1 {
+        protocol_version: "chaptera.history-transition.v1",
+        kind: transition_kind,
+        base_revision_id: parent_revision_id,
+        base_state_id,
+        resulting_state_id: &state_id,
+    })?;
+    let service_revision_id = web_hash_id(&WebRevisionNodeV1 {
+        protocol_version: "chaptera.revision-node.v1",
+        document_id,
+        source_hash: source_sha256,
+        parent_revision_id: Some(parent_revision_id),
+        state_id: &state_id,
+        transition_kind,
+        transition_hash: Some(&transition_hash),
+    })?;
+
+    Ok(HistoryIdentityDerivation {
         project_hash,
         state_id,
         transition_hash,
@@ -734,6 +805,92 @@ mod tests {
         assert_eq!(
             ids.canonical_authoring_revision_id,
             "5e246c364ec168c876ed07306a1ff99d5b2eb78913f5bd36777bc2863a5360f3"
+        );
+    }
+
+    #[test]
+    fn undo_reuses_prior_state_identity_but_creates_a_fresh_revision_node() {
+        let baseline_project = json!({
+            "operations": [],
+            "schema_version": "pub-editor-v0.2",
+            "source_hash": SOURCE_SHA,
+        });
+        let baseline = derive_import_baseline_identities(
+            DOCUMENT_ID,
+            SOURCE_SHA,
+            "pub-editor-v0.2",
+            &baseline_project,
+        )
+        .unwrap();
+
+        let operation = json!({
+            "MoveNode": {
+                "node_id": "00000000-0000-4000-8000-000000000001",
+                "before": {"x": 0, "y": 0, "width": 100, "height": 100},
+                "after": {"x": 10, "y": 20, "width": 100, "height": 100}
+            }
+        });
+        let moved_project = json!({
+            "operations": [operation.clone()],
+            "schema_version": "pub-editor-v0.4",
+            "source_hash": SOURCE_SHA,
+        });
+        let committed = derive_commit_revision_identities(
+            DOCUMENT_ID,
+            SOURCE_SHA,
+            "pub-editor-v0.4",
+            &moved_project,
+            &baseline.service_revision_id,
+            &operation,
+        )
+        .unwrap();
+
+        let undone = derive_history_revision_identities(
+            DOCUMENT_ID,
+            SOURCE_SHA,
+            "pub-editor-v0.2",
+            &baseline_project,
+            &committed.service_revision_id,
+            &committed.state_id,
+            "undo",
+        )
+        .unwrap();
+
+        assert_eq!(undone.state_id, baseline.state_id);
+        assert_eq!(undone.project_hash, baseline.project_hash);
+        assert_ne!(undone.service_revision_id, baseline.service_revision_id);
+        assert_ne!(undone.service_revision_id, committed.service_revision_id);
+        assert_ne!(undone.transition_hash, committed.transition_hash);
+    }
+
+    #[test]
+    fn history_identity_rejects_non_history_transition_kind() {
+        let project = json!({
+            "operations": [],
+            "schema_version": "pub-editor-v0.2",
+            "source_hash": SOURCE_SHA,
+        });
+        let baseline = derive_import_baseline_identities(
+            DOCUMENT_ID,
+            SOURCE_SHA,
+            "pub-editor-v0.2",
+            &project,
+        )
+        .unwrap();
+
+        assert_eq!(
+            derive_history_revision_identities(
+                DOCUMENT_ID,
+                SOURCE_SHA,
+                "pub-editor-v0.2",
+                &project,
+                &baseline.service_revision_id,
+                &baseline.state_id,
+                "commit",
+            )
+            .unwrap_err()
+            .code,
+            "source_baseline_history_transition_invalid"
         );
     }
 
