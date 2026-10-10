@@ -1110,15 +1110,16 @@ fn validate_host_materialization_binding(
             &isolated.project,
         )
         .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
-        let baseline_project_sha256 = baseline
-            .project_hash
-            .strip_prefix("sha256:")
-            .ok_or_else(|| {
-                RevisionMaterializerError::new(
-                    "product_materialization_baseline_identity_mismatch",
-                    "durable baseline project hash is not a canonical sha256 identity",
-                )
-            })?;
+        let baseline_project_sha256 =
+            baseline
+                .project_hash
+                .strip_prefix("sha256:")
+                .ok_or_else(|| {
+                    RevisionMaterializerError::new(
+                        "product_materialization_baseline_identity_mismatch",
+                        "durable baseline project hash is not a canonical sha256 identity",
+                    )
+                })?;
         if baseline_project_sha256 != isolated.project_sha256
             || baseline.service_revision_id != source.baseline_revision_id
             || baseline.canonical_authoring_revision_id != identity.canonical_revision_id
