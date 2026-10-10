@@ -5,8 +5,14 @@ on:
     paths:
       - "apps/web/project-home-v1.mjs"
       - "apps/web/project-home-v1.test.mjs"
+      - "apps/web/chaptera-cloud-project-catalog-v1.mjs"
+      - "apps/web/chaptera-cloud-project-catalog-v1.test.mjs"
       - ".github/workflows/web-project-home-01.yml"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -20,5 +26,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Test project-home controller
-        run: node --test apps/web/project-home-v1.test.mjs
+      - name: Test project-home controller and durable catalog adapter
+        run: |
+          node --test apps/web/project-home-v1.test.mjs
+          node --test apps/web/chaptera-cloud-project-catalog-v1.test.mjs
