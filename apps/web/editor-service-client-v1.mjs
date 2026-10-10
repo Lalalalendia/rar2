@@ -68,6 +68,13 @@ export class HttpEditorServiceV1 {
     );
   }
 
+  async fontFormatScope() {
+    const context = this.#context("scene_read");
+    return this.#json(
+      "/v1/editor/font-format-scope", {}, context, "browser.font_format_scope_http",
+    );
+  }
+
   async fontAuthoringAdmission() {
     const context = this.#context("scene_read");
     return this.#json(

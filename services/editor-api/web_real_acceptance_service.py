@@ -30,6 +30,7 @@ TOOLS = ROOT / "tools"
 sys.path.insert(0, str(TOOLS))
 
 from adapt_viewer_scene_v1 import adapt_viewer_geometry
+from scene_v1 import finalize_snapshot
 from resolved_graph_scene_bridge_v1 import (
     apply_project_to_resolved_graph,
     compare_viewer_and_adapter_scene,
@@ -59,6 +60,7 @@ SAMPLE4_LEN = 72192
 # This is a source fixture admission list, not a Writer/Publisher approval list.
 PINNED_FIXTURE_PROFILES = {
     "newsletter": (PINNED_SHA, PINNED_LEN),
+    "newsletter-font": (PINNED_SHA, PINNED_LEN),
     "sample3": (SAMPLE3_SHA, SAMPLE3_LEN),
     "sample4": (SAMPLE4_SHA, SAMPLE4_LEN),
 }
@@ -191,6 +193,7 @@ class RealAcceptanceState:
         baseline_project: pathlib.Path | None = None,
         fixture_profile: str = "newsletter",
         pinned_abel_demo: bool = False,
+        font_worker: pathlib.Path | None = None,
     ):
         self.fixture = fixture.resolve(strict=True)
         self.resolved_graph_path = resolved_graph.resolve(strict=True)
@@ -202,6 +205,7 @@ class RealAcceptanceState:
         self.work_dir = work_dir.resolve()
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.strict_acceptance = strict_acceptance
+        self.font_worker = font_worker.resolve(strict=True) if font_worker is not None else None
 
         if fixture_profile not in PINNED_FIXTURE_PROFILES:
             raise RuntimeError("unrecognized pinned PUB fixture profile")
@@ -235,6 +239,29 @@ class RealAcceptanceState:
             self.canonical_request = copy.deepcopy(self.revision_receipt["request"])
             self.target_node_id = self.canonical_operation["node_id"]
             self.target_after = copy.deepcopy(self.canonical_operation["after"])
+        elif fixture_profile == "newsletter-font":
+            # Explicit authoring demo: start from a real source-backed Rust
+            # identity-bearing EditorProject, not the geometry-only Producer B
+            # baseline. The project/Scene document IDs MUST match.
+            if (strict_acceptance or not pinned_abel_demo or baseline_project is None
+                    or self.font_worker is None):
+                raise RuntimeError("font demo requires an independent real Rust baseline and worker")
+            self.baseline_project = load_json(baseline_project.resolve(strict=True))
+            identity = self.baseline_project.get("identity")
+            if (not isinstance(identity, dict)
+                    or not isinstance(identity.get("document_id"), str)
+                    or self.baseline_project.get("source_hash") != self.pinned_sha
+                    or self.baseline_project.get("operations") != []):
+                raise RuntimeError("font demo baseline must be an immutable real PUB Project")
+            self.document_id = identity["document_id"]
+            self.source_hash = self.pinned_sha
+            self.revision_receipt = None
+            self.expected_baseline_revision = None
+            self.expected_accepted_revision = None
+            self.canonical_operation = None
+            self.canonical_request = None
+            self.target_node_id = None
+            self.target_after = None
         else:
             # An isolated, exact-source interactive scenario, not a fabricated
             # Producer B move receipt. The canonical baseline is real Rust EditorProject.
@@ -323,7 +350,23 @@ class RealAcceptanceState:
         require_viewer_equivalence: bool = False,
     ) -> dict:
         graph, viewer = self._fresh_graph_and_viewer()
-        current_graph = apply_project_to_resolved_graph(graph, project)
+        projection_project = project
+        if self.fixture_profile == "newsletter-font":
+            # Rust re-admits the complete resource from disk on every revision
+            # reconstruction. Geometry below remains source-only: font glyph
+            # reshaping/overset is NOT implemented, never silently projected.
+            operations = project.get("operations")
+            if not isinstance(operations, list) or any(
+                not isinstance(op, dict)
+                or op.get("kind") != "set_text_format_property"
+                or op.get("property") != "font_resource"
+                for op in operations
+            ):
+                raise ValueError("font-only demo refuses unproven mixed mutations")
+            self._run_font_worker("probe", project)
+            projection_project = copy.deepcopy(project)
+            projection_project["operations"] = []
+        current_graph = apply_project_to_resolved_graph(graph, projection_project)
         viewer_pages = viewer.get("document", {}).get("pages")
         if not isinstance(viewer_pages, list):
             raise ValueError("Viewer receipt document.pages must be an array")
@@ -385,7 +428,73 @@ class RealAcceptanceState:
             story["text"] = graph_story["text"]
 
         browser_scene = adapt_viewer_geometry(current_viewer, self.document_id, revision_id)
+        if self.fixture_profile == "newsletter-font" and project["operations"]:
+            # Canonical authoring changed, but no glyph metrics or frame flow
+            # was recalculated. Make the product fidelity gate explicit in
+            # every Scene revision and fresh reopen; never render as complete.
+            browser_scene["fidelity"]["state"] = "partial"
+            browser_scene["fidelity"]["reasons"] = sorted(set(
+                browser_scene["fidelity"]["reasons"]
+                + ["font_resource_layout_not_implemented"]
+            ))
+            browser_scene = finalize_snapshot(browser_scene)
         return bind_font_set_to_scene(browser_scene, self.pinned_abel)
+
+    def _run_font_worker(
+        self, mode: str, project: dict, scene: dict | None = None,
+        intent: dict | None = None,
+    ) -> dict:
+        if (self.fixture_profile != "newsletter-font" or self.font_worker is None
+                or self.pinned_abel is None or mode not in {"probe", "apply"}):
+            raise ValueError("pinned real-PUB font worker is not admitted")
+        token = hashlib.sha256(canonical_json(
+            {"mode": mode, "project": project, "scene": scene, "intent": intent}
+        )).hexdigest()[:24]
+        project_path = self.work_dir / f"{token}.font.project.json"
+        project_path.write_bytes(canonical_json(project) + b"\n")
+        args = [str(self.font_worker), mode, str(self.fixture), str(project_path)]
+        if mode == "apply":
+            if not isinstance(scene, dict) or not isinstance(intent, dict):
+                raise ValueError("trusted Scene and bounded font intent required")
+            scene_path = self.work_dir / f"{token}.trusted-font-scene.json"
+            intent_path = self.work_dir / f"{token}.font-intent.json"
+            scene_path.write_bytes(canonical_json(scene) + b"\n")
+            intent_path.write_bytes(canonical_json(intent) + b"\n")
+            args.extend((str(scene_path), str(intent_path)))
+        completed = subprocess.run(
+            args, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, check=False, timeout=30,
+        )
+        if completed.returncode:
+            # Rust error text may include source paths and Story payloads.
+            # Never return it over the authenticated HTTP API.
+            raise ValueError("pinned real-PUB Rust font command rejected")
+        try:
+            result = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise RuntimeError("Rust font worker returned invalid JSON") from error
+        expected = ("chaptera.local-font-format-probe.v1" if mode == "probe"
+                    else "chaptera.local-pinned-font-apply.v1")
+        if (not isinstance(result, dict)
+                or result.get("protocol_version") != expected
+                or result.get("source_hash") != self.source_hash):
+            raise RuntimeError("Rust font worker returned wrong physical/source authority")
+        return result
+
+    def font_editing_scope(self) -> dict:
+        current = self.kernel.current_revision(self.document_id)
+        scene = self.scenes[current.revision_id]
+        stories = []
+        if self.fixture_profile == "newsletter-font":
+            result = self._run_font_worker("probe", current.project)
+            stories = result["stories"]
+        return {
+            "protocol_version": "chaptera.font-format-edit-scope.v1",
+            "document_id": self.document_id,
+            "revision_id": scene["revision_id"],
+            "scene_snapshot_id": scene["snapshot_id"],
+            "stories": stories,
+        }
 
     def _run_editor_command(self, mode: str, project: dict, command: dict) -> dict:
         token = hashlib.sha256(
@@ -423,16 +532,50 @@ class RealAcceptanceState:
 
     def executor(self, project: dict, command: dict):
         self.executor_calls += 1
-        self.redo_stack.clear()
         if not isinstance(command, dict):
             raise ValueError("editor command must be an object")
 
         kind = command.get("kind")
+        if self.fixture_profile == "newsletter-font" and kind != "set_admitted_font_resource":
+            # Geometry and native Story text consumers cannot replay mixed
+            # font-resource authoring. Reject BEFORE RevisionKernel mutates.
+            raise ValueError("font-only authoring mode forbids unproved mixed edits")
+        if kind == "set_admitted_font_resource":
+            if self.fixture_profile != "newsletter-font":
+                raise ValueError("only the exact real-PUB font demo can commit")
+            current = self.kernel.current_revision(self.document_id).revision_id
+            scene = self.scenes[current]
+            intent = {
+                "protocol_version": "chaptera.local-pinned-font-intent.v1",
+                "story_id": command["story_id"],
+                "start_scalar": command["start_scalar"],
+                "end_scalar": command["end_scalar"],
+                "expected_state_hash": command["expected_state_hash"],
+                "candidate": command["candidate"],
+            }
+            result = self._run_font_worker("apply", project, scene, intent)
+            operation = result["canonical_operation"]
+            authored = result["project"]
+            if (result.get("fixed_output_eligible") is not False
+                    or result.get("layout_authority") != "partial_not_reshaped"
+                    or result.get("fresh_reopen_with_exact_bytes") is not True
+                    or authored.get("operations", []) != project.get("operations", []) + [operation]
+                    or authored.get("identity") != project.get("identity")
+                    or authored.get("source_hash") != self.source_hash):
+                raise RuntimeError("Rust font operation lacks durable independent replay proof")
+            self.redo_stack.clear()
+            self.last_operation = copy.deepcopy(operation)
+            return (
+                copy.deepcopy(operation), copy.deepcopy(authored),
+                [{"key": "story.font_resource", "state": "partial",
+                  "note": "actual_font_change_unshaped_fixed_output_blocked"}],
+            )
         if kind == "move_node_to":
             result = self._run_editor_command("editor-move-node", project, command)
             operation = result.get("operation")
             if not isinstance(operation, dict) or operation.get("kind") != "move_node":
                 raise RuntimeError("Rust editor returned non-MoveNode operation")
+            self.redo_stack.clear()
             self.last_operation = copy.deepcopy(operation)
             return (
                 copy.deepcopy(operation),
@@ -476,6 +619,7 @@ class RealAcceptanceState:
                         f"Rust/Python canonical Story operation differs at {field}"
                     )
 
+            self.redo_stack.clear()
             self.last_operation = copy.deepcopy(canonical.operation)
             return (
                 copy.deepcopy(canonical.operation),
@@ -500,6 +644,8 @@ class RealAcceptanceState:
         else:
             raise ValueError("unsupported history transition")
         project["operations"] = operations
+        if self.fixture_profile == "newsletter-font":
+            self._run_font_worker("probe", project)
         if project.get("identity") is None:
             # Legacy no-identity Projects (both pinned Newsletter Producer B
             # and interactive Newsletter smoke) normalize to v0.2 with no
@@ -528,6 +674,7 @@ class RealAcceptanceState:
         if protocol in {
             "chaptera.commit-request.v1",
             "chaptera.story-range-intent.v1",
+            "chaptera.font-resource-intent.v1",
         }:
             result = self.gateway.commit(
                 request,
@@ -571,6 +718,8 @@ class RealAcceptanceState:
         return copy.deepcopy(result)
 
     def _export_for_revision(self, revision_id: str, target: str):
+        if self.fixture_profile == "newsletter-font":
+            raise ValueError("font_layout_unverified")
         key = (revision_id, target)
         if key in self.export_cache:
             return self.export_cache[key]
@@ -688,6 +837,17 @@ class RealAcceptanceState:
 
     def editor_capabilities(self) -> dict:
         current = self.kernel.current_revision(self.document_id)
+        if self.fixture_profile == "newsletter-font":
+            # Source-geometry Scene cannot certify arbitrary text mutation
+            # after adding resource overrides. Font-range editing uses a
+            # separate exact resource probe with an authoritative state hash.
+            return {
+                "protocol_version": "chaptera.editor-capabilities.v1",
+                "document_id": self.document_id,
+                "source_hash": self.source_hash,
+                "revision_id": current.revision_id,
+                "editable_story_ids": [],
+            }
         record = self.kernel.read_revision(
             document_id=self.document_id,
             revision_id=current.revision_id,
@@ -742,6 +902,28 @@ class RealAcceptanceState:
     def _native_pub_for_revision_serialized(self, revision_id: str) -> dict:
         if revision_id in self.native_pub_cache:
             return self.native_pub_cache[revision_id]
+        if self.fixture_profile == "newsletter-font":
+            self._run_font_worker(
+                "probe", self.kernel.read_revision(
+                    document_id=self.document_id, revision_id=revision_id,
+                ).project,
+            )
+            blocked = {
+                "preview": {
+                    "protocol_version": "chaptera.native-pub-save-preview.v1",
+                    "document_id": self.document_id, "source_hash": self.source_hash,
+                    "revision_id": revision_id, "can_serialize": False,
+                    "can_download": False, "native_publisher_authorized": False,
+                    "download_blocker_code": "font_layout_unverified",
+                    "blocker_code": "font_layout_unverified",
+                    "output_hash": None, "byte_len": None,
+                    "chaptera_reopen_verified": False,
+                    "native_publisher_acceptance": "not_evaluated",
+                },
+                "artifact": None, "report": None,
+            }
+            self.native_pub_cache[revision_id] = blocked
+            return blocked
 
         record = self.kernel.read_revision(
             document_id=self.document_id,
@@ -1009,8 +1191,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/v1/export/preview":
                 self._authorize(CAP_EXPORT)
+                if STATE.fixture_profile == "newsletter-font":
+                    self._json({"error": "font_layout_unverified"}, 409)
+                    return
                 target = query.get("target", [""])[0]
                 self._json(STATE.export_preview(target))
+                return
+            if path == "/v1/editor/font-format-scope":
+                self._authorize(CAP_EDIT_TEXT)
+                self._json(STATE.font_editing_scope())
                 return
             if path == "/v1/editor/font-environment":
                 self._authorize(CAP_EDIT_TEXT)
@@ -1099,9 +1288,11 @@ def main():
     parser.add_argument("--revision-receipt", type=pathlib.Path)
     parser.add_argument("--baseline-project", type=pathlib.Path)
     parser.add_argument(
-        "--fixture-profile", choices=("newsletter", "sample3", "sample4"), default="newsletter"
+        "--fixture-profile", choices=("newsletter", "newsletter-font", "sample3", "sample4"), default="newsletter"
     )
     parser.add_argument("--exporter", required=True, type=pathlib.Path)
+    parser.add_argument("--font-worker", type=pathlib.Path,
+                        help="exact pinned real PUB Rust authoring binary (demo-only)")
     parser.add_argument("--pinned-abel-demo", action="store_true",
                         help="explicit dev-only admitted full-font delivery; never enabled in acceptance mode")
     parser.add_argument("--work-dir", required=True, type=pathlib.Path)
@@ -1123,6 +1314,7 @@ def main():
         baseline_project=args.baseline_project,
         fixture_profile=args.fixture_profile,
         pinned_abel_demo=args.pinned_abel_demo,
+        font_worker=args.font_worker,
     )
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(

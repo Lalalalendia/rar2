@@ -162,6 +162,11 @@ fn emit_apply(
     let project = read_project(project_path)?;
     let scene = read_json(trusted_scene_path)?;
     let context = scope_from_scene(&scene)?;
+    let project_doc_id = &project.identity.as_ref()
+        .context("font Project requires independently admitted document identity")?
+        .document_id;
+    ensure!(context.document_id == *project_doc_id,
+        "trusted Scene document identity differs from actual EditorProject");
     let intent = read_json(intent_path)?;
     ensure!(text(&intent, "protocol_version")? == "chaptera.local-pinned-font-intent.v1",
         "unsupported local font-intent protocol");
