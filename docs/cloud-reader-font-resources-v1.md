@@ -50,6 +50,21 @@ The helper scans the selected Windows font directory (default: `%WINDIR%\Fonts`)
 This helper does not grant redistribution or server-use rights. Its output must not be committed or uploaded to public CI.
 
 The current Cloud browser transport does not independently select a nonzero face from a font collection. Therefore the helper fails closed when a requested family resolves to `face_index > 0` in TTC/OTC bytes. A collection face at index 0 is allowed and is recorded as `first_face_only`; keep this fence until browser-side collection-face selection has its own acceptance proof.
+## Create a private font requirements plan from the actual PUB Reader output
+
+The source-backed Viewer JSON can now produce an **operator-only** requirements plan. It preserves exact source family spellings, candidate Quill font indices, script slots, and effective regular/bold/italic runs; it checks every reported scalar interval against the original Story text hash. It does not carry the Story text, font bytes, or grant source-font/PDF authority.
+
+```powershell
+python tools/pub_source_font_requirements_v1.py --viewer C:\\private\\publisher-viewer.json --output C:\\private\\source-font-requirements.json
+python tools/export_cloud_reader_windows_fonts.py --requirements C:\\private\\source-font-requirements.json --output-dir C:\\private\\source-font-packet
+```
+
+The existing private Windows helper then verifies installed font face names and exact SHA-256 bytes. This operation must run **only with font files licensed for the intended private use**. The plan's Quill font index is not a physical file hash or server-authoring grant.
+
+The exporter deliberately supports **Regular faces only**. If the original PUB needs bold/italic styles, contains unknown style bits, or has source runs without family names, the second command **fails before copying any files**. To generate a clearly marked partial packet for investigation only, add `--allow-incomplete-styles`. Its manifest explicitly records `partial_style_or_source_coverage`, `private_licensed_source_face_mapping_unverified`, and `publisher_visual_parity_verified=false`; no such packet authorizes native Publisher layout, PDF output, redistribution or a durable Editor authoring grant. Different Quill source font indices sharing one family name are never silently treated as a byte-identical original.
+
+The planning and parser regression runs on the public `SampleNewsletter.pub` Viewer JSON without requiring or committing licensed third-party fonts. Private `fonts/` packets and provenance files must stay off public CI artifacts.
+
 ## Acceptance
 
 The source-free server regression writes the redistribution-safe Chaptera fallback font to a temporary operator-style path and proves the real loader:

@@ -49,3 +49,15 @@ test("pending, rejected and uncertain edits are not presented as a saved revisio
   assert.equal(confirmed.status, "Revision sha256:child · selected");
   assert.equal(confirmed.fidelity, "Fidelity: supported");
 });
+
+
+test("SourceIngress persisted document identity opens through the same Editor page", () => {
+  const sourceDocument = "document:c54c2429d0bf699b890aab84";
+  assert.equal(documentIdFromEditorPath("/editor/doc/" + sourceDocument), sourceDocument);
+  assert.equal(documentIdFromEditorPath("/editor/doc/" + encodeURIComponent(sourceDocument)), sourceDocument);
+  assert.equal(documentIdFromEditorPath("/editor/doc/" + sourceDocument.toUpperCase()), null);
+  assert.equal(documentIdFromEditorPath("/editor/doc/document:123"), null);
+  assert.equal(documentIdFromEditorPath("/editor/doc/document:%2F%2Fevil.invalid"), null);
+  assert.equal(documentIdFromEditorPath("/editor/doc/%GG"), null);
+  assert.equal(documentIdFromEditorPath("/editor/doc/" + sourceDocument + "/extra"), null);
+});
