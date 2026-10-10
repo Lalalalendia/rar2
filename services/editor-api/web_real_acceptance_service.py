@@ -1174,6 +1174,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/v1/export/preview":
                 self._authorize(CAP_EXPORT)
+                if STATE.fixture_profile == "newsletter-font":
+                    self._json({"error": "font_layout_unverified"}, 409)
+                    return
                 target = query.get("target", [""])[0]
                 self._json(STATE.export_preview(target))
                 return
