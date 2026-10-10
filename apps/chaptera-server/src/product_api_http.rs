@@ -32,6 +32,7 @@ use crate::{
     authz_runtime::{
         AuthzError, CAP_VIEW, SqliteAuthorizedRevisionCommitter, SqliteAuthzAuthority,
     },
+    product_replay_worker::{IsolatedProductReplayProducer, ProductReplayWorkerError},
     reader_scene_v1::{ReaderSceneV1, from_viewer_geometry},
     revision_materializer::{
         BlobStoreExactSourceLoader, EDITOR_REVISION_EVENT_SCHEMA_V1,
@@ -41,7 +42,9 @@ use crate::{
         encode_editor_revision_event_v1, project_sha256,
     },
     source_authority::{SourceAuthorityError, SqliteDocumentSourceAuthority},
-    source_baseline::{SourceBaselineError, derive_commit_revision_identities},
+    source_baseline::{
+        SourceBaselineError, SourceBaselineProducerConfig, derive_commit_revision_identities,
+    },
     sqlite_store::{RevisionEdge, RevisionIdentityBinding, SqliteRevisionStore},
 };
 
@@ -57,6 +60,7 @@ pub struct ProductApiHttpState {
     revisions: SqliteRevisionStore,
     committer: SqliteAuthorizedRevisionCommitter,
     materializer: Arc<ExactRevisionMaterializer>,
+    isolated_replay: Option<IsolatedProductReplayProducer>,
 }
 
 impl ProductApiHttpState {
@@ -91,7 +95,18 @@ impl ProductApiHttpState {
             revisions,
             committer,
             materializer,
+            isolated_replay: None,
         })
+    }
+
+    /// Production must configure this at startup; tests using an injected
+    /// in-process source loader retain their existing isolated test scope.
+    pub fn with_isolated_replay(
+        mut self,
+        config: SourceBaselineProducerConfig,
+    ) -> Result<Self, ProductReplayWorkerError> {
+        self.isolated_replay = Some(IsolatedProductReplayProducer::new(config)?);
+        Ok(self)
     }
 }
 
@@ -209,28 +224,43 @@ async fn current_document(
         .await
         .map_err(ProductApiError::Materializer)?;
 
-    let source_hash = Sha256Digest::from_str(&source.source_sha256).map_err(|_| {
-        ProductApiError::internal(
-            "source_hash_invalid",
-            "durable source authority contains an invalid SHA-256 identity",
-        )
-    })?;
-    let mut session =
-        open_mature_0x2c_editor(&materialized.source_bytes, source_hash).map_err(|error| {
+    let authoring_graph = if let Some(worker) = &state.isolated_replay {
+        worker
+            .project_authoring_graph(
+                &document_id,
+                &source.source_sha256,
+                &materialized.source_bytes,
+                &materialized.receipt.project,
+                &materialized.receipt.project_sha256,
+            )
+            .await
+            .map_err(|error| ProductApiError::internal(error.code, error.message))?
+    } else {
+        // Test-only legacy producer when the HTTP state is manually injected.
+        // Configured production routes always use the isolated replay worker.
+        let source_hash = Sha256Digest::from_str(&source.source_sha256).map_err(|_| {
             ProductApiError::internal(
-                "editor_source_unsupported",
-                format!("canonical editor could not open durable source: {error}"),
+                "source_hash_invalid",
+                "durable source authority contains an invalid SHA-256 identity",
             )
         })?;
-    session
-        .apply_project(&materialized.receipt.project)
-        .map_err(|error| {
-            ProductApiError::internal(
-                "editor_replay_failed",
-                format!("canonical editor could not replay exact current revision: {error}"),
-            )
-        })?;
-    let authoring_graph = session.graph().clone();
+        let mut session = open_mature_0x2c_editor(&materialized.source_bytes, source_hash)
+            .map_err(|error| {
+                ProductApiError::internal(
+                    "editor_source_unsupported",
+                    format!("canonical editor could not open durable source: {error}"),
+                )
+            })?;
+        session
+            .apply_project(&materialized.receipt.project)
+            .map_err(|error| {
+                ProductApiError::internal(
+                    "editor_replay_failed",
+                    format!("canonical editor could not replay exact current revision: {error}"),
+                )
+            })?;
+        session.graph().clone()
+    };
     let receipt = materialized.receipt;
 
     Ok(Json(CurrentDocumentResponse {

@@ -20,6 +20,7 @@ use chaptera_server::{
     product_api_http::{self, ProductApiHttpState},
     product_editor_assets,
     product_export_http::{self, ProductExportHttpState},
+    product_replay_worker,
     project_persistence_sqlite::SqliteProjectPersistence,
     revision_materializer::BlobStoreExactSourceLoader,
     runtime_readiness::{
@@ -62,6 +63,29 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("chaptera: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    if let Command::ProductIsolatedReplay {
+        document_id,
+        expected_sha256,
+        expected_byte_len,
+        project_json,
+        expected_project_sha256,
+    } = &cli.command
+    {
+        return match product_replay_worker::run_product_replay_worker(
+            document_id,
+            expected_sha256,
+            *expected_byte_len,
+            project_json,
+            expected_project_sha256,
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("chaptera: {}", error.code);
                 ExitCode::FAILURE
             }
         };
@@ -261,6 +285,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                             authz.clone(),
                             revision_stream.clone(),
                             BlobStoreExactSourceLoader::new(blob_store.service().clone()),
+                        )?
+                        .with_isolated_replay(
+                            source_ingress_http::baseline_config(source_config),
                         )?;
                         let export_state = ProductExportHttpState::new(
                             auth_http.clone(),
@@ -397,6 +424,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         }
         Command::UntrustedPubInspect { .. } => unreachable!(
             "untrusted-pub-inspect is dispatched synchronously before Tokio runtime creation"
+        ),
+        Command::ProductIsolatedReplay { .. } => unreachable!(
+            "product-isolated-replay is dispatched synchronously before Tokio runtime creation"
         ),
         Command::SourceBaseline { .. } => unreachable!(
             "source-baseline is dispatched synchronously before Tokio runtime creation"

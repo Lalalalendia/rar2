@@ -66,6 +66,20 @@ pub enum Command {
         #[arg(long)]
         expected_byte_len: u64,
     },
+    /// Replay an exact canonical product project in a confined process.
+    #[command(name = "product-isolated-replay", hide = true)]
+    ProductIsolatedReplay {
+        #[arg(long)]
+        document_id: String,
+        #[arg(long)]
+        expected_sha256: String,
+        #[arg(long)]
+        expected_byte_len: u64,
+        #[arg(long)]
+        project_json: PathBuf,
+        #[arg(long)]
+        expected_project_sha256: String,
+    },
     #[command(hide = true)]
     GuestReaderScene {
         #[arg(long)]
@@ -149,6 +163,25 @@ mod tests {
             .unwrap()
             .command,
             Command::MigrationEditableRoutes { .. }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "chaptera",
+                "product-isolated-replay",
+                "--document-id",
+                "document-one",
+                "--expected-sha256",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "--expected-byte-len",
+                "1024",
+                "--project-json",
+                "/tmp/project.json",
+                "--expected-project-sha256",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ])
+            .unwrap()
+            .command,
+            Command::ProductIsolatedReplay { .. }
         ));
         assert!(matches!(
             Cli::try_parse_from(["chaptera", "migrate", "status"])
