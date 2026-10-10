@@ -25,8 +25,92 @@ use std::fmt;
 
 pub const EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1: &str = "0.1";
 
+/// Source-neutral page-lifecycle schema fence. Keep the full version
+/// compatibility law out of the central EditOperation/session monolith.
+pub(super) fn reject_legacy_page_lifecycle_schemas_v030(
+    project: &super::EditorProject,
+    legacy_compatible_schema: &str,
+) -> Result<(), super::EditorProjectError> {
+    if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_26
+        && legacy_compatible_schema != super::EDITOR_PROJECT_VERSION_V0_27
+    {
+        if let Some(index) = project.operations.iter().position(|operation| {
+            matches!(operation, EditOperation::DeleteBlankAuthoredPageV1 { .. })
+        }) {
+            return Err(
+                super::EditorProjectError::LegacyProjectCarriesDeleteBlankPageOperation { index },
+            );
+        }
+    }
+    if legacy_compatible_schema != super::EDITOR_PROJECT_VERSION_V0_27 {
+        if let Some(index) = project
+            .operations
+            .iter()
+            .position(|operation| matches!(operation, EditOperation::DuplicateBlankPageV1 { .. }))
+        {
+            return Err(
+                super::EditorProjectError::LegacyProjectCarriesDuplicateBlankPageOperation {
+                    index,
+                },
+            );
+        }
+    }
+    if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_28
+        && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_29
+        && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_30
+    {
+        if let Some(index) = project
+            .operations
+            .iter()
+            .position(|operation| matches!(operation, EditOperation::InsertBlankPageAfterV1 { .. }))
+        {
+            return Err(
+                super::EditorProjectError::LegacyProjectCarriesInsertBlankPageOperation { index },
+            );
+        }
+    }
+    if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_29
+        && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_30
+    {
+        if let Some(index) = project.operations.iter().position(|operation| {
+            matches!(
+                operation,
+                EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+            )
+        }) {
+            return Err(
+                super::EditorProjectError::LegacyProjectCarriesDeleteAuthoredRectanglePageOperation {
+                    index,
+                },
+            );
+        }
+    }
+    if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_30 {
+        if let Some(index) = project.operations.iter().position(|operation| {
+            matches!(
+                operation,
+                EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
+            )
+        }) {
+            return Err(
+                super::EditorProjectError::LegacyProjectCarriesDuplicateAuthoredRectanglePageOperation {
+                    index,
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
     if operations.iter().any(|operation| {
+        matches!(
+            operation,
+            EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
+        )
+    }) {
+        super::EDITOR_PROJECT_VERSION_V0_30
+    } else if operations.iter().any(|operation| {
         matches!(
             operation,
             EditOperation::DeleteAuthoredRectanglePageV1 { .. }
@@ -287,6 +371,7 @@ impl EditorSession {
                 | EditOperation::DuplicateBlankPageV1 { .. }
                 | EditOperation::InsertBlankPageAfterV1 { .. }
                 | EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+                | EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
                 | EditOperation::SetTextFormatProperty { .. }
                 | EditOperation::ClearTextFormatPropertyOverride { .. }
                 | EditOperation::SetTextFormatPropertyScopedV1 { .. }
@@ -405,6 +490,7 @@ impl EditorSession {
                 | EditOperation::DuplicateBlankPageV1 { .. }
                 | EditOperation::InsertBlankPageAfterV1 { .. }
                 | EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+                | EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
                 | EditOperation::SetTextFormatProperty { .. }
                 | EditOperation::ClearTextFormatPropertyOverride { .. }
                 | EditOperation::SetTextFormatPropertyScopedV1 { .. }
@@ -701,6 +787,7 @@ impl EditOperation {
             | Self::DuplicateBlankPageV1 { .. }
             | Self::InsertBlankPageAfterV1 { .. }
             | Self::DeleteAuthoredRectanglePageV1 { .. }
+            | Self::DuplicateAuthoredRectanglePageV1 { .. }
             | Self::SetTextFormatProperty { .. }
             | Self::ClearTextFormatPropertyOverride { .. }
             | Self::SetTextFormatPropertyScopedV1 { .. }
@@ -961,6 +1048,50 @@ impl PersistenceRequirements for EditOperation {
                     feature: "node.deleted_identity".into(),
                     origin: Some(transition.shape_before.node_id.into_canonical()),
                     property_path: Some("node".into()),
+                },
+            ],
+            Self::DuplicateAuthoredRectanglePageV1 { transition } => vec![
+                PersistenceRequirement {
+                    feature: "page.created_identity".into(),
+                    origin: Some(
+                        transition
+                            .page
+                            .destination_identity
+                            .page_id
+                            .into_canonical(),
+                    ),
+                    property_path: Some("page.identity".into()),
+                },
+                PersistenceRequirement {
+                    feature: "document.page_membership".into(),
+                    origin: Some(transition.page.document_id.into_canonical()),
+                    property_path: Some("document.pages".into()),
+                },
+                PersistenceRequirement {
+                    feature: "page.geometry".into(),
+                    origin: Some(
+                        transition
+                            .page
+                            .destination_identity
+                            .page_id
+                            .into_canonical(),
+                    ),
+                    property_path: Some("page.size".into()),
+                },
+                PersistenceRequirement {
+                    feature: "node.created_identity".into(),
+                    origin: Some(transition.destination_shape.node_id.into_canonical()),
+                    property_path: Some("node".into()),
+                },
+                PersistenceRequirement {
+                    feature: "node.geometry.bounds".into(),
+                    origin: Some(transition.destination_shape.node_id.into_canonical()),
+                    property_path: Some("node.bounds".into()),
+                },
+                PersistenceRequirement {
+                    feature: "shape.paint".into(),
+                    origin: Some(transition.destination_shape.node_id.into_canonical()),
+                    property_path: Some("node.paint".into()),
                 },
             ],
             Self::DuplicateBlankPageV1 { transition } => vec![
