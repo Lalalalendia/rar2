@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { ChapteraProductEditorServiceV1 } from "./chaptera-product-editor-service-v1.mjs";
+import { BrowserObservabilityV1 } from "./observability-v1.mjs";
 
 const DOC = "10000000-0000-4000-8000-000000000001";
 const PAGE = "20000000-0000-4000-8000-000000000001";
@@ -637,4 +638,31 @@ test("rich Reader scene re-fetch rejects unexpected advanced child revision", as
   );
   const reader = await service.readerSceneForRevision(CHILD);
   assert.equal(reader.revision_id, CHILD);
+});
+
+test("rich scene read supports production browser observability", async () => {
+  const { calls, fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/documents/" + DOC + "/current") return json(current());
+    if (path === "/v1/reader/documents/" + DOC + "/scene") return json(readerScene());
+    throw new Error("unexpected path " + path);
+  });
+  let serial = 0;
+  const observability = new BrowserObservabilityV1({
+    sessionIncarnation: "session:product-editor-test",
+    browserFamily: "chromium",
+    idFactory: (prefix) => prefix + ":product-test-" + String(++serial).padStart(6, "0"),
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl, observability,
+  });
+  const state = await service.currentRichEditorState();
+  assert.equal(state.current_document.revision_id, BASE);
+  assert.equal(state.reader_scene.revision_id, BASE);
+  assert.equal(state.interaction_scene.revision_id, BASE);
+  assert.deepEqual(
+    new Set(calls.map((call) => call.options.headers["x-chaptera-operation-class"])),
+    new Set(["open", "scene_read"]),
+  );
+  assert.ok(calls.every((call) => call.options.credentials === "include"));
 });

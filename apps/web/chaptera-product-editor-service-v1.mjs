@@ -140,7 +140,7 @@ export class ChapteraProductEditorServiceV1 {
       this.#fetchJson(
         "/v1/reader/documents/" + encodeURIComponent(this.documentId) + "/scene",
         { method: "GET" },
-        this.#context("visual_scene"),
+        this.#context("scene_read"),
       ),
     ]);
     this.#throwUnlessOk(visualResult, "current visual scene");

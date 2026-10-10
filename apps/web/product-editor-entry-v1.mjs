@@ -19,6 +19,38 @@ export function loginUrlForReturnPath(returnPath){
   return "/v1/auth/login?return_path="+encodeURIComponent(returnPath);
 }
 
+export function productEditorStatusView(state, readerScene = null) {
+  if (!state || typeof state !== "object") {
+    throw new TypeError("editor state receipt is required");
+  }
+  const revision = state.revision_id ?? "unknown";
+  const reasons = readerScene?.fidelity?.reasons;
+  const fidelity = "Fidelity: " + (readerScene?.fidelity?.state ?? "unknown") +
+    (Array.isArray(reasons) && reasons.length ? " — " + reasons.join(", ") : "");
+  if (state.reason === "commit_sent") {
+    return { status: "Saving change…", kind: "pending", fidelity };
+  }
+  if (state.reason === "commit_error") {
+    return {
+      status: "Change not confirmed — reload to reconcile before retrying",
+      kind: "error",
+      fidelity,
+    };
+  }
+  if (state.reason === "commit_rejected") {
+    return {
+      status: "Change rejected — reload the document before retrying",
+      kind: "error",
+      fidelity,
+    };
+  }
+  return {
+    status: "Revision " + revision + (state.selected_node_id ? " · selected" : ""),
+    kind: state.revision_id ? "ok" : "",
+    fidelity,
+  };
+}
+
 function statusText(element,text,kind=""){
   element.textContent=text;
   element.className="status"+(kind?" "+kind:"");
@@ -62,19 +94,18 @@ export async function bootProductEditor({
     throw error;
   }
 
-  const shell=new RichReaderEditorShellV1({
+  let shell=null;
+  shell=new RichReaderEditorShellV1({
     host,
     service,
     operationIdFactory:()=> "product-move-"+cryptoObject.randomUUID(),
     onState:(state)=>{
-      statusText(status,"Revision "+(state.revision_id??"unknown")+(state.selected_node_id?" · selected":""),
-        state.revision_id?"ok":"");
+      const view=productEditorStatusView(state,shell?.readerScene);
+      statusText(status,view.status,view.kind);
+      fidelity.textContent=view.fidelity;
     },
   });
   await shell.start();
-  const scene=shell.readerScene;
-  fidelity.textContent="Fidelity: "+(scene?.fidelity?.state??"unknown")+
-    ((scene?.fidelity?.reasons?.length??0)?" — "+scene.fidelity.reasons.join(", "):"");
   return {kind:"ready",document_id:documentId,shell,service};
 }
 

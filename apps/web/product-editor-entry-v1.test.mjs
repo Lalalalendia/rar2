@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { documentIdFromEditorPath, loginUrlForReturnPath } from "./product-editor-entry-v1.mjs";
+import { documentIdFromEditorPath, loginUrlForReturnPath, productEditorStatusView } from "./product-editor-entry-v1.mjs";
 
 const DOC="10000000-0000-4000-8000-000000000001";
 
@@ -25,4 +25,27 @@ test("real UUIDv7 DocumentId is accepted by the Product Editor entry", () => {
   assert.equal(documentIdFromEditorPath("/editor/doc/" + v7), v7);
   assert.equal(documentIdFromEditorPath("/editor/doc/" + v7.toUpperCase()), null);
   assert.equal(documentIdFromEditorPath("/editor/doc/" + v7 + "/extra"), null);
+});
+
+test("pending, rejected and uncertain edits are not presented as a saved revision", () => {
+  const receipt = { reason: "commit_sent", revision_id: "sha256:base" };
+  const scene = { fidelity: { state: "partial", reasons: ["missing_typeface"] } };
+  const pending = productEditorStatusView(receipt, scene);
+  assert.equal(pending.kind, "pending");
+  assert.match(pending.status, /Saving change/);
+  assert.equal(pending.fidelity, "Fidelity: partial — missing_typeface");
+  for (const reason of ["commit_error", "commit_rejected"]) {
+    const view = productEditorStatusView({ ...receipt, reason }, scene);
+    assert.equal(view.kind, "error");
+    assert.match(view.status, /reload/);
+    assert.doesNotMatch(view.status, /Revision sha256:base/);
+  }
+  const confirmed = productEditorStatusView({
+    reason: "commit_reconciled",
+    revision_id: "sha256:child",
+    selected_node_id: "node-a",
+  }, { fidelity: { state: "supported", reasons: [] } });
+  assert.equal(confirmed.kind, "ok");
+  assert.equal(confirmed.status, "Revision sha256:child · selected");
+  assert.equal(confirmed.fidelity, "Fidelity: supported");
 });

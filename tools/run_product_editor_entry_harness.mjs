@@ -58,6 +58,7 @@ function scene(revisionId, x = 95250, y = 95250) {
 let current = scene(BASE);
 const commitRequests = [];
 const sessionCookies = [];
+const traceClasses = [];
 const staticFiles = new Map([
   ["/editor/product-editor.css", ["apps/web/product-editor.css", ".css"]],
   ["/editor/product-editor-entry-v1.mjs", ["apps/web/product-editor-entry-v1.mjs", ".mjs"]],
@@ -89,6 +90,9 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (path.startsWith("/v1/")) {
+      if (req.headers["x-chaptera-operation-class"]) {
+        traceClasses.push(String(req.headers["x-chaptera-operation-class"]));
+      }
       if (!isAuthenticated(req)) {
         json(res, 401, { error: "authentication_required" });
         return;
@@ -231,6 +235,9 @@ try {
   const overlay = await page.locator('[data-layer="editor-transient-overlay"]').count();
   if (!overlay) throw new Error("accepted child lost the selection overlay");
   if (current.source_hash !== SOURCE) throw new Error("source identity changed");
+  for (const op of ["open", "scene_read", "commit"]) {
+    if (!traceClasses.includes(op)) throw new Error("missing browser trace operation: " + op);
+  }
   if (!sessionCookies.length || sessionCookies.some((value) => !value.includes("chaptera-test-auth=valid"))) {
     throw new Error("browser failed cookie-backed Product API request");
   }
@@ -255,6 +262,7 @@ try {
     child_revision_id: CHILD,
     browser_cookie_request: true,
     browser_csrf_commit: true,
+    browser_observability_classes: [...new Set(traceClasses)].sort(),
     projected_visual_read_only: true,
     canonical_commit_count: 1,
     child_reader_scene_repaint: true,

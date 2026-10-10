@@ -13,4 +13,5 @@ main{min-height:0;display:grid;grid-template-columns:220px 1fr}
 #canvas svg.page{box-shadow:0 2px 12px rgb(0 0 0 / 14%)}
 .status.error{color:#a61b1b}
 .status.ok{color:#176b3a}
+.status.pending{color:#805200}
 @media(max-width:760px){main{grid-template-columns:1fr}.notice{border-right:0;border-bottom:1px solid #d9dde5}}
