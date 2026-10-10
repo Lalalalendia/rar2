@@ -11,8 +11,7 @@ use pub_editor::{
     EDITOR_PROJECT_VERSION_V0_23, EDITOR_PROJECT_VERSION_V0_24, EDITOR_PROJECT_VERSION_V0_25,
     EDITOR_PROJECT_VERSION_V0_26, EDITOR_PROJECT_VERSION_V0_27, EDITOR_PROJECT_VERSION_V0_28,
     EDITOR_PROJECT_VERSION_V0_29, EDITOR_PROJECT_VERSION_V0_30, EDITOR_PROJECT_VERSION_V0_31,
-    EditOperation, EditorProject,
-    Sha256Digest, open_mature_0x2c_editor,
+    EditOperation, EditorProject, Sha256Digest, open_mature_0x2c_editor,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
