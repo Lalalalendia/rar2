@@ -431,10 +431,26 @@ mod tests {
         for (uri, expected_type, bytes) in [
             ("/editor", "text/html; charset=utf-8", HOME_HTML),
             ("/editor/projects", "text/html; charset=utf-8", HOME_HTML),
-            ("/editor/cloud-project-home.css", "text/css; charset=utf-8", HOME_CSS),
-            ("/editor/cloud-project-home-v1.mjs", "text/javascript; charset=utf-8", HOME_ENTRY),
-            ("/editor/project-home-v1.mjs", "text/javascript; charset=utf-8", PROJECT_HOME_CONTROLLER),
-            ("/editor/chaptera-cloud-project-catalog-v1.mjs", "text/javascript; charset=utf-8", PROJECT_CATALOG_CLIENT),
+            (
+                "/editor/cloud-project-home.css",
+                "text/css; charset=utf-8",
+                HOME_CSS,
+            ),
+            (
+                "/editor/cloud-project-home-v1.mjs",
+                "text/javascript; charset=utf-8",
+                HOME_ENTRY,
+            ),
+            (
+                "/editor/project-home-v1.mjs",
+                "text/javascript; charset=utf-8",
+                PROJECT_HOME_CONTROLLER,
+            ),
+            (
+                "/editor/chaptera-cloud-project-catalog-v1.mjs",
+                "text/javascript; charset=utf-8",
+                PROJECT_CATALOG_CLIENT,
+            ),
         ] {
             let response = routes
                 .clone()
