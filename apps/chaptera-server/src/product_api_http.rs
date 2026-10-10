@@ -808,7 +808,9 @@ impl IntoResponse for ProductApiError {
             Self::Authz(error) => {
                 let status = match error.code {
                     "stale_revision" | "idempotency_conflict" => StatusCode::CONFLICT,
-                    "authz_denied" | "authz_expired" => StatusCode::FORBIDDEN,
+                    "grant_missing" | "grant_expired" | "capability_denied" => {
+                        StatusCode::FORBIDDEN
+                    }
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
                 };
                 (
