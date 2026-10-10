@@ -143,6 +143,12 @@ async function chooseRealMoveTarget(documentId) {
       x <= node.bounds.x + node.bounds.width &&
       y <= node.bounds.y + node.bounds.height;
     for (const candidate of direct) {
+      const visualGroup = [...document.querySelectorAll("#canvas g[data-node-id]")]
+        .find(node => node.getAttribute("data-node-id") === candidate.node_id);
+      if (!visualGroup) continue;
+      visualGroup.scrollIntoView({ block: "center", inline: "center" });
+      await new Promise(resolve =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const svg = [...document.querySelectorAll("#canvas svg.page[data-page-id]")]
         .find(page => page.getAttribute("data-page-id") === candidate.page_id);
       if (!svg?.getScreenCTM()) continue;
