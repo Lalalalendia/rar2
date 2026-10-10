@@ -82,9 +82,9 @@ pub enum Command {
         expected_project_sha256: Option<String>,
         #[arg(long, requires_all = ["move_x_emu", "move_y_emu", "project_json"])]
         move_node_id: Option<String>,
-        #[arg(long, requires = "move_node_id")]
+        #[arg(long, requires = "move_node_id", allow_hyphen_values = true)]
         move_x_emu: Option<i64>,
-        #[arg(long, requires = "move_node_id")]
+        #[arg(long, requires = "move_node_id", allow_hyphen_values = true)]
         move_y_emu: Option<i64>,
     },
     #[command(hide = true)]
