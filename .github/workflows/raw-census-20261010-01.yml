@@ -1,0 +1,58 @@
+name: RAW-CENSUS-20261010-01 Chapter integrity
+
+on:
+  push:
+    branches:
+      - research/raw-census-20261010-01
+    paths:
+      - research/translation_raw_census/**
+      - .github/workflows/raw-census-20261010-01.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: raw-census-20261010-01-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  parser-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install parser deps
+        run: python -m pip install requests==2.32.3 beautifulsoup4==4.12.3
+      - name: Validate HTML parsing and integrity laws
+        run: python -m unittest discover -s research/translation_raw_census -p 'test_*.py' -v
+
+  census:
+    needs: parser-contract
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        book: [fencing, return, red-reaper, witcher]
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install parser deps
+        run: python -m pip install requests==2.32.3 beautifulsoup4==4.12.3
+      - name: Verify chapter body for every indexed episode
+        run: python research/translation_raw_census/audit.py --book '${{ matrix.book }}' --output receipts --delay 2.5
+      - name: Preserve metadata-only receipt even when blocked
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-census-${{ matrix.book }}
+          path: receipts/*.json
+          if-no-files-found: warn
+          retention-days: 14
