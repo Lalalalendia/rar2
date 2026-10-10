@@ -66,7 +66,7 @@ export class ChapteraProductEditorServiceV1 {
     baseUrl,
     {
       documentId,
-      fetchImpl = globalThis.fetch,
+      fetchImpl = (...args) => globalThis.fetch(...args),
       observability = null,
     } = {},
   ) {

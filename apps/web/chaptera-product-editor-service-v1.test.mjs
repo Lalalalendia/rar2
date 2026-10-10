@@ -666,3 +666,24 @@ test("rich scene read supports production browser observability", async () => {
   );
   assert.ok(calls.every((call) => call.options.credentials === "include"));
 });
+
+test("default browser fetch retains the Window-style global receiver", async () => {
+  const saved = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = function (url, options) {
+    assert.equal(this, globalThis);
+    requests.push({ url, options });
+    return Promise.resolve(json(current()));
+  };
+  try {
+    const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+      documentId: DOC,
+    });
+    const state = await service.currentDocument();
+    assert.equal(state.revision_id, BASE);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].options.credentials, "include");
+  } finally {
+    globalThis.fetch = saved;
+  }
+});
