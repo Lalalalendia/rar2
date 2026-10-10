@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/sample3-browser-native-pub-download.yml"
       - "tools/native-pub-candidate-cli/examples/accepted_sample3_project.rs"
+      - "tools/native-pub-candidate-cli/examples/cross_fixture_story_probe.rs"
       - "tools/test_sample3_browser_pub_download_service.py"
       - "tools/test_sample3_browser_pub_download.mjs"
       - "tools/test_sample3_editor_ui_acceptance.mjs"
@@ -101,6 +102,36 @@ jobs:
             .sample3-positive/source.pub \
             .sample3-positive/one-unit-baseline.json \
             .sample3-positive/one-unit-edited.json --one-unit
+
+      - name: Discriminate independent public PUB Story Writer/Reader transfers (no native Publisher)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path tools/native-pub-candidate-cli/Cargo.toml \
+            --example cross_fixture_story_probe -- \
+            .sample3-positive/cross-fixture-story-preflight.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          receipt = json.loads(Path(".sample3-positive/cross-fixture-story-preflight.json").read_text())
+          assert receipt["schema"] == "chaptera.cross-fixture-story-preflight.v1"
+          assert receipt["positive_control"]["receipt"]["output_sha256"] == (
+              "b9b789f35a34e016faceb27acf50bf0621273a7d612762ecc17c56ca450fe715"
+          )
+          assert receipt["positive_control"]["receipt"]["editor_project_replay_byte_equal"]
+          assert receipt["candidate_count"] == 4
+          assert receipt["native_publisher_acceptance"] == (
+              "not_evaluated_for_any_cross_fixture_candidate"
+          )
+          assert receipt["product_pub_download_authority"] is False
+          for candidate in receipt["candidates"]:
+              assert candidate["source_sha256"] != receipt["positive_control"]["source_sha256"]
+              assert not candidate["publisher_native_accepted"]
+              assert not candidate["product_download_authorized"]
+          print({"cross_fixture_candidates": [(r["fixture"], r["result"]) for r in receipt["candidates"]],
+                 "hosted_qualified": receipt["hosted_qualified_candidate_count"],
+                 "publisher_evaluated": False, "product_download": False})
+          PY
 
       - name: Prove source Story separator roundtrip is byte-exact
         run: node tools/test_story_line_endings_v1.mjs
@@ -313,6 +344,7 @@ jobs:
             .sample3-positive/runtime/sample3-ui-pub-download.json
             .sample3-positive/runtime-one-unit/sample3-ui-pub-download.json
             .sample3-positive/runtime-two-unit/sample3-negative-pub-download.json
+            .sample3-positive/cross-fixture-story-preflight.json
             .sample3-positive/handoff-one-unit/handoff.json
             .sample3-positive/runtime/accepted.json
             .sample3-positive/runtime/baseline.json
