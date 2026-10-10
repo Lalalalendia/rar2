@@ -39,7 +39,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/cloud-s3-provider-probe
-          cargo run -p chaptera-server --bin cloud_blob_provider_probe --quiet             > target/cloud-s3-provider-probe/receipt.json
+          cargo run -p chaptera-server --example cloud_blob_provider_probe --quiet > target/cloud-s3-provider-probe/receipt.json
           python - <<'PY'
           import json
           from pathlib import Path
