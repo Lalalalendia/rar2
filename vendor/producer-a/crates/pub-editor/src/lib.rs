@@ -7799,6 +7799,12 @@ fn apply_inverse(
                 message: "combined authored Page/Rectangle transition needs EditorSession".into(),
             });
         }
+        EditOperation::DuplicateAuthoredRectanglesPageV1 { .. } => {
+            return Err(EditorError::PageDuplicateUnsupported {
+                message: "combined authored Page/multi-Rectangle transition needs EditorSession"
+                    .into(),
+            });
+        }
         EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
             apply_delete_blank_authored_page_inverse_v1(
                 graph.document.id,
