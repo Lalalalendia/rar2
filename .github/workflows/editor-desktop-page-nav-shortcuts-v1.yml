@@ -100,6 +100,12 @@ jobs:
           gui_duplicate_blank_page_projects_membership_and_replays_on_real_pub
           -- --ignored --nocapture
 
+      - name: Prove real GUI one-Rectangle Page duplicate and fresh v0.30 project reopen
+        run: >-
+          cargo test -p chaptera-desktop
+          gui_duplicate_authored_rectangle_page_v030_click_undo_redo_reopen_real_pub
+          -- --ignored --nocapture
+
       - name: Prove real GUI blank insert after content-bearing customer
         run: >-
           cargo test -p chaptera-desktop
