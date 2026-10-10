@@ -21,10 +21,11 @@ use session_geometry::{
     apply_authored_line_inverse, apply_authored_shape_delete_forward,
     apply_authored_shape_delete_inverse, apply_authored_shape_inverse,
     apply_authored_stack_history_forward_v1, apply_page_lifecycle_graph_forward_v1,
-    apply_page_lifecycle_graph_inverse_v1, authored_line_from_operation, authored_shape_from_operation,
-    authored_stack_operation_page_id_v1, derive_authored_stacks_from_operations_v1,
-    display_page_append_error_v1, display_page_delete_error_v1, display_page_duplicate_error_v1,
-    display_page_insert_error_v1, validate_move_nodes_transition, validate_resize_nodes_transition,
+    apply_page_lifecycle_graph_inverse_v1, authored_line_from_operation,
+    authored_shape_from_operation, authored_stack_operation_page_id_v1,
+    derive_authored_stacks_from_operations_v1, display_page_append_error_v1,
+    display_page_delete_error_v1, display_page_duplicate_error_v1, display_page_insert_error_v1,
+    validate_move_nodes_transition, validate_resize_nodes_transition,
 };
 use session_image::{
     apply_crop_forward, apply_crop_inverse, apply_image_forward, apply_image_inverse,
