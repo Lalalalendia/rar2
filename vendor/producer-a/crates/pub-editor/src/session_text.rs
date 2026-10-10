@@ -168,12 +168,11 @@ impl EditorSession {
         expected_state_hash: &str,
     ) -> Result<EditOperation, EditorError> {
         let before = self.current_text_format_overlay_v1(story_id)?;
-        let before_hash = state_hash_v1(&before).map_err(|error| {
-            EditorError::TextFormatStateInvalid {
+        let before_hash =
+            state_hash_v1(&before).map_err(|error| EditorError::TextFormatStateInvalid {
                 story_id,
                 message: error.to_string(),
-            }
-        })?;
+            })?;
         if before_hash != expected_state_hash {
             return Err(EditorError::StaleOperation { story_id });
         }
@@ -282,7 +281,8 @@ fn replay_existing_text_format_set_v1(
     property: FormatPropertyV1,
     value: FormatValueV1,
     expected_state_hash: &str,
-) -> chaptera_text_format_overlay::Result<chaptera_text_format_overlay::TextFormatOperationReceiptV1> {
+) -> chaptera_text_format_overlay::Result<chaptera_text_format_overlay::TextFormatOperationReceiptV1>
+{
     if let (FormatPropertyV1::FontResource, FormatValueV1::FontResource(identity)) =
         (property, &value)
     {
@@ -453,143 +453,142 @@ pub(super) fn apply_text_format_history_operation_v1(
     Ok(receipt.after_state)
 }
 
-
 #[cfg(test)]
 mod font_resource_session_tests {
     use super::*;
+    use chaptera_text_format_overlay::{
+        FontAuthoringScopeV1, FontReplacementCandidateV1, FontResourceIdentityV1, FormatPropertyV1,
+        FormatValueV1, ServerFontResourceV1,
+    };
     use pub_model::{
-        Affine2D, CanonicalId, Document, DocumentId, LengthEmu, Node, NodeHeader, NodeId,
-        NodeKind, Page, PageId, RectEmu, ResolvedGraph, Sha256Digest, Size2D,
-        SourceDescriptor, Story, StoryId,
+        Affine2D, CanonicalId, Document, DocumentId, LengthEmu, Node, NodeHeader, NodeId, NodeKind,
+        Page, PageId, RectEmu, ResolvedGraph, Sha256Digest, Size2D, SourceDescriptor, Story,
+        StoryId,
     };
     use pub_reader::{
         PubExplicitShapePaintSource, PubResolvedGraph, PubResolvedNodePayload,
         PubResolvedStoryFrame, PubTypographyBooleanV1, PubTypographyRun,
     };
-    use chaptera_text_format_overlay::{
-        FontResourceIdentityV1, FormatPropertyV1, FormatValueV1,
-        FontReplacementCandidateV1, FontAuthoringScopeV1, ServerFontResourceV1,
-    };
     use std::collections::BTreeMap;
 
-fn canonical(byte: u8) -> CanonicalId {
-    CanonicalId::from_bytes([byte; 16])
-}
+    fn canonical(byte: u8) -> CanonicalId {
+        CanonicalId::from_bytes([byte; 16])
+    }
 
-fn document_id() -> DocumentId {
-    DocumentId::from_canonical(canonical(0x10))
-}
+    fn document_id() -> DocumentId {
+        DocumentId::from_canonical(canonical(0x10))
+    }
 
-fn page_id() -> PageId {
-    PageId::from_canonical(canonical(0x20))
-}
+    fn page_id() -> PageId {
+        PageId::from_canonical(canonical(0x20))
+    }
 
-fn frame_id() -> NodeId {
-    NodeId::from_canonical(canonical(0x30))
-}
+    fn frame_id() -> NodeId {
+        NodeId::from_canonical(canonical(0x30))
+    }
 
-fn story_id() -> StoryId {
-    StoryId::from_canonical(canonical(0x40))
-}
+    fn story_id() -> StoryId {
+        StoryId::from_canonical(canonical(0x40))
+    }
 
-fn source_hash() -> Sha256Digest {
-    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        .parse()
-        .expect("valid source hash")
-}
+    fn source_hash() -> Sha256Digest {
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            .parse()
+            .expect("valid source hash")
+    }
 
-fn graph() -> PubResolvedGraph {
-    let page_id = page_id();
-    let frame_id = frame_id();
-    let story_id = story_id();
-    let source_hash = source_hash();
+    fn graph() -> PubResolvedGraph {
+        let page_id = page_id();
+        let frame_id = frame_id();
+        let story_id = story_id();
+        let source_hash = source_hash();
 
-    let frame = Node {
-        kind: NodeKind::TextFrame,
-        header: NodeHeader {
-            id: frame_id,
-            parent_id: page_id.into_canonical(),
-            bounds: RectEmu::new(
-                LengthEmu::new(100_000),
-                LengthEmu::new(100_000),
-                LengthEmu::new(800_000),
-                LengthEmu::new(300_000),
-            ),
-            transform: Affine2D::identity(),
-            source_refs: Vec::new(),
-            extensions: Vec::new(),
-        },
-        payload: PubResolvedNodePayload {
-            contents_seq_num: 1,
-            officeart_shape_type: Some(202),
-            officeart_spid: Some(1),
-            image_slot: None,
-            legacy_ole: None,
-            explicit_image_crop: None,
-            explicit_image_cardinal_rotation_degrees: None,
-            explicit_paint: PubExplicitShapePaintSource::default(),
-            effective_paint: None,
-            story_frame: Some(PubResolvedStoryFrame {
-                story_id: Some(story_id),
-                ordinal: 0,
-                previous_frame: None,
-                next_frame: None,
-                vertical_alignment: None,
-            }),
-            text_frame_inset: None,
-            table_story: None,
-            table: None,
-        },
-    };
-
-    ResolvedGraph {
-        cdm_version: "0.1".into(),
-        resolver_version: "story-text-session-test".into(),
-        source: SourceDescriptor {
-            format: "pub".into(),
-            format_version: Some("0x2c".into()),
-            adapter_version: "pub-rs/test".into(),
-            source_hash,
-        },
-        document: Document {
-            id: document_id(),
-            format_origin: "pub".into(),
-            source_hash,
-            pages: vec![page_id],
-            resources: Vec::new(),
-            styles: Vec::new(),
-        },
-        pages: BTreeMap::from([(
-            page_id,
-            Page {
-                id: page_id,
-                size: Size2D::new(LengthEmu::new(4_000_000), LengthEmu::new(2_000_000)),
-                bleed: None,
-                margins: None,
-                children: vec![frame_id],
+        let frame = Node {
+            kind: NodeKind::TextFrame,
+            header: NodeHeader {
+                id: frame_id,
+                parent_id: page_id.into_canonical(),
+                bounds: RectEmu::new(
+                    LengthEmu::new(100_000),
+                    LengthEmu::new(100_000),
+                    LengthEmu::new(800_000),
+                    LengthEmu::new(300_000),
+                ),
+                transform: Affine2D::identity(),
+                source_refs: Vec::new(),
                 extensions: Vec::new(),
             },
-        )]),
-        nodes: BTreeMap::from([(frame_id, frame)]),
-        stories: BTreeMap::from([(
-            story_id,
-            Story {
-                id: story_id,
-                text: "Hello world".into(),
-                paragraphs: Vec::new(),
-                runs: Vec::new(),
-                fields: Vec::new(),
-                hyperlinks: Vec::new(),
-                source_refs: Vec::new(),
+            payload: PubResolvedNodePayload {
+                contents_seq_num: 1,
+                officeart_shape_type: Some(202),
+                officeart_spid: Some(1),
+                image_slot: None,
+                legacy_ole: None,
+                explicit_image_crop: None,
+                explicit_image_cardinal_rotation_degrees: None,
+                explicit_paint: PubExplicitShapePaintSource::default(),
+                effective_paint: None,
+                story_frame: Some(PubResolvedStoryFrame {
+                    story_id: Some(story_id),
+                    ordinal: 0,
+                    previous_frame: None,
+                    next_frame: None,
+                    vertical_alignment: None,
+                }),
+                text_frame_inset: None,
+                table_story: None,
+                table: None,
             },
-        )]),
-        paragraphs: BTreeMap::new(),
-        text_runs: BTreeMap::new(),
-        resources: BTreeMap::new(),
-        styles: BTreeMap::new(),
-        extensions: BTreeMap::new(),
+        };
+
+        ResolvedGraph {
+            cdm_version: "0.1".into(),
+            resolver_version: "story-text-session-test".into(),
+            source: SourceDescriptor {
+                format: "pub".into(),
+                format_version: Some("0x2c".into()),
+                adapter_version: "pub-rs/test".into(),
+                source_hash,
+            },
+            document: Document {
+                id: document_id(),
+                format_origin: "pub".into(),
+                source_hash,
+                pages: vec![page_id],
+                resources: Vec::new(),
+                styles: Vec::new(),
+            },
+            pages: BTreeMap::from([(
+                page_id,
+                Page {
+                    id: page_id,
+                    size: Size2D::new(LengthEmu::new(4_000_000), LengthEmu::new(2_000_000)),
+                    bleed: None,
+                    margins: None,
+                    children: vec![frame_id],
+                    extensions: Vec::new(),
+                },
+            )]),
+            nodes: BTreeMap::from([(frame_id, frame)]),
+            stories: BTreeMap::from([(
+                story_id,
+                Story {
+                    id: story_id,
+                    text: "Hello world".into(),
+                    paragraphs: Vec::new(),
+                    runs: Vec::new(),
+                    fields: Vec::new(),
+                    hyperlinks: Vec::new(),
+                    source_refs: Vec::new(),
+                },
+            )]),
+            paragraphs: BTreeMap::new(),
+            text_runs: BTreeMap::new(),
+            resources: BTreeMap::new(),
+            styles: BTreeMap::new(),
+            extensions: BTreeMap::new(),
+        }
     }
-}
 
     fn session() -> EditorSession {
         let mut editor = EditorSession::new(graph()).expect("source-backed EditorSession");
@@ -618,7 +617,9 @@ fn graph() -> PubResolvedGraph {
         editor
     }
 
-    fn scoped_identity(bytes: &[u8]) -> (
+    fn scoped_identity(
+        bytes: &[u8],
+    ) -> (
         FontAuthoringScopeV1,
         FontResourceIdentityV1,
         FontReplacementCandidateV1,
@@ -672,17 +673,23 @@ fn graph() -> PubResolvedGraph {
         let hash = state_hash_v1(&before).expect("source format hash");
 
         // Existing generic history cannot be used by an untrusted client.
-        assert!(editor
-            .set_text_format_property_v1(
-                story_id(), 1, 5, FormatPropertyV1::FontResource,
-                FormatValueV1::FontResource(id.clone()), &hash,
-            )
-            .is_err());
+        assert!(
+            editor
+                .set_text_format_property_v1(
+                    story_id(),
+                    1,
+                    5,
+                    FormatPropertyV1::FontResource,
+                    FormatValueV1::FontResource(id.clone()),
+                    &hash,
+                )
+                .is_err()
+        );
         assert!(editor.operations().is_empty());
 
-        let operation = editor.set_admitted_font_resource_v1(
-            story_id(), 1, 5, &candidate, &scope, &resource, &hash
-        ).expect("independently admitted exact-byte font operation");
+        let operation = editor
+            .set_admitted_font_resource_v1(story_id(), 1, 5, &candidate, &scope, &resource, &hash)
+            .expect("independently admitted exact-byte font operation");
         assert!(matches!(
             &operation,
             EditOperation::SetTextFormatProperty {
@@ -694,14 +701,21 @@ fn graph() -> PubResolvedGraph {
         assert_eq!(editor.operations().len(), 1);
         assert_eq!(editor.graph().stories[&story_id()].text, "Hello world");
 
-        let replaced = editor.current_text_format_overlay_v1(story_id())
+        let replaced = editor
+            .current_text_format_overlay_v1(story_id())
             .expect("effective font override");
         assert_ne!(replaced, before);
         assert_eq!(replaced.overrides.len(), 1);
         editor.undo().expect("undo admitted font");
-        assert_eq!(editor.current_text_format_overlay_v1(story_id()).unwrap(), before);
+        assert_eq!(
+            editor.current_text_format_overlay_v1(story_id()).unwrap(),
+            before
+        );
         editor.redo().expect("redo admitted font");
-        assert_eq!(editor.current_text_format_overlay_v1(story_id()).unwrap(), replaced);
+        assert_eq!(
+            editor.current_text_format_overlay_v1(story_id()).unwrap(),
+            replaced
+        );
 
         // Project persistence must not silently admit a font without trusted
         // original bytes at the next host. Current project replay fails closed.
@@ -713,20 +727,36 @@ fn graph() -> PubResolvedGraph {
         let mut fresh = session();
         assert!(fresh.apply_project(&loaded).is_err());
         assert!(fresh.operations().is_empty());
-        assert_eq!(fresh.current_text_format_overlay_v1(story_id()).unwrap(), before);
+        assert_eq!(
+            fresh.current_text_format_overlay_v1(story_id()).unwrap(),
+            before
+        );
 
-        let cleared = editor.clear_text_format_property_override_v1(
-            story_id(), 1, 5, FormatPropertyV1::FontResource,
-            &state_hash_v1(&replaced).unwrap()
-        ).expect("clear font override reveals immutable source");
+        let cleared = editor
+            .clear_text_format_property_override_v1(
+                story_id(),
+                1,
+                5,
+                FormatPropertyV1::FontResource,
+                &state_hash_v1(&replaced).unwrap(),
+            )
+            .expect("clear font override reveals immutable source");
         assert!(matches!(
-            cleared, EditOperation::ClearTextFormatPropertyOverride {
-                property: FormatPropertyV1::FontResource, ..
+            cleared,
+            EditOperation::ClearTextFormatPropertyOverride {
+                property: FormatPropertyV1::FontResource,
+                ..
             }
         ));
-        assert_eq!(editor.current_text_format_overlay_v1(story_id()).unwrap(), before);
+        assert_eq!(
+            editor.current_text_format_overlay_v1(story_id()).unwrap(),
+            before
+        );
         editor.undo().expect("undo clear restores admitted font");
-        assert_eq!(editor.current_text_format_overlay_v1(story_id()).unwrap(), replaced);
+        assert_eq!(
+            editor.current_text_format_overlay_v1(story_id()).unwrap(),
+            replaced
+        );
     }
 
     #[test]
@@ -734,36 +764,76 @@ fn graph() -> PubResolvedGraph {
         let bytes = b"synthetic-resource-for-negative-controls";
         let (scope, id, candidate) = scoped_identity(bytes);
         let mut editor = session();
-        let hash = editor.current_text_format_state_hash_v1(story_id()).unwrap();
+        let hash = editor
+            .current_text_format_state_hash_v1(story_id())
+            .unwrap();
         let good = ServerFontResourceV1 {
-            identity: &id, full_font_bytes: bytes, face_count: 1,
-            is_full_resource: true, authoring_admitted: true,
+            identity: &id,
+            full_font_bytes: bytes,
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: true,
         };
         let mut stale = candidate.clone();
         stale.layout_environment_id = format!("sha256:{}", "9".repeat(64));
-        assert!(editor.set_admitted_font_resource_v1(
-            story_id(), 0, 11, &stale, &scope, &good, &hash
-        ).is_err());
+        assert!(
+            editor
+                .set_admitted_font_resource_v1(story_id(), 0, 11, &stale, &scope, &good, &hash)
+                .is_err()
+        );
         let corrupt = ServerFontResourceV1 {
-            identity: &id, full_font_bytes: b"different bytes", face_count: 1,
-            is_full_resource: true, authoring_admitted: true,
+            identity: &id,
+            full_font_bytes: b"different bytes",
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: true,
         };
-        assert!(editor.set_admitted_font_resource_v1(
-            story_id(), 0, 11, &candidate, &scope, &corrupt, &hash
-        ).is_err());
+        assert!(
+            editor
+                .set_admitted_font_resource_v1(
+                    story_id(),
+                    0,
+                    11,
+                    &candidate,
+                    &scope,
+                    &corrupt,
+                    &hash
+                )
+                .is_err()
+        );
         let denied = ServerFontResourceV1 {
-            identity: &id, full_font_bytes: bytes, face_count: 1,
-            is_full_resource: true, authoring_admitted: false,
+            identity: &id,
+            full_font_bytes: bytes,
+            face_count: 1,
+            is_full_resource: true,
+            authoring_admitted: false,
         };
-        assert!(editor.set_admitted_font_resource_v1(
-            story_id(), 0, 11, &candidate, &scope, &denied, &hash
-        ).is_err());
+        assert!(
+            editor
+                .set_admitted_font_resource_v1(
+                    story_id(),
+                    0,
+                    11,
+                    &candidate,
+                    &scope,
+                    &denied,
+                    &hash
+                )
+                .is_err()
+        );
         let mut wrong_face = candidate.clone();
         wrong_face.face_index = 1;
-        assert!(editor.set_admitted_font_resource_v1(
-            story_id(), 0, 11, &wrong_face, &scope, &good, &hash
-        ).is_err());
+        assert!(
+            editor
+                .set_admitted_font_resource_v1(story_id(), 0, 11, &wrong_face, &scope, &good, &hash)
+                .is_err()
+        );
         assert!(editor.operations().is_empty());
-        assert_eq!(editor.current_text_format_state_hash_v1(story_id()).unwrap(), hash);
+        assert_eq!(
+            editor
+                .current_text_format_state_hash_v1(story_id())
+                .unwrap(),
+            hash
+        );
     }
 }
