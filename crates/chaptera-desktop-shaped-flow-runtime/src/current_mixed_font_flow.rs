@@ -882,9 +882,7 @@ mod tests {
         // A syntactically valid but unavailable glyph must not silently inherit
         // an ambient host font or claim valid frame allocation.
         let mut unavailable = all.clone();
-        if let CurrentPhysicalFontSpanV1::AdmittedExact { shaped, .. } =
-            &mut unavailable.spans[0]
-        {
+        if let CurrentPhysicalFontSpanV1::AdmittedExact { shaped, .. } = &mut unavailable.spans[0] {
             shaped.glyphs[0].glyph_id = 0;
         }
         assert_eq!(
