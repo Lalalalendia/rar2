@@ -316,6 +316,341 @@ pub fn apply_delete_authored_rectangle_page_inverse_v1(
     Ok(())
 }
 
+/// Strictly bounded multi-object successor: delete one AuthorCreated Page
+/// containing exactly two to eight direct independent AuthorCreated Rectangles.
+///
+/// Runtime callers must still prove absence of resolved/source membership,
+/// linked Stories and every non-Rectangle authored entity type before calling.
+pub const DELETE_AUTHORED_RECTANGLES_PAGE_PROTOCOL_V1: &str =
+    "chaptera.delete-authored-rectangles-page.v1";
+pub const MAX_DELETED_AUTHORED_RECTANGLES_PAGE_V1: usize = 8;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeleteAuthoredRectanglesPageTransitionV1 {
+    pub page: DeleteBlankAuthoredPageTransitionV1,
+    /// Exact source paint-stack order.
+    pub shapes_before: Vec<AuthoredShapeRuntimeV1>,
+    /// Canonical one-member remove laws, chained in shapes_before order.
+    pub stacks: Vec<AuthoredStackLifecycleTransitionV1>,
+    pub before_state_id: String,
+    pub after_state_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeleteAuthoredRectanglesPageErrorV1 {
+    ForeignOrUnprovenMembership,
+    InvalidAuthoredStack,
+    ShapeCountUnsupported,
+    ShapeMissing,
+    InvalidAuthoredShape,
+    ShapeRegistryMismatch,
+    TransitionMismatch,
+    BeforeStateMismatch,
+    AfterStateMismatch,
+    IdentityCollision,
+    Page(DeleteBlankAuthoredPageErrorV1),
+    Stack(AuthoredStackLifecycleErrorV1),
+}
+
+fn multiple_rectangles_state_id_v1(
+    document_id: DocumentId,
+    document_pages: &[PageId],
+    customer_page_ids: &[PageId],
+    target_page: Option<&Page>,
+    target_shapes: &[AuthoredShapeRuntimeV1],
+    stack: &AuthoredStackV1,
+) -> String {
+    let payload = serde_json::json!({
+        "protocol": DELETE_AUTHORED_RECTANGLES_PAGE_PROTOCOL_V1,
+        "document_id": document_id,
+        "document_pages": document_pages,
+        "customer_page_ids": customer_page_ids,
+        "page": target_page,
+        "shapes": target_shapes,
+        "authored_stack": stack,
+    });
+    let bytes = serde_json::to_vec(&payload)
+        .expect("canonical authored multi-Rectangle delete state JSON cannot fail");
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(71);
+    encoded.push_str("sha256:");
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut encoded, "{byte:02x}").expect("hex into String cannot fail");
+    }
+    encoded
+}
+
+/// Plan one atomic Page + N-Rectangle + stack deletion. Stack removal reuses
+/// the existing single-member RemoveDeleted protocol in exact source paint
+/// order; no second bulk-stack protocol is introduced.
+pub fn plan_delete_authored_rectangles_page_v1(
+    document_id: DocumentId,
+    state: &DeleteAuthoredRectanglePageStateV1,
+    customer_page_ids: &[PageId],
+    identity: AuthoredPageIdentityV1,
+    has_foreign_or_unproven_membership: bool,
+) -> Result<DeleteAuthoredRectanglesPageTransitionV1, DeleteAuthoredRectanglesPageErrorV1> {
+    use DeleteAuthoredRectanglesPageErrorV1 as Error;
+
+    if has_foreign_or_unproven_membership {
+        return Err(Error::ForeignOrUnprovenMembership);
+    }
+    validate_authored_stack_v1(&state.authored_stack).map_err(Error::Stack)?;
+    if state.authored_stack.page_id != identity.page_id {
+        return Err(Error::InvalidAuthoredStack);
+    }
+    let count = state.authored_stack.members.len();
+    if !(2..=MAX_DELETED_AUTHORED_RECTANGLES_PAGE_V1).contains(&count) {
+        return Err(Error::ShapeCountUnsupported);
+    }
+
+    let registered_count = state
+        .authored_shapes
+        .values()
+        .filter(|shape| shape.page_id == identity.page_id || shape.parent_id == identity.page_id)
+        .count();
+    if registered_count != count {
+        return Err(Error::ShapeRegistryMismatch);
+    }
+
+    let mut shapes_before = Vec::with_capacity(count);
+    for node_id in &state.authored_stack.members {
+        let shape = state
+            .authored_shapes
+            .get(node_id)
+            .ok_or(Error::ShapeMissing)?;
+        if shape.node_id != *node_id {
+            return Err(Error::ShapeRegistryMismatch);
+        }
+        validate_authored_shape_runtime_v1(shape).map_err(|_| Error::InvalidAuthoredShape)?;
+        if shape.page_id != identity.page_id || shape.parent_id != identity.page_id {
+            return Err(Error::InvalidAuthoredShape);
+        }
+        shapes_before.push(shape.clone());
+    }
+
+    let page = plan_delete_blank_authored_page_v1(
+        document_id,
+        &state.document_pages,
+        &state.pages,
+        customer_page_ids,
+        identity,
+    )
+    .map_err(Error::Page)?;
+
+    let mut current_stack = state.authored_stack.clone();
+    let mut stacks = Vec::with_capacity(count);
+    for shape in &shapes_before {
+        let transition =
+            plan_delete_shape_remove_v1(&current_stack, shape).map_err(Error::Stack)?;
+        current_stack = apply_authored_stack_transition_forward_v1(&current_stack, &transition)
+            .map_err(Error::Stack)?;
+        stacks.push(transition);
+    }
+    if !current_stack.members.is_empty() {
+        return Err(Error::ShapeRegistryMismatch);
+    }
+
+    let mut after_document_pages = state.document_pages.clone();
+    after_document_pages.remove(page.removal_index);
+    let before_state_id = multiple_rectangles_state_id_v1(
+        document_id,
+        &state.document_pages,
+        customer_page_ids,
+        state.pages.get(&identity.page_id),
+        &shapes_before,
+        &state.authored_stack,
+    );
+    let after_state_id = multiple_rectangles_state_id_v1(
+        document_id,
+        &after_document_pages,
+        &page.after_customer_page_ids,
+        None,
+        &[],
+        &current_stack,
+    );
+
+    Ok(DeleteAuthoredRectanglesPageTransitionV1 {
+        page,
+        shapes_before,
+        stacks,
+        before_state_id,
+        after_state_id,
+    })
+}
+
+/// Exact forward replay with zero partial Page/shape/stack mutation.
+pub fn apply_delete_authored_rectangles_page_forward_v1(
+    document_id: DocumentId,
+    state: &mut DeleteAuthoredRectanglePageStateV1,
+    current_customer_page_ids: &[PageId],
+    has_foreign_or_unproven_membership: bool,
+    transition: &DeleteAuthoredRectanglesPageTransitionV1,
+) -> Result<(), DeleteAuthoredRectanglesPageErrorV1> {
+    use DeleteAuthoredRectanglesPageErrorV1 as Error;
+
+    let expected = plan_delete_authored_rectangles_page_v1(
+        document_id,
+        state,
+        current_customer_page_ids,
+        transition.page.identity,
+        has_foreign_or_unproven_membership,
+    )?;
+    if expected != *transition {
+        return Err(Error::TransitionMismatch);
+    }
+    if multiple_rectangles_state_id_v1(
+        document_id,
+        &state.document_pages,
+        current_customer_page_ids,
+        state.pages.get(&transition.page.identity.page_id),
+        &transition.shapes_before,
+        &state.authored_stack,
+    ) != transition.before_state_id
+    {
+        return Err(Error::BeforeStateMismatch);
+    }
+
+    let mut next = state.clone();
+    apply_delete_blank_authored_page_forward_v1(
+        document_id,
+        &mut next.document_pages,
+        &mut next.pages,
+        &transition.page,
+    )
+    .map_err(Error::Page)?;
+    for (shape, stack) in transition.shapes_before.iter().zip(&transition.stacks) {
+        if next.authored_shapes.remove(&shape.node_id).as_ref() != Some(shape) {
+            return Err(Error::BeforeStateMismatch);
+        }
+        next.authored_stack =
+            apply_authored_stack_transition_forward_v1(&next.authored_stack, stack)
+                .map_err(Error::Stack)?;
+    }
+    if !next.authored_stack.members.is_empty() {
+        return Err(Error::AfterStateMismatch);
+    }
+    if multiple_rectangles_state_id_v1(
+        document_id,
+        &next.document_pages,
+        &transition.page.after_customer_page_ids,
+        None,
+        &[],
+        &next.authored_stack,
+    ) != transition.after_state_id
+    {
+        return Err(Error::AfterStateMismatch);
+    }
+
+    *state = next;
+    Ok(())
+}
+
+/// Exact inverse restores the same PageId, all NodeIds, paint/geometry and
+/// authored paint order. It refuses colliding or tampered post-delete state.
+pub fn apply_delete_authored_rectangles_page_inverse_v1(
+    document_id: DocumentId,
+    state: &mut DeleteAuthoredRectanglePageStateV1,
+    current_customer_page_ids: &[PageId],
+    transition: &DeleteAuthoredRectanglesPageTransitionV1,
+) -> Result<(), DeleteAuthoredRectanglesPageErrorV1> {
+    use DeleteAuthoredRectanglesPageErrorV1 as Error;
+
+    if current_customer_page_ids != transition.page.after_customer_page_ids.as_slice() {
+        return Err(Error::AfterStateMismatch);
+    }
+    let count = transition.shapes_before.len();
+    if !(2..=MAX_DELETED_AUTHORED_RECTANGLES_PAGE_V1).contains(&count)
+        || transition.stacks.len() != count
+    {
+        return Err(Error::TransitionMismatch);
+    }
+    let page_id = transition.page.identity.page_id;
+    if state.pages.contains_key(&page_id)
+        || state
+            .authored_shapes
+            .values()
+            .any(|shape| shape.page_id == page_id || shape.parent_id == page_id)
+    {
+        return Err(Error::IdentityCollision);
+    }
+    for (index, shape) in transition.shapes_before.iter().enumerate() {
+        if transition.shapes_before[..index]
+            .iter()
+            .any(|prior| prior.node_id == shape.node_id)
+            || state.authored_shapes.contains_key(&shape.node_id)
+        {
+            return Err(Error::IdentityCollision);
+        }
+        validate_authored_shape_runtime_v1(shape).map_err(|_| Error::InvalidAuthoredShape)?;
+        if shape.page_id != page_id || shape.parent_id != page_id {
+            return Err(Error::InvalidAuthoredShape);
+        }
+    }
+    if multiple_rectangles_state_id_v1(
+        document_id,
+        &state.document_pages,
+        current_customer_page_ids,
+        None,
+        &[],
+        &state.authored_stack,
+    ) != transition.after_state_id
+    {
+        return Err(Error::AfterStateMismatch);
+    }
+
+    let mut previous = state.clone();
+    apply_delete_blank_authored_page_inverse_v1(
+        document_id,
+        &mut previous.document_pages,
+        &mut previous.pages,
+        &transition.page,
+    )
+    .map_err(Error::Page)?;
+    for (shape, stack) in transition
+        .shapes_before
+        .iter()
+        .zip(&transition.stacks)
+        .rev()
+    {
+        previous.authored_stack =
+            apply_authored_stack_transition_inverse_v1(&previous.authored_stack, stack)
+                .map_err(Error::Stack)?;
+        if previous
+            .authored_shapes
+            .insert(shape.node_id, shape.clone())
+            .is_some()
+        {
+            return Err(Error::IdentityCollision);
+        }
+    }
+    if multiple_rectangles_state_id_v1(
+        document_id,
+        &previous.document_pages,
+        &transition.page.before_customer_page_ids,
+        previous.pages.get(&page_id),
+        &transition.shapes_before,
+        &previous.authored_stack,
+    ) != transition.before_state_id
+    {
+        return Err(Error::BeforeStateMismatch);
+    }
+
+    let planned = plan_delete_authored_rectangles_page_v1(
+        document_id,
+        &previous,
+        &transition.page.before_customer_page_ids,
+        transition.page.identity,
+        false,
+    )?;
+    if planned != *transition {
+        return Err(Error::TransitionMismatch);
+    }
+    *state = previous;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -635,5 +970,326 @@ mod tests {
             Err(DeleteAuthoredRectanglePageErrorV1::IdentityCollision)
         );
         assert_eq!(deleted, before);
+    }
+    fn multi_rectangle_fixture() -> (
+        DocumentId,
+        DeleteAuthoredRectanglePageStateV1,
+        Vec<PageId>,
+        AuthoredPageIdentityV1,
+        Vec<NodeId>,
+    ) {
+        let (document_id, mut state, customers, identity, first) = fixture();
+        let second = shape_id(0x66);
+        let mut second_shape = shape(second, identity.page_id);
+        second_shape.bounds = RectEmu::new(
+            LengthEmu::new(40_000),
+            LengthEmu::new(60_000),
+            LengthEmu::new(220_000),
+            LengthEmu::new(330_000),
+        );
+        second_shape.paint.fill.color = Srgb8V1 {
+            r: 210,
+            g: 25,
+            b: 95,
+        };
+        second_shape.paint.stroke.color = Srgb8V1 {
+            r: 5,
+            g: 120,
+            b: 200,
+        };
+        state.authored_shapes.insert(second, second_shape);
+        state.authored_stack.members.push(second);
+        (document_id, state, customers, identity, vec![first, second])
+    }
+
+    #[test]
+    fn multiple_rectangles_delete_inverse_restores_exact_raw_slots_shapes_and_lane() {
+        let (document_id, mut state, customers, identity, nodes) = multi_rectangle_fixture();
+        let before = state.clone();
+        let transition = plan_delete_authored_rectangles_page_v1(
+            document_id,
+            &state,
+            &customers,
+            identity,
+            false,
+        )
+        .expect("bounded multi-Rectangle delete plan");
+        assert_eq!(
+            transition
+                .shapes_before
+                .iter()
+                .map(|shape| shape.node_id)
+                .collect::<Vec<_>>(),
+            nodes
+        );
+        assert_eq!(transition.stacks.len(), 2);
+        assert_eq!(transition.stacks[0].before.members, nodes);
+        assert_eq!(transition.stacks[0].after.members, vec![nodes[1]]);
+        assert_eq!(transition.stacks[1].before.members, vec![nodes[1]]);
+        assert!(transition.stacks[1].after.members.is_empty());
+
+        apply_delete_authored_rectangles_page_forward_v1(
+            document_id,
+            &mut state,
+            &customers,
+            false,
+            &transition,
+        )
+        .expect("atomic multi-Rectangle delete");
+        assert!(!state.pages.contains_key(&identity.page_id));
+        for node in &nodes {
+            assert!(!state.authored_shapes.contains_key(node));
+        }
+        assert!(state.authored_stack.members.is_empty());
+        assert_eq!(
+            state.document_pages,
+            vec![page_id(0x22), page_id(0x33), page_id(0x44)]
+        );
+
+        apply_delete_authored_rectangles_page_inverse_v1(
+            document_id,
+            &mut state,
+            &transition.page.after_customer_page_ids,
+            &transition,
+        )
+        .expect("atomic multi-Rectangle inverse");
+        assert_eq!(state, before);
+    }
+
+    #[test]
+    fn multiple_rectangles_delete_rejects_unsupported_counts_and_unproven_membership() {
+        let (document_id, single, customers, identity, _) = fixture();
+        assert_eq!(
+            plan_delete_authored_rectangles_page_v1(
+                document_id,
+                &single,
+                &customers,
+                identity,
+                false,
+            ),
+            Err(DeleteAuthoredRectanglesPageErrorV1::ShapeCountUnsupported)
+        );
+
+        let (document_id, mut nine, customers, identity, _) = multi_rectangle_fixture();
+        for n in 0x67..=0x6d {
+            let node = shape_id(n);
+            nine.authored_shapes
+                .insert(node, shape(node, identity.page_id));
+            nine.authored_stack.members.push(node);
+        }
+        assert_eq!(nine.authored_stack.members.len(), 9);
+        assert_eq!(
+            plan_delete_authored_rectangles_page_v1(
+                document_id,
+                &nine,
+                &customers,
+                identity,
+                false,
+            ),
+            Err(DeleteAuthoredRectanglesPageErrorV1::ShapeCountUnsupported)
+        );
+
+        let (_, state, customers, identity, _) = multi_rectangle_fixture();
+        assert_eq!(
+            plan_delete_authored_rectangles_page_v1(
+                document_id,
+                &state,
+                &customers,
+                identity,
+                true,
+            ),
+            Err(DeleteAuthoredRectanglesPageErrorV1::ForeignOrUnprovenMembership)
+        );
+        assert!(
+            plan_delete_authored_rectangles_page_v1(
+                document_id,
+                &state,
+                &[identity.page_id],
+                identity,
+                false,
+            )
+            .is_err(),
+            "last customer Page must remain rejected"
+        );
+        let source_backed_identity = AuthoredPageIdentityV1 {
+            page_id: identity.page_id,
+            provenance: AuthoredEntityProvenanceV1::SourceBacked,
+        };
+        assert!(
+            plan_delete_authored_rectangles_page_v1(
+                document_id,
+                &state,
+                &customers,
+                source_backed_identity,
+                false,
+            )
+            .is_err(),
+            "SourceBacked Page identity must remain rejected"
+        );
+    }
+
+    #[test]
+    fn multiple_rectangles_delete_rejects_missing_extra_imported_and_dangling_members() {
+        let (document_id, state, customers, identity, nodes) = multi_rectangle_fixture();
+
+        let mut missing = state.clone();
+        missing.authored_shapes.remove(&nodes[1]);
+        assert_eq!(
+            plan_delete_authored_rectangles_page_v1(
+                document_id,
+                &missing,
+                &customers,
+                identity,
+                false,
+            ),
+            Err(DeleteAuthoredRectanglesPageErrorV1::ShapeRegistryMismatch)
+        );
+
+        let mut extra = state.clone();
+        let hidden = shape_id(0x67);
+        extra
+            .authored_shapes
+            .insert(hidden, shape(hidden, identity.page_id));
+        assert_eq!(
+            plan_delete_authored_rectangles_page_v1(
+                document_id,
+                &extra,
+                &customers,
+                identity,
+                false,
+            ),
+            Err(DeleteAuthoredRectanglesPageErrorV1::ShapeRegistryMismatch)
+        );
+
+        let mut imported = state.clone();
+        imported
+            .authored_shapes
+            .get_mut(&nodes[1])
+            .unwrap()
+            .provenance = AuthoredEntityProvenanceV1::SourceBacked;
+        assert_eq!(
+            plan_delete_authored_rectangles_page_v1(
+                document_id,
+                &imported,
+                &customers,
+                identity,
+                false,
+            ),
+            Err(DeleteAuthoredRectanglesPageErrorV1::InvalidAuthoredShape)
+        );
+
+        let mut dangling = state;
+        dangling.authored_stack.members[1] = shape_id(0x68);
+        assert_eq!(
+            plan_delete_authored_rectangles_page_v1(
+                document_id,
+                &dangling,
+                &customers,
+                identity,
+                false,
+            ),
+            Err(DeleteAuthoredRectanglesPageErrorV1::ShapeMissing)
+        );
+    }
+
+    #[test]
+    fn multiple_rectangles_delete_stale_or_tampered_forward_is_atomic() {
+        let (document_id, state, customers, identity, nodes) = multi_rectangle_fixture();
+        let transition = plan_delete_authored_rectangles_page_v1(
+            document_id,
+            &state,
+            &customers,
+            identity,
+            false,
+        )
+        .expect("plan");
+
+        let mut stale = state.clone();
+        stale
+            .authored_shapes
+            .get_mut(&nodes[1])
+            .unwrap()
+            .paint
+            .stroke
+            .width_emu += 1;
+        let unchanged = stale.clone();
+        assert_eq!(
+            apply_delete_authored_rectangles_page_forward_v1(
+                document_id,
+                &mut stale,
+                &customers,
+                false,
+                &transition,
+            ),
+            Err(DeleteAuthoredRectanglesPageErrorV1::TransitionMismatch)
+        );
+        assert_eq!(stale, unchanged);
+
+        let mut forged = transition.clone();
+        forged.shapes_before[1].bounds = forged.shapes_before[0].bounds;
+        let mut candidate = state.clone();
+        assert_eq!(
+            apply_delete_authored_rectangles_page_forward_v1(
+                document_id,
+                &mut candidate,
+                &customers,
+                false,
+                &forged,
+            ),
+            Err(DeleteAuthoredRectanglesPageErrorV1::TransitionMismatch)
+        );
+        assert_eq!(candidate, state);
+    }
+
+    #[test]
+    fn multiple_rectangles_delete_inverse_rejects_tamper_and_identity_collision_atomically() {
+        let (document_id, mut state, customers, identity, nodes) = multi_rectangle_fixture();
+        let transition = plan_delete_authored_rectangles_page_v1(
+            document_id,
+            &state,
+            &customers,
+            identity,
+            false,
+        )
+        .expect("plan");
+        apply_delete_authored_rectangles_page_forward_v1(
+            document_id,
+            &mut state,
+            &customers,
+            false,
+            &transition,
+        )
+        .expect("forward");
+
+        let mut tampered = state.clone();
+        tampered.authored_stack.members.push(shape_id(0x69));
+        let unchanged = tampered.clone();
+        assert_eq!(
+            apply_delete_authored_rectangles_page_inverse_v1(
+                document_id,
+                &mut tampered,
+                &transition.page.after_customer_page_ids,
+                &transition,
+            ),
+            Err(DeleteAuthoredRectanglesPageErrorV1::AfterStateMismatch)
+        );
+        assert_eq!(tampered, unchanged);
+
+        let mut collision = state;
+        let other_page = page_id(0x44);
+        collision
+            .authored_shapes
+            .insert(nodes[0], shape(nodes[0], other_page));
+        let unchanged = collision.clone();
+        assert_eq!(
+            apply_delete_authored_rectangles_page_inverse_v1(
+                document_id,
+                &mut collision,
+                &transition.page.after_customer_page_ids,
+                &transition,
+            ),
+            Err(DeleteAuthoredRectanglesPageErrorV1::IdentityCollision)
+        );
+        assert_eq!(collision, unchanged);
     }
 }
