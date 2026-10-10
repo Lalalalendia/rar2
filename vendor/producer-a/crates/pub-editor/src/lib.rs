@@ -18,18 +18,13 @@ mod session_table;
 use session_table::apply_table_cell_state;
 mod session_text;
 use session_geometry::{
-    append_blank_page_error_to_editor_v1, apply_authored_line_inverse,
-    apply_authored_shape_delete_forward, apply_authored_shape_delete_inverse,
-    apply_authored_shape_inverse, apply_authored_stack_history_forward_v1,
-    authored_line_from_operation, authored_shape_from_operation,
-    authored_stack_operation_page_id_v1, delete_blank_authored_page_error_to_editor_v1,
-    derive_authored_stacks_from_operations_v1, display_page_append_error_v1,
-    display_page_delete_error_v1, page_order_error_to_editor_v1, validate_move_nodes_transition,
-    validate_resize_nodes_transition,
-};
-use session_geometry::{
-    display_page_duplicate_error_v1, display_page_insert_error_v1,
-    duplicate_blank_page_error_to_editor_v1, insert_blank_page_after_error_to_editor_v1,
+    apply_authored_line_inverse, apply_authored_shape_delete_forward,
+    apply_authored_shape_delete_inverse, apply_authored_shape_inverse,
+    apply_authored_stack_history_forward_v1, apply_page_lifecycle_graph_forward_v1,
+    apply_page_lifecycle_graph_inverse_v1, authored_line_from_operation, authored_shape_from_operation,
+    authored_stack_operation_page_id_v1, derive_authored_stacks_from_operations_v1,
+    display_page_append_error_v1, display_page_delete_error_v1, display_page_duplicate_error_v1,
+    display_page_insert_error_v1, validate_move_nodes_transition, validate_resize_nodes_transition,
 };
 use session_image::{
     apply_crop_forward, apply_crop_inverse, apply_image_forward, apply_image_inverse,
@@ -7459,68 +7454,16 @@ fn apply_forward(
         EditOperation::ReorderAuthoredStack { .. } => {
             unreachable!("ReorderAuthoredStack is applied to the authored lane overlay state")
         }
-        EditOperation::RegisterAuthoredPageIdentityV1 { .. } => {
-            // Authored Page identity is derived from durable history only.
-        }
-        EditOperation::AppendBlankPageV1 { transition } => {
-            apply_append_blank_page_forward_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                &mut graph.pages,
-                transition,
-            )
-            .map_err(append_blank_page_error_to_editor_v1)?;
-        }
-        EditOperation::DeleteAuthoredRectanglePageV1 { .. } => {
-            return Err(EditorError::PageDeleteUnsupported {
-                message: "combined authored page/shape transition needs EditorSession".into(),
-            });
-        }
-        EditOperation::DuplicateAuthoredRectanglePageV1 { .. } => {
-            return Err(EditorError::PageDuplicateUnsupported {
-                message: "combined authored Page/Rectangle transition needs EditorSession".into(),
-            });
-        }
-        EditOperation::DuplicateAuthoredRectanglesPageV1 { .. } => {
-            return Err(EditorError::PageDuplicateUnsupported {
-                message: "combined authored Page/multi-Rectangle transition needs EditorSession"
-                    .into(),
-            });
-        }
-        EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
-            apply_delete_blank_authored_page_forward_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                &mut graph.pages,
-                transition,
-            )
-            .map_err(delete_blank_authored_page_error_to_editor_v1)?;
-        }
-        EditOperation::DuplicateBlankPageV1 { transition } => {
-            apply_duplicate_blank_page_forward_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                &mut graph.pages,
-                transition,
-            )
-            .map_err(duplicate_blank_page_error_to_editor_v1)?;
-        }
-        EditOperation::InsertBlankPageAfterV1 { transition } => {
-            apply_insert_blank_page_after_forward_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                &mut graph.pages,
-                transition,
-            )
-            .map_err(insert_blank_page_after_error_to_editor_v1)?;
-        }
-        EditOperation::ReorderPagesV1 { transition } => {
-            apply_page_order_transition_forward_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                transition,
-            )
-            .map_err(page_order_error_to_editor_v1)?;
+        EditOperation::RegisterAuthoredPageIdentityV1 { .. }
+        | EditOperation::AppendBlankPageV1 { .. }
+        | EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+        | EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
+        | EditOperation::DuplicateAuthoredRectanglesPageV1 { .. }
+        | EditOperation::DeleteBlankAuthoredPageV1 { .. }
+        | EditOperation::DuplicateBlankPageV1 { .. }
+        | EditOperation::InsertBlankPageAfterV1 { .. }
+        | EditOperation::ReorderPagesV1 { .. } => {
+            return apply_page_lifecycle_graph_forward_v1(graph, operation);
         }
         EditOperation::SetTextFormatProperty { .. }
         | EditOperation::ClearTextFormatPropertyOverride { .. }
@@ -7777,68 +7720,16 @@ fn apply_inverse(
         EditOperation::ReorderAuthoredStack { .. } => {
             unreachable!("ReorderAuthoredStack is reverted in the authored lane overlay state")
         }
-        EditOperation::RegisterAuthoredPageIdentityV1 { .. } => {
-            // Undo removes the declaration from active history; SourceGraph stays immutable.
-        }
-        EditOperation::AppendBlankPageV1 { transition } => {
-            apply_append_blank_page_inverse_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                &mut graph.pages,
-                transition,
-            )
-            .map_err(append_blank_page_error_to_editor_v1)?;
-        }
-        EditOperation::DeleteAuthoredRectanglePageV1 { .. } => {
-            return Err(EditorError::PageDeleteUnsupported {
-                message: "combined authored page/shape transition needs EditorSession".into(),
-            });
-        }
-        EditOperation::DuplicateAuthoredRectanglePageV1 { .. } => {
-            return Err(EditorError::PageDuplicateUnsupported {
-                message: "combined authored Page/Rectangle transition needs EditorSession".into(),
-            });
-        }
-        EditOperation::DuplicateAuthoredRectanglesPageV1 { .. } => {
-            return Err(EditorError::PageDuplicateUnsupported {
-                message: "combined authored Page/multi-Rectangle transition needs EditorSession"
-                    .into(),
-            });
-        }
-        EditOperation::DeleteBlankAuthoredPageV1 { transition } => {
-            apply_delete_blank_authored_page_inverse_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                &mut graph.pages,
-                transition,
-            )
-            .map_err(delete_blank_authored_page_error_to_editor_v1)?;
-        }
-        EditOperation::DuplicateBlankPageV1 { transition } => {
-            apply_duplicate_blank_page_inverse_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                &mut graph.pages,
-                transition,
-            )
-            .map_err(duplicate_blank_page_error_to_editor_v1)?;
-        }
-        EditOperation::InsertBlankPageAfterV1 { transition } => {
-            apply_insert_blank_page_after_inverse_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                &mut graph.pages,
-                transition,
-            )
-            .map_err(insert_blank_page_after_error_to_editor_v1)?;
-        }
-        EditOperation::ReorderPagesV1 { transition } => {
-            apply_page_order_transition_inverse_v1(
-                graph.document.id,
-                &mut graph.document.pages,
-                transition,
-            )
-            .map_err(page_order_error_to_editor_v1)?;
+        EditOperation::RegisterAuthoredPageIdentityV1 { .. }
+        | EditOperation::AppendBlankPageV1 { .. }
+        | EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+        | EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
+        | EditOperation::DuplicateAuthoredRectanglesPageV1 { .. }
+        | EditOperation::DeleteBlankAuthoredPageV1 { .. }
+        | EditOperation::DuplicateBlankPageV1 { .. }
+        | EditOperation::InsertBlankPageAfterV1 { .. }
+        | EditOperation::ReorderPagesV1 { .. } => {
+            return apply_page_lifecycle_graph_inverse_v1(graph, operation);
         }
         EditOperation::SetTextFormatProperty { .. }
         | EditOperation::ClearTextFormatPropertyOverride { .. }
