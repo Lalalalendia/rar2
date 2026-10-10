@@ -73,7 +73,7 @@ def main() -> None:
     real_receipt = json.loads(RECEIPT.read_text(encoding="utf-8"))
     viewer = json.loads(viewer_path.read_text(encoding="utf-8"))
     browser_scene = adapt_viewer_geometry(
-        viewer, real_receipt["document_id"], real_receipt["baseline"]["revision_id"]
+        viewer, baseline["identity"]["document_id"], real_receipt["baseline"]["revision_id"]
     )
     scene = bind_font_set_to_scene(browser_scene, load_pinned_abel())
     assert scene["source_hash"] == SOURCE_SHA
