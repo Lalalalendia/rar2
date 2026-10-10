@@ -22,6 +22,7 @@ on:
       - "apps/web/product-editor-entry-v1.mjs"
       - "apps/web/product-editor-entry-v1.test.mjs"
       - "tools/run_rich_reader_editor_harness.mjs"
+      - "tools/run_product_editor_entry_harness.mjs"
       - "services/editor-api/web_shell_http_harness.py"
       - "services/editor-api/observability.py"
       - "services/editor-api/test_observability.py"
@@ -72,10 +73,13 @@ jobs:
         run: node tools/run_web_editor_http_harness.mjs
       - name: Smoke rich Reader pixels with canonical MoveNode overlay
         run: node tools/run_rich_reader_editor_harness.mjs
+      - name: Smoke same-origin Product Editor entry with synthetic AuthN/Product API
+        run: node tools/run_product_editor_entry_harness.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: web-editor-http-seam-chromium
           path: |
             target/web-editor-http/chromium-http-*
             target/web-editor-rich/chromium-rich-editor-smoke.json
+            target/web-editor-product/chromium-product-editor-entry-smoke.json
           if-no-files-found: error
