@@ -68,6 +68,10 @@ def changed_mask(candidate: bytes, reference: bytes) -> list[bool]:
     return result
 
 
+def pair_delta_mask(first: bytes, second: bytes) -> list[bool]:
+    return changed_mask(first, second)
+
+
 def clipped_image_rect(pdf: fitz.Document, page_index: int) -> tuple[float, float, float, float]:
     page = pdf[page_index]
     streams = []
@@ -89,6 +93,8 @@ def region_for_cell(
     page_width: float,
     page_height: float,
     rect: tuple[float, float, float, float],
+    *,
+    invert_y: bool,
 ) -> str:
     x, y, w, h = rect
     x2, y2 = x + w, y + h
@@ -96,7 +102,7 @@ def region_for_cell(
     cell_h = page_height / GRID_H
     center_x = (col + 0.5) * cell_w
     center_y_top = (row + 0.5) * cell_h
-    center_y_pdf = page_height - center_y_top
+    center_y_pdf = page_height - center_y_top if invert_y else center_y_top
 
     inside = x <= center_x <= x2 and y <= center_y_pdf <= y2
     band_x = cell_w
@@ -122,6 +128,8 @@ def classify_delta(
     page_width: float,
     page_height: float,
     rect: tuple[float, float, float, float],
+    *,
+    invert_y: bool,
 ) -> dict:
     regression = {"frame_edge_band": 0, "frame_interior": 0, "outside_frame": 0}
     improvement = {"frame_edge_band": 0, "frame_interior": 0, "outside_frame": 0}
@@ -129,7 +137,9 @@ def classify_delta(
         if before == after:
             continue
         row, col = divmod(cell, GRID_W)
-        region = region_for_cell(row, col, page_width, page_height, rect)
+        region = region_for_cell(
+            row, col, page_width, page_height, rect, invert_y=invert_y
+        )
         if not before and after:
             regression[region] += 1
         elif before and not after:
@@ -170,13 +180,38 @@ def main() -> None:
         baseline_mask = changed_mask(baseline_grid, reference)
         candidate_mask = changed_mask(candidate_grid, reference)
         rect = clipped_image_rect(candidate_pdf, page_index)
-        delta = classify_delta(
+        page_width = float(candidate_page.rect.width)
+        page_height = float(candidate_page.rect.height)
+        delta_pdf_y = classify_delta(
             baseline_mask,
             candidate_mask,
-            float(candidate_page.rect.width),
-            float(candidate_page.rect.height),
+            page_width,
+            page_height,
             rect,
+            invert_y=True,
         )
+        delta_top_y = classify_delta(
+            baseline_mask,
+            candidate_mask,
+            page_width,
+            page_height,
+            rect,
+            invert_y=False,
+        )
+
+        direct_mask = pair_delta_mask(candidate_grid, baseline_grid)
+        direct_by_coordinate_model = {}
+        for label, invert_y in (("pdf_bottom_left", True), ("top_left", False)):
+            counts = {"frame_edge_band": 0, "frame_interior": 0, "outside_frame": 0}
+            for cell, changed in enumerate(direct_mask):
+                if not changed:
+                    continue
+                row, col = divmod(cell, GRID_W)
+                region = region_for_cell(
+                    row, col, page_width, page_height, rect, invert_y=invert_y
+                )
+                counts[region] += 1
+            direct_by_coordinate_model[label] = counts
 
     receipt = {
         "schema": "chaptera.pub-pdf-crop-034-spatial-ab.v1",
@@ -188,7 +223,12 @@ def main() -> None:
         "baseline_changed_cell_count": sum(baseline_mask),
         "candidate_changed_cell_count": sum(candidate_mask),
         "net_changed_cell_delta": sum(candidate_mask) - sum(baseline_mask),
-        **delta,
+        "reference_delta_by_coordinate_model": {
+            "pdf_bottom_left": delta_pdf_y,
+            "top_left": delta_top_y,
+        },
+        "candidate_vs_baseline_changed_cell_count": sum(direct_mask),
+        "candidate_vs_baseline_by_coordinate_model": direct_by_coordinate_model,
         "claims": {
             "reference_is_existing_publisher_fingerprint": True,
             "candidate_clip_is_product_output_from_source_backed_frame": True,
@@ -205,8 +245,9 @@ def main() -> None:
         "baseline_changed_cell_count": receipt["baseline_changed_cell_count"],
         "candidate_changed_cell_count": receipt["candidate_changed_cell_count"],
         "net_changed_cell_delta": receipt["net_changed_cell_delta"],
-        "regression_only_cells": receipt["regression_only_cells"],
-        "improvement_only_cells": receipt["improvement_only_cells"],
+        "reference_delta_by_coordinate_model": receipt["reference_delta_by_coordinate_model"],
+        "candidate_vs_baseline_changed_cell_count": receipt["candidate_vs_baseline_changed_cell_count"],
+        "candidate_vs_baseline_by_coordinate_model": receipt["candidate_vs_baseline_by_coordinate_model"],
     }, sort_keys=True))
 
 
