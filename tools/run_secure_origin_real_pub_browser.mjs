@@ -180,6 +180,125 @@ try {
       JSON.stringify({ reopened, expected_revision: current.revision_id }));
   }
   const reopenedPaint = await verifyEditorPaint(reopened, "page reload");
+
+  // Exercise the existing canonical Product API rather than a test-only edit path.
+  // Probe visible Reader nodes with a tiny bounded move until the canonical
+  // EditorSession admits one; rejected candidates do not create revisions.
+  const moveCommit = await page.evaluate(async id => {
+    const sessionResponse = await fetch("/v1/session", {
+      credentials: "same-origin", cache: "no-store",
+    });
+    const session = await sessionResponse.json().catch(() => null);
+    if (!sessionResponse.ok || !session?.csrf_token) {
+      throw new Error("real edit could not obtain CSRF session");
+    }
+
+    const currentResponse = await fetch("/v1/documents/" + encodeURIComponent(id) + "/current", {
+      credentials: "same-origin", cache: "no-store",
+    });
+    const current = await currentResponse.json().catch(() => null);
+    const sceneResponse = await fetch("/v1/reader/documents/" + encodeURIComponent(id) + "/scene", {
+      credentials: "same-origin", cache: "no-store",
+    });
+    const scene = await sceneResponse.json().catch(() => null);
+    if (!currentResponse.ok || !sceneResponse.ok ||
+        current?.document_id !== id || scene?.document_id !== id ||
+        current?.revision_id !== scene?.revision_id || !current?.source_hash) {
+      throw new Error("real edit lacks exact current document/Reader identity");
+    }
+
+    const pages = new Map((scene.pages ?? []).map(item => [item.page_id, item]));
+    const attempts = [];
+    const step = 9525;
+    for (const [index, node] of (scene.nodes ?? []).entries()) {
+      if (!node?.node_id || !node?.page_id || !node?.bounds ||
+          node.bounds.width <= 0 || node.bounds.height <= 0) continue;
+      const pageInfo = pages.get(node.page_id);
+      if (!pageInfo) continue;
+
+      let x = node.bounds.x;
+      let y = node.bounds.y;
+      if (x + node.bounds.width + step <= pageInfo.width_emu) x += step;
+      else if (x >= step) x -= step;
+      else if (y + node.bounds.height + step <= pageInfo.height_emu) y += step;
+      else if (y >= step) y -= step;
+      else continue;
+
+      const clientOperationId = "real-pub-move-" + String(index).padStart(3, "0");
+      const response = await fetch("/v1/documents/" + encodeURIComponent(id) + "/commit", {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: {
+          "content-type": "application/json",
+          "x-csrf-token": session.csrf_token,
+        },
+        body: JSON.stringify({
+          protocol_version: "chaptera.commit-request.v1",
+          document_id: id,
+          source_hash: current.source_hash,
+          base_revision_id: current.revision_id,
+          client_operation_id: clientOperationId,
+          command: {
+            kind: "move_node_to",
+            node_id: node.node_id,
+            x_emu: x,
+            y_emu: y,
+          },
+        }),
+      });
+      const data = await response.json().catch(() => null);
+      attempts.push({
+        node_id: node.node_id,
+        status: response.status,
+        code: data?.error?.code ?? data?.error ?? null,
+      });
+      if (response.ok) {
+        if (data?.protocol_version !== "chaptera.commit-accepted.v1" ||
+            data?.document_id !== id ||
+            data?.base_revision_id !== current.revision_id ||
+            !data?.revision_id ||
+            data.revision_id === current.revision_id) {
+          throw new Error("real edit returned an invalid commit receipt");
+        }
+        return {
+          node_id: node.node_id,
+          before: { x_emu: node.bounds.x, y_emu: node.bounds.y },
+          after: { x_emu: x, y_emu: y },
+          base_revision_id: current.revision_id,
+          revision_id: data.revision_id,
+          client_operation_id: clientOperationId,
+          attempts,
+        };
+      }
+      if (![400, 409].includes(response.status)) {
+        throw new Error("real edit failed unexpectedly: " +
+          JSON.stringify({ status: response.status, data, attempts }));
+      }
+    }
+    throw new Error("no visible Reader node admitted canonical MoveNode: " +
+      JSON.stringify(attempts));
+  }, documentId);
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  const edited = await page.evaluate(async id => {
+    const response = await fetch("/v1/documents/" + encodeURIComponent(id) + "/current", {
+      credentials: "same-origin", cache: "no-store",
+    });
+    const data = await response.json().catch(() => null);
+    return {
+      status: response.status,
+      document_id: data?.document_id ?? null,
+      revision_id: data?.revision_id ?? null,
+    };
+  }, documentId);
+  if (edited.status !== 200 || edited.document_id !== documentId ||
+      edited.revision_id !== moveCommit.revision_id) {
+    throw new Error("canonical MoveNode revision did not become browser current: " +
+      JSON.stringify({ edited, moveCommit }));
+  }
+  const editedPaint = await verifyEditorPaint(edited, "after real MoveNode");
+
   if (process.env.CHAPTERA_SECURE_SCREENSHOT) {
     await page.screenshot({ path: process.env.CHAPTERA_SECURE_SCREENSHOT, fullPage: true });
   }
@@ -212,13 +331,17 @@ try {
     reader_scene_reached_browser_paint: true,
     initial_editor_paint: initialPaint,
     reloaded_editor_paint: reopenedPaint,
+    edited_editor_paint: editedPaint,
+    real_move_commit: true,
+    move_commit: moveCommit,
     server_restart_reopen_claim: false,
     storage_provider: "filesystem",
     s3_claim: false,
     native_pub_write_claim: false,
     move_and_export_claim: false,
     document_id: documentId,
-    current_revision_id: current.revision_id,
+    imported_revision_id: current.revision_id,
+    current_revision_id: moveCommit.revision_id,
     session_cookie_secure_http_only: true,
     steps: calls.map(call => call.method + " " + call.path),
     head_sha: process.env.CHAPTERA_HEAD_SHA ?? "unknown",
