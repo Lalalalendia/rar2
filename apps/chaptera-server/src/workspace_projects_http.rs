@@ -279,15 +279,16 @@ mod tests {
         body::{Body, to_bytes},
         http::{
             Request,
-            header::{COOKIE, HOST},
+            header::{CONTENT_TYPE, COOKIE, HOST, ORIGIN},
         },
     };
     use sqlx::SqlitePool;
     use tower::ServiceExt;
 
     use crate::{
-        auth_http::SESSION_COOKIE,
+        auth_http::{CSRF_HEADER, SESSION_COOKIE},
         authn::SqliteAuthnStore,
+        authz_runtime::{DocumentRole, SqliteAuthzAuthority},
         authn_session::{SessionPolicy, issue_verified_login_session},
         oidc_authn::OidcVerifiedIdentity,
         schema_migration::SqliteMigrationRuntime,
@@ -310,6 +311,36 @@ mod tests {
     async fn parsed(response: Response) -> serde_json::Value {
         let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+
+    fn rename_request(
+        project_id: &str,
+        session: &str,
+        csrf: &str,
+        expected_metadata_version: u64,
+        name: &str,
+        request_id: &str,
+    ) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/v1/projects/{project_id}/rename"))
+            .header(HOST, "cloud.example.test")
+            .header(ORIGIN, "https://cloud.example.test")
+            .header(COOKIE, format!("{SESSION_COOKIE}={session}"))
+            .header(CSRF_HEADER, csrf)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({
+                    "protocol_version": "chaptera.project-rename.v1",
+                    "expected_lifecycle_generation": 0,
+                    "expected_metadata_version": expected_metadata_version,
+                    "name": name,
+                    "client_request_id": request_id,
+                }))
+                .unwrap(),
+            ))
+            .unwrap()
     }
 
     #[tokio::test]
@@ -467,12 +498,16 @@ mod tests {
         let projects = SqliteProjectPersistence::open(&path, 3, Duration::from_secs(2))
             .await
             .unwrap();
+        let authz = SqliteAuthzAuthority::open(&path, 3, Duration::from_secs(2))
+            .await
+            .unwrap();
         let auth =
             AuthHttpState::api_test(authn.clone(), policy, "https://cloud.example.test").unwrap();
         let app = router(WorkspaceProjectsHttpState::new(
             auth,
             workspace.clone(),
             projects.clone(),
+            authz.clone(),
         ));
         let anonymous = app
             .clone()
@@ -512,6 +547,103 @@ mod tests {
         );
         assert!(visible.get("tenant_id").is_none());
         assert!(visible["projects"][0].get("principal_id").is_none());
+
+        let renamed = app
+            .clone()
+            .oneshot(rename_request(
+                "project:catalog:alice",
+                &alice.session_token,
+                &alice.csrf_token,
+                0,
+                "Renamed Catalog.pub",
+                "rename-http-0001",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(renamed.status(), StatusCode::OK);
+        let renamed = parsed(renamed).await;
+        assert_eq!(
+            renamed["protocol_version"],
+            "chaptera.project-rename-receipt.v1"
+        );
+        assert_eq!(renamed["receipt"]["name"], "Renamed Catalog.pub");
+        assert_eq!(renamed["receipt"]["metadata_version"], 1);
+        assert_eq!(renamed["receipt"]["replayed"], false);
+
+        let replay = app
+            .clone()
+            .oneshot(rename_request(
+                "project:catalog:alice",
+                &alice.session_token,
+                &alice.csrf_token,
+                0,
+                "Renamed Catalog.pub",
+                "rename-http-0001",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(replay.status(), StatusCode::OK);
+        assert_eq!(parsed(replay).await["receipt"]["replayed"], true);
+
+        let stale = app
+            .clone()
+            .oneshot(rename_request(
+                "project:catalog:alice",
+                &alice.session_token,
+                &alice.csrf_token,
+                0,
+                "Stale rename",
+                "rename-http-0002",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(stale.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            parsed(stale).await["error"],
+            "stale_project_metadata_version"
+        );
+
+        sqlx::query(
+            r#"
+            INSERT INTO workspace_memberships (
+                workspace_id, principal_id, role, membership_state,
+                membership_version, created_at_ms, revoked_at_ms
+            ) VALUES (?, ?, 'member', 'active', 0, ?, NULL)
+            "#,
+        )
+        .bind(context.workspace_id.as_bytes())
+        .bind(bob.principal_id.as_bytes())
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+        authz
+            .set_role(
+                &context.tenant_id,
+                "document:catalog:alice",
+                &bob.principal_id,
+                DocumentRole::Viewer,
+                None,
+                "grant-catalog-viewer",
+                now + 1,
+            )
+            .await
+            .unwrap();
+
+        let viewer_rename = app
+            .clone()
+            .oneshot(rename_request(
+                "project:catalog:alice",
+                &bob.session_token,
+                &bob.csrf_token,
+                1,
+                "Viewer rename must fail",
+                "rename-http-viewer",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(viewer_rename.status(), StatusCode::FORBIDDEN);
+        assert_eq!(parsed(viewer_rename).await["error"], "capability_denied");
 
         sqlx::query(
             r#"
@@ -610,6 +742,7 @@ mod tests {
         assert_eq!(revoked.status(), StatusCode::FORBIDDEN);
 
         pool.close().await;
+        authz.close().await;
         projects.close().await;
         workspace.close().await;
         authn.close().await;
