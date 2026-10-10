@@ -500,6 +500,7 @@ fn rfc5987_encode(value: &str) -> String {
     }
     encoded
 }
+
 async fn authorize_loss_report_download(
     State(state): State<ProductExportHttpState>,
     Path(job_id): Path<String>,
@@ -832,5 +833,48 @@ mod tests {
         assert_eq!(response.progress_percent, None);
         assert_eq!(response.artifact_id, None);
         assert_eq!(response.loss_report_id, None);
+    }
+    #[test]
+    fn browser_download_representation_is_exact_target_derived() {
+        let idml = target_download_representation(IDML_BOUNDED_EDITABLE_PROFILE).unwrap();
+        assert_eq!(idml.extension, "idml");
+        assert_eq!(
+            idml.mime,
+            "application/vnd.adobe.indesign-idml-package"
+        );
+
+        let odg = target_download_representation(ODG_BOUNDED_EDITABLE_PROFILE).unwrap();
+        assert_eq!(odg.extension, "odg");
+        assert_eq!(odg.mime, "application/vnd.oasis.opendocument.graphics");
+        assert!(target_download_representation("html:guess").is_err());
+    }
+
+    #[test]
+    fn export_filename_is_safe_for_hostile_and_unicode_stems() {
+        let hostile = format!("..//CON\\\\bad\\r\\n{}", "Книга");
+        let (ascii, encoded) = safe_export_filename(&hostile, "idml");
+        assert!(ascii.starts_with("chaptera-"));
+        assert!(ascii.ends_with(".idml"));
+        assert!(!ascii.contains('/'));
+        assert!(!ascii.contains('\\\\'));
+        assert!(!ascii.contains('\\r'));
+        assert!(!ascii.contains('\\n'));
+        assert!(!ascii.contains('"'));
+        assert!(!encoded.contains('/'));
+        assert!(!encoded.contains('\\\\'));
+        assert!(encoded.contains("%D0%9A"));
+        assert!(encoded.ends_with(".idml"));
+    }
+
+    #[test]
+    fn export_authz_denials_are_forbidden_not_internal_errors() {
+        for code in ["grant_missing", "grant_expired", "capability_denied"] {
+            let response = ProductExportHttpError::Jobs(JobsRuntimeError {
+                code,
+                message: "denied".to_owned(),
+            })
+            .into_response();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{code}");
+        }
     }
 }
