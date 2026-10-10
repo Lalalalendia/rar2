@@ -3624,12 +3624,7 @@ impl ViewerApp {
                 continue;
             }
 
-            let expected_sha256 = image_decode_adapter::exact_sha256_hex(&embedded.bytes);
-            match image_decode_adapter::decode_texture_image_v1(
-                &embedded.bytes,
-                &embedded.mime,
-                &expected_sha256,
-            ) {
+            match image_decode_adapter::decode_viewer_embedded_texture_v1(embedded) {
                 Ok(admitted) => {
                     let texture = ctx.load_texture(
                         format!("pub-image-{key}"),
@@ -6208,13 +6203,28 @@ mod tests {
             "exact image resource must retain at least one proven resolved scene-node use"
         );
 
-        let expected_sha256 = image_decode_adapter::exact_sha256_hex(&embedded.bytes);
-        let admitted = image_decode_adapter::decode_texture_image_v1(
-            &embedded.bytes,
+        assert!(embedded.source_exact, "fixture image must carry exact source authority");
+        let expected_sha256 = embedded
+            .verified_source_sha256
+            .expect("Reader manifest must provide the independently checked payload digest")
+            .to_string();
+        assert_eq!(
+            image_decode_adapter::exact_sha256_hex(&embedded.bytes),
+            expected_sha256,
+            "Reader manifest SHA must agree with real exact embedded bytes"
+        );
+        let admitted = image_decode_adapter::decode_viewer_embedded_texture_v1(embedded)
+            .expect("Desktop must admit Reader-verified image through one decode hash");
+
+        let mut corrupted = embedded.bytes.clone();
+        corrupted[0] ^= 1;
+        let rejected = image_decode_adapter::decode_texture_image_v1(
+            &corrupted,
             &embedded.mime,
             &expected_sha256,
         )
-        .expect("bounded desktop decoder must admit the exact embedded image");
+        .expect_err("corrupted source bytes must fail before codec use");
+        assert_eq!(rejected.code, "resource_hash_mismatch");
 
         assert!(admitted.color_image.size[0] > 0);
         assert!(admitted.color_image.size[1] > 0);
