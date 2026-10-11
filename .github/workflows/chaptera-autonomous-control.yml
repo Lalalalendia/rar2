@@ -1,0 +1,47 @@
+name: Chaptera autonomous control preparation
+
+on:
+  pull_request:
+    paths:
+      - "tools/ci/chaptera_autonomous_control.py"
+      - "tools/ci/test_chaptera_autonomous_control.py"
+      - "docs/chaptera-autonomous-control.md"
+      - ".github/workflows/chaptera-autonomous-control.yml"
+  workflow_dispatch:
+  # Disabled until a real authenticated bridge and complete task cycle exist.
+  # The Work Scheduled Task is the currently enabled hourly executor.
+  schedule:
+    - cron: "0 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chaptera-autonomous-control-${{ github.event.pull_request.number || 'main-runner' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  controls:
+    if: github.event_name != 'schedule' || vars.CHAPTERA_ACTIONS_AGENT_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Test admission, ownership, exact-head closure, crash recovery and cost limits
+        run: python -m unittest discover -s tools/ci -p test_chaptera_autonomous_control.py
+      - name: Record activation blockers without calling an inference API
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHAPTERA_NOTION_TOKEN: ${{ secrets.CHAPTERA_NOTION_TOKEN }}
+          CHAPTERA_AGENT_API_KEY: ${{ secrets.CHAPTERA_AGENT_API_KEY }}
+          CHAPTERA_AGENT_VERIFIED_BRIDGE: ${{ vars.CHAPTERA_AGENT_VERIFIED_BRIDGE }}
+        run: python tools/ci/chaptera_autonomous_control.py --output "${RUNNER_TEMP}/chaptera-agent-preflight.json"
+      - uses: actions/upload-artifact@v4
+        if: always() && github.event_name != 'pull_request'
+        with:
+          name: chaptera-agent-control-checkpoint
+          path: ${{ runner.temp }}/chaptera-agent-preflight.json
+          if-no-files-found: error
