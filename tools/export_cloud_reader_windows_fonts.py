@@ -471,7 +471,9 @@ def build_packet(
     for requested_family in families:
         styles = [(False, False)]
         if include_source_styles:
-            requirement = source_requirements["required_styles_by_family"][requested_family]
+            requirement = source_requirements["required_styles_by_family"].get(
+                requested_family, {}
+            )
             styles.extend(
                 (bold, italic)
                 for name, bold, italic in (
@@ -479,7 +481,7 @@ def build_packet(
                     ("italic", False, True),
                     ("bold_italic", True, True),
                 )
-                if requirement[name] > 0
+                if requirement.get(name, 0) > 0
             )
         for bold, italic in styles:
             face = discover_source_face(font_dir, requested_family, bold, italic)

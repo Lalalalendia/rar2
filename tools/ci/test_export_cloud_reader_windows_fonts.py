@@ -113,6 +113,41 @@ def test_regular_selection_ignores_light(tmp: Path) -> None:
     assert face.path == regular
 
 
+def test_strict_styled_face_selection(tmp: Path) -> None:
+    family = "Example Serif"
+    faces = {
+        "Regular": "ExampleSerif-Regular",
+        "Bold": "ExampleSerif-Bold",
+        "Italic": "ExampleSerif-Italic",
+        "Bold Italic": "ExampleSerif-BoldItalic",
+    }
+    for index, (style, postscript) in enumerate(faces.items()):
+        (tmp / f"face-{index}.ttf").write_bytes(
+            standalone_font(family, style, postscript)
+        )
+    # Similar-but-different styles must never silently claim exact source.
+    (tmp / "semibold.ttf").write_bytes(
+        standalone_font(family, "SemiBold", "ExampleSerif-SemiBold")
+    )
+    (tmp / "oblique.ttf").write_bytes(
+        standalone_font(family, "Oblique", "ExampleSerif-Oblique")
+    )
+    assert font_export.discover_source_face(tmp, family, False, False).subfamily == "Regular"
+    assert font_export.discover_source_face(tmp, family, True, False).subfamily == "Bold"
+    assert font_export.discover_source_face(tmp, family, False, True).subfamily == "Italic"
+    assert font_export.discover_source_face(tmp, family, True, True).subfamily == "Bold Italic"
+
+    (tmp / "duplicate-bold.ttf").write_bytes(
+        standalone_font(family, "Bold", "ExampleSerif-DuplicateBold")
+    )
+    try:
+        font_export.discover_source_face(tmp, family, True, False)
+    except font_export.FontPacketError as exc:
+        assert "ambiguous Bold face" in str(exc)
+    else:
+        raise AssertionError("duplicate physical Bold faces must fail closed")
+
+
 def test_packet_generation(tmp: Path) -> None:
     fonts = tmp / "fonts-source"
     fonts.mkdir()
@@ -383,6 +418,7 @@ def main() -> None:
             ("otf", test_otf_parser),
             ("collection", test_collection_and_nonzero_face_fence),
             ("regular_selection", test_regular_selection_ignores_light),
+            ("styled_selection", test_strict_styled_face_selection),
             ("packet", test_packet_generation),
             ("cloud_path_fence", test_cloud_path_fence),
             ("ambiguous", test_ambiguous_family_fails),
