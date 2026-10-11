@@ -202,6 +202,127 @@ fn emf_record_census(logical: &[u8]) -> Result<serde_json::Value, Box<dyn Error>
     }))
 }
 
+
+fn vector_profile(logical: &[u8]) -> serde_json::Value {
+    // Derived numeric drawing classes only. Never emit PUB/EMF bytes, paths,
+    // object identifiers, actual brush colors, geometry points, or text.
+    let mut offset = 0usize;
+    let mut bounds_extent = None;
+    let mut map_modes = BTreeMap::<u32, usize>::new();
+    let mut window_extents = Vec::<(i32, i32)>::new();
+    let mut viewport_extents = Vec::<(i32, i32)>::new();
+    let mut origin_counts = [0_usize; 2];
+    let mut brushes = BTreeMap::<u32, u32>::new();
+    let mut brush_styles = BTreeMap::<u32, usize>::new();
+    let mut colors = std::collections::BTreeSet::<u32>::new();
+    let mut selected_solid = false;
+    let mut fill_count = 0_usize;
+    let mut proven_solid_fills = 0_usize;
+    let mut unresolved_selects = 0_usize;
+    let mut stock_selects = 0_usize;
+    let mut path_state = false;
+    let mut draws_outside_path = 0_usize;
+    let mut path_ops = BTreeMap::<u32, usize>::new();
+    let mut curve_records = 0_usize;
+    let mut curve_segments = 0_usize;
+    let mut malformed_curve_records = 0_usize;
+    let mut unsupported_types = BTreeMap::<u32, usize>::new();
+    const ADMITTED: &[u32] = &[1, 5, 9, 10, 11, 12, 14, 17, 19, 27, 37, 39, 40, 54, 59, 60, 61, 62, 88];
+    while offset + 8 <= logical.len() {
+        let kind = read_u32(logical, offset);
+        let size = read_u32(logical, offset + 4) as usize;
+        let Some(end) = offset.checked_add(size) else { break };
+        if size < 8 || end > logical.len() { break; }
+        let r = &logical[offset..end];
+        if !ADMITTED.contains(&kind) {
+            *unsupported_types.entry(kind).or_default() += 1;
+        }
+        match kind {
+            1 if size >= 88 => bounds_extent = Some((
+                (read_u32(r, 16) as i32) - (read_u32(r, 8) as i32),
+                (read_u32(r, 20) as i32) - (read_u32(r, 12) as i32),
+            )),
+            17 if size >= 12 => *map_modes.entry(read_u32(r, 8)).or_default() += 1,
+            9 | 11 if size >= 16 => {
+                let e = (read_u32(r, 8) as i32, read_u32(r, 12) as i32);
+                if kind == 9 { window_extents.push(e); }
+                else { viewport_extents.push(e); }
+            }
+            10 if size >= 16 => origin_counts[0] += 1,
+            12 if size >= 16 => origin_counts[1] += 1,
+            39 if size >= 24 => {
+                let handle = read_u32(r, 8);
+                let style = read_u32(r, 12);
+                brushes.insert(handle, style);
+                *brush_styles.entry(style).or_default() += 1;
+                colors.insert(read_u32(r, 16));
+            }
+            37 if size >= 12 => {
+                let handle = read_u32(r, 8);
+                if handle & 0x8000_0000 != 0 {
+                    stock_selects += 1;
+                    selected_solid = false;
+                } else if let Some(style) = brushes.get(&handle) {
+                    selected_solid = *style == 0;
+                } else {
+                    unresolved_selects += 1;
+                    selected_solid = false;
+                }
+            }
+            40 if size >= 12 => { brushes.remove(&read_u32(r, 8)); }
+            59 if size == 8 => { path_state = true; *path_ops.entry(kind).or_default() += 1; }
+            60 | 61 if size == 8 => *path_ops.entry(kind).or_default() += 1,
+            62 if size >= 24 => {
+                fill_count += 1;
+                if selected_solid { proven_solid_fills += 1; }
+                path_state = false;
+                *path_ops.entry(kind).or_default() += 1;
+            }
+            27 if size >= 16 => *path_ops.entry(kind).or_default() += 1,
+            54 if size >= 16 => {
+                *path_ops.entry(kind).or_default() += 1;
+                if !path_state { draws_outside_path += 1; }
+            }
+            5 | 88 if size >= 28 => {
+                curve_records += 1;
+                let n = read_u32(r, 24) as usize;
+                let stride = if kind == 5 { 8_usize } else { 4 };
+                if n == 0 || n % 3 != 0
+                    || n.checked_mul(stride).and_then(|v| v.checked_add(28))
+                        .is_none_or(|needed| needed > size)
+                {
+                    malformed_curve_records += 1;
+                } else { curve_segments += n / 3; }
+                if !path_state { draws_outside_path += 1; }
+                *path_ops.entry(kind).or_default() += 1;
+            }
+            _ => {}
+        }
+        offset = end;
+    }
+    json!({
+        "source_safe_profile": "emf066-vector-path-v1",
+        "all_records_consumed": offset == logical.len(),
+        "bounds_pixel_extent": bounds_extent,
+        "map_modes": map_modes,
+        "window_extents": window_extents,
+        "viewport_extents": viewport_extents,
+        "origin_record_counts": origin_counts,
+        "brush_styles": brush_styles,
+        "distinct_brush_colors": colors.len(),
+        "stock_selects": stock_selects,
+        "unresolved_selects": unresolved_selects,
+        "fill_paths": fill_count,
+        "solid_brush_fills": proven_solid_fills,
+        "path_op_types": path_ops,
+        "draw_commands_outside_path": draws_outside_path,
+        "bezier_records": curve_records,
+        "bezier_segments": curve_segments,
+        "malformed_bezier_records": malformed_curve_records,
+        "unsupported_types": unsupported_types,
+    })
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let input = env::args()
         .nth(1)
@@ -262,6 +383,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "logical_len": logical.len(),
             "logical_sha256": logical_sha,
             "census": census,
+            "vector_profile": vector_profile(&logical),
         }));
     }
 
@@ -282,6 +404,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "use_count": row["use_count"],
                 "logical_len": row["logical_len"],
                 "census": row["census"],
+                "vector_profile": row["vector_profile"],
             })
         })
         .collect::<Vec<_>>();
