@@ -14,7 +14,12 @@ fn real_sample_newsletter_viewer_preserves_direct_source_quill_indices() {
         .expect("source fixture environment must be explicitly configured");
     let bytes = fs::read(fixture).expect("read exact public PUB fixture");
     assert_eq!(bytes.len(), 291_840);
-    assert_eq!(format!("{:x}", Sha256::digest(&bytes)), SOURCE_SHA);
+    let actual_sha = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join("");
+    assert_eq!(actual_sha, SOURCE_SHA);
 
     let viewer = pub_viewer::open_pub_geometry(
         &bytes,
