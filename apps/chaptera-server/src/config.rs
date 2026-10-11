@@ -1576,14 +1576,19 @@ expected_sha256 = "{bold}"
             bold = "b".repeat(64),
         );
         let config: ChapteraConfig = toml::from_str(&source).unwrap();
-        config.validate().expect("one family can provide separate physical styles");
+        config
+            .validate()
+            .expect("one family can provide separate physical styles");
         let guest = config.cloud_reader_guest.as_ref().unwrap();
         assert!(!guest.font_resources[0].bold && !guest.font_resources[0].italic);
         assert!(guest.font_resources[1].bold && !guest.font_resources[1].italic);
 
         let duplicate_style = source.replace("bold = true", "bold = false");
         let config: ChapteraConfig = toml::from_str(&duplicate_style).unwrap();
-        assert_eq!(config.validate().unwrap_err().code, "cloud_reader_font_family_duplicate");
+        assert_eq!(
+            config.validate().unwrap_err().code,
+            "cloud_reader_font_family_duplicate"
+        );
 
         let duplicate_physical = source.replace(&"b".repeat(64), &"a".repeat(64));
         let config: ChapteraConfig = toml::from_str(&duplicate_physical).unwrap();
@@ -1592,10 +1597,7 @@ expected_sha256 = "{bold}"
             "cloud_reader_font_physical_face_duplicate"
         );
 
-        let nonzero_face = source.replace(
-            "bold = true",
-            "bold = true\nface_index = 1",
-        );
+        let nonzero_face = source.replace("bold = true", "bold = true\nface_index = 1");
         let config: ChapteraConfig = toml::from_str(&nonzero_face).unwrap();
         assert_eq!(
             config.validate().unwrap_err().code,
