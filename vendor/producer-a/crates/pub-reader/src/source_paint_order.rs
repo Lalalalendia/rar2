@@ -131,8 +131,8 @@ pub(super) fn source_page_paint_orders_v1(
         // Source-backed depth-1 PAGE LOGO ellipses have a proven carrier
         // order even when their styling still needs visual validation. Do not
         // broaden the ordinary 0x30 ellipse paint admission here.
-        let page_logo_ellipse = page_logo
-            && node.payload.officeart_shape_type == Some(OFFICEART_SHAPE_TYPE_ELLIPSE);
+        let page_logo_ellipse =
+            page_logo && node.payload.officeart_shape_type == Some(OFFICEART_SHAPE_TYPE_ELLIPSE);
         if !admit_grouped_paint_participant(
             node.payload.story_frame.is_some(),
             node.payload.image_slot.is_some(),
