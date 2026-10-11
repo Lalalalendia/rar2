@@ -140,7 +140,10 @@ async fn run() -> Result<IamListReceiptV1, String> {
         .await,
     ];
     // Do not even attempt to classify denial if a positive control failed.
-    let denials = if controls.iter().all(|passed| *passed) {
+    // A correct STS account alone is not proof of authority over both actual
+    // buckets; this requires all four owner-pinned physical HEAD controls.
+    let expected_bucket_owner_verified = controls.iter().all(|passed| *passed);
+    let denials = if expected_bucket_owner_verified {
         [
             sampled_list_denial(&serve, &quarantine_bucket, &private_bucket, &owner).await,
             sampled_list_denial(&worker, &quarantine_bucket, &private_bucket, &owner).await,
@@ -153,7 +156,7 @@ async fn run() -> Result<IamListReceiptV1, String> {
     Ok(IamListReceiptV1 {
         protocol_version: RECEIPT_VERSION,
         provider_family: "aws-s3",
-        expected_bucket_owner_verified: true,
+        expected_bucket_owner_verified,
         underlying_aws_roles_distinct: true,
         serve_quarantine_head_passed: controls[0],
         serve_private_head_passed: controls[1],
