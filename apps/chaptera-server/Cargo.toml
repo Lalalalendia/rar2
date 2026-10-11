@@ -20,6 +20,8 @@ chaptera-failure-intake-protocol = { path = "../../crates/chaptera-failure-intak
 chaptera-viewer-render-plan = { path = "../../crates/chaptera-viewer-render-plan", features = ["projected-scene-instances"] }
 chaptera-scene-instance = { path = "../../crates/chaptera-scene-instance" }
 chaptera-desktop-fallback-font-resource = { path = "../../crates/chaptera-desktop-fallback-font-resource" }
+chaptera-image-decode-contract = { path = "../../crates/chaptera-image-decode-contract" }
+base64 = "=0.22.1"
 aws-config = "=1.12.0"
 aws-sdk-s3 = "=1.149.0"
 aws-smithy-types = { version = "=1.8.0", features = ["http-body-1-x"] }
