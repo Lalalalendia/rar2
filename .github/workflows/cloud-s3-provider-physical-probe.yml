@@ -23,14 +23,14 @@ jobs:
         # to the existing provider-adapter operations. Never grant those
         # enumeration permissions to production serve or worker identities.
         env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.CHAPTERA_S3_PROBE_ACCESS_KEY_ID }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.CHAPTERA_S3_PROBE_SECRET_ACCESS_KEY }}
-        AWS_SESSION_TOKEN: ${{ secrets.CHAPTERA_S3_PROBE_SESSION_TOKEN }}
-        AWS_REGION: ${{ vars.CHAPTERA_S3_PROBE_REGION }}
-        CHAPTERA_S3_PROBE_ENDPOINT_URL: ${{ vars.CHAPTERA_S3_PROBE_ENDPOINT_URL }}
-        CHAPTERA_S3_QUARANTINE_BUCKET: ${{ vars.CHAPTERA_S3_PROBE_QUARANTINE_BUCKET }}
-        CHAPTERA_S3_PRIVATE_BUCKET: ${{ vars.CHAPTERA_S3_PROBE_PRIVATE_BUCKET }}
-        CHAPTERA_S3_EXPECTED_BUCKET_OWNER: ${{ vars.CHAPTERA_S3_PROBE_EXPECTED_BUCKET_OWNER }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.CHAPTERA_S3_PROBE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CHAPTERA_S3_PROBE_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.CHAPTERA_S3_PROBE_SESSION_TOKEN }}
+          AWS_REGION: ${{ vars.CHAPTERA_S3_PROBE_REGION }}
+          CHAPTERA_S3_PROBE_ENDPOINT_URL: ${{ vars.CHAPTERA_S3_PROBE_ENDPOINT_URL }}
+          CHAPTERA_S3_QUARANTINE_BUCKET: ${{ vars.CHAPTERA_S3_PROBE_QUARANTINE_BUCKET }}
+          CHAPTERA_S3_PRIVATE_BUCKET: ${{ vars.CHAPTERA_S3_PROBE_PRIVATE_BUCKET }}
+          CHAPTERA_S3_EXPECTED_BUCKET_OWNER: ${{ vars.CHAPTERA_S3_PROBE_EXPECTED_BUCKET_OWNER }}
         shell: bash
         run: |
           set -euo pipefail
