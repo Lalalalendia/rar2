@@ -220,6 +220,9 @@ fn vector_profile(logical: &[u8]) -> serde_json::Value {
     let mut proven_solid_fills = 0_usize;
     let mut unresolved_selects = 0_usize;
     let mut stock_selects = 0_usize;
+    let mut stock_pen_selects = 0_usize;
+    let mut stock_brush_selects = 0_usize;
+    let mut declared_brush_selects = 0_usize;
     let mut path_state = false;
     let mut draws_outside_path = 0_usize;
     let mut path_ops = BTreeMap::<u32, usize>::new();
@@ -261,8 +264,18 @@ fn vector_profile(logical: &[u8]) -> serde_json::Value {
                 let handle = read_u32(r, 8);
                 if handle & 0x8000_0000 != 0 {
                     stock_selects += 1;
-                    selected_solid = false;
+                    let stock_id = handle & 0x7fff_ffff;
+                    if stock_id <= 5 {
+                        stock_brush_selects += 1;
+                        selected_solid = stock_id < 5;
+                    } else if (6..=8).contains(&stock_id) {
+                        // Stock pen selection does not change the current brush.
+                        stock_pen_selects += 1;
+                    } else {
+                        selected_solid = false;
+                    }
                 } else if let Some(style) = brushes.get(&handle) {
+                    declared_brush_selects += 1;
                     selected_solid = *style == 0;
                 } else {
                     unresolved_selects += 1;
@@ -311,6 +324,9 @@ fn vector_profile(logical: &[u8]) -> serde_json::Value {
         "brush_styles": brush_styles,
         "distinct_brush_colors": colors.len(),
         "stock_selects": stock_selects,
+        "stock_pen_selects": stock_pen_selects,
+        "stock_brush_selects": stock_brush_selects,
+        "declared_brush_selects": declared_brush_selects,
         "unresolved_selects": unresolved_selects,
         "fill_paths": fill_count,
         "solid_brush_fills": proven_solid_fills,
