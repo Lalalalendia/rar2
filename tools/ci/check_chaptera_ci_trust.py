@@ -14,6 +14,7 @@ PROTECTED_WORKFLOWS = (
     ".github/workflows/editor-live-trial-package.yml",
     ".github/workflows/pub-ksu-publication4-provenance.yml",
     ".github/workflows/cloud-deploy-v0.yml",
+    ".github/workflows/cloud-s3-provider-physical-probe.yml",
 )
 
 DESKTOP_PR_ADMISSION_RULES = {
