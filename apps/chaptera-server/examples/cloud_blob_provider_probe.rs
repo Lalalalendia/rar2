@@ -6,7 +6,10 @@ use std::{
 
 use aws_config::BehaviorVersion;
 use chaptera_server::{
-    blob_store::{BlobProvider, GrantOperation, ProviderErrorKind, ProviderGrantRequest},
+    blob_store::{
+        BlobProvider, GrantOperation, ProviderError, ProviderErrorKind, ProviderGrant,
+        ProviderGrantRequest,
+    },
     s3_blob_provider::S3BlobProvider,
 };
 use rand::{RngCore, rngs::OsRng};
@@ -33,6 +36,8 @@ struct ProviderReceiptV1 {
     stale_delete_rejected: bool,
     delete_head_absent: bool,
     download_grant_available: bool,
+    owner_pinned_download_grant_denied: bool,
+    download_grant_policy_passed: bool,
     direct_upload_grant_available: bool,
     hard_create_only_reported: bool,
     hard_exact_or_max_upload_size_reported: bool,
@@ -134,7 +139,7 @@ async fn run() -> Result<(ProviderReceiptV1, bool), String> {
         Err(ref error) if matches!(error.kind, ProviderErrorKind::NotFound | ProviderErrorKind::AccessDenied)
     );
 
-    let download_grant_available = provider
+    let download_grant = provider
         .issue_grant(&ProviderGrantRequest {
             tenant_id: "tenant:provider-probe".to_owned(),
             object_locator: locator.clone(),
@@ -143,9 +148,16 @@ async fn run() -> Result<(ProviderReceiptV1, bool), String> {
             required_content_type: None,
             expires_at_ms: now_ms()?.saturating_add(Duration::from_secs(60).as_millis() as u64),
         })
-        .await
-        .map(|grant| !grant.opaque_url.is_empty())
-        .unwrap_or(false);
+        .await;
+    // Owner-pinned download MUST reject the URL-only grant envelope because
+    // it cannot carry the signed expected-bucket-owner header. Treat that
+    // exact fail-closed refusal as successful policy evidence, not a failure
+    // of S3 create/HEAD/GET/delete conformance.
+    let (
+        download_grant_available,
+        owner_pinned_download_grant_denied,
+        download_grant_policy_passed,
+    ) = evaluate_download_grant_policy(expected_owner.is_some(), download_grant);
 
     let direct_upload_grant_available = provider
         .issue_grant(&ProviderGrantRequest {
@@ -172,7 +184,7 @@ async fn run() -> Result<(ProviderReceiptV1, bool), String> {
         && stale_read_rejected
         && stale_delete_rejected
         && delete_head_absent
-        && download_grant_available
+        && download_grant_policy_passed
         && !direct_upload_grant_available;
 
     let receipt = ProviderReceiptV1 {
@@ -191,6 +203,8 @@ async fn run() -> Result<(ProviderReceiptV1, bool), String> {
         stale_delete_rejected,
         delete_head_absent,
         download_grant_available,
+        owner_pinned_download_grant_denied,
+        download_grant_policy_passed,
         direct_upload_grant_available,
         hard_create_only_reported: capabilities.hard_create_only,
         hard_exact_or_max_upload_size_reported: capabilities.hard_exact_or_max_upload_size,
@@ -204,6 +218,28 @@ async fn run() -> Result<(ProviderReceiptV1, bool), String> {
         core_adapter_probe_passed,
     };
     Ok((receipt, core_adapter_probe_passed))
+}
+
+// Report the true effective grant boundary: URL-only grants are supported
+// only without the expected bucket-owner pin. A pinned deployment must reject
+// them with the exact provider security code, never succeed with a URL.
+fn evaluate_download_grant_policy(
+    owner_pinned: bool,
+    grant: Result<ProviderGrant, ProviderError>,
+) -> (bool, bool, bool) {
+    let available = matches!(&grant, Ok(value) if !value.opaque_url.is_empty());
+    let refused_by_owner_fence = matches!(
+        &grant,
+        Err(error)
+            if error.kind == ProviderErrorKind::Other
+                && error.code == "s3_download_grant_expected_owner_requires_headers"
+    );
+    let passed = if owner_pinned {
+        refused_by_owner_fence && !available
+    } else {
+        available && !refused_by_owner_fence
+    };
+    (available, refused_by_owner_fence, passed)
 }
 
 fn required_env(name: &str) -> Result<String, String> {
@@ -242,4 +278,69 @@ fn now_ms() -> Result<u64, String> {
         .map_err(|_| "system clock is before Unix epoch")?
         .as_millis();
     u64::try_from(millis).map_err(|_| "system time does not fit u64 milliseconds".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn available_grant() -> ProviderGrant {
+        ProviderGrant {
+            opaque_url: "https://example.invalid/non-sensitive-synthetic-grant".to_owned(),
+            expires_at_ms: 123,
+        }
+    }
+
+    fn owner_denial() -> ProviderError {
+        ProviderError::new(
+            ProviderErrorKind::Other,
+            "s3_download_grant_expected_owner_requires_headers",
+        )
+    }
+
+    #[test]
+    fn owner_pinned_download_requires_exact_fail_closed_refusal() {
+        assert_eq!(
+            evaluate_download_grant_policy(true, Err(owner_denial())),
+            (false, true, true)
+        );
+        // A future regression that silently issues a URL despite owner
+        // pinning must turn the physical provider receipt RED.
+        assert_eq!(
+            evaluate_download_grant_policy(true, Ok(available_grant())),
+            (true, false, false)
+        );
+        assert_eq!(
+            evaluate_download_grant_policy(
+                true,
+                Err(ProviderError::new(
+                    ProviderErrorKind::Other,
+                    "unrelated_provider_error"
+                )),
+            ),
+            (false, false, false)
+        );
+    }
+
+    #[test]
+    fn unpinned_download_requires_actual_available_grant() {
+        assert_eq!(
+            evaluate_download_grant_policy(false, Ok(available_grant())),
+            (true, false, true)
+        );
+        assert_eq!(
+            evaluate_download_grant_policy(false, Err(owner_denial())),
+            (false, true, false)
+        );
+        assert_eq!(
+            evaluate_download_grant_policy(
+                false,
+                Err(ProviderError::new(
+                    ProviderErrorKind::Other,
+                    "presign_failed"
+                )),
+            ),
+            (false, false, false)
+        );
+    }
 }

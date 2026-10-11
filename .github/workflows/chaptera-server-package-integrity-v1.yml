@@ -72,6 +72,9 @@ jobs:
       - name: Run ordinary chaptera-server regression once
         run: cargo test -p chaptera-server
 
+      - name: Verify owner-pinned S3 probe fail-closed policy offline
+        run: cargo test -p chaptera-server --example cloud_blob_provider_probe
+
       - name: Prove Product worker physical isolation boundary
         run: |
           python3 - <<'PY'
