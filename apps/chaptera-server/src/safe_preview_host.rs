@@ -187,6 +187,12 @@ pub(crate) fn attach_admitted_previews(
     let mut accepted = 0_usize;
     let mut aggregate_raw = 0_usize;
     let mut seen = HashSet::new();
+    // Only the pinned Product acceptance requests aggregate, source-neutral
+    // stage diagnostics. Never log resource identifiers, bytes or hashes.
+    let probe = std::env::var_os("CHAPTERA_PREVIEW_PROBE_SUMMARY_OUT").is_some();
+    if probe {
+        eprintln!("SAFE_PREVIEW_022_HOST_CANDIDATES={}", previews.len());
+    }
     for preview in previews {
         if !seen.insert(preview.resource_id.as_str())
             || preview.encoded_base64.len() > MAX_WORKER_PREVIEW_BASE64_BYTES
@@ -213,15 +219,27 @@ pub(crate) fn attach_admitted_previews(
             return Err("preview_resource_not_sanitized");
         }
         let Ok(bytes) = STANDARD.decode(&preview.encoded_base64) else {
+            if probe {
+                eprintln!("SAFE_PREVIEW_022_HOST_SKIP=invalid_base64");
+            }
             continue;
         };
-        let Ok(admitted) = admit_worker_preview(&bytes, &preview.receipt) else {
-            continue;
+        let admitted = match admit_worker_preview(&bytes, &preview.receipt) {
+            Ok(admitted) => admitted,
+            Err(code) => {
+                if probe {
+                    eprintln!("SAFE_PREVIEW_022_HOST_SKIP={code}");
+                }
+                continue;
+            }
         };
         let Some(new_aggregate) = aggregate_raw.checked_add(admitted.encoded_len) else {
             continue;
         };
         if new_aggregate > MAX_BROWSER_PREVIEW_TOTAL_BYTES {
+            if probe {
+                eprintln!("SAFE_PREVIEW_022_HOST_SKIP=aggregate_budget");
+            }
             continue;
         }
         let original = scene["resources"][index].clone();
@@ -244,10 +262,16 @@ pub(crate) fn attach_admitted_previews(
             .len();
         if candidate_size > MAX_SCENE_BYTES.saturating_sub(256) {
             scene["resources"][index] = original;
+            if probe {
+                eprintln!("SAFE_PREVIEW_022_HOST_SKIP=scene_budget");
+            }
             continue;
         }
         accepted += 1;
         aggregate_raw = new_aggregate;
+    }
+    if probe {
+        eprintln!("SAFE_PREVIEW_022_HOST_ADMITTED={accepted}");
     }
     let all_available = scene
         .get("resources")
