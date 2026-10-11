@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   isUndoShortcutEvent,
+  historyShortcutCommand,
   resolveRichEditorPointerTarget,
 } from "./rich-reader-editor-shell-v1.mjs";
 
@@ -125,5 +126,34 @@ test("Ctrl/Cmd+Z is reserved for authoritative Undo outside editable controls", 
       metaKey: false,
       ...event,
     }), false);
+  }
+});
+
+test("Ctrl/Cmd+Shift+Z and Ctrl+Y route Redo without stealing text or IME history", () => {
+  const base = {
+    ctrlKey: true, metaKey: false, altKey: false, shiftKey: false,
+    repeat: false, defaultPrevented: false, isComposing: false,
+    target: { tagName: "DIV" },
+  };
+  assert.equal(historyShortcutCommand({ ...base, key: "z" }), "undo");
+  assert.equal(historyShortcutCommand({ ...base, key: "Z", shiftKey: true }), "redo");
+  assert.equal(historyShortcutCommand({ ...base, key: "y" }), "redo");
+  assert.equal(historyShortcutCommand({
+    ...base, key: "Z", ctrlKey: false, metaKey: true, shiftKey: true,
+  }), "redo");
+  for (const e of [
+    { key: "z", shiftKey: true, target: { tagName: "INPUT" } },
+    { key: "y", target: { tagName: "TEXTAREA" } },
+    { key: "y", target: { isContentEditable: true } },
+    { key: "y", target: { closest: () => true } },
+    { key: "y", altKey: true },
+    { key: "y", isComposing: true },
+    { key: "z", shiftKey: true, keyCode: 229 },
+    { key: "y", repeat: true },
+    { key: "z", shiftKey: true, defaultPrevented: true },
+    { key: "y", shiftKey: true },
+    { key: "y", ctrlKey: false },
+  ]) {
+    assert.equal(historyShortcutCommand({ ...base, ...e }), null);
   }
 });
