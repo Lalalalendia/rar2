@@ -2,50 +2,6 @@
 
 use super::{PubBridgeDiagnostic, ViewerDiagnostic, ViewerDiagnosticSeverity};
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pub_reader::PubBridgeDiagnostic;
-
-    #[test]
-    fn missing_directory_evidence_keeps_distinct_informational_product_codes() {
-        // Provenance stays in the Reader contract; the source-neutral Viewer
-        // receives a bounded explanation, without a health classification.
-        let source = pub_reader::PubBridgeDiagnostic::MissingRawType {
-            seq_num: 1,
-            source: serde_json::from_value(
-                serde_json::json!({"stream":"/Synthetic","offset":2,"len":18}),
-            )
-            .unwrap(),
-            parent_seq_num: Some(23),
-        };
-        let offset = PubBridgeDiagnostic::MissingChunkOffset {
-            seq_num: 1,
-            source: serde_json::from_value(
-                serde_json::json!({"stream":"/Synthetic","offset":2,"len":18}),
-            )
-            .unwrap(),
-            parent_seq_num: Some(23),
-        };
-        for (diagnostic, code) in [
-            (source, "viewer.source.missing_raw_type"),
-            (offset, "viewer.source.missing_chunk_offset"),
-        ] {
-            let mapped = map_bridge_diagnostic(&diagnostic);
-            assert_eq!(mapped.code, code);
-            assert_eq!(mapped.severity, ViewerDiagnosticSeverity::Info);
-            let value = serde_json::to_value(mapped).unwrap();
-            assert_eq!(value["code"], code);
-            assert!(value.get("health").is_none());
-            assert!(value.get("chunk_offset").is_none());
-        }
-        let existing =
-            map_bridge_diagnostic(&PubBridgeDiagnostic::MissingEscherGeometry { seq_num: 2 });
-        assert_eq!(existing.code, "viewer.geometry.missing");
-        assert_eq!(existing.severity, ViewerDiagnosticSeverity::FidelityWarning);
-    }
-}
-
 pub(super) fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
     use PubBridgeDiagnostic::*;
 
@@ -271,5 +227,49 @@ pub(super) fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerD
         code: code.to_owned(),
         severity,
         message: message.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pub_reader::PubBridgeDiagnostic;
+
+    #[test]
+    fn missing_directory_evidence_keeps_distinct_informational_product_codes() {
+        // Provenance stays in the Reader contract; the source-neutral Viewer
+        // receives a bounded explanation, without a health classification.
+        let source = pub_reader::PubBridgeDiagnostic::MissingRawType {
+            seq_num: 1,
+            source: serde_json::from_value(
+                serde_json::json!({"stream":"/Synthetic","offset":2,"len":18}),
+            )
+            .unwrap(),
+            parent_seq_num: Some(23),
+        };
+        let offset = PubBridgeDiagnostic::MissingChunkOffset {
+            seq_num: 1,
+            source: serde_json::from_value(
+                serde_json::json!({"stream":"/Synthetic","offset":2,"len":18}),
+            )
+            .unwrap(),
+            parent_seq_num: Some(23),
+        };
+        for (diagnostic, code) in [
+            (source, "viewer.source.missing_raw_type"),
+            (offset, "viewer.source.missing_chunk_offset"),
+        ] {
+            let mapped = map_bridge_diagnostic(&diagnostic);
+            assert_eq!(mapped.code, code);
+            assert_eq!(mapped.severity, ViewerDiagnosticSeverity::Info);
+            let value = serde_json::to_value(mapped).unwrap();
+            assert_eq!(value["code"], code);
+            assert!(value.get("health").is_none());
+            assert!(value.get("chunk_offset").is_none());
+        }
+        let existing =
+            map_bridge_diagnostic(&PubBridgeDiagnostic::MissingEscherGeometry { seq_num: 2 });
+        assert_eq!(existing.code, "viewer.geometry.missing");
+        assert_eq!(existing.severity, ViewerDiagnosticSeverity::FidelityWarning);
     }
 }
