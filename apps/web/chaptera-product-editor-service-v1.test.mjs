@@ -10,6 +10,7 @@ const NODE = "30000000-0000-4000-8000-000000000001";
 const SOURCE = "a".repeat(64);
 const BASE = "sha256:" + "b".repeat(64);
 const CHILD = "sha256:" + "c".repeat(64);
+const UNDONE = "sha256:" + "e".repeat(64);
 const LAYOUT = "sha256:" + "d".repeat(64);
 
 function json(value, status = 200) {
@@ -138,6 +139,25 @@ function accepted() {
     consequences: [],
     scene_refresh: "full_snapshot",
     replayed: false,
+  };
+}
+
+function historyAccepted() {
+  return {
+    protocol_version: "chaptera.history-transition-accepted.v1",
+    document_id: DOC,
+    source_hash: SOURCE,
+    base_revision_id: CHILD,
+    revision_id: UNDONE,
+    state_id: "sha256:" + "f".repeat(64),
+    client_operation_id: "undo-test-1",
+    transition_kind: "undo",
+    canonical_operation: accepted().canonical_operation,
+    project_schema_version: "pub-editor-v0.2",
+    canonical_revision_schema_version: "chaptera.cdm.authoring-revision.v1",
+    canonical_authoring_revision_id: "1".repeat(64),
+    replayed: false,
+    scene_refresh: "full_snapshot",
   };
 }
 
@@ -291,6 +311,88 @@ test("commit obtains server CSRF and uses document-scoped canonical route", asyn
   assert.equal(calls[1].options.headers["x-csrf-token"], "csrf-token-1");
   assert.equal(calls[1].options.headers["content-type"], "application/json");
   assert.ok(!("x-chaptera-principal-id" in calls[1].options.headers));
+});
+
+test("Undo uses authenticated history route, CSRF, and supported commit telemetry class", async () => {
+  const { calls, fetchImpl } = recorder((url, options) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/documents/" + DOC + "/history") {
+      const body = JSON.parse(options.body);
+      assert.deepEqual(body, {
+        protocol_version: "chaptera.history-transition-intent.v1",
+        document_id: DOC,
+        source_hash: SOURCE,
+        base_revision_id: CHILD,
+        client_operation_id: "undo-test-1",
+        command: { kind: "undo" },
+      });
+      return json(historyAccepted());
+    }
+    throw new Error("unexpected path " + path);
+  });
+  let serial = 0;
+  const observability = new BrowserObservabilityV1({
+    sessionIncarnation: "session:undo-test",
+    browserFamily: "chromium",
+    idFactory: (prefix) => prefix + ":undo-test-" + String(++serial).padStart(6, "0"),
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC,
+    fetchImpl,
+    observability,
+  });
+
+  const result = await service.undo({
+    sourceHash: SOURCE,
+    baseRevisionId: CHILD,
+    clientOperationId: "undo-test-1",
+  });
+
+  assert.equal(result.protocol_version, "chaptera.history-transition-accepted.v1");
+  assert.equal(result.revision_id, UNDONE);
+  assert.equal(result.transition_kind, "undo");
+  assert.deepEqual(calls.map((call) => call.path), [
+    "/v1/session",
+    "/v1/documents/" + DOC + "/history",
+  ]);
+  assert.equal(calls[1].options.credentials, "include");
+  assert.equal(calls[1].options.headers["x-csrf-token"], "csrf-token-1");
+  assert.equal(calls[1].options.headers["x-chaptera-operation-class"], "commit");
+  assert.ok(!("x-chaptera-principal-id" in calls[1].options.headers));
+});
+
+test("stale Undo re-reads canonical head and returns bounded rejection", async () => {
+  const { fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/documents/" + DOC + "/history") {
+      return json({ error: { code: "stale_revision", message: "advanced" } }, 409);
+    }
+    if (path === "/v1/documents/" + DOC + "/current") return json(current(UNDONE));
+    throw new Error("unexpected path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC,
+    fetchImpl,
+  });
+
+  const result = await service.undo({
+    sourceHash: SOURCE,
+    baseRevisionId: CHILD,
+    clientOperationId: "undo-stale-1",
+  });
+  assert.deepEqual(result, {
+    protocol_version: "chaptera.history-transition-rejected.v1",
+    document_id: DOC,
+    base_revision_id: CHILD,
+    current_revision_id: UNDONE,
+    client_operation_id: "undo-stale-1",
+    transition_kind: "undo",
+    code: "stale_revision",
+    message_key: "history.stale_revision",
+    retryable: true,
+  });
 });
 
 test("stale commit re-reads canonical current head before shell rejection", async () => {
