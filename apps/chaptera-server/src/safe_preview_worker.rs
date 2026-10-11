@@ -26,12 +26,35 @@ fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+/// Only source-neutral counts. Never source hashes, image IDs, paths or bytes.
+#[derive(Debug, Default, serde::Serialize)]
+pub(crate) struct PreviewWorkerCensusV1 {
+    pub image_count: usize,
+    pub source_exact_count: usize,
+    pub independently_verified_count: usize,
+    pub scene_resource_count: usize,
+    pub eligible_resources: usize,
+    pub supported_mime: usize,
+    pub verified_sha: usize,
+    pub decode_attempted: usize,
+    pub decode_succeeded: usize,
+    pub encode_succeeded: usize,
+    pub output_budget_admitted: usize,
+    pub emitted: usize,
+}
+
 /// Bounded best-effort derived images. An undecodable or unrepresentable
 /// image stays descriptor-only. There is no fallback to source containers.
 pub(crate) fn derive_isolated_image_previews(
     geometry: &ViewerGeometryDocument,
     scene: &ReaderSceneV1,
+    stage: &mut PreviewWorkerCensusV1,
 ) -> Vec<IsolatedImagePreviewV1> {
+    stage.image_count = geometry.images.len();
+    stage.source_exact_count = geometry.images.iter().filter(|i| i.source_exact).count();
+    stage.independently_verified_count = geometry.images.iter()
+        .filter(|i| i.verified_source_sha256.is_some()).count();
+    stage.scene_resource_count = scene.resources.len();
     let approved_ids: HashSet<&str> = scene
         .resources
         .iter()
@@ -53,15 +76,18 @@ pub(crate) fn derive_isolated_image_previews(
         {
             return;
         }
+        stage.eligible_resources += 1;
         let mime = match mime {
             "image/png" => "image/png",
             "image/jpeg" | "image/jpg" => "image/jpeg",
             _ => return,
         };
+        stage.supported_mime += 1;
         let source_sha = sha256_hex(bytes);
         if verified_sha.is_some_and(|hash| hash != source_sha) {
             return;
         }
+        stage.verified_sha += 1;
         // A malicious PUB could contain arbitrarily many small compressed
         // raster resources. Bound unsuccessful decode attempts as well as
         // successful preview output so the Reader remains responsive.
@@ -75,6 +101,7 @@ pub(crate) fn derive_isolated_image_previews(
             return;
         }
         attempted_images += 1;
+        stage.decode_attempted += 1;
         total_decode_input = next_input_total;
         let limits = PreviewEncodeLimitsV1::default();
         let decoded = match decode_image_v1(
@@ -93,6 +120,7 @@ pub(crate) fn derive_isolated_image_previews(
             Ok(decoded) => decoded,
             Err(_) => return,
         };
+        stage.decode_succeeded += 1;
         let Some(next_work_total) = total_decoded_work.checked_add(decoded.decoded_byte_count)
         else {
             return;
@@ -119,12 +147,14 @@ pub(crate) fn derive_isolated_image_previews(
         let Ok(candidate) = candidate else {
             return;
         };
+        stage.encode_succeeded += 1;
         let Some(total) = used_bytes.checked_add(candidate.bytes.len()) else {
             return;
         };
         if total > MAX_WORKER_PREVIEW_RAW_BYTES {
             return;
         }
+        stage.output_budget_admitted += 1;
         let Ok(receipt) = serde_json::to_value(&candidate.receipt) else {
             return;
         };
@@ -134,6 +164,7 @@ pub(crate) fn derive_isolated_image_previews(
             encoded_base64: STANDARD.encode(&candidate.bytes),
             receipt,
         });
+        stage.emitted += 1;
     };
 
     for image in &geometry.images {
