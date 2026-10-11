@@ -210,4 +210,3 @@ pub(super) fn viewer_mature_officeart_wmf_preview_images(
 
     images
 }
-
