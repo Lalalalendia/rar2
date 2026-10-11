@@ -1053,4 +1053,159 @@ mod tests {
         assert_eq!(body["error"]["message"], "internal server error");
         assert!(!String::from_utf8_lossy(&bytes).contains("private-provider-canary"));
     }
+
+    // This is the installed Product Export router with real AuthN, source
+    // authority, revision, jobs and BlobStore state. A deliberately broken
+    // SQLite source backend must not disclose its diagnostic through HTTP.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn configured_product_export_router_redacts_authenticated_sqlite_failure() {
+        use std::{fs, sync::Arc, time::Duration};
+
+        use axum::http::{
+            Request,
+            header::{CONTENT_TYPE, COOKIE, HOST, ORIGIN},
+        };
+        use tower::ServiceExt;
+
+        use crate::{
+            auth_http::{CSRF_HEADER, SESSION_COOKIE},
+            authn::SqliteAuthnStore,
+            authn_session::{SessionPolicy, issue_verified_login_session},
+            blob_runtime::SystemBlobIdGenerator,
+            filesystem_blob_provider::FilesystemBlobProvider,
+            oidc_authn::OidcVerifiedIdentity,
+            schema_migration::SqliteMigrationRuntime,
+            sqlite_blob_metadata::SqliteBlobBindingRepository,
+        };
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "chaptera-export-5xx-configured-{}-{suffix}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("control.sqlite");
+        let timeout = Duration::from_secs(2);
+        SqliteMigrationRuntime::new(&db, timeout)
+            .unwrap()
+            .migrate_up()
+            .await
+            .unwrap();
+
+        let authn = SqliteAuthnStore::open(&db, 4, timeout).await.unwrap();
+        let policy =
+            SessionPolicy::new(Duration::from_secs(600), Duration::from_secs(3600)).unwrap();
+        let session = issue_verified_login_session(
+            &authn,
+            OidcVerifiedIdentity {
+                issuer: "https://issuer.example.test".to_owned(),
+                subject: "subject-export-redaction".to_owned(),
+                email_snapshot: None,
+                return_path: "/editor".to_owned(),
+            },
+            now_ms().unwrap(),
+            policy,
+        )
+        .await
+        .unwrap();
+        let auth =
+            AuthHttpState::api_test(authn.clone(), policy, "https://cloud.example.test").unwrap();
+
+        let source = SqliteDocumentSourceAuthority::open(&db, 4, timeout)
+            .await
+            .unwrap();
+        let revisions = SqliteRevisionStore::open(&db, 4, timeout).await.unwrap();
+        let jobs = JobsRuntime::open(&db, 4, timeout).await.unwrap();
+        let metadata = SqliteBlobBindingRepository::open(&db, 4, timeout)
+            .await
+            .unwrap();
+        let blobs = BlobStoreService::new(
+            Arc::new(FilesystemBlobProvider::new(dir.join("blob-store")).unwrap()),
+            Arc::new(metadata.clone()),
+            Arc::new(SystemBlobIdGenerator),
+        );
+        let app = router(ProductExportHttpState::new(
+            auth,
+            source.clone(),
+            revisions.clone(),
+            jobs.clone(),
+            blobs,
+        ));
+
+        // Corrupt a required table only AFTER all real authorities have been
+        // initialized. The subsequent source SQL read is the forced backend
+        // failure, not a synthetic test handler returning a manufactured 500.
+        let pool = sqlx::SqlitePool::connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&db)
+                .create_if_missing(false),
+        )
+        .await
+        .unwrap();
+        sqlx::query("DROP TABLE upload_consumptions")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let create = json!({
+            "protocol_version": EXPORT_CREATE_V1,
+            "document_id": "document-export-canary",
+            "revision_id": format!("sha256:{}", "a".repeat(64)),
+            "target_profile": IDML_BOUNDED_EDITABLE_PROFILE,
+            "layout_environment_id": format!("sha256:{}", "b".repeat(64)),
+            "client_request_id": "request-export-redaction"
+        });
+        let request_body = serde_json::to_vec(&create).unwrap();
+        let authenticated = Request::builder()
+            .method("POST")
+            .uri("/v1/exports")
+            .header(HOST, "cloud.example.test")
+            .header(ORIGIN, "https://cloud.example.test")
+            .header(
+                COOKIE,
+                format!("{SESSION_COOKIE}={}", session.session_token),
+            )
+            .header(CSRF_HEADER, session.csrf_token.as_str())
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(request_body.clone()))
+            .unwrap();
+        let response = app.clone().oneshot(authenticated).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(error["error"]["code"], "sqlite_document_source_error");
+        assert_eq!(error["error"]["message"], "internal server error");
+        let body = String::from_utf8_lossy(&bytes);
+        for forbidden in ["upload_consumptions", "no such table", "control.sqlite"] {
+            assert!(!body.contains(forbidden), "leaked SQLite diagnostic");
+        }
+
+        // A missing session cannot probe the failed source table: the real
+        // authentication layer must deny before the broken backend is read.
+        let unauthenticated = Request::builder()
+            .method("POST")
+            .uri("/v1/exports")
+            .header(HOST, "cloud.example.test")
+            .header(ORIGIN, "https://cloud.example.test")
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(request_body))
+            .unwrap();
+        let denied = app.oneshot(unauthenticated).await.unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(denied.headers()[CACHE_CONTROL], "no-store");
+
+        pool.close().await;
+        authn.close().await;
+        source.close().await;
+        revisions.close().await;
+        jobs.close().await;
+        metadata.close().await;
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
