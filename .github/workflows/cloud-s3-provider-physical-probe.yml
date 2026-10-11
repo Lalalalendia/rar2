@@ -33,6 +33,9 @@ jobs:
           test -n "$AWS_REGION"
           test -n "$CHAPTERA_S3_QUARANTINE_BUCKET"
           test -n "$CHAPTERA_S3_PRIVATE_BUCKET"
+          # A public-pilot receipt cannot come from an unpinned S3 client.
+          test -n "$CHAPTERA_S3_EXPECTED_BUCKET_OWNER"
+          test "$CHAPTERA_S3_PRIVATE_BUCKET" != "$CHAPTERA_S3_QUARANTINE_BUCKET"
 
       - name: Run current-adapter physical probe
         shell: bash
@@ -51,6 +54,11 @@ jobs:
           receipt = json.loads(path.read_text(encoding="utf-8"))
           assert receipt["protocol_version"] == "chaptera.cloud-blob-provider-receipt.v1"
           assert receipt["core_adapter_probe_passed"] is True
+          assert receipt["expected_bucket_owner_configured"] is True
+          assert receipt["download_grant_available"] is False
+          assert receipt["owner_pinned_download_grant_denied"] is True
+          assert receipt["download_grant_policy_passed"] is True
+          assert receipt["direct_upload_grant_available"] is False
           prohibited = ("url", "secret", "access_key", "account_id", "object_locator")
           serialized = json.dumps(receipt, sort_keys=True).lower()
           for token in prohibited:
