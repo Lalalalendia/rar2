@@ -20,10 +20,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::{
-    product_replay_worker::IsolatedImagePreviewV1,
-    reader_scene_v1::MAX_SCENE_BYTES,
-};
+use crate::{product_replay_worker::IsolatedImagePreviewV1, reader_scene_v1::MAX_SCENE_BYTES};
 
 const MAX_BROWSER_PREVIEW_DATA_URL_BYTES: usize = 7 * 1024 * 1024;
 const MAX_BROWSER_PREVIEW_TOTAL_BYTES: usize = 8 * 1024 * 1024;
@@ -64,7 +61,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn canonical_hash(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 
 /// Verify a hostile worker receipt BEFORE parsing its bytes. Return only
@@ -73,18 +73,24 @@ pub(crate) fn admit_worker_preview(
     bytes: &[u8],
     wire_receipt: &Value,
 ) -> Result<HostAdmittedPreview, &'static str> {
-    let receipt: PreviewWireReceipt = serde_json::from_value(wire_receipt.clone())
-        .map_err(|_| "preview_receipt_shape_denied")?;
+    let receipt: PreviewWireReceipt =
+        serde_json::from_value(wire_receipt.clone()).map_err(|_| "preview_receipt_shape_denied")?;
     let limits = PreviewEncodeLimitsV1::default();
     let (input_cap, expected_encoder, codec) = match receipt.mime.as_str() {
         "image/png" => (limits.max_png_bytes, PNG_ENCODER_ID_V1, PreviewCodecV1::Png),
-        "image/jpeg" => (limits.max_jpeg_bytes, JPEG_ENCODER_ID_V1, PreviewCodecV1::Jpeg),
+        "image/jpeg" => (
+            limits.max_jpeg_bytes,
+            JPEG_ENCODER_ID_V1,
+            PreviewCodecV1::Jpeg,
+        ),
         _ => return Err("preview_mime_denied"),
     };
     let quality_valid = if codec == PreviewCodecV1::Png {
         receipt.quality.is_none()
     } else {
-        receipt.quality.is_some_and(|q| JPEG_QUALITY_LADDER_V1.contains(&q))
+        receipt
+            .quality
+            .is_some_and(|q| JPEG_QUALITY_LADDER_V1.contains(&q))
     };
     if receipt.protocol_version != SAFE_PREVIEW_ENCODE_V1
         || receipt.encoder_id != expected_encoder
@@ -103,7 +109,10 @@ pub(crate) fn admit_worker_preview(
         || receipt.source_metadata_carried
         || receipt.orientation_applied
         || receipt.dimensions_px.contains(&0)
-        || receipt.dimensions_px.iter().any(|&n| n > limits.max_dimension_px)
+        || receipt
+            .dimensions_px
+            .iter()
+            .any(|&n| n > limits.max_dimension_px)
         || u64::from(receipt.dimensions_px[0]) * u64::from(receipt.dimensions_px[1])
             > limits.max_total_pixels
     {
@@ -132,7 +141,11 @@ pub(crate) fn admit_worker_preview(
     // overflowing the unchanged 16 MiB Reader Scene budget for photographs.
     let fresh = encode_safe_preview_v1(&decoded, codec, &limits)
         .map_err(|_| "preview_host_reencode_rejected")?;
-    let data_url = format!("data:{};base64,{}", fresh.receipt.mime, STANDARD.encode(&fresh.bytes));
+    let data_url = format!(
+        "data:{};base64,{}",
+        fresh.receipt.mime,
+        STANDARD.encode(&fresh.bytes)
+    );
     if data_url.len() > MAX_BROWSER_PREVIEW_DATA_URL_BYTES {
         return Err("preview_browser_budget_exceeded");
     }
@@ -162,9 +175,11 @@ pub(crate) fn attach_admitted_previews(
         let index = scene
             .get("resources")
             .and_then(Value::as_array)
-            .and_then(|resources| resources.iter().position(|resource| {
-                resource["resource_id"].as_str() == Some(preview.resource_id.as_str())
-            }))
+            .and_then(|resources| {
+                resources.iter().position(|resource| {
+                    resource["resource_id"].as_str() == Some(preview.resource_id.as_str())
+                })
+            })
             .ok_or("preview_resource_unbound")?;
         // Never allow another candidate to overwrite an already admitted one,
         // nor permit a pre-sanitize inline URL to become delivery authority.
@@ -191,8 +206,14 @@ pub(crate) fn attach_admitted_previews(
                 .as_object_mut()
                 .ok_or("preview_resource_shape_denied")?;
             fields.insert("mime".to_owned(), Value::String(admitted.mime.to_owned()));
-            fields.insert("availability".to_owned(), Value::String("inline_data_url".to_owned()));
-            fields.insert("inline_data_url".to_owned(), Value::String(admitted.data_url));
+            fields.insert(
+                "availability".to_owned(),
+                Value::String("inline_data_url".to_owned()),
+            );
+            fields.insert(
+                "inline_data_url".to_owned(),
+                Value::String(admitted.data_url),
+            );
         }
         let candidate_size = serde_json::to_vec(scene)
             .map_err(|_| "preview_scene_serialization_denied")?
@@ -208,7 +229,9 @@ pub(crate) fn attach_admitted_previews(
         .get("resources")
         .and_then(Value::as_array)
         .is_none_or(|resources| {
-            resources.iter().all(|r| r["availability"] == "inline_data_url")
+            resources
+                .iter()
+                .all(|r| r["availability"] == "inline_data_url")
         });
     let fidelity = scene
         .get_mut("fidelity")
@@ -221,10 +244,18 @@ pub(crate) fn attach_admitted_previews(
     if all_available {
         reasons.retain(|reason| reason.as_str() != Some("image_resource_not_inline"));
     }
-    if accepted > 0 && !reasons.iter().any(|r| r == "image_preview_partial_fidelity") {
+    if accepted > 0
+        && !reasons
+            .iter()
+            .any(|r| r == "image_preview_partial_fidelity")
+    {
         reasons.push(json!("image_preview_partial_fidelity"));
     }
-    let state = if reasons.is_empty() { "supported" } else { "partial" };
+    let state = if reasons.is_empty() {
+        "supported"
+    } else {
+        "partial"
+    };
     fidelity.insert("state".to_owned(), json!(state));
     if serde_json::to_vec(scene)
         .map_err(|_| "preview_scene_serialization_denied")?
@@ -248,7 +279,9 @@ mod tests {
             writer.set_color(png::ColorType::Rgba);
             writer.set_depth(png::BitDepth::Eight);
             let mut writer = writer.write_header().unwrap();
-            writer.write_image_data(&[10, 20, 30, 80, 100, 110, 120, 240]).unwrap();
+            writer
+                .write_image_data(&[10, 20, 30, 80, 100, 110, 120, 240])
+                .unwrap();
         }
         encoded
     }
@@ -262,12 +295,14 @@ mod tests {
             "test-original-source",
             &DecodePolicyV1::reference(),
             &DecodeLimitsV1::default(),
-        ).unwrap();
+        )
+        .unwrap();
         let candidate = encode_safe_preview_v1(
             &decoded,
             PreviewCodecV1::Png,
             &PreviewEncodeLimitsV1::default(),
-        ).unwrap();
+        )
+        .unwrap();
         let receipt = serde_json::to_value(&candidate.receipt).unwrap();
         (candidate.bytes, receipt)
     }
@@ -278,7 +313,9 @@ mod tests {
         let admitted = admit_worker_preview(&candidate, &receipt).unwrap();
         assert_eq!(admitted.mime, "image/png");
         assert!(admitted.data_url.starts_with("data:image/png;base64,"));
-        let host_bytes = STANDARD.decode(admitted.data_url.split_once(',').unwrap().1).unwrap();
+        let host_bytes = STANDARD
+            .decode(admitted.data_url.split_once(',').unwrap().1)
+            .unwrap();
         let roundtrip = decode_image_v1(
             &host_bytes,
             "image/png",
@@ -286,7 +323,8 @@ mod tests {
             "test-host-preview",
             &DecodePolicyV1::reference(),
             &DecodeLimitsV1::default(),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(roundtrip.samples, [10, 20, 30, 80, 100, 110, 120, 240]);
 
         let mut scene = json!({
@@ -301,22 +339,37 @@ mod tests {
         assert_eq!(attach_admitted_previews(&mut scene, &previews).unwrap(), 1);
         assert_eq!(scene["resources"][0]["availability"], "inline_data_url");
         assert_eq!(scene["fidelity"]["state"], "partial");
-        assert_eq!(scene["fidelity"]["reasons"], json!(["image_preview_partial_fidelity"]));
+        assert_eq!(
+            scene["fidelity"]["reasons"],
+            json!(["image_preview_partial_fidelity"])
+        );
     }
 
     #[test]
     fn rejects_forged_identity_metadata_and_delivery_flag() {
         let (candidate, mut receipt) = worker_candidate();
         receipt["encoded_artifact_sha256"] = json!("f".repeat(64));
-        assert_eq!(admit_worker_preview(&candidate, &receipt), Err("preview_receipt_denied"));
+        assert_eq!(
+            admit_worker_preview(&candidate, &receipt),
+            Err("preview_receipt_denied")
+        );
         let (candidate, mut receipt) = worker_candidate();
         receipt["browser_delivery_authorized"] = json!(true);
-        assert_eq!(admit_worker_preview(&candidate, &receipt), Err("preview_receipt_denied"));
+        assert_eq!(
+            admit_worker_preview(&candidate, &receipt),
+            Err("preview_receipt_denied")
+        );
         let (candidate, mut receipt) = worker_candidate();
         receipt["unknown_secret_field"] = json!("/private/path");
-        assert_eq!(admit_worker_preview(&candidate, &receipt), Err("preview_receipt_shape_denied"));
+        assert_eq!(
+            admit_worker_preview(&candidate, &receipt),
+            Err("preview_receipt_shape_denied")
+        );
         let (candidate, receipt) = worker_candidate();
-        assert_eq!(admit_worker_preview(&candidate[..2], &receipt), Err("preview_receipt_denied"));
+        assert_eq!(
+            admit_worker_preview(&candidate[..2], &receipt),
+            Err("preview_receipt_denied")
+        );
     }
 
     #[test]
