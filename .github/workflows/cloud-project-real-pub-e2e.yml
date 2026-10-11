@@ -119,5 +119,6 @@ jobs:
             target/cloud-real-pub-ingress/browser-restart.log
             target/cloud-real-pub-ingress/caddy.log
             target/cloud-real-pub-ingress/Caddyfile
+            target/cloud-real-pub-ingress/security-leak-scan.json
           if-no-files-found: warn
           retention-days: 14
