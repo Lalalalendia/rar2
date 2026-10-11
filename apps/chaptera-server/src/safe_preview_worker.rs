@@ -111,7 +111,7 @@ pub(crate) fn derive_isolated_image_previews(
 
     for image in &geometry.images {
         try_add(
-            image.resource_id.to_string(),
+            image.resource_id.as_canonical().to_string(),
             &image.mime,
             &image.bytes,
             image
@@ -122,7 +122,7 @@ pub(crate) fn derive_isolated_image_previews(
     }
     for resource in &geometry.decorative_border_resources {
         try_add(
-            resource.resource_id.to_string(),
+            resource.resource_id.as_canonical().to_string(),
             &resource.mime,
             &resource.bytes,
             None,
