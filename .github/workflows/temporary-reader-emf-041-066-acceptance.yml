@@ -55,11 +55,11 @@ jobs:
           PY
       - name: Exact PUB 041/066 strict BLIP DIB profiles
         env:
-          CHAPTERA_PINNED_SOURCE_ROOT: out/pinned1050/materialized/native
+          CHAPTERA_PINNED_SOURCE_ROOT: ${{ github.workspace }}/out/pinned1050/materialized/native
         run: |
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --lib exact_041_and_066_source_profiles_when_corpus_is_mounted
       - name: Exact PUB 041/066 Viewer preview provenance and scene use
         env:
-          CHAPTERA_PINNED_SOURCE_ROOT: out/pinned1050/materialized/native
+          CHAPTERA_PINNED_SOURCE_ROOT: ${{ github.workspace }}/out/pinned1050/materialized/native
         run: |
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test emf_birgb_partial_v1
