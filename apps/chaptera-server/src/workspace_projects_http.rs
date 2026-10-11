@@ -8,18 +8,22 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    extract::{Path, Request, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header::CACHE_CONTROL},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use axum_extra::extract::cookie::CookieJar;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
     auth_http::{AuthHttpError, AuthHttpState},
-    project_persistence_sqlite::{ProjectCatalogEntry, SqliteProjectPersistence},
+    authz_runtime::{AuthzError, CAP_MEMBER_MANAGE, SqliteAuthzAuthority},
+    project_persistence_sqlite::{
+        ProjectCatalogEntry, ProjectRenameReceipt, RenameProjectRequest, SqliteProjectPersistence,
+    },
     source_ingress::IngressError,
     workspace_context::{SqliteWorkspaceContextResolver, WorkspaceContextError},
 };
@@ -29,6 +33,7 @@ pub struct WorkspaceProjectsHttpState {
     auth: AuthHttpState,
     workspace: SqliteWorkspaceContextResolver,
     projects: SqliteProjectPersistence,
+    authz: SqliteAuthzAuthority,
 }
 
 impl WorkspaceProjectsHttpState {
@@ -36,11 +41,13 @@ impl WorkspaceProjectsHttpState {
         auth: AuthHttpState,
         workspace: SqliteWorkspaceContextResolver,
         projects: SqliteProjectPersistence,
+        authz: SqliteAuthzAuthority,
     ) -> Self {
         Self {
             auth,
             workspace,
             projects,
+            authz,
         }
     }
 }
@@ -48,12 +55,40 @@ impl WorkspaceProjectsHttpState {
 pub fn router(state: WorkspaceProjectsHttpState) -> Router {
     Router::new()
         .route("/v1/workspaces/{workspace_id}/projects", get(list))
+        .route("/v1/projects/{project_id}/rename", post(rename))
         .with_state(state)
+        .layer(middleware::from_fn(private_project_metadata_response))
+}
+
+// Every response from the authenticated Project catalog/rename router can
+// reveal private existence, title or version metadata, even on an error.
+async fn private_project_metadata_response(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .entry(CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
+    response
 }
 
 #[derive(Serialize)]
 struct ProjectsResponse {
     projects: Vec<ProjectCatalogEntry>,
+}
+
+#[derive(Deserialize)]
+struct RenameRequestBody {
+    protocol_version: String,
+    expected_lifecycle_generation: u64,
+    expected_metadata_version: u64,
+    name: String,
+    client_request_id: String,
+}
+
+#[derive(Serialize)]
+struct RenameResponse {
+    protocol_version: &'static str,
+    receipt: ProjectRenameReceipt,
 }
 
 async fn list(
@@ -86,9 +121,84 @@ async fn list(
     Ok(Json(ProjectsResponse { projects }))
 }
 
+async fn rename(
+    State(state): State<WorkspaceProjectsHttpState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Json(body): Json<RenameRequestBody>,
+) -> Result<Json<RenameResponse>, CatalogHttpError> {
+    if body.protocol_version != "chaptera.project-rename.v1" {
+        return Err(CatalogHttpError::Persistence(IngressError::new(
+            "project_rename_protocol_invalid",
+            "project rename protocol version is unsupported",
+        )));
+    }
+
+    let principal = state
+        .auth
+        .authenticate_mutation_request(&headers, &jar)
+        .await?;
+    let now = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| CatalogHttpError::Clock)?
+            .as_millis(),
+    )
+    .map_err(|_| CatalogHttpError::Clock)?;
+
+    // Lookup must be principal-scoped before resolving tenant/document identity.
+    // Nonexistent and inaccessible ProjectIds return the same bounded 404.
+    let identity = state
+        .projects
+        .project_lifecycle_identity(&project_id, &principal.principal_id, now)
+        .await?;
+    let workspace = state
+        .workspace
+        .resolve(&principal.principal_id, &identity.workspace_id)
+        .await?;
+    if workspace.tenant_id != identity.tenant_id {
+        return Err(CatalogHttpError::Persistence(IngressError::new(
+            "project_workspace_tenant_mismatch",
+            "project identity does not match resolved workspace tenant",
+        )));
+    }
+
+    state
+        .authz
+        .authorize(
+            &identity.tenant_id,
+            &identity.document_id,
+            &principal.principal_id,
+            CAP_MEMBER_MANAGE,
+            &body.client_request_id,
+            now,
+        )
+        .await?;
+
+    let receipt = state
+        .projects
+        .rename_project(RenameProjectRequest {
+            tenant_id: identity.tenant_id,
+            project_id: identity.project_id,
+            expected_lifecycle_generation: body.expected_lifecycle_generation,
+            expected_metadata_version: body.expected_metadata_version,
+            name: body.name,
+            client_request_id: body.client_request_id,
+            now_ms: now,
+        })
+        .await?;
+
+    Ok(Json(RenameResponse {
+        protocol_version: "chaptera.project-rename-receipt.v1",
+        receipt,
+    }))
+}
+
 enum CatalogHttpError {
     Auth(AuthHttpError),
     Workspace(WorkspaceContextError),
+    Authz(AuthzError),
     Persistence(IngressError),
     Clock,
 }
@@ -102,6 +212,12 @@ impl From<AuthHttpError> for CatalogHttpError {
 impl From<WorkspaceContextError> for CatalogHttpError {
     fn from(value: WorkspaceContextError) -> Self {
         Self::Workspace(value)
+    }
+}
+
+impl From<AuthzError> for CatalogHttpError {
+    fn from(value: AuthzError) -> Self {
+        Self::Authz(value)
     }
 }
 
@@ -126,11 +242,33 @@ impl IntoResponse for CatalogHttpError {
                 };
                 (status, Json(json!({ "error": code }))).into_response()
             }
+            Self::Authz(error) => {
+                let code = error.code;
+                let status = match code {
+                    "grant_missing" | "grant_expired" | "capability_denied" => {
+                        StatusCode::FORBIDDEN
+                    }
+                    "invalid_identity" | "unknown_capability" | "invalid_now" => {
+                        StatusCode::BAD_REQUEST
+                    }
+                    _ => StatusCode::INTERNAL_SERVER_ERROR,
+                };
+                (status, Json(json!({ "error": code }))).into_response()
+            }
             Self::Persistence(error) => {
                 let code = error.code;
                 let status = match code {
-                    "project_catalog_pagination_required" => StatusCode::CONFLICT,
-                    "invalid_identifier" => StatusCode::BAD_REQUEST,
+                    "project_catalog_pagination_required"
+                    | "stale_project_lifecycle_generation"
+                    | "stale_project_metadata_version"
+                    | "project_not_active"
+                    | "idempotency_conflict" => StatusCode::CONFLICT,
+                    "project_not_found" => StatusCode::NOT_FOUND,
+                    "invalid_identifier"
+                    | "invalid_project_name"
+                    | "invalid_now"
+                    | "project_version_out_of_range"
+                    | "project_rename_protocol_invalid" => StatusCode::BAD_REQUEST,
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
                 };
                 (status, Json(json!({ "error": code }))).into_response()
@@ -156,16 +294,17 @@ mod tests {
         body::{Body, to_bytes},
         http::{
             Request,
-            header::{COOKIE, HOST},
+            header::{CONTENT_TYPE, COOKIE, HOST, ORIGIN},
         },
     };
     use sqlx::SqlitePool;
     use tower::ServiceExt;
 
     use crate::{
-        auth_http::SESSION_COOKIE,
+        auth_http::{CSRF_HEADER, SESSION_COOKIE},
         authn::SqliteAuthnStore,
         authn_session::{SessionPolicy, issue_verified_login_session},
+        authz_runtime::{DocumentRole, SqliteAuthzAuthority},
         oidc_authn::OidcVerifiedIdentity,
         schema_migration::SqliteMigrationRuntime,
     };
@@ -187,6 +326,35 @@ mod tests {
     async fn parsed(response: Response) -> serde_json::Value {
         let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    fn rename_request(
+        project_id: &str,
+        session: &str,
+        csrf: &str,
+        expected_metadata_version: u64,
+        name: &str,
+        request_id: &str,
+    ) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/v1/projects/{project_id}/rename"))
+            .header(HOST, "cloud.example.test")
+            .header(ORIGIN, "https://cloud.example.test")
+            .header(COOKIE, format!("{SESSION_COOKIE}={session}"))
+            .header(CSRF_HEADER, csrf)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({
+                    "protocol_version": "chaptera.project-rename.v1",
+                    "expected_lifecycle_generation": 0,
+                    "expected_metadata_version": expected_metadata_version,
+                    "name": name,
+                    "client_request_id": request_id,
+                }))
+                .unwrap(),
+            ))
+            .unwrap()
     }
 
     #[tokio::test]
@@ -344,12 +512,16 @@ mod tests {
         let projects = SqliteProjectPersistence::open(&path, 3, Duration::from_secs(2))
             .await
             .unwrap();
+        let authz = SqliteAuthzAuthority::open(&path, 3, Duration::from_secs(2))
+            .await
+            .unwrap();
         let auth =
             AuthHttpState::api_test(authn.clone(), policy, "https://cloud.example.test").unwrap();
         let app = router(WorkspaceProjectsHttpState::new(
             auth,
             workspace.clone(),
             projects.clone(),
+            authz.clone(),
         ));
         let anonymous = app
             .clone()
@@ -369,6 +541,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(visible.status(), StatusCode::OK);
+        assert_eq!(visible.headers()[CACHE_CONTROL], "no-store");
         let visible = parsed(visible).await;
         assert_eq!(
             visible["projects"][0]["project_id"],
@@ -389,6 +562,161 @@ mod tests {
         );
         assert!(visible.get("tenant_id").is_none());
         assert!(visible["projects"][0].get("principal_id").is_none());
+
+        let renamed = app
+            .clone()
+            .oneshot(rename_request(
+                "project:catalog:alice",
+                &alice.session_token,
+                &alice.csrf_token,
+                0,
+                "Renamed Catalog.pub",
+                "rename-http-0001",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(renamed.status(), StatusCode::OK);
+        assert_eq!(renamed.headers()[CACHE_CONTROL], "no-store");
+        let renamed = parsed(renamed).await;
+        assert_eq!(
+            renamed["protocol_version"],
+            "chaptera.project-rename-receipt.v1"
+        );
+        assert_eq!(renamed["receipt"]["name"], "Renamed Catalog.pub");
+        assert_eq!(renamed["receipt"]["metadata_version"], 1);
+        assert_eq!(renamed["receipt"]["replayed"], false);
+
+        let replay = app
+            .clone()
+            .oneshot(rename_request(
+                "project:catalog:alice",
+                &alice.session_token,
+                &alice.csrf_token,
+                0,
+                "Renamed Catalog.pub",
+                "rename-http-0001",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(replay.status(), StatusCode::OK);
+        assert_eq!(parsed(replay).await["receipt"]["replayed"], true);
+
+        // A different principal's real ProjectId and a guessed one must
+        // produce the same not-found response before any tenant/document lookup.
+        let foreign = app
+            .clone()
+            .oneshot(rename_request(
+                "project:catalog:alice",
+                &bob.session_token,
+                &bob.csrf_token,
+                1,
+                "Denied foreign rename",
+                "rename-http-foreign",
+            ))
+            .await
+            .unwrap();
+        let guessed = app
+            .clone()
+            .oneshot(rename_request(
+                "project:catalog:does-not-exist",
+                &bob.session_token,
+                &bob.csrf_token,
+                1,
+                "Denied unknown rename",
+                "rename-http-unknown",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+        assert_eq!(guessed.status(), StatusCode::NOT_FOUND);
+        assert_eq!(foreign.headers()[CACHE_CONTROL], "no-store");
+        assert_eq!(guessed.headers()[CACHE_CONTROL], "no-store");
+        assert_eq!(parsed(foreign).await["error"], "project_not_found");
+        assert_eq!(parsed(guessed).await["error"], "project_not_found");
+
+        let stale = app
+            .clone()
+            .oneshot(rename_request(
+                "project:catalog:alice",
+                &alice.session_token,
+                &alice.csrf_token,
+                0,
+                "Stale rename",
+                "rename-http-0002",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(stale.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            parsed(stale).await["error"],
+            "stale_project_metadata_version"
+        );
+
+        sqlx::query(
+            r#"
+            INSERT INTO workspace_memberships (
+                workspace_id, principal_id, role, membership_state,
+                membership_version, created_at_ms, revoked_at_ms
+            ) VALUES (?, ?, 'member', 'active', 0, ?, NULL)
+            "#,
+        )
+        .bind(context.workspace_id.as_bytes())
+        .bind(bob.principal_id.as_bytes())
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Workspace membership alone does not grant a document existence
+        // oracle. A member without a document grant sees the same 404.
+        let member_without_document_grant = app
+            .clone()
+            .oneshot(rename_request(
+                "project:catalog:alice",
+                &bob.session_token,
+                &bob.csrf_token,
+                1,
+                "Denied ungranted rename",
+                "rename-http-member-no-grant",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            member_without_document_grant.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            parsed(member_without_document_grant).await["error"],
+            "project_not_found"
+        );
+
+        authz
+            .set_role(
+                &context.tenant_id,
+                "document:catalog:alice",
+                &bob.principal_id,
+                DocumentRole::Viewer,
+                None,
+                "grant-catalog-viewer",
+                now + 1,
+            )
+            .await
+            .unwrap();
+
+        let viewer_rename = app
+            .clone()
+            .oneshot(rename_request(
+                "project:catalog:alice",
+                &bob.session_token,
+                &bob.csrf_token,
+                1,
+                "Viewer rename must fail",
+                "rename-http-viewer",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(viewer_rename.status(), StatusCode::FORBIDDEN);
+        assert_eq!(viewer_rename.headers()[CACHE_CONTROL], "no-store");
+        assert_eq!(parsed(viewer_rename).await["error"], "capability_denied");
 
         sqlx::query(
             r#"
@@ -487,6 +815,7 @@ mod tests {
         assert_eq!(revoked.status(), StatusCode::FORBIDDEN);
 
         pool.close().await;
+        authz.close().await;
         projects.close().await;
         workspace.close().await;
         authn.close().await;

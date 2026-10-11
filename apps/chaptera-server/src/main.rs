@@ -284,6 +284,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                                 auth_http.clone(),
                                 workspace.clone(),
                                 projects.clone(),
+                                authz.clone(),
                             ));
                         let source_state = SourceIngressHttpState::new(
                             auth_http.clone(),
