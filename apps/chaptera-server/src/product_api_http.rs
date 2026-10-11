@@ -45,8 +45,8 @@ use crate::{
         EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION, EditorHistoryEventV1, EditorRevisionEventV1,
         ExactRevisionMaterializer, ExactSourceLoader, PubEditorReplayEngine,
         RevisionMaterializerError, decode_editor_history_event_v1, decode_editor_revision_event_v1,
-        encode_editor_history_event_v1, encode_editor_revision_event_v1, project_sha256,
-        undo_event_operation,
+        append_event_operation, encode_editor_history_event_v1, encode_editor_revision_event_v1,
+        project_sha256, undo_event_operation,
     },
     source_authority::{SourceAuthorityError, SqliteDocumentSourceAuthority},
     source_baseline::{
@@ -867,30 +867,74 @@ async fn commit_history_transition(
     )
     .map_err(ProductApiError::Baseline)?;
 
-    // The canonical source has already been parsed and replayed by the
-    // materializer's isolated worker. Undo only removes the most recent
-    // trusted MoveNode event from its validated project. Do not open the PUB
-    // inside this Axum process: that would restore the original P0 boundary.
-    let operation = materialized
-        .receipt
-        .project
-        .operations
-        .last()
-        .cloned()
-        .ok_or_else(|| {
-            ProductApiError::conflict(
-                "undo_rejected",
-                "the current revision has no undoable canonical operation",
-            )
-        })?;
-    if !matches!(operation, EditOperation::MoveNode { .. }) {
-        return Err(ProductApiError::conflict(
-            "undo_operation_unsupported",
-            "this Cloud history slice admits Undo only for the latest MoveNode operation",
-        ));
-    }
-    let resulting_project = undo_event_operation(materialized.receipt.project.clone(), &operation)
-        .map_err(ProductApiError::Materializer)?;
+    // The source and predecessor project have already been validated by the
+    // isolated worker. Never reopen a PUB in the Axum HTTP process.
+    //
+    // One-step Redo is only allowed immediately after an Undo history edge.
+    // We reconstruct the exact canonical operation from that immutable edge;
+    // no browser-supplied inverse command or ephemeral redo stack is trusted.
+    let transition_kind = request.command.kind.as_str();
+    let (operation, resulting_project) = if transition_kind == "undo" {
+        let operation = materialized
+            .receipt
+            .project
+            .operations
+            .last()
+            .cloned()
+            .ok_or_else(|| {
+                ProductApiError::conflict(
+                    "undo_rejected",
+                    "the current revision has no undoable canonical operation",
+                )
+            })?;
+        if !matches!(operation, EditOperation::MoveNode { .. }) {
+            return Err(ProductApiError::conflict(
+                "undo_operation_unsupported",
+                "bounded history admits Undo only for the latest MoveNode",
+            ));
+        }
+        let resulting_project =
+            undo_event_operation(materialized.receipt.project.clone(), &operation)
+                .map_err(ProductApiError::Materializer)?;
+        (operation, resulting_project)
+    } else {
+        let edges = state
+            .revisions
+            .load_document_edges(&document_id)
+            .await
+            .map_err(ProductApiError::Store)?;
+        let last = edges
+            .last()
+            .filter(|edge| {
+                edge.child_revision == head.revision_id
+                    && edge.semantic_schema_version == EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION
+            })
+            .ok_or_else(|| {
+                ProductApiError::conflict(
+                    "redo_unavailable",
+                    "redo requires an immediately preceding canonical Undo transition",
+                )
+            })?;
+        let undone =
+            decode_editor_history_event_v1(last).map_err(ProductApiError::Materializer)?;
+        if undone.transition_kind != "undo" || undone.source_sha256 != source.source_sha256 {
+            return Err(ProductApiError::conflict(
+                "redo_unavailable",
+                "redo requires a source-bound immediately preceding Undo transition",
+            ));
+        }
+        let operation = undone.operation;
+        if !matches!(operation, EditOperation::MoveNode { .. }) {
+            return Err(ProductApiError::conflict(
+                "redo_operation_unsupported",
+                "bounded Redo admits only the immediately preceding MoveNode",
+            ));
+        }
+        let resulting_project =
+            append_event_operation(materialized.receipt.project.clone(), operation.clone())
+                .map_err(ProductApiError::Materializer)?;
+        (operation, resulting_project)
+    };
     let before_project_sha256 = materialized.receipt.project_sha256.clone();
     let after_project_sha256 =
         project_sha256(&resulting_project).map_err(ProductApiError::Materializer)?;
@@ -901,7 +945,7 @@ async fn commit_history_transition(
         &resulting_project,
         &head.revision_id,
         &base_state.state_id,
-        "undo",
+        transition_kind,
     )
     .map_err(ProductApiError::Baseline)?;
 
@@ -928,7 +972,7 @@ async fn commit_history_transition(
     let event = EditorHistoryEventV1 {
         schema_version: EDITOR_HISTORY_EVENT_SCHEMA_V1.to_owned(),
         source_sha256: source.source_sha256.clone(),
-        transition_kind: "undo".to_owned(),
+        transition_kind: transition_kind.to_owned(),
         before_project_sha256,
         after_project_sha256: after_project_sha256.clone(),
         base_state_id: base_state.state_id,
@@ -1120,10 +1164,10 @@ fn validate_history_request(
             "path document_id differs from history request document_id",
         ));
     }
-    if request.command.kind != "undo" {
+    if !matches!(request.command.kind.as_str(), "undo" | "redo") {
         return Err(ProductApiError::bad_request(
             "history_transition_unsupported",
-            "this Cloud history slice admits undo only",
+            "this Cloud history slice admits bounded undo or redo only",
         ));
     }
     require_ident(&request.document_id, "document_id")?;
