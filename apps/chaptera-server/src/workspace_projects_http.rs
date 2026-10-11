@@ -21,8 +21,7 @@ use crate::{
     auth_http::{AuthHttpError, AuthHttpState},
     authz_runtime::{AuthzError, CAP_MEMBER_MANAGE, SqliteAuthzAuthority},
     project_persistence_sqlite::{
-        ProjectCatalogEntry, ProjectRenameReceipt, RenameProjectRequest,
-        SqliteProjectPersistence,
+        ProjectCatalogEntry, ProjectRenameReceipt, RenameProjectRequest, SqliteProjectPersistence,
     },
     source_ingress::IngressError,
     workspace_context::{SqliteWorkspaceContextResolver, WorkspaceContextError},
@@ -127,7 +126,10 @@ async fn rename(
         .auth
         .authenticate_mutation_request(&headers, &jar)
         .await?;
-    let identity = state.projects.project_lifecycle_identity(&project_id).await?;
+    let identity = state
+        .projects
+        .project_lifecycle_identity(&project_id)
+        .await?;
     let workspace = state
         .workspace
         .resolve(&principal.principal_id, &identity.workspace_id)
@@ -286,8 +288,8 @@ mod tests {
     use crate::{
         auth_http::{CSRF_HEADER, SESSION_COOKIE},
         authn::SqliteAuthnStore,
-        authz_runtime::{DocumentRole, SqliteAuthzAuthority},
         authn_session::{SessionPolicy, issue_verified_login_session},
+        authz_runtime::{DocumentRole, SqliteAuthzAuthority},
         oidc_authn::OidcVerifiedIdentity,
         schema_migration::SqliteMigrationRuntime,
     };
