@@ -77,6 +77,66 @@ async function captureSvgScreenshotState(pageSvg) {
     };
   });
 }
+// Opt-in science only: never expose inline-image hrefs, bitmap bytes, or
+// document text. Observe one selected SVG page before/after decode + two rAFs.
+const rasterStabilityFixture = process.env.READER_RASTER_STABILITY_FIXTURE ?? "";
+const rasterStabilityPage = Number(process.env.READER_RASTER_STABILITY_PAGE ?? "3");
+assert.match(rasterStabilityFixture, /^[A-Za-z0-9._-]*$/, "stability fixture must be path-safe");
+assert.ok(Number.isSafeInteger(rasterStabilityPage) && rasterStabilityPage > 0 && rasterStabilityPage <= 64,
+  "stability page must be a bounded positive index");
+
+async function probeSvgRasterStability(pageSvg, baselinePng) {
+  const readiness = await pageSvg.evaluate(async (svg) => {
+    const urls = [...svg.querySelectorAll("image")].map((image) =>
+      image.getAttribute("href") || image.getAttributeNS("http://www.w3.org/1999/xlink", "href") || "");
+    const dataUrls = [...new Set(urls.filter((url) => /^data:image\/(png|jpeg|gif|webp|svg\+xml);base64,/i.test(url)))];
+    const unsupportedUrlCount = urls.length - urls.filter((url) =>
+      /^data:image\/(png|jpeg|gif|webp|svg\+xml);base64,/i.test(url)).length;
+    if (urls.length > 512 || dataUrls.length > 128) {
+      throw new Error("SVG image readiness source exceeds image budget");
+    }
+    const settled = await Promise.all(dataUrls.map(async (url) => {
+      const image = new Image();
+      image.decoding = "sync";
+      image.src = url;
+      try {
+        await Promise.race([
+          image.decode().then(() => true),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("decode_timeout")), 12000))
+        ]);
+        return "ready";
+      } catch {
+        return "failed_or_timeout";
+      }
+    }));
+    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+    return {
+      svg_image_nodes: urls.length,
+      inline_unique_images: dataUrls.length,
+      unsupported_or_absent_href_count: unsupportedUrlCount,
+      decode_ready_count: settled.filter((state) => state === "ready").length,
+      decode_failed_or_timeout_count: settled.filter((state) => state !== "ready").length,
+      paint_frames_observed: 2
+    };
+  });
+  // No extra screenshot PNGs are written to artifacts. The ordinary raw
+  // fixture outputs remain local to this ephemeral hosted job.
+  const afterDecode = await pageSvg.screenshot();
+  const again = await pageSvg.screenshot();
+  const before = sha256(baselinePng);
+  const warm = sha256(afterDecode);
+  const repeated = sha256(again);
+  return {
+    before_sha256: before,
+    after_decode_sha256: warm,
+    warm_repeat_sha256: repeated,
+    before_equals_after_decode: before === warm,
+    warm_capture_stable: warm === repeated,
+    ...readiness
+  };
+}
+
 const defaultFixtures = [
   { name: "SampleNewsletter", sha256: "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf", bytes: 291840, pages: 4, require_render: true, require_shared_text: true },
   { name: "SampleBrochure", sha256: "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87", bytes: 161792, pages: 2, require_render: true, require_shared_text: true }
@@ -521,6 +581,20 @@ try {
       }
       const captureStateBefore = await captureSvgScreenshotState(pageSvg);
       const png = await pageSvg.screenshot({ path: join(output, filename) });
+      const rasterStability = rasterStabilityFixture === fixture.name
+        && rasterStabilityPage === i + 1
+        ? await probeSvgRasterStability(pageSvg, png)
+        : null;
+      if (rasterStability) {
+        console.log("RASTER_STABILITY " + JSON.stringify({
+          fixture: fixture.name,
+          page: i + 1,
+          source_sha256: fixture.sha256,
+          worker_receipt_sha256: sha256(receiptBytes),
+          scene_sha256: sceneSha256,
+          ...rasterStability
+        }));
+      }
       const captureStateAfter = await captureSvgScreenshotState(pageSvg);
       const dimensions = pngDimensions(png);
       if (referenceRasterDpi > 0) {
@@ -537,7 +611,8 @@ try {
         sha256: sha256(png),
         png_dimensions: dimensions,
         capture_state_before: captureStateBefore,
-        capture_state_after: captureStateAfter
+        capture_state_after: captureStateAfter,
+        ...(rasterStability ? { raster_stability: rasterStability } : {})
       });
     }
     const nonempty = painted.filter((line) => line.text.trim());
