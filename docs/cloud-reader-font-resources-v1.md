@@ -12,7 +12,7 @@ Each entry contains:
 - `bold`, `italic`: explicit physical face/style identity (both default to `false` for existing configurations);
 - `path`: operator-managed local font file; absolute in production;
 - `expected_sha256`: lowercase SHA-256 of the exact file bytes;
-- `face_index`: collection face index, default `0`;
+- `face_index`: `0` only in the current Cloud browser transport (default `0`);
 - `mime`: `font/ttf` or `font/otf`.
 
 One source family may have separate Regular/Bold/Italic/BoldItalic entries when the operator provides different licensed physical faces. The `(source_family, bold, italic)` tuple must be unique, and the same SHA-256 + face index cannot claim two different source styles/families. Explicit styled runs use their matching configured face; an unavailable styled face stays in the explicit fallback/Partial path rather than borrowing Regular glyph widths.

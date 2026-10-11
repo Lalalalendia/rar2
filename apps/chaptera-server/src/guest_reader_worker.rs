@@ -596,6 +596,12 @@ fn load_configured_font_resources(
     let mut physical_faces = std::collections::HashSet::new();
     for config in configs {
         require_sha256(&config.expected_sha256)?;
+        if config.face_index != 0 {
+            return Err(GuestSceneWorkerError::new(
+                "guest_scene_font_face_index_unsupported",
+                "browser source-font transport requires physical face index zero",
+            ));
+        }
         if !source_styles.insert((
             config.source_family.trim().to_lowercase(),
             config.bold,
@@ -721,10 +727,10 @@ fn load_worker_font_manifest(
                 "configured font manifest contains an unsafe file name",
             ));
         }
-        if !matches!(entry.mime.as_str(), "font/ttf" | "font/otf") || entry.face_index > 31 {
+        if !matches!(entry.mime.as_str(), "font/ttf" | "font/otf") || entry.face_index != 0 {
             return Err(GuestSceneWorkerError::new(
                 "guest_scene_font_manifest_failed",
-                "configured font manifest resource metadata is invalid",
+                "configured font manifest requires supported browser font face index zero",
             ));
         }
         let font_bytes = stdfs::read(root.join(&entry.file_name)).map_err(|_| {
@@ -1075,6 +1081,12 @@ mod tests {
         assert_eq!(resources[0].face_index, 0);
         assert_eq!(resources[0].mime, "font/ttf");
         assert_eq!(resources[0].bytes, bytes);
+
+        let mut unsupported_face = config.clone();
+        unsupported_face.face_index = 1;
+        let error = load_configured_font_resources(&[unsupported_face])
+            .expect_err("nonzero face is not safe for current browser transport");
+        assert_eq!(error.code, "guest_scene_font_face_index_unsupported");
 
         let mut mismatch = config.clone();
         mismatch.expected_sha256 = "0".repeat(64);

@@ -701,6 +701,7 @@ fn configured_fonts_by_style_v1(
         let key = (font.normalized_source_family(), font.bold, font.italic);
         if key.0.is_empty()
             || font.resource_id.is_empty()
+            || font.face_index != 0
             || !resource_ids.insert(font.resource_id.as_str())
             || by_style.insert(key, font).is_some()
         {
@@ -2050,6 +2051,9 @@ mod tests {
         let mut aliased = bold;
         aliased.resource_id = "regular-face".to_owned();
         assert!(configured_fonts_by_style_v1(&[faces[0].clone(), aliased]).is_err());
+        let mut nonzero_face = faces[0].clone();
+        nonzero_face.face_index = 1;
+        assert!(configured_fonts_by_style_v1(&[nonzero_face]).is_err());
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
