@@ -1,5 +1,7 @@
 use super::*;
 
+const RAW_TYPE_LOGO: u16 = 0x31;
+
 pub(super) fn build_reference_index(
     contents: &[u8],
     directory: &pub_contents::Contents0x2cDirectory,
