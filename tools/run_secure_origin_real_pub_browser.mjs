@@ -257,6 +257,91 @@ try {
   }
   const initialPaint = await verifyEditorPaint(current, "initial open");
 
+  // A returning user must be able to rediscover the just-created durable
+  // project from the real Project Home without retaining the document URL.
+  await page.goto(origin + "/editor", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(id => {
+    const status = document.querySelector("#status");
+    const card = document.querySelector(
+      '[data-document-id="' + CSS.escape(id) + '"]'
+    );
+    return status?.textContent?.startsWith("Проектов:") && !!card;
+  }, documentId, { timeout: 30000 });
+  const homeReceipt = await page.evaluate(id => {
+    const card = document.querySelector(
+      '[data-document-id="' + CSS.escape(id) + '"]'
+    );
+    return {
+      path: location.pathname,
+      document_id: card?.dataset.documentId ?? null,
+      project_id: card?.dataset.projectId ?? null,
+      name: card?.querySelector("h2")?.textContent ?? null,
+      status: document.querySelector("#status")?.textContent ?? null,
+    };
+  }, documentId);
+  if (homeReceipt.path !== "/editor" || homeReceipt.document_id !== documentId ||
+      !homeReceipt.project_id || !homeReceipt.name) {
+    throw new Error("Project Home did not surface the imported durable project: " +
+      JSON.stringify(homeReceipt));
+  }
+  // Real UI rename, not a direct API request. The result must be confirmed
+  // by the exact server receipt, a fresh durable catalog and a browser reload.
+  const renamedTitle = "Chaptera " + hash.slice(0, 12);
+  const homeCard = page.locator(
+    '[data-document-id="' + documentId.replace(/"/g, '\\"') + '"]'
+  );
+  await homeCard.locator('[data-action="rename-project"]').click();
+  await homeCard.locator('[data-action="rename-input"]').fill(renamedTitle);
+  const renameResponsePromise = page.waitForResponse(response => {
+    if (response.request().method() !== "POST") return false;
+    return decodeURIComponent(new URL(response.url()).pathname) ===
+      "/v1/projects/" + homeReceipt.project_id + "/rename";
+  }, { timeout: 30000 });
+  await homeCard.locator('[data-action="save-rename"]').click();
+  const renameResponse = await renameResponsePromise;
+  if (renameResponse.status() !== 200) {
+    throw new Error("real project rename HTTP failed: " + renameResponse.status());
+  }
+  const renamed = await renameResponse.json();
+  if (renamed.protocol_version !== "chaptera.project-rename-receipt.v1" ||
+      renamed.receipt?.project_id !== homeReceipt.project_id ||
+      renamed.receipt?.name !== renamedTitle ||
+      !Number.isSafeInteger(renamed.receipt?.metadata_version)) {
+    throw new Error("project rename returned an unbound receipt");
+  }
+  await page.waitForFunction(({ id, name }) => {
+    const card = document.querySelector(
+      '[data-document-id="' + CSS.escape(id) + '"]'
+    );
+    return card?.querySelector("h2")?.textContent === name &&
+      document.querySelector("#status")?.textContent?.startsWith("Проектов:");
+  }, { id: documentId, name: renamedTitle }, { timeout: 30000 });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(({ id, name }) => {
+    const card = document.querySelector(
+      '[data-document-id="' + CSS.escape(id) + '"]'
+    );
+    return card?.querySelector("h2")?.textContent === name &&
+      document.querySelector("#status")?.textContent?.startsWith("Проектов:");
+  }, { id: documentId, name: renamedTitle }, { timeout: 30000 });
+
+  const homeOpen = page.locator(
+    '[data-document-id="' + documentId.replace(/"/g, '\\"') + '"] [data-action="open-project"]'
+  );
+  await Promise.all([
+    page.waitForURL(url =>
+      decodeURIComponent(url.pathname) === "/editor/doc/" + documentId,
+    { timeout: 30000, waitUntil: "domcontentloaded" }),
+    homeOpen.click(),
+  ]);
+  const homeOpened = await currentDocumentReceipt(documentId);
+  if (homeOpened.status !== 200 || homeOpened.document_id !== documentId ||
+      homeOpened.revision_id !== current.revision_id) {
+    throw new Error("Project Home reopened a different durable revision: " +
+      JSON.stringify({ homeOpened, expected: current.revision_id }));
+  }
+  const homeOpenedPaint = await verifyEditorPaint(homeOpened, "project home reopen");
+
   // An actual page reload (no synthetic product snapshot) must retain the
   // authoritative imported service revision. Server restart is a later gate.
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -382,6 +467,9 @@ try {
     reader_scene_reached_browser_paint: true,
     real_browser_pointer_move_node: true,
     initial_editor_paint: initialPaint,
+    project_home_catalog_claim: true,
+    project_home: homeReceipt,
+    project_home_editor_paint: homeOpenedPaint,
     reloaded_editor_paint: reopenedPaint,
     moved_editor_paint: movedPaint,
     edited_editor_paint: editedPaint,
