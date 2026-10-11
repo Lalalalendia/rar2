@@ -32,12 +32,19 @@ function editableShortcutTarget(target) {
   return !!target.closest?.("[contenteditable=true]");
 }
 
+export function historyShortcutCommand(event) {
+  if (!event || typeof event !== "object") return null;
+  if (event.defaultPrevented || event.repeat || event.altKey ||
+      event.isComposing || event.keyCode === 229) return null;
+  if (!(event.ctrlKey || event.metaKey) || editableShortcutTarget(event.target)) return null;
+  const key = String(event.key ?? "").toLowerCase();
+  if (key === "z") return event.shiftKey ? "redo" : "undo";
+  if (key === "y" && !event.shiftKey) return "redo";
+  return null;
+}
+
 export function isUndoShortcutEvent(event) {
-  if (!event || typeof event !== "object") return false;
-  if (event.defaultPrevented || event.repeat || event.altKey || event.shiftKey) return false;
-  if (!(event.ctrlKey || event.metaKey)) return false;
-  if (String(event.key ?? "").toLowerCase() !== "z") return false;
-  return !editableShortcutTarget(event.target);
+  return historyShortcutCommand(event) === "undo";
 }
 
 export function resolveRichEditorPointerTarget(
@@ -149,6 +156,7 @@ export class RichReaderEditorShellV1 {
     this.lastCommitResult = null;
     this.historyRequests = 0;
     this.lastHistoryResult = null;
+    this.lastHistoryKind = null;
     this.historyInFlight = false;
     this._handlers = null;
     this._bound = false;
@@ -291,10 +299,11 @@ export class RichReaderEditorShellV1 {
   bindKeyboardEvents() {
     if (this._keyboardBound) return;
     const keydown = (event) => {
-      if (!isUndoShortcutEvent(event)) return;
+      const command = historyShortcutCommand(event);
+      if (!command) return;
       event.preventDefault?.();
       if (this.historyInFlight) return;
-      void this.undo().catch(() => {});
+      void this[command]().catch(() => {});
     };
     this.keyboardTarget.addEventListener("keydown", keydown);
     this._keyboardHandler = keydown;
@@ -334,6 +343,7 @@ export class RichReaderEditorShellV1 {
       last_commit_protocol: this.lastCommitResult?.protocol_version ?? null,
       history_request_count: this.historyRequests,
       history_in_flight: this.historyInFlight,
+      history_command: this.lastHistoryKind,
       last_history_protocol: this.lastHistoryResult?.protocol_version ?? null,
       visual_scene_is_edit_authority: false,
       browser_interaction_is_durable_authority: false,
@@ -352,8 +362,18 @@ export class RichReaderEditorShellV1 {
   }
 
   async undo() {
+    return this.#historyTransition("undo");
+  }
+
+  async redo() {
+    return this.#historyTransition("redo");
+  }
+
+  async #historyTransition(kind) {
+    if (this.historyInFlight) throw new Error("history transition already pending");
+    if (typeof this.service[kind] !== "function") throw new TypeError("service cannot perform " + kind);
     if (!this.readerScene) throw new Error("editor scene is not loaded");
-    if (this.gesture) this.cancelGesture("gesture_cancelled_for_undo");
+    if (this.gesture) this.cancelGesture("gesture_cancelled_for_" + kind);
 
     const request = {
       sourceHash: this.readerScene.source_hash,
@@ -361,11 +381,13 @@ export class RichReaderEditorShellV1 {
       clientOperationId: this.historyOperationIdFactory(),
     };
     this.historyRequests += 1;
+    this.lastHistoryKind = kind;
     this.historyInFlight = true;
     this._emitState("history_sent");
 
     try {
-      const result = await this.service.undo(request);
+      const result = await this.service[kind](request);
+      if (result.transition_kind !== kind) throw new Error("history transition kind mismatch");
       this.lastHistoryResult = clone(result);
 
       if (result.protocol_version === "chaptera.history-transition-accepted.v1") {

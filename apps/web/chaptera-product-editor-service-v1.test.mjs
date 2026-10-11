@@ -789,3 +789,104 @@ test("default browser fetch retains the Window-style global receiver", async () 
     globalThis.fetch = saved;
   }
 });
+
+test("Redo uses authenticated source-bound history route with CSRF and accepted revision identity", async () => {
+  const { calls, fetchImpl } = recorder((url, options) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/documents/" + DOC + "/history") {
+      assert.deepEqual(JSON.parse(options.body), {
+        protocol_version: "chaptera.history-transition-intent.v1",
+        document_id: DOC,
+        source_hash: SOURCE,
+        base_revision_id: UNDONE,
+        client_operation_id: "redo-test-1",
+        command: { kind: "redo" },
+      });
+      return json({
+        ...historyAccepted(),
+        base_revision_id: UNDONE,
+        revision_id: CHILD,
+        client_operation_id: "redo-test-1",
+        transition_kind: "redo",
+      });
+    }
+    throw new Error("unexpected Redo path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC,
+    fetchImpl,
+  });
+  const result = await service.redo({
+    sourceHash: SOURCE,
+    baseRevisionId: UNDONE,
+    clientOperationId: "redo-test-1",
+  });
+  assert.equal(result.transition_kind, "redo");
+  assert.equal(result.revision_id, CHILD);
+  assert.deepEqual(calls.map(call => call.path), [
+    "/v1/session", "/v1/documents/" + DOC + "/history",
+  ]);
+  assert.equal(calls[1].options.credentials, "include");
+  assert.equal(calls[1].options.headers["x-csrf-token"], "csrf-token-1");
+  assert.equal(calls[1].options.headers["x-chaptera-operation-class"], "commit");
+  assert.ok(!("x-chaptera-principal-id" in calls[1].options.headers));
+});
+
+test("Rejected Redo returns a bounded redo_unavailable receipt and no new revision", async () => {
+  const { calls, fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/documents/" + DOC + "/history") {
+      return json({ error: { code: "redo_unavailable" } }, 409);
+    }
+    throw new Error("unexpected request " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  const result = await service.redo({
+    sourceHash: SOURCE, baseRevisionId: UNDONE,
+    clientOperationId: "redo-unavailable-1",
+  });
+  assert.deepEqual({
+    protocol_version: result.protocol_version,
+    transition_kind: result.transition_kind,
+    current_revision_id: result.current_revision_id,
+    code: result.code,
+    retryable: result.retryable,
+  }, {
+    protocol_version: "chaptera.history-transition-rejected.v1",
+    transition_kind: "redo",
+    current_revision_id: null,
+    code: "redo_unavailable",
+    retryable: false,
+  });
+  assert.equal(calls.length, 2);
+});
+
+test("Accepted Redo with mismatched kind fails closed instead of displaying another transition", async () => {
+  const { fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/documents/" + DOC + "/history") {
+      return json({
+        ...historyAccepted(),
+        base_revision_id: UNDONE,
+        client_operation_id: "redo-identity-test-1",
+        transition_kind: "undo",
+      });
+    }
+    throw new Error("unexpected path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  await assert.rejects(
+    () => service.redo({
+      sourceHash: SOURCE, baseRevisionId: UNDONE,
+      clientOperationId: "redo-identity-test-1",
+    }),
+    /history transition accepted identity mismatch/,
+  );
+});
