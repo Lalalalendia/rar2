@@ -22,6 +22,7 @@ chaptera-scene-instance = { path = "../../crates/chaptera-scene-instance" }
 chaptera-desktop-fallback-font-resource = { path = "../../crates/chaptera-desktop-fallback-font-resource" }
 aws-config = "=1.12.0"
 aws-sdk-s3 = "=1.149.0"
+aws-sdk-sts = "=1.117.0"
 aws-smithy-types = { version = "=1.8.0", features = ["http-body-1-x"] }
 bytes = "=1.12.1"
 http-body = "=1.1.0"
