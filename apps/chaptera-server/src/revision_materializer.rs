@@ -853,7 +853,7 @@ pub(crate) fn append_event_operation(
     Ok(cloud_revision_project(&project))
 }
 
-fn undo_event_operation(
+pub(crate) fn undo_event_operation(
     mut project: EditorProject,
     operation: &EditOperation,
 ) -> Result<EditorProject, RevisionMaterializerError> {
