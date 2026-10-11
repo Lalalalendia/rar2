@@ -52,6 +52,7 @@ struct ProviderReceiptV1 {
     no_versions_after_delete: bool,
     physical_delete_v0: Option<bool>,
     core_adapter_probe_passed: bool,
+    physical_probe_passed: bool,
 }
 
 #[tokio::main]
@@ -223,6 +224,11 @@ async fn run() -> Result<(ProviderReceiptV1, bool), String> {
         && download_grant_policy_passed
         && !direct_upload_grant_available;
 
+    // Core adapter conformance alone does not prove physical deletion.
+    // A bare cargo-run invocation must exit nonzero if any previous S3
+    // version or delete marker remains after the exact delete.
+    let physical_probe_passed = overall_probe_passed(core_adapter_probe_passed, physical_delete_v0);
+
     let receipt = ProviderReceiptV1 {
         protocol_version: RECEIPT_V1,
         provider_family: "s3-compatible",
@@ -255,8 +261,9 @@ async fn run() -> Result<(ProviderReceiptV1, bool), String> {
         no_versions_after_delete,
         physical_delete_v0: Some(physical_delete_v0),
         core_adapter_probe_passed,
+        physical_probe_passed,
     };
-    Ok((receipt, core_adapter_probe_passed))
+    Ok((receipt, physical_probe_passed))
 }
 
 // S3 GetBucketVersioning returns no Status only when versioning has never
@@ -308,6 +315,13 @@ fn physical_delete_proven(
         && quarantine_bucket_never_versioned
         && delete_head_absent
         && no_versions_after_delete
+}
+
+// In particular, do not claim success from DELETE + HEAD(None) when the
+// inspector still sees version history or delete markers. The returned
+// boolean is consumed by main() as a zero/nonzero exit gate.
+fn overall_probe_passed(core_adapter_probe_passed: bool, physical_delete_v0: bool) -> bool {
+    core_adapter_probe_passed && physical_delete_v0
 }
 
 // Report the true effective grant boundary: URL-only grants are supported
@@ -395,6 +409,14 @@ mod tests {
         assert!(!physical_delete_proven(true, false, true, true));
         assert!(!physical_delete_proven(true, true, false, true));
         assert!(!physical_delete_proven(true, true, true, false));
+    }
+
+    #[test]
+    fn standalone_probe_requires_both_adapter_and_physical_delete_proof() {
+        assert!(overall_probe_passed(true, true));
+        assert!(!overall_probe_passed(true, false)); // residual versions
+        assert!(!overall_probe_passed(false, true)); // adapter mismatch
+        assert!(!overall_probe_passed(false, false));
     }
 
     #[test]

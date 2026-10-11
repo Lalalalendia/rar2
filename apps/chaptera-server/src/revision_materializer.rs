@@ -465,7 +465,7 @@ impl ExactRevisionMaterializer {
         }
         if edge.semantic_schema_version == EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION {
             return self
-                .replay_undo_edge_v2(source_bytes, source, current_project, edge)
+                .replay_history_edge_v2(source_bytes, source, current_project, edge)
                 .await;
         }
         if edge.semantic_schema_version != EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION {
@@ -534,7 +534,7 @@ impl ExactRevisionMaterializer {
         Ok(replayed)
     }
 
-    async fn replay_undo_edge_v2(
+    async fn replay_history_edge_v2(
         &self,
         source_bytes: &[u8],
         source: &AuthorizedDocumentSource,
@@ -576,7 +576,18 @@ impl ExactRevisionMaterializer {
             ));
         }
 
-        let candidate = undo_event_operation(current_project, &event.operation)?;
+        // The history event is immutable, source-bound and predecessor-hash bound.
+        // Redo applies only the exact operation carried by a prior Undo.
+        let candidate = match event.transition_kind.as_str() {
+            "undo" => undo_event_operation(current_project, &event.operation)?,
+            "redo" => append_event_operation(current_project, event.operation.clone())?,
+            _ => {
+                return Err(RevisionMaterializerError::new(
+                    "unsupported_history_transition",
+                    "durable history supports bounded undo and redo only",
+                ));
+            }
+        };
         let replayed = self
             .replay_project_authoritative(source_bytes, source, &candidate)
             .await?;
@@ -892,10 +903,10 @@ fn validate_history_event_fields(
             ),
         ));
     }
-    if event.transition_kind != "undo" {
+    if !matches!(event.transition_kind.as_str(), "undo" | "redo") {
         return Err(RevisionMaterializerError::new(
             "unsupported_history_transition",
-            "materialization V2 currently admits durable undo only",
+            "materialization V2 admits bounded durable undo and redo only",
         ));
     }
     if !matches!(event.operation, EditOperation::MoveNode { .. }) {

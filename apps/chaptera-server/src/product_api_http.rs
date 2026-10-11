@@ -44,9 +44,9 @@ use crate::{
         EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION, EDITOR_REVISION_EVENT_SCHEMA_V1,
         EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION, EditorHistoryEventV1, EditorRevisionEventV1,
         ExactRevisionMaterializer, ExactSourceLoader, PubEditorReplayEngine,
-        RevisionMaterializerError, decode_editor_history_event_v1, decode_editor_revision_event_v1,
-        encode_editor_history_event_v1, encode_editor_revision_event_v1, project_sha256,
-        undo_event_operation,
+        RevisionMaterializerError, append_event_operation, decode_editor_history_event_v1,
+        decode_editor_revision_event_v1, encode_editor_history_event_v1,
+        encode_editor_revision_event_v1, project_sha256, undo_event_operation,
     },
     source_authority::{SourceAuthorityError, SqliteDocumentSourceAuthority},
     source_baseline::{
@@ -867,30 +867,73 @@ async fn commit_history_transition(
     )
     .map_err(ProductApiError::Baseline)?;
 
-    // The canonical source has already been parsed and replayed by the
-    // materializer's isolated worker. Undo only removes the most recent
-    // trusted MoveNode event from its validated project. Do not open the PUB
-    // inside this Axum process: that would restore the original P0 boundary.
-    let operation = materialized
-        .receipt
-        .project
-        .operations
-        .last()
-        .cloned()
-        .ok_or_else(|| {
-            ProductApiError::conflict(
-                "undo_rejected",
-                "the current revision has no undoable canonical operation",
-            )
-        })?;
-    if !matches!(operation, EditOperation::MoveNode { .. }) {
-        return Err(ProductApiError::conflict(
-            "undo_operation_unsupported",
-            "this Cloud history slice admits Undo only for the latest MoveNode operation",
-        ));
-    }
-    let resulting_project = undo_event_operation(materialized.receipt.project.clone(), &operation)
-        .map_err(ProductApiError::Materializer)?;
+    // The source and predecessor project have already been validated by the
+    // isolated worker. Never reopen a PUB in the Axum HTTP process.
+    //
+    // One-step Redo is only allowed immediately after an Undo history edge.
+    // We reconstruct the exact canonical operation from that immutable edge;
+    // no browser-supplied inverse command or ephemeral redo stack is trusted.
+    let transition_kind = request.command.kind.as_str();
+    let (operation, resulting_project) = if transition_kind == "undo" {
+        let operation = materialized
+            .receipt
+            .project
+            .operations
+            .last()
+            .cloned()
+            .ok_or_else(|| {
+                ProductApiError::conflict(
+                    "undo_rejected",
+                    "the current revision has no undoable canonical operation",
+                )
+            })?;
+        if !matches!(operation, EditOperation::MoveNode { .. }) {
+            return Err(ProductApiError::conflict(
+                "undo_operation_unsupported",
+                "bounded history admits Undo only for the latest MoveNode",
+            ));
+        }
+        let resulting_project =
+            undo_event_operation(materialized.receipt.project.clone(), &operation)
+                .map_err(ProductApiError::Materializer)?;
+        (operation, resulting_project)
+    } else {
+        let edges = state
+            .revisions
+            .load_document_edges(&document_id)
+            .await
+            .map_err(ProductApiError::Store)?;
+        let last = edges
+            .last()
+            .filter(|edge| {
+                edge.child_revision == head.revision_id
+                    && edge.semantic_schema_version == EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION
+            })
+            .ok_or_else(|| {
+                ProductApiError::conflict(
+                    "redo_unavailable",
+                    "redo requires an immediately preceding canonical Undo transition",
+                )
+            })?;
+        let undone = decode_editor_history_event_v1(last).map_err(ProductApiError::Materializer)?;
+        if undone.transition_kind != "undo" || undone.source_sha256 != source.source_sha256 {
+            return Err(ProductApiError::conflict(
+                "redo_unavailable",
+                "redo requires a source-bound immediately preceding Undo transition",
+            ));
+        }
+        let operation = undone.operation;
+        if !matches!(operation, EditOperation::MoveNode { .. }) {
+            return Err(ProductApiError::conflict(
+                "redo_operation_unsupported",
+                "bounded Redo admits only the immediately preceding MoveNode",
+            ));
+        }
+        let resulting_project =
+            append_event_operation(materialized.receipt.project.clone(), operation.clone())
+                .map_err(ProductApiError::Materializer)?;
+        (operation, resulting_project)
+    };
     let before_project_sha256 = materialized.receipt.project_sha256.clone();
     let after_project_sha256 =
         project_sha256(&resulting_project).map_err(ProductApiError::Materializer)?;
@@ -901,7 +944,7 @@ async fn commit_history_transition(
         &resulting_project,
         &head.revision_id,
         &base_state.state_id,
-        "undo",
+        transition_kind,
     )
     .map_err(ProductApiError::Baseline)?;
 
@@ -928,7 +971,7 @@ async fn commit_history_transition(
     let event = EditorHistoryEventV1 {
         schema_version: EDITOR_HISTORY_EVENT_SCHEMA_V1.to_owned(),
         source_sha256: source.source_sha256.clone(),
-        transition_kind: "undo".to_owned(),
+        transition_kind: transition_kind.to_owned(),
         before_project_sha256,
         after_project_sha256: after_project_sha256.clone(),
         base_state_id: base_state.state_id,
@@ -1120,10 +1163,10 @@ fn validate_history_request(
             "path document_id differs from history request document_id",
         ));
     }
-    if request.command.kind != "undo" {
+    if !matches!(request.command.kind.as_str(), "undo" | "redo") {
         return Err(ProductApiError::bad_request(
             "history_transition_unsupported",
-            "this Cloud history slice admits undo only",
+            "this Cloud history slice admits bounded undo or redo only",
         ));
     }
     require_ident(&request.document_id, "document_id")?;
@@ -2466,24 +2509,93 @@ mod tests {
             "stale_revision"
         );
 
-        let mut unsupported_redo = undo_body;
-        unsupported_redo["base_revision_id"] = json!(undo_revision);
-        unsupported_redo["client_operation_id"] = json!("redo-unsupported");
-        unsupported_redo["command"]["kind"] = json!("redo");
-        let redo = restarted_app
+        // A durable Undo carries the original MoveNode operation in its
+        // canonical event. Redo must restore only that exact immediate
+        // operation, yielding a NEW immutable revision after worker replay.
+        let mut redo_body = undo_body;
+        redo_body["base_revision_id"] = json!(undo_revision.clone());
+        redo_body["client_operation_id"] = json!("redo-sample3-1");
+        redo_body["command"]["kind"] = json!("redo");
+        let redone = restarted_app
+            .clone()
             .oneshot(authenticated_request(
                 "POST",
                 &format!("/v1/documents/{document_id}/history"),
                 &issued.session_token,
                 Some(&issued.csrf_token),
-                Some(unsupported_redo),
+                Some(redo_body.clone()),
             ))
             .await
             .unwrap();
-        assert_eq!(redo.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(redone.status(), StatusCode::OK);
+        assert_eq!(redone.headers()[CACHE_CONTROL], "no-store");
+        let redone = json_body(redone).await;
+        assert_eq!(redone["protocol_version"], HISTORY_TRANSITION_ACCEPTED_V1);
+        assert_eq!(redone["transition_kind"], "redo");
+        assert_eq!(redone["base_revision_id"], undo_revision);
+        assert_eq!(redone["replayed"], false);
+        let redo_revision = redone["revision_id"].as_str().unwrap().to_owned();
+        assert_ne!(redo_revision, undo_revision);
+        assert_ne!(redo_revision, child_revision);
+
+        let redone_scene = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/reader/documents/{document_id}/scene"),
+                &issued.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(redone_scene.status(), StatusCode::OK);
+        let redone_scene = json_body(redone_scene).await;
+        assert_eq!(redone_scene["revision_id"], redo_revision);
+        let moved_again = redone_scene["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["node_id"] == node_id)
+            .expect("canonical Redo Reader scene contains the moved node");
+        assert_eq!(moved_again["bounds"]["x"], x_emu);
+        assert_eq!(moved_again["bounds"]["y"], y_emu);
+
+        let retried_redo = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/history"),
+                &issued.session_token,
+                Some(&issued.csrf_token),
+                Some(redo_body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(retried_redo.status(), StatusCode::OK);
+        let retried_redo = json_body(retried_redo).await;
+        assert_eq!(retried_redo["revision_id"], redo_revision);
+        assert_eq!(retried_redo["replayed"], true);
+
+        // A fresh Redo after a Redo is forbidden; no unpersisted redo stack
+        // may claim to reapply the operation again.
+        let mut invalid_redo = redo_body;
+        invalid_redo["base_revision_id"] = json!(redo_revision);
+        invalid_redo["client_operation_id"] = json!("redo-second-rejected");
+        let rejected = restarted_app
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/history"),
+                &issued.session_token,
+                Some(&issued.csrf_token),
+                Some(invalid_redo),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::CONFLICT);
         assert_eq!(
-            json_body(redo).await["error"]["code"],
-            "history_transition_unsupported"
+            json_body(rejected).await["error"]["code"],
+            "redo_unavailable"
         );
 
         restarted_authn.close().await;
