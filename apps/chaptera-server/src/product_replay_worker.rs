@@ -1160,6 +1160,13 @@ impl IsolatedProductReplayProducer {
                 "Reader scene receipt was replayed for another document or revision",
             ));
         }
+        // Debug-build physical acceptance prints only candidate cardinality,
+        // never PUB/image bytes, resource IDs, text or source paths.
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "CHAPTERA_SAFE_PREVIEW_HOST_CANDIDATES count={}",
+            scene.image_previews.len()
+        );
         sanitize_reader_scene_browser_decoders(&mut scene.scene)?;
         crate::safe_preview_host::attach_admitted_previews(&mut scene.scene, &scene.image_previews)
             .map_err(|_| {
