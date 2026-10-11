@@ -274,7 +274,8 @@ pub fn validate_product_replay_receipt(
                 "isolated Reader preview count exceeds policy",
             ));
         }
-        let resource_ids: std::collections::HashSet<&str> = scene.scene
+        let resource_ids: std::collections::HashSet<&str> = scene
+            .scene
             .get("resources")
             .and_then(Value::as_array)
             .into_iter()
@@ -848,20 +849,21 @@ pub fn run_product_replay_worker(
         // This is the only execution point for the source-neutral Viewer.
         // It runs AFTER seccomp filesystem deny and under the no-network
         // process limits; the host never calls open_pub_bundle.
-        let (scene, image_previews) = crate::product_api_http::render_reader_scene_in_isolated_worker(
-            document_id,
-            expected_source_sha256,
-            &intent.revision_id,
-            &intent.baseline_revision_id,
-            &source_bytes,
-            &project,
-        )
-        .map_err(|_| {
-            ProductReplayWorkerError::new(
-                "product_reader_scene_rejected",
-                "isolated Viewer failed to project the exact authorized revision",
+        let (scene, image_previews) =
+            crate::product_api_http::render_reader_scene_in_isolated_worker(
+                document_id,
+                expected_source_sha256,
+                &intent.revision_id,
+                &intent.baseline_revision_id,
+                &source_bytes,
+                &project,
             )
-        })?;
+            .map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_reader_scene_rejected",
+                    "isolated Viewer failed to project the exact authorized revision",
+                )
+            })?;
         let bytes = serde_json::to_vec(&scene).map_err(|_| {
             ProductReplayWorkerError::new(
                 "product_reader_scene_invalid",
@@ -1160,10 +1162,12 @@ impl IsolatedProductReplayProducer {
         }
         sanitize_reader_scene_browser_decoders(&mut scene.scene)?;
         crate::safe_preview_host::attach_admitted_previews(&mut scene.scene, &scene.image_previews)
-            .map_err(|_| ProductReplayWorkerError::new(
-                "product_reader_preview_host_rejected",
-                "host could not safely admit isolated image derivatives",
-            ))?;
+            .map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_reader_preview_host_rejected",
+                    "host could not safely admit isolated image derivatives",
+                )
+            })?;
         Ok(scene.scene)
     }
 
