@@ -13,6 +13,9 @@ import os
 from pathlib import Path
 
 import export_cloud_reader_windows_fonts as fonts
+import private_font_os2_embedding_v1 as os2
+
+MAX_LOCAL_FONT_BYTES = 64 * 1024 * 1024
 
 PROTOCOL = "chaptera.private-pub-font-style-coverage.v1"
 STYLES = ("regular", "bold", "italic", "bold_italic")
@@ -45,6 +48,7 @@ def audit_style_coverage(requirements: Path, font_dir: Path) -> dict:
     allowed = {fonts.normalize_name(name) for name in families}
     candidates = {name: [] for name in allowed}
     malformed_files = 0
+    oversized_files = 0
     ignored_links = 0
     # A single scan is important for large Windows Fonts directories.
     for path in sorted(root.iterdir(), key=lambda file: file.name.casefold()):
@@ -54,6 +58,9 @@ def audit_style_coverage(requirements: Path, font_dir: Path) -> dict:
         if not path.is_file() or path.suffix.casefold() not in fonts.SUPPORTED_SUFFIXES:
             continue
         try:
+            if path.stat().st_size > MAX_LOCAL_FONT_BYTES:
+                oversized_files += 1
+                continue
             parsed = fonts.parse_font_faces(path)
         except (OSError, fonts.FontPacketError):
             malformed_files += 1
@@ -79,9 +86,12 @@ def audit_style_coverage(requirements: Path, font_dir: Path) -> dict:
                     if style_from_subfamily(face.subfamily) != style:
                         continue
                     content = face.path.read_bytes()
-                    options.append((hashlib.sha256(content).hexdigest(), len(content), face))
-            unique = {(digest, face.face_index): (digest, length, face)
-                      for digest, length, face in options}
+                    options.append((
+                        hashlib.sha256(content).hexdigest(), len(content), face,
+                        os2.inspect_os2_embedding_signal(content, face.face_index)
+                    ))
+            unique = {(digest, face.face_index): (digest, length, face, policy)
+                      for digest, length, face, policy in options}
             supported = [entry for entry in unique.values()
                          if entry[2].container_kind != "collection" or entry[2].face_index == 0]
             if style == "unknown":
@@ -99,7 +109,7 @@ def audit_style_coverage(requirements: Path, font_dir: Path) -> dict:
                 "source_family": name,
                 "requested_style": style,
                 "source_run_count": count,
-                "direct_source_quill_index_proven": source_index_proven,
+                "family_has_direct_source_index_evidence": source_index_proven,
                 "status": status,
                 "source_to_physical_face_verified": False,
                 "license_verified": False,
@@ -108,7 +118,7 @@ def audit_style_coverage(requirements: Path, font_dir: Path) -> dict:
                 "fixed_pdf_allowed": False,
             }
             if status == "single_local_candidate_unverified":
-                digest, byte_len, face = supported[0]
+                digest, byte_len, face, policy = supported[0]
                 record["local_candidate"] = {
                     "sha256": digest,
                     "byte_len": byte_len,
@@ -116,6 +126,7 @@ def audit_style_coverage(requirements: Path, font_dir: Path) -> dict:
                     "subfamily": face.subfamily,
                     "postscript_name": face.postscript_name,
                     "collection_browser_face_zero_only": True,
+                    "os2_embedding_metadata": policy,
                 }
             records.append(record)
     return {
@@ -129,6 +140,7 @@ def audit_style_coverage(requirements: Path, font_dir: Path) -> dict:
         "required_style_pairs": len(records),
         "coverage_status_counts": dict(sorted(statuses.items())),
         "malformed_local_font_files": malformed_files,
+        "oversized_local_font_files": oversized_files,
         "ignored_local_symlinks": ignored_links,
         "source_families": len(families),
         "records": records,
