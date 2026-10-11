@@ -193,9 +193,12 @@ export async function bootCloudProjectHome({
       status.textContent = "Проектов: " + fresh.cards.length;
       return receipt;
     } catch (error) {
-      if (!error?.retryable && error?.code !== "project_rename_receipt_invalid") {
-        pendingRenames.delete(project.project_id);
-      }
+      // A transport/JSON/5xx/catalog failure can occur AFTER the durable
+      // rename commits. Preserve the exact idempotency ID for those unknown
+      // outcomes; clear it only on a definitive client-side rejection.
+      const rejected = Number.isInteger(error?.status) &&
+        error.status >= 400 && error.status < 500 && error.status !== 429;
+      if (rejected) pendingRenames.delete(project.project_id);
       throw error;
     }
   }
