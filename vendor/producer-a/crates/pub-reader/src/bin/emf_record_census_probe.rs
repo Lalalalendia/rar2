@@ -1,8 +1,6 @@
 use flate2::bufread::ZlibDecoder;
 use pub_core::StreamPath;
-use pub_escher::{
-    BlipKind, BlipMetafileCompression, inspect_validated_delayed_blips_prefix,
-};
+use pub_escher::{BlipKind, BlipMetafileCompression, inspect_validated_delayed_blips_prefix};
 use pub_model::Sha256Digest;
 use pub_reader::{
     ESCHER_DELAY_STREAM_PATH, ESCHER_STREAM_PATH, build_mature_0x2c_source_graph,
@@ -29,7 +27,9 @@ fn slice_span<'a>(bytes: &'a [u8], offset: u64, len: u64) -> Result<&'a [u8], Bo
     let start = usize::try_from(offset)?;
     let len = usize::try_from(len)?;
     let end = start.checked_add(len).ok_or("span end overflow")?;
-    bytes.get(start..end).ok_or_else(|| "span out of bounds".into())
+    bytes
+        .get(start..end)
+        .ok_or_else(|| "span out of bounds".into())
 }
 
 fn logical_metafile_bytes(
@@ -219,7 +219,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .collect::<Vec<_>>();
     let nontrivial_emf_slots = rows
         .iter()
-        .filter(|row| row["census"]["non_header_eof_record_count"].as_u64().unwrap_or(0) > 0)
+        .filter(|row| {
+            row["census"]["non_header_eof_record_count"]
+                .as_u64()
+                .unwrap_or(0)
+                > 0
+        })
         .count();
 
     println!(
