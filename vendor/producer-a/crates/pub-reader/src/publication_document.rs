@@ -30,7 +30,7 @@ pub(super) fn materialize_publication_document(
     let page_list = parse_confirmed_document_page_list(contents, page_list_block)
         .context("parse DOCUMENT PageList")?;
 
-    let mut diagnostics = Vec::new();
+    let mut diagnostics = super::contents_access::reference_diagnostics(references);
     let color_scheme =
         match current_publication_color_scheme(contents_stream.clone(), contents, references) {
             Ok(scheme) => scheme,
