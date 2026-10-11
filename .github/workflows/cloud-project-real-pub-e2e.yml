@@ -11,6 +11,7 @@ on:
       - "tools/run_secure_origin_oidc_acceptance.py"
       - "tools/run_secure_origin_real_pub_browser.mjs"
       - "tools/run_secure_origin_real_pub_restart_browser.mjs"
+      - "tools/security_leak_scan_v1.py"
       - ".github/workflows/cloud-project-real-pub-e2e.yml"
   workflow_dispatch:
 
@@ -84,6 +85,24 @@ jobs:
             --fixture "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub" \
             --fixture-sha256 "$FIXTURE_SHA256" \
             --caddy-image caddy:2.10.2-alpine
+
+      - name: Fail closed on Product Editor acceptance privacy leaks
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          for path in             target/cloud-real-pub-ingress/receipt.json             target/cloud-real-pub-ingress/server.log             target/cloud-real-pub-ingress/worker.log             target/cloud-real-pub-ingress/browser.log             target/cloud-real-pub-ingress/server-restart.log             target/cloud-real-pub-ingress/worker-restart.log             target/cloud-real-pub-ingress/browser-restart.log             target/cloud-real-pub-ingress/caddy.log
+          do
+            if [ -f "$path" ]; then
+              args+=("$path")
+            fi
+          done
+          if [ "${#args[@]}" -eq 0 ]; then
+            echo "::error::real Product Editor acceptance emitted no receipt/log files to scan"
+            exit 1
+          fi
+          python tools/security_leak_scan_v1.py             "${args[@]}"             --forbid-literal "SampleNewsletter.pub"             --forbid-literal "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub"             --forbid-literal "chaptera-local-only-secret"             --forbid-literal "chaptera-secure-origin"             --json-out target/cloud-real-pub-ingress/security-leak-scan.json
 
       - uses: actions/upload-artifact@v4
         if: always()
