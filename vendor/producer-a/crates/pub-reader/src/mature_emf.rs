@@ -434,6 +434,67 @@ mod tests {
     }
 
     #[test]
+    fn exact_041_and_066_source_profiles_when_corpus_is_mounted() {
+        let Ok(root) = std::env::var("CHAPTERA_PINNED_SOURCE_ROOT") else {
+            return;
+        };
+        let targets = [
+            (
+                "155f8fd8c191851e4380ab1557638aeabb34b2257fa12a7748ab00b09edb74ba",
+                6_usize,
+                6_usize,
+            ),
+            (
+                "d8ac6507d86e35c0f43e293760627a01b00a29586a76f8bf05b5fae702a19d13",
+                0_usize,
+                0_usize,
+            ),
+        ];
+        for (expected_sha, expected_bitmap_sources, expected_bitmap_uses) in targets {
+            let filename = std::path::Path::new(&root).join(format!("{expected_sha}.pub"));
+            let bytes = std::fs::read(filename).expect("source fixture readable");
+            let digest = Sha256::digest(&bytes);
+            assert_eq!(format!("{digest:x}"), expected_sha);
+            let mut digest_bytes = [0_u8; 32];
+            digest_bytes.copy_from_slice(&digest);
+            let graph = crate::build_mature_0x2c_source_graph(
+                Cursor::new(bytes.as_slice()),
+                pub_model::Sha256Digest::from_bytes(digest_bytes),
+            )
+            .expect("real Publisher source graph");
+            let bundle =
+                build_mature_0x2c_emf_bitmap_preview_bundle_from_bytes(&bytes, &graph.graph)
+                    .expect("strict real-source EMF bundle");
+            assert_eq!(
+                bundle.sources.len(),
+                expected_bitmap_sources,
+                "source admission differs for {expected_sha}"
+            );
+            assert_eq!(
+                bundle.sources.iter().map(|s| s.uses.len()).sum::<usize>(),
+                expected_bitmap_uses
+            );
+            assert_eq!(bundle.rejected_source_count, 0);
+            if expected_bitmap_sources == 0 {
+                assert_eq!(bundle.vector_only_count, 1);
+            } else {
+                assert_eq!(bundle.vector_only_count, 0);
+                assert!(bundle.sources.iter().all(|s| s.other_emr_count > 0));
+                let mut sizes = bundle
+                    .sources
+                    .iter()
+                    .map(|s| (s.width, s.height))
+                    .collect::<Vec<_>>();
+                sizes.sort_unstable();
+                assert_eq!(
+                    sizes,
+                    [(250, 720), (257, 587), (259, 30), (259, 30), (259, 125), (259, 209)]
+                );
+            }
+        }
+    }
+
+    #[test]
     fn refuses_competing_bitmap_and_unsupported_dib_profile() {
         let a = synthetic_emf(2, SRCCOPY);
         let mut doubled = a[..88 + 136].to_vec();
