@@ -23,7 +23,7 @@ fn source_hash(bytes: &[u8]) -> Sha256Digest {
     Sha256Digest::from_bytes(raw)
 }
 
-fn slice_span<'a>(bytes: &'a [u8], offset: u64, len: u64) -> Result<&'a [u8], Box<dyn Error>> {
+fn slice_span(bytes: &[u8], offset: u64, len: u64) -> Result<&[u8], Box<dyn Error>> {
     let start = usize::try_from(offset)?;
     let len = usize::try_from(len)?;
     let end = start.checked_add(len).ok_or("span end overflow")?;
@@ -143,7 +143,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("PUB exceeds 16MiB research scope".into());
     }
     let hash = source_hash(&bytes);
-    let source = build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), hash.clone())?;
+    let source = build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), hash)?;
     let escher = pub_cfb::read_stream_reader(Cursor::new(bytes.as_slice()), ESCHER_STREAM_PATH)?;
     let delayed =
         pub_cfb::read_stream_reader(Cursor::new(bytes.as_slice()), ESCHER_DELAY_STREAM_PATH)?;
