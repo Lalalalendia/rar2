@@ -203,11 +203,43 @@ fn emf_record_census(logical: &[u8]) -> Result<serde_json::Value, Box<dyn Error>
 }
 
 
+
+fn observe_emf_point(
+    x: f64,
+    y: f64,
+    window_origin: (f64, f64),
+    window_extent: (f64, f64),
+    viewport_origin: (f64, f64),
+    viewport_extent: (f64, f64),
+    observed: &mut [f64; 4],
+    sample_count: &mut usize,
+) {
+    if window_extent.0 == 0.0 || window_extent.1 == 0.0 {
+        return;
+    }
+    let px = (x - window_origin.0) * viewport_extent.0 / window_extent.0 + viewport_origin.0;
+    let py = (y - window_origin.1) * viewport_extent.1 / window_extent.1 + viewport_origin.1;
+    if px.is_finite() && py.is_finite() && px.abs() < 1.0e9 && py.abs() < 1.0e9 {
+        observed[0] = observed[0].min(px);
+        observed[1] = observed[1].min(py);
+        observed[2] = observed[2].max(px);
+        observed[3] = observed[3].max(py);
+        *sample_count += 1;
+    }
+}
+
 fn vector_profile(logical: &[u8]) -> serde_json::Value {
     // Derived numeric drawing classes only. Never emit PUB/EMF bytes, paths,
     // object identifiers, actual brush colors, geometry points, or text.
     let mut offset = 0usize;
     let mut bounds_extent = None;
+    let mut bounds_origin = (0_f64, 0_f64);
+    let mut window_origin = (0_f64, 0_f64);
+    let mut viewport_origin = (0_f64, 0_f64);
+    let mut window_extent = (1_f64, 1_f64);
+    let mut viewport_extent = (1_f64, 1_f64);
+    let mut observed_points = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    let mut mapped_sample_count = 0_usize;
     let mut map_modes = BTreeMap::<u32, usize>::new();
     let mut window_extents = Vec::<(i32, i32)>::new();
     let mut viewport_extents = Vec::<(i32, i32)>::new();
@@ -241,18 +273,41 @@ fn vector_profile(logical: &[u8]) -> serde_json::Value {
             *unsupported_types.entry(kind).or_default() += 1;
         }
         match kind {
-            1 if size >= 88 => bounds_extent = Some((
-                (read_u32(r, 16) as i32) - (read_u32(r, 8) as i32),
-                (read_u32(r, 20) as i32) - (read_u32(r, 12) as i32),
-            )),
+            1 if size >= 88 => {
+                bounds_origin = (
+                    (read_u32(r, 8) as i32) as f64,
+                    (read_u32(r, 12) as i32) as f64,
+                );
+                bounds_extent = Some((
+                    (read_u32(r, 16) as i32) - (read_u32(r, 8) as i32),
+                    (read_u32(r, 20) as i32) - (read_u32(r, 12) as i32),
+                ));
+            },
             17 if size >= 12 => *map_modes.entry(read_u32(r, 8)).or_default() += 1,
             9 | 11 if size >= 16 => {
                 let e = (read_u32(r, 8) as i32, read_u32(r, 12) as i32);
-                if kind == 9 { window_extents.push(e); }
-                else { viewport_extents.push(e); }
+                if kind == 9 {
+                    window_extents.push(e);
+                    window_extent = (f64::from(e.0), f64::from(e.1));
+                } else {
+                    viewport_extents.push(e);
+                    viewport_extent = (f64::from(e.0), f64::from(e.1));
+                }
             }
-            10 if size >= 16 => origin_counts[0] += 1,
-            12 if size >= 16 => origin_counts[1] += 1,
+            10 if size >= 16 => {
+                origin_counts[0] += 1;
+                window_origin = (
+                    (read_u32(r, 8) as i32) as f64,
+                    (read_u32(r, 12) as i32) as f64,
+                );
+            }
+            12 if size >= 16 => {
+                origin_counts[1] += 1;
+                viewport_origin = (
+                    (read_u32(r, 8) as i32) as f64,
+                    (read_u32(r, 12) as i32) as f64,
+                );
+            }
             39 if size >= 24 => {
                 let handle = read_u32(r, 8);
                 let style = read_u32(r, 12);
@@ -291,10 +346,17 @@ fn vector_profile(logical: &[u8]) -> serde_json::Value {
                 path_state = false;
                 *path_ops.entry(kind).or_default() += 1;
             }
-            27 if size >= 16 => *path_ops.entry(kind).or_default() += 1,
-            54 if size >= 16 => {
+            27 | 54 if size >= 16 => {
                 *path_ops.entry(kind).or_default() += 1;
-                if !path_state { draws_outside_path += 1; }
+                if kind == 54 && !path_state {
+                    draws_outside_path += 1;
+                }
+                observe_emf_point(
+                    (read_u32(r, 8) as i32) as f64,
+                    (read_u32(r, 12) as i32) as f64,
+                    window_origin, window_extent, viewport_origin, viewport_extent,
+                    &mut observed_points, &mut mapped_sample_count,
+                );
             }
             5 | 88 if size >= 28 => {
                 curve_records += 1;
@@ -305,7 +367,23 @@ fn vector_profile(logical: &[u8]) -> serde_json::Value {
                         .is_none_or(|needed| needed > size)
                 {
                     malformed_curve_records += 1;
-                } else { curve_segments += n / 3; }
+                } else {
+                    curve_segments += n / 3;
+                    for idx in 0..n {
+                        let at = 28 + idx * stride;
+                        let (x, y) = if kind == 5 {
+                            ((read_u32(r, at) as i32) as f64, (read_u32(r, at + 4) as i32) as f64)
+                        } else {
+                            let x = i16::from_le_bytes([r[at], r[at + 1]]);
+                            let y = i16::from_le_bytes([r[at + 2], r[at + 3]]);
+                            (f64::from(x), f64::from(y))
+                        };
+                        observe_emf_point(
+                            x, y, window_origin, window_extent, viewport_origin, viewport_extent,
+                            &mut observed_points, &mut mapped_sample_count,
+                        );
+                    }
+                }
                 if !path_state { draws_outside_path += 1; }
                 *path_ops.entry(kind).or_default() += 1;
             }
@@ -313,7 +391,21 @@ fn vector_profile(logical: &[u8]) -> serde_json::Value {
         }
         offset = end;
     }
+    let normalized_bounds = bounds_extent.and_then(|(w, h)| {
+        if w <= 0 || h <= 0 || mapped_sample_count == 0 {
+            return None;
+        }
+        let vals = [
+            (observed_points[0] - bounds_origin.0) / f64::from(w),
+            (observed_points[1] - bounds_origin.1) / f64::from(h),
+            (observed_points[2] - bounds_origin.0) / f64::from(w),
+            (observed_points[3] - bounds_origin.1) / f64::from(h),
+        ];
+        Some(vals.map(|x| (x * 1000.0).round() / 1000.0))
+    });
     json!({
+        "mapped_point_count": mapped_sample_count,
+        "mapped_bounds_normalized_to_emf_header": normalized_bounds,
         "source_safe_profile": "emf066-vector-path-v1",
         "all_records_consumed": offset == logical.len(),
         "bounds_pixel_extent": bounds_extent,
