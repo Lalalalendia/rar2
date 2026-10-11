@@ -19,6 +19,8 @@ use crate::{product_replay_worker::IsolatedImagePreviewV1, reader_scene_v1::Read
 pub(crate) const MAX_WORKER_PREVIEW_ITEMS: usize = 64;
 pub(crate) const MAX_WORKER_PREVIEW_RAW_BYTES: usize = 7 * 1024 * 1024;
 pub(crate) const MAX_SOURCE_IMAGE_BYTES_FOR_PREVIEW: usize = 16 * 1024 * 1024;
+const MAX_PREVIEW_DECODE_INPUT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_PREVIEW_DECODED_WORK_BYTES: usize = 96 * 1024 * 1024;
 
 fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -37,6 +39,9 @@ pub(crate) fn derive_isolated_image_previews(
         .collect();
     let mut previews = Vec::new();
     let mut used_bytes = 0_usize;
+    let mut attempted_images = 0_usize;
+    let mut total_decode_input = 0_usize;
+    let mut total_decoded_work = 0_usize;
     let mut emitted = HashSet::new();
 
     let mut try_add = |id: String, mime: &str, bytes: &[u8], verified_sha: Option<String>| {
@@ -57,6 +62,20 @@ pub(crate) fn derive_isolated_image_previews(
         if verified_sha.is_some_and(|hash| hash != source_sha) {
             return;
         }
+        // A malicious PUB could contain arbitrarily many small compressed
+        // raster resources. Bound unsuccessful decode attempts as well as
+        // successful preview output so the Reader remains responsive.
+        let Some(next_input_total) = total_decode_input.checked_add(bytes.len()) else {
+            return;
+        };
+        if attempted_images >= MAX_WORKER_PREVIEW_ITEMS
+            || next_input_total > MAX_PREVIEW_DECODE_INPUT_BYTES
+            || total_decoded_work >= MAX_PREVIEW_DECODED_WORK_BYTES
+        {
+            return;
+        }
+        attempted_images += 1;
+        total_decode_input = next_input_total;
         let limits = PreviewEncodeLimitsV1::default();
         let decoded = match decode_image_v1(
             bytes,
@@ -74,6 +93,14 @@ pub(crate) fn derive_isolated_image_previews(
             Ok(decoded) => decoded,
             Err(_) => return,
         };
+        let Some(next_work_total) = total_decoded_work.checked_add(decoded.decoded_byte_count)
+        else {
+            return;
+        };
+        if next_work_total > MAX_PREVIEW_DECODED_WORK_BYTES {
+            return;
+        }
+        total_decoded_work = next_work_total;
         let codec = if mime == "image/jpeg" && !decoded.alpha_present {
             PreviewCodecV1::Jpeg
         } else {
