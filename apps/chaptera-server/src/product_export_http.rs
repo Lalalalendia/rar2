@@ -739,10 +739,13 @@ impl IntoResponse for ProductExportHttpError {
             Self::Auth(error) => error.into_response(),
             Self::Source(error) => {
                 if error.code == "document_source_not_found" {
+                    // Do not disclose whether a guessed document ID has a
+                    // consumed source: existing documents without CAP_EXPORT
+                    // yield this same stable grant denial.
                     export_error_response(
-                        StatusCode::NOT_FOUND,
-                        error.code,
-                        "document source not found",
+                        StatusCode::FORBIDDEN,
+                        "grant_missing",
+                        "principal has no grant for the document",
                     )
                 } else {
                     // A failed database/source authority is a server error,
@@ -997,10 +1000,16 @@ mod tests {
             message: canary.to_owned(),
         })
         .into_response();
-        assert_eq!(not_found.status(), StatusCode::NOT_FOUND);
+        assert_eq!(not_found.status(), StatusCode::FORBIDDEN);
         let bytes = axum::body::to_bytes(not_found.into_body(), 4096)
             .await
             .unwrap();
+        let missing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(missing["error"]["code"], "grant_missing");
+        assert_eq!(
+            missing["error"]["message"],
+            "principal has no grant for the document"
+        );
         assert!(!String::from_utf8_lossy(&bytes).contains(canary));
 
         let conflict = ProductExportHttpError::Store(SqliteStoreError::new(
@@ -1071,6 +1080,7 @@ mod tests {
             auth_http::{CSRF_HEADER, SESSION_COOKIE},
             authn::SqliteAuthnStore,
             authn_session::{SessionPolicy, issue_verified_login_session},
+            authz_runtime::{DocumentRole, SqliteAuthzAuthority},
             blob_runtime::SystemBlobIdGenerator,
             filesystem_blob_provider::FilesystemBlobProvider,
             oidc_authn::OidcVerifiedIdentity,
@@ -1145,34 +1155,155 @@ mod tests {
         )
         .await
         .unwrap();
-        sqlx::query("DROP TABLE upload_consumptions")
-            .execute(&pool)
+        // The existing source has a durable consumed upload. Another
+        // principal owns its grant; our real AuthN session must not learn
+        // whether this document exists from the Export API response.
+        let document_id = "document-export-canary";
+        let tenant_id = "tenant-export-canary";
+        sqlx::query(
+            r#"
+            INSERT INTO uploads (
+                upload_id, tenant_id, principal_id, purpose, expected_byte_len,
+                physical_upload_ref, state, upload_generation, object_version,
+                object_etag, observed_byte_len, canonical_sha256, durable_binding_id,
+                created_at_ms, expires_at_ms, completed_at_ms, idempotency_key,
+                request_hash
+            ) VALUES (?, ?, ?, 'pub_source', 256, 'probe/ref', 'CONSUMED', 2,
+                      'v1', 'etag', 256, ?, 'binding-export-canary', 1,
+                      9999999999999, 2, 'upload-export-idem', ?)
+            "#,
+        )
+        .bind(b"upload-export-canary".as_slice())
+        .bind(tenant_id.as_bytes())
+        .bind(b"principal-seed".as_slice())
+        .bind(b"c".repeat(64))
+        .bind(b"d".repeat(64))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO upload_consumptions (
+                upload_id, tenant_id, idempotency_key, request_hash,
+                project_id, document_id, genesis_revision_id, committed_at_ms
+            ) VALUES (?, ?, 'consume-export-idem', ?, 'project-export-canary',
+                      ?, 'revision-export-genesis', 3)
+            "#,
+        )
+        .bind(b"upload-export-canary".as_slice())
+        .bind(tenant_id.as_bytes())
+        .bind(b"e".repeat(64))
+        .bind(document_id.as_bytes())
+        .execute(&pool)
+        .await
+        .unwrap();
+        let authz = SqliteAuthzAuthority::open(&db, 4, timeout).await.unwrap();
+        authz
+            .set_role(
+                tenant_id,
+                document_id,
+                "principal-someone-else",
+                DocumentRole::Owner,
+                None,
+                "grant-other-export-owner",
+                now_ms().unwrap(),
+            )
             .await
             .unwrap();
 
         let create = json!({
             "protocol_version": EXPORT_CREATE_V1,
-            "document_id": "document-export-canary",
+            "document_id": document_id,
             "revision_id": format!("sha256:{}", "a".repeat(64)),
             "target_profile": IDML_BOUNDED_EDITABLE_PROFILE,
             "layout_environment_id": format!("sha256:{}", "b".repeat(64)),
             "client_request_id": "request-export-redaction"
         });
         let request_body = serde_json::to_vec(&create).unwrap();
-        let authenticated = Request::builder()
-            .method("POST")
-            .uri("/v1/exports")
-            .header(HOST, "cloud.example.test")
-            .header(ORIGIN, "https://cloud.example.test")
-            .header(
-                COOKIE,
-                format!("{SESSION_COOKIE}={}", session.session_token),
-            )
-            .header(CSRF_HEADER, session.csrf_token.as_str())
-            .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(request_body.clone()))
+        let authenticated_request = |body: Vec<u8>| {
+            Request::builder()
+                .method("POST")
+                .uri("/v1/exports")
+                .header(HOST, "cloud.example.test")
+                .header(ORIGIN, "https://cloud.example.test")
+                .header(
+                    COOKIE,
+                    format!("{SESSION_COOKIE}={}", session.session_token),
+                )
+                .header(CSRF_HEADER, session.csrf_token.as_str())
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        };
+        let existing_denial = app
+            .clone()
+            .oneshot(authenticated_request(request_body.clone()))
+            .await
             .unwrap();
-        let response = app.clone().oneshot(authenticated).await.unwrap();
+        let mut guessed = create.clone();
+        guessed["document_id"] = json!("document-guessed-not-present");
+        let guessed_denial = app
+            .clone()
+            .oneshot(authenticated_request(serde_json::to_vec(&guessed).unwrap()))
+            .await
+            .unwrap();
+        assert_eq!(existing_denial.status(), StatusCode::FORBIDDEN);
+        assert_eq!(guessed_denial.status(), StatusCode::FORBIDDEN);
+        assert_eq!(existing_denial.headers()[CACHE_CONTROL], "no-store");
+        assert_eq!(guessed_denial.headers()[CACHE_CONTROL], "no-store");
+        let existing_bytes = axum::body::to_bytes(existing_denial.into_body(), 4096)
+            .await
+            .unwrap();
+        let guessed_bytes = axum::body::to_bytes(guessed_denial.into_body(), 4096)
+            .await
+            .unwrap();
+        assert_eq!(existing_bytes, guessed_bytes);
+        let denial: serde_json::Value = serde_json::from_slice(&existing_bytes).unwrap();
+        assert_eq!(denial["error"]["code"], "grant_missing");
+        assert_eq!(
+            denial["error"]["message"],
+            "principal has no grant for the document"
+        );
+
+        // Grant the current session legitimate Export authority and verify
+        // it reaches the exact-revision check rather than a blanket denial.
+        authz
+            .set_role(
+                tenant_id,
+                document_id,
+                &session.principal_id,
+                DocumentRole::Owner,
+                None,
+                "grant-current-export-owner",
+                now_ms().unwrap(),
+            )
+            .await
+            .unwrap();
+        let authorized = app
+            .clone()
+            .oneshot(authenticated_request(request_body.clone()))
+            .await
+            .unwrap();
+        assert_eq!(authorized.status(), StatusCode::CONFLICT);
+        let bytes = axum::body::to_bytes(authorized.into_body(), 4096)
+            .await
+            .unwrap();
+        let unbound: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(unbound["error"]["code"], "canonical_revision_unbound");
+
+        // After exercising actual grant paths, poison the source backend.
+        // An authorized request must receive a redacted 500, not SQLite
+        // internals or a successful export.
+        sqlx::query("DROP TABLE upload_consumptions")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let response = app
+            .clone()
+            .oneshot(authenticated_request(request_body.clone()))
+            .await
+            .unwrap();
+
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
         let bytes = axum::body::to_bytes(response.into_body(), 4096)
@@ -1201,6 +1332,7 @@ mod tests {
         assert_eq!(denied.headers()[CACHE_CONTROL], "no-store");
 
         pool.close().await;
+        authz.close().await;
         authn.close().await;
         source.close().await;
         revisions.close().await;
