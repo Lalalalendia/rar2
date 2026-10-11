@@ -419,6 +419,7 @@ async fn reader_scene(
         &source.baseline_revision_id,
         &materialized.source_bytes,
         &materialized.receipt.project,
+        None,
     )?;
     Ok(Json(serde_json::to_value(scene).map_err(|_| {
         ProductApiError::internal(
@@ -435,6 +436,7 @@ fn project_reader_scene_from_exact_source(
     baseline_revision_id: &str,
     source_bytes: &[u8],
     project: &EditorProject,
+    preview_out: Option<&mut Vec<crate::product_replay_worker::IsolatedImagePreviewV1>>,
 ) -> Result<ReaderSceneV1, ProductApiError> {
     let mut bundle =
         open_pub_bundle(source_bytes, viewer_geometry_environment_v0_1()).map_err(|_| {
@@ -549,6 +551,11 @@ fn project_reader_scene_from_exact_source(
         )
     })?;
 
+    if let Some(out) = preview_out {
+        // Derive candidates from the same pinned Viewer bundle; do not reopen
+        // or interpret the original PUB in the host server.
+        *out = crate::safe_preview_worker::derive_isolated_image_previews(&bundle.geometry, &scene);
+    }
     Ok(scene)
 }
 
@@ -562,7 +569,14 @@ pub(crate) fn render_reader_scene_in_isolated_worker(
     baseline_revision_id: &str,
     source_bytes: &[u8],
     project: &EditorProject,
-) -> Result<serde_json::Value, &'static str> {
+) -> Result<
+    (
+        serde_json::Value,
+        Vec<crate::product_replay_worker::IsolatedImagePreviewV1>,
+    ),
+    &'static str,
+> {
+    let mut previews = Vec::new();
     let scene = project_reader_scene_from_exact_source(
         document_id.to_owned(),
         source_sha256.to_owned(),
@@ -570,9 +584,11 @@ pub(crate) fn render_reader_scene_in_isolated_worker(
         baseline_revision_id,
         source_bytes,
         project,
+        Some(&mut previews),
     )
     .map_err(|_| "reader_scene_projection_failed")?;
-    serde_json::to_value(scene).map_err(|_| "reader_scene_projection_failed")
+    let scene = serde_json::to_value(scene).map_err(|_| "reader_scene_projection_failed")?;
+    Ok((scene, previews))
 }
 
 async fn commit_move_node(
