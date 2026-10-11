@@ -1855,7 +1855,7 @@ mod tests {
             .unwrap();
         assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
         assert_eq!(forbidden.headers()[CACHE_CONTROL], "no-store");
-                // Do not distinguish a missing DocumentId from a real document
+        // Do not distinguish a missing DocumentId from a real document
         // invisible to this independently authenticated principal.
         let guessed_document_id = "document-unknown-privacy-probe";
         let guessed_current = restarted_app
