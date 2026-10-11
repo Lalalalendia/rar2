@@ -21,9 +21,12 @@ fn exact_public_newsletter_logo_0x31_baseline() {
     let fixture = std::env::var_os("CHAPTERA_LOGO_GROUP_FIXTURE")
         .expect("CHAPTERA_LOGO_GROUP_FIXTURE is required");
     let bytes = fs::read(fixture).expect("read pinned public SampleNewsletter.pub");
+    let calculated_sha256 = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     assert_eq!(
-        format!("{:x}", Sha256::digest(&bytes)),
-        NEWSLETTER_SHA256,
+        calculated_sha256, NEWSLETTER_SHA256,
         "the source must match the exact verified public PUB"
     );
     let source_hash: Sha256Digest = NEWSLETTER_SHA256.parse().unwrap();
