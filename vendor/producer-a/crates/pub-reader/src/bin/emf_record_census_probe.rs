@@ -42,14 +42,18 @@ fn logical_metafile_bytes(
         record.payload_source.len,
     )?;
     match record.metafile_compression {
-        Some(BlipMetafileCompression::Uncompressed) => Ok(stored.to_vec()),
+        Some(BlipMetafileCompression::Uncompressed) => {
+            let expected = usize::try_from(record.logical_payload_len.ok_or("missing logical len")?)?;
+            if expected > 64 * 1024 * 1024 || stored.len() != expected { return Err("uncompressed EMF length out of bounds".into()); }
+            Ok(stored.to_vec())
+        },
         Some(BlipMetafileCompression::Deflate) => {
-            let mut decoder = ZlibDecoder::new(Cursor::new(stored));
+            let decoder = ZlibDecoder::new(Cursor::new(stored));
             let mut logical = Vec::new();
             let expected = usize::try_from(record.logical_payload_len.ok_or("missing logical len")?)?;
             if expected > 64 * 1024 * 1024 { return Err("EMF logical payload exceeds 64MiB".into()); }
             decoder.take(u64::try_from(expected)?.saturating_add(1)).read_to_end(&mut logical)?;
-                if logical.len() != expected {
+            if logical.len() != expected {
                 return Err(format!(
                     "logical EMF length mismatch: expected {expected}, got {}",
                     logical.len()
