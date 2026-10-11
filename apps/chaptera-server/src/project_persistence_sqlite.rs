@@ -158,7 +158,6 @@ impl SqliteProjectPersistence {
             .await
     }
 
-
     /// Rename only project metadata. The source, document identity and
     /// RevisionStream are untouched. Exact request replay is durable so a lost
     /// ACK cannot turn a successful rename into a stale-version false negative.
@@ -204,18 +203,26 @@ impl SqliteProjectPersistence {
                     "project mutation request id was reused with different input",
                 ));
             }
-            let lifecycle_generation =
-                u64::try_from(row.try_get::<i64, _>("result_lifecycle_generation").map_err(sqlite_error)?)
-                    .map_err(|_| IngressError::new(
-                        "project_mutation_row_corrupt",
-                        "stored lifecycle generation is negative",
-                    ))?;
-            let metadata_version =
-                u64::try_from(row.try_get::<i64, _>("result_metadata_version").map_err(sqlite_error)?)
-                    .map_err(|_| IngressError::new(
-                        "project_mutation_row_corrupt",
-                        "stored metadata version is negative",
-                    ))?;
+            let lifecycle_generation = u64::try_from(
+                row.try_get::<i64, _>("result_lifecycle_generation")
+                    .map_err(sqlite_error)?,
+            )
+            .map_err(|_| {
+                IngressError::new(
+                    "project_mutation_row_corrupt",
+                    "stored lifecycle generation is negative",
+                )
+            })?;
+            let metadata_version = u64::try_from(
+                row.try_get::<i64, _>("result_metadata_version")
+                    .map_err(sqlite_error)?,
+            )
+            .map_err(|_| {
+                IngressError::new(
+                    "project_mutation_row_corrupt",
+                    "stored metadata version is negative",
+                )
+            })?;
             let name: String = row.try_get("result_name").map_err(sqlite_error)?;
             tx.commit().await.map_err(sqlite_error)?;
             return Ok(ProjectRenameReceipt {
@@ -262,18 +269,26 @@ impl SqliteProjectPersistence {
                 "only active projects may be renamed",
             ));
         }
-        let lifecycle_generation =
-            u64::try_from(row.try_get::<i64, _>("lifecycle_generation").map_err(sqlite_error)?)
-                .map_err(|_| IngressError::new(
-                    "project_persistence_row_corrupt",
-                    "project lifecycle generation is negative",
-                ))?;
-        let metadata_version =
-            u64::try_from(row.try_get::<i64, _>("metadata_version").map_err(sqlite_error)?)
-                .map_err(|_| IngressError::new(
-                    "project_persistence_row_corrupt",
-                    "project metadata version is negative",
-                ))?;
+        let lifecycle_generation = u64::try_from(
+            row.try_get::<i64, _>("lifecycle_generation")
+                .map_err(sqlite_error)?,
+        )
+        .map_err(|_| {
+            IngressError::new(
+                "project_persistence_row_corrupt",
+                "project lifecycle generation is negative",
+            )
+        })?;
+        let metadata_version = u64::try_from(
+            row.try_get::<i64, _>("metadata_version")
+                .map_err(sqlite_error)?,
+        )
+        .map_err(|_| {
+            IngressError::new(
+                "project_persistence_row_corrupt",
+                "project metadata version is negative",
+            )
+        })?;
 
         if lifecycle_generation != request.expected_lifecycle_generation {
             return Err(IngressError::new(
