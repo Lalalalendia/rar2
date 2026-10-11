@@ -17,6 +17,8 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@9376cdc5a5e25b16da71af47712785cf06b0d6d4 # 1.94.1
         with:
           components: rustfmt, clippy
@@ -27,8 +29,25 @@ jobs:
       - name: Clippy shared file authority
         run: cargo clippy --manifest-path crates/chaptera-suite-handoff/Cargo.toml --all-targets -- -D warnings
 
-      - name: Test exact-open and destination-write authority
-        run: cargo test --manifest-path crates/chaptera-suite-handoff/Cargo.toml
+      - name: Test exact-open, short stable snapshot and destination-write authority
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $proof = Join-Path $env:RUNNER_TEMP "chaptera-source-snapshot-proof"
+          New-Item -ItemType Directory -Force -Path $proof | Out-Null
+          $env:CHAPTERA_SOURCE_SNAPSHOT_PROOF_DIR = $proof
+          $env:CHAPTERA_CANDIDATE_SHA = (git rev-parse HEAD).Trim()
+          cargo test --manifest-path crates/chaptera-suite-handoff/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw "source/destination authority tests failed" }
+          foreach ($case in @("busy_writer", "mapped_writer", "external_mutator", "post_window_handle")) {
+            $receipt = Get-Content (Join-Path $proof "$case.json") -Raw | ConvertFrom-Json
+            if ($receipt.schema -ne "chaptera.win-source-snapshot.v1" -or $receipt.case -ne $case -or $receipt.git_commit -ne $env:CHAPTERA_CANDIDATE_SHA) { throw "source snapshot receipt identity mismatch" }
+            if ($receipt.source_bytes_serialized -ne $false -or $receipt.source_path_serialized -ne $false) { throw "source snapshot receipt exposed source data" }
+            foreach ($fact in $receipt.facts.PSObject.Properties) {
+              if ($fact.Value -ne $true) { throw "source snapshot case $case has an unproven fact $($fact.Name)" }
+            }
+          }
+          "CHAPTERA_SOURCE_SNAPSHOT_VERIFIED=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build Reader and Editor
         shell: pwsh
@@ -223,11 +242,16 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          if ($env:CHAPTERA_SOURCE_SNAPSHOT_VERIFIED -ne "true") { throw "short source snapshot proof is missing" }
           $out = Join-Path $env:CHAPTERA_PATH_ID_ROOT "receipt.json"
           [ordered]@{
             schema = "chaptera.win-path-identity.v1"
             task = "CHAPTERA-WIN-PATH-IDENTITY-01"
+            git_commit = (git rev-parse HEAD).Trim()
             exact_open_handle_identity = $true
+            stable_source_read_hash_window = $true
+            separate_process_write_truncate_rename_exclusion = $true
+            short_window_released_without_path_rebind = $true
             receiver_capability_uses_admitted_bytes = $true
             final_fence_rehashes_opened_handle = $true
             unicode_path_accepted = $true
@@ -242,5 +266,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: chaptera-win-path-identity
-          path: ${{ runner.temp }}/chaptera-path-identity/receipt.json
+          path: |
+            ${{ runner.temp }}/chaptera-path-identity/receipt.json
+            ${{ runner.temp }}/chaptera-source-snapshot-proof/*.json
           if-no-files-found: error
