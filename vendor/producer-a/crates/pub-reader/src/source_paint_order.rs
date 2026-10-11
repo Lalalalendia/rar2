@@ -106,7 +106,7 @@ pub(super) fn source_page_paint_orders_v1(
         let Some(group_reference) = references.get(&parent_seq) else {
             continue;
         };
-        let page_logo = is_page_owned_logo_group(parent_seq, references, page_seq_to_id);
+        let page_logo = super::contents_access::is_page_owned_logo_group(parent_seq, references, page_seq_to_id);
         if single_raw_type(group_reference) != Some(RAW_TYPE_GROUP) && !page_logo {
             continue;
         }
