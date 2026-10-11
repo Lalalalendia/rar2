@@ -1632,7 +1632,10 @@ fn mature_officeart_emf_bitmap_preview_resource_id(
     slot: u32,
     rgba: &[u8],
 ) -> Result<ResourceId> {
-    let rgba_sha256 = format!("{:x}", Sha256::digest(rgba));
+    let rgba_sha256 = Sha256::digest(rgba)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     let source_object_key = format!(
         "mature-officeart-emf-birgb-preview/slot-{slot}/rgba-sha256-{rgba_sha256}/{}",
         MATURE_OFFICEART_EMF_BITMAP_PREVIEW_SOURCE_V1,
