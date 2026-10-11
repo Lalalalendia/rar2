@@ -45,6 +45,38 @@ pub struct Contents0x2cChunkReference {
     pub parent_seq_nums: Vec<ObservedU32Field>,
 }
 
+impl Contents0x2cChunkReference {
+    /// Require one confirmed observation without synthesizing a physical value.
+    pub fn required_raw_type(&self) -> Result<&ObservedU16Field, ChunkReferenceReadError> {
+        match self.raw_types.as_slice() {
+            [] => Err(ChunkReferenceReadError::MissingRawType {
+                seq_num: self.seq_num,
+                source: self.source.clone(),
+            }),
+            [field] => Ok(field),
+            fields => Err(ChunkReferenceReadError::AmbiguousRawType {
+                seq_num: self.seq_num,
+                count: fields.len(),
+            }),
+        }
+    }
+
+    /// Absence must be rejected before a caller attempts physical range validation.
+    pub fn required_chunk_offset(&self) -> Result<&ObservedU32Field, ChunkReferenceReadError> {
+        match self.chunk_offsets.as_slice() {
+            [] => Err(ChunkReferenceReadError::MissingChunkOffset {
+                seq_num: self.seq_num,
+                source: self.source.clone(),
+            }),
+            [field] => Ok(field),
+            fields => Err(ChunkReferenceReadError::AmbiguousChunkOffset {
+                seq_num: self.seq_num,
+                count: fields.len(),
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChunkReferenceReadError {
     Contents(ContentsReadError),
@@ -53,6 +85,10 @@ pub enum ChunkReferenceReadError {
     SlotOutOfRange { seq_num: usize, slot_count: usize },
     InconsistentOccupiedSlot { seq_num: usize },
     UnsupportedReferenceWireType { block_type: u8, offset: usize },
+    MissingRawType { seq_num: usize, source: RawSpan },
+    MissingChunkOffset { seq_num: usize, source: RawSpan },
+    AmbiguousRawType { seq_num: usize, count: usize },
+    AmbiguousChunkOffset { seq_num: usize, count: usize },
 }
 
 impl fmt::Display for ChunkReferenceReadError {
@@ -80,6 +116,27 @@ impl fmt::Display for ChunkReferenceReadError {
                 f,
                 "неподтверждённый wire-type 0x{block_type:02X} внутри chunk reference по смещению {offset}"
             ),
+            Self::MissingRawType { seq_num, .. } => {
+                write!(f, "Contents seq {seq_num} is missing raw type field 0x02")
+            }
+            Self::MissingChunkOffset { seq_num, .. } => {
+                write!(
+                    f,
+                    "Contents seq {seq_num} is missing chunk offset field 0x04"
+                )
+            }
+            Self::AmbiguousRawType { seq_num, count } => {
+                write!(
+                    f,
+                    "Contents seq {seq_num} has {count} raw types, expected exactly one"
+                )
+            }
+            Self::AmbiguousChunkOffset { seq_num, count } => {
+                write!(
+                    f,
+                    "Contents seq {seq_num} has {count} chunk offsets, expected exactly one"
+                )
+            }
         }
     }
 }
