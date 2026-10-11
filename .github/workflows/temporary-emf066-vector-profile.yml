@@ -1,0 +1,128 @@
+name: TEMP EMF 066 vector state census (source-safe)
+
+on:
+  push:
+    branches:
+      - research/emf066-vector-path-profile-20261011
+    paths:
+      - ".github/workflows/temporary-emf066-vector-profile.yml"
+      - "vendor/producer-a/crates/pub-reader/src/bin/emf066_vector_profile_probe.rs"
+  workflow_dispatch:
+
+concurrency:
+  group: pub-041-066-emf-census-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Download immutable 1050-source artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+      - name: Verify source corpus and pinned exact witnesses
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          root = Path("out/pinned1050/materialized/native")
+          paths = sorted(root.glob("*.pub"))
+          assert len(paths) == 1050, len(paths)
+          digest = hashlib.sha256("".join(p.stem.casefold() + "\n" for p in paths).encode("ascii")).hexdigest()
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          for sha in (
+              "155f8fd8c191851e4380ab1557638aeabb34b2257fa12a7748ab00b09edb74ba",
+              "d8ac6507d86e35c0f43e293760627a01b00a29586a76f8bf05b5fae702a19d13",
+          ):
+              path = root / (sha + ".pub")
+              assert path.is_file(), sha
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == sha
+          print("verified 1050 and exact 041/066")
+          PY
+      - name: Enforce Rust source formatting
+        run: |
+          set -euo pipefail
+          p=vendor/producer-a/crates/pub-reader/src/bin/emf066_vector_profile_probe.rs
+          if ! rustfmt --edition 2024 --check "$p"; then
+            rustfmt --edition 2024 "$p"
+            git diff -- "$p"
+            exit 1
+          fi
+      - name: Run bounded EMF record-family census
+        run: |
+          set -euo pipefail
+          mkdir -p target/emf066-vector-profile
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin emf066_vector_profile_probe
+          for sha in \
+            155f8fd8c191851e4380ab1557638aeabb34b2257fa12a7748ab00b09edb74ba \
+            d8ac6507d86e35c0f43e293760627a01b00a29586a76f8bf05b5fae702a19d13
+          do
+            vendor/producer-a/target/debug/emf066_vector_profile_probe "out/pinned1050/materialized/native/${sha}.pub" \
+              | tee -a target/emf066-vector-profile/records.txt
+          done
+      - name: Validate and archive source-safe census only
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path("target/emf066-vector-profile/records.txt")
+          if not path.exists():
+              raise SystemExit("no census results")
+          rows = []
+          for line in path.read_text(encoding="utf-8").splitlines():
+              assert line.startswith("EMF_RECORD_CENSUS "), "unexpected probe stdout"
+              row = json.loads(line.removeprefix("EMF_RECORD_CENSUS "))
+              assert set(row) == {
+                  "source_sha256", "emf_slot_count", "rows",
+                  "emf_slots_with_non_header_eof_records",
+                  "duplicate_logical_cluster_count", "strict_scanned_record_count",
+                  "strict_rejected_complete_blip_count",
+                  "strict_terminal_gap_present",
+              }, row.keys()
+              assert all(
+                  set(record) == {"use_count", "logical_len", "census", "vector_profile"}
+                  for record in row["rows"]
+              ), "unsanitized asset data"
+              rows.append(row)
+          assert len(rows) == 2, "041 and 066 both required"
+          assert [row["source_sha256"] for row in rows] == [
+              "155f8fd8c191851e4380ab1557638aeabb34b2257fa12a7748ab00b09edb74ba",
+              "d8ac6507d86e35c0f43e293760627a01b00a29586a76f8bf05b5fae702a19d13",
+          ]
+          vector = rows[1]["rows"][0]["vector_profile"]
+          assert vector["source_safe_profile"] == "emf066-vector-path-v1"
+          assert vector["all_records_consumed"] is True
+          assert vector["fill_paths"] == 4
+          assert vector["bezier_records"] == 9
+          assert vector["path_op_types"]["54"] == 17
+          assert vector["path_op_types"]["59"] == 4
+          assert vector["path_op_types"]["60"] == 4
+          assert vector["path_op_types"]["61"] == 4
+          output = Path("target/emf066-vector-profile/receipt.json")
+          output.write_text(json.dumps({"schema":"chaptera.emf066-vector-profile.v1","fixtures":rows},indent=2,sort_keys=True)+"\n",encoding="utf-8")
+          print(json.dumps([{"fixture_sha":r["source_sha256"],"slots":r["emf_slot_count"],"nontrivial_slots":r["emf_slots_with_non_header_eof_records"]} for r in rows],sort_keys=True))
+          PY
+      - name: Upload source-safe receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emf066-path-semantics-source-safe
+          path: target/emf066-vector-profile/receipt.json
+          if-no-files-found: warn
+          retention-days: 30
