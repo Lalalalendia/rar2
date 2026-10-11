@@ -80,9 +80,14 @@ try {
       body: JSON.stringify(body),
     });
     const docPath = "/v1/documents/" + encodeURIComponent(input.document_id);
-    const moveAttempt = (sourceHash, operationId) => ({
+    // The second principal must not distinguish a real foreign document from
+    // an opaque, freshly generated, nonexistent DocumentId on ANY Product
+    // route. Never log or emit this synthetic ID in the receipt.
+    const guessedDocumentId = "document-b02-absent-" + crypto.randomUUID();
+    const guessedDocPath = "/v1/documents/" + encodeURIComponent(guessedDocumentId);
+    const moveAttempt = (sourceHash, operationId, documentId = input.document_id) => ({
       protocol_version: "chaptera.commit-request.v1",
-      document_id: input.document_id,
+      document_id: documentId,
       source_hash: sourceHash,
       base_revision_id: input.revision_id,
       client_operation_id: operationId,
@@ -106,9 +111,11 @@ try {
     ));
     const layoutEnvironmentId = "sha256:" + [...layoutDigest]
       .map(byte => byte.toString(16).padStart(2, "0")).join("");
-    const exportRequest = (revisionId, clientRequestId) => ({
+    const exportRequest = (
+      revisionId, clientRequestId, documentId = input.document_id
+    ) => ({
       protocol_version: "chaptera.export-create.v1",
-      document_id: input.document_id,
+      document_id: documentId,
       revision_id: revisionId,
       target_profile: "idml:bounded-editable",
       layout_environment_id: layoutEnvironmentId,
@@ -126,14 +133,34 @@ try {
     const exportGuessedRevision = await post("/v1/exports", exportRequest(
       guessedRevision, "b02-cross-principal-export-guessed-revision",
     ));
+    // Real OIDC+HTTPS requests through the installed Product routes, including
+    // both the path and body DocumentId for the guessed MoveNode attempt.
+    const guessedCommit = await post(
+      guessedDocPath + "/commit",
+      moveAttempt(
+        input.source_sha256,
+        "b02-cross-principal-guessed-document-commit",
+        guessedDocumentId,
+      ),
+    );
+    const guessedExport = await post("/v1/exports", exportRequest(
+      input.revision_id,
+      "b02-cross-principal-guessed-document-export",
+      guessedDocumentId,
+    ));
     return {
       current: await request(docPath + "/current"),
+      guessed_current: await request(guessedDocPath + "/current"),
       scene: await request("/v1/reader/documents/" +
         encodeURIComponent(input.document_id) + "/scene"),
+      guessed_scene: await request("/v1/reader/documents/" +
+        encodeURIComponent(guessedDocumentId) + "/scene"),
       commit_correct_hash: correctHashCommit,
+      guessed_commit: guessedCommit,
       commit_wrong_hash: wrongHashCommit,
       export_create: exportCreate,
       export_guessed_revision: exportGuessedRevision,
+      guessed_export: guessedExport,
     };
   }, {
     document_id: receipt.document_id,
@@ -174,6 +201,20 @@ try {
     throw new Error("foreign export responses expose exact revision existence");
   }
 
+  // Source-hash and revision oracles already have their own positive/negative
+  // controls above; this checks DocumentId membership across all four Product
+  // consumers with one unrelated authenticated principal and an absent ID.
+  for (const [name, foreign, guessed] of [
+    ["current", result.current, result.guessed_current],
+    ["reader_scene", result.scene, result.guessed_scene],
+    ["commit_move_node", result.commit_correct_hash, result.guessed_commit],
+    ["export_create", result.export_create, result.guessed_export],
+  ]) {
+    if (JSON.stringify(foreign) !== JSON.stringify(guessed)) {
+      throw new Error(name + " exposes real-vs-guessed DocumentId membership");
+    }
+  }
+
   receipt.cross_principal_isolation_claim = true;
   receipt.cross_principal_isolation = {
     current_status: result.current.status,
@@ -188,6 +229,8 @@ try {
     export_guessed_revision_status: result.export_guessed_revision.status,
     export_guessed_revision_code: result.export_guessed_revision.code,
     export_revision_existence_oracle: false,
+    document_existence_oracle: false,
+    document_id_denial_parity_claim: true,
     cache_control: result.current.cache_control,
     document_identity_disclosed: false,
     revision_identity_disclosed: false,
