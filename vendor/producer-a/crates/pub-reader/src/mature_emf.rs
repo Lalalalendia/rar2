@@ -49,7 +49,9 @@ fn slice_span(bytes: &[u8], offset: u64, len: u64) -> Result<&[u8]> {
     let start = usize::try_from(offset).context("EMF source offset overflow")?;
     let len = usize::try_from(len).context("EMF source length overflow")?;
     let end = start.checked_add(len).context("EMF source end overflow")?;
-    bytes.get(start..end).context("EMF source span outside stream")
+    bytes
+        .get(start..end)
+        .context("EMF source span outside stream")
 }
 
 fn bytes_at(bytes: &[u8], offset: usize, len: usize) -> Result<&[u8]> {
@@ -83,7 +85,9 @@ fn logical_emf_bytes(delayed: &[u8], record: &ValidatedBlip) -> Result<Vec<u8>> 
         bail!("not a strictly validated OfficeArt EMF");
     }
     let logical_len = usize::try_from(
-        record.logical_payload_len.context("EMF missing logical length")?,
+        record
+            .logical_payload_len
+            .context("EMF missing logical length")?,
     )
     .context("EMF logical length overflow")?;
     if logical_len > MAX_LOGICAL_EMF_BYTES {
@@ -144,7 +148,9 @@ fn decode_stretchdibits_layer(record: &[u8]) -> Result<BitmapLayer> {
     let bits_len = usize::try_from(u32_at(record, 60)?)?;
     let bmi = bytes_at(record, bmi_offset, bmi_len)?;
     let bits = bytes_at(record, bits_offset, bits_len)?;
-    let bmi_end = bmi_offset.checked_add(bmi_len).context("DIB header end overflow")?;
+    let bmi_end = bmi_offset
+        .checked_add(bmi_len)
+        .context("DIB header end overflow")?;
     if bmi_offset < 80 || bmi_len != 40 || bits_offset < bmi_end {
         bail!("unsupported EMF DIB offset/header layout");
     }
@@ -210,7 +216,9 @@ fn decode_stretchdibits_layer(record: &[u8]) -> Result<BitmapLayer> {
     let w = usize::try_from(width)?;
     for y in 0..h {
         let input_y = if height_i > 0 { h - 1 - y } else { y };
-        let row_start = input_y.checked_mul(stride).context("EMF DIB row overflow")?;
+        let row_start = input_y
+            .checked_mul(stride)
+            .context("EMF DIB row overflow")?;
         let row = bytes_at(bits, row_start, stride)?;
         for x in 0..w {
             let rgb = bytes_at(row, x * 3, 3)?;
@@ -220,7 +228,11 @@ fn decode_stretchdibits_layer(record: &[u8]) -> Result<BitmapLayer> {
     if rgba.len() != capacity {
         bail!("EMF preview RGBA length mismatch");
     }
-    Ok(BitmapLayer { width, height, rgba })
+    Ok(BitmapLayer {
+        width,
+        height,
+        rgba,
+    })
 }
 
 /// Bounded EMF framing: one bitmap layer only. All other paint/state records
@@ -269,7 +281,9 @@ fn decode_emf_bitmap_layer(logical: &[u8]) -> Result<Option<(BitmapLayer, usize)
             _ => other_emr_count += 1,
         }
         count += 1;
-        offset = offset.checked_add(record_len).context("EMF record offset overflow")?;
+        offset = offset
+            .checked_add(record_len)
+            .context("EMF record offset overflow")?;
     }
     if !saw_eof || offset != logical.len() {
         bail!("EMF lacks complete terminal EOF");
@@ -312,7 +326,10 @@ pub fn build_mature_0x2c_emf_bitmap_preview_bundle_from_bytes(
             out.rejected_source_count += 1;
             continue;
         };
-        let Some(record) = validated.records.iter().find(|r| &r.record_source == source_span)
+        let Some(record) = validated
+            .records
+            .iter()
+            .find(|r| &r.record_source == source_span)
         else {
             out.rejected_source_count += 1;
             continue;
@@ -379,8 +396,7 @@ mod tests {
         stretch[94..96].copy_from_slice(&24_u16.to_le_bytes());
         // Input row0 BGR: red, green; input row1: blue, white.
         stretch[120..136].copy_from_slice(&[
-            0, 0, 255, 0, 255, 0, 0, 0,
-            255, 255, 255, 255, 255, 255, 0, 0,
+            0, 0, 255, 0, 255, 0, 0, 0, 255, 255, 255, 255, 255, 255, 0, 0,
         ]);
         let mut eof = vec![0_u8; 20];
         push_u32(&mut eof, 0, EMR_EOF);
