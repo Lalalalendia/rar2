@@ -40,21 +40,26 @@ use crate::{
     },
     reader_scene_v1::{ReaderSceneV1, from_viewer_geometry},
     revision_materializer::{
-        BlobStoreExactSourceLoader, EDITOR_REVISION_EVENT_SCHEMA_V1,
-        EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION, EditorRevisionEventV1,
+        BlobStoreExactSourceLoader, EDITOR_HISTORY_EVENT_SCHEMA_V1,
+        EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION, EDITOR_REVISION_EVENT_SCHEMA_V1,
+        EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION, EditorHistoryEventV1, EditorRevisionEventV1,
         ExactRevisionMaterializer, ExactSourceLoader, PubEditorReplayEngine,
-        RevisionMaterializerError, decode_editor_revision_event_v1,
-        encode_editor_revision_event_v1, project_sha256,
+        RevisionMaterializerError, decode_editor_history_event_v1, decode_editor_revision_event_v1,
+        encode_editor_history_event_v1, encode_editor_revision_event_v1, project_sha256,
+        undo_event_operation,
     },
     source_authority::{SourceAuthorityError, SqliteDocumentSourceAuthority},
     source_baseline::{
-        SourceBaselineError, SourceBaselineProducerConfig, derive_commit_revision_identities,
+        SourceBaselineError, SourceBaselineProducerConfig, derive_authoring_state_identity,
+        derive_commit_revision_identities, derive_history_revision_identities,
     },
     sqlite_store::{RevisionEdge, RevisionIdentityBinding, SqliteRevisionStore},
 };
 
 pub const COMMIT_REQUEST_V1: &str = "chaptera.commit-request.v1";
 pub const COMMIT_ACCEPTED_V1: &str = "chaptera.commit-accepted.v1";
+pub const HISTORY_TRANSITION_INTENT_V1: &str = "chaptera.history-transition-intent.v1";
+pub const HISTORY_TRANSITION_ACCEPTED_V1: &str = "chaptera.history-transition-accepted.v1";
 pub const CURRENT_DOCUMENT_V1: &str = "chaptera.current-document.v1";
 
 #[derive(Clone)]
@@ -150,6 +155,10 @@ fn product_router_routes(state: ProductApiHttpState) -> Router {
             get(reader_scene),
         )
         .route("/v1/documents/{document_id}/commit", post(commit_move_node))
+        .route(
+            "/v1/documents/{document_id}/history",
+            post(commit_history_transition),
+        )
         .with_state(state)
         .layer(middleware::from_fn(private_document_response))
 }
@@ -193,6 +202,41 @@ struct MoveNodeToV1 {
     node_id: String,
     x_emu: i64,
     y_emu: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoryTransitionRequestV1 {
+    protocol_version: String,
+    document_id: String,
+    source_hash: String,
+    base_revision_id: String,
+    client_operation_id: String,
+    command: HistoryTransitionCommandV1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoryTransitionCommandV1 {
+    kind: String,
+}
+
+#[derive(Debug, Serialize)]
+struct HistoryTransitionAcceptedResponse {
+    protocol_version: &'static str,
+    document_id: String,
+    source_hash: String,
+    base_revision_id: String,
+    revision_id: String,
+    state_id: String,
+    client_operation_id: String,
+    transition_kind: String,
+    canonical_operation: EditOperation,
+    project_schema_version: String,
+    canonical_revision_schema_version: String,
+    canonical_authoring_revision_id: String,
+    replayed: bool,
+    scene_refresh: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -755,6 +799,185 @@ async fn commit_move_node(
     accepted_from_receipt(&state, &source, committed, false).await
 }
 
+async fn commit_history_transition(
+    State(state): State<ProductApiHttpState>,
+    Path(document_id): Path<String>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Json(request): Json<HistoryTransitionRequestV1>,
+) -> Result<Json<HistoryTransitionAcceptedResponse>, ProductApiError> {
+    validate_history_request(&request, &document_id)?;
+
+    let principal = state
+        .auth
+        .authenticate_mutation_request(&headers, &jar)
+        .await
+        .map_err(ProductApiError::Auth)?;
+    let source = state
+        .source
+        .resolve_by_document_id(&document_id)
+        .await
+        .map_err(ProductApiError::Source)?;
+    let request_hash = request_hash(&request)?;
+    let now = now_ms()?;
+
+    if let Some(existing) = state
+        .committer
+        .reconcile_geometry_revision(
+            &source.tenant_id,
+            &document_id,
+            &principal.principal_id,
+            &request.client_operation_id,
+            &request_hash,
+            now,
+        )
+        .await
+        .map_err(ProductApiError::Authz)?
+    {
+        return accepted_history_from_receipt(&state, &source, existing, true).await;
+    }
+
+    // Reconcile through the authoritative committer first, so a foreign
+    // principal cannot learn the document source identity from this endpoint.
+    if request.source_hash != source.source_sha256 {
+        return Err(ProductApiError::bad_request(
+            "source_hash_mismatch",
+            "history request source_hash differs from durable source authority",
+        ));
+    }
+
+    let head = current_head(&state.revisions, &source).await?;
+    if request.base_revision_id != head.revision_id {
+        return Err(ProductApiError::conflict(
+            "stale_revision",
+            "base_revision_id is no longer the current RevisionStream head",
+        ));
+    }
+
+    let materialized = state
+        .materializer
+        .materialize_state(&source.tenant_id, &document_id, &head.revision_id)
+        .await
+        .map_err(ProductApiError::Materializer)?;
+    let base_state = derive_authoring_state_identity(
+        &document_id,
+        &source.source_sha256,
+        &materialized.receipt.project.schema_version,
+        &materialized.receipt.project,
+    )
+    .map_err(ProductApiError::Baseline)?;
+
+    // The canonical source has already been parsed and replayed by the
+    // materializer's isolated worker. Undo only removes the most recent
+    // trusted MoveNode event from its validated project. Do not open the PUB
+    // inside this Axum process: that would restore the original P0 boundary.
+    let operation = materialized
+        .receipt
+        .project
+        .operations
+        .last()
+        .cloned()
+        .ok_or_else(|| {
+            ProductApiError::conflict(
+                "undo_rejected",
+                "the current revision has no undoable canonical operation",
+            )
+        })?;
+    if !matches!(operation, EditOperation::MoveNode { .. }) {
+        return Err(ProductApiError::conflict(
+            "undo_operation_unsupported",
+            "this Cloud history slice admits Undo only for the latest MoveNode operation",
+        ));
+    }
+    let resulting_project = undo_event_operation(materialized.receipt.project.clone(), &operation)
+        .map_err(ProductApiError::Materializer)?;
+    let before_project_sha256 = materialized.receipt.project_sha256.clone();
+    let after_project_sha256 =
+        project_sha256(&resulting_project).map_err(ProductApiError::Materializer)?;
+    let identities = derive_history_revision_identities(
+        &document_id,
+        &source.source_sha256,
+        &resulting_project.schema_version,
+        &resulting_project,
+        &head.revision_id,
+        &base_state.state_id,
+        "undo",
+    )
+    .map_err(ProductApiError::Baseline)?;
+
+    let parent_canonical: AuthoringRevisionIdV1 = materialized
+        .receipt
+        .canonical_authoring_revision_id
+        .parse()
+        .map_err(|_| {
+            ProductApiError::internal(
+                "canonical_parent_revision_invalid",
+                "materialized parent canonical revision identity is invalid",
+            )
+        })?;
+    let canonical_child =
+        derive_authoring_revision_id_v1(&resulting_project, Some(parent_canonical))
+            .map_err(|_| {
+                ProductApiError::internal(
+                    "canonical_child_revision_failed",
+                    "canonical Undo child AuthoringRevisionId derivation failed",
+                )
+            })?
+            .to_string();
+
+    let event = EditorHistoryEventV1 {
+        schema_version: EDITOR_HISTORY_EVENT_SCHEMA_V1.to_owned(),
+        source_sha256: source.source_sha256.clone(),
+        transition_kind: "undo".to_owned(),
+        before_project_sha256,
+        after_project_sha256: after_project_sha256.clone(),
+        base_state_id: base_state.state_id,
+        resulting_state_id: identities.state_id.clone(),
+        authoring_root_hash: None,
+        operation: operation.clone(),
+    };
+    let canonical_event =
+        encode_editor_history_event_v1(&event).map_err(ProductApiError::Materializer)?;
+    let child_cursor = head.cursor.checked_add(1).ok_or_else(|| {
+        ProductApiError::internal("revision_cursor_overflow", "revision cursor overflow")
+    })?;
+
+    let edge = RevisionEdge {
+        document_id: document_id.clone(),
+        parent_revision: head.revision_id.clone(),
+        parent_cursor: head.cursor,
+        operation_id: request.client_operation_id.clone(),
+        request_hash,
+        canonical_event,
+        child_revision: identities.service_revision_id.clone(),
+        child_cursor,
+        resulting_state_hash: after_project_sha256,
+        authoring_root_hash: None,
+        semantic_schema_version: EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION,
+        committed_at_ms: now,
+    };
+    let binding = RevisionIdentityBinding {
+        document_id: document_id.clone(),
+        service_revision_id: identities.service_revision_id,
+        canonical_schema_version: AUTHORING_REVISION_SCHEMA_V1.to_owned(),
+        canonical_revision_id: canonical_child,
+        bound_at_ms: now,
+    };
+    let committed = state
+        .committer
+        .commit_geometry_revision(
+            &source.tenant_id,
+            &principal.principal_id,
+            edge,
+            binding,
+            now,
+        )
+        .await
+        .map_err(ProductApiError::Authz)?;
+
+    accepted_history_from_receipt(&state, &source, committed, false).await
+}
+
 async fn current_head(
     revisions: &SqliteRevisionStore,
     source: &crate::revision_materializer::AuthorizedDocumentSource,
@@ -827,6 +1050,89 @@ async fn accepted_from_receipt(
     }))
 }
 
+async fn accepted_history_from_receipt(
+    state: &ProductApiHttpState,
+    source: &crate::revision_materializer::AuthorizedDocumentSource,
+    receipt: crate::authz_runtime::AuthorizedRevisionCommitReceipt,
+    replayed_hint: bool,
+) -> Result<Json<HistoryTransitionAcceptedResponse>, ProductApiError> {
+    let event =
+        decode_editor_history_event_v1(&receipt.edge).map_err(ProductApiError::Materializer)?;
+    let child = state
+        .materializer
+        .materialize(
+            &source.tenant_id,
+            &receipt.edge.document_id,
+            &receipt.edge.child_revision,
+        )
+        .await
+        .map_err(ProductApiError::Materializer)?;
+    let identities = derive_history_revision_identities(
+        &receipt.edge.document_id,
+        &event.source_sha256,
+        &child.project.schema_version,
+        &child.project,
+        &receipt.edge.parent_revision,
+        &event.base_state_id,
+        &event.transition_kind,
+    )
+    .map_err(ProductApiError::Baseline)?;
+    if identities.service_revision_id != receipt.edge.child_revision
+        || identities.state_id != event.resulting_state_id
+    {
+        return Err(ProductApiError::internal(
+            "accepted_history_identity_mismatch",
+            "durable accepted history edge differs from the canonical history-transition law",
+        ));
+    }
+
+    Ok(Json(HistoryTransitionAcceptedResponse {
+        protocol_version: HISTORY_TRANSITION_ACCEPTED_V1,
+        document_id: receipt.edge.document_id.clone(),
+        source_hash: event.source_sha256,
+        base_revision_id: receipt.edge.parent_revision,
+        revision_id: receipt.edge.child_revision,
+        state_id: identities.state_id,
+        client_operation_id: receipt.edge.operation_id,
+        transition_kind: event.transition_kind,
+        canonical_operation: event.operation,
+        project_schema_version: child.project.schema_version,
+        canonical_revision_schema_version: receipt.binding.canonical_schema_version,
+        canonical_authoring_revision_id: receipt.binding.canonical_revision_id,
+        replayed: replayed_hint || receipt.replayed,
+        scene_refresh: "full_snapshot",
+    }))
+}
+
+fn validate_history_request(
+    request: &HistoryTransitionRequestV1,
+    path_document_id: &str,
+) -> Result<(), ProductApiError> {
+    if request.protocol_version != HISTORY_TRANSITION_INTENT_V1 {
+        return Err(ProductApiError::bad_request(
+            "protocol_version_invalid",
+            "chaptera.history-transition-intent.v1 is required",
+        ));
+    }
+    if request.document_id != path_document_id {
+        return Err(ProductApiError::bad_request(
+            "document_id_mismatch",
+            "path document_id differs from history request document_id",
+        ));
+    }
+    if request.command.kind != "undo" {
+        return Err(ProductApiError::bad_request(
+            "history_transition_unsupported",
+            "this Cloud history slice admits undo only",
+        ));
+    }
+    require_ident(&request.document_id, "document_id")?;
+    require_ident(&request.client_operation_id, "client_operation_id")?;
+    require_hash(&request.source_hash, "source_hash")?;
+    require_revision_id(&request.base_revision_id)?;
+    Ok(())
+}
+
 fn validate_request(
     request: &CommitRequestV1,
     path_document_id: &str,
@@ -856,7 +1162,7 @@ fn validate_request(
     Ok(())
 }
 
-fn request_hash(request: &CommitRequestV1) -> Result<String, ProductApiError> {
+fn request_hash<T: Serialize>(request: &T) -> Result<String, ProductApiError> {
     let bytes = canonical_revision_json_v1(request).map_err(|_| {
         ProductApiError::internal(
             "request_hash_failed",
@@ -2043,6 +2349,7 @@ mod tests {
             .await
             .unwrap();
         let expired = restarted_app
+            .clone()
             .oneshot(authenticated_request(
                 "GET",
                 &format!("/v1/documents/{document_id}/current"),
@@ -2054,6 +2361,130 @@ mod tests {
             .unwrap();
         assert_eq!(expired.status(), StatusCode::FORBIDDEN);
         assert_eq!(json_body(expired).await["error"]["code"], "grant_expired");
+
+        // Physical HTTP path over pinned Sample3 and freshly reopened SQLite:
+        // Undo is a NEW immutable revision even when the resulting authoring
+        // state returns to exactly the imported baseline geometry.
+        let undo_body = json!({
+            "protocol_version": HISTORY_TRANSITION_INTENT_V1,
+            "document_id": document_id,
+            "source_hash": source_sha256,
+            "base_revision_id": child_revision,
+            "client_operation_id": "undo-sample3-1",
+            "command": { "kind": "undo" }
+        });
+        let undo_no_csrf = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/history"),
+                &issued.session_token,
+                None,
+                Some(undo_body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(undo_no_csrf.status(), StatusCode::FORBIDDEN);
+        let undone = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/history"),
+                &issued.session_token,
+                Some(&issued.csrf_token),
+                Some(undo_body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(undone.status(), StatusCode::OK);
+        assert_eq!(undone.headers()[CACHE_CONTROL], "no-store");
+        let undone = json_body(undone).await;
+        assert_eq!(undone["protocol_version"], HISTORY_TRANSITION_ACCEPTED_V1);
+        assert_eq!(undone["transition_kind"], "undo");
+        assert_eq!(undone["base_revision_id"], child_revision);
+        let undo_revision = undone["revision_id"].as_str().unwrap().to_owned();
+        assert_ne!(undo_revision, child_revision);
+        assert_ne!(undo_revision, baseline.service_revision_id);
+        assert_eq!(undone["replayed"], false);
+        assert_eq!(undone["scene_refresh"], "full_snapshot");
+
+        let scene_undone = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/reader/documents/{document_id}/scene"),
+                &issued.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(scene_undone.status(), StatusCode::OK);
+        let scene_undone = json_body(scene_undone).await;
+        assert_eq!(scene_undone["revision_id"], undo_revision);
+        let restored = scene_undone["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["node_id"] == node_id)
+            .expect("canonical Undo scene contains the original movable node");
+        assert_eq!(restored["bounds"]["x"], before_x_emu);
+        assert_eq!(restored["bounds"]["y"], before_y_emu);
+
+        let retried_undo = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/history"),
+                &issued.session_token,
+                Some(&issued.csrf_token),
+                Some(undo_body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(retried_undo.status(), StatusCode::OK);
+        let retried_undo = json_body(retried_undo).await;
+        assert_eq!(retried_undo["revision_id"], undo_revision);
+        assert_eq!(retried_undo["replayed"], true);
+
+        let mut stale_undo = undo_body.clone();
+        stale_undo["client_operation_id"] = json!("undo-sample3-stale");
+        let stale_undo = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/history"),
+                &issued.session_token,
+                Some(&issued.csrf_token),
+                Some(stale_undo),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(stale_undo.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            json_body(stale_undo).await["error"]["code"],
+            "stale_revision"
+        );
+
+        let mut unsupported_redo = undo_body;
+        unsupported_redo["base_revision_id"] = json!(undo_revision);
+        unsupported_redo["client_operation_id"] = json!("redo-unsupported");
+        unsupported_redo["command"]["kind"] = json!("redo");
+        let redo = restarted_app
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/history"),
+                &issued.session_token,
+                Some(&issued.csrf_token),
+                Some(unsupported_redo),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(redo.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            json_body(redo).await["error"]["code"],
+            "history_transition_unsupported"
+        );
 
         restarted_authn.close().await;
         restarted_authz.close().await;
