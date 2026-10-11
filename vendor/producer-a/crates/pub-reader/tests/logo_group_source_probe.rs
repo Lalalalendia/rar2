@@ -1,5 +1,5 @@
-//! Measurement-only #2616: exact real-PUB LOGO (raw 0x31) ownership and
-//! pre-fix SourceGraph omission. Never check in source PUB bytes.
+//! Exact real-PUB LOGO (raw 0x31) materialization and source stack acceptance.
+//! Never check source PUB bytes into the repository.
 use pub_contents::{
     parse_0x2c_header, parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
 };
@@ -106,43 +106,65 @@ fn exact_public_newsletter_logo_0x31_baseline() {
         .expect("PAGE seq381 must be in actual DOCUMENT PageList");
     println!("LOGO_0X31_PAGE_ORDINAL_ONE_BASED={}", page_ordinal + 1);
 
+    assert_eq!(page_ordinal + 1, 5, "physical page role must stay exact");
     let source_order = build
         .source_page_paint_orders
         .iter()
-        .find(|order| order.page_id == page_id);
+        .find(|order| order.page_id == page_id)
+        .expect("exact page source paint order");
+    let page_nodes = build
+        .graph
+        .nodes
+        .values()
+        .filter(|node| node.header.parent_id == page_id.into_canonical())
+        .count();
     println!(
-        "LOGO_0X31_BASELINE_PAGE_NODES={} SOURCE_PAINT_ORDER_COUNT={:?}",
-        build
-            .graph
-            .nodes
-            .values()
-            .filter(|node| node.header.parent_id == page_id.into_canonical())
-            .count(),
-        source_order.map(|order| order.node_ids.len())
+        "LOGO_0X31_PROJECTED_PAGE_NODES={page_nodes} SOURCE_PAINT_ORDER_COUNT={}",
+        source_order.node_ids.len()
+    );
+    assert_eq!(
+        page_nodes, 16,
+        "12 baseline nodes plus four bounded children"
+    );
+    assert_eq!(
+        source_order.node_ids.len(),
+        page_nodes,
+        "PAGE LOGO children need carrier-backed paint order"
     );
 
-    // Four class-eligible descendants from #2616. This is a pre-fix
-    // observation, not an assertion that all seven children should render.
+    // Only four class-eligible descendants. Generic rectangles 387/408/410
+    // remain unadmitted without their own local paint authority.
     let candidates = [
         (389u32, "image"),
         (391, "story"),
         (411, "ellipse"),
         (412, "story"),
     ];
-    let mut materialized = 0usize;
+    let mut last_rank = None;
     for (seq, class) in candidates {
         let node_id = derive_pub_node_id(&source_hash, seq).unwrap();
-        let node = build.graph.nodes.get(&node_id);
-        if node.is_some() {
-            materialized += 1;
+        let node = build
+            .graph
+            .nodes
+            .get(&node_id)
+            .expect("bounded PAGE LOGO child must materialize");
+        assert_eq!(node.header.parent_id, page_id.into_canonical());
+        if seq == 389 {
+            assert_eq!(
+                node.payload.image_slot,
+                Some(5),
+                "PAGE-owned LOGO image child must retain physically proven WMF slot 5"
+            );
         }
-        println!(
-            "LOGO_0X31_BASELINE_CANDIDATE seq={seq} class={class} materialized={}",
-            node.is_some()
-        );
+        let rank = source_order
+            .node_ids
+            .iter()
+            .position(|id| *id == node_id)
+            .expect("PAGE LOGO child must have a source carrier rank");
+        if let Some(previous) = last_rank {
+            assert!(rank > previous, "serialized LOGO child order must be kept");
+        }
+        last_rank = Some(rank);
+        println!("LOGO_0X31_PROJECTED_CANDIDATE seq={seq} class={class} rank={rank}");
     }
-    assert_eq!(
-        materialized, 0,
-        "baseline changed: reconcile exact measurements before enabling LOGO projection"
-    );
 }

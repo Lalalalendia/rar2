@@ -6168,7 +6168,7 @@ mod mature_officeart_wmf_exact_product_tests {
         exact_wmf_fixture(
             "CHAPTERA_SAMPLE_NEWSLETTER",
             "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
-            [8, 8, 7, 8, 8, 9, 7, 8],
+            [8, 8, 8, 9, 9, 10, 8, 9],
         );
     }
 
