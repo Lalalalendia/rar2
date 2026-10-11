@@ -134,17 +134,27 @@ async fn exact_022_preview_reaches_product_host_with_source_neutral_pixels() {
     // Controlled offline scientific diagnostic only: parse the fixed PUBLIC
     // corpus file outside the Product host to classify an image admission
     // failure. This diagnostic is not part of any production PUB server path.
-    let isolated_oracle = pub_viewer::open_pub_bundle(
-        &pub_bytes, pub_viewer::viewer_geometry_environment_v0_1()
-    ).expect("pinned 022 scientific Viewer control must open");
-    let limits = chaptera_image_decode_contract::safe_preview_encode::PreviewEncodeLimitsV1::default();
+    let isolated_oracle =
+        pub_viewer::open_pub_bundle(&pub_bytes, pub_viewer::viewer_geometry_environment_v0_1())
+            .expect("pinned 022 scientific Viewer control must open");
+    let limits =
+        chaptera_image_decode_contract::safe_preview_encode::PreviewEncodeLimitsV1::default();
     let mut source_diagnostics = Vec::new();
     for image in &isolated_oracle.geometry.images {
         let digest = format!("{:x}", Sha256::digest(&image.bytes));
-        let verified = image.verified_source_sha256.as_ref()
+        let verified = image
+            .verified_source_sha256
+            .as_ref()
             .is_some_and(|x| x.to_string() == digest);
-        let supported_mime = matches!(image.mime.as_str(), "image/png" | "image/jpeg" | "image/jpg");
-        let mime = if image.mime == "image/jpg" { "image/jpeg" } else { &image.mime };
+        let supported_mime = matches!(
+            image.mime.as_str(),
+            "image/png" | "image/jpeg" | "image/jpg"
+        );
+        let mime = if image.mime == "image/jpg" {
+            "image/jpeg"
+        } else {
+            &image.mime
+        };
         let decoded = chaptera_image_decode_contract::decode_image_v1(
             &image.bytes,
             mime,
@@ -170,12 +180,12 @@ async fn exact_022_preview_reaches_product_host_with_source_neutral_pixels() {
                 &limits,
             )
         });
-        let encoder_error = encoded.as_ref().and_then(|result| {
-            result.as_ref().err().map(|error| error.code)
-        });
-        let candidate_len = encoded.as_ref().and_then(|result| {
-            result.as_ref().ok().map(|preview| preview.bytes.len())
-        });
+        let encoder_error = encoded
+            .as_ref()
+            .and_then(|result| result.as_ref().err().map(|error| error.code));
+        let candidate_len = encoded
+            .as_ref()
+            .and_then(|result| result.as_ref().ok().map(|preview| preview.bytes.len()));
         source_diagnostics.push(json!({
             "mime": mime,
             "encoded_source_bytes": image.bytes.len(),
