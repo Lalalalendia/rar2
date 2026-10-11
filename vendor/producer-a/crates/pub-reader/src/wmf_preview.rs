@@ -140,7 +140,7 @@ enum GdiObject {
     Pen(Pen),
     Brush(Brush),
     FontCompatibility,
-    FontPartialText50,
+    FontPartialText50 { text_profile_admitted: bool },
     PaletteCompatibility,
     RegionCompatibility,
 }
@@ -1680,8 +1680,14 @@ fn rasterize_wmf_preview_internal(
             }
             META_CREATEFONTINDIRECT => {
                 if explicitly_partial && params.len() == WMF_PARTIAL_FONT_BYTES {
-                    admit_partial_50_byte_font(params)?;
-                    allocate_object(&mut objects, GdiObject::FontPartialText50)?;
+                    // Creating an unselected GDI font has no raster effect.
+                    // Admit its handle lifecycle, but allow visible text ONLY
+                    // when the source-proven selected font profile matches.
+                    let text_profile_admitted = admit_partial_50_byte_font(params).is_ok();
+                    allocate_object(
+                        &mut objects,
+                        GdiObject::FontPartialText50 { text_profile_admitted },
+                    )?;
                 } else {
                     validate_font_compatibility_object(params)?;
                     allocate_object(&mut objects, GdiObject::FontCompatibility)?;
@@ -1738,7 +1744,9 @@ fn rasterize_wmf_preview_internal(
                     GdiObject::Pen(pen) => state.pen = pen,
                     GdiObject::Brush(brush) => state.brush = brush,
                     GdiObject::FontCompatibility => state.selected_partial_font = false,
-                    GdiObject::FontPartialText50 => state.selected_partial_font = true,
+                    GdiObject::FontPartialText50 { text_profile_admitted } => {
+                        state.selected_partial_font = text_profile_admitted;
+                    }
                     GdiObject::PaletteCompatibility => {
                         bail!("WMF Palette requires META_SELECTPALETTE");
                     }
@@ -1975,6 +1983,22 @@ mod tests {
         assert_eq!((partial.image.width, partial.image.height), (100, 100));
         assert!(partial.image.rgba.chunks_exact(4).any(|px| px[3] == 255));
         assert!(rasterize_wmf_preview_explicit_text_gap(&synthetic_polygon(), 100, 100).is_err());
+    }
+
+    #[test]
+    fn unselected_unsupported_font_does_not_override_source_proven_selected_text_font() {
+        let mut source = synthetic_one_char_explicit_text_gap();
+        source[10..12].copy_from_slice(&4_u16.to_le_bytes()); // three GDI objects + one
+        let mut inactive = vec![0_u8; WMF_PARTIAL_FONT_BYTES];
+        inactive[0..2].copy_from_slice(&(-122_i16).to_le_bytes());
+        inactive[8..10].copy_from_slice(&700_u16.to_le_bytes());
+        inactive[13] = 42; // opaque unsupported charset, NEVER selected for text
+        insert_record_before_eof(&mut source, record(META_CREATEFONTINDIRECT, &inactive));
+        let preview = rasterize_wmf_preview_explicit_text_gap(&source, 100, 100)
+            .expect("unselected font creation must not suppress proven graph drawing");
+        assert_eq!(preview.omitted_text_record_count, 1);
+        // Strict previous API still refuses both 50-byte fonts and the text.
+        assert!(rasterize_wmf_preview(&source, 100, 100).is_err());
     }
 
     #[test]
