@@ -1,0 +1,113 @@
+name: TEMP WMF EXTTEXTOUT source-safe wire census
+
+on:
+  push:
+    branches:
+      - measure/wmf-exttextout-wire-084-20261011
+    paths:
+      - ".github/workflows/temporary-wmf-exttextout-wire-census.yml"
+      - "vendor/producer-a/crates/pub-reader/src/bin/wmf_exttextout_profile.rs"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: temp-wmf-exttextout-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Download pinned 1050 immutable PUB sources
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+      - name: Verify exact source SHA on 084 and WMF controls
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          root = Path("out/pinned1050/materialized/native")
+          assert len(list(root.glob("*.pub"))) == 1050
+          for sha in (
+            "6e50032567c85a83cacc4f07520a2966411950c73a739029862417dec369908d",
+            "40453fa60fbd9176f85e3b4d29f5074139b4e4a882d555d2801ec4a1a6c5fb62",
+            "b384bf6461c77c3d0fa227c148e1e3092cf69c98b0ad568a7b3e32fb139b6282",
+          ):
+            path = root / (sha + ".pub")
+            assert path.is_file(), sha
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == sha
+          print("WMF_EXACT_SOURCE_SHA_VERIFIED")
+          PY
+      - name: Transient rustfmt and build strict Reader probe
+        run: |
+          set -euo pipefail
+          rustfmt --edition 2024 vendor/producer-a/crates/pub-reader/src/bin/wmf_exttextout_profile.rs
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin wmf_exttextout_profile
+      - name: Classify WMF text wire without reading out document bytes
+        run: |
+          set -euo pipefail
+          mkdir -p target/wmf-exttextout
+          for sha in \
+            6e50032567c85a83cacc4f07520a2966411950c73a739029862417dec369908d \
+            40453fa60fbd9176f85e3b4d29f5074139b4e4a882d555d2801ec4a1a6c5fb62 \
+            b384bf6461c77c3d0fa227c148e1e3092cf69c98b0ad568a7b3e32fb139b6282
+          do
+            vendor/producer-a/target/debug/wmf_exttextout_profile "out/pinned1050/materialized/native/${sha}.pub" \
+              | tee -a target/wmf-exttextout/census.txt
+          done
+      - name: Validate source-safe schema and persist diagnostic
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          source = Path("target/wmf-exttextout/census.txt")
+          rows = []
+          for line in source.read_text(encoding="utf-8").splitlines():
+            prefix = "WMF_EXTTEXTOUT_PROFILE "
+            assert line.startswith(prefix), "unexpected probe stdout"
+            row = json.loads(line[len(prefix):])
+            assert set(row) == {"schema","pub_sha256","wmf_source_count","wmf_use_count","rejected_source_count","physical_wmf_record_count","rows"}
+            assert row["schema"] == "chaptera.wmf-exttextout-wire.v1"
+            assert all(set(w) == {"uses","record_len","census"} for w in row["rows"])
+            assert all(set(w["census"]) == {"record_count","function_histogram","font_lengths","text_records","full_consumption"} for w in row["rows"])
+            assert all(set(t) == {
+              "wire_state","param_len","text_length","opts","has_clip_or_opaque_rect","rectangle_extent","string_start",
+              "string_span_complete","padding_bytes","dx_count","high_byte_count","zero_byte_count",
+              "logical_x","logical_y","font_selected","font_profile","map_mode","window_origin",
+              "window_extent","text_color_set","text_color_is_black","background_color_set","background_mode","text_align"
+            } for w in row["rows"] for t in w["census"]["text_records"])
+            rows.append(row)
+          assert len(rows) == 3
+          expected = [
+            "6e50032567c85a83cacc4f07520a2966411950c73a739029862417dec369908d",
+            "40453fa60fbd9176f85e3b4d29f5074139b4e4a882d555d2801ec4a1a6c5fb62",
+            "b384bf6461c77c3d0fa227c148e1e3092cf69c98b0ad568a7b3e32fb139b6282",
+          ]
+          assert [row["pub_sha256"] for row in rows] == expected
+          out = Path("target/wmf-exttextout/receipt.json")
+          out.write_text(json.dumps({"schema":"chaptera.wmf-exttextout-pinned-084.v1","fixtures":rows},sort_keys=True,indent=2)+"\n",encoding="utf-8")
+          print(json.dumps([{
+            "sha":row["pub_sha256"],"wmf_sources":row["wmf_source_count"],
+            "text_records":sum(len(w["census"]["text_records"]) for w in row["rows"])
+          } for row in rows],sort_keys=True))
+          PY
+      - name: Upload only source-safe WMF census
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-084-wmf-exttextout-wire-source-safe
+          path: target/wmf-exttextout/receipt.json
+          if-no-files-found: error
+          retention-days: 30
