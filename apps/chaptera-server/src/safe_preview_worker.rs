@@ -52,8 +52,11 @@ pub(crate) fn derive_isolated_image_previews(
 ) -> Vec<IsolatedImagePreviewV1> {
     stage.image_count = geometry.images.len();
     stage.source_exact_count = geometry.images.iter().filter(|i| i.source_exact).count();
-    stage.independently_verified_count = geometry.images.iter()
-        .filter(|i| i.verified_source_sha256.is_some()).count();
+    stage.independently_verified_count = geometry
+        .images
+        .iter()
+        .filter(|i| i.verified_source_sha256.is_some())
+        .count();
     stage.scene_resource_count = scene.resources.len();
     let approved_ids: HashSet<&str> = scene
         .resources
