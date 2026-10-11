@@ -10,21 +10,27 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.CHAPTERA_S3_PROBE_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.CHAPTERA_S3_PROBE_SECRET_ACCESS_KEY }}
-      AWS_SESSION_TOKEN: ${{ secrets.CHAPTERA_S3_PROBE_SESSION_TOKEN }}
-      AWS_REGION: ${{ vars.CHAPTERA_S3_PROBE_REGION }}
-      CHAPTERA_S3_PROBE_ENDPOINT_URL: ${{ vars.CHAPTERA_S3_PROBE_ENDPOINT_URL }}
-      CHAPTERA_S3_QUARANTINE_BUCKET: ${{ vars.CHAPTERA_S3_PROBE_QUARANTINE_BUCKET }}
-      CHAPTERA_S3_PRIVATE_BUCKET: ${{ vars.CHAPTERA_S3_PROBE_PRIVATE_BUCKET }}
-      CHAPTERA_S3_EXPECTED_BUCKET_OWNER: ${{ vars.CHAPTERA_S3_PROBE_EXPECTED_BUCKET_OWNER }}
     steps:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@1.94.1
 
-      - name: Require ephemeral provider authority
+      - name: Run owner-pinned physical provider and versioning probe
+        # Keep secrets out of checkout, toolchain setup and artifact upload.
+        # This is an operator-only probe identity. It needs read-only
+        # GetBucketVersioning on both buckets and ListBucketVersions scoped
+        # to the disposable canonical/provider-receipt prefix, in addition
+        # to the existing provider-adapter operations. Never grant those
+        # enumeration permissions to production serve or worker identities.
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CHAPTERA_S3_PROBE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CHAPTERA_S3_PROBE_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.CHAPTERA_S3_PROBE_SESSION_TOKEN }}
+          AWS_REGION: ${{ vars.CHAPTERA_S3_PROBE_REGION }}
+          CHAPTERA_S3_PROBE_ENDPOINT_URL: ${{ vars.CHAPTERA_S3_PROBE_ENDPOINT_URL }}
+          CHAPTERA_S3_QUARANTINE_BUCKET: ${{ vars.CHAPTERA_S3_PROBE_QUARANTINE_BUCKET }}
+          CHAPTERA_S3_PRIVATE_BUCKET: ${{ vars.CHAPTERA_S3_PROBE_PRIVATE_BUCKET }}
+          CHAPTERA_S3_EXPECTED_BUCKET_OWNER: ${{ vars.CHAPTERA_S3_PROBE_EXPECTED_BUCKET_OWNER }}
         shell: bash
         run: |
           set -euo pipefail
@@ -33,14 +39,8 @@ jobs:
           test -n "$AWS_REGION"
           test -n "$CHAPTERA_S3_QUARANTINE_BUCKET"
           test -n "$CHAPTERA_S3_PRIVATE_BUCKET"
-          # A public-pilot receipt cannot come from an unpinned S3 client.
           test -n "$CHAPTERA_S3_EXPECTED_BUCKET_OWNER"
           test "$CHAPTERA_S3_PRIVATE_BUCKET" != "$CHAPTERA_S3_QUARANTINE_BUCKET"
-
-      - name: Run current-adapter physical probe
-        shell: bash
-        run: |
-          set -euo pipefail
           mkdir -p target/cloud-s3-provider-probe
           if [ -n "${CHAPTERA_S3_PROBE_ENDPOINT_URL:-}" ]; then
             export AWS_ENDPOINT_URL_S3="$CHAPTERA_S3_PROBE_ENDPOINT_URL"
@@ -59,6 +59,16 @@ jobs:
           assert receipt["owner_pinned_download_grant_denied"] is True
           assert receipt["download_grant_policy_passed"] is True
           assert receipt["direct_upload_grant_available"] is False
+          assert receipt["private_bucket_never_versioned"] is True
+          assert receipt["quarantine_bucket_never_versioned"] is True
+          assert receipt["no_versions_after_delete"] is True
+          assert receipt["physical_delete_v0"] is True
+          # Other IAM, anonymous access and CORS proofs still require
+          # separate principal-scoped physical operator acceptance.
+          assert receipt["serve_list_denied"] is None
+          assert receipt["worker_list_denied"] is None
+          assert receipt["anonymous_access_denied"] is None
+          assert receipt["cors_allowed_origin_only"] is None
           prohibited = ("url", "secret", "access_key", "account_id", "object_locator")
           serialized = json.dumps(receipt, sort_keys=True).lower()
           for token in prohibited:

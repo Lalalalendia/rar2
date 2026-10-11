@@ -47,6 +47,9 @@ struct ProviderReceiptV1 {
     worker_list_denied: Option<bool>,
     anonymous_access_denied: Option<bool>,
     cors_allowed_origin_only: Option<bool>,
+    private_bucket_never_versioned: bool,
+    quarantine_bucket_never_versioned: bool,
+    no_versions_after_delete: bool,
     physical_delete_v0: Option<bool>,
     core_adapter_probe_passed: bool,
 }
@@ -75,12 +78,31 @@ async fn run() -> Result<(ProviderReceiptV1, bool), String> {
     let quarantine_bucket = required_env("CHAPTERA_S3_QUARANTINE_BUCKET")?;
     let private_bucket = required_env("CHAPTERA_S3_PRIVATE_BUCKET")?;
     let expected_owner = optional_env("CHAPTERA_S3_EXPECTED_BUCKET_OWNER");
+    let expected_owner_str = expected_owner
+        .as_deref()
+        .ok_or_else(|| "expected bucket owner required for physical S3 probe".to_owned())?;
+    if quarantine_bucket == private_bucket {
+        return Err("quarantine and private buckets must differ".to_owned());
+    }
     let region = optional_env("AWS_REGION").or_else(|| optional_env("AWS_DEFAULT_REGION"));
 
     let shared_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let client = aws_sdk_s3::Client::new(&shared_config);
+
+    // V0 hard delete is unsafe for an Enabled or Suspended bucket: a
+    // successful HEAD absence would not rule out retained object versions.
+    // These read-only checks must run before creating a disposable object.
+    // Probe credentials are separate from the ordinary serve/worker roles.
+    let private_bucket_never_versioned =
+        verify_never_versioned_bucket(&client, &private_bucket, expected_owner_str).await?;
+    let quarantine_bucket_never_versioned =
+        verify_never_versioned_bucket(&client, &quarantine_bucket, expected_owner_str).await?;
+    if !private_bucket_never_versioned || !quarantine_bucket_never_versioned {
+        return Err("S3 probe requires buckets with versioning never enabled".to_owned());
+    }
+
     let provider = S3BlobProvider::new(
-        client,
+        client.clone(),
         quarantine_bucket.clone(),
         private_bucket.clone(),
         expected_owner.clone(),
@@ -177,6 +199,20 @@ async fn run() -> Result<(ProviderReceiptV1, bool), String> {
         .is_ok();
     let delete_head_absent =
         exact_delete_succeeded && matches!(provider.head_exact(&locator).await, Ok(None));
+    // HEAD absence alone is insufficient when a provider might retain old
+    // versions or deletion markers. Query only this disposable probe prefix.
+    // A truncated result, missing truncation flag or query failure is NO-GO.
+    let no_versions_after_delete = if delete_head_absent {
+        verify_no_version_residue(&client, &private_bucket, &locator, expected_owner_str).await?
+    } else {
+        false
+    };
+    let physical_delete_v0 = physical_delete_proven(
+        private_bucket_never_versioned,
+        quarantine_bucket_never_versioned,
+        delete_head_absent,
+        no_versions_after_delete,
+    );
 
     let core_adapter_probe_passed = create_once_collision_rejected
         && head_length_exact
@@ -214,10 +250,64 @@ async fn run() -> Result<(ProviderReceiptV1, bool), String> {
         worker_list_denied: None,
         anonymous_access_denied: None,
         cors_allowed_origin_only: None,
-        physical_delete_v0: None,
+        private_bucket_never_versioned,
+        quarantine_bucket_never_versioned,
+        no_versions_after_delete,
+        physical_delete_v0: Some(physical_delete_v0),
         core_adapter_probe_passed,
     };
     Ok((receipt, core_adapter_probe_passed))
+}
+
+// S3 GetBucketVersioning returns no Status only when versioning has never
+// been enabled. A Suspended bucket is not safe for the current V0 hard-delete
+// model, since noncurrent objects may survive a successful ordinary DELETE.
+async fn verify_never_versioned_bucket(
+    client: &aws_sdk_s3::Client,
+    bucket: &str,
+    expected_owner: &str,
+) -> Result<bool, String> {
+    let output = client
+        .get_bucket_versioning()
+        .bucket(bucket)
+        .expected_bucket_owner(expected_owner)
+        .send()
+        .await
+        .map_err(|_| "s3_bucket_versioning_probe_failed".to_owned())?;
+    Ok(output.status().is_none())
+}
+
+// This is an inspector-only permission on a synthetic key prefix, not a
+// justification for granting ListBucketVersions to serve/worker identities.
+async fn verify_no_version_residue(
+    client: &aws_sdk_s3::Client,
+    bucket: &str,
+    locator: &str,
+    expected_owner: &str,
+) -> Result<bool, String> {
+    let output = client
+        .list_object_versions()
+        .bucket(bucket)
+        .expected_bucket_owner(expected_owner)
+        .prefix(locator)
+        .send()
+        .await
+        .map_err(|_| "s3_object_version_probe_failed".to_owned())?;
+    Ok(output.is_truncated() == Some(false)
+        && output.versions().is_empty()
+        && output.delete_markers().is_empty())
+}
+
+fn physical_delete_proven(
+    private_bucket_never_versioned: bool,
+    quarantine_bucket_never_versioned: bool,
+    delete_head_absent: bool,
+    no_versions_after_delete: bool,
+) -> bool {
+    private_bucket_never_versioned
+        && quarantine_bucket_never_versioned
+        && delete_head_absent
+        && no_versions_after_delete
 }
 
 // Report the true effective grant boundary: URL-only grants are supported
@@ -296,6 +386,15 @@ mod tests {
             ProviderErrorKind::Other,
             "s3_download_grant_expected_owner_requires_headers",
         )
+    }
+
+    #[test]
+    fn physical_delete_requires_never_versioned_buckets_and_no_residual_versions() {
+        assert!(physical_delete_proven(true, true, true, true));
+        assert!(!physical_delete_proven(false, true, true, true));
+        assert!(!physical_delete_proven(true, false, true, true));
+        assert!(!physical_delete_proven(true, true, false, true));
+        assert!(!physical_delete_proven(true, true, true, false));
     }
 
     #[test]
