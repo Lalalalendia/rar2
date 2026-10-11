@@ -3,11 +3,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Request, State},
     http::{
         HeaderMap, HeaderName, HeaderValue, StatusCode,
         header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
     },
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -81,6 +82,22 @@ pub fn router(state: ProductExportHttpState) -> Router {
             post(authorize_loss_report_download),
         )
         .with_state(state)
+        .layer(middleware::from_fn(private_export_response))
+}
+
+// Denial and success responses both can reveal exact job/revision scope.
+// Never downgrade an artifact response's existing private, no-store policy.
+async fn private_export_response(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    ensure_export_no_store(&mut response);
+    response
+}
+
+fn ensure_export_no_store(response: &mut Response) {
+    response
+        .headers_mut()
+        .entry(CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -877,6 +894,26 @@ mod tests {
         assert!(!encoded.contains('\\'));
         assert!(encoded.contains("%D0%9A"));
         assert!(encoded.ends_with(".idml"));
+    }
+
+    #[test]
+    fn export_router_cache_policy_preserves_private_artifacts() {
+        let mut denied = ProductExportHttpError::Jobs(JobsRuntimeError {
+            code: "grant_missing",
+            message: "denied".to_owned(),
+        })
+        .into_response();
+        ensure_export_no_store(&mut denied);
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        assert_eq!(denied.headers()[CACHE_CONTROL], "no-store");
+
+        let mut artifact = Response::new(Body::empty());
+        artifact.headers_mut().insert(
+            CACHE_CONTROL,
+            HeaderValue::from_static("private, no-store"),
+        );
+        ensure_export_no_store(&mut artifact);
+        assert_eq!(artifact.headers()[CACHE_CONTROL], "private, no-store");
     }
 
     #[test]

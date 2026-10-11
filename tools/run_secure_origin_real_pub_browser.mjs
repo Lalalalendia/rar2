@@ -257,6 +257,59 @@ try {
   }
   const initialPaint = await verifyEditorPaint(current, "initial open");
 
+  const sourceNeutralBoundary = await page.evaluate(async id => {
+    const forbiddenKeys = new Set([
+      "source_bytes", "raw_source_bytes", "physical_upload_ref",
+      "object_version", "object_etag", "durable_binding_id", "binding_id",
+      "object_locator", "provider_key", "opaque_url", "presigned_url",
+      "download_handle", "local_path", "filesystem_path",
+    ]);
+    const forbiddenStrings = ["SampleNewsletter.pub", "TruncatedNewsletter.pub"];
+    const violations = [];
+    const visit = (value, path) => {
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => visit(item, path + "[" + index + "]"));
+        return;
+      }
+      if (!value || typeof value !== "object") {
+        if (typeof value === "string" &&
+            forbiddenStrings.some(canary => value.includes(canary))) {
+          violations.push(path + ":source-filename");
+        }
+        return;
+      }
+      for (const [key, nested] of Object.entries(value)) {
+        const next = path ? path + "." + key : key;
+        if (forbiddenKeys.has(key)) violations.push(next);
+        visit(nested, next);
+      }
+    };
+    const payloads = {};
+    for (const [name, path] of [
+      ["current", "/v1/documents/" + encodeURIComponent(id) + "/current"],
+      ["scene", "/v1/reader/documents/" + encodeURIComponent(id) + "/scene"],
+    ]) {
+      const response = await fetch(path, {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error(name + " source-neutral probe HTTP " + response.status);
+      payloads[name] = await response.json();
+      visit(payloads[name], name);
+    }
+    return {
+      violations,
+      current_protocol: payloads.current?.protocol_version ?? null,
+      scene_protocol: payloads.scene?.protocol_version ?? null,
+    };
+  }, documentId);
+  if (sourceNeutralBoundary.violations.length ||
+      sourceNeutralBoundary.current_protocol !== "chaptera.current-document.v1" ||
+      sourceNeutralBoundary.scene_protocol !== "chaptera.reader-scene.v1") {
+    throw new Error("browser payload crossed raw/provider source boundary: " +
+      JSON.stringify(sourceNeutralBoundary));
+  }
+
   // A returning user must be able to rediscover the just-created durable
   // project from the real Project Home without retaining the document URL.
   await page.goto(origin + "/editor", { waitUntil: "domcontentloaded" });
@@ -280,12 +333,18 @@ try {
     };
   }, documentId);
   if (homeReceipt.path !== "/editor" || homeReceipt.document_id !== documentId ||
-      !homeReceipt.project_id || !homeReceipt.name) {
-    throw new Error("Project Home did not surface the imported durable project: " +
-      JSON.stringify({ path: homeReceipt.path, document_id: homeReceipt.document_id,
-        project_id_present: !!homeReceipt.project_id,
-        name_present: !!homeReceipt.name }));
+      !homeReceipt.project_id || homeReceipt.name !== "SampleNewsletter.pub") {
+    // The authenticated Project Home may display the owner's uploaded filename,
+    // but the retained security evidence must never copy that filename.
+    throw new Error("Project Home did not preserve the authorized imported project label");
   }
+  const safeHomeReceipt = {
+    path: homeReceipt.path,
+    document_id: homeReceipt.document_id,
+    project_id: homeReceipt.project_id,
+    uploaded_label_verified: true,
+    status: homeReceipt.status,
+  };
   const homeOpen = page.locator(
     '[data-document-id="' + documentId.replace(/"/g, '\\"') + '"] [data-action="open-project"]'
   );
@@ -392,6 +451,133 @@ try {
     attempts: [{ node_id: moveTarget.node_id, status: commitResponse.status(), code: null }],
   };
 
+  // Physical hostile-source control: a truncated copy of the real Publisher
+  // fixture must traverse the authenticated upload path, fail validation, and
+  // never create a second Project/genesis.
+  await page.goto(origin + "/editor", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() =>
+    document.querySelector("#status")?.textContent?.startsWith("Проектов:"),
+  null, { timeout: 30000 });
+  const projectsBeforeMalformed = await page.evaluate(() =>
+    [...document.querySelectorAll("[data-document-id]")]
+      .map(card => card.getAttribute("data-document-id"))
+      .filter(Boolean)
+      .sort());
+  const createCallsBeforeMalformed = calls.filter(call =>
+    call.method === "POST" && call.path === "/v1/projects/from-upload").length;
+
+  const oversizedAdmission = await page.evaluate(async () => {
+    const sessionResponse = await fetch("/v1/session", {
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    const session = await sessionResponse.json().catch(() => null);
+    if (!sessionResponse.ok || !session?.csrf_token) {
+      throw new Error("oversized admission probe could not obtain CSRF");
+    }
+    const workspaceResponse = await fetch("/v1/workspaces/personal", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: {
+        "content-type": "application/json",
+        "x-csrf-token": session.csrf_token,
+      },
+      body: "{}",
+    });
+    const workspace = await workspaceResponse.json().catch(() => null);
+    if (!workspaceResponse.ok || !workspace?.workspace_id) {
+      throw new Error("oversized admission probe could not resolve workspace");
+    }
+    const response = await fetch("/v1/uploads", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: {
+        "content-type": "application/json",
+        "x-csrf-token": session.csrf_token,
+      },
+      body: JSON.stringify({
+        workspace_id: workspace.workspace_id,
+        purpose: "pub_source",
+        expected_byte_len: 1099511627776,
+        declared_content_type: "application/x-mspublisher",
+        idempotency_key: "b02-oversized-upload-admission",
+      }),
+    });
+    const body = await response.json().catch(() => null);
+    return {
+      status: response.status,
+      error: body?.error ?? null,
+      upload_disclosed: !!body?.upload,
+      transport_disclosed: !!body?.transport,
+    };
+  });
+  if (oversizedAdmission.status !== 413 ||
+      oversizedAdmission.error !== "upload_size_rejected" ||
+      oversizedAdmission.upload_disclosed ||
+      oversizedAdmission.transport_disclosed) {
+    throw new Error("oversized upload was not rejected before object admission: " +
+      JSON.stringify(oversizedAdmission));
+  }
+
+  await page.goto(origin + "/editor/new", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() =>
+    document.querySelector("#status")?.textContent?.includes("Готов к загрузке"),
+  null, { timeout: 30000 });
+  const truncated = raw.subarray(0, Math.min(raw.length, 4096));
+  if (truncated.length >= raw.length) {
+    throw new Error("real Publisher fixture is too small for truncated hostile control");
+  }
+  await page.locator("#pub-file").setInputFiles({
+    name: "TruncatedNewsletter.pub",
+    mimeType: "application/x-mspublisher",
+    buffer: truncated,
+  });
+  await page.waitForFunction(() => {
+    const code = document.querySelector("#error")?.textContent ?? "";
+    return code.length > 0;
+  }, null, { timeout: 120000 });
+  const malformedUi = await page.evaluate(() => ({
+    path: location.pathname,
+    status: document.querySelector("#status")?.textContent ?? "",
+    error_code: document.querySelector("#error")?.textContent ?? "",
+  }));
+  if (malformedUi.path !== "/editor/new" ||
+      malformedUi.status !== "Needs attention" ||
+      !/^[a-z0-9_:-]{1,96}$/.test(malformedUi.error_code)) {
+    throw new Error("truncated PUB did not fail closed at file-entry boundary: " +
+      JSON.stringify(malformedUi));
+  }
+  const createCallsAfterMalformed = calls.filter(call =>
+    call.method === "POST" && call.path === "/v1/projects/from-upload").length;
+  if (createCallsAfterMalformed !== createCallsBeforeMalformed) {
+    throw new Error("truncated PUB reached durable Project creation");
+  }
+
+  await page.goto(origin + "/editor", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() =>
+    document.querySelector("#status")?.textContent?.startsWith("Проектов:"),
+  null, { timeout: 30000 });
+  const projectsAfterMalformed = await page.evaluate(() =>
+    [...document.querySelectorAll("[data-document-id]")]
+      .map(card => card.getAttribute("data-document-id"))
+      .filter(Boolean)
+      .sort());
+  if (JSON.stringify(projectsAfterMalformed) !== JSON.stringify(projectsBeforeMalformed)) {
+    throw new Error("truncated PUB changed durable Project catalog: " +
+      JSON.stringify({ projectsBeforeMalformed, projectsAfterMalformed }));
+  }
+  const malformedSource = {
+    claim: true,
+    byte_len: truncated.length,
+    error_code: malformedUi.error_code,
+    project_create_calls_delta:
+      createCallsAfterMalformed - createCallsBeforeMalformed,
+    catalog_unchanged: true,
+    raw_parser_diagnostic_disclosed: false,
+  };
+
   if (process.env.CHAPTERA_SECURE_SCREENSHOT) {
     await page.screenshot({ path: process.env.CHAPTERA_SECURE_SCREENSHOT, fullPage: true });
   }
@@ -427,20 +613,21 @@ try {
     real_project_genesis_and_page_reload: true,
     reader_scene_reached_browser_paint: true,
     real_browser_pointer_move_node: true,
+    browser_source_neutral_boundary_claim: true,
+    browser_source_neutral_boundary: sourceNeutralBoundary,
+    oversized_upload_admission_claim: true,
+    oversized_upload_admission: oversizedAdmission,
     initial_editor_paint: initialPaint,
     project_home_catalog_claim: true,
-    project_home: {
-      path: homeReceipt.path,
-      document_id: homeReceipt.document_id,
-      project_id: homeReceipt.project_id,
-      name_present: !!homeReceipt.name,
-    },
+    project_home: safeHomeReceipt,
     project_home_editor_paint: homeOpenedPaint,
     reloaded_editor_paint: reopenedPaint,
     moved_editor_paint: movedPaint,
     edited_editor_paint: editedPaint,
     real_move_commit: true,
     move_commit: moveCommit,
+    malformed_source_rejection_claim: true,
+    malformed_source_rejection: malformedSource,
     server_restart_reopen_claim: false,
     storage_provider: "filesystem",
     s3_claim: false,
@@ -453,9 +640,11 @@ try {
     steps: calls.map(call => call.method + " " + call.path),
     head_sha: process.env.CHAPTERA_HEAD_SHA ?? "unknown",
   };
-  // Project title comes from the customer source filename. Assert that even
-  // the test harness cannot persist it in acceptance receipts or stdout.
-  if (JSON.stringify(receipt).includes("SampleNewsletter.pub")) {
+  // Keep customer/source-derived labels out of persisted acceptance telemetry.
+  // The authenticated owner can see the title, but CI receipts must not echo it.
+  const retained = JSON.stringify(receipt);
+  if (retained.includes("SampleNewsletter.pub") ||
+      retained.includes("TruncatedNewsletter.pub")) {
     throw new Error("source filename leaked into acceptance telemetry");
   }
   await writeFile(receiptPath, JSON.stringify(receipt, null, 2) + "\n");

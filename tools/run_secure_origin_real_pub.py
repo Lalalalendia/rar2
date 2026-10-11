@@ -212,6 +212,11 @@ def main() -> int:
         type=pathlib.Path,
         default=ROOT / "tools" / "run_secure_origin_real_pub_restart_browser.mjs",
     )
+    parser.add_argument(
+        "--cross-principal-browser-script",
+        type=pathlib.Path,
+        default=ROOT / "tools" / "run_secure_origin_cross_principal_browser.mjs",
+    )
     parser.add_argument("--caddy-image", default="caddy:2.10.2-alpine")
     parser.add_argument("--fixture", type=pathlib.Path, required=True)
     parser.add_argument("--fixture-sha256", required=True)
@@ -223,12 +228,17 @@ def main() -> int:
     binary = args.binary.resolve()
     browser_script = args.browser_script.resolve()
     restart_browser_script = args.restart_browser_script.resolve()
+    cross_principal_browser_script = args.cross_principal_browser_script.resolve()
     if not binary.is_file():
         raise SystemExit(f"Chaptera binary not found: {binary}")
     if not browser_script.is_file():
         raise SystemExit(f"browser script not found: {browser_script}")
     if not restart_browser_script.is_file():
         raise SystemExit(f"restart browser script not found: {restart_browser_script}")
+    if not cross_principal_browser_script.is_file():
+        raise SystemExit(
+            f"cross-principal browser script not found: {cross_principal_browser_script}"
+        )
 
     TARGET.mkdir(parents=True, exist_ok=True)
     caddy_config = render_caddy()
@@ -247,6 +257,7 @@ def main() -> int:
     caddy_log = TARGET / "caddy.log"
     worker_log = TARGET / "worker.log"
     browser_log = TARGET / "browser.log"
+    cross_principal_browser_log = TARGET / "browser-cross-principal.log"
     restart_server_log = TARGET / "server-restart.log"
     restart_worker_log = TARGET / "worker-restart.log"
     restart_browser_log = TARGET / "browser-restart.log"
@@ -389,6 +400,42 @@ def main() -> int:
                 if not (TARGET / "receipt.json").is_file():
                     raise RuntimeError(
                         "secure-origin Chromium acceptance emitted no receipt"
+                    )
+
+                # Same issuer/JWKS, different OIDC subject, fresh browser context.
+                # This proves guessed durable DocumentId does not grant a second
+                # principal any current/revision/Reader payload.
+                primary_subject = provider.subject
+                primary_email = provider.email
+                provider.subject = "chaptera-cross-principal-user"
+                provider.email = "cross-principal@chaptera.invalid"
+                try:
+                    cross_principal_browser = subprocess.run(
+                        ["node", str(cross_principal_browser_script)],
+                        cwd=ROOT,
+                        env=browser_env,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                finally:
+                    provider.subject = primary_subject
+                    provider.email = primary_email
+                cross_principal_browser_log.write_text(
+                    cross_principal_browser.stdout
+                    + "\n--- stderr ---\n"
+                    + cross_principal_browser.stderr,
+                    encoding="utf-8",
+                )
+                if cross_principal_browser.returncode != 0:
+                    raise RuntimeError(
+                        "cross-principal Product authorization acceptance failed; "
+                        f"see {cross_principal_browser_log}"
+                    )
+                if worker.poll() is not None:
+                    raise RuntimeError(
+                        f"real SourceValidation worker exited during cross-principal proof: "
+                        f"{worker.returncode}"
                     )
 
                 # Prove persistence rather than page-local continuity: stop the

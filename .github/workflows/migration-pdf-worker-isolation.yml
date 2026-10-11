@@ -5,8 +5,13 @@ on:
     paths:
       - "tools/migration_pdf_worker_isolation.py"
       - "tools/test_migration_pdf_worker_isolation.py"
+      - "tools/run_product_isolation_security_probe.py"
       - ".github/workflows/migration-pdf-worker-isolation.yml"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -29,3 +34,13 @@ jobs:
           PY
       - name: Run per-file isolation regressions
         run: python tools/test_migration_pdf_worker_isolation.py -v
+      - name: Prove Product wiring consumes this exact isolation authority
+        run: |
+          python tools/run_product_isolation_security_probe.py \
+            --output target/product-security-isolation/receipt.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: migration-product-isolation-security-receipt-v1
+          path: target/product-security-isolation/receipt.json
+          if-no-files-found: error
+          retention-days: 90
