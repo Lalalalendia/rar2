@@ -505,6 +505,230 @@ try {
     browser_reload_persisted: true,
   };
 
+
+  // Redo is a real browser command after the durable Undo/Reload/export path.
+  // No client-supplied geometry and no synthetic history authority.
+  const redoRequestOffset = historyPosts.length;
+  const redoReplyOffset = historyResponses.length;
+  await page.keyboard.press("Control+Shift+z");
+  await page.waitForFunction(undoneRevision => {
+    const status = document.querySelector("#status");
+    return status?.classList.contains("ok") &&
+      status.textContent.includes("Revision sha256:") &&
+      !status.textContent.includes(undoneRevision) &&
+      document.querySelectorAll("#canvas svg.page[data-page-id]").length > 0;
+  }, undoCurrent.revision_id, { timeout: 60000 });
+  const redoCurrent = await page.evaluate(async id => {
+    const response = await fetch("/v1/documents/" + encodeURIComponent(id) + "/current", {
+      credentials: "same-origin", cache: "no-store",
+    });
+    const body = await response.json().catch(() => null);
+    return {
+      status: response.status,
+      document_id: body?.document_id ?? null,
+      revision_id: body?.revision_id ?? null,
+      source_hash: body?.source_hash ?? null,
+    };
+  }, receipt.document_id);
+  const redoPosts = historyPosts.slice(redoRequestOffset);
+  const redoReplies = await Promise.all(historyResponses.slice(redoReplyOffset));
+  const redoIntent = redoPosts.length ? JSON.parse(redoPosts[0].body) : null;
+  const oneRedo = redoPosts.length === 1 &&
+    redoReplies.length === 1 && redoReplies[0].status === 200;
+  const csrfRetryRedo = redoPosts.length === 2 &&
+    redoReplies.length === 2 &&
+    redoReplies[0].status === 403 &&
+    redoReplies[0].code === "csrf_invalid" &&
+    redoReplies[1].status === 200 &&
+    redoPosts[0].body === redoPosts[1].body &&
+    redoPosts[0].csrfToken !== redoPosts[1].csrfToken;
+  const undoIntent = JSON.parse(historyPosts[0].body);
+  if (!(oneRedo || csrfRetryRedo) ||
+      !redoPosts.every(post => post.csrfToken && !post.forged) ||
+      redoIntent?.protocol_version !== "chaptera.history-transition-intent.v1" ||
+      redoIntent?.command?.kind !== "redo" ||
+      Object.keys(redoIntent.command).length !== 1 ||
+      redoIntent.source_hash !== receipt.real_pub_sha256 ||
+      redoIntent.base_revision_id !== undoCurrent.revision_id ||
+      redoIntent.client_operation_id === undoIntent.client_operation_id ||
+      redoCurrent.status !== 200 || redoCurrent.document_id !== receipt.document_id ||
+      redoCurrent.source_hash !== receipt.real_pub_sha256 ||
+      !redoCurrent.revision_id ||
+      redoCurrent.revision_id === undoCurrent.revision_id ||
+      redoCurrent.revision_id === receipt.current_revision_id) {
+    throw new Error("real Chromium Redo did not produce an authenticated immutable successor: " +
+      JSON.stringify({
+        requests: redoPosts.length,
+        responses: redoReplies,
+        csrf_retry: csrfRetryRedo,
+        revision_advanced: redoCurrent.revision_id !== undoCurrent.revision_id,
+      }));
+  }
+  const redoScene = await page.evaluate(async id => {
+    const response = await fetch("/v1/reader/documents/" + encodeURIComponent(id) + "/scene", {
+      credentials: "same-origin", cache: "no-store",
+    });
+    if (!response.ok) throw new Error("Redo Reader scene HTTP " + response.status);
+    return response.json();
+  }, receipt.document_id);
+  const redoneNode = redoScene.nodes?.find(node =>
+    node.node_id === receipt.move_commit.node_id);
+  if (redoScene.revision_id !== redoCurrent.revision_id ||
+      redoScene.source_hash !== receipt.real_pub_sha256 ||
+      redoneNode?.bounds?.x !== receipt.move_commit.after.x_emu ||
+      redoneNode?.bounds?.y !== receipt.move_commit.after.y_emu) {
+    throw new Error("real Chromium Redo did not restore moved canonical Reader geometry");
+  }
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(revision => {
+    const status = document.querySelector("#status");
+    return status?.classList.contains("ok") &&
+      status.textContent.includes(revision) &&
+      document.querySelectorAll("#canvas svg.page[data-page-id]").length > 0;
+  }, redoCurrent.revision_id, { timeout: 30000 });
+  const redoAfterReload = await page.evaluate(async id => {
+    const response = await fetch("/v1/documents/" + encodeURIComponent(id) + "/current", {
+      credentials: "same-origin", cache: "no-store",
+    });
+    const body = await response.json().catch(() => null);
+    return { status: response.status, revision_id: body?.revision_id ?? null };
+  }, receipt.document_id);
+  if (redoAfterReload.status !== 200 ||
+      redoAfterReload.revision_id !== redoCurrent.revision_id) {
+    throw new Error("real Chromium Redo was not durable after browser reload");
+  }
+
+  // Exact-revision Redo IDML export. Reusing the same source keeps the export
+  // geometry comparison meaningful while requiring a distinct immutable RevId.
+  const redoExport = await page.evaluate(async input => {
+    const sessionResponse = await fetch("/v1/session", {
+      credentials: "same-origin", cache: "no-store",
+    });
+    const session = await sessionResponse.json().catch(() => null);
+    if (!sessionResponse.ok || !session?.csrf_token) {
+      throw new Error("Redo export requires authenticated CSRF");
+    }
+    const createResponse = await fetch("/v1/exports", {
+      method: "POST", credentials: "same-origin", cache: "no-store",
+      headers: {
+        "content-type": "application/json",
+        "x-csrf-token": session.csrf_token,
+      },
+      body: JSON.stringify({
+        protocol_version: "chaptera.export-create.v1",
+        document_id: input.document_id,
+        revision_id: input.revision_id,
+        target_profile: "idml:bounded-editable",
+        layout_environment_id: input.layout_environment_id,
+        client_request_id: "real-pub-redo-export-003",
+      }),
+    });
+    const created = await createResponse.json().catch(() => null);
+    if (!createResponse.ok ||
+        created?.protocol_version !== "chaptera.export-job-http.v1" ||
+        created.document_id !== input.document_id ||
+        created.revision_id !== input.revision_id ||
+        created.target_profile !== "idml:bounded-editable" ||
+        created.layout_environment_id !== input.layout_environment_id ||
+        !created.job_id) {
+      throw new Error("Redo export create failed, HTTP " + createResponse.status);
+    }
+    const deadline = Date.now() + 90000;
+    while (Date.now() < deadline) {
+      const response = await fetch("/v1/exports/" + encodeURIComponent(created.job_id), {
+        credentials: "same-origin", cache: "no-store",
+      });
+      const status = await response.json().catch(() => null);
+      if (!response.ok) throw new Error("Redo export status HTTP " + response.status);
+      if (status?.status === "ready") {
+        if (status.document_id !== input.document_id ||
+            status.revision_id !== input.revision_id ||
+            status.target_profile !== "idml:bounded-editable" ||
+            status.layout_environment_id !== input.layout_environment_id ||
+            !status.artifact_id || !status.loss_report_id) {
+          throw new Error("Redo export artifact identity mismatch");
+        }
+        return { job_id: status.job_id, artifact_id: status.artifact_id,
+          revision_id: status.revision_id };
+      }
+      if (status?.status === "failed" || status?.status === "cancelled") {
+        throw new Error("Redo export terminated " + status.status);
+      }
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    throw new Error("Redo export did not complete within its acceptance deadline");
+  }, {
+    document_id: receipt.document_id,
+    revision_id: redoCurrent.revision_id,
+    layout_environment_id: layoutEnvironmentId,
+  });
+  const redoDownload = await page.evaluate(async input => {
+    const response = await fetch(
+      "/v1/exports/" + encodeURIComponent(input.job_id) +
+      "/artifacts/" + encodeURIComponent(input.artifact_id),
+      { credentials: "same-origin", cache: "no-store" },
+    );
+    const contentLength = response.headers.get("content-length");
+    const data = await response.arrayBuffer();
+    const bytes = new Uint8Array(data);
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+    return {
+      status: response.status,
+      content_type: response.headers.get("content-type"),
+      disposition: response.headers.get("content-disposition"),
+      nosniff: response.headers.get("x-content-type-options"),
+      cache_control: response.headers.get("cache-control"),
+      content_length: contentLength === null ? null : Number(contentLength),
+      bytes: bytes.length,
+      hash: [...digest].map(byte => byte.toString(16).padStart(2, "0")).join(""),
+      zip_magic: bytes.length >= 4 &&
+        bytes[0] === 0x50 && bytes[1] === 0x4b &&
+        bytes[2] === 0x03 && bytes[3] === 0x04,
+    };
+  }, { job_id: redoExport.job_id, artifact_id: redoExport.artifact_id });
+  if (redoDownload.status !== 200 ||
+      redoDownload.content_type !== "application/vnd.adobe.indesign-idml-package" ||
+      !redoDownload.disposition?.startsWith("attachment;") ||
+      !redoDownload.disposition.includes(".idml") ||
+      redoDownload.nosniff !== "nosniff" ||
+      redoDownload.cache_control !== "private, no-store" ||
+      !Number.isSafeInteger(redoDownload.content_length) ||
+      redoDownload.content_length !== redoDownload.bytes ||
+      redoDownload.bytes <= 0 || !redoDownload.zip_magic ||
+      !/^[0-9a-f]{64}$/.test(redoDownload.hash) ||
+      redoDownload.hash === undoExportDownload.sha256) {
+    throw new Error("Redo IDML exact-revision artifact failed content or integrity checks");
+  }
+  const headAfterRedoExport = await page.evaluate(async id => {
+    const response = await fetch("/v1/documents/" + encodeURIComponent(id) + "/current", {
+      credentials: "same-origin", cache: "no-store",
+    });
+    const body = await response.json().catch(() => null);
+    return { status: response.status, revision_id: body?.revision_id ?? null };
+  }, receipt.document_id);
+  if (headAfterRedoExport.status !== 200 ||
+      headAfterRedoExport.revision_id !== redoCurrent.revision_id) {
+    throw new Error("Redo export unexpectedly advanced or changed the document HEAD");
+  }
+  receipt.real_browser_authoritative_redo_claim = true;
+  receipt.real_browser_authoritative_redo = {
+    base_revision_id: undoCurrent.revision_id,
+    revision_id: redoCurrent.revision_id,
+    post_count: redoPosts.length,
+    csrf_refresh_retry: csrfRetryRedo,
+    source_hash_unchanged: true,
+    restored_moved_geometry: true,
+    reload_persisted: true,
+  };
+  receipt.redo_revision_export_claim = true;
+  receipt.redo_revision_export = {
+    revision_id: redoExport.revision_id,
+    artifact_bytes: redoDownload.bytes,
+    artifact_sha256: redoDownload.hash,
+    downloadable_idml: true,
+    differs_from_undo_export: true,
+  };
+
   receipt.server_restart_reopen_claim = true;
   receipt.server_restart_reopen = {
     document_id: current.document_id,

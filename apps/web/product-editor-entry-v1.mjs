@@ -47,19 +47,20 @@ export function productEditorStatusView(state, readerScene = null) {
       fidelity,
     };
   }
+  const historyAction = state.history_command === "redo" ? "Redo" : "Undo";
   if (state.reason === "history_sent") {
-    return { status: "Undoing change…", kind: "pending", fidelity };
+    return { status: historyAction === "Redo" ? "Redoing change…" : "Undoing change…", kind: "pending", fidelity };
   }
   if (state.reason === "history_error") {
     return {
-      status: "Undo not confirmed — reload to reconcile before retrying",
+      status: historyAction + " not confirmed — reload to reconcile before retrying",
       kind: "error",
       fidelity,
     };
   }
   if (state.reason === "history_rejected") {
     return {
-      status: "Undo rejected — current revision was not changed",
+      status: historyAction + " rejected — current revision was not changed",
       kind: "error",
       fidelity,
     };
@@ -89,6 +90,8 @@ export async function bootProductEditor({
   const fidelity=documentObject.querySelector("#fidelity");
   const identity=documentObject.querySelector("#document");
   const host=documentObject.querySelector("#canvas");
+  const undoButton=documentObject.querySelector("#undo-action");
+  const redoButton=documentObject.querySelector("#redo-action");
   if(!status||!fidelity||!identity||!host) throw new Error("Chaptera Editor shell DOM is incomplete");
   identity.textContent=documentId;
 
@@ -120,14 +123,22 @@ export async function bootProductEditor({
     service,
     keyboardTarget:documentObject,
     operationIdFactory:()=> "product-move-"+cryptoObject.randomUUID(),
-    historyOperationIdFactory:()=> "product-undo-"+cryptoObject.randomUUID(),
+    historyOperationIdFactory:()=> "product-history-"+cryptoObject.randomUUID(),
     onState:(state)=>{
       const view=productEditorStatusView(state,shell?.readerScene);
       statusText(status,view.status,view.kind);
       fidelity.textContent=view.fidelity;
+      if(undoButton) undoButton.disabled=state.history_in_flight===true;
+      if(redoButton) redoButton.disabled=state.history_in_flight===true;
     },
   });
   await shell.start();
+  for(const [button,command] of [[undoButton,"undo"],[redoButton,"redo"]]){
+    button?.addEventListener("click",()=>{
+      if(shell.historyInFlight) return;
+      void shell[command]().catch(()=>{});
+    });
+  }
   return {kind:"ready",document_id:documentId,shell,service};
 }
 

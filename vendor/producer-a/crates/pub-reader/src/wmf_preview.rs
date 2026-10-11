@@ -45,6 +45,8 @@ const META_POLYPOLYGON: u16 = 0x0538;
 const META_ESCAPE: u16 = 0x0626;
 const META_CREATEREGION: u16 = 0x06ff;
 const META_STRETCHDIB: u16 = 0x0f43;
+const META_EXTTEXTOUT: u16 = 0x0a32;
+const WMF_PARTIAL_FONT_BYTES: usize = 50;
 
 const MM_ANISOTROPIC: u16 = 8;
 const R2_COPYPEN: u16 = 13;
@@ -79,6 +81,14 @@ pub struct WmfPreviewRgba {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+}
+
+/// This is a derived preview with omitted, SOURCE-PROVEN visible WMF text.
+/// Consumers MUST emit a visible FidelityWarning and MUST NOT claim source exact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WmfExplicitTextGapPreview {
+    pub image: WmfPreviewRgba,
+    pub omitted_text_record_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +140,7 @@ enum GdiObject {
     Pen(Pen),
     Brush(Brush),
     FontCompatibility,
+    FontPartialText50 { text_profile_admitted: bool },
     PaletteCompatibility,
     RegionCompatibility,
 }
@@ -179,6 +190,11 @@ struct PlaybackState {
     pen: Pen,
     brush: Brush,
     selected_palette: Option<usize>,
+    selected_partial_font: bool,
+    text_background_mode: Option<u16>,
+    text_align: Option<u16>,
+    text_color: Option<u32>,
+    map_mode: Option<u16>,
 }
 
 impl PlaybackState {
@@ -207,6 +223,11 @@ impl PlaybackState {
                 pattern: None,
             },
             selected_palette: None,
+            selected_partial_font: false,
+            text_background_mode: None,
+            text_align: None,
+            text_color: None,
+            map_mode: None,
         }
     }
 }
@@ -1159,6 +1180,42 @@ fn validate_font_compatibility_object(params: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Only the independently censused modern OfficeArt WMF GDI font profile.
+fn admit_partial_50_byte_font(params: &[u8]) -> Result<()> {
+    if params.len() != WMF_PARTIAL_FONT_BYTES
+        || read_i16(params, 0) != Some(-416)
+        || read_i16(params, 2) != Some(0)
+        || read_i16(params, 4) != Some(0)
+        || read_i16(params, 6) != Some(0)
+        || read_u16(params, 8) != Some(400)
+        || params.get(13..18) != Some(&[0, 3, 2, 1, 18][..])
+    {
+        bail!("WMF 50-byte partial-font profile not admitted");
+    }
+    // The opaque face-name bytes are never logged, interpreted as a font
+    // resource, or used for ambient host font discovery.
+    Ok(())
+}
+
+fn admit_single_char_exttextout_gap(params: &[u8], state: &PlaybackState) -> Result<()> {
+    if params.len() != 12
+        || !state.selected_partial_font
+        || state.map_mode != Some(MM_ANISOTROPIC)
+        || state.text_background_mode != Some(1)
+        || state.text_align != Some(24)
+        || state.text_color != Some(0)
+        || read_i16(params, 4) != Some(1)
+        || read_u16(params, 6) != Some(0)
+        || !matches!(params.get(8).copied(), Some(1..=127))
+        || read_i16(params, 0).is_none()
+        || read_i16(params, 2).is_none()
+        || read_i16(params, 10).is_none()
+    {
+        bail!("unsupported WMF EXTTEXTOUT partial omission profile");
+    }
+    Ok(())
+}
+
 fn validate_region_compatibility_object(params: &[u8]) -> Result<()> {
     // Exact-1050 evidence for the seven Publisher Region compatibility objects:
     // 42-byte payload, ObjectType=6, RegionSize=42, one scan, maxScan=2.
@@ -1359,6 +1416,28 @@ pub fn rasterize_wmf_preview(
     width_hint: u32,
     height_hint: u32,
 ) -> Result<WmfPreviewRgba> {
+    Ok(rasterize_wmf_preview_internal(bytes, width_hint, height_hint, false)?.image)
+}
+
+/// Only usable by a partial Viewer consumer which emits the omission warning.
+pub fn rasterize_wmf_preview_explicit_text_gap(
+    bytes: &[u8],
+    width_hint: u32,
+    height_hint: u32,
+) -> Result<WmfExplicitTextGapPreview> {
+    let preview = rasterize_wmf_preview_internal(bytes, width_hint, height_hint, true)?;
+    if preview.omitted_text_record_count == 0 {
+        bail!("WMF has no admitted visible text to omit in partial preview");
+    }
+    Ok(preview)
+}
+
+fn rasterize_wmf_preview_internal(
+    bytes: &[u8],
+    width_hint: u32,
+    height_hint: u32,
+    explicitly_partial: bool,
+) -> Result<WmfExplicitTextGapPreview> {
     if bytes.len() > MAX_WMF_BYTES {
         bail!("WMF payload exceeds bounded size");
     }
@@ -1409,6 +1488,7 @@ pub fn rasterize_wmf_preview(
     let mut records = 0usize;
     let mut eof_seen = false;
     let mut pending_region_compat_cliprect = false;
+    let mut omitted_text_record_count = 0usize;
 
     while offset < declared_len {
         records += 1;
@@ -1468,7 +1548,8 @@ pub fn rasterize_wmf_preview(
                     .ok_or_else(|| anyhow!("WMF RESTOREDC without matching SAVEDC"))?;
             }
             META_SETBKMODE => {
-                read_u16(params, 0).ok_or_else(|| anyhow!("WMF SETBKMODE is truncated"))?;
+                state.text_background_mode =
+                    Some(read_u16(params, 0).ok_or_else(|| anyhow!("WMF SETBKMODE is truncated"))?);
             }
             META_SETMAPMODE => {
                 let mode =
@@ -1476,6 +1557,7 @@ pub fn rasterize_wmf_preview(
                 if mode != MM_ANISOTROPIC {
                     bail!("unsupported WMF map mode {mode}");
                 }
+                state.map_mode = Some(mode);
             }
             META_SETROP2 => {
                 let mode =
@@ -1510,8 +1592,9 @@ pub fn rasterize_wmf_preview(
                 if params.len() < 2 {
                     bail!("WMF SETTEXTALIGN is truncated");
                 }
-                let _ =
-                    read_u16(params, 0).ok_or_else(|| anyhow!("WMF SETTEXTALIGN is truncated"))?;
+                state.text_align = Some(
+                    read_u16(params, 0).ok_or_else(|| anyhow!("WMF SETTEXTALIGN is truncated"))?,
+                );
             }
             META_SETBKCOLOR => {
                 if params.len() < 4 {
@@ -1524,8 +1607,10 @@ pub fn rasterize_wmf_preview(
                 if params.len() != 4 {
                     bail!("WMF SETTEXTCOLOR parameter length is not 4 bytes");
                 }
-                let _ = read_u32(params, 0)
-                    .ok_or_else(|| anyhow!("WMF SETTEXTCOLOR parameter is truncated"))?;
+                state.text_color = Some(
+                    read_u32(params, 0)
+                        .ok_or_else(|| anyhow!("WMF SETTEXTCOLOR parameter is truncated"))?,
+                );
             }
             META_SETWINDOWORG => {
                 state.window_org_y = i32::from(
@@ -1595,8 +1680,21 @@ pub fn rasterize_wmf_preview(
                 allocate_object(&mut objects, GdiObject::Pen(pen))?;
             }
             META_CREATEFONTINDIRECT => {
-                validate_font_compatibility_object(params)?;
-                allocate_object(&mut objects, GdiObject::FontCompatibility)?;
+                if explicitly_partial && params.len() == WMF_PARTIAL_FONT_BYTES {
+                    // Creating an unselected GDI font has no raster effect.
+                    // Admit its handle lifecycle, but allow visible text ONLY
+                    // when the source-proven selected font profile matches.
+                    let text_profile_admitted = admit_partial_50_byte_font(params).is_ok();
+                    allocate_object(
+                        &mut objects,
+                        GdiObject::FontPartialText50 {
+                            text_profile_admitted,
+                        },
+                    )?;
+                } else {
+                    validate_font_compatibility_object(params)?;
+                    allocate_object(&mut objects, GdiObject::FontCompatibility)?;
+                }
             }
             META_CREATEPALETTE => {
                 validate_palette_compatibility_object(params)?;
@@ -1648,7 +1746,12 @@ pub fn rasterize_wmf_preview(
                 match object {
                     GdiObject::Pen(pen) => state.pen = pen,
                     GdiObject::Brush(brush) => state.brush = brush,
-                    GdiObject::FontCompatibility => {}
+                    GdiObject::FontCompatibility => state.selected_partial_font = false,
+                    GdiObject::FontPartialText50 {
+                        text_profile_admitted,
+                    } => {
+                        state.selected_partial_font = text_profile_admitted;
+                    }
                     GdiObject::PaletteCompatibility => {
                         bail!("WMF Palette requires META_SELECTPALETTE");
                     }
@@ -1772,6 +1875,10 @@ pub fn rasterize_wmf_preview(
                 draw_polyline(&mut canvas, &state, &points, true)?;
             }
             META_STRETCHDIB => rasterize_bounded_stretchdib(params, &state, &mut canvas)?,
+            META_EXTTEXTOUT if explicitly_partial => {
+                admit_single_char_exttextout_gap(params, &state)?;
+                omitted_text_record_count += 1;
+            }
             META_ESCAPE => validate_meta_escape(params)?,
             other => bail!("unsupported WMF record function 0x{other:04x}"),
         }
@@ -1783,10 +1890,13 @@ pub fn rasterize_wmf_preview(
         bail!("WMF payload does not contain META_EOF");
     }
 
-    Ok(WmfPreviewRgba {
-        width,
-        height,
-        rgba: canvas.rgba,
+    Ok(WmfExplicitTextGapPreview {
+        image: WmfPreviewRgba {
+            width,
+            height,
+            rgba: canvas.rgba,
+        },
+        omitted_text_record_count,
     })
 }
 
@@ -1837,6 +1947,87 @@ mod tests {
         if extra_words > max_record_words {
             bytes[12..16].copy_from_slice(&extra_words.to_le_bytes());
         }
+    }
+
+    fn synthetic_one_char_explicit_text_gap() -> Vec<u8> {
+        let mut wmf = synthetic_polygon();
+        wmf[10..12].copy_from_slice(&3_u16.to_le_bytes());
+
+        let mut font = vec![0_u8; WMF_PARTIAL_FONT_BYTES];
+        font[0..2].copy_from_slice(&(-416_i16).to_le_bytes());
+        font[8..10].copy_from_slice(&400_u16.to_le_bytes());
+        font[14] = 3; // output precision
+        font[15] = 2; // clipping precision
+        font[16] = 1; // quality
+        font[17] = 18; // pitch/family
+        insert_record_before_eof(&mut wmf, record(META_CREATEFONTINDIRECT, &font));
+        insert_record_before_eof(&mut wmf, record(META_SELECTOBJECT, &2_u16.to_le_bytes()));
+        insert_record_before_eof(
+            &mut wmf,
+            record(META_SETMAPMODE, &MM_ANISOTROPIC.to_le_bytes()),
+        );
+        insert_record_before_eof(&mut wmf, record(META_SETBKMODE, &1_u16.to_le_bytes()));
+        insert_record_before_eof(&mut wmf, record(META_SETTEXTALIGN, &24_u16.to_le_bytes()));
+        insert_record_before_eof(&mut wmf, record(META_SETTEXTCOLOR, &0_u32.to_le_bytes()));
+        let text = [
+            20_u8, 0, // Y
+            30, 0, // X
+            1, 0, // one byte of character data
+            0, 0, // no text option rectangle
+            b'A', 0, // one nonzero ANSI glyph byte and alignment padding
+            8, 0, // one 16-bit character displacement
+        ];
+        insert_record_before_eof(&mut wmf, record(META_EXTTEXTOUT, &text));
+        wmf
+    }
+
+    #[test]
+    fn explicit_text_gap_is_partial_only_and_ordinary_wmf_stays_strict() {
+        let source = synthetic_one_char_explicit_text_gap();
+        assert!(rasterize_wmf_preview(&source, 100, 100).is_err());
+        let partial = rasterize_wmf_preview_explicit_text_gap(&source, 100, 100)
+            .expect("bounded partial graphics");
+        assert_eq!(partial.omitted_text_record_count, 1);
+        assert_eq!((partial.image.width, partial.image.height), (100, 100));
+        assert!(partial.image.rgba.chunks_exact(4).any(|px| px[3] == 255));
+        assert!(rasterize_wmf_preview_explicit_text_gap(&synthetic_polygon(), 100, 100).is_err());
+    }
+
+    #[test]
+    fn unselected_unsupported_font_does_not_override_source_proven_selected_text_font() {
+        let mut source = synthetic_one_char_explicit_text_gap();
+        source[10..12].copy_from_slice(&4_u16.to_le_bytes()); // three GDI objects + one
+        let mut inactive = vec![0_u8; WMF_PARTIAL_FONT_BYTES];
+        inactive[0..2].copy_from_slice(&(-122_i16).to_le_bytes());
+        inactive[8..10].copy_from_slice(&700_u16.to_le_bytes());
+        inactive[13] = 42; // opaque unsupported charset, NEVER selected for text
+        insert_record_before_eof(&mut source, record(META_CREATEFONTINDIRECT, &inactive));
+        let preview = rasterize_wmf_preview_explicit_text_gap(&source, 100, 100)
+            .expect("unselected font creation must not suppress proven graph drawing");
+        assert_eq!(preview.omitted_text_record_count, 1);
+        // Strict previous API still refuses both 50-byte fonts and the text.
+        assert!(rasterize_wmf_preview(&source, 100, 100).is_err());
+    }
+
+    #[test]
+    fn reject_unsupported_exttextout_flags_and_unknown_font_charset() {
+        let mut source = synthetic_one_char_explicit_text_gap();
+        let record_function = META_EXTTEXTOUT.to_le_bytes();
+        let pos = source
+            .windows(2)
+            .position(|w| w == record_function)
+            .expect("text function");
+        source[pos + 2 + 6] = 0x04; // ETO_CLIPPED must not be ignored
+        assert!(rasterize_wmf_preview_explicit_text_gap(&source, 100, 100).is_err());
+
+        let mut bad_font = synthetic_one_char_explicit_text_gap();
+        let font = META_CREATEFONTINDIRECT.to_le_bytes();
+        let pos = bad_font
+            .windows(2)
+            .position(|w| w == font)
+            .expect("font function");
+        bad_font[pos + 2 + 13] = 0x01; // unsupported character set
+        assert!(rasterize_wmf_preview_explicit_text_gap(&bad_font, 100, 100).is_err());
     }
 
     fn palette_compatibility_params() -> Vec<u8> {

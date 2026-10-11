@@ -76,3 +76,19 @@ test("SourceIngress persisted document identity opens through the same Editor pa
   assert.equal(documentIdFromEditorPath("/editor/doc/%GG"), null);
   assert.equal(documentIdFromEditorPath("/editor/doc/" + sourceDocument + "/extra"), null);
 });
+
+test("Redo status distinguishes pending/rejected/uncertain from a confirmed revision", () => {
+  const pending = productEditorStatusView({
+    reason: "history_sent", history_command: "redo", revision_id: "sha256:undo",
+  });
+  assert.equal(pending.kind, "pending");
+  assert.match(pending.status, /Redoing/);
+  for (const reason of ["history_error", "history_rejected"]) {
+    const view = productEditorStatusView({
+      reason, history_command: "redo", revision_id: "sha256:undo",
+    });
+    assert.equal(view.kind, "error");
+    assert.match(view.status, /Redo/);
+    assert.doesNotMatch(view.status, /Revision sha256:undo/);
+  }
+});

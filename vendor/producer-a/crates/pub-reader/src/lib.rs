@@ -51,7 +51,7 @@ mod structural_base;
 mod table_bridge;
 mod typography_projection;
 mod wmf;
-mod wmf_preview;
+pub mod wmf_preview;
 
 pub use asset_export::{
     PUB_ASSET_EXPORT_SCHEMA_V0_1, PUB_ASSET_MANIFEST_FILENAME, PubAssetExportBundle,

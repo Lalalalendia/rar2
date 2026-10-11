@@ -27,6 +27,7 @@ const REJECTABLE_HISTORY_CODES = new Set([
   "idempotency_conflict",
   "source_hash_mismatch",
   "undo_rejected",
+  "redo_unavailable",
   "undo_operation_unsupported",
   "grant_missing",
   "grant_expired",
@@ -282,7 +283,16 @@ export class ChapteraProductEditorServiceV1 {
     };
   }
 
-  async undo({ sourceHash, baseRevisionId, clientOperationId }) {
+  async undo(request) {
+    return this.#historyTransition("undo", request);
+  }
+
+  async redo(request) {
+    return this.#historyTransition("redo", request);
+  }
+
+  async #historyTransition(kind, { sourceHash, baseRevisionId, clientOperationId }) {
+    if (kind !== "undo" && kind !== "redo") throw new TypeError("unsupported history kind");
     ident(sourceHash, "sourceHash");
     ident(baseRevisionId, "baseRevisionId");
     ident(clientOperationId, "clientOperationId");
@@ -292,7 +302,7 @@ export class ChapteraProductEditorServiceV1 {
       source_hash: sourceHash,
       base_revision_id: baseRevisionId,
       client_operation_id: clientOperationId,
-      command: { kind: "undo" },
+      command: { kind },
     };
 
     // History is a durable revision mutation, so reuse the supported "commit"
@@ -321,7 +331,7 @@ export class ChapteraProductEditorServiceV1 {
         accepted.source_hash !== sourceHash ||
         accepted.base_revision_id !== baseRevisionId ||
         accepted.client_operation_id !== clientOperationId ||
-        accepted.transition_kind !== "undo"
+        accepted.transition_kind !== kind
       ) {
         throw new Error("history transition accepted identity mismatch");
       }
@@ -342,7 +352,7 @@ export class ChapteraProductEditorServiceV1 {
       base_revision_id: baseRevisionId,
       current_revision_id: currentRevisionId,
       client_operation_id: clientOperationId,
-      transition_kind: "undo",
+      transition_kind: kind,
       code,
       message_key: "history." + code,
       retryable: code === "stale_revision",
