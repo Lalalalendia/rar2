@@ -58,6 +58,13 @@ jobs:
           rustfmt --edition 2024 vendor/producer-a/crates/pub-reader/src/mature_emf_vector.rs
           rustfmt --edition 2024 vendor/producer-a/crates/pub-viewer/src/mature_emf_preview.rs
           rustfmt --edition 2024 vendor/producer-a/crates/pub-viewer/tests/emf_birgb_partial_v1.rs
+      - name: Print bounded product source formatting delta
+        run: |
+          git diff --no-ext-diff -- \
+            vendor/producer-a/crates/pub-reader/src/mature_emf.rs \
+            vendor/producer-a/crates/pub-reader/src/mature_emf_vector.rs \
+            vendor/producer-a/crates/pub-viewer/src/mature_emf_preview.rs \
+            vendor/producer-a/crates/pub-viewer/tests/emf_birgb_partial_v1.rs
       - name: Strict source 066 vector and 041 bitmap arbitration
         env:
           CHAPTERA_PINNED_SOURCE_ROOT: ${{ github.workspace }}/out/pinned1050/materialized/native
