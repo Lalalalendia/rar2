@@ -43,16 +43,24 @@ fn logical_metafile_bytes(
     )?;
     match record.metafile_compression {
         Some(BlipMetafileCompression::Uncompressed) => {
-            let expected = usize::try_from(record.logical_payload_len.ok_or("missing logical len")?)?;
-            if expected > 64 * 1024 * 1024 || stored.len() != expected { return Err("uncompressed EMF length out of bounds".into()); }
+            let expected =
+                usize::try_from(record.logical_payload_len.ok_or("missing logical len")?)?;
+            if expected > 64 * 1024 * 1024 || stored.len() != expected {
+                return Err("uncompressed EMF length out of bounds".into());
+            }
             Ok(stored.to_vec())
-        },
+        }
         Some(BlipMetafileCompression::Deflate) => {
             let decoder = ZlibDecoder::new(Cursor::new(stored));
             let mut logical = Vec::new();
-            let expected = usize::try_from(record.logical_payload_len.ok_or("missing logical len")?)?;
-            if expected > 64 * 1024 * 1024 { return Err("EMF logical payload exceeds 64MiB".into()); }
-            decoder.take(u64::try_from(expected)?.saturating_add(1)).read_to_end(&mut logical)?;
+            let expected =
+                usize::try_from(record.logical_payload_len.ok_or("missing logical len")?)?;
+            if expected > 64 * 1024 * 1024 {
+                return Err("EMF logical payload exceeds 64MiB".into());
+            }
+            decoder
+                .take(u64::try_from(expected)?.saturating_add(1))
+                .read_to_end(&mut logical)?;
             if logical.len() != expected {
                 return Err(format!(
                     "logical EMF length mismatch: expected {expected}, got {}",
@@ -109,7 +117,11 @@ fn emf_record_census(logical: &[u8]) -> Result<serde_json::Value, Box<dyn Error>
         offset = end;
     }
 
+    let non_header_eof_record_count = count
+        .saturating_sub(histogram.get(&1).copied().unwrap_or(0))
+        .saturating_sub(histogram.get(&14).copied().unwrap_or(0));
     Ok(json!({
+        "non_header_eof_record_count": non_header_eof_record_count,
         "record_count": count,
         "max_record_size": max_record_size,
         "first_type": first_type,
@@ -127,7 +139,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         .nth(1)
         .ok_or("usage: emf_record_census_probe INPUT.pub")?;
     let bytes = fs::read(&input)?;
-    if bytes.len() > 16 * 1024 * 1024 { return Err("PUB exceeds 16MiB research scope".into()); }
+    if bytes.len() > 16 * 1024 * 1024 {
+        return Err("PUB exceeds 16MiB research scope".into());
+    }
     let hash = source_hash(&bytes);
     let source = build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), hash.clone())?;
     let escher = pub_cfb::read_stream_reader(Cursor::new(bytes.as_slice()), ESCHER_STREAM_PATH)?;
@@ -184,22 +198,41 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     rows.sort_by_key(|row| row["slot"].as_u64().unwrap_or_default());
+    if rows.is_empty() {
+        return Err("no strict EMF asset inventory found".into());
+    }
     let duplicate_clusters = logical_clusters
         .into_iter()
         .filter(|(_, slots)| slots.len() > 1)
         .map(|(sha256, slots)| json!({"sha256": sha256, "slots": slots}))
         .collect::<Vec<_>>();
 
-    eprintln!(
+    let public_rows = rows
+        .iter()
+        .map(|row| {
+            json!({
+                "use_count": row["use_count"],
+                "logical_len": row["logical_len"],
+                "census": row["census"],
+            })
+        })
+        .collect::<Vec<_>>();
+    let nontrivial_emf_slots = rows
+        .iter()
+        .filter(|row| row["census"]["non_header_eof_record_count"].as_u64().unwrap_or(0) > 0)
+        .count();
+
+    println!(
         "EMF_RECORD_CENSUS {}",
         serde_json::to_string(&json!({
             "source_sha256": hash.to_string(),
             "emf_slot_count": rows.len(),
-            "rows": rows.iter().map(|row| json!({"use_count":row["use_count"],"logical_len":row["logical_len"],"census":row["census"]})).collect::<Vec<_>>(),
+            "rows": public_rows,
+            "emf_slots_with_non_header_eof_records": nontrivial_emf_slots,
             "duplicate_logical_cluster_count": duplicate_clusters.len(),
             "strict_scanned_record_count": validated.scanned_record_count,
             "strict_rejected_complete_blip_count": validated.rejected_complete_blips.len(),
-            "strict_terminal_gap": validated.terminal_gap,
+            "strict_terminal_gap_present": validated.terminal_gap.is_some(),
         }))?
     );
     Ok(())
