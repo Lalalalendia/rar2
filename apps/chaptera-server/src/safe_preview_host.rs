@@ -163,16 +163,18 @@ fn scene_has_resource_use(scene: &Value, resource_id: &str) -> bool {
     scene
         .get("nodes")
         .and_then(Value::as_array)
-        .is_some_and(|nodes| nodes.iter().any(|node| {
-            node["resource_id"].as_str() == Some(resource_id)
-                || node["decorative_border"]["placements"]
-                    .as_array()
-                    .is_some_and(|placements| {
-                        placements.iter().any(|placement| {
-                            placement["resource_id"].as_str() == Some(resource_id)
+        .is_some_and(|nodes| {
+            nodes.iter().any(|node| {
+                node["resource_id"].as_str() == Some(resource_id)
+                    || node["decorative_border"]["placements"]
+                        .as_array()
+                        .is_some_and(|placements| {
+                            placements.iter().any(|placement| {
+                                placement["resource_id"].as_str() == Some(resource_id)
+                            })
                         })
-                    })
-        }))
+            })
+        })
 }
 
 /// Called ONLY after worker receipt validation and after the legacy sanitizer
