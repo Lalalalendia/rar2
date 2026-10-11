@@ -349,6 +349,149 @@ try {
       undoAfterReload.revision_id !== undoCurrent.revision_id) {
     throw new Error("browser reload failed to recover the immutable Undo revision");
   }
+
+  // Acceptance completes with a SECOND exact export of the durable Undo
+  // revision. A successful edited export before Undo does not prove that
+  // materialization and export work for a history-transition child revision.
+  const undoExport = await page.evaluate(async input => {
+    const sessionResponse = await fetch("/v1/session", {
+      credentials: "same-origin", cache: "no-store",
+    });
+    const session = await sessionResponse.json().catch(() => null);
+    if (!sessionResponse.ok || !session?.csrf_token) {
+      throw new Error("Undo revision export lacked an authenticated CSRF session");
+    }
+    const createResponse = await fetch("/v1/exports", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: {
+        "content-type": "application/json",
+        "x-csrf-token": session.csrf_token,
+      },
+      body: JSON.stringify({
+        protocol_version: "chaptera.export-create.v1",
+        document_id: input.document_id,
+        revision_id: input.revision_id,
+        target_profile: "idml:bounded-editable",
+        layout_environment_id: input.layout_environment_id,
+        client_request_id: "real-pub-undo-export-002",
+      }),
+    });
+    const created = await createResponse.json().catch(() => null);
+    if (!createResponse.ok || created?.protocol_version !== "chaptera.export-job-http.v1" ||
+        created.document_id !== input.document_id ||
+        created.revision_id !== input.revision_id ||
+        created.target_profile !== "idml:bounded-editable" ||
+        created.layout_environment_id !== input.layout_environment_id ||
+        !created.job_id) {
+      throw new Error("durable Undo revision export create rejected: " +
+        JSON.stringify({
+          status: createResponse.status,
+          code: typeof created?.error === "string" ?
+            created.error : (created?.error?.code ?? null),
+        }));
+    }
+    const deadline = Date.now() + 90000;
+    while (Date.now() < deadline) {
+      const response = await fetch(
+        "/v1/exports/" + encodeURIComponent(created.job_id),
+        { credentials: "same-origin", cache: "no-store" },
+      );
+      const status = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error("durable Undo export status HTTP " + response.status);
+      }
+      if (status?.status === "ready") {
+        if (status.document_id !== input.document_id ||
+            status.revision_id !== input.revision_id ||
+            status.target_profile !== "idml:bounded-editable" ||
+            status.layout_environment_id !== input.layout_environment_id ||
+            !status.artifact_id || !status.loss_report_id) {
+          throw new Error("Undo export artifact identity mismatched accepted revision");
+        }
+        return {
+          job_id: status.job_id,
+          artifact_id: status.artifact_id,
+          revision_id: status.revision_id,
+          target_profile: status.target_profile,
+          loss_report_id: status.loss_report_id,
+        };
+      }
+      if (status?.status === "failed" || status?.status === "cancelled") {
+        throw new Error("durable Undo revision export terminated " + status.status);
+      }
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    throw new Error("durable Undo revision export did not reach ready");
+  }, {
+    document_id: receipt.document_id,
+    revision_id: undoCurrent.revision_id,
+    layout_environment_id: layoutEnvironmentId,
+  });
+
+  const undoExportDownload = await page.evaluate(async input => {
+    const response = await fetch(
+      "/v1/exports/" + encodeURIComponent(input.job_id) +
+        "/artifacts/" + encodeURIComponent(input.artifact_id),
+      { credentials: "same-origin", cache: "no-store" },
+    );
+    const buffer = await response.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", buffer));
+    return {
+      status: response.status,
+      content_type: response.headers.get("content-type"),
+      content_disposition: response.headers.get("content-disposition"),
+      content_length: Number(response.headers.get("content-length")),
+      nosniff: response.headers.get("x-content-type-options"),
+      cache_control: response.headers.get("cache-control"),
+      byte_len: bytes.length,
+      sha256: [...digest].map(byte => byte.toString(16).padStart(2, "0")).join(""),
+      zip_magic: bytes.length >= 4 &&
+        bytes[0] === 0x50 && bytes[1] === 0x4b &&
+        bytes[2] === 0x03 && bytes[3] === 0x04,
+    };
+  }, { job_id: undoExport.job_id, artifact_id: undoExport.artifact_id });
+
+  if (undoExportDownload.status !== 200 ||
+      undoExportDownload.content_type !== "application/vnd.adobe.indesign-idml-package" ||
+      !undoExportDownload.content_disposition?.startsWith("attachment;") ||
+      !undoExportDownload.content_disposition.includes(".idml") ||
+      !Number.isSafeInteger(undoExportDownload.content_length) ||
+      undoExportDownload.content_length <= 0 ||
+      undoExportDownload.content_length !== undoExportDownload.byte_len ||
+      undoExportDownload.nosniff !== "nosniff" ||
+      undoExportDownload.cache_control !== "private, no-store" ||
+      !undoExportDownload.zip_magic ||
+      !/^[0-9a-f]{64}$/.test(undoExportDownload.sha256) ||
+      undoExportDownload.sha256 === downloadedArtifact.sha256) {
+    throw new Error("Undo revision IDML physical artifact failed integrity or delta proof");
+  }
+  const unchangedHeadAfterExport = await page.evaluate(async documentId => {
+    const response = await fetch(
+      "/v1/documents/" + encodeURIComponent(documentId) + "/current",
+      { credentials: "same-origin", cache: "no-store" },
+    );
+    const data = await response.json().catch(() => null);
+    return { status: response.status, revision_id: data?.revision_id ?? null };
+  }, receipt.document_id);
+  if (unchangedHeadAfterExport.status !== 200 ||
+      unchangedHeadAfterExport.revision_id !== undoCurrent.revision_id ||
+      undoExport.revision_id !== undoCurrent.revision_id) {
+    throw new Error("Undo revision export advanced or misbound authoritative revision head");
+  }
+  receipt.undo_revision_export_claim = true;
+  receipt.undo_revision_export = {
+    revision_id: undoExport.revision_id,
+    target_profile: undoExport.target_profile,
+    artifact_bytes: undoExportDownload.byte_len,
+    artifact_sha256: undoExportDownload.sha256,
+    downloadable_idml: true,
+    differs_from_moved_revision_export: true,
+    original_undo_revision_preserved: true,
+  };
+
   receipt.real_browser_authoritative_undo_claim = true;
   receipt.real_browser_authoritative_undo = {
     base_revision_id: receipt.current_revision_id,
