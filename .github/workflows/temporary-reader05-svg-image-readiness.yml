@@ -1,0 +1,165 @@
+name: TEMP Reader 05 exact SVG image readiness census
+
+on:
+  push:
+    branches:
+      - measure/cloud-reader-05-svg-image-readiness-20261011
+    paths:
+      - ".github/workflows/temporary-reader05-svg-image-readiness.yml"
+      - "apps/cloud-reader/real-browser.test.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: svg-readiness-05-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pinned-05-raster:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download immutable 1050 PUB source materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+      - name: Verify 05 pinned source and select exact fixture
+        env:
+          RUNNER_TEMP_DIR: ${{ runner.temp }}
+        run: |
+          python - <<'PY'
+          import csv,hashlib,json,os
+          from pathlib import Path
+          rows=list(csv.DictReader(Path("tools/corpus/receipts/publisher-visual-golden-supplemental-2026-10-06-pairs.csv").open(encoding="utf-8")))
+          selected=[r for r in rows if r["basename"]=="05-modern2c-officeart-wmf"]
+          assert len(selected)==1
+          row=selected[0]
+          sha=row["pub_sha256"]
+          source=Path("out/pinned1050/materialized/native") / f"{sha}.pub"
+          assert source.is_file()
+          assert len(source.read_bytes())==int(row["pub_bytes"])
+          assert hashlib.sha256(source.read_bytes()).hexdigest()==sha
+          assert int(row["pdf_pages"])==14
+          manifest={"fixtures":[{
+              "name":row["basename"],"sha256":sha,"bytes":int(row["pub_bytes"]),
+              "pages":14,"require_render":True,"require_shared_text":False,
+              "source_path":str(source.resolve()),
+          }]}
+          dest=Path(os.environ["RUNNER_TEMP_DIR"])/"reader05-manifest.json"
+          dest.write_text(json.dumps(manifest),encoding="utf-8")
+          print("PINNED_05_SOURCE_VERIFIED")
+          PY
+      - name: Build isolated canonical Cloud Reader worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+      - name: Install fixed browser runtime and safe 64x64 comparator
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
+          npm install --no-save playwright@1.55.0
+          npx playwright install chromium
+          node --check apps/cloud-reader/real-browser.test.mjs
+          python -m py_compile tools/cloud_reader_visual_fingerprint_v1.py
+      - name: Two fresh identical-worker browser replays and image decode gates
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.sha }}
+          READER_CORPUS_DIAGNOSTIC: "1"
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/debug/chaptera
+          READER_REAL_MANIFEST: ${{ runner.temp }}/reader05-manifest.json
+          READER_REFERENCE_RASTER_DPI: "144"
+          READER_WORKER_TIMEOUT_SECONDS: "120"
+          READER_WORKER_CPU_SECONDS: "90"
+          READER_WORKER_ADDRESS_SPACE_MB: "768"
+          READER_RASTER_STABILITY_FIXTURE: "05-modern2c-officeart-wmf"
+          READER_RASTER_STABILITY_PAGE: "3"
+        run: |
+          set -euo pipefail
+          for arm in 1 2; do
+            export READER_REAL_OUTPUT="$RUNNER_TEMP/reader05-arm-$arm"
+            node apps/cloud-reader/real-browser.test.mjs > "$RUNNER_TEMP/reader05-arm-$arm.log" 2>&1 || {
+              tail -n 30 "$RUNNER_TEMP/reader05-arm-$arm.log"
+              exit 1
+            }
+            grep '^RASTER_STABILITY ' "$RUNNER_TEMP/reader05-arm-$arm.log"
+          done
+      - name: Compare baseline and decoded image rasters against immutable Publisher reference
+        env:
+          RUNNER_TEMP_DIR: ${{ runner.temp }}
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,re,sys
+          from pathlib import Path
+          sys.path.insert(0,str(Path("tools").resolve()))
+          from cloud_reader_visual_fingerprint_v1 import image_grid,reference_grid,compare_grid
+          root=Path(os.environ["RUNNER_TEMP_DIR"])
+          reference=json.loads(Path("tools/corpus/receipts/publisher-visual-golden-supplemental-reference-available-2026-10-06-fingerprint-v1.json").read_text())
+          pairs=[p for p in reference["pairs"] if p["basename"]=="05-modern2c-officeart-wmf"]
+          assert len(pairs)==1 and len(pairs[0]["pages"])==14
+          grid=reference_grid(pairs[0]["pages"][2])
+          results=[]
+          for arm in (1,2):
+              folder=root/f"reader05-arm-{arm}"
+              receipt=json.loads((folder/"receipt.json").read_text())
+              assert len(receipt["results"])==1
+              row=receipt["results"][0]
+              assert row["rendered"] and row["pages"]==14
+              assert row["source_sha256"]=="99ffa361aa8d0ba3a851ff86986bede358743945b6a8ea2e6bf19401bb00cd06"
+              shot=row["screenshots"][2]
+              obs=shot["raster_stability"]
+              hashes={k:obs[k] for k in ("before_sha256","after_decode_sha256","warm_repeat_sha256")}
+              assert all(re.fullmatch(r"[0-9a-f]{64}",h) for h in hashes.values())
+              base=folder/"05-modern2c-officeart-wmf-page-3.png"
+              warm=folder/"05-modern2c-officeart-wmf-page-3-warm.png"
+              assert hashlib.sha256(base.read_bytes()).hexdigest()==hashes["before_sha256"]
+              assert hashlib.sha256(warm.read_bytes()).hexdigest()==hashes["after_decode_sha256"]
+              clean={
+                  "arm":arm, "source_sha256":row["source_sha256"],
+                  "worker_receipt_sha256":row["worker_receipt_sha256"],
+                  "scene_sha256":row["scene_sha256"], "page":3,
+                  "before_changed_cell_fraction":compare_grid(image_grid(base),grid)["changed_cell_fraction"],
+                  "after_decode_changed_cell_fraction":compare_grid(image_grid(warm),grid)["changed_cell_fraction"],
+                  **{k:obs[k] for k in (
+                    "before_sha256","after_decode_sha256","warm_repeat_sha256",
+                    "before_equals_after_decode","warm_capture_stable","svg_image_nodes",
+                    "inline_unique_images","unsupported_or_absent_href_count",
+                    "decode_ready_count","decode_failed_or_timeout_count",
+                    "paint_frames_observed",
+                  )}
+              }
+              results.append(clean)
+          same_scene=results[0]["scene_sha256"]==results[1]["scene_sha256"]
+          same_before=results[0]["before_sha256"]==results[1]["before_sha256"]
+          same_warm=results[0]["after_decode_sha256"]==results[1]["after_decode_sha256"]
+          summary={
+              "schema":"chaptera.reader05-svg-image-readiness-source-safe.v1",
+              "same_worker_scene":same_scene,"same_before_capture":same_before,
+              "same_after_decode_capture":same_warm,"arms":results,
+              "not_full_browser_determinism_proof":True,
+              "no_source_or_image_bytes_emitted":True,
+          }
+          dest=root/"reader05-source-safe-readiness.json"
+          dest.write_text(json.dumps(summary,indent=2,sort_keys=True)+"\n")
+          print("READER05_SOURCE_SAFE "+json.dumps(summary,sort_keys=True))
+          PY
+      - name: Upload only source-safe measurement receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: reader05-image-readiness-source-safe
+          path: ${{ runner.temp }}/reader05-source-safe-readiness.json
+          if-no-files-found: error
+          retention-days: 30
