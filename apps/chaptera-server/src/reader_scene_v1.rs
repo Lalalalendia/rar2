@@ -3323,15 +3323,30 @@ mod tests {
     #[test]
     fn descriptor_probe_classifier_matches_inline_admission_law() {
         assert_eq!(
-            classify_probe_image_inline_admission("image/png", 3, true, MAX_INLINE_IMAGE_TOTAL_BYTES),
+            classify_probe_image_inline_admission(
+                "image/png",
+                3,
+                true,
+                MAX_INLINE_IMAGE_TOTAL_BYTES
+            ),
             ProbeImageInlineAdmission::Inline
         );
         assert_eq!(
-            classify_probe_image_inline_admission("image/svg+xml", 3, true, MAX_INLINE_IMAGE_TOTAL_BYTES),
+            classify_probe_image_inline_admission(
+                "image/svg+xml",
+                3,
+                true,
+                MAX_INLINE_IMAGE_TOTAL_BYTES
+            ),
             ProbeImageInlineAdmission::UnsupportedMime
         );
         assert_eq!(
-            classify_probe_image_inline_admission("image/png", 0, true, MAX_INLINE_IMAGE_TOTAL_BYTES),
+            classify_probe_image_inline_admission(
+                "image/png",
+                0,
+                true,
+                MAX_INLINE_IMAGE_TOTAL_BYTES
+            ),
             ProbeImageInlineAdmission::EmptyPayload
         );
         assert_eq!(
