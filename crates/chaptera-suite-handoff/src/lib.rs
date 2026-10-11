@@ -1,4 +1,7 @@
 mod destination;
+mod packet_admission;
+
+pub use packet_admission::{HandoffPacketAdmissionError, HandoffPacketAdmissionV1};
 
 pub use destination::{
     AdmittedDestination, DestinationCommitReceipt, DestinationWriteError, FileIdentity,
@@ -18,6 +21,7 @@ pub const EDITOR_PRODUCT_ID: &str = "chaptera.editor";
 pub const RESCUE_PRODUCT_ID: &str = "chaptera.rescue";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HandoffPacket {
     pub protocol_version: String,
     pub sender_product_id: String,
@@ -30,6 +34,7 @@ pub struct HandoffPacket {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HandoffSource {
     pub path: String,
     pub sha256: String,
@@ -37,24 +42,28 @@ pub struct HandoffSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HandoffContext {
     pub capability: String,
     pub loss_state: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HandoffProvenance {
     pub source_identity_verified: bool,
     pub mutable_document_state_included: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HandoffConsent {
     pub local_file_handoff: bool,
     pub user_initiated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HandoffAcceptance {
     pub protocol_version: String,
     pub sender_product_id: String,
@@ -316,6 +325,7 @@ pub fn create_reader_handoff_from_admitted(
 }
 
 pub fn validate_packet(packet: &HandoffPacket) -> Result<(), String> {
+    HandoffPacketAdmissionV1::check_lengths(packet).map_err(|error| error.to_string())?;
     if packet.protocol_version != PACKET_VERSION {
         return Err(format!(
             "unsupported suite handoff version: {}",
@@ -366,6 +376,10 @@ pub fn write_packet(packet: &HandoffPacket, output: &Path) -> Result<(), String>
     if Path::new(&packet.source.path) == output {
         return Err("handoff packet must not overwrite the source PUB".to_owned());
     }
+    let mut bytes = serde_json::to_vec_pretty(packet)
+        .map_err(|error| format!("serialize suite handoff packet: {error}"))?;
+    bytes.push(b'\n');
+    HandoffPacketAdmissionV1::check_byte_length(bytes.len()).map_err(|error| error.to_string())?;
     if let Some(parent) = output
         .parent()
         .filter(|value| !value.as_os_str().is_empty())
@@ -373,20 +387,17 @@ pub fn write_packet(packet: &HandoffPacket, output: &Path) -> Result<(), String>
         fs::create_dir_all(parent)
             .map_err(|error| format!("create {}: {error}", parent.display()))?;
     }
-    let bytes = serde_json::to_vec_pretty(packet)
-        .map_err(|error| format!("serialize suite handoff packet: {error}"))?;
-    fs::write(output, [bytes.as_slice(), b"\n"].concat())
-        .map_err(|error| format!("write {}: {error}", output.display()))
+    fs::write(output, bytes).map_err(|error| format!("write {}: {error}", output.display()))
 }
 
 pub fn load_for_receiver(
     packet_path: &Path,
     expected_receiver: &str,
 ) -> Result<ValidatedHandoff, String> {
-    let packet_bytes = fs::read(packet_path)
-        .map_err(|error| format!("read {}: {error}", packet_path.display()))?;
-    let packet: HandoffPacket = serde_json::from_slice(&packet_bytes)
-        .map_err(|error| format!("parse suite handoff packet: {error}"))?;
+    let packet_bytes =
+        HandoffPacketAdmissionV1::read_path(packet_path).map_err(|error| error.to_string())?;
+    let packet =
+        HandoffPacketAdmissionV1::decode(&packet_bytes).map_err(|error| error.to_string())?;
     validate_packet(&packet)?;
     if packet.target_product_id != expected_receiver {
         return Err(format!(

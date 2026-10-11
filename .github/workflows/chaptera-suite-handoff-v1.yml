@@ -27,6 +27,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
@@ -155,6 +157,49 @@ jobs:
           $tamperReceiver = Start-Process -FilePath (Join-Path $bin "chaptera-editor.exe") -ArgumentList @("--handoff-accept-v1", $tamperPacket, (Join-Path $env:SUITE_HANDOFF_ROOT "tamper.acceptance.json")) -Wait -PassThru
           if ($tamperReceiver.ExitCode -eq 0) { throw "Editor accepted source bytes changed after sender admission" }
 
+      - name: Prove packet admission rejects before source access on the real Editor
+        shell: pwsh
+        env:
+          CHAPTERA_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bin = Join-Path $env:RUNNER_TEMP "suite-bins"
+          $validPacket = Join-Path $env:SUITE_HANDOFF_ROOT "reader-to-editor.packet.json"
+          $body = Get-Content $validPacket -Raw | ConvertFrom-Json
+          $body.source.path = Join-Path $env:SUITE_HANDOFF_ROOT "must-not-be-opened.pub"
+          if (Test-Path $body.source.path) { throw "negative source unexpectedly exists" }
+          $normal = $body | ConvertTo-Json -Depth 5 -Compress
+          $unknown = $body | ConvertTo-Json -Depth 5 -Compress | ConvertFrom-Json
+          $unknown.context | Add-Member -NotePropertyName unknown_v1_semantics -NotePropertyValue $true
+          $long = $body | ConvertTo-Json -Depth 5 -Compress | ConvertFrom-Json
+          $long.sender_product_id = "x" * 129
+          $cases = @(
+            @{ name="size_limit"; bytes=[byte[]]::new(256 * 1024 + 1); code="handoff_packet_size_limit" },
+            @{ name="unknown_field"; bytes=[Text.Encoding]::UTF8.GetBytes(($unknown | ConvertTo-Json -Depth 5 -Compress)); code="handoff_packet_json_invalid" },
+            @{ name="duplicate_field"; bytes=[Text.Encoding]::UTF8.GetBytes(('{"protocol_version":"chaptera.suite-handoff.v1",' + $normal.Substring(1))); code="handoff_packet_json_invalid" },
+            @{ name="field_limit"; bytes=[Text.Encoding]::UTF8.GetBytes(($long | ConvertTo-Json -Depth 5 -Compress)); code="handoff_packet_field_length_limit" }
+          )
+          $results = @()
+          foreach ($case in $cases) {
+            $packet = Join-Path $env:SUITE_HANDOFF_ROOT ($case.name + ".negative.packet.json")
+            $acceptance = Join-Path $env:SUITE_HANDOFF_ROOT ($case.name + ".negative.acceptance.json")
+            $stderr = Join-Path $env:SUITE_HANDOFF_ROOT ($case.name + ".negative.stderr")
+            [IO.File]::WriteAllBytes($packet, $case.bytes)
+            $process = Start-Process -FilePath (Join-Path $bin "chaptera-editor.exe") -ArgumentList @("--handoff-accept-v1", $packet, $acceptance) -RedirectStandardError $stderr -Wait -PassThru
+            if ($process.ExitCode -eq 0 -or (Test-Path $acceptance)) { throw "Editor admitted negative packet $($case.name)" }
+            if ((Get-Content $stderr -Raw) -notmatch [regex]::Escape($case.code)) { throw "Editor did not return the expected source-free packet admission code for $($case.name)" }
+            $results += [ordered]@{ case=$case.name; code=$case.code; rejected=$true; acceptance_created=$false }
+          }
+          [ordered]@{
+            schema="chaptera.suite-handoff-packet-admission.v1"
+            git_commit=$env:CHAPTERA_CANDIDATE_SHA
+            real_editor_receiver=$true
+            source_exists=$false
+            source_path_serialized=$false
+            packet_bytes_serialized=$false
+            cases=$results
+          } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $env:SUITE_HANDOFF_ROOT "packet-admission.receipt.json")
+
       - name: Stage source-free acceptance receipts
         shell: pwsh
         run: |
@@ -162,6 +207,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           Copy-Item (Join-Path $env:SUITE_HANDOFF_ROOT "reader-to-editor.acceptance.json") (Join-Path $out "reader-to-editor.acceptance.json")
           Copy-Item (Join-Path $env:SUITE_HANDOFF_ROOT "reader-to-rescue.acceptance.json") (Join-Path $out "reader-to-rescue.acceptance.json")
+          Copy-Item (Join-Path $env:SUITE_HANDOFF_ROOT "packet-admission.receipt.json") (Join-Path $out "packet-admission.receipt.json")
 
       - uses: actions/upload-artifact@v4
         with:
