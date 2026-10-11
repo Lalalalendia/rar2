@@ -97,6 +97,9 @@ const service={
   async readerSceneForRevision(revisionId){
     if(current.revision_id!==revisionId) throw new Error("synthetic revision mismatch");
     return structuredClone(current);
+  },
+  async undo(){
+    throw new Error("synthetic move-only harness does not exercise Undo");
   }
 };
 

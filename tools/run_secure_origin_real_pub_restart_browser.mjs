@@ -234,6 +234,134 @@ try {
       JSON.stringify(downloadedArtifact));
   }
 
+  // Keep the already-accepted edited IDML proof above. Then test the real
+  // browser Ctrl/Cmd+Z on that exact durable revision through the same
+  // configured OIDC/HTTPS Chaptera route, without issuing a fabricated
+  // reverse MoveNode command.
+  const historyPosts = [];
+  const historyResponses = [];
+  const historyPath =
+    "/v1/documents/" + encodeURIComponent(receipt.document_id) + "/history";
+  page.on("request", request => {
+    if (request.method() === "POST" &&
+        new URL(request.url()).pathname === historyPath) {
+      historyPosts.push({
+        csrfToken: request.headers()["x-csrf-token"] ?? null,
+        forged: !!request.headers()["x-chaptera-principal-id"],
+        body: request.postData(),
+      });
+    }
+  });
+  page.on("response", response => {
+    if (response.request().method() === "POST" &&
+        new URL(response.url()).pathname === historyPath) {
+      historyResponses.push(response.json().then(body => ({
+        status: response.status(),
+        code: typeof body?.error === "string" ? body.error : (body?.error?.code ?? null),
+      })).catch(() => ({
+        status: response.status(),
+        code: null,
+      })));
+    }
+  });
+  await page.keyboard.press("Control+z");
+  await page.waitForFunction(previousRevision => {
+    const status = document.querySelector("#status");
+    return status?.classList.contains("ok") &&
+      status.textContent.includes("Revision sha256:") &&
+      !status.textContent.includes(previousRevision) &&
+      document.querySelectorAll("#canvas svg.page[data-page-id]").length > 0;
+  }, receipt.current_revision_id, { timeout: 60000 });
+  const undoCurrent = await page.evaluate(async id => {
+    const response = await fetch("/v1/documents/" + encodeURIComponent(id) + "/current", {
+      credentials: "same-origin", cache: "no-store",
+    });
+    const body = await response.json().catch(() => null);
+    return {
+      status: response.status,
+      document_id: body?.document_id ?? null,
+      revision_id: body?.revision_id ?? null,
+      source_hash: body?.source_hash ?? null,
+    };
+  }, receipt.document_id);
+  const historyReplies = await Promise.all(historyResponses);
+  // A restarted browser may hold a stale CSRF token. Product mutation logic
+  // explicitly permits ONE retry after a typed csrf_invalid 403, with the
+  // exact same idempotent request body and a newly fetched CSRF token.
+  // Reject extra POSTs, changed operation IDs, or any other failed request.
+  const safeSingle = historyPosts.length === 1 &&
+    historyReplies.length === 1 &&
+    historyReplies[0].status === 200;
+  const safeCsrfRefresh = historyPosts.length === 2 &&
+    historyReplies.length === 2 &&
+    historyReplies[0].status === 403 &&
+    historyReplies[0].code === "csrf_invalid" &&
+    historyReplies[1].status === 200 &&
+    historyPosts[0].body === historyPosts[1].body &&
+    historyPosts[0].csrfToken !== historyPosts[1].csrfToken;
+  if (!(safeSingle || safeCsrfRefresh) ||
+      !historyPosts.every(post => post.csrfToken && !post.forged) ||
+      undoCurrent.status !== 200 || undoCurrent.document_id !== receipt.document_id ||
+      !undoCurrent.revision_id || undoCurrent.revision_id === receipt.current_revision_id ||
+      undoCurrent.source_hash !== receipt.real_pub_sha256) {
+    // Do not copy the ephemeral CSRF tokens, raw source/doc identities or
+    // canonical mutation JSON into retained security telemetry.
+    throw new Error("real keyboard Undo did not preserve authenticated idempotent history: " +
+      JSON.stringify({
+        post_count: historyPosts.length,
+        responses: historyReplies,
+        valid_single: safeSingle,
+        valid_csrf_refresh: safeCsrfRefresh,
+        current_ok: undoCurrent.status === 200,
+        revision_advanced: undoCurrent.revision_id !== receipt.current_revision_id,
+      }));
+  }
+  const undoScene = await page.evaluate(async id => {
+    const response = await fetch("/v1/reader/documents/" + encodeURIComponent(id) + "/scene", {
+      credentials: "same-origin", cache: "no-store",
+    });
+    if (!response.ok) throw new Error("Undo Reader scene HTTP " + response.status);
+    return response.json();
+  }, receipt.document_id);
+  const undoneNode = undoScene.nodes?.find(node =>
+    node.node_id === receipt.move_commit.node_id);
+  if (undoScene.revision_id !== undoCurrent.revision_id ||
+      undoScene.source_hash !== receipt.real_pub_sha256 ||
+      undoneNode?.bounds?.x !== receipt.move_commit.before.x_emu ||
+      undoneNode?.bounds?.y !== receipt.move_commit.before.y_emu) {
+    throw new Error("real keyboard Undo failed to restore authoritative original geometry");
+  }
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(revision => {
+    const status = document.querySelector("#status");
+    return status?.classList.contains("ok") &&
+      status.textContent.includes(revision) &&
+      document.querySelectorAll("#canvas svg.page[data-page-id]").length > 0;
+  }, undoCurrent.revision_id, { timeout: 30000 });
+  const undoAfterReload = await page.evaluate(async id => {
+    const response = await fetch("/v1/documents/" + encodeURIComponent(id) + "/current", {
+      credentials: "same-origin", cache: "no-store",
+    });
+    const body = await response.json().catch(() => null);
+    return { status: response.status, revision_id: body?.revision_id ?? null };
+  }, receipt.document_id);
+  if (undoAfterReload.status !== 200 ||
+      undoAfterReload.revision_id !== undoCurrent.revision_id) {
+    throw new Error("browser reload failed to recover the immutable Undo revision");
+  }
+  receipt.real_browser_authoritative_undo_claim = true;
+  receipt.real_browser_authoritative_undo = {
+    base_revision_id: receipt.current_revision_id,
+    revision_id: undoCurrent.revision_id,
+    history_post_count: historyPosts.length,
+    accepted_history_post_count: 1,
+    csrf_refresh_retry: safeCsrfRefresh,
+    csrf_present: true,
+    source_hash_unchanged: true,
+    baseline_geometry_restored: true,
+    browser_reload_persisted: true,
+  };
+
   receipt.server_restart_reopen_claim = true;
   receipt.server_restart_reopen = {
     document_id: current.document_id,
