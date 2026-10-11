@@ -7,87 +7,58 @@ use std::{fs, path::Path};
 fn pinned(root: &str, hash: &str) -> Vec<u8> {
     let bytes = fs::read(Path::new(root).join(format!("{hash}.pub")))
         .expect("exact Publisher fixture exists");
-    let actual = Sha256::digest(&bytes).iter()
-        .map(|x| format!("{x:02x}")).collect::<String>();
+    let actual = Sha256::digest(&bytes)
+        .iter()
+        .map(|x| format!("{x:02x}"))
+        .collect::<String>();
     assert_eq!(actual, hash);
     bytes
 }
 
 #[test]
 fn exact_084_recovers_nine_partial_wmf_graphics_and_surfaces_nineteen_omitted_characters() {
-    let Ok(root) = std::env::var("CHAPTERA_PINNED_SOURCE_ROOT") else { return; };
+    let Ok(root) = std::env::var("CHAPTERA_PINNED_SOURCE_ROOT") else {
+        return;
+    };
     let bytes = pinned(
         &root,
         "6e50032567c85a83cacc4f07520a2966411950c73a739029862417dec369908d",
     );
     let visual = open_pub_geometry(&bytes, viewer_geometry_environment_v0_1())
         .expect("real 084 source opens in Viewer");
-    // Measurement-only source-safe diagnostics. Never print font names, WMF text,
-    // source bytes, original paths, resource identifiers, or raw parser errors.
-    let digest = Sha256::digest(&bytes);
-    let mut raw = [0_u8; 32];
-    raw.copy_from_slice(&digest);
-    let source = pub_reader::build_mature_0x2c_source_graph(
-        std::io::Cursor::new(bytes.as_slice()),
-        pub_model::Sha256Digest::from_bytes(raw),
-    ).expect("real source graph");
-    let bundle = pub_reader::build_mature_0x2c_wmf_preview_bundle_from_bytes(
-        &bytes, &source.graph,
-    ).expect("real source-backed WMF uses");
-    let classes = bundle.sources.iter().map(|candidate| {
-        match pub_reader::wmf_preview::rasterize_wmf_preview_explicit_text_gap(
-            &candidate.wmf_bytes,
-            candidate.width_hint,
-            candidate.height_hint,
-        ) {
-            Ok(admitted) => format!("ok-{}", admitted.omitted_text_record_count),
-            Err(error) => {
-                let detail = error.to_string();
-                let category = if detail.contains("50-byte partial-font profile") { "font50-profile" }
-                else if detail.contains("unsupported WMF Font compatibility") { "font26-profile" }
-                else if detail.contains("EXTTEXTOUT partial omission") { "exttextout-profile" }
-                else if detail.contains("unsupported WMF record function") { "other-wmf-function" }
-                else if detail.contains("WMF has no admitted visible text") { "no-text" }
-                else if detail.contains("WMF SELECTOBJECT") { "select-object" }
-                else if detail.contains("WMF DELETEOBJECT") { "delete-object" }
-                else if detail.contains("WMF ") { "other-wmf-error" }
-                else { "unknown-rejected" };
-                category.to_owned()
-            }
-        }
-    }).collect::<Vec<_>>();
-    let warning_codes = visual.document.diagnostics.iter()
-        .filter(|d| d.code.starts_with("viewer.mature_officeart_wmf."))
-        .map(|d| d.code.as_str()).collect::<Vec<_>>();
-    println!(
-        "WMF084_DIAGNOSTIC_CLASSES {}",
-        serde_json::json!({
-            "source_count":bundle.sources.len(),
-            "source_rejected":bundle.rejected_source_count,
-            "classes":classes,
-            "viewer_codes":warning_codes,
-        })
-    );
-
-    let partial = visual.document.diagnostics.iter()
+    let partial = visual
+        .document
+        .diagnostics
+        .iter()
         .filter(|d| d.code == "viewer.mature_officeart_wmf.visible_text_omitted_partial")
         .collect::<Vec<_>>();
-    assert_eq!(partial.len(), 1, "all per-source omissions must be consolidated");
+    assert_eq!(
+        partial.len(),
+        1,
+        "all per-source omissions must be consolidated"
+    );
     assert!(partial[0].message.contains("9 bounded WMF previews"));
     assert!(partial[0].message.contains("19 visible source text record"));
-    let candidates = visual.images.iter()
+    let candidates = visual
+        .images
+        .iter()
         .filter(|image| !image.source_exact && image.mime == "image/png")
         .collect::<Vec<_>>();
-    assert!(candidates.len() >= 9, "real derived image resources must reach Viewer");
+    assert!(
+        candidates.len() >= 9,
+        "real derived image resources must reach Viewer"
+    );
     for image in candidates {
         assert!(image.verified_source_sha256.is_none());
-        assert!(image.bytes.starts_with(&[137,80,78,71,13,10,26,10]));
+        assert!(image.bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]));
     }
 }
 
 #[test]
 fn exact_040_and_085_do_not_acquire_false_partial_text_warnings() {
-    let Ok(root) = std::env::var("CHAPTERA_PINNED_SOURCE_ROOT") else { return; };
+    let Ok(root) = std::env::var("CHAPTERA_PINNED_SOURCE_ROOT") else {
+        return;
+    };
     for hash in [
         "b384bf6461c77c3d0fa227c148e1e3092cf69c98b0ad568a7b3e32fb139b6282",
         "40453fa60fbd9176f85e3b4d29f5074139b4e4a882d555d2801ec4a1a6c5fb62",
@@ -96,9 +67,11 @@ fn exact_040_and_085_do_not_acquire_false_partial_text_warnings() {
         let visual = open_pub_geometry(&bytes, viewer_geometry_environment_v0_1())
             .expect("WMF control source opens in Viewer");
         assert!(
-            !visual.document.diagnostics.iter().any(|d|
-                d.code == "viewer.mature_officeart_wmf.visible_text_omitted_partial"
-            ),
+            !visual
+                .document
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "viewer.mature_officeart_wmf.visible_text_omitted_partial"),
             "text-free WMF control must retain strict existing admission"
         );
     }
