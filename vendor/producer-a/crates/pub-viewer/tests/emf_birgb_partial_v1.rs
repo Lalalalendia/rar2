@@ -7,7 +7,11 @@ use std::{fs, path::Path};
 fn load_pinned(root: &str, sha: &str) -> Vec<u8> {
     let bytes = fs::read(Path::new(root).join(format!("{sha}.pub")))
         .expect("pinned PUB fixture readable");
-    assert_eq!(format!("{:x}", Sha256::digest(&bytes)), sha);
+    let actual_sha = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(actual_sha, sha);
     bytes
 }
 
