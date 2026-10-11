@@ -85,7 +85,7 @@ assert.match(rasterStabilityFixture, /^[A-Za-z0-9._-]*$/, "stability fixture mus
 assert.ok(Number.isSafeInteger(rasterStabilityPage) && rasterStabilityPage > 0 && rasterStabilityPage <= 64,
   "stability page must be a bounded positive index");
 
-async function probeSvgRasterStability(pageSvg, baselinePng) {
+async function probeSvgRasterStability(pageSvg, baselinePng, warmedCapturePath) {
   const readiness = await pageSvg.evaluate(async (svg) => {
     const urls = [...svg.querySelectorAll("image")].map((image) =>
       image.getAttribute("href") || image.getAttributeNS("http://www.w3.org/1999/xlink", "href") || "");
@@ -120,9 +120,9 @@ async function probeSvgRasterStability(pageSvg, baselinePng) {
       paint_frames_observed: 2
     };
   });
-  // No extra screenshot PNGs are written to artifacts. The ordinary raw
-  // fixture outputs remain local to this ephemeral hosted job.
-  const afterDecode = await pageSvg.screenshot();
+  // This extra raster stays in the ephemeral job for grid comparison; the
+  // uploaded artifact contains only SHA digests and numeric metrics.
+  const afterDecode = await pageSvg.screenshot({ path: warmedCapturePath });
   const again = await pageSvg.screenshot();
   const before = sha256(baselinePng);
   const warm = sha256(afterDecode);
@@ -583,7 +583,7 @@ try {
       const png = await pageSvg.screenshot({ path: join(output, filename) });
       const rasterStability = rasterStabilityFixture === fixture.name
         && rasterStabilityPage === i + 1
-        ? await probeSvgRasterStability(pageSvg, png)
+        ? await probeSvgRasterStability(pageSvg, png, join(output, fixture.name + `-page-${i + 1}-warm.png`))
         : null;
       if (rasterStability) {
         console.log("RASTER_STABILITY " + JSON.stringify({
