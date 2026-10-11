@@ -316,6 +316,19 @@ fn reject_ambient_credentials() -> Result<(), String> {
     if AMBIENT.iter().any(|name| env::var_os(name).is_some()) {
         return Err("ambient_aws_credentials_not_allowed".to_owned());
     }
+    // AWS-only acceptance must not unknowingly test an operator-supplied
+    // S3/STS emulator or endpoint override instead of genuine AWS policy.
+    const ENDPOINT_OVERRIDES: &[&str] = &[
+        "AWS_ENDPOINT_URL",
+        "AWS_ENDPOINT_URL_S3",
+        "AWS_ENDPOINT_URL_STS",
+    ];
+    if ENDPOINT_OVERRIDES
+        .iter()
+        .any(|name| env::var_os(name).is_some())
+    {
+        return Err("custom_aws_endpoints_not_supported".to_owned());
+    }
     Ok(())
 }
 
