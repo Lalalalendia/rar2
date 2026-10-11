@@ -578,6 +578,96 @@ try {
     raw_parser_diagnostic_disclosed: false,
   };
 
+  // The truncated fixture above proved one real CFB rejection. Expand that
+  // existing B02 browser path into deterministic hostile-header controls:
+  // each nonempty source must physically reach authenticated ingress, fail
+  // before Product genesis, and leave the original project/scene intact.
+  const corruptCopy = (offset, bytes) => {
+    const altered = Buffer.from(raw);
+    for (let index = 0; index < bytes.length; index += 1) {
+      altered[offset + index] = bytes[index];
+    }
+    return altered;
+  };
+  const hostileCfbFixtures = [
+    { kind: "magic_only", buffer: Buffer.from(raw.subarray(0, 8)) },
+    { kind: "header_prefix_128", buffer: Buffer.from(raw.subarray(0, 128)) },
+    { kind: "header_prefix_511", buffer: Buffer.from(raw.subarray(0, 511)) },
+    { kind: "invalid_signature", buffer: corruptCopy(0, [0x00]) },
+    { kind: "invalid_byte_order", buffer: corruptCopy(28, [0x00, 0x00]) },
+    { kind: "invalid_sector_shift", buffer: corruptCopy(30, [0x00, 0x00]) },
+    { kind: "missing_directory_sector", buffer: corruptCopy(48, [0xfe, 0xff, 0xff, 0xff]) },
+  ];
+  const sourceAdmissionCount = () => calls.filter(call =>
+    call.method === "POST" && call.path === "/v1/uploads").length;
+  const sourceContentCount = () => calls.filter(call =>
+    call.method === "PUT" && call.path.endsWith("/content")).length;
+  const durableProjectCreateCount = () => calls.filter(call =>
+    call.method === "POST" && call.path === "/v1/projects/from-upload").length;
+  const hostileCfbResults = [];
+  for (const hostile of hostileCfbFixtures) {
+    if (hostile.buffer.length === 0 || hostile.buffer.length >= raw.length + 1) {
+      throw new Error("hostile CFB fixture generator violated size bounds");
+    }
+    await page.goto(origin + "/editor/new", { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() =>
+      document.querySelector("#status")?.textContent?.includes("Готов к загрузке"),
+    null, { timeout: 30000 });
+    const admissionBefore = sourceAdmissionCount();
+    const contentBefore = sourceContentCount();
+    const durableBefore = durableProjectCreateCount();
+    await page.locator("#pub-file").setInputFiles({
+      name: "TruncatedNewsletter.pub",
+      mimeType: "application/x-mspublisher",
+      buffer: hostile.buffer,
+    });
+    await page.waitForFunction(() =>
+      (document.querySelector("#error")?.textContent ?? "").length > 0,
+    null, { timeout: 45000 });
+    const failed = await page.evaluate(() => ({
+      path: location.pathname,
+      status: document.querySelector("#status")?.textContent ?? "",
+      code: document.querySelector("#error")?.textContent ?? "",
+    }));
+    if (failed.path !== "/editor/new" || failed.status !== "Needs attention" ||
+        !/^[a-z0-9_:-]{1,96}$/.test(failed.code)) {
+      throw new Error("hostile CFB did not fail with a bounded typed UI error: " + hostile.kind);
+    }
+    if (sourceAdmissionCount() !== admissionBefore + 1 ||
+        sourceContentCount() !== contentBefore + 1 ||
+        durableProjectCreateCount() !== durableBefore) {
+      throw new Error("hostile CFB did not traverse exact ingress or reached Project genesis: " +
+        hostile.kind);
+    }
+    hostileCfbResults.push({
+      kind: hostile.kind,
+      byte_len: hostile.buffer.length,
+      error_code: failed.code,
+      passed: true,
+    });
+  }
+  await page.goto(origin + "/editor", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() =>
+    document.querySelector("#status")?.textContent?.startsWith("Проектов:"),
+  null, { timeout: 30000 });
+  const finalProjects = await page.evaluate(() =>
+    [...document.querySelectorAll("[data-document-id]")]
+      .map(card => card.getAttribute("data-document-id")).filter(Boolean).sort());
+  if (JSON.stringify(finalProjects) !== JSON.stringify(projectsBeforeMalformed)) {
+    throw new Error("hostile CFB attempts changed durable Project catalog");
+  }
+  const afterHostile = await currentDocumentReceipt(documentId);
+  if (afterHostile.status !== 200 || afterHostile.revision_id !== edited.revision_id) {
+    throw new Error("hostile CFB attempts damaged already accepted canonical revision");
+  }
+  const hostileCfbMatrix = {
+    claim: true,
+    tested_count: hostileCfbResults.length + 1,
+    additional_cases: hostileCfbResults,
+    same_project_catalog: true,
+    original_revision_unchanged: true,
+  };
+
   if (process.env.CHAPTERA_SECURE_SCREENSHOT) {
     await page.screenshot({ path: process.env.CHAPTERA_SECURE_SCREENSHOT, fullPage: true });
   }
@@ -628,6 +718,8 @@ try {
     move_commit: moveCommit,
     malformed_source_rejection_claim: true,
     malformed_source_rejection: malformedSource,
+    hostile_cfb_matrix_claim: true,
+    hostile_cfb_matrix: hostileCfbMatrix,
     server_restart_reopen_claim: false,
     storage_provider: "filesystem",
     s3_claim: false,
