@@ -1188,7 +1188,7 @@ fn admit_partial_50_byte_font(params: &[u8]) -> Result<()> {
         || read_i16(params, 4) != Some(0)
         || read_i16(params, 6) != Some(0)
         || read_u16(params, 8) != Some(400)
-        || params.get(10..18) != Some(&[0, 0, 0, 0, 3, 2, 1, 18][..])
+        || params.get(13..18) != Some(&[0, 3, 2, 1, 18][..])
     {
         bail!("WMF 50-byte partial-font profile not admitted");
     }
