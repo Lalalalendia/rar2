@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  isUndoShortcutEvent,
   resolveRichEditorPointerTarget,
 } from "./rich-reader-editor-shell-v1.mjs";
 
@@ -96,4 +97,33 @@ test("visual target and geometry target must name the same canonical node", () =
     A,
   );
   assert.deepEqual(result, { kind: "hit", node_id: A });
+});
+
+
+test("Ctrl/Cmd+Z is reserved for authoritative Undo outside editable controls", () => {
+  assert.equal(isUndoShortcutEvent({
+    key: "z", ctrlKey: true, metaKey: false, altKey: false, shiftKey: false,
+    repeat: false, defaultPrevented: false, target: { tagName: "DIV" },
+  }), true);
+  assert.equal(isUndoShortcutEvent({
+    key: "Z", ctrlKey: false, metaKey: true, altKey: false, shiftKey: false,
+    repeat: false, defaultPrevented: false, target: { tagName: "DIV" },
+  }), true);
+
+  for (const event of [
+    { key: "z", ctrlKey: true, shiftKey: true, target: { tagName: "DIV" } },
+    { key: "z", ctrlKey: true, repeat: true, target: { tagName: "DIV" } },
+    { key: "z", ctrlKey: true, target: { tagName: "INPUT" } },
+    { key: "z", ctrlKey: true, target: { isContentEditable: true } },
+    { key: "z", ctrlKey: false, metaKey: false, target: { tagName: "DIV" } },
+  ]) {
+    assert.equal(isUndoShortcutEvent({
+      altKey: false,
+      shiftKey: false,
+      repeat: false,
+      defaultPrevented: false,
+      metaKey: false,
+      ...event,
+    }), false);
+  }
 });

@@ -24,6 +24,22 @@ function nodeById(interactionScene, nodeId) {
   return interactionScene.nodes.find((node) => node.node_id === nodeId) ?? null;
 }
 
+function editableShortcutTarget(target) {
+  if (!target || typeof target !== "object") return false;
+  const tag = String(target.tagName ?? "").toLowerCase();
+  if (["input", "textarea", "select"].includes(tag)) return true;
+  if (target.isContentEditable === true) return true;
+  return !!target.closest?.("[contenteditable=true]");
+}
+
+export function isUndoShortcutEvent(event) {
+  if (!event || typeof event !== "object") return false;
+  if (event.defaultPrevented || event.repeat || event.altKey || event.shiftKey) return false;
+  if (!(event.ctrlKey || event.metaKey)) return false;
+  if (String(event.key ?? "").toLowerCase() !== "z") return false;
+  return !editableShortcutTarget(event.target);
+}
+
 export function resolveRichEditorPointerTarget(
   interactionScene,
   pageId,
@@ -91,6 +107,8 @@ export class RichReaderEditorShellV1 {
     service,
     renderOptions = {},
     operationIdFactory = null,
+    historyOperationIdFactory = null,
+    keyboardTarget = globalThis.document ?? host,
     onState = null,
   }) {
     if (!host || typeof host.addEventListener !== "function") {
@@ -99,19 +117,27 @@ export class RichReaderEditorShellV1 {
     if (
       !service ||
       typeof service.commit !== "function" ||
+      typeof service.undo !== "function" ||
       typeof service.currentRichEditorState !== "function" ||
       typeof service.readerSceneForRevision !== "function"
     ) {
       throw new TypeError(
-        "service must implement currentRichEditorState(), commit(), and readerSceneForRevision()",
+        "service must implement currentRichEditorState(), commit(), undo(), and readerSceneForRevision()",
       );
     }
+    if (!keyboardTarget || typeof keyboardTarget.addEventListener !== "function") {
+      throw new TypeError("keyboardTarget EventTarget is required");
+    }
     this.host = host;
+    this.keyboardTarget = keyboardTarget;
     this.service = service;
     this.renderOptions = { ...renderOptions };
     this.operationIdFactory =
       operationIdFactory ??
       (() => "rich-move-" + globalThis.crypto.randomUUID());
+    this.historyOperationIdFactory =
+      historyOperationIdFactory ??
+      (() => "rich-undo-" + globalThis.crypto.randomUUID());
     this.onState = onState;
     this.readerScene = null;
     this.interactionScene = null;
@@ -121,8 +147,13 @@ export class RichReaderEditorShellV1 {
     this.pointerMoveCount = 0;
     this.commitRequests = 0;
     this.lastCommitResult = null;
+    this.historyRequests = 0;
+    this.lastHistoryResult = null;
+    this.historyInFlight = false;
     this._handlers = null;
     this._bound = false;
+    this._keyboardHandler = null;
+    this._keyboardBound = false;
   }
 
   async start() {
@@ -131,6 +162,7 @@ export class RichReaderEditorShellV1 {
       preserveSelection: false,
     });
     this.bindPointerEvents();
+    this.bindKeyboardEvents();
     return this.stateReceipt();
   }
 
@@ -256,6 +288,26 @@ export class RichReaderEditorShellV1 {
     this._bound = false;
   }
 
+  bindKeyboardEvents() {
+    if (this._keyboardBound) return;
+    const keydown = (event) => {
+      if (!isUndoShortcutEvent(event)) return;
+      event.preventDefault?.();
+      if (this.historyInFlight) return;
+      void this.undo().catch(() => {});
+    };
+    this.keyboardTarget.addEventListener("keydown", keydown);
+    this._keyboardHandler = keydown;
+    this._keyboardBound = true;
+  }
+
+  unbindKeyboardEvents() {
+    if (!this._keyboardBound) return;
+    this.keyboardTarget.removeEventListener("keydown", this._keyboardHandler);
+    this._keyboardHandler = null;
+    this._keyboardBound = false;
+  }
+
   cancelGesture(reason = "gesture_cancelled") {
     if (!this.gesture) return false;
     this.gesture.cancel();
@@ -280,6 +332,9 @@ export class RichReaderEditorShellV1 {
       pointer_move_count: this.pointerMoveCount,
       commit_request_count: this.commitRequests,
       last_commit_protocol: this.lastCommitResult?.protocol_version ?? null,
+      history_request_count: this.historyRequests,
+      history_in_flight: this.historyInFlight,
+      last_history_protocol: this.lastHistoryResult?.protocol_version ?? null,
       visual_scene_is_edit_authority: false,
       browser_interaction_is_durable_authority: false,
     };
@@ -287,12 +342,65 @@ export class RichReaderEditorShellV1 {
 
   destroy() {
     this.unbindPointerEvents();
+    this.unbindKeyboardEvents();
     this.gesture = null;
     this.gesturePageId = null;
     this.readerScene = null;
     this.interactionScene = null;
     this.selectedNodeId = null;
     this.host.replaceChildren();
+  }
+
+  async undo() {
+    if (!this.readerScene) throw new Error("editor scene is not loaded");
+    if (this.gesture) this.cancelGesture("gesture_cancelled_for_undo");
+
+    const request = {
+      sourceHash: this.readerScene.source_hash,
+      baseRevisionId: this.readerScene.revision_id,
+      clientOperationId: this.historyOperationIdFactory(),
+    };
+    this.historyRequests += 1;
+    this.historyInFlight = true;
+    this._emitState("history_sent");
+
+    try {
+      const result = await this.service.undo(request);
+      this.lastHistoryResult = clone(result);
+
+      if (result.protocol_version === "chaptera.history-transition-accepted.v1") {
+        const nextReaderScene =
+          await this.service.readerSceneForRevision(result.revision_id);
+        await this.loadScenes(
+          nextReaderScene,
+          projectReaderSceneToEditorInteractionScene(nextReaderScene),
+          { preserveSelection: false },
+        );
+        this.historyInFlight = false;
+        this._emitState("history_reconciled");
+        return { request, result, reader_scene: clone(nextReaderScene) };
+      }
+
+      if (result.protocol_version !== "chaptera.history-transition-rejected.v1") {
+        throw new Error("unknown history transition result protocol");
+      }
+      if (result.current_revision_id) {
+        const currentReaderScene =
+          await this.service.readerSceneForRevision(result.current_revision_id);
+        await this.loadScenes(
+          currentReaderScene,
+          projectReaderSceneToEditorInteractionScene(currentReaderScene),
+          { preserveSelection: false },
+        );
+      }
+      this.historyInFlight = false;
+      this._emitState("history_rejected");
+      return { request, result, reader_scene: clone(this.readerScene) };
+    } catch (error) {
+      this.historyInFlight = false;
+      this._emitState("history_error");
+      throw error;
+    }
   }
 
   async _commitGesture(point) {

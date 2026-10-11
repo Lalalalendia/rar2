@@ -4,6 +4,9 @@ import { projectReaderSceneToEditorInteractionScene } from "./reader-scene-edito
 
 const COMMIT_REQUEST_V1 = "chaptera.commit-request.v1";
 const COMMIT_REJECTED_V1 = "chaptera.commit-rejected.v1";
+const HISTORY_TRANSITION_INTENT_V1 = "chaptera.history-transition-intent.v1";
+const HISTORY_TRANSITION_ACCEPTED_V1 = "chaptera.history-transition-accepted.v1";
+const HISTORY_TRANSITION_REJECTED_V1 = "chaptera.history-transition-rejected.v1";
 const EXPORT_CREATE_V1 = "chaptera.export-create.v1";
 const MIGRATION_EDITABLE_ROUTE_REQUEST_V1 =
   "chaptera.migration-editable-route-request.v1";
@@ -17,6 +20,17 @@ const REJECTABLE_COMMIT_CODES = new Set([
   "move_node_rejected",
   "authz_denied",
   "authz_expired",
+]);
+
+const REJECTABLE_HISTORY_CODES = new Set([
+  "stale_revision",
+  "idempotency_conflict",
+  "source_hash_mismatch",
+  "undo_rejected",
+  "undo_operation_unsupported",
+  "grant_missing",
+  "grant_expired",
+  "capability_denied",
 ]);
 
 function clone(value) {
@@ -264,6 +278,73 @@ export class ChapteraProductEditorServiceV1 {
       client_operation_id: request.client_operation_id,
       code,
       message_key: "revision." + code,
+      retryable: code === "stale_revision",
+    };
+  }
+
+  async undo({ sourceHash, baseRevisionId, clientOperationId }) {
+    ident(sourceHash, "sourceHash");
+    ident(baseRevisionId, "baseRevisionId");
+    ident(clientOperationId, "clientOperationId");
+    const request = {
+      protocol_version: HISTORY_TRANSITION_INTENT_V1,
+      document_id: this.documentId,
+      source_hash: sourceHash,
+      base_revision_id: baseRevisionId,
+      client_operation_id: clientOperationId,
+      command: { kind: "undo" },
+    };
+
+    // History is a durable revision mutation, so reuse the supported "commit"
+    // observability class rather than inventing an unsupported telemetry class.
+    const context = this.#context("commit", clientOperationId);
+    this.lastCommitTraceContext = context;
+    this.lastRequest = clone(request);
+    const result = await this.#mutationJson(
+      "/v1/documents/" + encodeURIComponent(this.documentId) + "/history",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+      },
+      context,
+    );
+
+    if (result.response.ok) {
+      const accepted = ensureProtocol(
+        result.value,
+        HISTORY_TRANSITION_ACCEPTED_V1,
+        "history transition accepted",
+      );
+      if (
+        accepted.document_id !== this.documentId ||
+        accepted.source_hash !== sourceHash ||
+        accepted.base_revision_id !== baseRevisionId ||
+        accepted.client_operation_id !== clientOperationId ||
+        accepted.transition_kind !== "undo"
+      ) {
+        throw new Error("history transition accepted identity mismatch");
+      }
+      return clone(accepted);
+    }
+
+    const code = responseErrorCode(result.value);
+    if (!REJECTABLE_HISTORY_CODES.has(code)) {
+      this.#throwUnlessOk(result, "history transition");
+    }
+    let currentRevisionId = null;
+    if (code === "stale_revision") {
+      currentRevisionId = (await this.currentDocument()).revision_id;
+    }
+    return {
+      protocol_version: HISTORY_TRANSITION_REJECTED_V1,
+      document_id: this.documentId,
+      base_revision_id: baseRevisionId,
+      current_revision_id: currentRevisionId,
+      client_operation_id: clientOperationId,
+      transition_kind: "undo",
+      code,
+      message_key: "history." + code,
       retryable: code === "stale_revision",
     };
   }
