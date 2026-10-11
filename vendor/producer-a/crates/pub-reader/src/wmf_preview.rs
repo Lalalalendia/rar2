@@ -1936,6 +1936,62 @@ mod tests {
         }
     }
 
+    fn synthetic_one_char_explicit_text_gap() -> Vec<u8> {
+        let mut wmf = synthetic_polygon();
+        wmf[10..12].copy_from_slice(&3_u16.to_le_bytes());
+
+        let mut font = vec![0_u8; WMF_PARTIAL_FONT_BYTES];
+        font[0..2].copy_from_slice(&(-416_i16).to_le_bytes());
+        font[8..10].copy_from_slice(&400_u16.to_le_bytes());
+        font[14] = 3; // output precision
+        font[15] = 2; // clipping precision
+        font[16] = 1; // quality
+        font[17] = 18; // pitch/family
+        insert_record_before_eof(&mut wmf, record(META_CREATEFONTINDIRECT, &font));
+        insert_record_before_eof(&mut wmf, record(META_SELECTOBJECT, &2_u16.to_le_bytes()));
+        insert_record_before_eof(&mut wmf, record(META_SETMAPMODE, &MM_ANISOTROPIC.to_le_bytes()));
+        insert_record_before_eof(&mut wmf, record(META_SETBKMODE, &1_u16.to_le_bytes()));
+        insert_record_before_eof(&mut wmf, record(META_SETTEXTALIGN, &24_u16.to_le_bytes()));
+        insert_record_before_eof(&mut wmf, record(META_SETTEXTCOLOR, &0_u32.to_le_bytes()));
+        let text = [
+            20_u8, 0, // Y
+            30, 0, // X
+            1, 0, // one byte of character data
+            0, 0, // no text option rectangle
+            b'A', 0, // one nonzero ANSI glyph byte and alignment padding
+            8, 0, // one 16-bit character displacement
+        ];
+        insert_record_before_eof(&mut wmf, record(META_EXTTEXTOUT, &text));
+        wmf
+    }
+
+    #[test]
+    fn explicit_text_gap_is_partial_only_and_ordinary_wmf_stays_strict() {
+        let source = synthetic_one_char_explicit_text_gap();
+        assert!(rasterize_wmf_preview(&source, 100, 100).is_err());
+        let partial = rasterize_wmf_preview_explicit_text_gap(&source, 100, 100)
+            .expect("bounded partial graphics");
+        assert_eq!(partial.omitted_text_record_count, 1);
+        assert_eq!((partial.image.width, partial.image.height), (100, 100));
+        assert!(partial.image.rgba.chunks_exact(4).any(|px| px[3] == 255));
+        assert!(rasterize_wmf_preview_explicit_text_gap(&synthetic_polygon(), 100, 100).is_err());
+    }
+
+    #[test]
+    fn reject_unsupported_exttextout_flags_and_unknown_font_charset() {
+        let mut source = synthetic_one_char_explicit_text_gap();
+        let record_function = META_EXTTEXTOUT.to_le_bytes();
+        let pos = source.windows(2).position(|w| w == record_function).expect("text function");
+        source[pos + 2 + 6] = 0x04; // ETO_CLIPPED must not be ignored
+        assert!(rasterize_wmf_preview_explicit_text_gap(&source, 100, 100).is_err());
+
+        let mut bad_font = synthetic_one_char_explicit_text_gap();
+        let font = META_CREATEFONTINDIRECT.to_le_bytes();
+        let pos = bad_font.windows(2).position(|w| w == font).expect("font function");
+        bad_font[pos + 2 + 13] = 0x01; // unsupported character set
+        assert!(rasterize_wmf_preview_explicit_text_gap(&bad_font, 100, 100).is_err());
+    }
+
     fn palette_compatibility_params() -> Vec<u8> {
         let mut params = Vec::with_capacity(1028);
         params.extend_from_slice(&0x0300_u16.to_le_bytes());
