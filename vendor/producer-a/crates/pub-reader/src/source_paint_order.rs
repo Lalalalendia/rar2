@@ -1,5 +1,5 @@
-use super::*;
 use super::contents_access::is_page_owned_logo_group;
+use super::*;
 
 pub const PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1: &str = "chaptera.pub-source-page-paint-order.v1";
 
