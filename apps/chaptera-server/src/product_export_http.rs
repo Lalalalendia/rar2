@@ -1096,8 +1096,8 @@ mod tests {
             .unwrap();
 
         let authn = SqliteAuthnStore::open(&db, 4, timeout).await.unwrap();
-        let policy = SessionPolicy::new(Duration::from_secs(600), Duration::from_secs(3600))
-            .unwrap();
+        let policy =
+            SessionPolicy::new(Duration::from_secs(600), Duration::from_secs(3600)).unwrap();
         let session = issue_verified_login_session(
             &authn,
             OidcVerifiedIdentity {
@@ -1111,19 +1111,13 @@ mod tests {
         )
         .await
         .unwrap();
-        let auth = AuthHttpState::api_test(
-            authn.clone(),
-            policy,
-            "https://cloud.example.test",
-        )
-        .unwrap();
+        let auth =
+            AuthHttpState::api_test(authn.clone(), policy, "https://cloud.example.test").unwrap();
 
         let source = SqliteDocumentSourceAuthority::open(&db, 4, timeout)
             .await
             .unwrap();
-        let revisions = SqliteRevisionStore::open(&db, 4, timeout)
-            .await
-            .unwrap();
+        let revisions = SqliteRevisionStore::open(&db, 4, timeout).await.unwrap();
         let jobs = JobsRuntime::open(&db, 4, timeout).await.unwrap();
         let metadata = SqliteBlobBindingRepository::open(&db, 4, timeout)
             .await
@@ -1170,7 +1164,10 @@ mod tests {
             .uri("/v1/exports")
             .header(HOST, "cloud.example.test")
             .header(ORIGIN, "https://cloud.example.test")
-            .header(COOKIE, format!("{SESSION_COOKIE}={}", session.session_token))
+            .header(
+                COOKIE,
+                format!("{SESSION_COOKIE}={}", session.session_token),
+            )
             .header(CSRF_HEADER, session.csrf_token.as_str())
             .header(CONTENT_TYPE, "application/json")
             .body(Body::from(request_body.clone()))
