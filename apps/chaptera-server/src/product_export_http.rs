@@ -908,10 +908,9 @@ mod tests {
         assert_eq!(denied.headers()[CACHE_CONTROL], "no-store");
 
         let mut artifact = Response::new(Body::empty());
-        artifact.headers_mut().insert(
-            CACHE_CONTROL,
-            HeaderValue::from_static("private, no-store"),
-        );
+        artifact
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
         ensure_export_no_store(&mut artifact);
         assert_eq!(artifact.headers()[CACHE_CONTROL], "private, no-store");
     }
