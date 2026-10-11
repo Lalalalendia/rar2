@@ -1,3 +1,5 @@
+pub mod safe_preview_encode;
+
 use jpeg_decoder::{CodingProcess, Decoder as JpegDecoder, PixelFormat};
 use png::{BitDepth, ColorType, Decoder as PngDecoder, Transformations};
 use serde::{Deserialize, Serialize};
