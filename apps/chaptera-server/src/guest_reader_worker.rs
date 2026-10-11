@@ -73,6 +73,10 @@ struct GuestSceneFontManifestV1 {
 #[serde(deny_unknown_fields)]
 struct GuestSceneFontManifestResourceV1 {
     source_family: String,
+    #[serde(default)]
+    bold: bool,
+    #[serde(default)]
+    italic: bool,
     expected_sha256: String,
     face_index: u32,
     mime: String,
@@ -174,6 +178,8 @@ impl IsolatedGuestSceneProducer {
             drop(output);
             resources.push(GuestSceneFontManifestResourceV1 {
                 source_family: font.source_family.clone(),
+                bold: font.bold,
+                italic: font.italic,
                 expected_sha256: font.expected_sha256.clone(),
                 face_index: font.face_index,
                 mime: font.mime.clone(),
@@ -586,8 +592,21 @@ fn load_configured_font_resources(
 ) -> Result<Vec<ReaderConfiguredFontResourceV1>, GuestSceneWorkerError> {
     let mut total_bytes = 0_usize;
     let mut resources = Vec::with_capacity(configs.len());
+    let mut source_styles = std::collections::HashSet::new();
+    let mut physical_faces = std::collections::HashSet::new();
     for config in configs {
         require_sha256(&config.expected_sha256)?;
+        if !source_styles.insert((
+            config.source_family.trim().to_lowercase(),
+            config.bold,
+            config.italic,
+        )) || !physical_faces.insert((config.expected_sha256.clone(), config.face_index))
+        {
+            return Err(GuestSceneWorkerError::new(
+                "guest_scene_font_manifest_failed",
+                "configured source font style/physical identity is duplicated",
+            ));
+        }
         let bytes = stdfs::read(&config.path).map_err(|_| {
             GuestSceneWorkerError::new(
                 "guest_scene_font_read_failed",
@@ -621,6 +640,8 @@ fn load_configured_font_resources(
         }
         resources.push(ReaderConfiguredFontResourceV1 {
             source_family: config.source_family.trim().to_owned(),
+            bold: config.bold,
+            italic: config.italic,
             resource_id: configured_font_resource_id(&config.expected_sha256, config.face_index),
             expected_sha256: config.expected_sha256.clone(),
             face_index: config.face_index,
@@ -674,15 +695,19 @@ fn load_worker_font_manifest(
         )
     })?;
     let mut total_bytes = 0_usize;
-    let mut families = std::collections::HashSet::new();
+    let mut source_styles = std::collections::HashSet::new();
+    let mut physical_faces = std::collections::HashSet::new();
     let mut resources = Vec::with_capacity(manifest.resources.len());
     for entry in manifest.resources {
         require_sha256(&entry.expected_sha256)?;
         let normalized_family = entry.source_family.trim().to_lowercase();
-        if normalized_family.is_empty() || !families.insert(normalized_family) {
+        if normalized_family.is_empty()
+            || !source_styles.insert((normalized_family, entry.bold, entry.italic))
+            || !physical_faces.insert((entry.expected_sha256.clone(), entry.face_index))
+        {
             return Err(GuestSceneWorkerError::new(
                 "guest_scene_font_manifest_failed",
-                "configured font manifest contains invalid or duplicate source family",
+                "configured font manifest contains invalid or duplicate source face/style",
             ));
         }
         if entry.file_name.is_empty()
@@ -735,6 +760,8 @@ fn load_worker_font_manifest(
         }
         resources.push(ReaderConfiguredFontResourceV1 {
             source_family: entry.source_family.trim().to_owned(),
+            bold: entry.bold,
+            italic: entry.italic,
             resource_id: configured_font_resource_id(&entry.expected_sha256, entry.face_index),
             expected_sha256: entry.expected_sha256,
             face_index: entry.face_index,
@@ -1020,6 +1047,8 @@ mod tests {
 
         let config = CloudReaderFontResourceConfig {
             source_family: "Chaptera Test Family".to_owned(),
+            bold: false,
+            italic: false,
             path: path.clone(),
             expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256.to_owned(),
             face_index: 0,
@@ -1030,6 +1059,8 @@ mod tests {
             .expect("exact configured font bytes must be admitted");
         assert_eq!(resources.len(), 1);
         assert_eq!(resources[0].source_family, "Chaptera Test Family");
+        assert!(!resources[0].bold);
+        assert!(!resources[0].italic);
         assert_eq!(
             resources[0].resource_id,
             configured_font_resource_id(
@@ -1055,6 +1086,28 @@ mod tests {
         let error = load_configured_font_resources(&[config])
             .expect_err("missing configured font file must fail closed");
         assert_eq!(error.code, "guest_scene_font_read_failed");
+    }
+
+    #[test]
+    fn configured_font_manifest_retains_explicit_style_and_old_regular_default() {
+        let legacy = serde_json::json!({
+            "source_family": "Example",
+            "expected_sha256": "a".repeat(64),
+            "face_index": 0,
+            "mime": "font/ttf",
+            "file_name": "font-0.ttf"
+        });
+        let old: GuestSceneFontManifestResourceV1 =
+            serde_json::from_value(legacy).expect("old regular manifest remains readable");
+        assert!(!old.bold && !old.italic);
+        let mut styled = old;
+        styled.bold = true;
+        let json = serde_json::to_value(&styled).expect("serialize styled source face");
+        assert_eq!(json["bold"], true);
+        assert_eq!(json["italic"], false);
+        let roundtrip: GuestSceneFontManifestResourceV1 =
+            serde_json::from_value(json).expect("read styled source face");
+        assert!(roundtrip.bold && !roundtrip.italic);
     }
 
     #[test]

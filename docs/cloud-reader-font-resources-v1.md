@@ -9,10 +9,13 @@ Configure resources under `cloud_reader_guest.font_resources`.
 Each entry contains:
 
 - `source_family`: exact source family identity admitted by Reader typography;
+- `bold`, `italic`: explicit physical face/style identity (both default to `false` for existing configurations);
 - `path`: operator-managed local font file; absolute in production;
 - `expected_sha256`: lowercase SHA-256 of the exact file bytes;
 - `face_index`: collection face index, default `0`;
 - `mime`: `font/ttf` or `font/otf`.
+
+One source family may have separate Regular/Bold/Italic/BoldItalic entries when the operator provides different licensed physical faces. The `(source_family, bold, italic)` tuple must be unique, and the same SHA-256 + face index cannot claim two different source styles/families. Explicit styled runs use their matching configured face; an unavailable styled face stays in the explicit fallback/Partial path rather than borrowing Regular glyph widths.
 
 Chaptera does not bundle proprietary fonts, search ambient Linux fonts, or download fonts from the network.
 
@@ -61,7 +64,7 @@ python tools/export_cloud_reader_windows_fonts.py --requirements C:\\private\\so
 
 The existing private Windows helper then verifies installed font face names and exact SHA-256 bytes. This operation must run **only with font files licensed for the intended private use**. The plan's Quill font index is not a physical file hash or server-authoring grant.
 
-The exporter deliberately supports **Regular faces only**. If the original PUB needs bold/italic styles, contains unknown style bits, or has source runs without family names, the second command **fails before copying any files**. To generate a clearly marked partial packet for investigation only, add `--allow-incomplete-styles`. Its manifest explicitly records `partial_style_or_source_coverage`, `private_licensed_source_face_mapping_unverified`, and `publisher_visual_parity_verified=false`; no such packet authorizes native Publisher layout, PDF output, redistribution or a durable Editor authoring grant. Different Quill source font indices sharing one family name are never silently treated as a byte-identical original.
+The current private packet exporter deliberately supports **Regular faces only**; styled source faces must presently be configured separately by an authorized operator with proven local font licenses and matching SHA-256. If the original PUB needs bold/italic styles, contains unknown style bits, or has source runs without family names, the second command **fails before copying any files**. To generate a clearly marked partial packet for investigation only, add `--allow-incomplete-styles`. Its manifest explicitly records `partial_style_or_source_coverage`, `private_licensed_source_face_mapping_unverified`, and `publisher_visual_parity_verified=false`; no such packet authorizes native Publisher layout, PDF output, redistribution or a durable Editor authoring grant. Different Quill source font indices sharing one family name are never silently treated as a byte-identical original.
 
 The planning and parser regression runs on the public `SampleNewsletter.pub` Viewer JSON without requiring or committing licensed third-party fonts. Private `fonts/` packets and provenance files must stay off public CI artifacts.
 

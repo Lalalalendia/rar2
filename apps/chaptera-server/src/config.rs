@@ -204,6 +204,10 @@ pub struct CloudReaderGuestRuntimeConfig {
 #[serde(deny_unknown_fields)]
 pub struct CloudReaderFontResourceConfig {
     pub source_family: String,
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
     pub path: PathBuf,
     pub expected_sha256: String,
     #[serde(default)]
@@ -756,7 +760,8 @@ fn validate_cloud_reader_guest(
             "cloud_reader_guest.font_resources must contain at most 16 configured resources",
         ));
     }
-    let mut font_families = BTreeSet::new();
+    let mut font_faces = BTreeSet::new();
+    let mut physical_faces = BTreeSet::new();
     for font in &guest.font_resources {
         let family = font.source_family.trim().to_lowercase();
         if family.is_empty() || family.len() > 128 {
@@ -765,10 +770,10 @@ fn validate_cloud_reader_guest(
                 "configured Reader font source_family must be 1..=128 characters",
             ));
         }
-        if !font_families.insert(family) {
+        if !font_faces.insert((family, font.bold, font.italic)) {
             return Err(ConfigError::new(
                 "cloud_reader_font_family_duplicate",
-                "configured Reader font source_family entries must be unique",
+                "configured Reader font source_family + bold + italic must be unique",
             ));
         }
         if font.path.as_os_str().is_empty() {
@@ -798,6 +803,12 @@ fn validate_cloud_reader_guest(
             return Err(ConfigError::new(
                 "cloud_reader_font_face_index_invalid",
                 "configured Reader font face_index must be <=31",
+            ));
+        }
+        if !physical_faces.insert((font.expected_sha256.clone(), font.face_index)) {
+            return Err(ConfigError::new(
+                "cloud_reader_font_physical_face_duplicate",
+                "one physical Reader font face cannot claim multiple source family/style identities",
             ));
         }
         if !matches!(font.mime.as_str(), "font/ttf" | "font/otf") {
