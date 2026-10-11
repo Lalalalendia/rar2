@@ -4,8 +4,7 @@
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, env, fs};
 
-const SOURCE_SHA: &str =
-    "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf";
+const SOURCE_SHA: &str = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf";
 
 #[test]
 #[ignore = "requires pinned 291840-byte Apache POI SampleNewsletter.pub"]
@@ -21,15 +20,12 @@ fn real_sample_newsletter_viewer_preserves_direct_source_quill_indices() {
         .join("");
     assert_eq!(actual_sha, SOURCE_SHA);
 
-    let viewer = pub_viewer::open_pub_geometry(
-        &bytes,
-        pub_viewer::viewer_geometry_environment_v0_1(),
-    )
-    .expect("current Reader can project the actual Publisher document");
+    let viewer =
+        pub_viewer::open_pub_geometry(&bytes, pub_viewer::viewer_geometry_environment_v0_1())
+            .expect("current Reader can project the actual Publisher document");
     assert_eq!(viewer.document.source.byte_len, bytes.len() as u64);
     assert_eq!(
-        serde_json::to_value(viewer.document.source.source_hash)
-            .expect("source hash serializable"),
+        serde_json::to_value(viewer.document.source.source_hash).expect("source hash serializable"),
         serde_json::json!(SOURCE_SHA),
     );
 
@@ -75,7 +71,10 @@ fn real_sample_newsletter_viewer_preserves_direct_source_quill_indices() {
             rockwell_runs += 1;
         }
     }
-    assert!(direct_runs >= 80, "actual document must expose ample direct ranges");
+    assert!(
+        direct_runs >= 80,
+        "actual document must expose ample direct ranges"
+    );
     assert!(
         rockwell_runs >= 20,
         "original Rockwell source ranges must be independently proven"
