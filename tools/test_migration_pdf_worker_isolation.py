@@ -49,18 +49,35 @@ import socket
 
 out = pathlib.Path(os.environ["CHAPTERA_WORKER_OUTPUT_DIR"])
 out.mkdir(parents=True, exist_ok=True)
-blocked = False
-error_number = None
+attempts = {}
+# IPv4 loopback, IPv4 private destinations, IPv6 loopback, and local Unix
+# sockets must all be blocked before any connection can be attempted.
+for label, family in [
+    ("ipv4_loopback", socket.AF_INET),
+    ("ipv4_private", socket.AF_INET),
+    ("ipv6_loopback", socket.AF_INET6),
+    ("unix_stream", socket.AF_UNIX),
+]:
+    try:
+        client = socket.socket(family, socket.SOCK_STREAM)
+    except OSError as exc:
+        attempts[label] = exc.errno
+    else:
+        attempts[label] = 0
+        client.close()
 try:
-    socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    pair = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
 except OSError as exc:
-    error_number = exc.errno
-    blocked = exc.errno == errno.EPERM
+    attempts["unix_socketpair"] = exc.errno
+else:
+    attempts["unix_socketpair"] = 0
+    for client in pair:
+        client.close()
 
-(out / "network.json").write_text(json.dumps({
-    "blocked": blocked,
-    "errno": error_number,
-}), encoding="utf-8")
+blocked = all(number == errno.EPERM for number in attempts.values())
+(out / "network.json").write_text(
+    json.dumps({"blocked": blocked, "attempts": attempts}), encoding="utf-8"
+)
 raise SystemExit(0 if blocked else 9)
 """
 
@@ -217,7 +234,16 @@ class MigrationPdfWorkerIsolationTests(unittest.TestCase):
             self.assertTrue(result.succeeded, result.stderr_tail)
             receipt = json.loads((final / "network.json").read_text(encoding="utf-8"))
             self.assertTrue(receipt["blocked"])
-            self.assertEqual(errno.EPERM, receipt["errno"])
+            self.assertEqual(
+                {
+                    "ipv4_loopback": errno.EPERM,
+                    "ipv4_private": errno.EPERM,
+                    "ipv6_loopback": errno.EPERM,
+                    "unix_stream": errno.EPERM,
+                    "unix_socketpair": errno.EPERM,
+                },
+                receipt["attempts"],
+            )
 
     def test_clear_environment_drops_parent_secrets_but_keeps_explicit_worker_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -248,6 +274,58 @@ class MigrationPdfWorkerIsolationTests(unittest.TestCase):
             self.assertEqual("cloud-source", receipt["explicit_value"])
             self.assertEqual("seccomp_default_deny", receipt["network_policy"])
             self.assertTrue(receipt["input_present"])
+
+    def test_inherited_worker_authority_keys_are_reset_before_child_launch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            worker = self.write_worker(tmp, "env_probe.py", ENV_PROBE)
+            final = tmp / "published"
+            foreign_output = tmp / "outside-staging"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "CHAPTERA_WORKER_INPUT": str(tmp / "unapproved-private-input.pub"),
+                    "CHAPTERA_WORKER_OUTPUT_DIR": str(foreign_output),
+                    "CHAPTERA_NETWORK_POLICY": "allow",
+                },
+                clear=False,
+            ):
+                result = run_isolated_worker(
+                    [sys.executable, str(worker)],
+                    final_output_dir=final,
+                    timeout_seconds=5,
+                    limits=self.limits(),
+                    inherit_environment=True,
+                )
+            self.assertTrue(result.succeeded, result.stderr_tail)
+            receipt = json.loads((final / "env.json").read_text(encoding="utf-8"))
+            self.assertFalse(receipt["input_present"])
+            self.assertEqual("seccomp_default_deny", receipt["network_policy"])
+            self.assertFalse(foreign_output.exists())
+
+    def test_extra_env_cannot_replace_harness_owned_source_output_or_network_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            worker = self.write_worker(tmp, "env_probe.py", ENV_PROBE)
+            final = tmp / "published"
+            for key in [
+                "CHAPTERA_WORKER_INPUT",
+                "CHAPTERA_WORKER_OUTPUT_DIR",
+                "CHAPTERA_NETWORK_POLICY",
+            ]:
+                with self.subTest(key=key):
+                    with self.assertRaisesRegex(ValueError, "harness-owned"):
+                        run_isolated_worker(
+                            [sys.executable, str(worker)],
+                            final_output_dir=final,
+                            timeout_seconds=5,
+                            limits=self.limits(),
+                            extra_env={key: str(tmp / "unapproved")},
+                            inherit_environment=False,
+                        )
+                    self.assertFalse(final.exists())
+                    self.assertEqual(list(tmp.glob(".published.stage-*")), [])
+                    self.assertEqual(list(tmp.glob(".published.control-*")), [])
 
     def test_forced_zero_timeout_never_publishes_or_runs_worker(self):
         with tempfile.TemporaryDirectory() as tmp:

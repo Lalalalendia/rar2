@@ -73,6 +73,12 @@ PROCESS_GROUP_ESCAPE_SYSCALLS = (
     "unshare",
 )
 
+# The harness, not extra_env or an inherited parent environment, owns the
+# exact input, output and network-policy keys for each isolated worker.
+PROTECTED_WORKER_ENV_KEYS = frozenset(
+    {"CHAPTERA_WORKER_OUTPUT_DIR", "CHAPTERA_WORKER_INPUT", "CHAPTERA_NETWORK_POLICY"}
+)
+
 SCMP_ACT_ALLOW = 0x7FFF0000
 SCMP_ACT_ERRNO_BASE = 0x00050000
 PR_SET_NO_NEW_PRIVS = 38
@@ -280,6 +286,13 @@ def run_isolated_worker(
     _require_linux()
     limits = limits or WorkerLimits()
     limits.validate()
+    if extra_env:
+        forbidden = PROTECTED_WORKER_ENV_KEYS.intersection(str(key) for key in extra_env)
+        if forbidden:
+            raise ValueError(
+                "isolated worker extra_env cannot override harness-owned keys: "
+                + ", ".join(sorted(forbidden))
+            )
     final_output_dir = final_output_dir.resolve()
     parent = final_output_dir.parent
     parent.mkdir(parents=True, exist_ok=True)
@@ -311,6 +324,8 @@ def run_isolated_worker(
         )
 
     env = os.environ.copy() if inherit_environment else {}
+    for key in PROTECTED_WORKER_ENV_KEYS:
+        env.pop(key, None)
     env["CHAPTERA_WORKER_OUTPUT_DIR"] = str(staging)
     env["CHAPTERA_NETWORK_POLICY"] = "seccomp_default_deny"
     if input_path is not None:
