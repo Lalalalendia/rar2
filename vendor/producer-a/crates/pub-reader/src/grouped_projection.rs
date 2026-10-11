@@ -5,6 +5,7 @@
 //! in the crate root.
 
 use super::*;
+use super::contents_access::is_page_owned_logo_group;
 
 #[derive(Debug)]
 pub(super) struct GroupedObjectProjection {
@@ -100,7 +101,7 @@ pub(super) fn project_grouped_object_shape(
         // 0x31 has multiple meanings outside page-owned OfficeArt groups.
         // Permit only the exact depth-1 PAGE-owned LOGO carrier profile.
         let page_logo = depth == 1
-            && super::contents_access::is_page_owned_logo_group(
+            && is_page_owned_logo_group(
                 current_group_seq,
                 context.references,
                 context.page_seq_to_id,
