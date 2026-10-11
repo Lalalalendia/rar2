@@ -124,7 +124,25 @@ impl ProductApiHttpState {
     }
 }
 
+/// Production route composition must never permit the injected test-only
+/// in-process PUB parser fallback. Fail at router construction, not after a
+/// customer document request reaches any handler.
 pub fn router(state: ProductApiHttpState) -> Router {
+    assert!(
+        state.isolated_replay.is_some(),
+        "Product API requires an isolated PUB replay worker before HTTP routing"
+    );
+    product_router_routes(state)
+}
+
+#[cfg(test)]
+fn unisolated_unit_test_router(state: ProductApiHttpState) -> Router {
+    // Existing manually seeded test states deliberately exercise canonical
+    // non-sandbox control semantics. This helper does not exist in releases.
+    product_router_routes(state)
+}
+
+fn product_router_routes(state: ProductApiHttpState) -> Router {
     Router::new()
         .route("/v1/documents/{document_id}/current", get(current_document))
         .route(
@@ -1402,16 +1420,24 @@ mod tests {
             bytes: Arc::new(source_bytes.clone()),
             source_sha256: source_sha256.clone(),
         };
-        let app = router(
-            ProductApiHttpState::with_source_loader(
-                auth,
-                source.clone(),
-                authz.clone(),
-                revisions.clone(),
-                Arc::new(source_loader),
-            )
-            .unwrap(),
+        let manually_seeded_state = ProductApiHttpState::with_source_loader(
+            auth,
+            source.clone(),
+            authz.clone(),
+            revisions.clone(),
+            Arc::new(source_loader),
+        )
+        .unwrap();
+        // The same fully authorized, real-PUB test state MUST NOT be accepted
+        // by the public production router without the isolated replay worker.
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                router(manually_seeded_state.clone())
+            }))
+            .is_err(),
+            "production route must fail closed before any in-process PUB parse"
         );
+        let app = unisolated_unit_test_router(manually_seeded_state);
 
         let unauthorized = app
             .clone()
@@ -1686,7 +1712,7 @@ mod tests {
             "https://cloud.example.test",
         )
         .unwrap();
-        let restarted_app = router(
+        let restarted_app = unisolated_unit_test_router(
             ProductApiHttpState::with_source_loader(
                 restarted_auth.clone(),
                 restarted_source.clone(),
