@@ -32,7 +32,9 @@ use crate::{
     authz_runtime::{
         AuthzError, CAP_VIEW, SqliteAuthorizedRevisionCommitter, SqliteAuthzAuthority,
     },
-    product_replay_worker::{IsolatedProductReplayProducer, ProductReplayWorkerError},
+    product_replay_worker::{
+        IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer, ProductReplayWorkerError,
+    },
     reader_scene_v1::{ReaderSceneV1, from_viewer_geometry},
     revision_materializer::{
         BlobStoreExactSourceLoader, EDITOR_REVISION_EVENT_SCHEMA_V1,
@@ -507,55 +509,84 @@ async fn commit_move_node(
         .await
         .map_err(ProductApiError::Materializer)?;
 
-    let source_hash = Sha256Digest::from_str(&source.source_sha256).map_err(|_| {
-        ProductApiError::internal(
-            "source_hash_invalid",
-            "durable source authority contains an invalid SHA-256 identity",
-        )
-    })?;
-    let mut session =
-        open_mature_0x2c_editor(&materialized.source_bytes, source_hash).map_err(|error| {
+    let (operation, resulting_project) = if let Some(worker) = &state.isolated_replay {
+        // Production executes canonical PUB replay and mutation inside the
+        // sandbox. AuthN/AuthZ, exact revision head and durable SQLite commit
+        // remain authoritative in this main server process.
+        worker
+            .move_node_to(
+                &document_id,
+                &source.source_sha256,
+                &materialized.source_bytes,
+                &materialized.receipt.project,
+                &materialized.receipt.project_sha256,
+                &IsolatedMoveNodeIntentV1 {
+                    node_id: request.command.node_id.clone(),
+                    x_emu: request.command.x_emu,
+                    y_emu: request.command.y_emu,
+                },
+            )
+            .await
+            .map_err(|error| match error.code {
+                "product_move_node_invalid" | "product_move_node_rejected" => {
+                    ProductApiError::bad_request(error.code, error.message)
+                }
+                _ => ProductApiError::internal(error.code, error.message),
+            })?
+    } else {
+        // The in-process path remains only for manually injected unit tests.
+        let source_hash = Sha256Digest::from_str(&source.source_sha256).map_err(|_| {
             ProductApiError::internal(
-                "editor_source_unsupported",
-                format!("canonical editor could not open durable source: {error}"),
+                "source_hash_invalid",
+                "durable source authority contains an invalid SHA-256 identity",
             )
         })?;
-    session
-        .apply_project(&materialized.receipt.project)
-        .map_err(|error| {
-            ProductApiError::internal(
-                "editor_replay_failed",
-                format!("canonical editor could not replay exact base revision: {error}"),
-            )
-        })?;
-
-    let node_id: NodeId =
-        serde_json::from_value(serde_json::Value::String(request.command.node_id.clone()))
-            .map_err(|_| {
-                ProductApiError::bad_request("node_id_invalid", "node_id is not canonical")
+        let mut session = open_mature_0x2c_editor(&materialized.source_bytes, source_hash)
+            .map_err(|error| {
+                ProductApiError::internal(
+                    "editor_source_unsupported",
+                    format!("canonical editor could not open durable source: {error}"),
+                )
+            })?;
+        session
+            .apply_project(&materialized.receipt.project)
+            .map_err(|error| {
+                ProductApiError::internal(
+                    "editor_replay_failed",
+                    format!("canonical editor could not replay exact base revision: {error}"),
+                )
             })?;
 
-    let operation = session
-        .move_node_to(
-            node_id,
-            LengthEmu::new(request.command.x_emu),
-            LengthEmu::new(request.command.y_emu),
-        )
-        .map_err(|error| {
-            ProductApiError::bad_request(
-                "move_node_rejected",
-                format!("canonical MoveNode rejected the intent: {error}"),
-            )
-        })?;
-    if !matches!(operation, EditOperation::MoveNode { .. }) {
-        return Err(ProductApiError::internal(
-            "move_node_operation_invalid",
-            "canonical editor returned a non-MoveNode operation",
-        ));
-    }
+        let node_id: NodeId =
+            serde_json::from_value(serde_json::Value::String(request.command.node_id.clone()))
+                .map_err(|_| {
+                    ProductApiError::bad_request("node_id_invalid", "node_id is not canonical")
+                })?;
 
-    let resulting_project =
-        crate::revision_materializer::cloud_revision_project(&session.project());
+        let operation = session
+            .move_node_to(
+                node_id,
+                LengthEmu::new(request.command.x_emu),
+                LengthEmu::new(request.command.y_emu),
+            )
+            .map_err(|error| {
+                ProductApiError::bad_request(
+                    "move_node_rejected",
+                    format!("canonical MoveNode rejected the intent: {error}"),
+                )
+            })?;
+        if !matches!(operation, EditOperation::MoveNode { .. }) {
+            return Err(ProductApiError::internal(
+                "move_node_operation_invalid",
+                "canonical editor returned a non-MoveNode operation",
+            ));
+        }
+
+        let resulting_project =
+            crate::revision_materializer::cloud_revision_project(&session.project());
+        (operation, resulting_project)
+    };
+
     let before_project_sha256 = materialized.receipt.project_sha256.clone();
     let after_project_sha256 =
         project_sha256(&resulting_project).map_err(ProductApiError::Materializer)?;

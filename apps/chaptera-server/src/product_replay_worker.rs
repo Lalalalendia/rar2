@@ -13,7 +13,9 @@ use std::{
 };
 
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
-use pub_editor::{EditorProject, Sha256Digest, open_mature_0x2c_editor};
+use pub_editor::{
+    EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest, open_mature_0x2c_editor,
+};
 use pub_reader::PubResolvedGraph;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,13 +26,29 @@ use tokio::{fs as async_fs, io::AsyncWriteExt, process::Command, time::timeout};
 
 use crate::{
     revision_materializer::{
-        EditorReplayEngine, PubEditorReplayEngine, cloud_replay_requires_local_identity,
-        project_sha256,
+        EditorReplayEngine, PubEditorReplayEngine, append_event_operation,
+        cloud_replay_requires_local_identity, cloud_revision_project, project_sha256,
     },
     source_baseline::SourceBaselineProducerConfig,
 };
 
 pub const PRODUCT_REPLAY_WORKER_V1: &str = "chaptera.product-isolated-replay.v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolatedMoveNodeIntentV1 {
+    pub node_id: String,
+    pub x_emu: i64,
+    pub y_emu: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolatedMoveNodeReceiptV1 {
+    pub operation: EditOperation,
+    pub resulting_project: EditorProject,
+    pub resulting_project_sha256: String,
+}
 const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PROJECT_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
@@ -68,6 +86,8 @@ pub struct ProductReplayWorkerReceiptV1 {
     /// Present only for the isolated baseline derivation mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_project: Option<EditorProject>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub move_node: Option<IsolatedMoveNodeReceiptV1>,
     pub filesystem_confinement: bool,
 }
 
@@ -174,6 +194,22 @@ pub fn validate_product_replay_receipt(
             "isolated baseline project does not match its source/project identity",
         ));
     }
+    if let Some(move_node) = &receipt.move_node
+        && (receipt.baseline_project.is_some()
+            || !matches!(move_node.operation, EditOperation::MoveNode { .. })
+            || move_node.resulting_project.source_hash.to_string() != source_sha256
+            || project_sha256(&move_node.resulting_project).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "isolated MoveNode project cannot be canonically hashed",
+                )
+            })? != move_node.resulting_project_sha256)
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_receipt_invalid",
+            "isolated MoveNode receipt violates source and project identity",
+        ));
+    }
     Ok(())
 }
 
@@ -186,6 +222,7 @@ pub fn run_product_replay_worker(
     expected_source_byte_len: u64,
     project_path: Option<&Path>,
     expected_project_sha256: Option<&str>,
+    move_node_intent: Option<IsolatedMoveNodeIntentV1>,
 ) -> Result<(), ProductReplayWorkerError> {
     require_document_id(document_id)?;
     require_sha256(expected_source_sha256)?;
@@ -197,6 +234,12 @@ pub fn run_product_replay_worker(
     }
     if let Some(expected_project_sha256) = expected_project_sha256 {
         require_sha256(expected_project_sha256)?;
+    }
+    if move_node_intent.is_some() && project_path.is_none() {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_identity_invalid",
+            "MoveNode requires an authorized exact source-bound project",
+        ));
     }
     if expected_source_byte_len == 0 || expected_source_byte_len > MAX_SOURCE_BYTES {
         return Err(ProductReplayWorkerError::new(
@@ -352,6 +395,61 @@ pub fn run_product_replay_worker(
         )
     })?;
 
+    let move_node = if let Some(intent) = move_node_intent {
+        let node_id: NodeId =
+            serde_json::from_value(Value::String(intent.node_id)).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_move_node_invalid",
+                    "MoveNode target is not a canonical node identifier",
+                )
+            })?;
+        let operation = session
+            .move_node_to(
+                node_id,
+                LengthEmu::new(intent.x_emu),
+                LengthEmu::new(intent.y_emu),
+            )
+            .map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_move_node_rejected",
+                    "isolated canonical EditorSession rejected requested MoveNode",
+                )
+            })?;
+        if !matches!(operation, EditOperation::MoveNode { .. }) {
+            return Err(ProductReplayWorkerError::new(
+                "product_move_node_invalid",
+                "isolated EditorSession emitted an unexpected operation kind",
+            ));
+        }
+        let resulting_project = cloud_revision_project(&session.project());
+        let expected_project =
+            append_event_operation(project.clone(), operation.clone()).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_move_node_invalid",
+                    "isolated MoveNode cannot be appended to canonical source project",
+                )
+            })?;
+        if expected_project != resulting_project {
+            return Err(ProductReplayWorkerError::new(
+                "product_move_node_invalid",
+                "isolated MoveNode result differs from canonical event append",
+            ));
+        }
+        let resulting_project_sha256 = project_sha256(&resulting_project).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_move_node_invalid",
+                "isolated MoveNode resulting project has invalid canonical hash",
+            )
+        })?;
+        Some(IsolatedMoveNodeReceiptV1 {
+            operation,
+            resulting_project,
+            resulting_project_sha256,
+        })
+    } else {
+        None
+    };
+
     let graph: Value = serde_json::to_value(session.graph()).map_err(|_| {
         ProductReplayWorkerError::new(
             "product_replay_projection_failed",
@@ -380,6 +478,7 @@ pub fn run_product_replay_worker(
         authoring_graph_sha256: sha256_hex(&graph_bytes),
         authoring_graph: graph,
         baseline_project: if baseline_mode { Some(project) } else { None },
+        move_node,
         filesystem_confinement: true,
     };
     validate_product_replay_receipt(
@@ -475,6 +574,7 @@ impl IsolatedProductReplayProducer {
                 source_sha256,
                 source_bytes,
                 Some((&project_bytes, expected_project_sha256)),
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -484,10 +584,10 @@ impl IsolatedProductReplayProducer {
             source_bytes.len() as u64,
             expected_project_sha256,
         )?;
-        if receipt.baseline_project.is_some() {
+        if receipt.baseline_project.is_some() || receipt.move_node.is_some() {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
-                "projection worker unexpectedly returned a baseline project",
+                "projection worker returned an unexpected baseline or mutation",
             ));
         }
         require_typed_graph(receipt.authoring_graph)
@@ -502,8 +602,14 @@ impl IsolatedProductReplayProducer {
         source_bytes: &[u8],
     ) -> Result<EditorProject, ProductReplayWorkerError> {
         let receipt = self
-            .invoke_job(document_id, source_sha256, source_bytes, None)
+            .invoke_job(document_id, source_sha256, source_bytes, None, None)
             .await?;
+        if receipt.move_node.is_some() {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "baseline worker unexpectedly returned a MoveNode mutation",
+            ));
+        }
         let project = receipt.baseline_project.as_ref().ok_or_else(|| {
             ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
@@ -533,6 +639,115 @@ impl IsolatedProductReplayProducer {
         Ok(project.clone())
     }
 
+    /// Exact geometry mutation is performed inside the confined worker.
+    /// The server independently checks the typed operation and deterministic
+    /// project transition before submitting the durable RevisionStream edge.
+    pub async fn move_node_to(
+        &self,
+        document_id: &str,
+        source_sha256: &str,
+        source_bytes: &[u8],
+        base_project: &EditorProject,
+        expected_base_sha256: &str,
+        intent: &IsolatedMoveNodeIntentV1,
+    ) -> Result<(EditOperation, EditorProject), ProductReplayWorkerError> {
+        let project_bytes = serde_json::to_vec(base_project).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_replay_project_invalid",
+                "canonical base project could not be serialized",
+            )
+        })?;
+        if project_bytes.len() as u64 > MAX_PROJECT_BYTES
+            || project_sha256(base_project).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_project_invalid",
+                    "canonical base project hash could not be derived",
+                )
+            })? != expected_base_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_project_hash_mismatch",
+                "MoveNode base is not the exact authorized revision",
+            ));
+        }
+        let receipt = self
+            .invoke_job(
+                document_id,
+                source_sha256,
+                source_bytes,
+                Some((&project_bytes, expected_base_sha256)),
+                Some(intent),
+            )
+            .await?;
+        validate_product_replay_receipt(
+            &receipt,
+            document_id,
+            source_sha256,
+            source_bytes.len() as u64,
+            expected_base_sha256,
+        )?;
+        if receipt.baseline_project.is_some() {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "isolated MoveNode response unexpectedly included a baseline",
+            ));
+        }
+        let mutation = receipt.move_node.ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "isolated MoveNode receipt does not contain a mutation",
+            )
+        })?;
+        let node_id: NodeId = serde_json::from_value(Value::String(intent.node_id.clone()))
+            .map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_move_node_invalid",
+                    "MoveNode target identifier is not canonical",
+                )
+            })?;
+        match &mutation.operation {
+            EditOperation::MoveNode {
+                node_id: actual_id,
+                after,
+                ..
+            } if *actual_id == node_id
+                && after.x.get() == intent.x_emu
+                && after.y.get() == intent.y_emu => {}
+            _ => {
+                return Err(ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "isolated MoveNode operation differs from authorized intent",
+                ));
+            }
+        }
+        let expected_project =
+            append_event_operation(base_project.clone(), mutation.operation.clone()).map_err(
+                |_| {
+                    ProductReplayWorkerError::new(
+                        "product_replay_receipt_invalid",
+                        "isolated MoveNode cannot form a canonical project transition",
+                    )
+                },
+            )?;
+        if expected_project != mutation.resulting_project {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "isolated MoveNode project differs from the exact event append",
+            ));
+        }
+        let graph = require_typed_graph(receipt.authoring_graph)?;
+        let bounds = graph.nodes.get(&node_id).map(|node| node.header.bounds);
+        if !matches!(bounds, Some(bounds) if bounds.x.get() == intent.x_emu
+            && bounds.y.get() == intent.y_emu)
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "isolated MoveNode graph does not represent its claimed geometry",
+            ));
+        }
+        Ok((mutation.operation, mutation.resulting_project))
+    }
+
     /// Executes only the existing per-file isolation harness. The host may
     /// serialize verified bytes but must not interpret the source PUB.
     async fn invoke_job(
@@ -541,6 +756,7 @@ impl IsolatedProductReplayProducer {
         source_sha256: &str,
         source_bytes: &[u8],
         project: Option<(&[u8], &str)>,
+        move_node: Option<&IsolatedMoveNodeIntentV1>,
     ) -> Result<ProductReplayWorkerReceiptV1, ProductReplayWorkerError> {
         require_document_id(document_id)?;
         require_sha256(source_sha256)?;
@@ -551,6 +767,12 @@ impl IsolatedProductReplayProducer {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_source_mismatch",
                 "verified source differs from worker request",
+            ));
+        }
+        if move_node.is_some() && project.is_none() {
+            return Err(ProductReplayWorkerError::new(
+                "product_move_node_invalid",
+                "MoveNode requires a verified project and source",
             ));
         }
         if let Some((bytes, expected_hash)) = project {
@@ -606,6 +828,15 @@ impl IsolatedProductReplayProducer {
                 .arg(&project_path)
                 .arg("--expected-project-sha256")
                 .arg(expected_hash);
+        }
+        if let Some(move_node) = move_node {
+            command
+                .arg("--move-node-id")
+                .arg(&move_node.node_id)
+                .arg("--move-x-emu")
+                .arg(move_node.x_emu.to_string())
+                .arg("--move-y-emu")
+                .arg(move_node.y_emu.to_string());
         }
         let deadline = self
             .config
@@ -770,6 +1001,7 @@ mod tests {
             authoring_graph_sha256: sha256_hex(&serde_json::to_vec(&graph).unwrap()),
             authoring_graph: graph,
             baseline_project: None,
+            move_node: None,
             filesystem_confinement: true,
         }
     }

@@ -80,6 +80,12 @@ pub enum Command {
         project_json: Option<PathBuf>,
         #[arg(long, requires = "project_json")]
         expected_project_sha256: Option<String>,
+        #[arg(long, requires_all = ["move_x_emu", "move_y_emu", "project_json"])]
+        move_node_id: Option<String>,
+        #[arg(long, requires = "move_node_id", allow_hyphen_values = true)]
+        move_x_emu: Option<i64>,
+        #[arg(long, requires = "move_node_id", allow_hyphen_values = true)]
+        move_y_emu: Option<i64>,
     },
     #[command(hide = true)]
     GuestReaderScene {
@@ -219,6 +225,36 @@ mod tests {
             .is_err()
         );
 
+        assert!(matches!(
+            Cli::try_parse_from([
+                "chaptera",
+                "product-isolated-replay",
+                "--document-id",
+                "document-one",
+                "--expected-sha256",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "--expected-byte-len",
+                "1024",
+                "--project-json",
+                "/tmp/project.json",
+                "--expected-project-sha256",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "--move-node-id",
+                "00112233-4455-6677-8899-aabbccddeeff",
+                "--move-x-emu",
+                "100",
+                "--move-y-emu",
+                "-50",
+            ])
+            .unwrap()
+            .command,
+            Command::ProductIsolatedReplay {
+                move_node_id: Some(_),
+                move_x_emu: Some(100),
+                move_y_emu: Some(-50),
+                ..
+            }
+        ));
         assert!(matches!(
             Cli::try_parse_from(["chaptera", "migrate", "status"])
                 .unwrap()

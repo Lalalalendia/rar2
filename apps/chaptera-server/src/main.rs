@@ -74,14 +74,25 @@ fn main() -> ExitCode {
         expected_byte_len,
         project_json,
         expected_project_sha256,
+        move_node_id,
+        move_x_emu,
+        move_y_emu,
     } = &cli.command
     {
+        let move_intent = move_node_id.as_ref().and_then(|node_id| {
+            Some(product_replay_worker::IsolatedMoveNodeIntentV1 {
+                node_id: node_id.clone(),
+                x_emu: (*move_x_emu)?,
+                y_emu: (*move_y_emu)?,
+            })
+        });
         return match product_replay_worker::run_product_replay_worker(
             document_id,
             expected_sha256,
             *expected_byte_len,
             project_json.as_deref(),
             expected_project_sha256.as_deref(),
+            move_intent,
         ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
