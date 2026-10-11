@@ -56,7 +56,7 @@ fn exact_041_emf_bitmap_use_join_yields_six_derived_partial_resources() {
 }
 
 #[test]
-fn exact_066_vector_only_emf_never_becomes_bitmap_preview() {
+fn exact_066_vector_path_admits_one_partial_png_with_two_scene_uses() {
     let Ok(root) = std::env::var("CHAPTERA_PINNED_SOURCE_ROOT") else {
         return;
     };
@@ -72,10 +72,34 @@ fn exact_066_vector_only_emf_never_becomes_bitmap_preview() {
         }),
         "vector-only 066 must not be promoted to bitmap"
     );
+    let derived = visual
+        .images
+        .iter()
+        .filter(|image| !image.source_exact)
+        .collect::<Vec<_>>();
+    assert_eq!(derived.len(), 1, "one source-backed EMF vector PNG");
+    assert_eq!(
+        derived[0].node_ids.len(),
+        2,
+        "the same vector resource has two source uses"
+    );
+    assert_eq!(derived[0].mime, "image/png");
+    assert!(
+        derived[0]
+            .bytes
+            .starts_with(&[137, 80, 78, 71, 13, 10, 26, 10])
+    );
+    assert!(derived[0].verified_source_sha256.is_none());
     assert!(
         visual.document.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "viewer.mature_officeart_emf.vector_fill_partial"
+        }),
+        "successful vector projection must remain Partial"
+    );
+    assert!(
+        !visual.document.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "viewer.mature_officeart_emf.vector_not_rendered"
         }),
-        "vector-only omission must remain visible"
+        "rendered 066 vector must not be misreported as omitted"
     );
 }
