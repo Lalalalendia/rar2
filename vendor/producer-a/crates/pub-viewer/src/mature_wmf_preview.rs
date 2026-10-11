@@ -1,6 +1,7 @@
 //! Mature OfficeArt WMF bounded derived preview and deterministic source identity.
 //! Extracted from the Viewer monolith; retains the exact original admission logic.
 use super::*;
+use pub_reader::wmf_preview::rasterize_wmf_preview_explicit_text_gap;
 
 fn mature_officeart_wmf_preview_resource_id(
     source_hash: &Sha256Digest,
@@ -25,6 +26,28 @@ fn mature_officeart_wmf_preview_resource_id(
         semantic_role: "viewer.mature-officeart-wmf-preview-v1",
     })
     .map_err(|error| anyhow!("derive mature OfficeArt WMF preview identity: {error:?}"))?;
+    Ok(ResourceId::from_canonical(canonical))
+}
+
+fn mature_officeart_wmf_text_gap_preview_resource_id(
+    source_hash: &Sha256Digest,
+    slot: u32,
+    wmf_bytes: &[u8],
+) -> Result<ResourceId> {
+    let wmf_sha256 = Sha256::digest(wmf_bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let key = format!(
+        "mature-officeart-wmf-text-gap-preview/slot-{slot}/wmf-sha256-{wmf_sha256}/explicit-omission-v1"
+    );
+    let canonical = derive_source_canonical_id(SourceDerivedIdInput {
+        source_hash,
+        adapter_id: "pub-viewer",
+        source_object_key: &key,
+        semantic_role: "viewer.mature-officeart-wmf-omitted-text-partial-v1",
+    })
+    .map_err(|error| anyhow!("derive WMF text-gap preview id: {error:?}"))?;
     Ok(ResourceId::from_canonical(canonical))
 }
 
@@ -67,6 +90,8 @@ pub(super) fn viewer_mature_officeart_wmf_preview_images(
         .map(|node| node.origin)
         .collect::<BTreeSet<_>>();
     let mut images = Vec::new();
+    let mut partial_text_sources = 0usize;
+    let mut omitted_text_records = 0usize;
 
     for preview_source in bundle.sources {
         let mut node_ids = preview_source
@@ -81,22 +106,27 @@ pub(super) fn viewer_mature_officeart_wmf_preview_images(
             continue;
         }
 
-        let preview = match rasterize_wmf_preview(
+        let (preview, omitted_count) = match rasterize_wmf_preview(
             &preview_source.wmf_bytes,
             preview_source.width_hint,
             preview_source.height_hint,
         ) {
-            Ok(preview) => preview,
-            Err(_) => {
-                diagnostics.push(ViewerDiagnostic {
-                    code: "viewer.mature_officeart_wmf.preview_raster_unsupported".to_owned(),
-                    severity: ViewerDiagnosticSeverity::FidelityWarning,
-                    message:
-                        "A structurally valid mature OfficeArt WMF is outside the existing bounded Viewer raster profile."
-                            .to_owned(),
-                });
-                continue;
-            }
+            Ok(preview) => (preview, 0usize),
+            Err(_) => match rasterize_wmf_preview_explicit_text_gap(
+                &preview_source.wmf_bytes,
+                preview_source.width_hint,
+                preview_source.height_hint,
+            ) {
+                Ok(partial) => (partial.image, partial.omitted_text_record_count),
+                Err(_) => {
+                    diagnostics.push(ViewerDiagnostic {
+                        code: "viewer.mature_officeart_wmf.preview_raster_unsupported".to_owned(),
+                        severity: ViewerDiagnosticSeverity::FidelityWarning,
+                        message: "A structurally valid mature OfficeArt WMF is outside the bounded Viewer raster and explicit-partial-text profiles.".to_owned(),
+                    });
+                    continue;
+                }
+            },
         };
         let png = match encode_wmf_preview_png(&preview) {
             Ok(png) => png,
@@ -111,11 +141,19 @@ pub(super) fn viewer_mature_officeart_wmf_preview_images(
                 continue;
             }
         };
-        let resource_id = match mature_officeart_wmf_preview_resource_id(
-            source_hash,
-            preview_source.slot,
-            &preview_source.wmf_bytes,
-        ) {
+        let resource_id = match if omitted_count > 0 {
+            mature_officeart_wmf_text_gap_preview_resource_id(
+                source_hash,
+                preview_source.slot,
+                &preview_source.wmf_bytes,
+            )
+        } else {
+            mature_officeart_wmf_preview_resource_id(
+                source_hash,
+                preview_source.slot,
+                &preview_source.wmf_bytes,
+            )
+        } {
             Ok(resource_id) => resource_id,
             Err(_) => {
                 diagnostics.push(ViewerDiagnostic {
@@ -170,6 +208,20 @@ pub(super) fn viewer_mature_officeart_wmf_preview_images(
             placements,
             png,
         ));
+        if omitted_count > 0 {
+            partial_text_sources += 1;
+            omitted_text_records += omitted_count;
+        }
+    }
+
+    if partial_text_sources > 0 {
+        diagnostics.push(ViewerDiagnostic {
+            code: "viewer.mature_officeart_wmf.visible_text_omitted_partial".to_owned(),
+            severity: ViewerDiagnosticSeverity::FidelityWarning,
+            message: format!(
+                "{partial_text_sources} bounded WMF previews recovered non-text graphics, but {omitted_text_records} visible source text record(s) were explicitly omitted: no authenticated font/glyph resource is available. Partial/Needs review.",
+            ),
+        });
     }
 
     if !images.is_empty() {
