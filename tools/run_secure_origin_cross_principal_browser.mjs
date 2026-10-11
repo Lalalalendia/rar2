@@ -106,14 +106,26 @@ try {
     ));
     const layoutEnvironmentId = "sha256:" + [...layoutDigest]
       .map(byte => byte.toString(16).padStart(2, "0")).join("");
-    const exportCreate = await post("/v1/exports", {
+    const exportRequest = (revisionId, clientRequestId) => ({
       protocol_version: "chaptera.export-create.v1",
       document_id: input.document_id,
-      revision_id: input.revision_id,
+      revision_id: revisionId,
       target_profile: "idml:bounded-editable",
       layout_environment_id: layoutEnvironmentId,
-      client_request_id: "b02-cross-principal-export-denied",
+      client_request_id: clientRequestId,
     });
+    const exportCreate = await post("/v1/exports", exportRequest(
+      input.revision_id, "b02-cross-principal-export-denied",
+    ));
+    // A valid but unbound exact revision must be indistinguishable from a
+    // real revision to a principal without CAP_EXPORT. This physically
+    // proves that authorization precedes the durable revision lookup.
+    const guessedRevision = "sha256:" + (
+      input.revision_id === "sha256:" + "0".repeat(64) ? "f" : "0"
+    ).repeat(64);
+    const exportGuessedRevision = await post("/v1/exports", exportRequest(
+      guessedRevision, "b02-cross-principal-export-guessed-revision",
+    ));
     return {
       current: await request(docPath + "/current"),
       scene: await request("/v1/reader/documents/" +
@@ -121,6 +133,7 @@ try {
       commit_correct_hash: correctHashCommit,
       commit_wrong_hash: wrongHashCommit,
       export_create: exportCreate,
+      export_guessed_revision: exportGuessedRevision,
     };
   }, {
     document_id: receipt.document_id,
@@ -154,6 +167,13 @@ try {
     throw new Error("unauthorized MoveNode response differs by guessed source hash");
   }
 
+  // In addition to the ordinary denial matrix, the public response to an
+  // unauthorized export must not depend on existence of a guessed revision.
+  if (JSON.stringify(result.export_create) !==
+      JSON.stringify(result.export_guessed_revision)) {
+    throw new Error("foreign export responses expose exact revision existence");
+  }
+
   receipt.cross_principal_isolation_claim = true;
   receipt.cross_principal_isolation = {
     current_status: result.current.status,
@@ -165,6 +185,9 @@ try {
     commit_source_hash_oracle: false,
     export_create_status: result.export_create.status,
     export_create_code: result.export_create.code,
+    export_guessed_revision_status: result.export_guessed_revision.status,
+    export_guessed_revision_code: result.export_guessed_revision.code,
+    export_revision_existence_oracle: false,
     cache_control: result.current.cache_control,
     document_identity_disclosed: false,
     revision_identity_disclosed: false,
