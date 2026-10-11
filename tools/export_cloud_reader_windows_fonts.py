@@ -15,6 +15,14 @@ from typing import Iterable
 
 TOOL_SCHEMA = "chaptera.cloud-reader-private-font-packet.v1"
 REGULAR_STYLE_NAMES = {"", "regular", "roman", "normal", "book", "plain"}
+# Only exact, conservative full-face style names. Semibold/oblique/light
+# are not silently interchangeable with Publisher's Bold/Italic.
+SOURCE_FACE_STYLE_NAMES = {
+    (False, False): REGULAR_STYLE_NAMES,
+    (True, False): {"bold"},
+    (False, True): {"italic"},
+    (True, True): {"bold italic", "bolditalic", "bold-italic"},
+}
 SUPPORTED_SUFFIXES = {".ttf", ".otf", ".ttc", ".otc"}
 
 
@@ -196,10 +204,15 @@ def is_regular_style(value: str) -> bool:
     return normalize_name(value) in REGULAR_STYLE_NAMES
 
 
-def discover_regular_face(font_dir: Path, requested_family: str) -> FontFace:
+def discover_source_face(
+    font_dir: Path, requested_family: str, bold: bool, italic: bool
+) -> FontFace:
     if not font_dir.is_dir():
         raise FontPacketError(f"font directory does not exist: {font_dir}")
     target = normalize_name(requested_family)
+    style_names = SOURCE_FACE_STYLE_NAMES[(bold, italic)]
+    style_label = ("BoldItalic" if bold and italic else
+                   "Bold" if bold else "Italic" if italic else "Regular")
     candidates: list[FontFace] = []
     parse_failures: list[str] = []
     for path in sorted(font_dir.iterdir(), key=lambda p: p.name.casefold()):
@@ -211,13 +224,16 @@ def discover_regular_face(font_dir: Path, requested_family: str) -> FontFace:
             parse_failures.append(f"{path.name}: {exc}")
             continue
         for face in faces:
-            if normalize_name(face.family) == target and is_regular_style(face.subfamily):
+            if (normalize_name(face.family) == target
+                    and normalize_name(face.subfamily) in style_names):
                 candidates.append(face)
     if not candidates:
         detail = ""
         if parse_failures:
             detail = f"; {len(parse_failures)} font file(s) could not be parsed"
-        raise FontPacketError(f"no unique Regular face found for {requested_family!r}{detail}")
+        raise FontPacketError(
+            f"no unique {style_label} face found for {requested_family!r}{detail}"
+        )
     unique = {(face.path.resolve(), face.face_index): face for face in candidates}
     candidates = list(unique.values())
     if len(candidates) != 1:
@@ -225,7 +241,9 @@ def discover_regular_face(font_dir: Path, requested_family: str) -> FontFace:
             f"{face.path.name}#face{face.face_index} ({face.family} {face.subfamily})"
             for face in sorted(candidates, key=lambda f: (f.path.name.casefold(), f.face_index))
         )
-        raise FontPacketError(f"ambiguous Regular face for {requested_family!r}: {rendered}")
+        raise FontPacketError(
+            f"ambiguous {style_label} face for {requested_family!r}: {rendered}"
+        )
     face = candidates[0]
     if face.container_kind == "collection" and face.face_index != 0:
         raise FontPacketError(
@@ -234,6 +252,10 @@ def discover_regular_face(font_dir: Path, requested_family: str) -> FontFace:
             "Refusing to produce a misleading exact-font packet."
         )
     return face
+
+
+def discover_regular_face(font_dir: Path, requested_family: str) -> FontFace:
+    return discover_source_face(font_dir, requested_family, False, False)
 
 
 def _safe_slug(value: str) -> str:
@@ -274,6 +296,8 @@ def read_private_source_requirements(path: Path) -> tuple[list[str], dict]:
     lower_names = set()
     direct_indices_by_family: dict[str, set[int]] = {}
     incomplete_styles = False
+    unresolved_source_authority = False
+    required_styles_by_family: dict[str, dict[str, int]] = {}
     missing_quill_indices = 0
     for item in items:
         if not isinstance(item, dict):
@@ -320,7 +344,12 @@ def read_private_source_requirements(path: Path) -> tuple[list[str], dict]:
         )
         if item.get("needs_non_regular_style") is not needs_non_regular:
             raise FontPacketError("source font style requirements contradict Reader evidence")
+        unresolved_source_authority |= bool(styles.get("unknown", 0)) or not bool(indices)
         incomplete_styles |= needs_non_regular or bool(styles.get("unknown", 0)) or not bool(indices)
+        required_styles_by_family[family] = {
+            name: styles.get(name, 0)
+            for name in ("regular", "bold", "italic", "bold_italic")
+        }
         families.append(family)
     if (type(packet.get("source_families_without_quill_index_count")) is not int
             or packet["source_families_without_quill_index_count"] != missing_quill_indices):
@@ -332,6 +361,8 @@ def read_private_source_requirements(path: Path) -> tuple[list[str], dict]:
         raise FontPacketError("unresolved source font counters are not trustworthy")
     incomplete_styles |= bool(packet["unresolved_source_family_run_count"])
     incomplete_styles |= bool(packet["unknown_effective_style_run_count"])
+    unresolved_source_authority |= bool(packet["unresolved_source_family_run_count"])
+    unresolved_source_authority |= bool(packet["unknown_effective_style_run_count"])
 
     # A direct typography run can prove an Editor source binding identity, but
     # never that a local Windows file is the original Publisher face/style.
@@ -388,6 +419,8 @@ def read_private_source_requirements(path: Path) -> tuple[list[str], dict]:
         "source_family_requirements_only": True,
         "direct_binding_identity_candidates": inventory,
         "partial_style_or_source_coverage": incomplete_styles,
+        "unresolved_source_authority": unresolved_source_authority,
+        "required_styles_by_family": required_styles_by_family,
         "native_publisher_layout_authoritative": False,
         "fixed_pdf_allowed": False,
     }
@@ -401,12 +434,23 @@ def build_packet(
     *,
     source_requirements: dict | None = None,
     allow_incomplete_styles: bool = False,
+    include_source_styles: bool = False,
 ) -> dict:
     if not families:
         raise FontPacketError("at least one source family is required")
+    if include_source_styles and source_requirements is None:
+        raise FontPacketError("--include-source-styles requires a validated source plan")
     if source_requirements:
-        if (source_requirements["partial_style_or_source_coverage"]
-                and not allow_incomplete_styles):
+        if include_source_styles:
+            if (source_requirements["unresolved_source_authority"]
+                    and not allow_incomplete_styles):
+                raise FontPacketError(
+                    "source PUB has unknown style/family/index authority; "
+                    "even all known physical faces cannot prove full coverage. "
+                    "Use --allow-incomplete-styles only for a marked partial packet."
+                )
+        elif (source_requirements["partial_style_or_source_coverage"]
+              and not allow_incomplete_styles):
             raise FontPacketError(
                 "source PUB needs styled or unresolved fonts; Regular-only packet cannot "
                 "satisfy them. Pass --allow-incomplete-styles to export a clearly "
@@ -421,24 +465,51 @@ def build_packet(
     if not cloud_root.is_absolute() or ".." in cloud_root.parts:
         raise FontPacketError(f"--cloud-font-dir must be an absolute normalized POSIX path")
 
+    # Admit all requested face/style selections before writing a single private
+    # file. Missing Bold/Italic must not leave a misleading partial packet.
+    selected: list[tuple[str, bool, bool, FontFace]] = []
+    for requested_family in families:
+        styles = [(False, False)]
+        if include_source_styles:
+            requirement = source_requirements["required_styles_by_family"][requested_family]
+            styles.extend(
+                (bold, italic)
+                for name, bold, italic in (
+                    ("bold", True, False),
+                    ("italic", False, True),
+                    ("bold_italic", True, True),
+                )
+                if requirement[name] > 0
+            )
+        for bold, italic in styles:
+            face = discover_source_face(font_dir, requested_family, bold, italic)
+            selected.append((requested_family, bold, italic, face))
+    if len(selected) > 16:
+        raise FontPacketError("styled source font packet exceeds 16 Cloud resource slots")
+
     output_dir.mkdir(parents=True, exist_ok=True)
     fonts_dir = output_dir / "fonts"
     fonts_dir.mkdir(exist_ok=True)
 
     resources = []
     toml_parts: list[str] = []
-    for requested_family in families:
-        face = discover_regular_face(font_dir, requested_family)
+    for requested_family, bold, italic, face in selected:
         source_bytes = face.path.read_bytes()
         sha256 = hashlib.sha256(source_bytes).hexdigest()
         suffix = face.path.suffix.casefold() or ".font"
-        packet_name = f"{_safe_slug(requested_family)}-{sha256[:16]}{suffix}"
+        style_suffix = (
+            "-bold-italic" if bold and italic else "-bold" if bold else
+            "-italic" if italic else ""
+        )
+        packet_name = f"{_safe_slug(requested_family)}{style_suffix}-{sha256[:16]}{suffix}"
         packet_path = fonts_dir / packet_name
         packet_path.write_bytes(source_bytes)
         cloud_path = str(cloud_root / packet_name)
         resources.append(
             {
                 "source_family": requested_family,
+                "bold": bold,
+                "italic": italic,
                 "resolved_family": face.family,
                 "subfamily": face.subfamily,
                 "postscript_name": face.postscript_name,
@@ -458,6 +529,8 @@ def build_packet(
             [
                 "[[cloud_reader_guest.font_resources]]",
                 f"source_family = {_toml_string(requested_family)}",
+                f"bold = {str(bold).lower()}",
+                f"italic = {str(italic).lower()}",
                 f"path = {_toml_string(cloud_path)}",
                 f"expected_sha256 = {_toml_string(sha256)}",
                 f"face_index = {face.face_index}",
@@ -470,7 +543,13 @@ def build_packet(
     # These are operator-only candidate links. Exact source family matching
     # does NOT prove byte-for-byte identity, style, Publisher layout or legal
     # rights. No Editor authoring grant can consume this metadata directly.
-    packet_by_family = {item["source_family"]: item for item in resources}
+    # Old Editor candidate crosswalk is family/Quill-index only. It cannot
+    # authorize a styled face; retain *only* Regular file candidates.
+    packet_by_family = {
+        item["source_family"]: item
+        for item in resources
+        if not item["bold"] and not item["italic"]
+    }
     source_binding_file_candidates = []
     if source_requirements:
         for binding in source_requirements.get("direct_binding_identity_candidates", []):
@@ -499,7 +578,10 @@ def build_packet(
         "publisher_source_requirements": (
             {
                 **source_requirements,
-                "regular_only_packet": True,
+                "regular_only_packet": not any(
+                    item["bold"] or item["italic"] for item in resources
+                ),
+                "known_source_style_faces_supplied": include_source_styles,
                 "private_licensed_source_face_mapping_unverified": True,
                 "publisher_visual_parity_verified": False,
             }
@@ -542,7 +624,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--requirements", type=Path,
                         help="private source-font requirement plan from pub_source_font_requirements_v1.py")
     parser.add_argument("--allow-incomplete-styles", action="store_true",
-                        help="explicitly export partial Regular-only packet when PUB needs bold/italic/unknown styles")
+                        help="explicitly export a partial packet if source styles/families cannot all be proven")
+    parser.add_argument("--include-source-styles", action="store_true",
+                        help="export exact locally named Bold/Italic faces required by a verified --requirements plan")
     parser.add_argument("--font-dir", type=Path, help="font directory; defaults to %%WINDIR%%\\Fonts")
     parser.add_argument("--output-dir", type=Path, required=True, help="new/empty private packet directory")
     parser.add_argument(
@@ -574,6 +658,7 @@ def main(argv: list[str] | None = None) -> int:
             families, font_dir, args.output_dir, args.cloud_font_dir,
             source_requirements=provenance,
             allow_incomplete_styles=args.allow_incomplete_styles,
+            include_source_styles=args.include_source_styles,
         )
     except (OSError, FontPacketError) as exc:
         print(f"error: {exc}", file=sys.stderr)

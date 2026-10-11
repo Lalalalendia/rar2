@@ -230,6 +230,41 @@ def test_private_requirements_regular_only_fence(tmp: Path) -> None:
     ]) == 2
     assert not blocked.exists(), "incomplete style gate must precede font copying"
 
+    # The original Regular-only mode must still refuse an otherwise fully
+    # known PUB with Bold source runs. The opt-in styled mode must fail before
+    # writing when its explicitly needed physical Bold face is absent.
+    styled_missing = tmp / "styled-missing"
+    assert font_export.main([
+        "--requirements", str(plan), "--font-dir", str(font_dir),
+        "--output-dir", str(styled_missing), "--include-source-styles",
+    ]) == 2
+    assert not styled_missing.exists()
+
+    bold_bytes = standalone_font("Example Sans", "Bold", "ExampleSans-Bold")
+    (font_dir / "ExampleSansBold.ttf").write_bytes(bold_bytes)
+    styled = tmp / "styled"
+    assert font_export.main([
+        "--requirements", str(plan), "--font-dir", str(font_dir),
+        "--output-dir", str(styled), "--include-source-styles",
+    ]) == 0
+    styled_manifest = json.loads((styled / "manifest.json").read_text(encoding="utf-8"))
+    assert len(styled_manifest["resources"]) == 3
+    bold_record = next(
+        resource for resource in styled_manifest["resources"]
+        if resource["source_family"] == "Example Sans" and resource["bold"]
+    )
+    assert bold_record["italic"] is False
+    assert bold_record["sha256"] == hashlib.sha256(bold_bytes).hexdigest()
+    assert styled_manifest["publisher_source_requirements"]["regular_only_packet"] is False
+    assert styled_manifest["publisher_source_requirements"]["publisher_visual_parity_verified"] is False
+    toml_config = (styled / "cloud-reader-font-resources.toml").read_text(encoding="utf-8")
+    assert toml_config.count("[[cloud_reader_guest.font_resources]]") == 3
+    assert "bold = true" in toml_config
+    assert all(
+        (styled / entry["packet_file"]).is_file()
+        for entry in styled_manifest["resources"]
+    )
+
     out = tmp / "private-partial"
     assert font_export.main([
         "--requirements", str(plan), "--font-dir", str(font_dir),
