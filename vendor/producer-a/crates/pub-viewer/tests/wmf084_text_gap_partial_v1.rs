@@ -43,7 +43,7 @@ fn exact_084_recovers_nine_partial_wmf_graphics_and_surfaces_nineteen_omitted_ch
             Ok(admitted) => format!("ok-{}", admitted.omitted_text_record_count),
             Err(error) => {
                 let detail = error.to_string();
-                if detail.contains("50-byte partial-font profile") { "font50-profile" }
+                let category = if detail.contains("50-byte partial-font profile") { "font50-profile" }
                 else if detail.contains("unsupported WMF Font compatibility") { "font26-profile" }
                 else if detail.contains("EXTTEXTOUT partial omission") { "exttextout-profile" }
                 else if detail.contains("unsupported WMF record function") { "other-wmf-function" }
@@ -51,7 +51,8 @@ fn exact_084_recovers_nine_partial_wmf_graphics_and_surfaces_nineteen_omitted_ch
                 else if detail.contains("WMF SELECTOBJECT") { "select-object" }
                 else if detail.contains("WMF DELETEOBJECT") { "delete-object" }
                 else if detail.contains("WMF ") { "other-wmf-error" }
-                else { "unknown-rejected" }.to_owned()
+                else { "unknown-rejected" };
+                category.to_owned()
             }
         }
     }).collect::<Vec<_>>();
