@@ -685,7 +685,9 @@ fn uniform_configured_source_style_v1(fragment: &RenderTextFragmentV1) -> Option
         selected = Some(style);
         cursor = run.scalar_end;
     }
-    (cursor == fragment.scalar_end).then_some(selected).flatten()
+    (cursor == fragment.scalar_end)
+        .then_some(selected)
+        .flatten()
 }
 
 type ConfiguredSourceStyleKeyV1 = (String, bool, bool);
@@ -702,7 +704,9 @@ fn configured_fonts_by_style_v1(
             || !resource_ids.insert(font.resource_id.as_str())
             || by_style.insert(key, font).is_some()
         {
-            return Err("configured source font face/style identity is duplicated or invalid".to_owned());
+            return Err(
+                "configured source font face/style identity is duplicated or invalid".to_owned(),
+            );
         }
     }
     Ok(by_style)
@@ -1081,8 +1085,11 @@ pub fn from_viewer_geometry_with_fonts(
                     } else if let Some((bold, italic)) =
                         configured_source_style_v1(run.bold, run.italic)
                     {
-                        if !configured_fonts_by_style.contains_key(&(normalized.clone(), bold, italic))
-                        {
+                        if !configured_fonts_by_style.contains_key(&(
+                            normalized.clone(),
+                            bold,
+                            italic,
+                        )) {
                             missing_configured_font_families.insert(normalized);
                         }
                     } else {
@@ -1996,10 +2003,10 @@ mod tests {
         MAX_INLINE_JPEG_RESOURCE_BYTES, ReaderConfiguredFontResourceV1, ReaderNodeV1, ReaderPageV1,
         ReaderPaintV1, ReaderRectV1, ReaderTransformV1, SHARED_FALLBACK_FONT_MIME, base64_encode,
         bind_visible_paint, configured_fonts_by_style_v1, configured_source_style_v1,
-        from_viewer_geometry, from_viewer_geometry_with_fonts,
-        inline_image_data_url, inline_image_resource_byte_limit,
-        insert_inherited_master_nodes_before_page_locals, insert_projected_nodes_after_targets,
-        reader_image_resource, shared_text_font_resource, take_direct_render_text,
+        from_viewer_geometry, from_viewer_geometry_with_fonts, inline_image_data_url,
+        inline_image_resource_byte_limit, insert_inherited_master_nodes_before_page_locals,
+        insert_projected_nodes_after_targets, reader_image_resource, shared_text_font_resource,
+        take_direct_render_text,
     };
 
     #[test]
@@ -2034,7 +2041,10 @@ mod tests {
             "bold-face"
         );
         assert!(!by_style.contains_key(&("example".to_owned(), false, true)));
-        assert_eq!(configured_source_style_v1(Some(true), Some(false)), Some((true, false)));
+        assert_eq!(
+            configured_source_style_v1(Some(true), Some(false)),
+            Some((true, false))
+        );
         assert_eq!(configured_source_style_v1(Some(true), None), None);
         assert!(configured_fonts_by_style_v1(&[regular.clone(), regular]).is_err());
         let mut aliased = bold;
