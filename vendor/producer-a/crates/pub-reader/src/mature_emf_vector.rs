@@ -285,7 +285,7 @@ impl Raster {
                 }
             }
             crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let mut previous = None;
+            let mut previous: Option<f64> = None;
             let mut winding = 0_i32;
             for (x, delta) in crossings {
                 if let Some(left) = previous {
