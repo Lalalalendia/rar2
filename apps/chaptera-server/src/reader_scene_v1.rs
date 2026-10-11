@@ -1844,9 +1844,11 @@ fn reader_image_resource(
     browser_inline_safe: bool,
     remaining_budget: &mut usize,
 ) -> ReaderImageResourceV1 {
-    let inline_data_url = browser_inline_safe
-        .then(|| inline_image_data_url(&mime, bytes, remaining_budget))
-        .flatten();
+    let inline_data_url = if browser_inline_safe {
+        inline_image_data_url(&mime, bytes, remaining_budget)
+    } else {
+        None
+    };
     let availability = if inline_data_url.is_some() {
         "inline_data_url"
     } else {
@@ -3336,12 +3338,13 @@ mod tests {
             classify_probe_image_inline_admission(
                 "image/png",
                 MAX_INLINE_IMAGE_RESOURCE_BYTES + 1,
+                true,
                 MAX_INLINE_IMAGE_TOTAL_BYTES
             ),
             ProbeImageInlineAdmission::PerResourceLimit
         );
         assert_eq!(
-            classify_probe_image_inline_admission("image/png", 3, 2),
+            classify_probe_image_inline_admission("image/png", 3, true, 2),
             ProbeImageInlineAdmission::AggregateBudgetExhausted
         );
 
