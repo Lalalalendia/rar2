@@ -83,6 +83,69 @@ fn read_u32(bytes: &[u8], offset: usize) -> u32 {
     ])
 }
 
+// EMR_STRETCHDIBITS (MS-EMF section 2.3.1.7, type 81).
+// Reads only bounded record metadata; never copies or emits embedded pixel bytes.
+fn bounded_record_field(bytes: &[u8], offset: u32, len: u32) -> Option<&[u8]> {
+    let start = usize::try_from(offset).ok()?;
+    let len = usize::try_from(len).ok()?;
+    let end = start.checked_add(len)?;
+    bytes.get(start..end)
+}
+
+fn stretchdibits_profile(record: &[u8]) -> serde_json::Value {
+    if record.len() < 80 {
+        return json!({"status": "short_fixed_header"});
+    }
+    let bmi_offset = read_u32(record, 48);
+    let bmi_len = read_u32(record, 52);
+    let bits_offset = read_u32(record, 56);
+    let bits_len = read_u32(record, 60);
+    let Some(bmi) = bounded_record_field(record, bmi_offset, bmi_len) else {
+        return json!({"status": "bitmap_header_out_of_range"});
+    };
+    let Some(bits) = bounded_record_field(record, bits_offset, bits_len) else {
+        return json!({"status": "bitmap_bits_out_of_range"});
+    };
+    if bmi.len() < 40 {
+        return json!({"status": "unsupported_bitmap_header_short"});
+    }
+    let bi_size = read_u32(bmi, 0);
+    let bi_width = read_u32(bmi, 4) as i32;
+    let bi_height = read_u32(bmi, 8) as i32;
+    let bi_planes = u16::from_le_bytes([bmi[12], bmi[13]]);
+    let bi_bit_count = u16::from_le_bytes([bmi[14], bmi[15]]);
+    let bi_compression = read_u32(bmi, 16);
+    let x_src = read_u32(record, 32) as i32;
+    let y_src = read_u32(record, 36) as i32;
+    let cx_src = read_u32(record, 40) as i32;
+    let cy_src = read_u32(record, 44) as i32;
+    let cx_dest = read_u32(record, 72) as i32;
+    let cy_dest = read_u32(record, 76) as i32;
+    let usage = read_u32(record, 64);
+    let rop = read_u32(record, 68);
+    let src_whole_bitmap = x_src == 0
+        && y_src == 0
+        && bi_width.checked_abs() == Some(cx_src)
+        && bi_height.checked_abs() == Some(cy_src);
+    json!({
+        "status": "bounded_bitmap_fields",
+        "bi_size": bi_size,
+        "bi_planes": bi_planes,
+        "bi_bit_count": bi_bit_count,
+        "bi_compression": bi_compression,
+        "bmi_len": bmi.len(),
+        "bits_len": bits.len(),
+        "usage": usage,
+        "rop": rop,
+        "rop_is_srccopy": rop == 0x00cc0020,
+        "src_whole_bitmap": src_whole_bitmap,
+        "src_dimensions_positive": cx_src > 0 && cy_src > 0,
+        "dest_dimensions_positive": cx_dest > 0 && cy_dest > 0,
+        "bitmap_width_abs": bi_width.checked_abs(),
+        "bitmap_height_abs": bi_height.checked_abs(),
+    })
+}
+
 fn emf_record_census(logical: &[u8]) -> Result<serde_json::Value, Box<dyn Error>> {
     let mut offset = 0usize;
     let mut count = 0usize;
@@ -91,6 +154,7 @@ fn emf_record_census(logical: &[u8]) -> Result<serde_json::Value, Box<dyn Error>
     let mut ordered_unique = Vec::<u32>::new();
     let mut first_type = None;
     let mut last_type = None;
+    let mut stretchdibits_profiles = Vec::new();
 
     while offset < logical.len() {
         if logical.len() - offset < 8 {
@@ -105,6 +169,9 @@ fn emf_record_census(logical: &[u8]) -> Result<serde_json::Value, Box<dyn Error>
             .checked_add(record_size)
             .filter(|end| *end <= logical.len())
             .ok_or_else(|| format!("EMF record {record_type} crosses logical payload"))?;
+        if record_type == 81 {
+            stretchdibits_profiles.push(stretchdibits_profile(&logical[offset..end]));
+        }
 
         first_type.get_or_insert(record_type);
         last_type = Some(record_type);
@@ -121,6 +188,7 @@ fn emf_record_census(logical: &[u8]) -> Result<serde_json::Value, Box<dyn Error>
         .saturating_sub(histogram.get(&1).copied().unwrap_or(0))
         .saturating_sub(histogram.get(&14).copied().unwrap_or(0));
     Ok(json!({
+        "stretchdibits_profiles": stretchdibits_profiles,
         "non_header_eof_record_count": non_header_eof_record_count,
         "record_count": count,
         "max_record_size": max_record_size,
