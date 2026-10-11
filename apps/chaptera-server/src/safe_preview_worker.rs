@@ -38,7 +38,9 @@ pub(crate) struct PreviewWorkerCensusV1 {
     pub verified_sha: usize,
     pub decode_attempted: usize,
     pub decode_succeeded: usize,
+    pub first_decode_failure_code: Option<String>,
     pub encode_succeeded: usize,
+    pub first_encode_failure_code: Option<String>,
     pub output_budget_admitted: usize,
     pub emitted: usize,
 }
@@ -121,7 +123,12 @@ pub(crate) fn derive_isolated_image_previews(
             },
         ) {
             Ok(decoded) => decoded,
-            Err(_) => return,
+            Err(error) => {
+                if stage.first_decode_failure_code.is_none() {
+                    stage.first_decode_failure_code = Some(error.code.to_owned());
+                }
+                return;
+            }
         };
         stage.decode_succeeded += 1;
         let Some(next_work_total) = total_decoded_work.checked_add(decoded.decoded_byte_count)
@@ -147,8 +154,14 @@ pub(crate) fn derive_isolated_image_previews(
             }
             encode_safe_preview_v1(&decoded, PreviewCodecV1::Jpeg, &limits)
         });
-        let Ok(candidate) = candidate else {
-            return;
+        let candidate = match candidate {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                if stage.first_encode_failure_code.is_none() {
+                    stage.first_encode_failure_code = Some(error.code.to_owned());
+                }
+                return;
+            }
         };
         stage.encode_succeeded += 1;
         let Some(total) = used_bytes.checked_add(candidate.bytes.len()) else {
