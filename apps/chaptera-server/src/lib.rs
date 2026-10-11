@@ -33,6 +33,7 @@ pub mod oidc_authn;
 pub mod product_api_http;
 pub mod product_editor_assets;
 pub mod product_export_http;
+pub mod product_replay_worker;
 pub mod project_persistence_sqlite;
 pub mod public_rate_limit;
 pub mod quota_admission;

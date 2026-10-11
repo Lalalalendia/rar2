@@ -6,8 +6,9 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    extract::{Path, Request, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header::CACHE_CONTROL},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -31,6 +32,7 @@ use crate::{
     authz_runtime::{
         AuthzError, CAP_VIEW, SqliteAuthorizedRevisionCommitter, SqliteAuthzAuthority,
     },
+    product_replay_worker::{IsolatedProductReplayProducer, ProductReplayWorkerError},
     reader_scene_v1::{ReaderSceneV1, from_viewer_geometry},
     revision_materializer::{
         BlobStoreExactSourceLoader, EDITOR_REVISION_EVENT_SCHEMA_V1,
@@ -40,7 +42,9 @@ use crate::{
         encode_editor_revision_event_v1, project_sha256,
     },
     source_authority::{SourceAuthorityError, SqliteDocumentSourceAuthority},
-    source_baseline::{SourceBaselineError, derive_commit_revision_identities},
+    source_baseline::{
+        SourceBaselineError, SourceBaselineProducerConfig, derive_commit_revision_identities,
+    },
     sqlite_store::{RevisionEdge, RevisionIdentityBinding, SqliteRevisionStore},
 };
 
@@ -56,6 +60,7 @@ pub struct ProductApiHttpState {
     revisions: SqliteRevisionStore,
     committer: SqliteAuthorizedRevisionCommitter,
     materializer: Arc<ExactRevisionMaterializer>,
+    isolated_replay: Option<IsolatedProductReplayProducer>,
 }
 
 impl ProductApiHttpState {
@@ -90,7 +95,18 @@ impl ProductApiHttpState {
             revisions,
             committer,
             materializer,
+            isolated_replay: None,
         })
+    }
+
+    /// Production must configure this at startup; tests using an injected
+    /// in-process source loader retain their existing isolated test scope.
+    pub fn with_isolated_replay(
+        mut self,
+        config: SourceBaselineProducerConfig,
+    ) -> Result<Self, ProductReplayWorkerError> {
+        self.isolated_replay = Some(IsolatedProductReplayProducer::new(config)?);
+        Ok(self)
     }
 }
 
@@ -103,6 +119,15 @@ pub fn router(state: ProductApiHttpState) -> Router {
         )
         .route("/v1/documents/{document_id}/commit", post(commit_move_node))
         .with_state(state)
+        .layer(middleware::from_fn(private_document_response))
+}
+
+async fn private_document_response(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 #[derive(Debug, Serialize)]
@@ -199,28 +224,43 @@ async fn current_document(
         .await
         .map_err(ProductApiError::Materializer)?;
 
-    let source_hash = Sha256Digest::from_str(&source.source_sha256).map_err(|_| {
-        ProductApiError::internal(
-            "source_hash_invalid",
-            "durable source authority contains an invalid SHA-256 identity",
-        )
-    })?;
-    let mut session =
-        open_mature_0x2c_editor(&materialized.source_bytes, source_hash).map_err(|error| {
+    let authoring_graph = if let Some(worker) = &state.isolated_replay {
+        worker
+            .project_authoring_graph(
+                &document_id,
+                &source.source_sha256,
+                &materialized.source_bytes,
+                &materialized.receipt.project,
+                &materialized.receipt.project_sha256,
+            )
+            .await
+            .map_err(|error| ProductApiError::internal(error.code, error.message))?
+    } else {
+        // Test-only legacy producer when the HTTP state is manually injected.
+        // Configured production routes always use the isolated replay worker.
+        let source_hash = Sha256Digest::from_str(&source.source_sha256).map_err(|_| {
             ProductApiError::internal(
-                "editor_source_unsupported",
-                format!("canonical editor could not open durable source: {error}"),
+                "source_hash_invalid",
+                "durable source authority contains an invalid SHA-256 identity",
             )
         })?;
-    session
-        .apply_project(&materialized.receipt.project)
-        .map_err(|error| {
-            ProductApiError::internal(
-                "editor_replay_failed",
-                format!("canonical editor could not replay exact current revision: {error}"),
-            )
-        })?;
-    let authoring_graph = session.graph().clone();
+        let mut session = open_mature_0x2c_editor(&materialized.source_bytes, source_hash)
+            .map_err(|error| {
+                ProductApiError::internal(
+                    "editor_source_unsupported",
+                    format!("canonical editor could not open durable source: {error}"),
+                )
+            })?;
+        session
+            .apply_project(&materialized.receipt.project)
+            .map_err(|error| {
+                ProductApiError::internal(
+                    "editor_replay_failed",
+                    format!("canonical editor could not replay exact current revision: {error}"),
+                )
+            })?;
+        session.graph().clone()
+    };
     let receipt = materialized.receipt;
 
     Ok(Json(CurrentDocumentResponse {
@@ -278,10 +318,10 @@ async fn reader_scene(
         &materialized.source_bytes,
         viewer_geometry_environment_v0_1(),
     )
-    .map_err(|error| {
+    .map_err(|_| {
         ProductApiError::unprocessable(
             "reader_scene_open_failed",
-            format!("source-neutral Viewer could not open durable PUB source: {error}"),
+            "source-neutral Viewer could not open this PUB source",
         )
     })?;
 
@@ -417,13 +457,6 @@ async fn commit_move_node(
         .resolve_by_document_id(&document_id)
         .await
         .map_err(ProductApiError::Source)?;
-    if request.source_hash != source.source_sha256 {
-        return Err(ProductApiError::bad_request(
-            "source_hash_mismatch",
-            "commit request source_hash differs from durable source authority",
-        ));
-    }
-
     let request_hash = request_hash(&request)?;
     let now = now_ms()?;
 
@@ -441,6 +474,14 @@ async fn commit_move_node(
         .map_err(ProductApiError::Authz)?
     {
         return accepted_from_receipt(&state, &source, existing, true).await;
+    }
+
+    // Check current geometry authorization before source identity comparison.
+    if request.source_hash != source.source_sha256 {
+        return Err(ProductApiError::bad_request(
+            "source_hash_mismatch",
+            "commit request source_hash differs from durable source authority",
+        ));
     }
 
     let head = current_head(&state.revisions, &source).await?;
@@ -801,6 +842,14 @@ impl ProductApiError {
     }
 }
 
+fn public_product_error_message(status: StatusCode, original: &str) -> &str {
+    if status.is_server_error() {
+        "internal server error"
+    } else {
+        original
+    }
+}
+
 impl IntoResponse for ProductApiError {
     fn into_response(self) -> Response {
         match self {
@@ -813,9 +862,10 @@ impl IntoResponse for ProductApiError {
                     }
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
                 };
+                let public_message = public_product_error_message(status, &error.message);
                 (
                     status,
-                    Json(json!({"error": {"code": error.code, "message": error.message}})),
+                    Json(json!({"error": {"code": error.code, "message": public_message}})),
                 )
                     .into_response()
             }
@@ -825,36 +875,40 @@ impl IntoResponse for ProductApiError {
                 } else {
                     StatusCode::INTERNAL_SERVER_ERROR
                 };
+                let public_message = public_product_error_message(status, &error.message);
                 (
                     status,
-                    Json(json!({"error": {"code": error.code, "message": error.message}})),
+                    Json(json!({"error": {"code": error.code, "message": public_message}})),
                 )
                     .into_response()
             }
             Self::Materializer(error) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": {"code": error.code, "message": error.message}})),
+                Json(json!({"error": {"code": error.code, "message": "internal server error"}})),
             )
                 .into_response(),
             Self::Store(error) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": {"code": error.code, "message": error.message}})),
+                Json(json!({"error": {"code": error.code, "message": "internal server error"}})),
             )
                 .into_response(),
             Self::Baseline(error) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": {"code": error.code, "message": error.message}})),
+                Json(json!({"error": {"code": error.code, "message": "internal server error"}})),
             )
                 .into_response(),
             Self::Http {
                 status,
                 code,
                 message,
-            } => (
-                status,
-                Json(json!({"error": {"code": code, "message": message}})),
-            )
-                .into_response(),
+            } => {
+                let public_message = public_product_error_message(status, &message);
+                (
+                    status,
+                    Json(json!({"error": {"code": code, "message": public_message}})),
+                )
+                    .into_response()
+            }
         }
     }
 }
@@ -1111,6 +1165,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn internal_failures_never_echo_parser_or_storage_diagnostics() {
+        let canary = "private-pub-text-or-provider-secret";
+        let errors = [
+            ProductApiError::internal("editor_open_failed", canary),
+            ProductApiError::Source(SourceAuthorityError {
+                code: "sqlite_source_error",
+                message: canary.to_owned(),
+            }),
+            ProductApiError::Authz(AuthzError {
+                code: "sqlite_authz_error",
+                message: canary.to_owned(),
+            }),
+            ProductApiError::Materializer(RevisionMaterializerError::new("replay_failed", canary)),
+        ];
+        for error in errors {
+            let response = error.into_response();
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            let body = json_body(response).await;
+            assert_eq!(body["error"]["message"], "internal server error");
+            assert!(!body.to_string().contains(canary));
+        }
+
+        let denied = ProductApiError::Authz(AuthzError {
+            code: "grant_missing",
+            message: "document permission missing".into(),
+        })
+        .into_response();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        let body = json_body(denied).await;
+        assert_eq!(body["error"]["code"], "grant_missing");
+        assert_eq!(body["error"]["message"], "document permission missing");
+    }
+
+    #[tokio::test]
     async fn http_open_move_retry_stale_restart_and_auth_csrf_are_authoritative() {
         let path = std::env::temp_dir().join(format!(
             "chaptera-product-api-http-{}-{}.sqlite",
@@ -1235,6 +1323,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(opened.status(), StatusCode::OK);
+        assert_eq!(opened.headers()[CACHE_CONTROL], "no-store");
         let opened = json_body(opened).await;
         assert_eq!(opened["revision_id"], baseline.service_revision_id);
 
@@ -1250,6 +1339,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(reader_scene.status(), StatusCode::OK);
+        assert_eq!(reader_scene.headers()[CACHE_CONTROL], "no-store");
         let reader_scene = json_body(reader_scene).await;
         assert_eq!(
             reader_scene["protocol_version"],
@@ -1593,7 +1683,34 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+        assert_eq!(forbidden.headers()[CACHE_CONTROL], "no-store");
         assert_eq!(json_body(forbidden).await["error"]["code"], "grant_missing");
+
+        let mut denial_receipts = Vec::new();
+        for (index, source_hash) in [source_sha256.clone(), "0".repeat(64)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut attempt = body.clone();
+            attempt["client_operation_id"] = json!(format!("rejected-source-check-{index}"));
+            attempt["source_hash"] = json!(source_hash);
+            let denied = restarted_app
+                .clone()
+                .oneshot(authenticated_request(
+                    "POST",
+                    &format!("/v1/documents/{document_id}/commit"),
+                    &other.session_token,
+                    Some(&other.csrf_token),
+                    Some(attempt),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+            assert_eq!(denied.headers()[CACHE_CONTROL], "no-store");
+            denial_receipts.push(json_body(denied).await);
+        }
+        assert_eq!(denial_receipts[0], denial_receipts[1]);
+        assert_eq!(denial_receipts[0]["error"]["code"], "grant_missing");
 
         // A real Viewer grant allows reading the same reopened document but
         // never authorizes a MoveNode mutation. This tests the canonical
