@@ -211,10 +211,12 @@ async fn exact_022_preview_reaches_product_host_with_source_neutral_pixels() {
             "sources": source_diagnostics,
         })
     );
-    let stage = scene["diagnostics"].as_array()
-        .and_then(|rows| rows.iter().find(|row| {
-            row["code"] == "safe_preview_pinned_worker_census"
-        }))
+    let stage = scene["diagnostics"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row["code"] == "safe_preview_pinned_worker_census")
+        })
         .and_then(|row| row["message"].as_str())
         .expect("debug physical Product worker must emit source-neutral stage census");
     println!("SAFE_PREVIEW_022_WORKER_PIPELINE_CENSUS {stage}");
