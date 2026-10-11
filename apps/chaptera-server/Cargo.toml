@@ -48,3 +48,4 @@ zip = { workspace = true, features = ["flate2", "deflate-flate2"] }
 
 [dev-dependencies]
 tower = { version = "=0.5.3", features = ["util"] }
+png = "=0.18.1"
