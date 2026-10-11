@@ -18,7 +18,7 @@ use pub_editor::{
 };
 use pub_reader::PubResolvedGraph;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use rand::{RngCore, rngs::OsRng};
@@ -397,6 +397,150 @@ fn approved_scene_objects(value: &Value, allowed: &[&str], required: &[&str]) ->
             })
         })
     })
+}
+
+fn trusted_base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = chunk.get(1).copied().unwrap_or(0);
+        let b2 = chunk.get(2).copied().unwrap_or(0);
+        encoded.push(char::from(TABLE[usize::from(b0 >> 2)]));
+        encoded.push(char::from(
+            TABLE[usize::from(((b0 & 0x03) << 4) | (b1 >> 4))],
+        ));
+        if chunk.len() > 1 {
+            encoded.push(char::from(
+                TABLE[usize::from(((b1 & 0x0f) << 2) | (b2 >> 6))],
+            ));
+        } else {
+            encoded.push('=');
+        }
+        if chunk.len() > 2 {
+            encoded.push(char::from(TABLE[usize::from(b2 & 0x3f)]));
+        } else {
+            encoded.push('=');
+        }
+    }
+    encoded
+}
+
+fn trusted_fallback_font_value() -> Result<Value, ProductReplayWorkerError> {
+    chaptera_desktop_fallback_font_resource::validate().map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_reader_scene_trusted_font_invalid",
+            "embedded trusted fallback font failed its pinned identity check",
+        )
+    })?;
+    Ok(json!({
+        "resource_id": chaptera_desktop_fallback_font_resource::RESOURCE_ID,
+        "family_name": chaptera_desktop_fallback_font_resource::FAMILY_NAME,
+        "mime": "font/ttf",
+        "expected_sha256": chaptera_desktop_fallback_font_resource::EXPECTED_SHA256,
+        "availability": "inline_data_url",
+        "inline_data_url": format!(
+            "data:font/ttf;base64,{}",
+            trusted_base64_encode(chaptera_desktop_fallback_font_resource::bytes())
+        ),
+    }))
+}
+
+/// Treat the isolated parser/Viewer output as hostile even after schema/hash
+/// validation. Browser decoder inputs are a separate trust boundary:
+/// - image payloads from the worker are never forwarded as data URLs;
+/// - font payloads are reconstructed from the server's pinned embedded font,
+///   never copied from worker JSON.
+/// Text/diagnostic strings remain data-only and are rendered with textContent.
+fn sanitize_reader_scene_browser_decoders(
+    scene: &mut Value,
+) -> Result<(), ProductReplayWorkerError> {
+    let object = scene.as_object_mut().ok_or_else(|| {
+        ProductReplayWorkerError::new(
+            "product_reader_scene_resource_invalid",
+            "Reader scene browser envelope is not an object",
+        )
+    })?;
+
+    let has_image_resources = if let Some(resources) = object.get_mut("resources") {
+        let resources = resources.as_array_mut().ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_reader_scene_resource_invalid",
+                "Reader scene resources must be an array",
+            )
+        })?;
+        for resource in resources.iter_mut() {
+            let fields = resource.as_object_mut().ok_or_else(|| {
+                ProductReplayWorkerError::new(
+                    "product_reader_scene_resource_invalid",
+                    "Reader image resource must be an object",
+                )
+            })?;
+            fields.remove("inline_data_url");
+            fields.insert(
+                "availability".to_owned(),
+                Value::String("descriptor_only".to_owned()),
+            );
+        }
+        !resources.is_empty()
+    } else {
+        false
+    };
+
+    if has_image_resources {
+        let fidelity = object
+            .get_mut("fidelity")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                ProductReplayWorkerError::new(
+                    "product_reader_scene_resource_invalid",
+                    "Reader scene fidelity envelope is invalid",
+                )
+            })?;
+        fidelity.insert("state".to_owned(), Value::String("partial".to_owned()));
+        let reasons = fidelity
+            .get_mut("reasons")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| {
+                ProductReplayWorkerError::new(
+                    "product_reader_scene_resource_invalid",
+                    "Reader scene fidelity reasons are invalid",
+                )
+            })?;
+        if !reasons
+            .iter()
+            .any(|reason| reason.as_str() == Some("image_resource_not_inline"))
+        {
+            reasons.push(Value::String("image_resource_not_inline".to_owned()));
+        }
+    }
+
+    if let Some(fonts) = object.get_mut("fonts") {
+        let fonts = fonts.as_array_mut().ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_reader_scene_resource_invalid",
+                "Reader scene fonts must be an array",
+            )
+        })?;
+        if !fonts.is_empty() {
+            fonts.clear();
+            fonts.push(trusted_fallback_font_value()?);
+        }
+    }
+
+    let payload = serde_json::to_vec(scene).map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_reader_scene_resource_invalid",
+            "sanitized Reader scene could not be serialized",
+        )
+    })?;
+    if payload.len() > MAX_SCENE_BYTES {
+        return Err(ProductReplayWorkerError::new(
+            "product_reader_scene_resource_invalid",
+            "sanitized Reader scene exceeds the browser response limit",
+        ));
+    }
+    Ok(())
 }
 
 fn valid_revision_id(value: &str) -> bool {
@@ -952,7 +1096,7 @@ impl IsolatedProductReplayProducer {
                 "Reader scene worker returned baseline or geometry mutation",
             ));
         }
-        let scene = receipt.reader_scene.ok_or_else(|| {
+        let mut scene = receipt.reader_scene.ok_or_else(|| {
             ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
                 "Reader scene worker did not return an exact scene",
@@ -969,6 +1113,7 @@ impl IsolatedProductReplayProducer {
                 "Reader scene receipt was replayed for another document or revision",
             ));
         }
+        sanitize_reader_scene_browser_decoders(&mut scene.scene)?;
         Ok(scene.scene)
     }
 
@@ -1410,6 +1555,78 @@ mod tests {
             .unwrap_err()
             .code,
             "product_replay_receipt_identity_mismatch"
+        );
+    }
+
+    #[test]
+    fn browser_decoder_boundary_strips_worker_images_and_rebuilds_trusted_font() {
+        let mut scene = serde_json::json!({
+            "protocol_version": READER_SCENE_V1,
+            "scene_authority": "server_viewer_projection",
+            "document_id": "document-a",
+            "source_hash": "a".repeat(64),
+            "revision_id": "revision-a",
+            "stacking_fidelity": "source",
+            "fidelity": {"state": "supported", "reasons": []},
+            "pages": [],
+            "nodes": [],
+            "stories": [],
+            "resources": [{
+                "resource_id": "resource-a",
+                "mime": "image/png",
+                "availability": "inline_data_url",
+                "inline_data_url": "data:image/png;base64,ATTACKER_CONTROLLED"
+            }],
+            "fonts": [{
+                "resource_id": "worker-forged-font",
+                "family_name": "Forged",
+                "mime": "font/ttf",
+                "expected_sha256": "b".repeat(64),
+                "availability": "inline_data_url",
+                "inline_data_url": "data:font/ttf;base64,ATTACKER_CONTROLLED"
+            }]
+        });
+
+        sanitize_reader_scene_browser_decoders(&mut scene).unwrap();
+
+        let image = &scene["resources"][0];
+        assert_eq!(image["availability"], "descriptor_only");
+        assert!(image.get("inline_data_url").is_none());
+        assert_eq!(scene["fidelity"]["state"], "partial");
+        assert!(
+            scene["fidelity"]["reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reason| reason == "image_resource_not_inline")
+        );
+
+        let fonts = scene["fonts"].as_array().unwrap();
+        assert_eq!(fonts.len(), 1);
+        let font = &fonts[0];
+        assert_eq!(
+            font["resource_id"],
+            chaptera_desktop_fallback_font_resource::RESOURCE_ID
+        );
+        assert_eq!(
+            font["family_name"],
+            chaptera_desktop_fallback_font_resource::FAMILY_NAME
+        );
+        assert_eq!(
+            font["expected_sha256"],
+            chaptera_desktop_fallback_font_resource::EXPECTED_SHA256
+        );
+        assert_eq!(font["mime"], "font/ttf");
+        assert!(
+            font["inline_data_url"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("data:font/ttf;base64,"))
+        );
+        assert!(
+            !font["inline_data_url"]
+                .as_str()
+                .unwrap()
+                .contains("ATTACKER_CONTROLLED")
         );
     }
 
