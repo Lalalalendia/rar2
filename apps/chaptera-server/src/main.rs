@@ -80,8 +80,8 @@ fn main() -> ExitCode {
             document_id,
             expected_sha256,
             *expected_byte_len,
-            project_json,
-            expected_project_sha256,
+            project_json.as_deref(),
+            expected_project_sha256.as_deref(),
         ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {

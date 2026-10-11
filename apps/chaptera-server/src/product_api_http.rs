@@ -105,7 +105,16 @@ impl ProductApiHttpState {
         mut self,
         config: SourceBaselineProducerConfig,
     ) -> Result<Self, ProductReplayWorkerError> {
-        self.isolated_replay = Some(IsolatedProductReplayProducer::new(config)?);
+        let worker = IsolatedProductReplayProducer::new(config)?;
+        let materializer =
+            Arc::get_mut(&mut self.materializer).ok_or(ProductReplayWorkerError {
+                code: "product_replay_config_invalid",
+                message: "production materializer is shared before sandbox wiring",
+            })?;
+        // Fail closed: no host PUB parsing is permitted while canonical
+        // baselines or historical revisions are being materialized.
+        materializer.set_isolated_replay(worker.clone());
+        self.isolated_replay = Some(worker);
         Ok(self)
     }
 }
