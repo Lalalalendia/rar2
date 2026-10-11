@@ -2510,24 +2510,93 @@ mod tests {
             "stale_revision"
         );
 
-        let mut unsupported_redo = undo_body;
-        unsupported_redo["base_revision_id"] = json!(undo_revision);
-        unsupported_redo["client_operation_id"] = json!("redo-unsupported");
-        unsupported_redo["command"]["kind"] = json!("redo");
-        let redo = restarted_app
+        // A durable Undo carries the original MoveNode operation in its
+        // canonical event. Redo must restore only that exact immediate
+        // operation, yielding a NEW immutable revision after worker replay.
+        let mut redo_body = undo_body;
+        redo_body["base_revision_id"] = json!(undo_revision.clone());
+        redo_body["client_operation_id"] = json!("redo-sample3-1");
+        redo_body["command"]["kind"] = json!("redo");
+        let redone = restarted_app
+            .clone()
             .oneshot(authenticated_request(
                 "POST",
                 &format!("/v1/documents/{document_id}/history"),
                 &issued.session_token,
                 Some(&issued.csrf_token),
-                Some(unsupported_redo),
+                Some(redo_body.clone()),
             ))
             .await
             .unwrap();
-        assert_eq!(redo.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(redone.status(), StatusCode::OK);
+        assert_eq!(redone.headers()[CACHE_CONTROL], "no-store");
+        let redone = json_body(redone).await;
+        assert_eq!(redone["protocol_version"], HISTORY_TRANSITION_ACCEPTED_V1);
+        assert_eq!(redone["transition_kind"], "redo");
+        assert_eq!(redone["base_revision_id"], undo_revision);
+        assert_eq!(redone["replayed"], false);
+        let redo_revision = redone["revision_id"].as_str().unwrap().to_owned();
+        assert_ne!(redo_revision, undo_revision);
+        assert_ne!(redo_revision, child_revision);
+
+        let redone_scene = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/reader/documents/{document_id}/scene"),
+                &issued.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(redone_scene.status(), StatusCode::OK);
+        let redone_scene = json_body(redone_scene).await;
+        assert_eq!(redone_scene["revision_id"], redo_revision);
+        let moved_again = redone_scene["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["node_id"] == node_id)
+            .expect("canonical Redo Reader scene contains the moved node");
+        assert_eq!(moved_again["bounds"]["x"], x_emu);
+        assert_eq!(moved_again["bounds"]["y"], y_emu);
+
+        let retried_redo = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/history"),
+                &issued.session_token,
+                Some(&issued.csrf_token),
+                Some(redo_body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(retried_redo.status(), StatusCode::OK);
+        let retried_redo = json_body(retried_redo).await;
+        assert_eq!(retried_redo["revision_id"], redo_revision);
+        assert_eq!(retried_redo["replayed"], true);
+
+        // A fresh Redo after a Redo is forbidden; no unpersisted redo stack
+        // may claim to reapply the operation again.
+        let mut invalid_redo = redo_body;
+        invalid_redo["base_revision_id"] = json!(redo_revision);
+        invalid_redo["client_operation_id"] = json!("redo-second-rejected");
+        let rejected = restarted_app
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/history"),
+                &issued.session_token,
+                Some(&issued.csrf_token),
+                Some(invalid_redo),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::CONFLICT);
         assert_eq!(
-            json_body(redo).await["error"]["code"],
-            "history_transition_unsupported"
+            json_body(rejected).await["error"]["code"],
+            "redo_unavailable"
         );
 
         restarted_authn.close().await;
