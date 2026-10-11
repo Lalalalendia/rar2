@@ -5,8 +5,6 @@ on:
     paths:
       - "apps/chaptera-server/src/safe_preview_host.rs"
       - "apps/chaptera-server/src/safe_preview_worker.rs"
-      - "apps/chaptera-server/src/product_replay_worker.rs"
-      - "apps/chaptera-server/src/product_api_http.rs"
       - "apps/chaptera-server/tests/reader_safe_preview_real_v1.rs"
       - "apps/cloud-reader/product-safe-preview-022-browser.test.mjs"
       - "tools/reader_safe_preview_visual_022.py"
