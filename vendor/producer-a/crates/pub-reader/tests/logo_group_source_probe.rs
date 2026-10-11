@@ -6,14 +6,11 @@ use pub_contents::{
 use pub_core::StreamPath;
 use pub_escher::{PUBLISHER_FIELD_SHAPE_ID, SpContainerObservation, inspect_sp_containers};
 use pub_model::Sha256Digest;
-use pub_reader::{
-    build_mature_0x2c_source_graph, derive_pub_node_id, derive_pub_page_id,
-};
+use pub_reader::{build_mature_0x2c_source_graph, derive_pub_node_id, derive_pub_page_id};
 use sha2::{Digest, Sha256};
 use std::{fs, io::Cursor};
 
-const NEWSLETTER_SHA256: &str =
-    "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf";
+const NEWSLETTER_SHA256: &str = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf";
 
 #[test]
 #[ignore = "requires CHAPTERA_LOGO_GROUP_FIXTURE (SHA-pinned public Apache POI source)"]
@@ -31,8 +28,7 @@ fn exact_public_newsletter_logo_0x31_baseline() {
     );
     let source_hash: Sha256Digest = NEWSLETTER_SHA256.parse().unwrap();
 
-    let contents =
-        pub_cfb::read_stream_reader(Cursor::new(bytes.as_slice()), "/Contents").unwrap();
+    let contents = pub_cfb::read_stream_reader(Cursor::new(bytes.as_slice()), "/Contents").unwrap();
     let escher =
         pub_cfb::read_stream_reader(Cursor::new(bytes.as_slice()), "/Escher/EscherStm").unwrap();
     let header = parse_0x2c_header(StreamPath("/Contents".into()), &contents).unwrap();
@@ -75,13 +71,15 @@ fn exact_public_newsletter_logo_0x31_baseline() {
 
         let group_shape = shape_for(carrier_seq);
         assert!(group_shape.fspgr.is_some(), "LOGO carrier has FSPGR");
-        assert!(group_shape.client_anchor.is_some(), "LOGO has page ClientAnchor");
+        assert!(
+            group_shape.client_anchor.is_some(),
+            "LOGO has page ClientAnchor"
+        );
         for child_seq in children {
             let child = reference_for(child_seq);
             assert_eq!(child.parent_seq_nums.len(), 1);
             assert_eq!(
-                child.parent_seq_nums[0].value,
-                carrier_seq,
+                child.parent_seq_nums[0].value, carrier_seq,
                 "Contents nested child must match LOGO parent"
             );
             let shape = shape_for(child_seq);
@@ -125,7 +123,12 @@ fn exact_public_newsletter_logo_0x31_baseline() {
 
     // Four class-eligible descendants from #2616. This is a pre-fix
     // observation, not an assertion that all seven children should render.
-    let candidates = [(389u32, "image"), (391, "story"), (411, "ellipse"), (412, "story")];
+    let candidates = [
+        (389u32, "image"),
+        (391, "story"),
+        (411, "ellipse"),
+        (412, "story"),
+    ];
     let mut materialized = 0usize;
     for (seq, class) in candidates {
         let node_id = derive_pub_node_id(&source_hash, seq).unwrap();
