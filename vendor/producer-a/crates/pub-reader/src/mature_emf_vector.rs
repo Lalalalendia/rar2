@@ -166,8 +166,8 @@ impl State {
         let py = (logical.y - self.window_origin.y) * self.viewport_extent.y
             / self.window_extent.y
             + self.viewport_origin.y;
-        let w = f64::from(bounds[2] - bounds[0]);
-        let h = f64::from(bounds[3] - bounds[1]);
+        let w = f64::from(bounds[2]) - f64::from(bounds[0]);
+        let h = f64::from(bounds[3]) - f64::from(bounds[1]);
         let x = (px - f64::from(bounds[0])) * f64::from(raster.width) / w;
         let y = (py - f64::from(bounds[1])) * f64::from(raster.height) / h;
         if !x.is_finite()
@@ -316,9 +316,29 @@ impl Raster {
     }
 }
 
+fn contains_bitmap_record(logical: &[u8]) -> Result<bool> {
+    let mut at = 0usize;
+    let mut count = 0usize;
+    let mut has_bitmap = false;
+    while at < logical.len() {
+        if count >= MAX_RECORDS { bail!("EMF bitmap discrimination exceeds record budget"); }
+        let kind = u32_at(logical, at)?;
+        let size = usize::try_from(u32_at(logical, at + 4)?)?;
+        if size < 8 || size % 4 != 0 { bail!("misframed EMF while discriminating bitmap"); }
+        span(logical, at, size)?;
+        has_bitmap |= kind == 81;
+        at = at.checked_add(size).context("EMF record advance overflow")?;
+        count += 1;
+    }
+    Ok(has_bitmap)
+}
+
 fn parse_vector_emf(logical: &[u8]) -> Result<Option<(Raster, usize)>> {
     if logical.len() < 108 || logical.len() > MAX_VECTOR_BYTES {
         bail!("EMF vector file outside bounded record profile");
+    }
+    if contains_bitmap_record(logical)? {
+        return Ok(None); // The existing strict BI_RGB owner handles these assets.
     }
     let mut state = State::default();
     let mut raster = None;
@@ -326,7 +346,6 @@ fn parse_vector_emf(logical: &[u8]) -> Result<Option<(Raster, usize)>> {
     let mut at = 0_usize;
     let mut count = 0_usize;
     let mut eof = false;
-    let mut skipped_bitmap = false;
     while at < logical.len() {
         if count >= MAX_RECORDS {
             bail!("EMF vector record budget exceeded");
@@ -347,7 +366,6 @@ fn parse_vector_emf(logical: &[u8]) -> Result<Option<(Raster, usize)>> {
                 raster = Some(Raster::new(bounds)?);
             }
             14 if size >= 20 => eof = true,
-            81 => skipped_bitmap = true,
             17 if size >= 12 => {
                 let mode = u32_at(r, 8)?;
                 if mode != MM_ANISOTROPIC { bail!("unsupported EMF map mode"); }
@@ -485,9 +503,6 @@ fn parse_vector_emf(logical: &[u8]) -> Result<Option<(Raster, usize)>> {
     }
     if !eof || at != logical.len() || state.path_active || state.path_ready {
         bail!("EMF vector stream incomplete");
-    }
-    if skipped_bitmap {
-        return Ok(None);
     }
     let image = raster.context("EMF missing header")?;
     if state.filled_paths == 0 || !image.painted {
