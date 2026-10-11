@@ -6,6 +6,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -135,6 +136,25 @@ def synthetic_controls() -> None:
     assert out["families"][1]["script_map_reference_count"] == 1
     assert "AéB" not in json.dumps(out, ensure_ascii=False)
     assert "Substitute" not in json.dumps(out, ensure_ascii=False)
+
+    # Stream the same current-source direct Quill evidence without ever
+    # persisting raw Story text to a temporary file or printing it into CI.
+    streamed = subprocess.run(
+        [sys.executable, str(MODULE), "--viewer", "-", "--output", "-"],
+        input=json.dumps(directly_proven, ensure_ascii=False),
+        text=True, capture_output=True, timeout=15, check=False,
+    )
+    assert streamed.returncode == 0, streamed.stderr
+    assert json.loads(streamed.stdout) == current
+    assert "AéB" not in streamed.stdout
+    assert streamed.stderr == ""
+    invalid = subprocess.run(
+        [sys.executable, str(MODULE), "--viewer", "-", "--output", "-"],
+        input="{not-json}", text=True, capture_output=True, timeout=15, check=False,
+    )
+    assert invalid.returncode == 2
+    assert invalid.stdout == ""
+    assert "source font requirements blocked:" in invalid.stderr
 
     bad = copy.deepcopy(viewer)
     bad["typography_runs"][0]["source_story_text_sha256"] = "0" * 64

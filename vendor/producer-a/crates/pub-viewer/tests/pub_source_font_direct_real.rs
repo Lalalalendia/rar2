@@ -2,7 +2,11 @@
 //! font index provenance. No document text, proprietary font bytes or
 //! substitute-font admission is emitted by this test.
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, env, fs};
+use std::{
+    collections::BTreeSet,
+    env, fs,
+    process::{Command, Stdio},
+};
 
 const SOURCE_SHA: &str = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf";
 
@@ -81,6 +85,62 @@ fn real_sample_newsletter_viewer_preserves_direct_source_quill_indices() {
     );
     assert!(names.contains("Franklin Gothic Book"));
     assert!(names.contains("Rockwell Condensed"));
+
+    // The current real PUB must pass the *actual* source-font planner, not
+    // only the DTO serde witness or an obsolete persisted Viewer fixture.
+    // Stream private Viewer JSON via stdin: do not write raw Story text to
+    // files or upload it as an Actions artifact.
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../../tools/pub_source_font_requirements_v1.py");
+    assert!(script.is_file(), "source font planner must be available");
+    let mut child = Command::new("python")
+        .arg(script)
+        .args(["--viewer", "-", "--output", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run bounded source font requirements planner");
+    {
+        let mut input = child.stdin.take().expect("source planner stdin");
+        serde_json::to_writer(&mut input, &viewer)
+            .expect("stream actual PUB Viewer without writing raw Story files");
+    }
+    let output = child
+        .wait_with_output()
+        .expect("wait for source-font planner");
+    assert!(
+        output.status.success(),
+        "actual PUB source font requirements planner must accept direct indexes"
+    );
+    let plan: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("parse source-safe plan");
+    assert_eq!(plan["document_source_sha256"], SOURCE_SHA);
+    assert_eq!(
+        plan["direct_source_binding_count"].as_u64(),
+        Some(direct_runs as u64)
+    );
+    assert_eq!(plan["physical_font_bytes_included"], false);
+    assert_eq!(plan["fixed_pdf_allowed"], false);
+    assert_eq!(plan["original_publisher_layout_authoritative"], false);
+    let bindings = plan["direct_source_bindings"]
+        .as_array()
+        .expect("exact source font bindings");
+    assert_eq!(bindings.len(), direct_runs);
+    assert!(bindings.iter().any(|binding| {
+        binding["source_family"] == "Rockwell Condensed"
+            && binding["source_font_index"] == 18
+            && binding["source_font_binding_id"]
+                == "pub-source-font:b402e726-72b4-5d52-bb0d-07a0c13dc05d"
+    }));
+    assert!(
+        plan.get("document").is_none(),
+        "no raw Viewer Story in private plan"
+    );
+    println!(
+        "REAL_PUB_SOURCE_FONT_PLAN_OK direct_bindings={} source_identity_only=true physical_font_files=false fixed_pdf_allowed=false",
+        bindings.len()
+    );
     // No original Story text or physical font paths enter the CI receipt.
     println!(
         "REAL_PUB_DIRECT_QUILL_FONT_ID_OK direct_runs={direct_runs} rockwell_runs={rockwell_runs} families={} size_only_runs={size_only_runs} source_font_index_18=true font_files_admitted=false fixed_pdf_allowed=false",

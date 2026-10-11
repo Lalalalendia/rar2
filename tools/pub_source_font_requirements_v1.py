@@ -271,18 +271,33 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Generate a source-safe, non-authorizing private PUB font provisioning plan"
     )
-    parser.add_argument("--viewer", required=True, type=Path, help="source-backed Reader Viewer JSON")
-    parser.add_argument("--output", required=True, type=Path, help="private requirements JSON file")
+    parser.add_argument("--viewer", required=True,
+                        help="source-backed Viewer JSON file, or '-' for bounded stdin")
+    parser.add_argument("--output", required=True,
+                        help="private requirements JSON file, or '-' for safe JSON stdout")
     args = parser.parse_args(argv)
     try:
-        if args.viewer.resolve() == args.output.resolve():
+        if (args.viewer != "-" and args.output != "-"
+                and Path(args.viewer).resolve() == Path(args.output).resolve()):
             raise SourceFontRequirementsError("cannot overwrite original Publisher Viewer receipt")
-        plan = source_font_requirements_v1(
-            json.loads(args.viewer.read_text(encoding="utf-8"))
-        )
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(plan, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        if args.viewer == "-":
+            # The verified Reader may stream raw Story text to this private
+            # planner. Bound memory and avoid temporary plaintext documents.
+            raw = sys.stdin.buffer.read(32 * 1024 * 1024 + 1)
+            if len(raw) > 32 * 1024 * 1024:
+                raise SourceFontRequirementsError("bounded Viewer stdin exceeds 32 MiB")
+            viewer = json.loads(raw.decode("utf-8"))
+        else:
+            viewer = json.loads(Path(args.viewer).read_text(encoding="utf-8"))
+        plan = source_font_requirements_v1(viewer)
+        safe_json = json.dumps(plan, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        if args.output == "-":
+            sys.stdout.write(safe_json)
+            return 0
+        destination = Path(args.output)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(safe_json, encoding="utf-8")
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
         print(f"source font requirements blocked: {exc}", file=sys.stderr)
         return 2
     print("PUB_SOURCE_FONT_REQUIREMENTS_OK " + json.dumps({
