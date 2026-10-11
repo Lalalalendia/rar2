@@ -451,6 +451,7 @@ fn trusted_fallback_font_value() -> Result<Value, ProductReplayWorkerError> {
 /// - image payloads from the worker are never forwarded as data URLs;
 /// - font payloads are reconstructed from the server's pinned embedded font,
 ///   never copied from worker JSON.
+///
 /// Text/diagnostic strings remain data-only and are rendered with textContent.
 fn sanitize_reader_scene_browser_decoders(
     scene: &mut Value,
