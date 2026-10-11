@@ -25,6 +25,8 @@ jobs:
         with:
           toolchain: 1.94.1
           components: rustfmt, clippy
+      - name: Check focused decoder rustfmt
+        run: cargo fmt -p chaptera-image-decode-contract -- --check
       - name: Check focused decoder crate
         run: cargo check -p chaptera-image-decode-contract
       - name: Clippy focused decoder crate
