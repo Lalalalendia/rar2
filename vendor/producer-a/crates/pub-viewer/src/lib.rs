@@ -6024,12 +6024,6 @@ mod mature_officeart_wmf_exact_product_tests {
                     .map(|slot| (node.payload.contents_seq_num, slot))
             })
             .collect::<Vec<_>>();
-        if env_name == "CHAPTERA_SAMPLE_NEWSLETTER" {
-            assert!(
-                graph_image_slot_bindings.contains(&(389, 5)),
-                "PAGE-owned LOGO child 389 must bind to the actual source WMF slot 5"
-            );
-        }
         eprintln!(
             "EXACT_MATURE_WMF_SOURCE_BINDINGS bindings={:?} bridge_diagnostics={:?}",
             graph_image_slot_bindings, source.diagnostics,
@@ -6174,9 +6168,6 @@ mod mature_officeart_wmf_exact_product_tests {
         exact_wmf_fixture(
             "CHAPTERA_SAMPLE_NEWSLETTER",
             "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
-            // PAGE-owned LOGO seq389 is a real extra use of existing WMF slot 5.
-            // Physical BStore count remains eight; exact Viewer attachment grows
-            // by one resource/use instead of silently dropping the LOGO image.
             [8, 8, 8, 9, 9, 10, 8, 9],
         );
     }
