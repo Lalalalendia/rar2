@@ -116,10 +116,15 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 fn canonical_hash(value: &str) -> bool {
     value.len() == 64
-        && value.bytes().all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
-fn sample_layout(decoded: &DecodedImageV1, limits: &PreviewEncodeLimitsV1) -> Result<(u32, u32, PngColorType, Option<JpegColorType>), PreviewEncodeErrorV1> {
+fn sample_layout(
+    decoded: &DecodedImageV1,
+    limits: &PreviewEncodeLimitsV1,
+) -> Result<(u32, u32, PngColorType, Option<JpegColorType>), PreviewEncodeErrorV1> {
     if decoded.contract_version != DECODE_CONTRACT_VERSION_V1
         || decoded.decoder_id != REFERENCE_DECODER_ID_V1
         || !canonical_hash(&decoded.resource_sha256)
@@ -135,9 +140,11 @@ fn sample_layout(decoded: &DecodedImageV1, limits: &PreviewEncodeLimitsV1) -> Re
 
     let width = decoded.decoded_width_px;
     let height = decoded.decoded_height_px;
-    let pixels = u64::from(width).checked_mul(u64::from(height))
+    let pixels = u64::from(width)
+        .checked_mul(u64::from(height))
         .ok_or_else(|| reject("preview_pixel_arithmetic_overflow"))?;
-    if width == 0 || height == 0
+    if width == 0
+        || height == 0
         || width > limits.max_dimension_px
         || height > limits.max_dimension_px
         || pixels > limits.max_total_pixels
@@ -146,13 +153,19 @@ fn sample_layout(decoded: &DecodedImageV1, limits: &PreviewEncodeLimitsV1) -> Re
     }
 
     let (channels, png_color, jpeg_color, alpha) = match decoded.decoded_sample_model.as_str() {
-        "gray" => (1_u64, PngColorType::Grayscale, Some(JpegColorType::Luma), false),
+        "gray" => (
+            1_u64,
+            PngColorType::Grayscale,
+            Some(JpegColorType::Luma),
+            false,
+        ),
         "rgb" => (3, PngColorType::Rgb, Some(JpegColorType::Rgb), false),
         "gray_alpha" => (2, PngColorType::GrayscaleAlpha, None, true),
         "rgba" => (4, PngColorType::Rgba, None, true),
         _ => return Err(reject("preview_sample_model_unsupported")),
     };
-    let expected_len = pixels.checked_mul(channels)
+    let expected_len = pixels
+        .checked_mul(channels)
         .and_then(|bytes| usize::try_from(bytes).ok())
         .ok_or_else(|| reject("preview_pixel_arithmetic_overflow"))?;
     if expected_len > limits.max_decoded_bytes
@@ -167,24 +180,40 @@ fn sample_layout(decoded: &DecodedImageV1, limits: &PreviewEncodeLimitsV1) -> Re
     Ok((width, height, png_color, jpeg_color))
 }
 
-fn encode_png(decoded: &DecodedImageV1, width: u32, height: u32, color: PngColorType) -> Result<Vec<u8>, PreviewEncodeErrorV1> {
+fn encode_png(
+    decoded: &DecodedImageV1,
+    width: u32,
+    height: u32,
+    color: PngColorType,
+) -> Result<Vec<u8>, PreviewEncodeErrorV1> {
     let mut bytes = Vec::new();
     {
         let mut encoder = PngEncoder::new(&mut bytes, width, height);
         encoder.set_color(color);
         encoder.set_depth(BitDepth::Eight);
-        let mut writer = encoder.write_header().map_err(|_| reject("preview_png_encode_failed"))?;
-        writer.write_image_data(&decoded.samples).map_err(|_| reject("preview_png_encode_failed"))?;
+        let mut writer = encoder
+            .write_header()
+            .map_err(|_| reject("preview_png_encode_failed"))?;
+        writer
+            .write_image_data(&decoded.samples)
+            .map_err(|_| reject("preview_png_encode_failed"))?;
     }
     Ok(bytes)
 }
 
-fn encode_jpeg(decoded: &DecodedImageV1, width: u32, height: u32, color: JpegColorType, quality: u8) -> Result<Vec<u8>, PreviewEncodeErrorV1> {
+fn encode_jpeg(
+    decoded: &DecodedImageV1,
+    width: u32,
+    height: u32,
+    color: JpegColorType,
+    quality: u8,
+) -> Result<Vec<u8>, PreviewEncodeErrorV1> {
     let w = u16::try_from(width).map_err(|_| reject("preview_pixel_limit"))?;
     let h = u16::try_from(height).map_err(|_| reject("preview_pixel_limit"))?;
     let mut bytes = Vec::new();
     let encoder = JpegEncoder::new(&mut bytes, quality);
-    encoder.encode(&decoded.samples, w, h, color)
+    encoder
+        .encode(&decoded.samples, w, h, color)
         .map_err(|_| reject("preview_jpeg_encode_failed"))?;
     Ok(bytes)
 }
@@ -197,7 +226,11 @@ fn finalize_candidate(
     bytes: Vec<u8>,
     limits: &PreviewEncodeLimitsV1,
 ) -> Result<EncodedSafePreviewV1, PreviewEncodeErrorV1> {
-    let output_cap = if mime == "image/png" { limits.max_png_bytes } else { limits.max_jpeg_bytes };
+    let output_cap = if mime == "image/png" {
+        limits.max_png_bytes
+    } else {
+        limits.max_jpeg_bytes
+    };
     if bytes.is_empty() || bytes.len() > output_cap {
         return Err(reject("preview_encoded_bytes_limit"));
     }
@@ -218,7 +251,8 @@ fn finalize_candidate(
             max_total_pixels: limits.max_total_pixels,
             max_decoded_bytes: limits.max_decoded_bytes,
         },
-    ).map_err(|_| reject("preview_encoded_verification_failed"))?;
+    )
+    .map_err(|_| reject("preview_encoded_verification_failed"))?;
     if decoded_output.decoded_width_px != decoded.decoded_width_px
         || decoded_output.decoded_height_px != decoded.decoded_height_px
         || decoded_output.decoded_precision_bits != 8
@@ -238,11 +272,16 @@ fn finalize_candidate(
         encoder_id,
         quality,
         orientation_policy: "source-raster-unrotated;exif-stripped",
-        alpha_policy: if decoded.alpha_present { "straight-alpha-preserved" } else { "opaque-no-alpha" },
+        alpha_policy: if decoded.alpha_present {
+            "straight-alpha-preserved"
+        } else {
+            "opaque-no-alpha"
+        },
         metadata_policy: "fresh-container-no-source-metadata",
         output_color_disposition: PREVIEW_COLOR_DISPOSITION_V1,
     };
-    let spec_bytes = serde_json::to_vec(&spec).map_err(|_| reject("preview_encode_spec_invalid"))?;
+    let spec_bytes =
+        serde_json::to_vec(&spec).map_err(|_| reject("preview_encode_spec_invalid"))?;
     let spec_hash = sha256_hex(&spec_bytes);
     Ok(EncodedSafePreviewV1 {
         receipt: SafePreviewEncodeReceiptV1 {
@@ -287,7 +326,12 @@ pub fn encode_safe_preview_v1(
                 let bytes = encode_jpeg(decoded, width, height, color, quality)?;
                 if bytes.len() <= limits.max_jpeg_bytes {
                     return finalize_candidate(
-                        decoded, "image/jpeg", JPEG_ENCODER_ID_V1, Some(quality), bytes, limits,
+                        decoded,
+                        "image/jpeg",
+                        JPEG_ENCODER_ID_V1,
+                        Some(quality),
+                        bytes,
+                        limits,
                     );
                 }
             }
@@ -305,7 +349,11 @@ mod tests {
         let mut out = Vec::new();
         {
             let mut encoder = PngEncoder::new(&mut out, width, height);
-            encoder.set_color(if rgba { PngColorType::Rgba } else { PngColorType::Rgb });
+            encoder.set_color(if rgba {
+                PngColorType::Rgba
+            } else {
+                PngColorType::Rgb
+            });
             encoder.set_depth(BitDepth::Eight);
             let mut writer = encoder.write_header().unwrap();
             writer.write_image_data(pixels).unwrap();
@@ -315,9 +363,14 @@ mod tests {
 
     fn fixture_decoded(bytes: &[u8], mime: &str) -> DecodedImageV1 {
         decode_image_v1(
-            bytes, mime, &sha256_hex(bytes), "sample-color-source",
-            &DecodePolicyV1::reference(), &DecodeLimitsV1::default(),
-        ).unwrap()
+            bytes,
+            mime,
+            &sha256_hex(bytes),
+            "sample-color-source",
+            &DecodePolicyV1::reference(),
+            &DecodeLimitsV1::default(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -333,9 +386,16 @@ mod tests {
         let b = encode_safe_preview_v1(&decoded, PreviewCodecV1::Png, &limits).unwrap();
         assert_eq!(a.bytes, b.bytes);
         assert_eq!(a.receipt, b.receipt);
-        assert!(!a.bytes.windows(25).any(|window| window == b"source-private-exif-gps-c"));
+        assert!(
+            !a.bytes
+                .windows(25)
+                .any(|window| window == b"source-private-exif-gps-c")
+        );
         assert_eq!(a.receipt.encoded_artifact_sha256, sha256_hex(&a.bytes));
-        assert_ne!(a.receipt.source_resource_sha256, a.receipt.encoded_artifact_sha256);
+        assert_ne!(
+            a.receipt.source_resource_sha256,
+            a.receipt.encoded_artifact_sha256
+        );
         assert!(a.receipt.alpha_preserved);
         assert!(!a.receipt.browser_delivery_authorized);
         assert!(!a.receipt.source_metadata_carried);
@@ -358,8 +418,11 @@ mod tests {
         let original = fixture_png(128, 128, false, &pixels);
         let decoded = fixture_decoded(&original, "image/png");
         let first = encode_safe_preview_v1(
-            &decoded, PreviewCodecV1::Jpeg, &PreviewEncodeLimitsV1::default(),
-        ).unwrap();
+            &decoded,
+            PreviewCodecV1::Jpeg,
+            &PreviewEncodeLimitsV1::default(),
+        )
+        .unwrap();
         assert_eq!(first.receipt.quality, Some(93));
         let q88 = encode_jpeg(&decoded, 128, 128, JpegColorType::Rgb, 88).unwrap();
         assert!(first.bytes.len() > q88.len());
@@ -370,12 +433,28 @@ mod tests {
         let smaller = encode_safe_preview_v1(&decoded, PreviewCodecV1::Jpeg, &limits).unwrap();
         assert!(smaller.receipt.quality.unwrap() < 93);
         assert!(smaller.bytes.len() <= limits.max_jpeg_bytes);
-        assert_ne!(smaller.receipt.encode_spec_sha256, first.receipt.encode_spec_sha256);
-        assert_ne!(smaller.receipt.encoded_artifact_sha256, first.receipt.encoded_artifact_sha256);
-        assert_eq!(smaller.bytes, encode_safe_preview_v1(&decoded, PreviewCodecV1::Jpeg, &limits).unwrap().bytes);
-        let impossible = PreviewEncodeLimitsV1 { max_jpeg_bytes: 8, ..limits };
+        assert_ne!(
+            smaller.receipt.encode_spec_sha256,
+            first.receipt.encode_spec_sha256
+        );
+        assert_ne!(
+            smaller.receipt.encoded_artifact_sha256,
+            first.receipt.encoded_artifact_sha256
+        );
         assert_eq!(
-            encode_safe_preview_v1(&decoded, PreviewCodecV1::Jpeg, &impossible).unwrap_err().code,
+            smaller.bytes,
+            encode_safe_preview_v1(&decoded, PreviewCodecV1::Jpeg, &limits)
+                .unwrap()
+                .bytes
+        );
+        let impossible = PreviewEncodeLimitsV1 {
+            max_jpeg_bytes: 8,
+            ..limits
+        };
+        assert_eq!(
+            encode_safe_preview_v1(&decoded, PreviewCodecV1::Jpeg, &impossible)
+                .unwrap_err()
+                .code,
             "preview_encoded_bytes_limit"
         );
     }
@@ -386,21 +465,29 @@ mod tests {
         let pixels = [5_u8, 70, 180, 12, 130, 230, 38, 90, 0, 200, 123, 25];
         {
             let mut encoder = JpegEncoder::new(&mut original, 90);
-            encoder.add_exif_metadata(&[
-                73, 73, 42, 0, 8, 0, 0, 0, 1, 0, 18, 1, 3, 0,
-                1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
-            ]).unwrap();
+            encoder
+                .add_exif_metadata(&[
+                    73, 73, 42, 0, 8, 0, 0, 0, 1, 0, 18, 1, 3, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
+                    0,
+                ])
+                .unwrap();
             encoder.encode(&pixels, 2, 2, JpegColor::Rgb).unwrap();
         }
         let decoded = fixture_decoded(&original, "image/jpeg");
         assert_eq!(decoded.exif_orientation, Some(1));
         let preview = encode_safe_preview_v1(
-            &decoded, PreviewCodecV1::Jpeg, &PreviewEncodeLimitsV1::default(),
-        ).unwrap();
+            &decoded,
+            PreviewCodecV1::Jpeg,
+            &PreviewEncodeLimitsV1::default(),
+        )
+        .unwrap();
         assert!(!preview.bytes.windows(6).any(|w| w == b"Exif\0\0"));
         assert!(!preview.receipt.orientation_applied);
         assert!(!preview.receipt.source_metadata_carried);
-        assert_eq!(fixture_decoded(&preview.bytes, "image/jpeg").decoded_width_px, 2);
+        assert_eq!(
+            fixture_decoded(&preview.bytes, "image/jpeg").decoded_width_px,
+            2
+        );
     }
 
     #[test]
@@ -410,24 +497,35 @@ mod tests {
         let rgba = fixture_decoded(&source, "image/png");
         let defaults = PreviewEncodeLimitsV1::default();
         assert_eq!(
-            encode_safe_preview_v1(&rgba, PreviewCodecV1::Jpeg, &defaults).unwrap_err().code,
+            encode_safe_preview_v1(&rgba, PreviewCodecV1::Jpeg, &defaults)
+                .unwrap_err()
+                .code,
             "preview_jpeg_alpha_unsupported"
         );
         let mut forged = rgba.clone();
         forged.samples[0] ^= 1;
         assert_eq!(
-            encode_safe_preview_v1(&forged, PreviewCodecV1::Png, &defaults).unwrap_err().code,
+            encode_safe_preview_v1(&forged, PreviewCodecV1::Png, &defaults)
+                .unwrap_err()
+                .code,
             "preview_source_decode_contract_invalid"
         );
         let mut forged = rgba.clone();
         forged.decoded_width_px = 100_000;
         assert_eq!(
-            encode_safe_preview_v1(&forged, PreviewCodecV1::Png, &defaults).unwrap_err().code,
+            encode_safe_preview_v1(&forged, PreviewCodecV1::Png, &defaults)
+                .unwrap_err()
+                .code,
             "preview_pixel_limit"
         );
-        let tiny = PreviewEncodeLimitsV1 { max_png_bytes: 10, ..defaults };
+        let tiny = PreviewEncodeLimitsV1 {
+            max_png_bytes: 10,
+            ..defaults
+        };
         assert_eq!(
-            encode_safe_preview_v1(&rgba, PreviewCodecV1::Png, &tiny).unwrap_err().code,
+            encode_safe_preview_v1(&rgba, PreviewCodecV1::Png, &tiny)
+                .unwrap_err()
+                .code,
             "preview_encoded_bytes_limit"
         );
     }
