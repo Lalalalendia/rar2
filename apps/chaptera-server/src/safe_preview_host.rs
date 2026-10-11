@@ -270,7 +270,6 @@ pub(crate) fn attach_admitted_previews(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chaptera_image_decode_contract::safe_preview_encode::SafePreviewEncodeReceiptV1;
 
     fn input_png() -> Vec<u8> {
         let mut encoded = Vec::new();
