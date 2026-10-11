@@ -120,7 +120,10 @@ fn logical_emf_bytes(delayed: &[u8], record: &ValidatedBlip) -> Result<Vec<u8>> 
         }
         None => bail!("EMF compression profile unavailable"),
     };
-    let digest = format!("{:x}", Sha256::digest(&logical));
+    let digest = Sha256::digest(&logical)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     if record.logical_payload_sha256.as_deref() != Some(digest.as_str()) {
         bail!("EMF logical SHA-256 differs from strictly validated envelope");
     }
@@ -454,7 +457,11 @@ mod tests {
             let filename = std::path::Path::new(&root).join(format!("{expected_sha}.pub"));
             let bytes = std::fs::read(filename).expect("source fixture readable");
             let digest = Sha256::digest(&bytes);
-            assert_eq!(format!("{digest:x}"), expected_sha);
+            let actual_sha = digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            assert_eq!(actual_sha, expected_sha);
             let mut digest_bytes = [0_u8; 32];
             digest_bytes.copy_from_slice(&digest);
             let graph = crate::build_mature_0x2c_source_graph(
