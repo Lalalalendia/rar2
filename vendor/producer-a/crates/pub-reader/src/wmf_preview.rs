@@ -1548,9 +1548,8 @@ fn rasterize_wmf_preview_internal(
                     .ok_or_else(|| anyhow!("WMF RESTOREDC without matching SAVEDC"))?;
             }
             META_SETBKMODE => {
-                state.text_background_mode = Some(
-                    read_u16(params, 0).ok_or_else(|| anyhow!("WMF SETBKMODE is truncated"))?,
-                );
+                state.text_background_mode =
+                    Some(read_u16(params, 0).ok_or_else(|| anyhow!("WMF SETBKMODE is truncated"))?);
             }
             META_SETMAPMODE => {
                 let mode =
@@ -1608,8 +1607,10 @@ fn rasterize_wmf_preview_internal(
                 if params.len() != 4 {
                     bail!("WMF SETTEXTCOLOR parameter length is not 4 bytes");
                 }
-                state.text_color = Some(read_u32(params, 0)
-                    .ok_or_else(|| anyhow!("WMF SETTEXTCOLOR parameter is truncated"))?);
+                state.text_color = Some(
+                    read_u32(params, 0)
+                        .ok_or_else(|| anyhow!("WMF SETTEXTCOLOR parameter is truncated"))?,
+                );
             }
             META_SETWINDOWORG => {
                 state.window_org_y = i32::from(
@@ -1686,7 +1687,9 @@ fn rasterize_wmf_preview_internal(
                     let text_profile_admitted = admit_partial_50_byte_font(params).is_ok();
                     allocate_object(
                         &mut objects,
-                        GdiObject::FontPartialText50 { text_profile_admitted },
+                        GdiObject::FontPartialText50 {
+                            text_profile_admitted,
+                        },
                     )?;
                 } else {
                     validate_font_compatibility_object(params)?;
@@ -1744,7 +1747,9 @@ fn rasterize_wmf_preview_internal(
                     GdiObject::Pen(pen) => state.pen = pen,
                     GdiObject::Brush(brush) => state.brush = brush,
                     GdiObject::FontCompatibility => state.selected_partial_font = false,
-                    GdiObject::FontPartialText50 { text_profile_admitted } => {
+                    GdiObject::FontPartialText50 {
+                        text_profile_admitted,
+                    } => {
                         state.selected_partial_font = text_profile_admitted;
                     }
                     GdiObject::PaletteCompatibility => {
@@ -1957,7 +1962,10 @@ mod tests {
         font[17] = 18; // pitch/family
         insert_record_before_eof(&mut wmf, record(META_CREATEFONTINDIRECT, &font));
         insert_record_before_eof(&mut wmf, record(META_SELECTOBJECT, &2_u16.to_le_bytes()));
-        insert_record_before_eof(&mut wmf, record(META_SETMAPMODE, &MM_ANISOTROPIC.to_le_bytes()));
+        insert_record_before_eof(
+            &mut wmf,
+            record(META_SETMAPMODE, &MM_ANISOTROPIC.to_le_bytes()),
+        );
         insert_record_before_eof(&mut wmf, record(META_SETBKMODE, &1_u16.to_le_bytes()));
         insert_record_before_eof(&mut wmf, record(META_SETTEXTALIGN, &24_u16.to_le_bytes()));
         insert_record_before_eof(&mut wmf, record(META_SETTEXTCOLOR, &0_u32.to_le_bytes()));
@@ -2005,13 +2013,19 @@ mod tests {
     fn reject_unsupported_exttextout_flags_and_unknown_font_charset() {
         let mut source = synthetic_one_char_explicit_text_gap();
         let record_function = META_EXTTEXTOUT.to_le_bytes();
-        let pos = source.windows(2).position(|w| w == record_function).expect("text function");
+        let pos = source
+            .windows(2)
+            .position(|w| w == record_function)
+            .expect("text function");
         source[pos + 2 + 6] = 0x04; // ETO_CLIPPED must not be ignored
         assert!(rasterize_wmf_preview_explicit_text_gap(&source, 100, 100).is_err());
 
         let mut bad_font = synthetic_one_char_explicit_text_gap();
         let font = META_CREATEFONTINDIRECT.to_le_bytes();
-        let pos = bad_font.windows(2).position(|w| w == font).expect("font function");
+        let pos = bad_font
+            .windows(2)
+            .position(|w| w == font)
+            .expect("font function");
         bad_font[pos + 2 + 13] = 0x01; // unsupported character set
         assert!(rasterize_wmf_preview_explicit_text_gap(&bad_font, 100, 100).is_err());
     }
