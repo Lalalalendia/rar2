@@ -717,26 +717,50 @@ impl ProductExportHttpError {
     }
 }
 
+// Lower-layer diagnostic text can contain SQLite paths, provider locators or
+// source details. Stable machine error codes are retained; 5xx messages are not.
+fn export_error_response(status: StatusCode, code: &'static str, message: &str) -> Response {
+    let public_message = if status.is_server_error() {
+        "internal server error"
+    } else {
+        message
+    };
+    (
+        status,
+        Json(json!({"error":{"code":code,"message":public_message}})),
+    )
+        .into_response()
+}
+
 impl IntoResponse for ProductExportHttpError {
     fn into_response(self) -> Response {
         let mut response = match self {
+            // AuthHttpError already exposes only a stable code, never a diagnostic message.
             Self::Auth(error) => error.into_response(),
-            Self::Source(error) => (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error":{"code":error.code,"message":error.message}})),
-            )
-                .into_response(),
+            Self::Source(error) => {
+                if error.code == "document_source_not_found" {
+                    export_error_response(
+                        StatusCode::NOT_FOUND,
+                        error.code,
+                        "document source not found",
+                    )
+                } else {
+                    // A failed database/source authority is a server error,
+                    // not a client-visible 404 carrying SQLite diagnostics.
+                    export_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        error.code,
+                        &error.message,
+                    )
+                }
+            }
             Self::Store(error) => {
                 let status = if error.code == "canonical_revision_unbound" {
                     StatusCode::CONFLICT
                 } else {
                     StatusCode::INTERNAL_SERVER_ERROR
                 };
-                (
-                    status,
-                    Json(json!({"error":{"code":error.code,"message":error.message}})),
-                )
-                    .into_response()
+                export_error_response(status, error.code, &error.message)
             }
             Self::Jobs(error) => {
                 let status = match error.code {
@@ -751,29 +775,20 @@ impl IntoResponse for ProductExportHttpError {
                     "invalid_client_request_id" | "invalid_operation_id" => StatusCode::BAD_REQUEST,
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
                 };
-                (
-                    status,
-                    Json(json!({"error":{"code":error.code,"message":error.message}})),
-                )
-                    .into_response()
+                export_error_response(status, error.code, &error.message)
             }
-            Self::Blob(error) => (
+            Self::Blob(error) => export_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":{"code":error.code,"message":error.message}})),
-            )
-                .into_response(),
+                error.code,
+                &error.message,
+            ),
             Self::Http {
                 status,
                 code,
                 message,
-            } => (
-                status,
-                Json(json!({"error":{"code":code,"message":message}})),
-            )
-                .into_response(),
+            } => export_error_response(status, code, &message),
         };
-        // Export responses can contain durable revision or job identities.
-        // Never let an intermediary cache denial diagnostics.
+        // These identities and denial details must not be cached by intermediaries.
         response
             .headers_mut()
             .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -926,5 +941,116 @@ mod tests {
             assert_eq!(response.status(), StatusCode::FORBIDDEN, "{code}");
             assert_eq!(response.headers()[CACHE_CONTROL], "no-store", "{code}");
         }
+    }
+
+    #[tokio::test]
+    async fn internal_export_failures_redact_source_storage_and_provider_canaries() {
+        let canary = "private-source-pub=/srv/documents/secret.pub; provider-secret=canary";
+        let failures = [
+            (
+                ProductExportHttpError::Source(SourceAuthorityError {
+                    code: "sqlite_source_error",
+                    message: canary.to_owned(),
+                }),
+                "sqlite_source_error",
+            ),
+            (
+                ProductExportHttpError::Store(SqliteStoreError::new("sqlite_query_failed", canary)),
+                "sqlite_query_failed",
+            ),
+            (
+                ProductExportHttpError::Jobs(JobsRuntimeError {
+                    code: "export_worker_unavailable",
+                    message: canary.to_owned(),
+                }),
+                "export_worker_unavailable",
+            ),
+            (
+                ProductExportHttpError::Blob(BlobStoreError::new("provider_read_failed", canary)),
+                "provider_read_failed",
+            ),
+            (
+                ProductExportHttpError::internal("clock_invalid", canary),
+                "clock_invalid",
+            ),
+        ];
+        for (failure, code) in failures {
+            let response = failure.into_response();
+            assert_eq!(
+                response.status(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{code}"
+            );
+            assert_eq!(response.headers()[CACHE_CONTROL], "no-store", "{code}");
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["error"]["code"], code);
+            assert_eq!(body["error"]["message"], "internal server error");
+            assert!(!String::from_utf8_lossy(&bytes).contains(canary));
+        }
+
+        // The stable expected denials keep their exact HTTP classification.
+        let not_found = ProductExportHttpError::Source(SourceAuthorityError {
+            code: "document_source_not_found",
+            message: canary.to_owned(),
+        })
+        .into_response();
+        assert_eq!(not_found.status(), StatusCode::NOT_FOUND);
+        let bytes = axum::body::to_bytes(not_found.into_body(), 4096)
+            .await
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains(canary));
+
+        let conflict = ProductExportHttpError::Store(SqliteStoreError::new(
+            "canonical_revision_unbound",
+            "requested revision is not bound",
+        ))
+        .into_response();
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
+        let bytes = axum::body::to_bytes(conflict.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["message"], "requested revision is not bound");
+    }
+
+    #[tokio::test]
+    async fn axum_export_error_route_never_serializes_provider_canary() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        // Exercise Axum's actual route/IntoResponse serialization, not only a
+        // helper function. The full OIDC/HTTPS B02 journey remains separate.
+        let app = Router::new().route(
+            "/v1/exports/fault-injection",
+            get(|| async {
+                Err::<Json<serde_json::Value>, ProductExportHttpError>(
+                    ProductExportHttpError::Blob(BlobStoreError::new(
+                        "provider_read_failed",
+                        "private-provider-canary=never-public",
+                    )),
+                )
+            }),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/exports/fault-injection")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["code"], "provider_read_failed");
+        assert_eq!(body["error"]["message"], "internal server error");
+        assert!(!String::from_utf8_lossy(&bytes).contains("private-provider-canary"));
     }
 }
