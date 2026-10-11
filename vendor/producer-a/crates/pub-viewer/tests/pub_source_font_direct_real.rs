@@ -2,7 +2,11 @@
 //! font index provenance. No document text, proprietary font bytes or
 //! substitute-font admission is emitted by this test.
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, env, fs, process::{Command, Stdio}};
+use std::{
+    collections::BTreeSet,
+    env, fs,
+    process::{Command, Stdio},
+};
 
 const SOURCE_SHA: &str = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf";
 
@@ -102,7 +106,9 @@ fn real_sample_newsletter_viewer_preserves_direct_source_quill_indices() {
         serde_json::to_writer(&mut input, &viewer)
             .expect("stream actual PUB Viewer without writing raw Story files");
     }
-    let output = child.wait_with_output().expect("wait for source-font planner");
+    let output = child
+        .wait_with_output()
+        .expect("wait for source-font planner");
     assert!(
         output.status.success(),
         "actual PUB source font requirements planner must accept direct indexes"
@@ -127,7 +133,10 @@ fn real_sample_newsletter_viewer_preserves_direct_source_quill_indices() {
             && binding["source_font_binding_id"]
                 == "pub-source-font:b402e726-72b4-5d52-bb0d-07a0c13dc05d"
     }));
-    assert!(plan.get("document").is_none(), "no raw Viewer Story in private plan");
+    assert!(
+        plan.get("document").is_none(),
+        "no raw Viewer Story in private plan"
+    );
     println!(
         "REAL_PUB_SOURCE_FONT_PLAN_OK direct_bindings={} source_identity_only=true physical_font_files=false fixed_pdf_allowed=false",
         bindings.len()
