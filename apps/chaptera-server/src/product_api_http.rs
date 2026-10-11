@@ -556,21 +556,26 @@ fn project_reader_scene_from_exact_source(
         // or interpret the original PUB in the host server.
         let mut census = crate::safe_preview_worker::PreviewWorkerCensusV1::default();
         *out = crate::safe_preview_worker::derive_isolated_image_previews(
-            &bundle.geometry, &scene, &mut census
+            &bundle.geometry,
+            &scene,
+            &mut census,
         );
         // Debug-only, source-neutral stage witness. Release Reader never emits
         // this implementation diagnostic to the browser; tests pin counts.
         #[cfg(debug_assertions)]
-        scene.diagnostics.push(crate::reader_scene_v1::ReaderDiagnosticV1 {
-            code: "safe_preview_pinned_worker_census".to_owned(),
-            severity: "info",
-            origin_id: None,
-            message: serde_json::to_string(&census)
-                .map_err(|_| ProductApiError::internal(
-                    "preview_diagnostic_failed",
-                    "source-neutral preview census could not be serialized",
-                ))?,
-        });
+        scene
+            .diagnostics
+            .push(crate::reader_scene_v1::ReaderDiagnosticV1 {
+                code: "safe_preview_pinned_worker_census".to_owned(),
+                severity: "info",
+                origin_id: None,
+                message: serde_json::to_string(&census).map_err(|_| {
+                    ProductApiError::internal(
+                        "preview_diagnostic_failed",
+                        "source-neutral preview census could not be serialized",
+                    )
+                })?,
+            });
         #[cfg(not(debug_assertions))]
         let _ = census;
     }
