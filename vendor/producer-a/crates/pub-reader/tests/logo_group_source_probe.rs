@@ -122,7 +122,10 @@ fn exact_public_newsletter_logo_0x31_baseline() {
         "LOGO_0X31_PROJECTED_PAGE_NODES={page_nodes} SOURCE_PAINT_ORDER_COUNT={}",
         source_order.node_ids.len()
     );
-    assert_eq!(page_nodes, 16, "12 baseline nodes plus four bounded children");
+    assert_eq!(
+        page_nodes, 16,
+        "12 baseline nodes plus four bounded children"
+    );
     assert_eq!(
         source_order.node_ids.len(),
         page_nodes,
