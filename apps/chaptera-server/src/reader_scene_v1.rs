@@ -1741,13 +1741,21 @@ fn promote_inline_images_within_scene_cap(
     scene: &mut ReaderSceneV1,
     geometry: &ViewerGeometryDocument,
 ) -> Result<(), String> {
-    let mut image_by_resource = HashMap::<String, (&str, &[u8])>::new();
+    let mut image_by_resource = HashMap::<String, (&str, &[u8], bool)>::new();
     for image in &geometry.images {
         let resource_id = serialized_string(&image.resource_id, "image resource id")?;
+        // Exact source bytes are not browser-delivery authority. Until an
+        // independently bounded decoder/re-encode path exists, keep them
+        // descriptor-only and let fidelity report the missing preview.
+        let browser_inline_safe = !image.source_exact;
         if image_by_resource
             .insert(
                 resource_id.clone(),
-                (image.mime.as_str(), image.bytes.as_slice()),
+                (
+                    image.mime.as_str(),
+                    image.bytes.as_slice(),
+                    browser_inline_safe,
+                ),
             )
             .is_some()
         {
@@ -1760,7 +1768,7 @@ fn promote_inline_images_within_scene_cap(
         if image_by_resource
             .insert(
                 resource_id.clone(),
-                (resource.mime.as_str(), resource.bytes.as_slice()),
+                (resource.mime.as_str(), resource.bytes.as_slice(), true),
             )
             .is_some()
         {
@@ -1780,7 +1788,9 @@ fn promote_inline_images_within_scene_cap(
     }
 
     for resource in &mut scene.resources {
-        let Some(&(mime, bytes)) = image_by_resource.get(resource.resource_id.as_str()) else {
+        let Some(&(mime, bytes, browser_inline_safe)) =
+            image_by_resource.get(resource.resource_id.as_str())
+        else {
             return Err(format!(
                 "Reader Scene image resource {} has no Viewer payload",
                 resource.resource_id
@@ -1798,6 +1808,7 @@ fn promote_inline_images_within_scene_cap(
             resource.resource_id.clone(),
             resource.mime.clone(),
             bytes,
+            browser_inline_safe,
             &mut unbounded_aggregate,
         );
         if candidate.inline_data_url.is_none() {
@@ -1830,9 +1841,12 @@ fn reader_image_resource(
     resource_id: String,
     mime: String,
     bytes: &[u8],
+    browser_inline_safe: bool,
     remaining_budget: &mut usize,
 ) -> ReaderImageResourceV1 {
-    let inline_data_url = inline_image_data_url(&mime, bytes, remaining_budget);
+    let inline_data_url = browser_inline_safe
+        .then(|| inline_image_data_url(&mime, bytes, remaining_budget))
+        .flatten();
     let availability = if inline_data_url.is_some() {
         "inline_data_url"
     } else {
@@ -1921,6 +1935,7 @@ mod tests {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum ProbeImageInlineAdmission {
         Inline,
+        SourceExactBrowserDenied,
         UnsupportedMime,
         EmptyPayload,
         PerResourceLimit,
@@ -1931,6 +1946,7 @@ mod tests {
         fn reason(self) -> Option<&'static str> {
             match self {
                 Self::Inline => None,
+                Self::SourceExactBrowserDenied => Some("source_exact_browser_denied"),
                 Self::UnsupportedMime => Some("unsupported_mime"),
                 Self::EmptyPayload => Some("empty_payload"),
                 Self::PerResourceLimit => Some("per_resource_limit"),
@@ -1942,8 +1958,12 @@ mod tests {
     fn classify_probe_image_inline_admission(
         mime: &str,
         byte_len: usize,
+        browser_inline_safe: bool,
         remaining_budget: usize,
     ) -> ProbeImageInlineAdmission {
+        if !browser_inline_safe {
+            return ProbeImageInlineAdmission::SourceExactBrowserDenied;
+        }
         let Some(limit) = inline_image_resource_byte_limit(mime) else {
             return ProbeImageInlineAdmission::UnsupportedMime;
         };
@@ -2233,6 +2253,7 @@ mod tests {
                     let admission = classify_probe_image_inline_admission(
                         &image.mime,
                         image.bytes.len(),
+                        !image.source_exact,
                         descriptor_probe_budget,
                     );
                     if admission == ProbeImageInlineAdmission::Inline {
@@ -2312,6 +2333,7 @@ mod tests {
                         resource_id,
                         image.mime.clone(),
                         &image.bytes,
+                        true,
                         &mut unlimited_budget,
                     );
                     assert_eq!(
@@ -3184,12 +3206,38 @@ mod tests {
     }
 
     #[test]
+    fn exact_source_image_bytes_are_never_inlined_into_browser_scene() {
+        let mut budget = MAX_INLINE_IMAGE_TOTAL_BYTES;
+        let resource = reader_image_resource(
+            "resource:source-exact-png".to_owned(),
+            "image/png".to_owned(),
+            b"otherwise-inlineable-source-bytes",
+            false,
+            &mut budget,
+        );
+
+        assert_eq!(resource.availability, "descriptor_only");
+        assert!(resource.inline_data_url.is_none());
+        assert_eq!(budget, MAX_INLINE_IMAGE_TOTAL_BYTES);
+        assert_eq!(
+            classify_probe_image_inline_admission(
+                "image/png",
+                b"otherwise-inlineable-source-bytes".len(),
+                false,
+                MAX_INLINE_IMAGE_TOTAL_BYTES,
+            ),
+            ProbeImageInlineAdmission::SourceExactBrowserDenied
+        );
+    }
+
+    #[test]
     fn viewer_materialized_ole_preview_png_uses_generic_reader_image_resource_path() {
         let mut budget = MAX_INLINE_IMAGE_TOTAL_BYTES;
         let resource = reader_image_resource(
             "resource:legacy-ole-preview".to_owned(),
             "image/png".to_owned(),
             b"bounded-ole-preview-png",
+            true,
             &mut budget,
         );
 
@@ -3232,6 +3280,7 @@ mod tests {
             "resource:large-jpeg-control".to_owned(),
             "image/jpeg".to_owned(),
             &raw,
+            true,
             &mut jpeg_budget,
         );
         assert_eq!(jpeg.availability, "inline_data_url");
@@ -3249,6 +3298,7 @@ mod tests {
             classify_probe_image_inline_admission(
                 "image/jpeg",
                 MAX_INLINE_JPEG_RESOURCE_BYTES + 1,
+                true,
                 usize::MAX
             ),
             ProbeImageInlineAdmission::PerResourceLimit
@@ -3257,12 +3307,13 @@ mod tests {
             classify_probe_image_inline_admission(
                 "image/jpg",
                 MAX_INLINE_IMAGE_RESOURCE_BYTES + 1,
+                true,
                 MAX_INLINE_JPEG_RESOURCE_BYTES
             ),
             ProbeImageInlineAdmission::Inline
         );
         assert_eq!(
-            classify_probe_image_inline_admission("image/jpeg", byte_len, byte_len - 1),
+            classify_probe_image_inline_admission("image/jpeg", byte_len, true, byte_len - 1),
             ProbeImageInlineAdmission::AggregateBudgetExhausted
         );
     }
@@ -3270,15 +3321,15 @@ mod tests {
     #[test]
     fn descriptor_probe_classifier_matches_inline_admission_law() {
         assert_eq!(
-            classify_probe_image_inline_admission("image/png", 3, MAX_INLINE_IMAGE_TOTAL_BYTES),
+            classify_probe_image_inline_admission("image/png", 3, true, MAX_INLINE_IMAGE_TOTAL_BYTES),
             ProbeImageInlineAdmission::Inline
         );
         assert_eq!(
-            classify_probe_image_inline_admission("image/svg+xml", 3, MAX_INLINE_IMAGE_TOTAL_BYTES),
+            classify_probe_image_inline_admission("image/svg+xml", 3, true, MAX_INLINE_IMAGE_TOTAL_BYTES),
             ProbeImageInlineAdmission::UnsupportedMime
         );
         assert_eq!(
-            classify_probe_image_inline_admission("image/png", 0, MAX_INLINE_IMAGE_TOTAL_BYTES),
+            classify_probe_image_inline_admission("image/png", 0, true, MAX_INLINE_IMAGE_TOTAL_BYTES),
             ProbeImageInlineAdmission::EmptyPayload
         );
         assert_eq!(
