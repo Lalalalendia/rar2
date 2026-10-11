@@ -8,12 +8,20 @@ permissions:
 
 jobs:
   probe:
+    # Defense-in-depth only. The environment itself MUST be main-only with
+    # required reviewers and no repository-scope fallback copies of secrets.
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.repository == 'Lalalalendia/rar2'
+    environment: chaptera-s3-physical
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Immutable checkout of the reviewed main commit that initiated the
+          # dispatch, not the moving tip or an attacker-controlled PR branch.
+          ref: ${{ github.sha }}
 
-      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: dtolnay/rust-toolchain@9376cdc5a5e25b16da71af47712785cf06b0d6d4 # 1.94.1
 
       - name: Run owner-pinned physical provider and versioning probe
         # Keep secrets out of checkout, toolchain setup and artifact upload.
@@ -76,7 +84,7 @@ jobs:
           PY
 
       - name: Upload sanitized receipt only
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cloud-s3-provider-physical-receipt
           path: target/cloud-s3-provider-probe/receipt.json
