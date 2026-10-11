@@ -149,6 +149,13 @@ fn exact_public_newsletter_logo_0x31_baseline() {
             .get(&node_id)
             .expect("bounded PAGE LOGO child must materialize");
         assert_eq!(node.header.parent_id, page_id.into_canonical());
+        if seq == 389 {
+            assert_eq!(
+                node.payload.image_slot,
+                Some(5),
+                "PAGE-owned LOGO image child must retain physically proven WMF slot 5"
+            );
+        }
         let rank = source_order
             .node_ids
             .iter()
