@@ -15,6 +15,9 @@ use pub_escher::{
 use sha2::{Digest, Sha256};
 use std::io::{Cursor, Read};
 
+#[path = "mature_emf_vector.rs"]
+pub mod vector;
+
 pub const MATURE_OFFICEART_EMF_BITMAP_PREVIEW_SOURCE_V1: &str =
     "mature-officeart-emf-birgb-partial-preview-v1";
 
