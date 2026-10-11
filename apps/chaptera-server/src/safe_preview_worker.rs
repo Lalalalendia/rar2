@@ -14,10 +14,7 @@ use chaptera_image_decode_contract::{
 use pub_viewer::ViewerGeometryDocument;
 use sha2::{Digest, Sha256};
 
-use crate::{
-    product_replay_worker::IsolatedImagePreviewV1,
-    reader_scene_v1::ReaderSceneV1,
-};
+use crate::{product_replay_worker::IsolatedImagePreviewV1, reader_scene_v1::ReaderSceneV1};
 
 pub(crate) const MAX_WORKER_PREVIEW_ITEMS: usize = 64;
 pub(crate) const MAX_WORKER_PREVIEW_RAW_BYTES: usize = 7 * 1024 * 1024;
@@ -33,7 +30,9 @@ pub(crate) fn derive_isolated_image_previews(
     geometry: &ViewerGeometryDocument,
     scene: &ReaderSceneV1,
 ) -> Vec<IsolatedImagePreviewV1> {
-    let approved_ids: HashSet<&str> = scene.resources.iter()
+    let approved_ids: HashSet<&str> = scene
+        .resources
+        .iter()
         .map(|resource| resource.resource_id.as_str())
         .collect();
     let mut previews = Vec::new();
@@ -80,15 +79,16 @@ pub(crate) fn derive_isolated_image_previews(
         } else {
             PreviewCodecV1::Png
         };
-        let candidate = encode_safe_preview_v1(&decoded, codec, &limits)
-            .or_else(|_| {
-                if decoded.alpha_present || codec == PreviewCodecV1::Jpeg {
-                    return Err(chaptera_image_decode_contract::safe_preview_encode::PreviewEncodeErrorV1 {
+        let candidate = encode_safe_preview_v1(&decoded, codec, &limits).or_else(|_| {
+            if decoded.alpha_present || codec == PreviewCodecV1::Jpeg {
+                return Err(
+                    chaptera_image_decode_contract::safe_preview_encode::PreviewEncodeErrorV1 {
                         code: "preview_unsupported",
-                    });
-                }
-                encode_safe_preview_v1(&decoded, PreviewCodecV1::Jpeg, &limits)
-            });
+                    },
+                );
+            }
+            encode_safe_preview_v1(&decoded, PreviewCodecV1::Jpeg, &limits)
+        });
         let Ok(candidate) = candidate else {
             return;
         };
@@ -114,7 +114,10 @@ pub(crate) fn derive_isolated_image_previews(
             image.resource_id.to_string(),
             &image.mime,
             &image.bytes,
-            image.verified_source_sha256.as_ref().map(ToString::to_string),
+            image
+                .verified_source_sha256
+                .as_ref()
+                .map(ToString::to_string),
         );
     }
     for resource in &geometry.decorative_border_resources {
