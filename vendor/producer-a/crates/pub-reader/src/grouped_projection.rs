@@ -4,8 +4,8 @@
 //! group ancestry. Direct page-local geometry and graph orchestration remain
 //! in the crate root.
 
-use super::*;
 use super::contents_access::is_page_owned_logo_group;
+use super::*;
 
 #[derive(Debug)]
 pub(super) struct GroupedObjectProjection {
