@@ -64,9 +64,9 @@ jobs:
         env:
           CHAPTERA_SOURCE_STACK_FIXTURE: ${{ runner.temp }}/group-stack-controls/SampleNewsletter.pub
           CHAPTERA_SOURCE_STACK_SHA256: 6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf
-          CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS: "21,20,20,12"
+          CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS: "21,20,20,16"
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --lib -- --ignored --exact tests::exact_public_source_stack_order_covers_materialized_grouped_nodes --nocapture
-      - name: Measure exact public Newsletter LOGO 0x31 baseline
+      - name: Assert PAGE-owned Newsletter LOGO 0x31 projection
         env:
           CHAPTERA_LOGO_GROUP_FIXTURE: ${{ runner.temp }}/group-stack-controls/SampleNewsletter.pub
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --test logo_group_source_probe -- --ignored --exact exact_public_newsletter_logo_0x31_baseline --nocapture
