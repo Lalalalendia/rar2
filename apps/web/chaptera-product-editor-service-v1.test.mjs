@@ -813,9 +813,16 @@ test("Redo uses authenticated source-bound history route with CSRF and accepted 
     }
     throw new Error("unexpected Redo path " + path);
   });
+  let serial = 0;
+  const observability = new BrowserObservabilityV1({
+    sessionIncarnation: "session:redo-test",
+    browserFamily: "chromium",
+    idFactory: (prefix) => prefix + ":redo-test-" + String(++serial).padStart(6, "0"),
+  });
   const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
     documentId: DOC,
     fetchImpl,
+    observability,
   });
   const result = await service.redo({
     sourceHash: SOURCE,
