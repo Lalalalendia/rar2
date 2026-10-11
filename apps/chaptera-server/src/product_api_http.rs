@@ -20,7 +20,9 @@ use chaptera_cdm_model::{
 use chaptera_scene_instance::{
     GeometrySyncPolicyV1, direct_page_local_instance_v1, geometry_sync_policy_v1,
 };
-use pub_editor::{EditOperation, LengthEmu, NodeId, Sha256Digest, open_mature_0x2c_editor};
+use pub_editor::{
+    EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest, open_mature_0x2c_editor,
+};
 use pub_reader::PubResolvedGraph;
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde::{Deserialize, Serialize};
@@ -33,7 +35,8 @@ use crate::{
         AuthzError, CAP_VIEW, SqliteAuthorizedRevisionCommitter, SqliteAuthzAuthority,
     },
     product_replay_worker::{
-        IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer, ProductReplayWorkerError,
+        IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer, IsolatedReaderSceneIntentV1,
+        ProductReplayWorkerError,
     },
     reader_scene_v1::{ReaderSceneV1, from_viewer_geometry},
     revision_materializer::{
@@ -292,7 +295,7 @@ async fn reader_scene(
     Path(document_id): Path<String>,
     headers: HeaderMap,
     jar: CookieJar,
-) -> Result<Json<ReaderSceneV1>, ProductApiError> {
+) -> Result<Json<serde_json::Value>, ProductApiError> {
     let principal = state
         .auth
         .authenticate_read_request(&headers, &jar)
@@ -325,44 +328,82 @@ async fn reader_scene(
         .await
         .map_err(ProductApiError::Materializer)?;
 
-    let mut bundle = open_pub_bundle(
-        &materialized.source_bytes,
-        viewer_geometry_environment_v0_1(),
-    )
-    .map_err(|_| {
-        ProductApiError::unprocessable(
-            "reader_scene_open_failed",
-            "source-neutral Viewer could not open this PUB source",
-        )
-    })?;
+    if let Some(worker) = &state.isolated_replay {
+        // The authorized source/revision is selected by the server, not by
+        // a browser-supplied worker path or revision. No in-process fallback.
+        let scene = worker
+            .project_reader_scene(
+                &document_id,
+                &source.source_sha256,
+                &materialized.source_bytes,
+                &materialized.receipt.project,
+                &materialized.receipt.project_sha256,
+                &IsolatedReaderSceneIntentV1 {
+                    revision_id: head.revision_id.clone(),
+                    baseline_revision_id: source.baseline_revision_id.clone(),
+                },
+            )
+            .await
+            .map_err(|error| ProductApiError::internal(error.code, error.message))?;
+        return Ok(Json(scene));
+    }
 
-    if head.revision_id != source.baseline_revision_id {
-        let source_hash = Sha256Digest::from_str(&source.source_sha256).map_err(|_| {
+    // Injected test-only Product API state uses the canonical projection
+    // without launching a Linux worker. Production always configures one.
+    let scene = project_reader_scene_from_exact_source(
+        document_id,
+        source.source_sha256,
+        head.revision_id,
+        &source.baseline_revision_id,
+        &materialized.source_bytes,
+        &materialized.receipt.project,
+    )?;
+    Ok(Json(serde_json::to_value(scene).map_err(|_| {
+        ProductApiError::internal(
+            "reader_scene_projection_failed",
+            "Reader scene could not be serialized",
+        )
+    })?))
+}
+
+fn project_reader_scene_from_exact_source(
+    document_id: String,
+    source_sha256: String,
+    revision_id: String,
+    baseline_revision_id: &str,
+    source_bytes: &[u8],
+    project: &EditorProject,
+) -> Result<ReaderSceneV1, ProductApiError> {
+    let mut bundle =
+        open_pub_bundle(source_bytes, viewer_geometry_environment_v0_1()).map_err(|_| {
+            ProductApiError::unprocessable(
+                "reader_scene_open_failed",
+                "source-neutral Viewer could not open this PUB source",
+            )
+        })?;
+
+    if revision_id != baseline_revision_id {
+        let source_hash = Sha256Digest::from_str(&source_sha256).map_err(|_| {
             ProductApiError::internal(
                 "source_hash_invalid",
                 "durable source authority contains an invalid SHA-256 identity",
             )
         })?;
-        let mut session = open_mature_0x2c_editor(&materialized.source_bytes, source_hash)
-            .map_err(|error| {
-                ProductApiError::internal(
-                    "reader_scene_editor_source_unsupported",
-                    format!(
-                        "canonical editor could not open durable source for scene replay: {error}"
-                    ),
-                )
-            })?;
-        session
-            .apply_project(&materialized.receipt.project)
-            .map_err(|error| {
-                ProductApiError::internal(
-                    "reader_scene_editor_replay_failed",
-                    format!("canonical editor could not replay exact scene revision: {error}"),
-                )
-            })?;
+        let mut session = open_mature_0x2c_editor(source_bytes, source_hash).map_err(|error| {
+            ProductApiError::internal(
+                "reader_scene_editor_source_unsupported",
+                format!("canonical editor could not open durable source for scene replay: {error}"),
+            )
+        })?;
+        session.apply_project(project).map_err(|error| {
+            ProductApiError::internal(
+                "reader_scene_editor_replay_failed",
+                format!("canonical editor could not replay exact scene revision: {error}"),
+            )
+        })?;
 
         let mut moved_node_ids = Vec::new();
-        for operation in &materialized.receipt.project.operations {
+        for operation in &project.operations {
             match operation {
                 EditOperation::MoveNode { node_id, .. } => moved_node_ids.push(*node_id),
                 _ => {
@@ -434,8 +475,8 @@ async fn reader_scene(
 
     let scene = from_viewer_geometry(
         document_id,
-        source.source_sha256,
-        head.revision_id,
+        source_sha256,
+        revision_id,
         &bundle.geometry,
         &bundle.source_page_paint_orders,
     )
@@ -446,7 +487,30 @@ async fn reader_scene(
         )
     })?;
 
-    Ok(Json(scene))
+    Ok(scene)
+}
+
+/// Called only inside the already confined product worker after post-read
+/// filesystem seccomp is installed. This retains exactly the same Viewer
+/// scene projection as the injected Product HTTP tests.
+pub(crate) fn render_reader_scene_in_isolated_worker(
+    document_id: &str,
+    source_sha256: &str,
+    revision_id: &str,
+    baseline_revision_id: &str,
+    source_bytes: &[u8],
+    project: &EditorProject,
+) -> Result<serde_json::Value, &'static str> {
+    let scene = project_reader_scene_from_exact_source(
+        document_id.to_owned(),
+        source_sha256.to_owned(),
+        revision_id.to_owned(),
+        baseline_revision_id,
+        source_bytes,
+        project,
+    )
+    .map_err(|_| "reader_scene_projection_failed")?;
+    serde_json::to_value(scene).map_err(|_| "reader_scene_projection_failed")
 }
 
 async fn commit_move_node(
@@ -1613,7 +1677,7 @@ mod tests {
         .unwrap();
         let restarted_app = router(
             ProductApiHttpState::with_source_loader(
-                restarted_auth,
+                restarted_auth.clone(),
                 restarted_source.clone(),
                 restarted_authz.clone(),
                 restarted_revisions.clone(),
@@ -1624,6 +1688,62 @@ mod tests {
             )
             .unwrap(),
         );
+
+        // An otherwise-authorized configured Product API must fail closed
+        // when its sandbox executable is missing. Neither current-document
+        // nor Reader scene may fall back to opening PUB in the Axum process.
+        let fail_closed_app = router(
+            ProductApiHttpState::with_source_loader(
+                restarted_auth,
+                restarted_source.clone(),
+                restarted_authz.clone(),
+                restarted_revisions.clone(),
+                Arc::new(FixtureSourceLoader {
+                    bytes: Arc::new(source_bytes.clone()),
+                    source_sha256: source_sha256.clone(),
+                }),
+            )
+            .unwrap()
+            .with_isolated_replay(SourceBaselineProducerConfig {
+                isolation_python: std::path::PathBuf::from(
+                    "/chaptera-security-missing-worker-runtime/python",
+                ),
+                isolation_harness: std::path::PathBuf::from(
+                    "/chaptera-security-missing-worker-runtime/isolation.py",
+                ),
+                worker_binary: std::path::PathBuf::from(
+                    "/chaptera-security-missing-worker-runtime/chaptera",
+                ),
+                worker_wall_timeout: Duration::from_secs(1),
+                worker_address_space_mb: 256,
+                worker_cpu_seconds: 1,
+                worker_open_files: 16,
+                worker_output_file_mb: 1,
+                temp_root: std::env::temp_dir(),
+            })
+            .unwrap(),
+        );
+        for route in [
+            format!("/v1/documents/{document_id}/current"),
+            format!("/v1/reader/documents/{document_id}/scene"),
+        ] {
+            let failed = fail_closed_app
+                .clone()
+                .oneshot(authenticated_request(
+                    "GET",
+                    &route,
+                    &issued.session_token,
+                    None,
+                    None,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(failed.headers()[CACHE_CONTROL], "no-store");
+            let failed = json_body(failed).await;
+            assert_eq!(failed["error"]["code"], "product_replay_worker_failed");
+            assert_eq!(failed["error"]["message"], "internal server error");
+        }
 
         // The original OIDC-issued cookie must still work after the original
         // AuthN and revision connections are gone: no in-memory project state

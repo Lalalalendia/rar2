@@ -77,6 +77,8 @@ fn main() -> ExitCode {
         move_node_id,
         move_x_emu,
         move_y_emu,
+        scene_revision_id,
+        scene_baseline_revision_id,
     } = &cli.command
     {
         let move_intent = move_node_id.as_ref().and_then(|node_id| {
@@ -86,6 +88,15 @@ fn main() -> ExitCode {
                 y_emu: (*move_y_emu)?,
             })
         });
+        let scene_intent = scene_revision_id
+            .as_ref()
+            .zip(scene_baseline_revision_id.as_ref())
+            .map(|(revision_id, baseline_revision_id)| {
+                product_replay_worker::IsolatedReaderSceneIntentV1 {
+                    revision_id: revision_id.clone(),
+                    baseline_revision_id: baseline_revision_id.clone(),
+                }
+            });
         return match product_replay_worker::run_product_replay_worker(
             document_id,
             expected_sha256,
@@ -93,6 +104,7 @@ fn main() -> ExitCode {
             project_json.as_deref(),
             expected_project_sha256.as_deref(),
             move_intent,
+            scene_intent,
         ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
