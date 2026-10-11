@@ -6,7 +6,9 @@
 use std::{path::PathBuf, str::FromStr, time::Duration};
 
 use chaptera_server::{
-    product_replay_worker::{IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer},
+    product_replay_worker::{
+        IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer, IsolatedReaderSceneIntentV1,
+    },
     revision_materializer::{
         EditorReplayEngine, PubEditorReplayEngine, cloud_revision_project, project_sha256,
     },
@@ -112,6 +114,46 @@ async fn pinned_sample3_exact_project_replays_in_real_seccomp_worker() {
     let expected_graph = serde_json::to_value(expected.graph()).unwrap();
     assert_eq!(serde_json::to_value(&actual).unwrap(), expected_graph);
 
+    // This is the true source-neutral rich scene from the same Linux worker,
+    // not a mocked ReaderScene or an in-process HTTP parser.
+    let baseline_scene = producer
+        .project_reader_scene(
+            "document-sample3-isolated",
+            &source_sha256,
+            &source_bytes,
+            &project,
+            &project_hash,
+            &IsolatedReaderSceneIntentV1 {
+                revision_id: "revision-sample3-baseline".into(),
+                baseline_revision_id: "revision-sample3-baseline".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        baseline_scene["protocol_version"],
+        "chaptera.reader-scene.v1"
+    );
+    assert_eq!(baseline_scene["document_id"], "document-sample3-isolated");
+    assert_eq!(baseline_scene["source_hash"], source_sha256);
+    assert_eq!(baseline_scene["revision_id"], "revision-sample3-baseline");
+    assert_eq!(
+        baseline_scene["scene_authority"],
+        "server_viewer_projection"
+    );
+    assert!(
+        baseline_scene["pages"]
+            .as_array()
+            .is_some_and(|pages| !pages.is_empty())
+    );
+    assert!(
+        baseline_scene["nodes"]
+            .as_array()
+            .is_some_and(|nodes| !nodes.is_empty())
+    );
+    assert!(baseline_scene.get("project").is_none());
+    assert!(baseline_scene.get("authoring_graph").is_none());
+
     // A real canonical moved-object revision must replay identically inside
     // the sandbox, not just the unedited import baseline.
     let (node_id, x_emu, y_emu) = expected
@@ -119,6 +161,16 @@ async fn pinned_sample3_exact_project_replays_in_real_seccomp_worker() {
         .nodes
         .iter()
         .find_map(|(node_id, node)| {
+            // Only scene-representable objects are admitted by the rich
+            // Reader path; this mirrors real Product API acceptance.
+            let node_json = serde_json::to_value(node_id).ok()?;
+            if !baseline_scene["nodes"]
+                .as_array()?
+                .iter()
+                .any(|scene_node| scene_node["node_id"] == node_json)
+            {
+                return None;
+            }
             let x = node.header.bounds.x.get().checked_add(9_525)?;
             let y = node.header.bounds.y.get().checked_add(9_525)?;
             expected
@@ -182,6 +234,34 @@ async fn pinned_sample3_exact_project_replays_in_real_seccomp_worker() {
         serde_json::to_value(&isolated_edited).unwrap(),
         serde_json::to_value(expected.graph()).unwrap()
     );
+
+    // The edited revision must preserve the full scene structure while
+    // faithfully reflecting the exact persisted geometry at the new head.
+    let edited_scene = producer
+        .project_reader_scene(
+            "document-sample3-isolated",
+            &source_sha256,
+            &source_bytes,
+            &edited_project,
+            &edited_sha,
+            &IsolatedReaderSceneIntentV1 {
+                revision_id: "revision-sample3-moved".into(),
+                baseline_revision_id: "revision-sample3-baseline".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(edited_scene["revision_id"], "revision-sample3-moved");
+    let moved_scene_node = edited_scene["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|scene_node| scene_node["node_id"] == intent.node_id)
+        .expect("rich Reader scene must preserve moved authoring node");
+    assert_eq!(moved_scene_node["bounds"]["x"], x_emu);
+    assert_eq!(moved_scene_node["bounds"]["y"], y_emu);
+    assert!(edited_scene.get("authoring_graph").is_none());
+    assert!(edited_scene.get("project").is_none());
 
     // A forged project identity must be rejected before launching a worker.
     let denied = producer
