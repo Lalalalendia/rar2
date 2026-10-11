@@ -8,17 +8,14 @@
 use std::{env, fs, path::PathBuf, time::Duration};
 
 use chaptera_server::{
-    product_replay_worker::{
-        IsolatedProductReplayProducer, IsolatedReaderSceneIntentV1,
-    },
+    product_replay_worker::{IsolatedProductReplayProducer, IsolatedReaderSceneIntentV1},
     revision_materializer::project_sha256,
     source_baseline::SourceBaselineProducerConfig,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-const PUB_SHA256_022: &str =
-    "7079ad60fd8109796b84286d294cb490051a1517d8e52ac61e7c416dbd04428c";
+const PUB_SHA256_022: &str = "7079ad60fd8109796b84286d294cb490051a1517d8e52ac61e7c416dbd04428c";
 const PUB_BYTES_022: usize = 5_012_480;
 
 #[tokio::test]
@@ -87,8 +84,13 @@ async fn exact_022_preview_reaches_product_host_with_source_neutral_pixels() {
     assert!(scene.get("project").is_none());
     assert!(scene.get("authoring_graph").is_none());
 
-    let resources = scene["resources"].as_array().expect("022 image resources must exist");
-    let picture_nodes = scene["nodes"].as_array().unwrap().iter()
+    let resources = scene["resources"]
+        .as_array()
+        .expect("022 image resources must exist");
+    let picture_nodes = scene["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
         .filter(|node| node["kind"] == "picture_frame")
         .count();
     let mut admitted = 0_usize;
@@ -97,18 +99,25 @@ async fn exact_022_preview_reaches_product_host_with_source_neutral_pixels() {
     let mut admitted_ids = std::collections::HashSet::new();
 
     for resource in resources {
-        let resource_id = resource["resource_id"].as_str().expect("resource ID string");
+        let resource_id = resource["resource_id"]
+            .as_str()
+            .expect("resource ID string");
         match resource["availability"].as_str() {
             Some("inline_data_url") => {
                 admitted += 1;
-                let url = resource["inline_data_url"].as_str().expect("host-owned URL");
+                let url = resource["inline_data_url"]
+                    .as_str()
+                    .expect("host-owned URL");
                 assert!(
                     url.starts_with("data:image/png;base64,")
-                    || url.starts_with("data:image/jpeg;base64,"),
+                        || url.starts_with("data:image/jpeg;base64,"),
                     "host must emit only freshly derived PNG/JPEG"
                 );
                 assert!(url.len() <= 7 * 1024 * 1024);
-                assert!(admitted_ids.insert(resource_id), "no duplicate resource IDs");
+                assert!(
+                    admitted_ids.insert(resource_id),
+                    "no duplicate resource IDs"
+                );
                 max_url_len = max_url_len.max(url.len());
             }
             Some("descriptor_only") => {
@@ -118,11 +127,22 @@ async fn exact_022_preview_reaches_product_host_with_source_neutral_pixels() {
             _ => panic!("unexpected browser availability"),
         }
     }
-    assert!(picture_nodes > 0, "022 must expose a real image-bearing scene node");
-    assert!(admitted > 0, "022 source-exact JPEG must be restored through host derivative");
-    assert!(scene["fidelity"]["reasons"].as_array().unwrap().iter()
-        .any(|reason| reason == "image_preview_partial_fidelity"),
-        "safe re-encoding must retain partial color/fidelity disposition");
+    assert!(
+        picture_nodes > 0,
+        "022 must expose a real image-bearing scene node"
+    );
+    assert!(
+        admitted > 0,
+        "022 source-exact JPEG must be restored through host derivative"
+    );
+    assert!(
+        scene["fidelity"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "image_preview_partial_fidelity"),
+        "safe re-encoding must retain partial color/fidelity disposition"
+    );
 
     let report = json!({
         "schema": "chaptera.product-reader-safe-preview-exact-022.v1",
