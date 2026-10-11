@@ -312,6 +312,13 @@ pub fn build_mature_0x2c_emf_bitmap_preview_bundle_from_bytes(
     let escher = pub_cfb::read_stream_reader(Cursor::new(pub_bytes), ESCHER_STREAM_PATH)?;
     let delayed = pub_cfb::read_stream_reader(Cursor::new(pub_bytes), ESCHER_DELAY_STREAM_PATH)?;
     let manifest = build_pub_asset_manifest(graph, &escher, &delayed)?;
+    if !manifest
+        .assets
+        .iter()
+        .any(|asset| asset.blip_kind == Some(BlipKind::Emf))
+    {
+        return Ok(PubMatureEmfBitmapPreviewBundle::default());
+    }
     let validated = inspect_validated_delayed_blips_prefix(
         StreamPath(ESCHER_DELAY_STREAM_PATH.to_owned()),
         &delayed,
@@ -495,7 +502,14 @@ mod tests {
                 sizes.sort_unstable();
                 assert_eq!(
                     sizes,
-                    [(250, 720), (257, 587), (259, 30), (259, 30), (259, 125), (259, 209)]
+                    [
+                        (250, 720),
+                        (257, 587),
+                        (259, 30),
+                        (259, 30),
+                        (259, 125),
+                        (259, 209)
+                    ]
                 );
             }
         }
