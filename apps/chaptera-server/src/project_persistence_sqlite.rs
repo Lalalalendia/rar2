@@ -65,6 +65,15 @@ pub struct ProjectRenameReceipt {
     pub replayed: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectLifecycleIdentity {
+    pub tenant_id: String,
+    pub workspace_id: String,
+    pub project_id: String,
+    pub document_id: String,
+    pub lifecycle_state: String,
+}
+
 pub fn plan_project_identity(
     request: &ConsumeUploadRequest,
 ) -> Result<PlannedProjectIdentity, IngressError> {
@@ -383,6 +392,64 @@ impl SqliteProjectPersistence {
             name: request.name,
             replayed: false,
         })
+    }
+
+    pub async fn project_lifecycle_identity(
+        &self,
+        project_id: &str,
+    ) -> Result<ProjectLifecycleIdentity, IngressError> {
+        require_ident(project_id, "project_id")?;
+        let rows = sqlx::query(
+            r#"
+            SELECT p.tenant_id, p.workspace_id, p.project_id, p.lifecycle_state,
+                   d.document_id
+            FROM projects AS p
+            JOIN documents AS d
+              ON d.project_id = p.project_id AND d.tenant_id = p.tenant_id
+            WHERE p.project_id = ?
+            LIMIT 2
+            "#,
+        )
+        .bind(project_id.as_bytes())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+
+        match rows.as_slice() {
+            [] => Err(IngressError::new(
+                "project_not_found",
+                "project does not exist",
+            )),
+            [row] => {
+                let tenant_id = blob_text(row, "tenant_id")?;
+                let workspace_id = blob_text(row, "workspace_id")?;
+                let project_id = blob_text(row, "project_id")?;
+                let document_id = blob_text(row, "document_id")?;
+                let lifecycle_state: String =
+                    row.try_get("lifecycle_state").map_err(sqlite_error)?;
+                require_ident(&tenant_id, "tenant_id")?;
+                require_ident(&workspace_id, "workspace_id")?;
+                require_ident(&project_id, "project_id")?;
+                require_ident(&document_id, "document_id")?;
+                if !matches!(lifecycle_state.as_str(), "active" | "trashed" | "deleted") {
+                    return Err(IngressError::new(
+                        "project_persistence_row_corrupt",
+                        "project lifecycle state is invalid",
+                    ));
+                }
+                Ok(ProjectLifecycleIdentity {
+                    tenant_id,
+                    workspace_id,
+                    project_id,
+                    document_id,
+                    lifecycle_state,
+                })
+            }
+            _ => Err(IngressError::new(
+                "project_persistence_row_ambiguous",
+                "project identity resolved to multiple rows",
+            )),
+        }
     }
 
     /// Workspace catalog is read from the existing durable projects/documents,
