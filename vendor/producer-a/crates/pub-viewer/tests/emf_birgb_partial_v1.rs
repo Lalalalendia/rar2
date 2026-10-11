@@ -5,8 +5,8 @@ use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
 
 fn load_pinned(root: &str, sha: &str) -> Vec<u8> {
-    let bytes = fs::read(Path::new(root).join(format!("{sha}.pub")))
-        .expect("pinned PUB fixture readable");
+    let bytes =
+        fs::read(Path::new(root).join(format!("{sha}.pub"))).expect("pinned PUB fixture readable");
     let actual_sha = Sha256::digest(&bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -26,10 +26,21 @@ fn exact_041_emf_bitmap_use_join_yields_six_derived_partial_resources() {
     );
     let visual = open_pub_geometry(&source, viewer_geometry_environment_v0_1())
         .expect("041 must open through real Viewer scene");
-    let derived = visual.images.iter().filter(|image| !image.source_exact).collect::<Vec<_>>();
-    assert_eq!(derived.len(), 6, "all six strict EMF bitmap slots must reach Viewer");
+    let derived = visual
+        .images
+        .iter()
+        .filter(|image| !image.source_exact)
+        .collect::<Vec<_>>();
     assert_eq!(
-        derived.iter().map(|image| image.node_ids.len()).sum::<usize>(),
+        derived.len(),
+        6,
+        "all six strict EMF bitmap slots must reach Viewer"
+    );
+    assert_eq!(
+        derived
+            .iter()
+            .map(|image| image.node_ids.len())
+            .sum::<usize>(),
         6,
         "exact source EMF uses must map one-to-one to Viewer scene nodes"
     );
