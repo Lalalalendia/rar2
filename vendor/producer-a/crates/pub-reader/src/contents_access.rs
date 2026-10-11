@@ -80,6 +80,16 @@ pub(super) fn single_parent_seq(reference: &Contents0x2cChunkReference) -> Optio
     }
 }
 
+fn bounded_page_logo_context(
+    raw_type: Option<u16>,
+    parent_raw_type: Option<u16>,
+    registered_page: bool,
+) -> bool {
+    raw_type == Some(RAW_TYPE_LOGO)
+        && parent_raw_type == Some(RAW_TYPE_PAGE)
+        && registered_page
+}
+
 /// LOGO (0x31) is context-overloaded. Only mature PAGE-owned carriers whose
 /// parent is an actual registered 0x43 PAGE may join the bounded grouped
 /// projection; never promote 0x31 solely by its raw type.
@@ -91,14 +101,14 @@ pub(super) fn is_page_owned_logo_group(
     let Some(reference) = references.get(&group_seq) else {
         return false;
     };
-    if single_raw_type(reference) != Some(RAW_TYPE_LOGO) {
-        return false;
-    }
     let Some(parent_seq) = single_parent_seq(reference) else {
         return false;
     };
-    page_seq_to_id.contains_key(&parent_seq)
-        && references.get(&parent_seq).and_then(single_raw_type) == Some(RAW_TYPE_PAGE)
+    bounded_page_logo_context(
+        single_raw_type(reference),
+        references.get(&parent_seq).and_then(single_raw_type),
+        page_seq_to_id.contains_key(&parent_seq),
+    )
 }
 
 pub(super) fn seq_u32(seq_num: usize) -> Result<u32> {
@@ -126,5 +136,29 @@ pub(super) fn unique_u32_field(
             "Contents field 0x{id:02X} at {} is not a confirmed u32/reference body",
             field.source.offset
         ),
+    }
+}
+
+#[cfg(test)]
+mod page_logo_admission_tests {
+    use super::*;
+
+    #[test]
+    fn only_registered_page_owned_logo_context_is_eligible() {
+        assert!(bounded_page_logo_context(
+            Some(RAW_TYPE_LOGO),
+            Some(RAW_TYPE_PAGE),
+            true
+        ));
+        for (raw_type, parent_type, is_page) in [
+            (Some(RAW_TYPE_LOGO), Some(RAW_TYPE_PAGE), false),
+            (Some(RAW_TYPE_LOGO), Some(RAW_TYPE_GROUP), true),
+            (Some(RAW_TYPE_LOGO), None, true),
+            (Some(RAW_TYPE_GROUP), Some(RAW_TYPE_PAGE), true),
+            (Some(RAW_TYPE_SHAPE), Some(RAW_TYPE_PAGE), true),
+            (None, Some(RAW_TYPE_PAGE), true),
+        ] {
+            assert!(!bounded_page_logo_context(raw_type, parent_type, is_page));
+        }
     }
 }
