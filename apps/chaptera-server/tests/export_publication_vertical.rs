@@ -429,7 +429,10 @@ fn build_materialized_state() -> (ExactRevisionMaterializedState, ExportJobPaylo
     (state, payload)
 }
 
-#[tokio::test]
+// Production chaptera creates a multi-thread Tokio runtime. Exact PUB export
+// may execute CPU-bound serializers while the worker heartbeat and watchdog
+// must retain an independently scheduled runtime thread.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires pinned real PUB fixture from CLOUD-EXPORT-EXECUTOR-01 acceptance"]
 async fn real_queue_quota_executor_blob_publication_terminal_vertical() {
     let db = temp_db();
@@ -520,7 +523,8 @@ async fn real_queue_quota_executor_blob_publication_terminal_vertical() {
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "export vertical did not reach terminal state"
+            "export vertical did not reach terminal state; last durable job: {job:?}; worker task finished: {}",
+            worker_task.is_finished()
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     };

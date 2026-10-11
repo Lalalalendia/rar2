@@ -157,6 +157,20 @@ async fn create_export(
         .resolve_by_document_id(&request.document_id)
         .await
         .map_err(ProductExportHttpError::Source)?;
+    // An unauthorized principal must get the same grant denial for real and
+    // guessed revisions. Inspect exact revision identity only after AuthZ.
+    let now = now_ms()?;
+    state
+        .jobs
+        .authorize_export_before_revision(
+            &source.tenant_id,
+            &request.document_id,
+            &principal.principal_id,
+            &request.client_request_id,
+            now,
+        )
+        .await
+        .map_err(ProductExportHttpError::Jobs)?;
     let binding = state
         .revisions
         .require_revision_identity(&request.document_id, &request.revision_id)
@@ -169,7 +183,6 @@ async fn create_export(
         ));
     }
 
-    let now = now_ms()?;
     let snapshot = state
         .jobs
         .create_export(CreateExportJobRequestV1 {
@@ -689,7 +702,7 @@ impl ProductExportHttpError {
 
 impl IntoResponse for ProductExportHttpError {
     fn into_response(self) -> Response {
-        match self {
+        let mut response = match self {
             Self::Auth(error) => error.into_response(),
             Self::Source(error) => (
                 StatusCode::NOT_FOUND,
@@ -741,7 +754,13 @@ impl IntoResponse for ProductExportHttpError {
                 Json(json!({"error":{"code":code,"message":message}})),
             )
                 .into_response(),
-        }
+        };
+        // Export responses can contain durable revision or job identities.
+        // Never let an intermediary cache denial diagnostics.
+        response
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        response
     }
 }
 
@@ -869,6 +888,7 @@ mod tests {
             })
             .into_response();
             assert_eq!(response.status(), StatusCode::FORBIDDEN, "{code}");
+            assert_eq!(response.headers()[CACHE_CONTROL], "no-store", "{code}");
         }
     }
 }
