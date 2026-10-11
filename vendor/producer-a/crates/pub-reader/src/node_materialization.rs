@@ -1,4 +1,5 @@
 use super::*;
+use super::contents_access::is_page_owned_logo_group;
 
 pub(super) struct MatureNodeMaterializationContext<'a> {
     pub(super) source_hash: &'a Sha256Digest,
@@ -114,7 +115,7 @@ pub(super) fn materialize_mature_nodes(
         };
         let grouped_projection = if direct_page.is_none()
             && (references.get(&parent_seq).and_then(single_raw_type) == Some(RAW_TYPE_GROUP)
-                || super::contents_access::is_page_owned_logo_group(parent_seq, references, page_seq_to_id))
+                || is_page_owned_logo_group(parent_seq, references, page_seq_to_id))
             && (exact_story_identity.is_some()
                 || exact_grouped_image_identity
                 || exact_grouped_primitive_shape_type.is_some())
