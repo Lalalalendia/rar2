@@ -28,7 +28,7 @@ mod legacy22_noquill_graph;
 mod legacy22_page_role;
 #[cfg(feature = "master-authority-bridge")]
 mod master_bridge;
-mod mature_emf;
+pub mod mature_emf;
 mod mature_wmf;
 mod node_materialization;
 mod ole_presentation;
@@ -122,10 +122,6 @@ pub use legacy22_page_role::{
 #[cfg(feature = "master-authority-bridge")]
 pub use master_bridge::{
     PubMasterProjectionBridgeV1, build_mature_0x2c_master_projection_bridge_v1,
-};
-pub use mature_emf::{
-    MATURE_OFFICEART_EMF_BITMAP_PREVIEW_SOURCE_V1, PubMatureEmfBitmapPreviewBundle,
-    PubMatureEmfBitmapPreviewSource, build_mature_0x2c_emf_bitmap_preview_bundle_from_bytes,
 };
 pub use mature_wmf::{
     MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1, PubMatureOfficeArtWmfPreviewBundle,
@@ -277,7 +273,6 @@ pub use wmf::{BoundedWmfMetafile, WmfMetafileInfo, bounded_wmf_metafile, validat
 pub use wmf_preview::{
     LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, WmfPreviewRgba, rasterize_wmf_preview,
 };
-
 pub const PUB_ADAPTER_ID: &str = "pub-rs";
 pub const PUB_FORMAT_PROFILE_ID: &str = "pub-mature-0x2c-v0.1";
 
