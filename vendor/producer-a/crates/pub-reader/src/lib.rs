@@ -76,8 +76,9 @@ pub use borderart_assets::{
 #[cfg(feature = "cmo-authority-bridge")]
 pub use cmo_bridge::{PubCmoProjectionBridgeV1, build_mature_0x2c_cmo_projection_bridge_v1};
 use contents_access::{
-    build_reference_index, chunk_for_reference, seq_u32, single_parent_seq, single_raw_type,
-    unique_block, unique_reference_by_raw_type, unique_u32_field,
+    build_reference_index, chunk_for_reference, is_page_owned_logo_group, seq_u32,
+    single_parent_seq, single_raw_type, unique_block, unique_reference_by_raw_type,
+    unique_u32_field,
 };
 pub use diagnostics::PubBridgeDiagnostic;
 pub use failure_envelope::{
@@ -299,6 +300,7 @@ const FSP_FLIP_V: u32 = 1 << 7;
 const AFFINE_DECIMAL_SCALE: i128 = 1_000_000_000_000;
 const PI_SCALED: i128 = 3_141_592_653_590;
 const RAW_TYPE_GROUP: u16 = 0x30;
+const RAW_TYPE_LOGO: u16 = 0x31;
 const RAW_TYPE_PAGE: u16 = 0x43;
 const RAW_TYPE_DOCUMENT: u16 = 0x44;
 const RAW_TYPE_MARGINS: u16 = 0x4C;
