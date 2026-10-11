@@ -131,6 +131,76 @@ async fn exact_022_preview_reaches_product_host_with_source_neutral_pixels() {
         picture_nodes > 0,
         "022 must expose a real image-bearing scene node"
     );
+    // Controlled offline scientific diagnostic only: parse the fixed PUBLIC
+    // corpus file outside the Product host to classify an image admission
+    // failure. This diagnostic is not part of any production PUB server path.
+    let isolated_oracle = pub_viewer::open_pub_bundle(
+        &pub_bytes, pub_viewer::viewer_geometry_environment_v0_1()
+    ).expect("pinned 022 scientific Viewer control must open");
+    let limits = chaptera_image_decode_contract::safe_preview_encode::PreviewEncodeLimitsV1::default();
+    let mut source_diagnostics = Vec::new();
+    for image in &isolated_oracle.geometry.images {
+        let digest = format!("{:x}", Sha256::digest(&image.bytes));
+        let verified = image.verified_source_sha256.as_ref()
+            .is_some_and(|x| x.to_string() == digest);
+        let supported_mime = matches!(image.mime.as_str(), "image/png" | "image/jpeg" | "image/jpg");
+        let mime = if image.mime == "image/jpg" { "image/jpeg" } else { &image.mime };
+        let decoded = chaptera_image_decode_contract::decode_image_v1(
+            &image.bytes,
+            mime,
+            &digest,
+            "pinned-022-public-fixture-diagnostic",
+            &chaptera_image_decode_contract::DecodePolicyV1::reference(),
+            &chaptera_image_decode_contract::DecodeLimitsV1 {
+                max_encoded_bytes: 16 * 1024 * 1024,
+                max_dimension_px: limits.max_dimension_px,
+                max_total_pixels: limits.max_total_pixels,
+                max_decoded_bytes: limits.max_decoded_bytes,
+            },
+        );
+        let decoder_error = decoded.as_ref().err().map(|error| error.code);
+        let encoded = decoded.as_ref().ok().map(|decoded| {
+            chaptera_image_decode_contract::safe_preview_encode::encode_safe_preview_v1(
+                decoded,
+                if mime == "image/jpeg" {
+                    chaptera_image_decode_contract::safe_preview_encode::PreviewCodecV1::Jpeg
+                } else {
+                    chaptera_image_decode_contract::safe_preview_encode::PreviewCodecV1::Png
+                },
+                &limits,
+            )
+        });
+        let encoder_error = encoded.as_ref().and_then(|result| {
+            result.as_ref().err().map(|error| error.code)
+        });
+        let candidate_len = encoded.as_ref().and_then(|result| {
+            result.as_ref().ok().map(|preview| preview.bytes.len())
+        });
+        source_diagnostics.push(json!({
+            "mime": mime,
+            "encoded_source_bytes": image.bytes.len(),
+            "source_exact": image.source_exact,
+            "source_sha_verified": verified,
+            "supported_mime": supported_mime,
+            "independent_decode_ok": decoded.is_ok(),
+            "independent_decode_error": decoder_error,
+            "independent_encode_bytes": candidate_len,
+            "independent_encode_error": encoder_error,
+            "bound_to_reader_scene_resource": resources.iter().any(|resource| {
+                resource["resource_id"].as_str()
+                    == Some(image.resource_id.as_canonical().to_string().as_str())
+            }),
+        }));
+    }
+    println!(
+        "SAFE_PREVIEW_022_ADMISSION_CAUSAL_CENSUS {}",
+        json!({
+            "source_image_count": isolated_oracle.geometry.images.len(),
+            "actual_host_admitted": admitted,
+            "actual_descriptor_only": descriptor_only,
+            "sources": source_diagnostics,
+        })
+    );
     assert!(
         admitted > 0,
         "022 source-exact JPEG must be restored through host derivative"
