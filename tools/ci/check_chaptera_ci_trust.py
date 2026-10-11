@@ -214,6 +214,91 @@ def audit_desktop_pr_admission(
     )
 
 
+
+S3_PROBE_WORKFLOW = ".github/workflows/cloud-s3-provider-physical-probe.yml"
+S3_PROBE_JOB_IF = (
+    "    if: github.event_name == 'workflow_dispatch' && "
+    "github.ref == 'refs/heads/main' && "
+    "github.repository == 'Lalalalendia/rar2'"
+)
+S3_PROBE_RUN_STEP = "      - name: Run owner-pinned physical provider and versioning probe"
+S3_PROBE_UPLOAD_STEP = "      - name: Upload sanitized receipt only"
+
+
+def audit_s3_probe_trust_text(rel: str, text: str) -> list[str]:
+    """Guard reviewed source wiring, NOT live environment protection settings."""
+    lines = active_lines(text)
+    active = "\n".join(lines)
+    errors: list[str] = []
+
+    if "on:\n  workflow_dispatch:" not in active or re.search(
+        r"(?m)^  (pull_request|pull_request_target|push|schedule|workflow_run|workflow_call|repository_dispatch):",
+        active,
+    ):
+        errors.append(f"{rel}: S3 credentials require workflow_dispatch only")
+    if S3_PROBE_JOB_IF not in lines:
+        errors.append(f"{rel}: S3 probe requires canonical main-only dispatch condition")
+    if "    environment: chaptera-s3-physical" not in lines:
+        errors.append(f"{rel}: S3 probe must bind protected chaptera-s3-physical environment")
+    if "          ref: ${{ github.sha }}" not in lines:
+        errors.append(f"{rel}: checkout must pin immutable trigger commit SHA")
+    if any(line == "env:" or line.startswith("    env:") for line in lines):
+        errors.append(f"{rel}: S3 credentials cannot live in workflow/job-wide env")
+    if re.search(r"(?m)^\s+id-token:\s+write\s*$", active):
+        errors.append(f"{rel}: OIDC write authority requires separate reviewed role policy")
+
+    run_start = active.find(S3_PROBE_RUN_STEP)
+    upload_start = active.find(S3_PROBE_UPLOAD_STEP, run_start + 1)
+    if run_start == -1 or upload_start == -1:
+        errors.append(f"{rel}: bounded S3 probe and receipt upload steps required")
+    else:
+        probe_step = active[run_start:upload_start]
+        secret_occurrences = list(
+            re.finditer(r"secrets\.CHAPTERA_S3_PROBE_[A-Z_]+", active)
+        )
+        if len(secret_occurrences) < 2 or any(
+            not (run_start <= match.start() < upload_start)
+            for match in secret_occurrences
+        ):
+            errors.append(f"{rel}: S3 secrets must appear only in physical probe step")
+        if "        env:" not in probe_step:
+            errors.append(f"{rel}: no step-local S3 probe authority detected")
+
+    checkout_start = active.find("      - uses: actions/checkout@")
+    if checkout_start == -1:
+        errors.append(f"{rel}: checkout action missing")
+    else:
+        next_step = active.find("\n      - uses:", checkout_start + 1)
+        checkout_step = active[checkout_start:next_step if next_step > 0 else None]
+        if "          ref: ${{ github.sha }}" not in checkout_step:
+            errors.append(f"{rel}: checkout must bind ref to exact triggering SHA")
+    return errors
+
+
+def self_test_s3_probe_trust() -> None:
+    path = pathlib.Path(S3_PROBE_WORKFLOW)
+    valid = path.read_text(encoding="utf-8")
+    if errors := audit_s3_probe_trust_text(S3_PROBE_WORKFLOW, valid):
+        raise AssertionError("real S3 probe violates canonical trust: " + "; ".join(errors))
+
+    mutations = [
+        valid.replace("    environment: chaptera-s3-physical\n", ""),
+        valid.replace(S3_PROBE_JOB_IF + "\n", ""),
+        valid.replace("          ref: ${{ github.sha }}", "          ref: refs/heads/unreviewed"),
+        valid.replace("  workflow_dispatch:", "  pull_request:"),
+        valid.replace("    timeout-minutes: 15\n", "    timeout-minutes: 15\n    env:\n      AWS_ACCESS_KEY_ID: risky\n"),
+        valid.replace(
+            S3_PROBE_UPLOAD_STEP,
+            S3_PROBE_UPLOAD_STEP + "\n        env:\n          AWS_ACCESS_KEY_ID: ${{ secrets.CHAPTERA_S3_PROBE_ACCESS_KEY_ID }}",
+        ),
+    ]
+    for index, mutated in enumerate(mutations):
+        if mutated == valid:
+            raise AssertionError(f"S3 trust mutation {index} did not alter fixture")
+        if not audit_s3_probe_trust_text(S3_PROBE_WORKFLOW, mutated):
+            raise AssertionError(f"S3 trust mutation {index} was not rejected")
+
+
 def self_test_desktop_pr_admission() -> None:
     rel = ".github/workflows/chaptera-suite-handoff-v1.yml"
     rule = DESKTOP_PR_ADMISSION_RULES[rel]
@@ -251,6 +336,7 @@ def main() -> int:
 
     if args.self_test:
         self_test_desktop_pr_admission()
+        self_test_s3_probe_trust()
         print("CHAPTERA-CI-TRUST-01 self-test PASS")
         return 0
 
@@ -262,6 +348,14 @@ def main() -> int:
             errors.append(f"{rel}: protected workflow missing")
             continue
         errors.extend(audit(path))
+
+    s3_path = root / S3_PROBE_WORKFLOW
+    if s3_path.is_file():
+        errors.extend(
+            audit_s3_probe_trust_text(
+                S3_PROBE_WORKFLOW, s3_path.read_text(encoding="utf-8")
+            )
+        )
 
     for rel, rule in DESKTOP_PR_ADMISSION_RULES.items():
         path = root / rel
