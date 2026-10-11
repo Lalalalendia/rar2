@@ -80,6 +80,27 @@ pub(super) fn single_parent_seq(reference: &Contents0x2cChunkReference) -> Optio
     }
 }
 
+/// LOGO (0x31) is context-overloaded. Only mature PAGE-owned carriers whose
+/// parent is an actual registered 0x43 PAGE may join the bounded grouped
+/// projection; never promote 0x31 solely by its raw type.
+pub(super) fn is_page_owned_logo_group(
+    group_seq: u32,
+    references: &BTreeMap<u32, Contents0x2cChunkReference>,
+    page_seq_to_id: &BTreeMap<u32, PageId>,
+) -> bool {
+    let Some(reference) = references.get(&group_seq) else {
+        return false;
+    };
+    if single_raw_type(reference) != Some(RAW_TYPE_LOGO) {
+        return false;
+    }
+    let Some(parent_seq) = single_parent_seq(reference) else {
+        return false;
+    };
+    page_seq_to_id.contains_key(&parent_seq)
+        && references.get(&parent_seq).and_then(single_raw_type) == Some(RAW_TYPE_PAGE)
+}
+
 pub(super) fn seq_u32(seq_num: usize) -> Result<u32> {
     u32::try_from(seq_num).map_err(|_| anyhow!("Contents seqNum does not fit u32: {seq_num}"))
 }
