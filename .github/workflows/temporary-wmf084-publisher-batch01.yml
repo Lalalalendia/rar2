@@ -1,0 +1,16 @@
+name: TEMP WMF084 partial graphics Publisher Batch01
+
+on:
+  push:
+    branches:
+      - measure/wmf084-graphics-batch01-20261011
+    paths:
+      - ".github/workflows/temporary-wmf084-publisher-batch01.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  compare:
+    uses: ./.github/workflows/publisher-visual-golden-batch01.yml
