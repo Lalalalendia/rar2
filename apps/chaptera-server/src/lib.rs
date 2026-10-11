@@ -47,6 +47,7 @@ pub mod runtime_readiness;
 pub mod s3_blob_provider;
 pub mod schema_migration;
 mod safe_preview_host;
+mod safe_preview_worker;
 pub mod serve;
 pub mod shutdown;
 pub mod source_authority;
