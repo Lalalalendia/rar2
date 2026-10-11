@@ -1,12 +1,11 @@
 //! Source-backed derived EMF bitmap and bounded vector-fill previews.
 use super::*;
+use pub_reader::mature_emf::vector::{
+    MATURE_EMF_VECTOR_SOLID_PATH_PARTIAL_V1, build_mature_0x2c_emf_vector_preview_bundle_from_bytes,
+};
 use pub_reader::mature_emf::{
     MATURE_OFFICEART_EMF_BITMAP_PREVIEW_SOURCE_V1,
     build_mature_0x2c_emf_bitmap_preview_bundle_from_bytes,
-};
-use pub_reader::mature_emf::vector::{
-    MATURE_EMF_VECTOR_SOLID_PATH_PARTIAL_V1,
-    build_mature_0x2c_emf_vector_preview_bundle_from_bytes,
 };
 
 fn mature_officeart_emf_bitmap_preview_resource_id(
@@ -215,7 +214,8 @@ pub(super) fn viewer_mature_officeart_emf_bitmap_preview_images(
                 diagnostics.push(ViewerDiagnostic {
                     code: "viewer.mature_officeart_emf.vector_source_unavailable".to_owned(),
                     severity: ViewerDiagnosticSeverity::FidelityWarning,
-                    message: "Bounded EMF vector-fill source cannot be strictly admitted.".to_owned(),
+                    message: "Bounded EMF vector-fill source cannot be strictly admitted."
+                        .to_owned(),
                 });
                 return images;
             }
@@ -257,7 +257,8 @@ pub(super) fn viewer_mature_officeart_emf_bitmap_preview_images(
                 diagnostics.push(ViewerDiagnostic {
                     code: "viewer.mature_officeart_emf.vector_encode_unavailable".to_owned(),
                     severity: ViewerDiagnosticSeverity::FidelityWarning,
-                    message: "Bounded EMF vector RGBA could not be encoded as derived PNG.".to_owned(),
+                    message: "Bounded EMF vector RGBA could not be encoded as derived PNG."
+                        .to_owned(),
                 });
                 continue;
             }
@@ -272,7 +273,8 @@ pub(super) fn viewer_mature_officeart_emf_bitmap_preview_images(
                 diagnostics.push(ViewerDiagnostic {
                     code: "viewer.mature_officeart_emf.vector_identity_unavailable".to_owned(),
                     severity: ViewerDiagnosticSeverity::FidelityWarning,
-                    message: "Derived EMF vector resource has no deterministic identity.".to_owned(),
+                    message: "Derived EMF vector resource has no deterministic identity."
+                        .to_owned(),
                 });
                 continue;
             }
@@ -288,7 +290,8 @@ pub(super) fn viewer_mature_officeart_emf_bitmap_preview_images(
                     diagnostics.push(ViewerDiagnostic {
                         code: "viewer.mature_officeart_emf.vector_crop_partial".to_owned(),
                         severity: ViewerDiagnosticSeverity::FidelityWarning,
-                        message: "EMF derived vector crop cannot be projected; full preview shown.".to_owned(),
+                        message: "EMF derived vector crop cannot be projected; full preview shown."
+                            .to_owned(),
                     });
                     None
                 }

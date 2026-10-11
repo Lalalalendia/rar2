@@ -107,7 +107,9 @@ impl Default for State {
 }
 
 fn span(bytes: &[u8], at: usize, count: usize) -> Result<&[u8]> {
-    let end = at.checked_add(count).context("EMF vector record offset overflow")?;
+    let end = at
+        .checked_add(count)
+        .context("EMF vector record offset overflow")?;
     bytes.get(at..end).context("EMF vector record truncated")
 }
 fn u32_at(bytes: &[u8], at: usize) -> Result<u32> {
@@ -160,11 +162,9 @@ impl State {
         {
             bail!("unsupported EMF mapping mode or zero window extent");
         }
-        let px = (logical.x - self.window_origin.x) * self.viewport_extent.x
-            / self.window_extent.x
+        let px = (logical.x - self.window_origin.x) * self.viewport_extent.x / self.window_extent.x
             + self.viewport_origin.x;
-        let py = (logical.y - self.window_origin.y) * self.viewport_extent.y
-            / self.window_extent.y
+        let py = (logical.y - self.window_origin.y) * self.viewport_extent.y / self.window_extent.y
             + self.viewport_origin.y;
         let w = f64::from(bounds[2]) - f64::from(bounds[0]);
         let h = f64::from(bounds[3]) - f64::from(bounds[1]);
@@ -192,7 +192,10 @@ impl State {
         if total_points >= MAX_POINTS {
             bail!("EMF vector path exceeds point budget");
         }
-        self.subpaths.last_mut().context("missing EMF subpath")?.push(point);
+        self.subpaths
+            .last_mut()
+            .context("missing EMF subpath")?
+            .push(point);
         self.current = Some(point);
         Ok(())
     }
@@ -252,8 +255,16 @@ impl Raster {
         if point_count > MAX_POINTS {
             bail!("EMF path segment budget exceeded");
         }
-        let y_min = figures.iter().flatten().map(|p| p.y).fold(f64::INFINITY, f64::min);
-        let y_max = figures.iter().flatten().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+        let y_min = figures
+            .iter()
+            .flatten()
+            .map(|p| p.y)
+            .fold(f64::INFINITY, f64::min);
+        let y_max = figures
+            .iter()
+            .flatten()
+            .map(|p| p.y)
+            .fold(f64::NEG_INFINITY, f64::max);
         if !y_min.is_finite() || !y_max.is_finite() {
             bail!("EMF path has no finite fill geometry");
         }
@@ -262,7 +273,10 @@ impl Raster {
         let work = u64::try_from(point_count)?
             .checked_mul(u64::try_from((bottom - top).max(0))?)
             .context("EMF vector raster work overflow")?;
-        self.fill_work = self.fill_work.checked_add(work).context("EMF fill work overflow")?;
+        self.fill_work = self
+            .fill_work
+            .checked_add(work)
+            .context("EMF fill work overflow")?;
         if self.fill_work > MAX_FILL_WORK {
             bail!("EMF vector raster exceeds fill work budget");
         }
@@ -299,7 +313,8 @@ impl Raster {
                         let end = ((x - 0.5).floor() as i32).min(self.width as i32 - 1);
                         for col in start..=end {
                             let at = ((y as usize * self.width as usize) + col as usize) * 4;
-                            self.rgba[at..at + 4].copy_from_slice(&[color.r, color.g, color.b, 255]);
+                            self.rgba[at..at + 4]
+                                .copy_from_slice(&[color.r, color.g, color.b, 255]);
                             self.painted = true;
                         }
                     }
@@ -321,13 +336,19 @@ fn contains_bitmap_record(logical: &[u8]) -> Result<bool> {
     let mut count = 0usize;
     let mut has_bitmap = false;
     while at < logical.len() {
-        if count >= MAX_RECORDS { bail!("EMF bitmap discrimination exceeds record budget"); }
+        if count >= MAX_RECORDS {
+            bail!("EMF bitmap discrimination exceeds record budget");
+        }
         let kind = u32_at(logical, at)?;
         let size = usize::try_from(u32_at(logical, at + 4)?)?;
-        if size < 8 || size % 4 != 0 { bail!("misframed EMF while discriminating bitmap"); }
+        if size < 8 || size % 4 != 0 {
+            bail!("misframed EMF while discriminating bitmap");
+        }
         span(logical, at, size)?;
         has_bitmap |= kind == 81;
-        at = at.checked_add(size).context("EMF record advance overflow")?;
+        at = at
+            .checked_add(size)
+            .context("EMF record advance overflow")?;
         count += 1;
     }
     Ok(has_bitmap)
@@ -356,10 +377,17 @@ fn parse_vector_emf(logical: &[u8]) -> Result<Option<(Raster, usize)>> {
             bail!("EMF vector record misframed");
         }
         let r = span(logical, at, size)?;
-        if eof { bail!("EMF has trailing records after EOF"); }
+        if eof {
+            bail!("EMF has trailing records after EOF");
+        }
         match kind {
             1 if count == 0 && size >= 88 => {
-                bounds = [i32_at(r, 8)?, i32_at(r, 12)?, i32_at(r, 16)?, i32_at(r, 20)?];
+                bounds = [
+                    i32_at(r, 8)?,
+                    i32_at(r, 12)?,
+                    i32_at(r, 16)?,
+                    i32_at(r, 20)?,
+                ];
                 if u32_at(r, 40)? != 0x464d_4520 {
                     bail!("EMF header signature missing");
                 }
@@ -368,7 +396,9 @@ fn parse_vector_emf(logical: &[u8]) -> Result<Option<(Raster, usize)>> {
             14 if size >= 20 => eof = true,
             17 if size >= 12 => {
                 let mode = u32_at(r, 8)?;
-                if mode != MM_ANISOTROPIC { bail!("unsupported EMF map mode"); }
+                if mode != MM_ANISOTROPIC {
+                    bail!("unsupported EMF map mode");
+                }
                 state.map_mode = Some(mode);
             }
             19 if size >= 12 => {
@@ -383,17 +413,24 @@ fn parse_vector_emf(logical: &[u8]) -> Result<Option<(Raster, usize)>> {
                 if extent.x <= 0.0 || extent.y <= 0.0 {
                     bail!("unsupported EMF negative/zero mapping extent");
                 }
-                if kind == 9 { state.window_extent = extent; }
-                else { state.viewport_extent = extent; }
+                if kind == 9 {
+                    state.window_extent = extent;
+                } else {
+                    state.viewport_extent = extent;
+                }
             }
             10 | 12 if size >= 16 => {
                 let origin = pt_at(r, 8)?;
-                if kind == 10 { state.window_origin = origin; }
-                else { state.viewport_origin = origin; }
+                if kind == 10 {
+                    state.window_origin = origin;
+                } else {
+                    state.viewport_origin = origin;
+                }
             }
             39 if size >= 24 => {
                 let handle = u32_at(r, 8)?;
-                if handle == 0 || handle & 0x8000_0000 != 0
+                if handle == 0
+                    || handle & 0x8000_0000 != 0
                     || state.brushes.len() >= MAX_OBJECTS
                     || u32_at(r, 12)? != 0
                 {
@@ -414,8 +451,12 @@ fn parse_vector_emf(logical: &[u8]) -> Result<Option<(Raster, usize)>> {
                         bail!("unsupported selected EMF stock GDI object");
                     }
                 } else {
-                    state.brush = Some(*state.brushes.get(&handle)
-                        .context("EMF selected undeclared brush")?);
+                    state.brush = Some(
+                        *state
+                            .brushes
+                            .get(&handle)
+                            .context("EMF selected undeclared brush")?,
+                    );
                 }
             }
             40 if size >= 12 => {
@@ -432,24 +473,37 @@ fn parse_vector_emf(logical: &[u8]) -> Result<Option<(Raster, usize)>> {
                 state.current = None;
             }
             60 if size == 8 => {
-                if !state.path_active { bail!("EMF EndPath without BeginPath"); }
+                if !state.path_active {
+                    bail!("EMF EndPath without BeginPath");
+                }
                 state.path_active = false;
                 state.path_ready = true;
             }
             61 if size == 8 => state.close_figure()?,
             27 if size >= 16 => {
-                let dst = state.map(pt_at(r, 8)?, raster.as_ref().context("missing EMF raster")?, bounds)?;
+                let dst = state.map(
+                    pt_at(r, 8)?,
+                    raster.as_ref().context("missing EMF raster")?,
+                    bounds,
+                )?;
                 state.start_figure(dst)?;
             }
             54 if size >= 16 => {
-                let dst = state.map(pt_at(r, 8)?, raster.as_ref().context("missing EMF raster")?, bounds)?;
+                let dst = state.map(
+                    pt_at(r, 8)?,
+                    raster.as_ref().context("missing EMF raster")?,
+                    bounds,
+                )?;
                 state.append(dst)?;
             }
             5 | 88 if size >= 28 => {
                 let n = usize::try_from(u32_at(r, 24)?)?;
                 let step = if kind == 5 { 8 } else { 4 };
-                if n == 0 || n > MAX_POINTS || n % 3 != 0
-                    || n.checked_mul(step).and_then(|v| v.checked_add(28))
+                if n == 0
+                    || n > MAX_POINTS
+                    || n % 3 != 0
+                    || n.checked_mul(step)
+                        .and_then(|v| v.checked_add(28))
                         .is_none_or(|required| required > size)
                 {
                     bail!("EMF Bezier segment count or record bounds invalid");
@@ -462,10 +516,16 @@ fn parse_vector_emf(logical: &[u8]) -> Result<Option<(Raster, usize)>> {
                         let logical_pt = if kind == 5 {
                             pt_at(r, base)?
                         } else {
-                            Pt { x: f64::from(i16_at(r, base)?),
-                                y: f64::from(i16_at(r, base + 2)?) }
+                            Pt {
+                                x: f64::from(i16_at(r, base)?),
+                                y: f64::from(i16_at(r, base + 2)?),
+                            }
                         };
-                        *dest = state.map(logical_pt, raster.as_ref().context("missing EMF raster")?, bounds)?;
+                        *dest = state.map(
+                            logical_pt,
+                            raster.as_ref().context("missing EMF raster")?,
+                            bounds,
+                        )?;
                     }
                     let [a, b, end] = control;
                     // Piecewise cubic approximation, bounded and deterministic.
@@ -473,8 +533,14 @@ fn parse_vector_emf(logical: &[u8]) -> Result<Option<(Raster, usize)>> {
                         let t = f64::from(k) / 16.0;
                         let q = 1.0 - t;
                         let p = Pt {
-                            x: q*q*q*start.x + 3.0*q*q*t*a.x + 3.0*q*t*t*b.x + t*t*t*end.x,
-                            y: q*q*q*start.y + 3.0*q*q*t*a.y + 3.0*q*t*t*b.y + t*t*t*end.y,
+                            x: q * q * q * start.x
+                                + 3.0 * q * q * t * a.x
+                                + 3.0 * q * t * t * b.x
+                                + t * t * t * end.x,
+                            y: q * q * q * start.y
+                                + 3.0 * q * q * t * a.y
+                                + 3.0 * q * t * t * b.y
+                                + t * t * t * end.y,
                         };
                         state.append(p)?;
                     }
@@ -489,8 +555,11 @@ fn parse_vector_emf(logical: &[u8]) -> Result<Option<(Raster, usize)>> {
                     bail!("EMF FillPath contains incomplete figure");
                 }
                 if let Some(color) = state.brush {
-                    raster.as_mut().context("no EMF raster")?
-                        .fill(&state.subpaths, color, state.fill_mode)?;
+                    raster.as_mut().context("no EMF raster")?.fill(
+                        &state.subpaths,
+                        color,
+                        state.fill_mode,
+                    )?;
                 }
                 state.path_ready = false;
                 state.subpaths.clear();
@@ -518,34 +587,54 @@ pub fn build_mature_0x2c_emf_vector_preview_bundle_from_bytes(
     graph: &PubSourceGraph,
 ) -> Result<PubMatureEmfVectorPreviewBundle> {
     let inventory = pub_cfb::inspect_reader(Cursor::new(pub_bytes))?;
-    if !inventory.entries.iter().any(|e| e.path == ESCHER_DELAY_STREAM_PATH) {
+    if !inventory
+        .entries
+        .iter()
+        .any(|e| e.path == ESCHER_DELAY_STREAM_PATH)
+    {
         return Ok(PubMatureEmfVectorPreviewBundle::default());
     }
     let escher = pub_cfb::read_stream_reader(Cursor::new(pub_bytes), ESCHER_STREAM_PATH)?;
     let delayed = pub_cfb::read_stream_reader(Cursor::new(pub_bytes), ESCHER_DELAY_STREAM_PATH)?;
     let manifest = build_pub_asset_manifest(graph, &escher, &delayed)?;
-    if !manifest.assets.iter().any(|a| a.blip_kind == Some(BlipKind::Emf)) {
+    if !manifest
+        .assets
+        .iter()
+        .any(|a| a.blip_kind == Some(BlipKind::Emf))
+    {
         return Ok(PubMatureEmfVectorPreviewBundle::default());
     }
     let validated = inspect_validated_delayed_blips_prefix(
-        StreamPath(ESCHER_DELAY_STREAM_PATH.to_owned()), &delayed
+        StreamPath(ESCHER_DELAY_STREAM_PATH.to_owned()),
+        &delayed,
     );
     if validated.terminal_gap.is_some() || !validated.rejected_complete_blips.is_empty() {
         bail!("EMF vector strict BLIP prefix contains rejected/trailing payload");
     }
     let mut out = PubMatureEmfVectorPreviewBundle::default();
-    for asset in manifest.assets.iter().filter(|a| a.blip_kind == Some(BlipKind::Emf)) {
+    for asset in manifest
+        .assets
+        .iter()
+        .filter(|a| a.blip_kind == Some(BlipKind::Emf))
+    {
         let Some(source_span) = asset.blip_record_source.as_ref() else {
-            out.rejected_source_count += 1; continue;
+            out.rejected_source_count += 1;
+            continue;
         };
-        let Some(record) = validated.records.iter()
+        let Some(record) = validated
+            .records
+            .iter()
             .find(|r| &r.record_source == source_span)
-        else { out.rejected_source_count += 1; continue; };
+        else {
+            out.rejected_source_count += 1;
+            continue;
+        };
         if record.kind != BlipKind::Emf || record.effective_uid != asset.uid {
-            out.rejected_source_count += 1; continue;
+            out.rejected_source_count += 1;
+            continue;
         }
-        let decoded = logical_emf_bytes(&delayed, record)
-            .and_then(|logical| parse_vector_emf(&logical));
+        let decoded =
+            logical_emf_bytes(&delayed, record).and_then(|logical| parse_vector_emf(&logical));
         match decoded {
             Ok(Some((raster, filled_path_count))) => {
                 let mut uses = asset.uses.clone();
@@ -605,18 +694,18 @@ mod tests {
         bytes.extend(record(54, &vec2(4, 28)));
         bytes.extend(record(61, &[]));
         bytes.extend(record(60, &[]));
-        bytes.extend(record(62, &[0;16]));
-        bytes.extend(record(14, &[0;12]));
+        bytes.extend(record(62, &[0; 16]));
+        bytes.extend(record(14, &[0; 12]));
         bytes
     }
 
     #[test]
     fn paints_only_the_proven_solid_path_and_preserves_transparency() {
         let (raster, n) = parse_vector_emf(&synthetic()).unwrap().unwrap();
-        assert_eq!((raster.width, raster.height, n), (32,32,1));
-        let inside = ((16*32+16)*4) as usize;
-        assert_eq!(&raster.rgba[inside..inside+4], &[255,0,0,255]);
-        assert_eq!(&raster.rgba[0..4], &[0,0,0,0]);
+        assert_eq!((raster.width, raster.height, n), (32, 32, 1));
+        let inside = ((16 * 32 + 16) * 4) as usize;
+        assert_eq!(&raster.rgba[inside..inside + 4], &[255, 0, 0, 255]);
+        assert_eq!(&raster.rgba[0..4], &[0, 0, 0, 0]);
     }
 
     #[test]
@@ -626,14 +715,27 @@ mod tests {
             return;
         };
         for (sha, expected_vector, expected_uses, expected_bitmap) in [
-            ("d8ac6507d86e35c0f43e293760627a01b00a29586a76f8bf05b5fae702a19d13", 1, 2, 0),
-            ("155f8fd8c191851e4380ab1557638aeabb34b2257fa12a7748ab00b09edb74ba", 0, 0, 6),
+            (
+                "d8ac6507d86e35c0f43e293760627a01b00a29586a76f8bf05b5fae702a19d13",
+                1,
+                2,
+                0,
+            ),
+            (
+                "155f8fd8c191851e4380ab1557638aeabb34b2257fa12a7748ab00b09edb74ba",
+                0,
+                0,
+                6,
+            ),
         ] {
             let bytes = std::fs::read(std::path::Path::new(&root).join(format!("{sha}.pub")))
                 .expect("immutable pinned PUB source");
             let digest = Sha256::digest(&bytes);
             assert_eq!(
-                digest.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+                digest
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>(),
                 sha
             );
             let mut raw = [0_u8; 32];
@@ -641,10 +743,11 @@ mod tests {
             let source = crate::build_mature_0x2c_source_graph(
                 Cursor::new(bytes.as_slice()),
                 pub_model::Sha256Digest::from_bytes(raw),
-            ).expect("exact source graph");
-            let bundle = build_mature_0x2c_emf_vector_preview_bundle_from_bytes(
-                &bytes, &source.graph
-            ).expect("bounded vector builder");
+            )
+            .expect("exact source graph");
+            let bundle =
+                build_mature_0x2c_emf_vector_preview_bundle_from_bytes(&bytes, &source.graph)
+                    .expect("bounded vector builder");
             assert_eq!(bundle.sources.len(), expected_vector);
             assert_eq!(bundle.skipped_bitmap_count, expected_bitmap);
             assert_eq!(bundle.rejected_source_count, 0);
@@ -655,8 +758,11 @@ mod tests {
             for candidate in bundle.sources {
                 assert_eq!(candidate.filled_path_count, 4);
                 assert!(candidate.width <= MAX_SIDE && candidate.height <= MAX_SIDE);
-                let filled = candidate.rgba.chunks_exact(4)
-                    .filter(|px| px[3] == 255).count();
+                let filled = candidate
+                    .rgba
+                    .chunks_exact(4)
+                    .filter(|px| px[3] == 255)
+                    .count();
                 assert!(filled > 0 && filled < (candidate.width * candidate.height) as usize);
             }
         }
@@ -665,8 +771,8 @@ mod tests {
     #[test]
     fn fails_closed_on_unmodeled_draw_operations_and_invalid_source() {
         let mut data = synthetic();
-        let last = data.split_off(data.len()-20);
-        data.extend(record(35, &[0;16]));
+        let last = data.split_off(data.len() - 20);
+        data.extend(record(35, &[0; 16]));
         data.extend(last);
         assert!(parse_vector_emf(&data).is_err());
         let mut truncated = synthetic();
