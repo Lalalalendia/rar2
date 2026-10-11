@@ -102,7 +102,7 @@ async fn run() -> Result<(ProviderReceiptV1, bool), String> {
     }
 
     let provider = S3BlobProvider::new(
-        client,
+        client.clone(),
         quarantine_bucket.clone(),
         private_bucket.clone(),
         expected_owner.clone(),
