@@ -974,17 +974,28 @@ impl IntoResponse for ProductApiError {
                     .into_response()
             }
             Self::Source(error) => {
-                let status = if error.code == "document_source_not_found" {
-                    StatusCode::NOT_FOUND
+                // Source membership is not a browser authorization oracle.
+                // A missing source and a document with no visible grant must
+                // have the same public denial, without disclosing tenant data.
+                if error.code == "document_source_not_found" {
+                    (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({"error": {
+                            "code": "grant_missing",
+                            "message": "principal has no grant for the document"
+                        }})),
+                    )
+                        .into_response()
                 } else {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                };
-                let public_message = public_product_error_message(status, &error.message);
-                (
-                    status,
-                    Json(json!({"error": {"code": error.code, "message": public_message}})),
-                )
-                    .into_response()
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": {
+                            "code": error.code,
+                            "message": "internal server error"
+                        }})),
+                    )
+                        .into_response()
+                }
             }
             Self::Materializer(error) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1844,7 +1855,56 @@ mod tests {
             .unwrap();
         assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
         assert_eq!(forbidden.headers()[CACHE_CONTROL], "no-store");
-        assert_eq!(json_body(forbidden).await["error"]["code"], "grant_missing");
+                // Do not distinguish a missing DocumentId from a real document
+        // invisible to this independently authenticated principal.
+        let guessed_document_id = "document-unknown-privacy-probe";
+        let guessed_current = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/documents/{guessed_document_id}/current"),
+                &other.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(guessed_current.status(), StatusCode::FORBIDDEN);
+        assert_eq!(guessed_current.headers()[CACHE_CONTROL], "no-store");
+        let visible_denial = json_body(forbidden).await;
+        assert_eq!(visible_denial["error"]["code"], "grant_missing");
+        assert_eq!(json_body(guessed_current).await, visible_denial);
+
+        let actual_scene_denied = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/reader/documents/{document_id}/scene"),
+                &other.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        let guessed_scene_denied = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/reader/documents/{guessed_document_id}/scene"),
+                &other.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(actual_scene_denied.status(), StatusCode::FORBIDDEN);
+        assert_eq!(guessed_scene_denied.status(), StatusCode::FORBIDDEN);
+        assert_eq!(actual_scene_denied.headers()[CACHE_CONTROL], "no-store");
+        assert_eq!(guessed_scene_denied.headers()[CACHE_CONTROL], "no-store");
+        assert_eq!(
+            json_body(actual_scene_denied).await,
+            json_body(guessed_scene_denied).await
+        );
 
         let mut denial_receipts = Vec::new();
         for (index, source_hash) in [source_sha256.clone(), "0".repeat(64)]
@@ -1870,6 +1930,27 @@ mod tests {
             denial_receipts.push(json_body(denied).await);
         }
         assert_eq!(denial_receipts[0], denial_receipts[1]);
+
+        // POST commit must also return the same denial before any source
+        // hash, revision or isolated worker can reveal document membership.
+        let mut guessed_commit = body.clone();
+        guessed_commit["document_id"] = json!(guessed_document_id);
+        guessed_commit["client_operation_id"] = json!("move-guessed-document-privacy");
+        let missing_commit = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{guessed_document_id}/commit"),
+                &other.session_token,
+                Some(&other.csrf_token),
+                Some(guessed_commit),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(missing_commit.status(), StatusCode::FORBIDDEN);
+        assert_eq!(missing_commit.headers()[CACHE_CONTROL], "no-store");
+        assert_eq!(json_body(missing_commit).await, denial_receipts[0]);
+
         assert_eq!(denial_receipts[0]["error"]["code"], "grant_missing");
 
         // A real Viewer grant allows reading the same reopened document but
