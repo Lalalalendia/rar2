@@ -38,18 +38,18 @@ pub(super) fn viewer_mature_officeart_emf_bitmap_preview_images(
     scene: &BoundedResolvedScene,
     diagnostics: &mut Vec<ViewerDiagnostic>,
 ) -> Vec<ViewerEmbeddedImage> {
-    let bundle =
-        match build_mature_0x2c_emf_bitmap_preview_bundle_from_bytes(bytes, &source.graph) {
-            Ok(bundle) => bundle,
-            Err(_) => {
-                diagnostics.push(ViewerDiagnostic {
+    let bundle = match build_mature_0x2c_emf_bitmap_preview_bundle_from_bytes(bytes, &source.graph)
+    {
+        Ok(bundle) => bundle,
+        Err(_) => {
+            diagnostics.push(ViewerDiagnostic {
                     code: "viewer.mature_officeart_emf.bitmap_source_unavailable".to_owned(),
                     severity: ViewerDiagnosticSeverity::FidelityWarning,
                     message: "Source-backed OfficeArt EMF bitmap-preview admission could not be strictly validated.".to_owned(),
                 });
-                return Vec::new();
-            }
-        };
+            return Vec::new();
+        }
+    };
     if bundle.rejected_source_count > 0 {
         diagnostics.push(ViewerDiagnostic {
             code: "viewer.mature_officeart_emf.bitmap_source_rejected".to_owned(),
@@ -97,7 +97,9 @@ pub(super) fn viewer_mature_officeart_emf_bitmap_preview_images(
             diagnostics.push(ViewerDiagnostic {
                 code: "viewer.mature_officeart_emf.source_use_not_in_scene".to_owned(),
                 severity: ViewerDiagnosticSeverity::FidelityWarning,
-                message: "Strictly validated EMF bitmap has no matching admitted physical image frame.".to_owned(),
+                message:
+                    "Strictly validated EMF bitmap has no matching admitted physical image frame."
+                        .to_owned(),
             });
             continue;
         }
@@ -113,7 +115,9 @@ pub(super) fn viewer_mature_officeart_emf_bitmap_preview_images(
                 diagnostics.push(ViewerDiagnostic {
                     code: "viewer.mature_officeart_emf.bitmap_encode_unavailable".to_owned(),
                     severity: ViewerDiagnosticSeverity::FidelityWarning,
-                    message: "Strictly validated EMF bitmap layer exceeds bounded PNG preview encoding.".to_owned(),
+                    message:
+                        "Strictly validated EMF bitmap layer exceeds bounded PNG preview encoding."
+                            .to_owned(),
                 });
                 continue;
             }
@@ -128,7 +132,9 @@ pub(super) fn viewer_mature_officeart_emf_bitmap_preview_images(
                 diagnostics.push(ViewerDiagnostic {
                     code: "viewer.mature_officeart_emf.preview_identity_unavailable".to_owned(),
                     severity: ViewerDiagnosticSeverity::FidelityWarning,
-                    message: "Derived EMF bitmap layer has no deterministic Viewer resource identity.".to_owned(),
+                    message:
+                        "Derived EMF bitmap layer has no deterministic Viewer resource identity."
+                            .to_owned(),
                 });
                 continue;
             }
@@ -184,4 +190,3 @@ pub(super) fn viewer_mature_officeart_emf_bitmap_preview_images(
     }
     images
 }
-
