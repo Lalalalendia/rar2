@@ -282,7 +282,9 @@ try {
   if (homeReceipt.path !== "/editor" || homeReceipt.document_id !== documentId ||
       !homeReceipt.project_id || !homeReceipt.name) {
     throw new Error("Project Home did not surface the imported durable project: " +
-      JSON.stringify(homeReceipt));
+      JSON.stringify({ path: homeReceipt.path, document_id: homeReceipt.document_id,
+        project_id_present: !!homeReceipt.project_id,
+        name_present: !!homeReceipt.name }));
   }
   const homeOpen = page.locator(
     '[data-document-id="' + documentId.replace(/"/g, '\\"') + '"] [data-action="open-project"]'
@@ -427,7 +429,12 @@ try {
     real_browser_pointer_move_node: true,
     initial_editor_paint: initialPaint,
     project_home_catalog_claim: true,
-    project_home: homeReceipt,
+    project_home: {
+      path: homeReceipt.path,
+      document_id: homeReceipt.document_id,
+      project_id: homeReceipt.project_id,
+      name_present: !!homeReceipt.name,
+    },
     project_home_editor_paint: homeOpenedPaint,
     reloaded_editor_paint: reopenedPaint,
     moved_editor_paint: movedPaint,
@@ -446,6 +453,11 @@ try {
     steps: calls.map(call => call.method + " " + call.path),
     head_sha: process.env.CHAPTERA_HEAD_SHA ?? "unknown",
   };
+  // Project title comes from the customer source filename. Assert that even
+  // the test harness cannot persist it in acceptance receipts or stdout.
+  if (JSON.stringify(receipt).includes("SampleNewsletter.pub")) {
+    throw new Error("source filename leaked into acceptance telemetry");
+  }
   await writeFile(receiptPath, JSON.stringify(receipt, null, 2) + "\n");
   process.stdout.write(JSON.stringify(receipt) + "\n");
 } finally {
