@@ -156,6 +156,25 @@ pub(crate) fn admit_worker_preview(
     })
 }
 
+/// A candidate may be attached only where a real Reader image frame or
+/// BorderArt placement consumes its resource ID. Declaring an unused resource
+/// inside a forged worker Scene is not browser-rendering authority.
+fn scene_has_resource_use(scene: &Value, resource_id: &str) -> bool {
+    scene
+        .get("nodes")
+        .and_then(Value::as_array)
+        .is_some_and(|nodes| nodes.iter().any(|node| {
+            node["resource_id"].as_str() == Some(resource_id)
+                || node["decorative_border"]["placements"]
+                    .as_array()
+                    .is_some_and(|placements| {
+                        placements.iter().any(|placement| {
+                            placement["resource_id"].as_str() == Some(resource_id)
+                        })
+                    })
+        }))
+}
+
 /// Called ONLY after worker receipt validation and after the legacy sanitizer
 /// strips every worker-provided `inline_data_url`. Unadmitted image resources
 /// stay descriptors, with an explicit partial-fidelity reason.
@@ -181,6 +200,9 @@ pub(crate) fn attach_admitted_previews(
                 })
             })
             .ok_or("preview_resource_unbound")?;
+        if !scene_has_resource_use(scene, &preview.resource_id) {
+            return Err("preview_resource_unused");
+        }
         // Never allow another candidate to overwrite an already admitted one,
         // nor permit a pre-sanitize inline URL to become delivery authority.
         if scene["resources"][index]["availability"] != "descriptor_only"
@@ -328,6 +350,7 @@ mod tests {
 
         let mut scene = json!({
             "fidelity": {"state": "partial", "reasons": ["image_resource_not_inline"]},
+            "nodes": [{"resource_id":"resource-a", "kind":"picture_frame"}],
             "resources": [{"resource_id":"resource-a","mime":"image/png","availability":"descriptor_only"}]
         });
         let previews = vec![IsolatedImagePreviewV1 {
@@ -386,6 +409,26 @@ mod tests {
         assert_eq!(
             attach_admitted_previews(&mut scene, &[alien]),
             Err("preview_resource_unbound")
+        );
+        assert_eq!(scene["resources"][0]["availability"], "descriptor_only");
+    }
+
+    #[test]
+    fn rejects_unused_resource_even_with_valid_worker_preview_digest() {
+        let (candidate, receipt) = worker_candidate();
+        let mut scene = json!({
+            "fidelity": {"state": "partial", "reasons": ["image_resource_not_inline"]},
+            "nodes": [],
+            "resources": [{"resource_id":"resource-a","mime":"image/png","availability":"descriptor_only"}]
+        });
+        let preview = IsolatedImagePreviewV1 {
+            resource_id: "resource-a".to_owned(),
+            encoded_base64: STANDARD.encode(&candidate),
+            receipt,
+        };
+        assert_eq!(
+            attach_admitted_previews(&mut scene, &[preview]),
+            Err("preview_resource_unused")
         );
         assert_eq!(scene["resources"][0]["availability"], "descriptor_only");
     }
