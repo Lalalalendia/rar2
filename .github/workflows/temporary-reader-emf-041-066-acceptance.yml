@@ -1,0 +1,65 @@
+name: TEMP Reader EMF 041 066 source admission
+
+on:
+  push:
+    branches:
+      - feat/reader-emf-birgb-derived-preview-v1
+    paths:
+      - ".github/workflows/temporary-reader-emf-041-066-acceptance.yml"
+      - "vendor/producer-a/crates/pub-reader/src/mature_emf.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/lib.rs"
+      - "vendor/producer-a/crates/pub-viewer/tests/emf_birgb_partial_v1.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: reader-emf-041-066-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Download pinned 1050 Publisher source corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+      - name: Verify immutable 041/066 source hashes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          root = Path("out/pinned1050/materialized/native")
+          assert len(list(root.glob("*.pub"))) == 1050
+          for sha in (
+              "155f8fd8c191851e4380ab1557638aeabb34b2257fa12a7748ab00b09edb74ba",
+              "d8ac6507d86e35c0f43e293760627a01b00a29586a76f8bf05b5fae702a19d13",
+          ):
+              path = root / f"{sha}.pub"
+              assert path.is_file()
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == sha
+          print("exact 041/066 source identities verified")
+          PY
+      - name: Exact PUB 041/066 strict BLIP DIB profiles
+        env:
+          CHAPTERA_PINNED_SOURCE_ROOT: out/pinned1050/materialized/native
+        run: |
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --lib exact_041_and_066_source_profiles_when_corpus_is_mounted
+      - name: Exact PUB 041/066 Viewer preview provenance and scene use
+        env:
+          CHAPTERA_PINNED_SOURCE_ROOT: out/pinned1050/materialized/native
+        run: |
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test emf_birgb_partial_v1
