@@ -57,6 +57,16 @@ pub struct IsolatedReaderSceneIntentV1 {
     pub baseline_revision_id: String,
 }
 
+/// Isolated-worker output is never itself browser-authorized. The host
+/// matches resource IDs to a validated scene and independently re-encodes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolatedImagePreviewV1 {
+    pub resource_id: String,
+    pub encoded_base64: String,
+    pub receipt: Value,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IsolatedReaderSceneReceiptV1 {
@@ -64,6 +74,8 @@ pub struct IsolatedReaderSceneReceiptV1 {
     pub baseline_revision_id: String,
     pub scene_sha256: String,
     pub scene: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub image_previews: Vec<IsolatedImagePreviewV1>,
 }
 
 const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
@@ -253,6 +265,37 @@ pub fn validate_product_replay_receipt(
                 "product_replay_receipt_invalid",
                 "Reader scene disagrees with exact document, revision or bounded payload",
             ));
+        }
+        // Previews are a separate bounded untrusted envelope. A forged worker
+        // cannot attach images to a resource absent from the authorized scene.
+        if scene.image_previews.len() > crate::safe_preview_worker::MAX_WORKER_PREVIEW_ITEMS {
+            return Err(ProductReplayWorkerError::new(
+                "product_reader_preview_limit",
+                "isolated Reader preview count exceeds policy",
+            ));
+        }
+        let resource_ids: std::collections::HashSet<&str> = scene.scene
+            .get("resources")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|resource| resource["resource_id"].as_str())
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        let mut total_base64 = 0_usize;
+        for preview in &scene.image_previews {
+            total_base64 = total_base64.saturating_add(preview.encoded_base64.len());
+            if !resource_ids.contains(preview.resource_id.as_str())
+                || !seen.insert(preview.resource_id.as_str())
+                || preview.encoded_base64.len() > 7 * 1024 * 1024
+                || total_base64 > 10 * 1024 * 1024
+                || !preview.receipt.is_object()
+            {
+                return Err(ProductReplayWorkerError::new(
+                    "product_reader_preview_invalid",
+                    "isolated Reader image candidate is unbound, duplicated or oversized",
+                ));
+            }
         }
     }
     Ok(())
@@ -805,7 +848,7 @@ pub fn run_product_replay_worker(
         // This is the only execution point for the source-neutral Viewer.
         // It runs AFTER seccomp filesystem deny and under the no-network
         // process limits; the host never calls open_pub_bundle.
-        let scene = crate::product_api_http::render_reader_scene_in_isolated_worker(
+        let (scene, image_previews) = crate::product_api_http::render_reader_scene_in_isolated_worker(
             document_id,
             expected_source_sha256,
             &intent.revision_id,
@@ -836,6 +879,7 @@ pub fn run_product_replay_worker(
             baseline_revision_id: intent.baseline_revision_id,
             scene_sha256: sha256_hex(&bytes),
             scene,
+            image_previews,
         })
     } else {
         None
@@ -1115,6 +1159,11 @@ impl IsolatedProductReplayProducer {
             ));
         }
         sanitize_reader_scene_browser_decoders(&mut scene.scene)?;
+        crate::safe_preview_host::attach_admitted_previews(&mut scene.scene, &scene.image_previews)
+            .map_err(|_| ProductReplayWorkerError::new(
+                "product_reader_preview_host_rejected",
+                "host could not safely admit isolated image derivatives",
+            ))?;
         Ok(scene.scene)
     }
 
@@ -1651,6 +1700,7 @@ mod tests {
             baseline_revision_id: "revision-a".into(),
             scene_sha256: sha256_hex(&serde_json::to_vec(&scene).unwrap()),
             scene,
+            image_previews: Vec::new(),
         });
         assert!(
             validate_product_replay_receipt(
