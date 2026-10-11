@@ -137,6 +137,12 @@ pub(crate) fn derive_isolated_image_previews(
     };
 
     for image in &geometry.images {
+        // Exact original PUB images require the Reader's independently verified
+        // source-resource hash. A raw image container without that authority
+        // must remain descriptor-only, even when its bytes are decodable.
+        if image.source_exact && image.verified_source_sha256.is_none() {
+            continue;
+        }
         try_add(
             image.resource_id.as_canonical().to_string(),
             &image.mime,
