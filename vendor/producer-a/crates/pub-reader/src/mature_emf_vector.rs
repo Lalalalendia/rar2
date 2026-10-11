@@ -620,6 +620,49 @@ mod tests {
     }
 
     #[test]
+    fn exact_066_source_draws_four_bounded_paths_but_041_stays_bitmap_owned() {
+        use sha2::{Digest, Sha256};
+        let Ok(root) = std::env::var("CHAPTERA_PINNED_SOURCE_ROOT") else {
+            return;
+        };
+        for (sha, expected_vector, expected_uses, expected_bitmap) in [
+            ("d8ac6507d86e35c0f43e293760627a01b00a29586a76f8bf05b5fae702a19d13", 1, 2, 0),
+            ("155f8fd8c191851e4380ab1557638aeabb34b2257fa12a7748ab00b09edb74ba", 0, 0, 6),
+        ] {
+            let bytes = std::fs::read(std::path::Path::new(&root).join(format!("{sha}.pub")))
+                .expect("immutable pinned PUB source");
+            let digest = Sha256::digest(&bytes);
+            assert_eq!(
+                digest.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+                sha
+            );
+            let mut raw = [0_u8; 32];
+            raw.copy_from_slice(&digest);
+            let source = crate::build_mature_0x2c_source_graph(
+                Cursor::new(bytes.as_slice()),
+                pub_model::Sha256Digest::from_bytes(raw),
+            ).expect("exact source graph");
+            let bundle = build_mature_0x2c_emf_vector_preview_bundle_from_bytes(
+                &bytes, &source.graph
+            ).expect("bounded vector builder");
+            assert_eq!(bundle.sources.len(), expected_vector);
+            assert_eq!(bundle.skipped_bitmap_count, expected_bitmap);
+            assert_eq!(bundle.rejected_source_count, 0);
+            assert_eq!(
+                bundle.sources.iter().map(|s| s.uses.len()).sum::<usize>(),
+                expected_uses
+            );
+            for candidate in bundle.sources {
+                assert_eq!(candidate.filled_path_count, 4);
+                assert!(candidate.width <= MAX_SIDE && candidate.height <= MAX_SIDE);
+                let filled = candidate.rgba.chunks_exact(4)
+                    .filter(|px| px[3] == 255).count();
+                assert!(filled > 0 && filled < (candidate.width * candidate.height) as usize);
+            }
+        }
+    }
+
+    #[test]
     fn fails_closed_on_unmodeled_draw_operations_and_invalid_source() {
         let mut data = synthetic();
         let last = data.split_off(data.len()-20);
