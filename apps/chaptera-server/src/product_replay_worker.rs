@@ -18,13 +18,14 @@ use pub_editor::{
 };
 use pub_reader::PubResolvedGraph;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use rand::{RngCore, rngs::OsRng};
 use tokio::{fs as async_fs, io::AsyncWriteExt, process::Command, time::timeout};
 
 use crate::{
+    reader_scene_v1::{MAX_SCENE_BYTES, READER_SCENE_V1},
     revision_materializer::{
         EditorReplayEngine, PubEditorReplayEngine, append_event_operation,
         cloud_replay_requires_local_identity, cloud_revision_project, project_sha256,
@@ -49,6 +50,22 @@ pub struct IsolatedMoveNodeReceiptV1 {
     pub resulting_project: EditorProject,
     pub resulting_project_sha256: String,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolatedReaderSceneIntentV1 {
+    pub revision_id: String,
+    pub baseline_revision_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolatedReaderSceneReceiptV1 {
+    pub revision_id: String,
+    pub baseline_revision_id: String,
+    pub scene_sha256: String,
+    pub scene: Value,
+}
+
 const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PROJECT_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
@@ -88,6 +105,8 @@ pub struct ProductReplayWorkerReceiptV1 {
     pub baseline_project: Option<EditorProject>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub move_node: Option<IsolatedMoveNodeReceiptV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reader_scene: Option<IsolatedReaderSceneReceiptV1>,
     pub filesystem_confinement: bool,
 }
 
@@ -210,7 +229,327 @@ pub fn validate_product_replay_receipt(
             "isolated MoveNode receipt violates source and project identity",
         ));
     }
+    if let Some(scene) = &receipt.reader_scene {
+        let payload = serde_json::to_vec(&scene.scene).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "Reader scene receipt could not be serialized",
+            )
+        })?;
+        if receipt.baseline_project.is_some()
+            || receipt.move_node.is_some()
+            || !valid_revision_id(&scene.revision_id)
+            || !valid_revision_id(&scene.baseline_revision_id)
+            || scene.scene["protocol_version"] != READER_SCENE_V1
+            || scene.scene["scene_authority"] != "server_viewer_projection"
+            || scene.scene["document_id"] != document_id
+            || scene.scene["source_hash"] != source_sha256
+            || scene.scene["revision_id"] != scene.revision_id
+            || !approved_reader_scene_shape(&scene.scene)
+            || payload.len() > MAX_SCENE_BYTES
+            || sha256_hex(&payload) != scene.scene_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "Reader scene disagrees with exact document, revision or bounded payload",
+            ));
+        }
+    }
     Ok(())
+}
+
+/// Treat worker JSON as an untrusted wire envelope. In particular, never
+/// forward a newly invented top-level key that could carry editor projects,
+/// original PUB bytes, provider credentials or internal diagnostics.
+fn approved_reader_scene_shape(scene: &Value) -> bool {
+    let Some(object) = scene.as_object() else {
+        return false;
+    };
+    const APPROVED: &[&str] = &[
+        "protocol_version",
+        "document_id",
+        "source_hash",
+        "revision_id",
+        "scene_authority",
+        "stacking_fidelity",
+        "fidelity",
+        "pages",
+        "nodes",
+        "stories",
+        "resources",
+        "fonts",
+        "text_layout_fallback_counts",
+        "diagnostics",
+    ];
+    if object.keys().any(|key| !APPROVED.contains(&key.as_str())) {
+        return false;
+    }
+    // A valid top-level envelope is not sufficient: a compromised worker
+    // could hide source paths, cookies or raw PUB data in an otherwise-valid
+    // node/resource/story object and recompute the entire scene checksum.
+    // Allow only the fields serialized by the public Reader Scene schema.
+    const NODE_FIELDS: &[&str] = &[
+        "node_id",
+        "origin_node_id",
+        "page_id",
+        "parent_node_id",
+        "kind",
+        "bounds",
+        "text_bounds",
+        "transform",
+        "paint",
+        "decorative_border",
+        "resource_id",
+        "image_source_window",
+        "image_content_rotation_degrees",
+        "image_recolor",
+        "table",
+        "text",
+        "text_layout",
+        "preview_text_style",
+    ];
+    if !approved_scene_objects(
+        &scene["pages"],
+        &["page_id", "order", "width_emu", "height_emu"],
+        &["page_id", "order", "width_emu", "height_emu"],
+    ) || !approved_scene_objects(
+        &scene["nodes"],
+        NODE_FIELDS,
+        &["node_id", "page_id", "kind", "bounds", "transform"],
+    ) || !approved_scene_objects(
+        &scene["stories"],
+        &["story_id", "text", "text_fidelity"],
+        &["story_id", "text", "text_fidelity"],
+    ) || !scene.get("resources").is_none_or(|values| {
+        approved_scene_objects(
+            values,
+            &["resource_id", "mime", "availability", "inline_data_url"],
+            &["resource_id", "mime", "availability"],
+        )
+    }) || !scene.get("fonts").is_none_or(|values| {
+        approved_scene_objects(
+            values,
+            &[
+                "resource_id",
+                "family_name",
+                "mime",
+                "expected_sha256",
+                "availability",
+                "inline_data_url",
+            ],
+            &[
+                "resource_id",
+                "family_name",
+                "mime",
+                "expected_sha256",
+                "availability",
+                "inline_data_url",
+            ],
+        )
+    }) || !scene.get("diagnostics").is_none_or(|values| {
+        approved_scene_objects(
+            values,
+            &["code", "severity", "origin_id", "message"],
+            &["code", "severity", "message"],
+        )
+    }) {
+        return false;
+    }
+    let Some(fidelity) = scene["fidelity"].as_object() else {
+        return false;
+    };
+    if fidelity
+        .keys()
+        .any(|key| !["state", "reasons"].contains(&key.as_str()))
+        || !scene["fidelity"]["reasons"]
+            .as_array()
+            .is_some_and(|reasons| reasons.iter().all(Value::is_string))
+        || !scene
+            .get("text_layout_fallback_counts")
+            .is_none_or(|value| {
+                value
+                    .as_object()
+                    .is_some_and(|counts| counts.values().all(|n| n.as_u64().is_some()))
+            })
+    {
+        return false;
+    }
+    scene["stacking_fidelity"].is_string()
+        && scene["fidelity"]["state"].is_string()
+        && scene["fidelity"]["reasons"].is_array()
+        && scene["pages"].is_array()
+        && scene["nodes"].is_array()
+        && scene["stories"].is_array()
+        && scene.get("resources").is_none_or(Value::is_array)
+        && scene.get("fonts").is_none_or(Value::is_array)
+        && scene
+            .get("text_layout_fallback_counts")
+            .is_none_or(Value::is_object)
+        && scene.get("diagnostics").is_none_or(Value::is_array)
+}
+
+fn approved_scene_objects(value: &Value, allowed: &[&str], required: &[&str]) -> bool {
+    value.as_array().is_some_and(|items| {
+        items.iter().all(|item| {
+            item.as_object().is_some_and(|fields| {
+                fields.keys().all(|key| allowed.contains(&key.as_str()))
+                    && required.iter().all(|key| fields.contains_key(*key))
+            })
+        })
+    })
+}
+
+fn trusted_base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = chunk.get(1).copied().unwrap_or(0);
+        let b2 = chunk.get(2).copied().unwrap_or(0);
+        encoded.push(char::from(TABLE[usize::from(b0 >> 2)]));
+        encoded.push(char::from(
+            TABLE[usize::from(((b0 & 0x03) << 4) | (b1 >> 4))],
+        ));
+        if chunk.len() > 1 {
+            encoded.push(char::from(
+                TABLE[usize::from(((b1 & 0x0f) << 2) | (b2 >> 6))],
+            ));
+        } else {
+            encoded.push('=');
+        }
+        if chunk.len() > 2 {
+            encoded.push(char::from(TABLE[usize::from(b2 & 0x3f)]));
+        } else {
+            encoded.push('=');
+        }
+    }
+    encoded
+}
+
+fn trusted_fallback_font_value() -> Result<Value, ProductReplayWorkerError> {
+    chaptera_desktop_fallback_font_resource::validate().map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_reader_scene_trusted_font_invalid",
+            "embedded trusted fallback font failed its pinned identity check",
+        )
+    })?;
+    Ok(json!({
+        "resource_id": chaptera_desktop_fallback_font_resource::RESOURCE_ID,
+        "family_name": chaptera_desktop_fallback_font_resource::FAMILY_NAME,
+        "mime": "font/ttf",
+        "expected_sha256": chaptera_desktop_fallback_font_resource::EXPECTED_SHA256,
+        "availability": "inline_data_url",
+        "inline_data_url": format!(
+            "data:font/ttf;base64,{}",
+            trusted_base64_encode(chaptera_desktop_fallback_font_resource::bytes())
+        ),
+    }))
+}
+
+/// Treat the isolated parser/Viewer output as hostile even after schema/hash
+/// validation. Browser decoder inputs are a separate trust boundary:
+/// - image payloads from the worker are never forwarded as data URLs;
+/// - font payloads are reconstructed from the server's pinned embedded font,
+///   never copied from worker JSON.
+///
+/// Text/diagnostic strings remain data-only and are rendered with textContent.
+fn sanitize_reader_scene_browser_decoders(
+    scene: &mut Value,
+) -> Result<(), ProductReplayWorkerError> {
+    let object = scene.as_object_mut().ok_or_else(|| {
+        ProductReplayWorkerError::new(
+            "product_reader_scene_resource_invalid",
+            "Reader scene browser envelope is not an object",
+        )
+    })?;
+
+    let has_image_resources = if let Some(resources) = object.get_mut("resources") {
+        let resources = resources.as_array_mut().ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_reader_scene_resource_invalid",
+                "Reader scene resources must be an array",
+            )
+        })?;
+        for resource in resources.iter_mut() {
+            let fields = resource.as_object_mut().ok_or_else(|| {
+                ProductReplayWorkerError::new(
+                    "product_reader_scene_resource_invalid",
+                    "Reader image resource must be an object",
+                )
+            })?;
+            fields.remove("inline_data_url");
+            fields.insert(
+                "availability".to_owned(),
+                Value::String("descriptor_only".to_owned()),
+            );
+        }
+        !resources.is_empty()
+    } else {
+        false
+    };
+
+    if has_image_resources {
+        let fidelity = object
+            .get_mut("fidelity")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                ProductReplayWorkerError::new(
+                    "product_reader_scene_resource_invalid",
+                    "Reader scene fidelity envelope is invalid",
+                )
+            })?;
+        fidelity.insert("state".to_owned(), Value::String("partial".to_owned()));
+        let reasons = fidelity
+            .get_mut("reasons")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| {
+                ProductReplayWorkerError::new(
+                    "product_reader_scene_resource_invalid",
+                    "Reader scene fidelity reasons are invalid",
+                )
+            })?;
+        if !reasons
+            .iter()
+            .any(|reason| reason.as_str() == Some("image_resource_not_inline"))
+        {
+            reasons.push(Value::String("image_resource_not_inline".to_owned()));
+        }
+    }
+
+    if let Some(fonts) = object.get_mut("fonts") {
+        let fonts = fonts.as_array_mut().ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_reader_scene_resource_invalid",
+                "Reader scene fonts must be an array",
+            )
+        })?;
+        if !fonts.is_empty() {
+            fonts.clear();
+            fonts.push(trusted_fallback_font_value()?);
+        }
+    }
+
+    let payload = serde_json::to_vec(scene).map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_reader_scene_resource_invalid",
+            "sanitized Reader scene could not be serialized",
+        )
+    })?;
+    if payload.len() > MAX_SCENE_BYTES {
+        return Err(ProductReplayWorkerError::new(
+            "product_reader_scene_resource_invalid",
+            "sanitized Reader scene exceeds the browser response limit",
+        ));
+    }
+    Ok(())
+}
+
+fn valid_revision_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && !value
+            .chars()
+            .any(|ch| ch.is_control() || ch.is_whitespace())
 }
 
 /// Invoke only through the existing no-network, resource-limited worker harness.
@@ -223,6 +562,7 @@ pub fn run_product_replay_worker(
     project_path: Option<&Path>,
     expected_project_sha256: Option<&str>,
     move_node_intent: Option<IsolatedMoveNodeIntentV1>,
+    reader_scene_intent: Option<IsolatedReaderSceneIntentV1>,
 ) -> Result<(), ProductReplayWorkerError> {
     require_document_id(document_id)?;
     require_sha256(expected_source_sha256)?;
@@ -239,6 +579,17 @@ pub fn run_product_replay_worker(
         return Err(ProductReplayWorkerError::new(
             "product_replay_identity_invalid",
             "MoveNode requires an authorized exact source-bound project",
+        ));
+    }
+    if let Some(scene) = &reader_scene_intent
+        && (project_path.is_none()
+            || move_node_intent.is_some()
+            || !valid_revision_id(&scene.revision_id)
+            || !valid_revision_id(&scene.baseline_revision_id))
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_identity_invalid",
+            "Reader scene requires an exact project and exclusive revision identities",
         ));
     }
     if expected_source_byte_len == 0 || expected_source_byte_len > MAX_SOURCE_BYTES {
@@ -450,6 +801,46 @@ pub fn run_product_replay_worker(
         None
     };
 
+    let reader_scene = if let Some(intent) = reader_scene_intent {
+        // This is the only execution point for the source-neutral Viewer.
+        // It runs AFTER seccomp filesystem deny and under the no-network
+        // process limits; the host never calls open_pub_bundle.
+        let scene = crate::product_api_http::render_reader_scene_in_isolated_worker(
+            document_id,
+            expected_source_sha256,
+            &intent.revision_id,
+            &intent.baseline_revision_id,
+            &source_bytes,
+            &project,
+        )
+        .map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_reader_scene_rejected",
+                "isolated Viewer failed to project the exact authorized revision",
+            )
+        })?;
+        let bytes = serde_json::to_vec(&scene).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_reader_scene_invalid",
+                "isolated Reader scene cannot be serialized",
+            )
+        })?;
+        if bytes.len() > MAX_SCENE_BYTES {
+            return Err(ProductReplayWorkerError::new(
+                "product_reader_scene_limit",
+                "isolated Reader scene exceeds the bounded response envelope",
+            ));
+        }
+        Some(IsolatedReaderSceneReceiptV1 {
+            revision_id: intent.revision_id,
+            baseline_revision_id: intent.baseline_revision_id,
+            scene_sha256: sha256_hex(&bytes),
+            scene,
+        })
+    } else {
+        None
+    };
+
     let graph: Value = serde_json::to_value(session.graph()).map_err(|_| {
         ProductReplayWorkerError::new(
             "product_replay_projection_failed",
@@ -479,6 +870,7 @@ pub fn run_product_replay_worker(
         authoring_graph: graph,
         baseline_project: if baseline_mode { Some(project) } else { None },
         move_node,
+        reader_scene,
         filesystem_confinement: true,
     };
     validate_product_replay_receipt(
@@ -575,6 +967,7 @@ impl IsolatedProductReplayProducer {
                 source_bytes,
                 Some((&project_bytes, expected_project_sha256)),
                 None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -584,7 +977,10 @@ impl IsolatedProductReplayProducer {
             source_bytes.len() as u64,
             expected_project_sha256,
         )?;
-        if receipt.baseline_project.is_some() || receipt.move_node.is_some() {
+        if receipt.baseline_project.is_some()
+            || receipt.move_node.is_some()
+            || receipt.reader_scene.is_some()
+        {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
                 "projection worker returned an unexpected baseline or mutation",
@@ -602,12 +998,12 @@ impl IsolatedProductReplayProducer {
         source_bytes: &[u8],
     ) -> Result<EditorProject, ProductReplayWorkerError> {
         let receipt = self
-            .invoke_job(document_id, source_sha256, source_bytes, None, None)
+            .invoke_job(document_id, source_sha256, source_bytes, None, None, None)
             .await?;
-        if receipt.move_node.is_some() {
+        if receipt.move_node.is_some() || receipt.reader_scene.is_some() {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
-                "baseline worker unexpectedly returned a MoveNode mutation",
+                "baseline worker unexpectedly returned a mutation or Reader scene",
             ));
         }
         let project = receipt.baseline_project.as_ref().ok_or_else(|| {
@@ -637,6 +1033,89 @@ impl IsolatedProductReplayProducer {
             ));
         }
         Ok(project.clone())
+    }
+
+    /// Return the same rich Reader Scene envelope as the legacy source-neutral
+    /// Viewer. The caller has already authorized the source and selected the
+    /// exact current RevisionStream head; the host never parses a PUB here.
+    pub async fn project_reader_scene(
+        &self,
+        document_id: &str,
+        source_sha256: &str,
+        source_bytes: &[u8],
+        project: &EditorProject,
+        expected_project_sha256: &str,
+        intent: &IsolatedReaderSceneIntentV1,
+    ) -> Result<Value, ProductReplayWorkerError> {
+        if !valid_revision_id(&intent.revision_id)
+            || !valid_revision_id(&intent.baseline_revision_id)
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_reader_scene_invalid",
+                "Reader scene revision identity is invalid",
+            ));
+        }
+        let project_bytes = serde_json::to_vec(project).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_replay_project_invalid",
+                "canonical project cannot be serialized",
+            )
+        })?;
+        if project_bytes.len() as u64 > MAX_PROJECT_BYTES
+            || project_sha256(project).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_project_invalid",
+                    "canonical Reader project hash is invalid",
+                )
+            })? != expected_project_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_project_hash_mismatch",
+                "Reader Scene input is not the exact authorized revision project",
+            ));
+        }
+        let receipt = self
+            .invoke_job(
+                document_id,
+                source_sha256,
+                source_bytes,
+                Some((&project_bytes, expected_project_sha256)),
+                None,
+                Some(intent),
+            )
+            .await?;
+        validate_product_replay_receipt(
+            &receipt,
+            document_id,
+            source_sha256,
+            source_bytes.len() as u64,
+            expected_project_sha256,
+        )?;
+        if receipt.baseline_project.is_some() || receipt.move_node.is_some() {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "Reader scene worker returned baseline or geometry mutation",
+            ));
+        }
+        let mut scene = receipt.reader_scene.ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "Reader scene worker did not return an exact scene",
+            )
+        })?;
+        if scene.revision_id != intent.revision_id
+            || scene.baseline_revision_id != intent.baseline_revision_id
+            || scene.scene["revision_id"] != intent.revision_id
+            || scene.scene["document_id"] != document_id
+            || scene.scene["source_hash"] != source_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_identity_mismatch",
+                "Reader scene receipt was replayed for another document or revision",
+            ));
+        }
+        sanitize_reader_scene_browser_decoders(&mut scene.scene)?;
+        Ok(scene.scene)
     }
 
     /// Exact geometry mutation is performed inside the confined worker.
@@ -677,6 +1156,7 @@ impl IsolatedProductReplayProducer {
                 source_bytes,
                 Some((&project_bytes, expected_base_sha256)),
                 Some(intent),
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -686,10 +1166,10 @@ impl IsolatedProductReplayProducer {
             source_bytes.len() as u64,
             expected_base_sha256,
         )?;
-        if receipt.baseline_project.is_some() {
+        if receipt.baseline_project.is_some() || receipt.reader_scene.is_some() {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
-                "isolated MoveNode response unexpectedly included a baseline",
+                "isolated MoveNode response unexpectedly included a baseline or Reader scene",
             ));
         }
         let mutation = receipt.move_node.ok_or_else(|| {
@@ -757,6 +1237,7 @@ impl IsolatedProductReplayProducer {
         source_bytes: &[u8],
         project: Option<(&[u8], &str)>,
         move_node: Option<&IsolatedMoveNodeIntentV1>,
+        reader_scene: Option<&IsolatedReaderSceneIntentV1>,
     ) -> Result<ProductReplayWorkerReceiptV1, ProductReplayWorkerError> {
         require_document_id(document_id)?;
         require_sha256(source_sha256)?;
@@ -767,6 +1248,12 @@ impl IsolatedProductReplayProducer {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_source_mismatch",
                 "verified source differs from worker request",
+            ));
+        }
+        if reader_scene.is_some() && (project.is_none() || move_node.is_some()) {
+            return Err(ProductReplayWorkerError::new(
+                "product_reader_scene_invalid",
+                "Reader scene request must have an exact project without a mutation",
             ));
         }
         if move_node.is_some() && project.is_none() {
@@ -837,6 +1324,13 @@ impl IsolatedProductReplayProducer {
                 .arg(move_node.x_emu.to_string())
                 .arg("--move-y-emu")
                 .arg(move_node.y_emu.to_string());
+        }
+        if let Some(scene) = reader_scene {
+            command
+                .arg("--scene-revision-id")
+                .arg(&scene.revision_id)
+                .arg("--scene-baseline-revision-id")
+                .arg(&scene.baseline_revision_id);
         }
         let deadline = self
             .config
@@ -1002,6 +1496,7 @@ mod tests {
             authoring_graph: graph,
             baseline_project: None,
             move_node: None,
+            reader_scene: None,
             filesystem_confinement: true,
         }
     }
@@ -1061,6 +1556,226 @@ mod tests {
             .unwrap_err()
             .code,
             "product_replay_receipt_identity_mismatch"
+        );
+    }
+
+    #[test]
+    fn browser_decoder_boundary_strips_worker_images_and_rebuilds_trusted_font() {
+        let mut scene = serde_json::json!({
+            "protocol_version": READER_SCENE_V1,
+            "scene_authority": "server_viewer_projection",
+            "document_id": "document-a",
+            "source_hash": "a".repeat(64),
+            "revision_id": "revision-a",
+            "stacking_fidelity": "source",
+            "fidelity": {"state": "supported", "reasons": []},
+            "pages": [],
+            "nodes": [],
+            "stories": [],
+            "resources": [{
+                "resource_id": "resource-a",
+                "mime": "image/png",
+                "availability": "inline_data_url",
+                "inline_data_url": "data:image/png;base64,ATTACKER_CONTROLLED"
+            }],
+            "fonts": [{
+                "resource_id": "worker-forged-font",
+                "family_name": "Forged",
+                "mime": "font/ttf",
+                "expected_sha256": "b".repeat(64),
+                "availability": "inline_data_url",
+                "inline_data_url": "data:font/ttf;base64,ATTACKER_CONTROLLED"
+            }]
+        });
+
+        sanitize_reader_scene_browser_decoders(&mut scene).unwrap();
+
+        let image = &scene["resources"][0];
+        assert_eq!(image["availability"], "descriptor_only");
+        assert!(image.get("inline_data_url").is_none());
+        assert_eq!(scene["fidelity"]["state"], "partial");
+        assert!(
+            scene["fidelity"]["reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reason| reason == "image_resource_not_inline")
+        );
+
+        let fonts = scene["fonts"].as_array().unwrap();
+        assert_eq!(fonts.len(), 1);
+        let font = &fonts[0];
+        assert_eq!(
+            font["resource_id"],
+            chaptera_desktop_fallback_font_resource::RESOURCE_ID
+        );
+        assert_eq!(
+            font["family_name"],
+            chaptera_desktop_fallback_font_resource::FAMILY_NAME
+        );
+        assert_eq!(
+            font["expected_sha256"],
+            chaptera_desktop_fallback_font_resource::EXPECTED_SHA256
+        );
+        assert_eq!(font["mime"], "font/ttf");
+        assert!(
+            font["inline_data_url"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("data:font/ttf;base64,"))
+        );
+        assert!(
+            !font["inline_data_url"]
+                .as_str()
+                .unwrap()
+                .contains("ATTACKER_CONTROLLED")
+        );
+    }
+
+    #[test]
+    fn reader_scene_receipt_rejects_replayed_revision_and_bad_shape() {
+        let mut expected = receipt();
+        let scene = serde_json::json!({
+            "protocol_version": READER_SCENE_V1,
+            "scene_authority": "server_viewer_projection",
+            "document_id": "document-a",
+            "source_hash": "a".repeat(64),
+            "revision_id": "revision-a",
+            "stacking_fidelity": "source",
+            "fidelity": {"state": "Exact", "reasons": []},
+            "pages": [],
+            "nodes": [],
+            "stories": []
+        });
+        expected.reader_scene = Some(IsolatedReaderSceneReceiptV1 {
+            revision_id: "revision-a".into(),
+            baseline_revision_id: "revision-a".into(),
+            scene_sha256: sha256_hex(&serde_json::to_vec(&scene).unwrap()),
+            scene,
+        });
+        assert!(
+            validate_product_replay_receipt(
+                &expected,
+                "document-a",
+                &"a".repeat(64),
+                512,
+                &"b".repeat(64)
+            )
+            .is_ok()
+        );
+
+        let mut other_revision = expected.clone();
+        let refscene = other_revision.reader_scene.as_mut().unwrap();
+        refscene.scene["revision_id"] = Value::String("revision-other".into());
+        // Even when a malicious worker recomputes the checksum, its revision
+        // payload must be bound to the declared exact revision identity.
+        refscene.scene_sha256 = sha256_hex(&serde_json::to_vec(&refscene.scene).unwrap());
+        assert_eq!(
+            validate_product_replay_receipt(
+                &other_revision,
+                "document-a",
+                &"a".repeat(64),
+                512,
+                &"b".repeat(64)
+            )
+            .unwrap_err()
+            .code,
+            "product_replay_receipt_invalid"
+        );
+
+        let mut leaked = expected.clone();
+        let leak = leaked.reader_scene.as_mut().unwrap();
+        leak.scene["project"] = serde_json::json!({"source_file": "should-not-leak"});
+        leak.scene_sha256 = sha256_hex(&serde_json::to_vec(&leak.scene).unwrap());
+        assert_eq!(
+            validate_product_replay_receipt(
+                &leaked,
+                "document-a",
+                &"a".repeat(64),
+                512,
+                &"b".repeat(64)
+            )
+            .unwrap_err()
+            .code,
+            "product_replay_receipt_invalid"
+        );
+
+        // Recomputing a valid scene SHA must never make private fields in
+        // child collections eligible for browser delivery.
+        for (collection, injected) in [
+            (
+                "pages",
+                serde_json::json!({
+                    "page_id": "page-a",
+                    "order": 0,
+                    "width_emu": 100,
+                    "height_emu": 100,
+                    "private_file_path": "/srv/private/source.pub",
+                }),
+            ),
+            (
+                "stories",
+                serde_json::json!({
+                    "story_id": "story-a",
+                    "text": "visible",
+                    "text_fidelity": "source",
+                    "raw_pub_bytes": "secret",
+                }),
+            ),
+            (
+                "resources",
+                serde_json::json!({
+                    "resource_id": "resource-a",
+                    "mime": "image/png",
+                    "availability": "available",
+                    "provider_token": "secret",
+                }),
+            ),
+            (
+                "nodes",
+                serde_json::json!({
+                    "node_id": "node-a",
+                    "page_id": "page-a",
+                    "kind": "shape",
+                    "bounds": {"x": 0, "y": 0, "width": 10, "height": 10},
+                    "transform": {"a": "1", "b": "0", "c": "0", "d": "1", "tx": 0, "ty": 0},
+                    "editor_project": {"private": "secret"},
+                }),
+            ),
+        ] {
+            let mut forged = expected.clone();
+            let scene = forged.reader_scene.as_mut().unwrap();
+            scene.scene[collection] = serde_json::json!([injected]);
+            scene.scene_sha256 = sha256_hex(&serde_json::to_vec(&scene.scene).unwrap());
+            assert_eq!(
+                validate_product_replay_receipt(
+                    &forged,
+                    "document-a",
+                    &"a".repeat(64),
+                    512,
+                    &"b".repeat(64),
+                )
+                .unwrap_err()
+                .code,
+                "product_replay_receipt_invalid",
+                "nested leak in {collection} should be rejected",
+            );
+        }
+
+        let mut bad_shape = expected.clone();
+        let bad = bad_shape.reader_scene.as_mut().unwrap();
+        bad.scene["nodes"] = Value::String("forged nodes".into());
+        bad.scene_sha256 = sha256_hex(&serde_json::to_vec(&bad.scene).unwrap());
+        assert_eq!(
+            validate_product_replay_receipt(
+                &bad_shape,
+                "document-a",
+                &"a".repeat(64),
+                512,
+                &"b".repeat(64)
+            )
+            .unwrap_err()
+            .code,
+            "product_replay_receipt_invalid"
         );
     }
 
