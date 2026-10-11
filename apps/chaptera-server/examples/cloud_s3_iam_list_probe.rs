@@ -254,7 +254,9 @@ async fn sampled_list_denial(
         let denied = match outcome {
             Ok(Err(error)) => list_is_denied(
                 error.as_service_error().is_some(),
-                error.raw_response().map(|response| response.status().as_u16()),
+                error
+                    .raw_response()
+                    .map(|response| response.status().as_u16()),
             ),
             _ => false,
         };
@@ -270,8 +272,7 @@ fn list_is_denied(service_error: bool, status: Option<u16>) -> bool {
 }
 
 fn sampled_iam_gate(head_controls: [bool; 4], list_denials: [bool; 2]) -> bool {
-    head_controls.into_iter().all(|passed| passed)
-        && list_denials.into_iter().all(|passed| passed)
+    head_controls.into_iter().all(|passed| passed) && list_denials.into_iter().all(|passed| passed)
 }
 
 fn normalize_assumed_role_arn(value: &str) -> Option<String> {
@@ -300,7 +301,9 @@ fn valid_synthetic_fixture(value: &str, prefix: &str) -> bool {
         return false;
     };
     token.len() == 32
-        && token.bytes().all(|ch| ch.is_ascii_digit() || (b'a'..=b'f').contains(&ch))
+        && token
+            .bytes()
+            .all(|ch| ch.is_ascii_digit() || (b'a'..=b'f').contains(&ch))
 }
 
 fn reject_ambient_credentials() -> Result<(), String> {
@@ -373,7 +376,10 @@ mod tests {
         assert_eq!(normalize_assumed_role_arn(a), normalize_assumed_role_arn(b));
         assert_ne!(normalize_assumed_role_arn(a), normalize_assumed_role_arn(c));
         assert!(normalize_assumed_role_arn("arn:aws:iam::123456789012:user/root").is_none());
-        assert!(normalize_assumed_role_arn("arn:aws:sts::123456789012:assumed-role/no-session").is_none());
+        assert!(
+            normalize_assumed_role_arn("arn:aws:sts::123456789012:assumed-role/no-session")
+                .is_none()
+        );
     }
 
     #[test]
