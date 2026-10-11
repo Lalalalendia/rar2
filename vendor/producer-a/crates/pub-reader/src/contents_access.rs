@@ -87,9 +87,7 @@ fn bounded_page_logo_context(
     parent_raw_type: Option<u16>,
     registered_page: bool,
 ) -> bool {
-    raw_type == Some(RAW_TYPE_LOGO)
-        && parent_raw_type == Some(RAW_TYPE_PAGE)
-        && registered_page
+    raw_type == Some(RAW_TYPE_LOGO) && parent_raw_type == Some(RAW_TYPE_PAGE) && registered_page
 }
 
 /// LOGO (0x31) is context-overloaded. Only mature PAGE-owned carriers whose
