@@ -1006,7 +1006,10 @@ mod tests {
             .unwrap();
         let missing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(missing["error"]["code"], "grant_missing");
-        assert_eq!(missing["error"]["message"], "principal has no grant for the document");
+        assert_eq!(
+            missing["error"]["message"],
+            "principal has no grant for the document"
+        );
         assert!(!String::from_utf8_lossy(&bytes).contains(canary));
 
         let conflict = ProductExportHttpError::Store(SqliteStoreError::new(
@@ -1194,9 +1197,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let authz = SqliteAuthzAuthority::open(&db, 4, timeout)
-            .await
-            .unwrap();
+        let authz = SqliteAuthzAuthority::open(&db, 4, timeout).await.unwrap();
         authz
             .set_role(
                 tenant_id,
