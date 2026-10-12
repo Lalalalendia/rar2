@@ -72,6 +72,7 @@ export function productEditorStatusView(state, readerScene = null) {
     };
   }
   if (state.reason === "history_blocked_during_save") return { status: "Save still pending — retry Undo/Redo after confirmation", kind: "pending", fidelity };
+  if (state.reason === "nudge_blocked_during_save") return { status: "Save still pending — retry the arrow key after confirmation", kind: "pending", fidelity };
   const historyAction = state.history_command === "redo" ? "Redo" : "Undo";
   if (state.reason === "history_sent") {
     return { status: historyAction === "Redo" ? "Redoing change…" : "Undoing change…", kind: "pending", fidelity };
