@@ -120,6 +120,57 @@ pub(super) fn has_bounded_grouped_solid_rectangle(
     })
 }
 
+/// The PAGE-owned LOGO lane may admit a solid rectangle whose color comes
+/// from the document palette or an unambiguous DGG layer. This is stricter
+/// than the general grouped lane: the shape itself must explicitly opt into
+/// filling and opt out of its outline. An unproven normative color, ambiguity,
+/// non-solid fill or unsupported opacity cannot create an opaque page node.
+pub(super) fn has_bounded_logo_effective_solid_rectangle(
+    shape: &pub_escher::SpContainerObservation,
+    effective: &PubEffectiveShapePaintSource,
+) -> bool {
+    if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(OFFICEART_SHAPE_TYPE_RECTANGLE)
+        || !admits_normative_2d_paint_defaults(shape)
+    {
+        return false;
+    }
+    // The effective solid RGB paint adapter does not currently carry alpha.
+    if shape
+        .fopts
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .any(|property| matches!(property.property_id(), 0x0182 | 0x0184))
+    {
+        return false;
+    }
+    let fill = &effective.fill;
+    matches!(fill.solid.as_ref(), Some(solid) if solid.value)
+        && matches!(
+            fill.visible.as_ref(),
+            Some(visible)
+                if visible.value
+                    && visible.authority == PubEffectivePaintAuthority::ShapeLocal
+                    && visible.source.is_some()
+        )
+        && matches!(
+            fill.color_rgb.as_ref(),
+            Some(color)
+                if matches!(
+                    color.authority,
+                    PubEffectivePaintAuthority::ShapeLocal
+                        | PubEffectivePaintAuthority::DrawingGroupPrimary
+                        | PubEffectivePaintAuthority::DrawingGroupTertiary
+                ) && color.source.is_some()
+        )
+        && matches!(
+            effective.line.visible.as_ref(),
+            Some(line)
+                if !line.value
+                    && line.authority == PubEffectivePaintAuthority::ShapeLocal
+                    && line.source.is_some()
+        )
+}
+
 pub(super) fn has_default_line_geometry(shape: &pub_escher::SpContainerObservation) -> bool {
     shape.fsp.as_ref().map(|fsp| fsp.shape_type) == Some(OFFICEART_SHAPE_TYPE_LINE)
 }
