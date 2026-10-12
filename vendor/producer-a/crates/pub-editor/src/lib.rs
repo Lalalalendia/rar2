@@ -39,6 +39,10 @@ use session_text::{
 };
 mod table_rowcol_graph_v1;
 mod table_rowcol_history_v1;
+use table_rowcol_history_v1::{
+    effective_table_bounds_with_history, effective_table_grids_with_history,
+    table_rowcol_history_v1, table_rowcol_operation_matches_mutation_v1,
+};
 mod text_format_property_base_v1;
 mod writer_assessment;
 use writer_assessment::{
@@ -6757,163 +6761,6 @@ fn effective_table_grids(graph: &PubResolvedGraph) -> Vec<EffectiveTableGridV1> 
 
     grids.sort_by_key(|grid| grid.table_id);
     grids
-}
-
-fn table_rowcol_history_v1(operation: &EditOperation) -> Option<&TableRowColHistoryV1> {
-    match operation {
-        EditOperation::InsertTableRow { history }
-        | EditOperation::DeleteTableRow { history }
-        | EditOperation::InsertTableColumn { history }
-        | EditOperation::DeleteTableColumn { history } => Some(history),
-        _ => None,
-    }
-}
-
-fn table_rowcol_operation_matches_mutation_v1(operation: &EditOperation) -> bool {
-    matches!(
-        operation,
-        EditOperation::InsertTableRow {
-            history: TableRowColHistoryV1 {
-                mutation: TableRowColMutationV1::InsertRow { .. },
-                ..
-            },
-        } | EditOperation::DeleteTableRow {
-            history: TableRowColHistoryV1 {
-                mutation: TableRowColMutationV1::DeleteRow { .. },
-                ..
-            },
-        } | EditOperation::InsertTableColumn {
-            history: TableRowColHistoryV1 {
-                mutation: TableRowColMutationV1::InsertColumn { .. },
-                ..
-            },
-        } | EditOperation::DeleteTableColumn {
-            history: TableRowColHistoryV1 {
-                mutation: TableRowColMutationV1::DeleteColumn { .. },
-                ..
-            },
-        }
-    )
-}
-
-fn effective_table_grids_with_history(
-    graph: &PubResolvedGraph,
-    operations: &[EditOperation],
-) -> Vec<EffectiveTableGridV1> {
-    let mut grids = effective_table_grids(graph);
-    let mut bounds = graph
-        .nodes
-        .iter()
-        .map(|(node_id, node)| (*node_id, node.header.bounds))
-        .collect::<BTreeMap<_, _>>();
-
-    let mut structural_anchors = BTreeMap::<NodeId, (usize, &TableRowColHistoryV1)>::new();
-    for (index, operation) in operations.iter().enumerate() {
-        if let Some(history) = table_rowcol_history_v1(operation) {
-            structural_anchors.insert(history.table_id, (index, history));
-        }
-    }
-    for (table_id, (_, history)) in &structural_anchors {
-        if let Some(target) = grids.iter_mut().find(|grid| grid.table_id == *table_id) {
-            *target = history.after.grid.clone();
-        } else {
-            grids.push(history.after.grid.clone());
-        }
-        bounds.insert(*table_id, history.after.bounds);
-    }
-
-    for (index, operation) in operations.iter().enumerate() {
-        match operation {
-            EditOperation::CreateTable { table } => {
-                if structural_anchors
-                    .get(&table.node_id)
-                    .is_some_and(|(anchor, _)| index <= *anchor)
-                {
-                    continue;
-                }
-                let plan = build_create_table_plan_v1(table)
-                    .expect("accepted CreateTable history must remain canonical");
-                let current = grids
-                    .iter()
-                    .find(|grid| grid.table_id == table.node_id)
-                    .cloned()
-                    .expect("accepted CreateTable must materialize one effective table grid");
-                let target = grids
-                    .iter_mut()
-                    .find(|grid| grid.table_id == table.node_id)
-                    .expect("accepted CreateTable grid is present");
-
-                *target = plan.grid;
-                for cell in &mut target.cells {
-                    let current_cell = current
-                        .cells
-                        .iter()
-                        .find(|candidate| candidate.id == cell.id)
-                        .expect("created table cell identity remains stable");
-                    cell.utf16_start = current_cell.utf16_start;
-                    cell.utf16_end = current_cell.utf16_end;
-                }
-                bounds.insert(table.node_id, table.bounds);
-            }
-            EditOperation::SetTableTrackExtent { history } => {
-                if structural_anchors
-                    .get(&history.table_id)
-                    .is_some_and(|(anchor, _)| index <= *anchor)
-                {
-                    continue;
-                }
-                let target = grids
-                    .iter_mut()
-                    .find(|grid| grid.table_id == history.table_id)
-                    .expect("accepted track-resize history must target one effective table grid");
-                let before_bounds = *bounds
-                    .get(&history.table_id)
-                    .expect("accepted track-resize history must target one table bounds record");
-                let (after_grid, after_bounds) =
-                    apply_table_track_extent_history_forward_v1(target, before_bounds, history)
-                        .expect("accepted track-resize history must remain canonical");
-                *target = after_grid;
-                bounds.insert(history.table_id, after_bounds);
-            }
-            _ => {}
-        }
-    }
-
-    grids.sort_by_key(|grid| grid.table_id);
-    grids
-}
-
-fn effective_table_bounds_with_history(
-    graph: &PubResolvedGraph,
-    operations: &[EditOperation],
-    table_id: NodeId,
-) -> Option<RectEmu> {
-    let mut anchor = None;
-    for (index, operation) in operations.iter().enumerate() {
-        let Some(history) = table_rowcol_history_v1(operation) else {
-            continue;
-        };
-        if history.table_id == table_id {
-            anchor = Some((index, history.after.bounds));
-        }
-    }
-
-    let (start_index, mut bounds) = match anchor {
-        Some((index, bounds)) => (index + 1, bounds),
-        None => (0, graph.nodes.get(&table_id)?.header.bounds),
-    };
-    for operation in operations.iter().skip(start_index) {
-        let EditOperation::SetTableTrackExtent { history } = operation else {
-            continue;
-        };
-        if history.table_id == table_id {
-            if history.before_bounds != bounds {
-                return None;
-            }
-            bounds = history.after_bounds;
-        }
-    }
-    Some(bounds)
 }
 
 fn frame_from_payload(
