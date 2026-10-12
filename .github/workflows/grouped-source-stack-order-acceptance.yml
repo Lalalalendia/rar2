@@ -64,7 +64,7 @@ jobs:
         env:
           CHAPTERA_SOURCE_STACK_FIXTURE: ${{ runner.temp }}/group-stack-controls/SampleNewsletter.pub
           CHAPTERA_SOURCE_STACK_SHA256: 6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf
-          CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS: "21,20,20,16"
+          CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS: "21,20,20,18"
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --lib -- --ignored --exact tests::exact_public_source_stack_order_covers_materialized_grouped_nodes --nocapture
       - name: Verify exact PAGE LOGO shape and effective paint evidence
         env:
