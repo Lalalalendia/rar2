@@ -58,11 +58,11 @@ jobs:
           CHAPTERA_LOGO_BROCHURE_FIXTURE: ${{ runner.temp }}/group-stack-controls/SampleBrochure.pub
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --test logo_brochure_source_census -- --ignored --exact exact_public_brochure_admitted_logo_rectangle_census --nocapture
 
-      - name: Brochure remains direct-only control
+      - name: Brochure expands only two proven PAGE LOGO white background rectangles
         env:
           CHAPTERA_SOURCE_STACK_FIXTURE: ${{ runner.temp }}/group-stack-controls/SampleBrochure.pub
           CHAPTERA_SOURCE_STACK_SHA256: ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87
-          CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS: "14,16"
+          CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS: "15,17"
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --lib -- --ignored --exact tests::exact_public_source_stack_order_covers_materialized_grouped_nodes --nocapture
 
       - name: Newsletter admits grouped materialized visuals
