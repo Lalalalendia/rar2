@@ -1,0 +1,26 @@
+name: Cloud Product MoveNode ACK identity fence
+
+on:
+  pull_request:
+    paths:
+      - "apps/web/chaptera-product-editor-service-v1.mjs"
+      - "apps/web/chaptera-product-editor-service-v1.test.mjs"
+      - ".github/workflows/cloud-product-movenode-ack-identity.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ack-identity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate Cloud Product client syntax
+        run: node --check apps/web/chaptera-product-editor-service-v1.mjs
+      - name: Prove MoveNode exact ACK binding and existing Product client regressions
+        run: node --test apps/web/chaptera-product-editor-service-v1.test.mjs
