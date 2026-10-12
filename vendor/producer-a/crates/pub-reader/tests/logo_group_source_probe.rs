@@ -6,7 +6,10 @@ use pub_contents::{
 use pub_core::StreamPath;
 use pub_escher::{PUBLISHER_FIELD_SHAPE_ID, SpContainerObservation, inspect_sp_containers};
 use pub_model::Sha256Digest;
-use pub_reader::{build_mature_0x2c_source_graph, derive_pub_node_id, derive_pub_page_id};
+use pub_reader::{
+    PubEffectivePaintAuthority, build_mature_0x2c_source_graph, derive_pub_node_id,
+    derive_pub_page_id,
+};
 use sha2::{Digest, Sha256};
 use std::{fs, io::Cursor};
 
@@ -238,8 +241,8 @@ fn exact_public_newsletter_logo_0x31_baseline() {
         source_order.node_ids.len()
     );
     assert_eq!(
-        page_nodes, 16,
-        "12 baseline nodes plus four bounded children"
+        page_nodes, 18,
+        "12 baseline nodes plus six bounded children"
     );
     assert_eq!(
         source_order.node_ids.len(),
@@ -247,11 +250,21 @@ fn exact_public_newsletter_logo_0x31_baseline() {
         "PAGE LOGO children need carrier-backed paint order"
     );
 
-    // Only four class-eligible descendants. Generic rectangles 387/408/410
-    // remain unadmitted without their own local paint authority.
+    // The hidden LOGO rectangle 387 stays absent. Visible 408/410 have
+    // source-backed effective fill and line suppression; do not guess paint
+    // for generic rectangles outside this PAGE-owned LOGO lane.
+    assert!(
+        !build
+            .graph
+            .nodes
+            .contains_key(&derive_pub_node_id(&source_hash, 387).unwrap()),
+        "locally hidden LOGO shape 387 must not be added"
+    );
     let candidates = [
         (389u32, "image"),
         (391, "story"),
+        (408, "dgg-solid-rectangle"),
+        (410, "palette-solid-rectangle"),
         (411, "ellipse"),
         (412, "story"),
     ];
@@ -269,6 +282,33 @@ fn exact_public_newsletter_logo_0x31_baseline() {
                 node.payload.image_slot,
                 Some(5),
                 "PAGE-owned LOGO image child must retain physically proven WMF slot 5"
+            );
+        }
+        if matches!(seq, 408 | 410) {
+            let effective = node
+                .payload
+                .effective_paint
+                .as_ref()
+                .expect("bounded LOGO primitive must retain effective paint");
+            let color = effective
+                .fill
+                .color_rgb
+                .as_ref()
+                .expect("LOGO rectangle requires resolved RGB");
+            let (expected_rgb, authority) = if seq == 408 {
+                (
+                    [255, 255, 255],
+                    PubEffectivePaintAuthority::DrawingGroupPrimary,
+                )
+            } else {
+                ([0, 0, 0], PubEffectivePaintAuthority::ShapeLocal)
+            };
+            assert_eq!(color.value, expected_rgb);
+            assert_eq!(color.authority, authority);
+            assert_eq!(effective.fill.visible.as_ref().map(|v| v.value), Some(true));
+            assert_eq!(
+                effective.line.visible.as_ref().map(|v| v.value),
+                Some(false)
             );
         }
         let rank = source_order
