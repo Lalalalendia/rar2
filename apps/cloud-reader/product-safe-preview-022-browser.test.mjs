@@ -1,4 +1,4 @@
-// Exact pinned 022 Product Reader scene ablation in real Playwright Chromium.
+// Exact pinned 001/022/023 Product Reader image ablation in Chromium.
 // Both captures use the same host-admitted isolated Product producer Scene and
 // the same renderer/head/Publisher oracle. Suppress image URLs only in the
 // negative control. No mock pictures, no external fetch and no PNG upload.
@@ -17,10 +17,18 @@ const output = process.env.CHAPTERA_PREVIEW_BROWSER_OUTPUT;
 const exactHead = process.env.REPOSITORY_COMMIT_SHA;
 assert.ok(scenePath && output, "pinned private scene and output paths required");
 assert.match(exactHead ?? "", /^[0-9a-f]{40}$/, "exact repository head must be supplied for physical Product visual proof");
+const visualCaseId = process.env.CHAPTERA_PRODUCT_VISUAL_ID ?? "022";
+const visualCases = {
+  "001": { sha: "0ca858ed4806e81da2964d75d54d25a2ac0c6126074e9f82ea33b87701de4ade", images: 1 },
+  "022": { sha: "7079ad60fd8109796b84286d294cb490051a1517d8e52ac61e7c416dbd04428c", images: 1 },
+  "023": { sha: "6bbfbf7b4c9b240026399fcc114ee0eb78fbc954c8f258f5baf3a388d3f188c8", images: 7 },
+};
+assert.ok(Object.hasOwn(visualCases, visualCaseId), "unsupported Product visual case");
+const pinned = visualCases[visualCaseId];
 const readerScene = JSON.parse(await readFile(resolve(scenePath), "utf8"));
 assert.equal(readerScene.protocol_version, "chaptera.reader-scene.v1");
-assert.equal(readerScene.source_hash, "7079ad60fd8109796b84286d294cb490051a1517d8e52ac61e7c416dbd04428c");
-assert.equal(readerScene.pages.length, 1, "022 is a one-page Publisher control");
+assert.equal(readerScene.source_hash, pinned.sha, "Product Scene must match exact pinned case");
+assert.equal(readerScene.pages.length, 1, "pinned Product visual cases require one page");
 assert.ok(readerScene.resources.some((r) => r.availability === "inline_data_url"));
 
 const noImages = structuredClone(readerScene);
@@ -28,7 +36,7 @@ const previewImageTypes = new Set(["image/png", "image/jpeg"]);
 const visibleImages = (readerScene.resources ?? []).filter(
   (resource) => previewImageTypes.has(resource.mime) && resource.availability === "inline_data_url"
 );
-assert.ok(visibleImages.length > 0, "Product positive must contain host-derived image resource");
+assert.equal(visibleImages.length, pinned.images, "Product positive must contain exact host-derived image resource count");
 for (const resource of noImages.resources ?? []) {
   // Alter ONLY host-derived image delivery. Font URLs and nonimage
   // render inputs must remain identical in both Publisher A/B arms.
@@ -116,14 +124,15 @@ try {
   const before = await capture(page, noImages, "before");
   const after = await capture(page, readerScene, "after");
   assert.equal(before.image_count, 0, "source-exact JPEG must be unavailable in control");
-  assert.ok(after.image_count > before.image_count, "new host-owned image must reach Chromium");
+  assert.equal(after.image_count, pinned.images, "all host-owned images must reach Chromium");
   assert.equal(before.picture_frame_count, after.picture_frame_count);
   assert.equal(before.page_id_sha256, after.page_id_sha256);
   assert.notEqual(before.screenshot_sha256, after.screenshot_sha256);
   assert.deepEqual(pageErrors, [], "Chromium must not throw during scene paint");
   assert.deepEqual(foreign, [], "source-neutral scene must not request external URLs");
   const receipt = {
-    schema: "chaptera.product-safe-preview-022-browser.v1",
+    schema: visualCaseId === "022" ? "chaptera.product-safe-preview-022-browser.v1" : "chaptera.product-safe-preview-multiimage-browser.v1",
+    fixture: visualCaseId,
     repository_commit_sha: exactHead,
     browser: "chromium",
     source_sha256: readerScene.source_hash,
