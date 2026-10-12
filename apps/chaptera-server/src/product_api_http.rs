@@ -2009,7 +2009,7 @@ mod tests {
         assert!(validate_story_range_request(&request, "document-1").is_err());
 
         let mut paragraph = base.clone();
-        paragraph["command"]["replacement_text"] = json!("new\\nparagraph");
+        paragraph["command"]["replacement_text"] = json!("new\nparagraph");
         let request: StoryRangeCommitRequestV1 =
             serde_json::from_value(paragraph).unwrap();
         assert!(validate_story_range_request(&request, "document-1").is_err());
