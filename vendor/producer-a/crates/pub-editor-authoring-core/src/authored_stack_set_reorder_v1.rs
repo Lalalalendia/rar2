@@ -6,8 +6,8 @@
 //! EditorSession must validate actual AuthorCreated ownership before commit.
 
 use crate::{
-    AuthoredStackReorderModeV1, AuthoredStackV1, NodeId, PageId,
-    authored_stack_state_id_v1, validate_authored_stack_v1,
+    AuthoredStackReorderModeV1, AuthoredStackV1, NodeId, PageId, authored_stack_state_id_v1,
+    validate_authored_stack_v1,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -50,7 +50,7 @@ impl fmt::Display for AuthoredStackSetReorderErrorV1 {
             Self::PageMismatch => f.write_str("authored set reorder page mismatch"),
             Self::TooFewSelected => {
                 f.write_str("authored set reorder requires two selected members")
-            },
+            }
             Self::DuplicateSelected { node_id } => {
                 write!(f, "authored set reorder repeats selected {node_id:?}")
             }
@@ -76,8 +76,7 @@ pub fn plan_reorder_authored_stack_set_v1(
     selected_node_ids: &[NodeId],
     mode: AuthoredStackReorderModeV1,
 ) -> Result<AuthoredStackSetReorderTransitionV1, AuthoredStackSetReorderErrorV1> {
-    validate_authored_stack_v1(before)
-        .map_err(|_| AuthoredStackSetReorderErrorV1::InvalidStack)?;
+    validate_authored_stack_v1(before).map_err(|_| AuthoredStackSetReorderErrorV1::InvalidStack)?;
     if page_id != before.page_id {
         return Err(AuthoredStackSetReorderErrorV1::PageMismatch);
     }
