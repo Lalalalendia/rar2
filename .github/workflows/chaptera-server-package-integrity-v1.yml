@@ -75,6 +75,9 @@ jobs:
       - name: Verify owner-pinned S3 probe fail-closed policy offline
         run: cargo test -p chaptera-server --example cloud_blob_provider_probe
 
+      - name: Verify sampled AWS S3 IAM deny probe fail-closed laws offline
+        run: cargo test -p chaptera-server --example cloud_s3_iam_list_probe
+
       - name: Prove Product worker physical isolation boundary
         run: |
           python3 - <<'PY'
