@@ -256,9 +256,20 @@ export class ChapteraProductEditorServiceV1 {
     );
 
     if (result.response.ok) {
-      return clone(
-        ensureProtocol(result.value, "chaptera.commit-accepted.v1", "commit accepted"),
+      const accepted = ensureProtocol(
+        result.value, "chaptera.commit-accepted.v1", "commit accepted",
       );
+      if (
+        accepted.document_id !== request.document_id ||
+        accepted.source_hash !== request.source_hash ||
+        accepted.base_revision_id !== request.base_revision_id ||
+        accepted.client_operation_id !== request.client_operation_id
+      ) {
+        // A mismatched 2xx acknowledgment cannot prove that our operation
+        // committed. The shell must preserve its uncertain-commit fence.
+        throw new Error("commit accepted identity mismatch");
+      }
+      return clone(accepted);
     }
 
     const code = responseErrorCode(result.value);
