@@ -1,0 +1,28 @@
+name: Product 49/111 source-neutral scoring contract
+on:
+  pull_request:
+    paths:
+      - "tools/reader_product_publisher_49_111_scoreboard_v1.py"
+      - "tools/test_reader_product_publisher_49_111_scoreboard_v1.py"
+      - "docs/reader-product-publisher-49-111-contract.md"
+      - ".github/workflows/reader-product-49-111-contract.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check pinned 49-source Product receipt contract, not actual Product pixels
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/reader_product_publisher_49_111_scoreboard_v1.py tools/test_reader_product_publisher_49_111_scoreboard_v1.py
+          python tools/test_reader_product_publisher_49_111_scoreboard_v1.py
+          python tools/reader_product_publisher_49_111_scoreboard_v1.py --help
