@@ -109,12 +109,6 @@ fn exact_public_newsletter_logo_0x31_baseline() {
             shape.fopts.len(),
             shape.child_anchor.is_some()
         );
-        println!(
-            "LOGO_RECT_ALL_FOPT seq={seq} ids={:?}",
-            shape.fopts.iter().flat_map(|record| record.properties.iter())
-                .map(|property| format!("0x{:04x}", property.property_id()))
-                .collect::<Vec<_>>()
-        );
         for record in &shape.fopts {
             for property in &record.properties {
                 let id = property.property_id();
@@ -193,13 +187,6 @@ fn exact_public_newsletter_logo_0x31_baseline() {
             true,
         )
         .expect("2D shape effective paint");
-        println!(
-            "LOGO_RECT_PAINT_SOURCES seq={seq} fill_visible_source={} color_source={} line_source={} fill_solid_source={}",
-            paint.fill.visible.as_ref().is_some_and(|v| v.source.is_some()),
-            paint.fill.color_rgb.as_ref().is_some_and(|v| v.source.is_some()),
-            paint.line.visible.as_ref().is_some_and(|v| v.source.is_some()),
-            paint.fill.solid.as_ref().is_some_and(|v| v.source.is_some())
-        );
         println!(
             "LOGO_RECT_EFFECTIVE seq={seq} fill_solid={:?} fill_visible={:?} fill_color={:?} line_visible={:?}",
             paint
