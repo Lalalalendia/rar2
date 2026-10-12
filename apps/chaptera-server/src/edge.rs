@@ -733,9 +733,15 @@ mod tests {
             let path = format!("/v1/reader/guest-sessions/{prefix}:{valid}/content");
             assert!(is_stream_upload(&path));
         }
-        assert!(!is_stream_upload("/v1/reader/guest-sessions/not-a-session/content"));
-        assert!(!is_stream_upload("/v1/reader/guest-sessions/tempedit:invalid/content"));
-        assert!(!is_stream_upload("/v1/reader/guest-sessions/tempedit:invalid/scene"));
+        assert!(!is_stream_upload(
+            "/v1/reader/guest-sessions/not-a-session/content"
+        ));
+        assert!(!is_stream_upload(
+            "/v1/reader/guest-sessions/tempedit:invalid/content"
+        ));
+        assert!(!is_stream_upload(
+            "/v1/reader/guest-sessions/tempedit:invalid/scene"
+        ));
         assert!(!is_stream_upload("/v1/editor/temporary-sessions"));
     }
 
