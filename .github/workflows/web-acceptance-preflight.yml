@@ -34,6 +34,10 @@ on:
           - preflight
           - strict
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -79,7 +83,7 @@ jobs:
               raise SystemExit("unexpected Git blob identity")
           if data.get("encoding") != "base64":
               raise SystemExit("unexpected Git blob encoding")
-          raw = base64.b64decode(data["content"], validate=True)
+          raw = base64.b64decode("".join(data["content"].split()), validate=True)
           pathlib.Path(".acceptance-input/SampleNewsletter.pub").write_bytes(raw)
           PY
       - name: Validate real-PUB acceptance gate
