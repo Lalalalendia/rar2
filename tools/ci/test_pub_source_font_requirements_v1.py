@@ -180,20 +180,37 @@ def real_publisher() -> None:
     source = json.loads(REAL.read_text(encoding="utf-8"))
     out = req.source_font_requirements_v1(source)
     assert out["document_source_sha256"] == SOURCE_SHA
-    # Historical pinned receipt predates the direct-index Viewer field; no
-    # source binding ID may be inferred from script names alone.
-    assert out["direct_source_binding_count"] == 0
-    assert out["direct_source_bindings"] == []
+    # The physically refreshed Viewer includes exactly 106 direct Quill
+    # source indices. These are source-only identities, never a font license
+    # or physical byte resource grant. Keep script alternatives separate.
+    assert out["direct_source_binding_count"] == 106
+    assert out["direct_source_binding_count"] == sum(
+        "source_font_index" in run for run in source["typography_runs"]
+    )
+    assert len(out["direct_source_bindings"]) == 106
+    assert out["direct_source_bindings_only_source_identity"] is True
+    assert all(
+        binding["source_font_binding_id"] == req.source_font_binding_id_v1(
+            SOURCE_SHA, binding["source_font_index"], binding["source_family"]
+        )
+        for binding in out["direct_source_bindings"]
+    )
     assert {item["source_family"] for item in out["families"]} == ALL_FAMILIES
     assert out["visible_story_count"] > 0
     assert out["source_story_count"] >= out["visible_story_count"]
     assert all(item["physical_face_authorized"] is False for item in out["families"])
     assert any(item["source_font_index_candidates"] for item in out["families"])
-    assert any(not item["source_font_index_candidates"] for item in out["families"])
+    # Every real source family now has a proven Quill index, but a script
+    # alternative is still not an exact directly bound typography run.
+    assert all(item["source_font_index_candidates"] for item in out["families"])
+    mv_boli = next(x for x in out["families"] if x["source_family"] == "MV Boli")
+    assert mv_boli["source_font_index_candidates"] == [24]
+    assert mv_boli["direct_run_source_font_indices"] == []
+    assert mv_boli["source_typography_run_count"] == 0
     assert out["source_families_without_quill_index_count"] == sum(
         not family["source_quill_index_proven"] for family in out["families"]
     )
-    assert out["source_families_without_quill_index_count"] > 0
+    assert out["source_families_without_quill_index_count"] == 0
     rockwell = next(x for x in out["families"] if x["source_family"] == "Rockwell Condensed")
     assert rockwell["source_font_index_candidates"] == [18]
     assert rockwell["source_typography_run_count"] > 0

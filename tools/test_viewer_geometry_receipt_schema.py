@@ -91,6 +91,44 @@ class ViewerGeometryReceiptSchemaTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             validate_schema(receipt)
 
+    def test_exact_viewer_shape_and_font_index_provenance_is_bounded(self):
+        # These are typed Viewer fields, not file paths or physical font grants.
+        receipt = minimal_receipt()
+        node_id = receipt["scene"]["nodes"][0]["origin"]
+        story_id = receipt["document"]["stories"][0]["id"]
+        receipt["paints"] = [{
+            "node_id": node_id,
+            "preset_shape": "ellipse",
+            "solid_fill_rgb": [1, 2, 3],
+        }]
+        receipt["typography_runs"] = [{
+            "story_id": story_id,
+            "scalar_start": 0,
+            "scalar_end": 1,
+            "source_font_name": "Test Font",
+            "source_font_index": 18,
+            "text_size_emu": 228600,
+            "font_inherited": False,
+            "size_inherited": True,
+            "source_story_text_sha256": "b" * 64,
+            "color_inherited": False,
+        }]
+        validate_schema(receipt)
+        for invalid in [-1, 4294967296, "18", None]:
+            bad = copy.deepcopy(receipt)
+            bad["typography_runs"][0]["source_font_index"] = invalid
+            with self.subTest(invalid_font_index=invalid), self.assertRaises(AssertionError):
+                validate_schema(bad)
+        for invalid in ["triangle", "private/path", None, 17]:
+            bad = copy.deepcopy(receipt)
+            bad["paints"][0]["preset_shape"] = invalid
+            with self.subTest(invalid_preset=invalid), self.assertRaises(AssertionError):
+                validate_schema(bad)
+        bad = copy.deepcopy(receipt)
+        bad["typography_runs"][0]["source_font_path"] = "/tmp/source/private.otf"
+        with self.assertRaises(AssertionError):
+            validate_schema(bad)
+
     def test_unreviewed_fetch_handle_is_forbidden_in_v0_1_receipt(self):
         receipt = minimal_receipt()
         receipt["images"][0]["fetch_handle"] = "file:///private/cache/image.png"

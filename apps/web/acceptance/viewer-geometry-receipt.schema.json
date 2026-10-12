@@ -514,6 +514,9 @@
         "node_id": {
           "$ref": "#/$defs/uuid"
         },
+        "preset_shape": {
+          "enum": ["round_rect", "ellipse", "line", "line_dash_gel"]
+        },
         "solid_fill_rgb": {
           "$ref": "#/$defs/rgb"
         },
@@ -656,6 +659,11 @@
         },
         "source_font_name": {
           "type": "string"
+        },
+        "source_font_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "text_size_emu": {
           "type": "integer",
