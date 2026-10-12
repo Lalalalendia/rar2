@@ -1,5 +1,7 @@
 name: Free PUB PDF CLI V1
-
+# MEASUREMENT-ONLY PR: exact current-main publisher PDF bytes; assertions unchanged.
+# This comment-only candidate must be CLOSED UNMERGED after physical evidence.
+ 
 on:
   pull_request:
     paths:
