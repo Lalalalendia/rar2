@@ -55,6 +55,7 @@ jobs:
       - name: Validate source-safe runner and real syscall sandbox
         run: |
           set -euo pipefail
+          python -m pip install Pillow==11.3.0
           python -m py_compile tools/run_product_oidc_multiimage_acceptance.py tools/reader_safe_preview_visual_multiimage.py tools/test_reader_safe_preview_visual_multiimage.py tools/run_secure_origin_real_pub.py tools/chaptera_local_oidc.py tools/migration_pdf_worker_isolation.py
           python tools/test_reader_safe_preview_visual_multiimage.py
           node --check tools/run_secure_origin_product_multiimage_browser.mjs
