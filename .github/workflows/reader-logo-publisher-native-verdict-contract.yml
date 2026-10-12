@@ -5,6 +5,8 @@ on:
     paths:
       - "tools/reader_logo_publisher_native_verdict_v1.py"
       - "tools/test_reader_logo_publisher_native_verdict_v1.py"
+      - "tools/reader_line405_publisher_offline_v1.py"
+      - "tools/test_reader_line405_publisher_offline_v1.py"
       - ".github/workflows/reader-logo-publisher-native-verdict-contract.yml"
   workflow_dispatch:
 
@@ -30,11 +32,15 @@ jobs:
       - name: Install deterministic PDF comparator dependencies
         run: python -m pip install --disable-pip-version-check --no-cache-dir "PyMuPDF==1.26.7"
       - name: Verify external Publisher identity and negative controls
-        run: python tools/test_reader_logo_publisher_native_verdict_v1.py
+        run: |
+          python tools/test_reader_logo_publisher_native_verdict_v1.py
+          python tools/test_reader_line405_publisher_offline_v1.py
       - name: Verify command line contract
-        run: python tools/reader_logo_publisher_native_verdict_v1.py --help
+        run: |
+          python tools/reader_logo_publisher_native_verdict_v1.py --help
+          python tools/reader_line405_publisher_offline_v1.py --help
       - name: State evidence limitations explicitly
         run: |
           echo "Native Publisher PDF bytes are external and are NOT in this CI." >> "$GITHUB_STEP_SUMMARY"
-          echo "This job only proves fail-closed tooling. It does NOT claim that #2644 is closer to Publisher." >> "$GITHUB_STEP_SUMMARY"
-          echo "Run against the SHA-pinned external 10-PUB / 20-page Publisher 2019 ZIP to determine the actual native delta." >> "$GITHUB_STEP_SUMMARY"
+          echo "This job proves only source-free fail-closed tooling; it does NOT claim that LINE405 matches Publisher." >> "$GITHUB_STEP_SUMMARY"
+          echo "Run the offline LINE405 tool against two pinned Chromium artifact ZIPs and the local external 10-PDF / 20-page Publisher 2019 ZIP for a native visual delta." >> "$GITHUB_STEP_SUMMARY"
