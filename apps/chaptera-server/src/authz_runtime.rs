@@ -483,6 +483,10 @@ impl SqliteAuthorizedRevisionCommitter {
         .await
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "trusted source, revision and principal identities are separate security inputs"
+    )]
     async fn reconcile_revision_for_capability(
         &self,
         tenant_id: &str,
