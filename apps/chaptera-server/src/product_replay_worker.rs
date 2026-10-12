@@ -1068,7 +1068,12 @@ pub fn run_product_replay_worker(
                 "requested scalar range exceeds the canonical Story",
             ));
         }
-        let expected_before = story.text.chars().skip(start).take(end - start).collect::<String>();
+        let expected_before = story
+            .text
+            .chars()
+            .skip(start)
+            .take(end - start)
+            .collect::<String>();
         let operation = session
             .replace_story_range(
                 story_id,
@@ -1289,7 +1294,8 @@ impl IsolatedProductReplayProducer {
                 source_bytes,
                 Some((&project_bytes, expected_project_sha256)),
                 None,
-                None,                None,
+                None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -1321,9 +1327,20 @@ impl IsolatedProductReplayProducer {
         source_bytes: &[u8],
     ) -> Result<EditorProject, ProductReplayWorkerError> {
         let receipt = self
-            .invoke_job(document_id, source_sha256, source_bytes, None, None, None, None)
+            .invoke_job(
+                document_id,
+                source_sha256,
+                source_bytes,
+                None,
+                None,
+                None,
+                None,
+            )
             .await?;
-        if receipt.move_node.is_some() || receipt.reader_scene.is_some() || receipt.story_range.is_some() {
+        if receipt.move_node.is_some()
+            || receipt.reader_scene.is_some()
+            || receipt.story_range.is_some()
+        {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
                 "baseline worker unexpectedly returned a mutation or Reader scene",
@@ -1404,7 +1421,8 @@ impl IsolatedProductReplayProducer {
                 source_bytes,
                 Some((&project_bytes, expected_project_sha256)),
                 None,
-                Some(intent),                None,
+                Some(intent),
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -1482,7 +1500,8 @@ impl IsolatedProductReplayProducer {
                 source_bytes,
                 Some((&project_bytes, expected_base_sha256)),
                 Some(intent),
-                None,                None,
+                None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
