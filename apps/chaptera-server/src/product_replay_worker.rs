@@ -2061,14 +2061,8 @@ mod tests {
         });
         // The source, project and graph checks pass before host-only
         // exclusive Story extraction. A synthetic graph is not E2E PUB proof.
-        validate_product_replay_receipt(
-            &valid,
-            "document-a",
-            &source_sha256,
-            512,
-            &"b".repeat(64),
-        )
-        .unwrap();
+        validate_product_replay_receipt(&valid, "document-a", &source_sha256, 512, &"b".repeat(64))
+            .unwrap();
         let (mutation, graph) = take_exclusive_story_range_receipt(valid.clone()).unwrap();
         assert!(matches!(
             mutation.operation,
@@ -2085,9 +2079,7 @@ mod tests {
         let mut mixed = valid;
         mixed.baseline_project = Some(project);
         assert_eq!(
-            take_exclusive_story_range_receipt(mixed)
-                .unwrap_err()
-                .code,
+            take_exclusive_story_range_receipt(mixed).unwrap_err().code,
             "product_replay_receipt_invalid"
         );
     }
