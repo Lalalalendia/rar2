@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - "tools/run_product_oidc_multiimage_acceptance.py"
+      - "tools/reader_safe_preview_visual_multiimage.py"
+      - "tools/test_reader_safe_preview_visual_multiimage.py"
+      - "apps/cloud-reader/product-safe-preview-multiimage-browser.test.mjs"
       - "tools/run_secure_origin_product_multiimage_browser.mjs"
       - ".github/workflows/cloud-product-oidc-multiimage.yml"
   workflow_dispatch:
@@ -52,8 +55,10 @@ jobs:
       - name: Validate source-safe runner and real syscall sandbox
         run: |
           set -euo pipefail
-          python -m py_compile tools/run_product_oidc_multiimage_acceptance.py tools/run_secure_origin_real_pub.py tools/chaptera_local_oidc.py tools/migration_pdf_worker_isolation.py
+          python -m py_compile tools/run_product_oidc_multiimage_acceptance.py tools/reader_safe_preview_visual_multiimage.py tools/test_reader_safe_preview_visual_multiimage.py tools/run_secure_origin_real_pub.py tools/chaptera_local_oidc.py tools/migration_pdf_worker_isolation.py
+          python tools/test_reader_safe_preview_visual_multiimage.py
           node --check tools/run_secure_origin_product_multiimage_browser.mjs
+          node --check apps/cloud-reader/product-safe-preview-multiimage-browser.test.mjs
           python - <<'PY'
           import ctypes.util
           assert ctypes.util.find_library("seccomp"), "real seccomp required"
