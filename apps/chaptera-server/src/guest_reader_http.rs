@@ -657,7 +657,7 @@ async fn put_content(
             metadata.byte_len,
             &metadata.storage_generation,
             &metadata.etag,
-            now_ms,
+            self::now_ms()?,
         )
         .await
     {
@@ -797,7 +797,7 @@ async fn open_session(
         SourceSecurityScanOutcome::Rejected { code } => {
             let rejected = state
                 .sessions
-                .finish_rejected(&opening.session_id, code, now_ms)
+                .finish_rejected(&opening.session_id, code, self::now_ms()?)
                 .await?;
             state.finalize_rejected_cleanup(&rejected, now_ms).await?;
             state.observability.record(
@@ -913,7 +913,7 @@ async fn open_session(
             scene_json.as_deref(),
             terminal_code.as_deref(),
             failure_classification_json.as_deref(),
-            now_ms,
+            self::now_ms()?,
         )
         .await?;
     state.release_admission(&opened, now_ms).await?;
@@ -1586,7 +1586,7 @@ impl SqliteGuestReaderSessionStore {
             UPDATE reader_guest_sessions
             SET state='opened', classification=?, source_sha256=?, scene_json=?,
                 terminal_code=?, failure_classification_json=?, updated_at_ms=?
-            WHERE session_id=? AND state='opening'
+            WHERE session_id=? AND state='opening' AND expires_at_ms>?
             "#,
         )
         .bind(classification)
@@ -1596,6 +1596,7 @@ impl SqliteGuestReaderSessionStore {
         .bind(failure_classification_json)
         .bind(now_ms)
         .bind(session_id.as_bytes())
+        .bind(now_ms)
         .execute(&self.pool)
         .await
         .map_err(sqlite_error)?;
@@ -1618,12 +1619,13 @@ impl SqliteGuestReaderSessionStore {
             UPDATE reader_guest_sessions
             SET state='rejected', classification='rejected', terminal_code=?,
                 updated_at_ms=?
-            WHERE session_id=? AND state='opening'
+            WHERE session_id=? AND state='opening' AND expires_at_ms>?
             "#,
         )
         .bind(code)
         .bind(now_ms)
         .bind(session_id.as_bytes())
+        .bind(now_ms)
         .execute(&self.pool)
         .await
         .map_err(sqlite_error)?;
@@ -2423,6 +2425,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_finishing_at_deadline_cannot_store_source() {
+        let path = migrated_path("upload-at-deadline").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let pending = session(1_000);
+        store.insert(&pending).await.unwrap();
+
+        let error = store
+            .mark_stored(&pending.session_id, 1024, "generation-1", "etag-1", 61_000)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "guest_upload_state_conflict");
+        assert_eq!(
+            store.get(&pending.session_id).await.unwrap().unwrap().state,
+            GuestSessionState::Issued
+        );
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn worker_finishing_at_deadline_cannot_publish_scene_or_rejection() {
+        let path = migrated_path("scene-at-deadline").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let pending = session(1_000);
+        store.insert(&pending).await.unwrap();
+        store
+            .mark_stored(&pending.session_id, 1024, "generation-1", "etag-1", 1_001)
+            .await
+            .unwrap();
+        store.claim_open(&pending.session_id, 1_002).await.unwrap();
+
+        let opened = store
+            .finish_opened(
+                &pending.session_id,
+                "supported",
+                &"a".repeat(64),
+                Some(br#"{"protocol_version":"chaptera.reader-scene.v1"}"#),
+                None,
+                None,
+                61_000,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(opened.code, "guest_open_state_conflict");
+        let rejected = store
+            .finish_rejected(&pending.session_id, "scanner_rejected", 61_000)
+            .await
+            .unwrap_err();
+        assert_eq!(rejected.code, "guest_open_state_conflict");
+        let stored = store.get(&pending.session_id).await.unwrap().unwrap();
+        assert_eq!(stored.state, GuestSessionState::Opening);
+        assert!(stored.scene_json.is_none());
+        assert!(store.mark_expired(&pending.session_id, 61_000).await.unwrap());
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
     async fn stale_expiry_snapshot_cannot_delete_a_renewed_session() {
         let path = migrated_path("stale-expiry-claim").await;
         let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
@@ -2435,25 +2501,30 @@ mod tests {
         assert_eq!(store.expired_pending(61_000, 16).await.unwrap().len(), 1);
         // Simulate a later, authoritative expiry extension before its delete
         // claim (the mutation/operation identity fence belongs to the caller).
-        sqlx::query(
-            "UPDATE reader_guest_sessions SET expires_at_ms=? WHERE session_id=?",
-        )
-        .bind(3_661_000_i64)
-        .bind(pending.session_id.as_bytes())
-        .execute(&store.pool)
-        .await
-        .unwrap();
+        sqlx::query("UPDATE reader_guest_sessions SET expires_at_ms=? WHERE session_id=?")
+            .bind(3_661_000_i64)
+            .bind(pending.session_id.as_bytes())
+            .execute(&store.pool)
+            .await
+            .unwrap();
 
-        assert!(!store.mark_expired(&pending.session_id, 61_000).await.unwrap());
+        assert!(
+            !store
+                .mark_expired(&pending.session_id, 61_000)
+                .await
+                .unwrap()
+        );
         let live = store.get(&pending.session_id).await.unwrap().unwrap();
         assert_eq!(live.state, GuestSessionState::Issued);
         assert_eq!(live.expires_at_ms, 3_661_000);
 
         // Its genuine new deadline can still be claimed, never earlier.
-        assert!(store
-            .mark_expired(&pending.session_id, 3_661_000)
-            .await
-            .unwrap());
+        assert!(
+            store
+                .mark_expired(&pending.session_id, 3_661_000)
+                .await
+                .unwrap()
+        );
         assert_eq!(
             store.get(&pending.session_id).await.unwrap().unwrap().state,
             GuestSessionState::Expired
@@ -2471,14 +2542,24 @@ mod tests {
         let pending = session(1_000);
         store.insert(&pending).await.unwrap();
         sqlx::query("UPDATE reader_guest_sessions SET scene_json=? WHERE session_id=?")
-            .bind(br#"{\"private\":true}"#.as_slice())
+            .bind(br#"{"private":true}"#.as_slice())
             .bind(pending.session_id.as_bytes())
             .execute(&store.pool)
             .await
             .unwrap();
 
-        assert!(!store.mark_expired(&pending.session_id, 60_999).await.unwrap());
-        assert!(store.mark_expired(&pending.session_id, 61_000).await.unwrap());
+        assert!(
+            !store
+                .mark_expired(&pending.session_id, 60_999)
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .mark_expired(&pending.session_id, 61_000)
+                .await
+                .unwrap()
+        );
         store
             .mark_quarantine_deleted(&pending.session_id, 61_001)
             .await
