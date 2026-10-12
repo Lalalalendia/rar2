@@ -1,0 +1,28 @@
+name: Web Temporary Editor Browser Session V0
+
+on:
+  pull_request:
+    paths:
+      - "apps/web/temporary-edit-browser-session-v0.mjs"
+      - "apps/web/temporary-edit-browser-session-v0.test.mjs"
+      - ".github/workflows/web-temporary-editor-browser-v0.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  temporary-browser-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify anonymous temporary session, expiry and privacy fences
+        run: node --test apps/web/temporary-edit-browser-session-v0.test.mjs
