@@ -9,6 +9,9 @@ mod acceptance_cli;
 mod acceptance_v2;
 mod acceptance_v2_cli;
 mod agent;
+mod authored_arrange;
+#[cfg(all(test, not(feature = "reader-only")))]
+mod authored_arrange_gui_tests;
 mod authored_stack;
 mod diagnostic_sweep;
 mod duplicate_rectangle;
@@ -3449,6 +3452,8 @@ impl ViewerApp {
 
         ui.add_space(16.0);
         ui.heading("Object");
+        ui.separator();
+        self.show_authored_arrange_controls_v1(ui);
         ui.separator();
 
         match self.selected_direct_replace_image_target() {
