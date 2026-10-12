@@ -1,0 +1,129 @@
+name: CLOUD-PRODUCT-WORST-CENSUS authenticated PUB020 PUB026 PUB043
+on:
+  pull_request:
+    paths:
+      - "tools/run_product_oidc_worst_census_acceptance.py"
+      - "tools/run_secure_origin_product_worst_browser.mjs"
+      - ".github/workflows/cloud-product-worst-census.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-worst-census-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  real-product-worst-census:
+    name: Authenticated Product source and Chromium census ${{ matrix.id }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: "020"
+            sha: 6c6af8064f91ad5321f76c97c00b1a6564794d92614373334de23e2759294aaa
+            bytes: "9351168"
+          - id: "026"
+            sha: 5c1054b0bd7bd3ae64ab6884e51943e2c5161cdf2dd13803c8d338f652c06cf0
+            bytes: "4218368"
+          - id: "043"
+            sha: e635d3b0320073b6d08402945a90e14e13d0294c02262d854b106b9f0088904b
+            bytes: "980480"
+    env:
+      EXACT_SHA: ${{ matrix.sha }}
+      EXACT_BYTES: ${{ matrix.bytes }}
+      CHAPTERA_PRODUCT_MULTI_ID: ${{ matrix.id }}
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Syntax and mandatory kernel sandbox preflight
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/run_product_oidc_worst_census_acceptance.py tools/run_secure_origin_real_pub.py tools/chaptera_local_oidc.py tools/migration_pdf_worker_isolation.py
+          node --check tools/run_secure_origin_product_worst_browser.mjs
+          python - <<'PY'
+          import ctypes.util
+          assert ctypes.util.find_library("seccomp"), "real syscall sandbox required"
+          PY
+          docker version
+      - name: Download exact original Publisher source from immutable corpus run
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: ${{ runner.temp }}/product-worst-census/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+      - name: Check source SHA and byte count before parsing
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/product-worst-census/pinned1050/materialized/native/$EXACT_SHA.pub"
+          test -f "$fixture"
+          printf '%s  %s\n' "$EXACT_SHA" "$fixture" | sha256sum --check
+          test "$(stat -c %s "$fixture")" = "$EXACT_BYTES"
+      - name: Build canonical Product HTTP service and isolated worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+      - name: Install actual Chromium
+        run: |
+          set -euo pipefail
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Real OIDC HTTPS Product upload and first-failing-layer census
+        env:
+          CHAPTERA_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python tools/run_product_oidc_worst_census_acceptance.py \
+            --binary target/debug/chaptera \
+            --fixture "$RUNNER_TEMP/product-worst-census/pinned1050/materialized/native/$EXACT_SHA.pub" \
+            --fixture-sha256 "$EXACT_SHA" \
+            --head-sha "$CHAPTERA_HEAD_SHA" \
+            --caddy-image caddy:2.10.2-alpine
+      - name: Fail closed on source PII and cookie leakage in private logs
+        id: worst_privacy
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/product-oidc-worst-census-${{ matrix.id }}
+          args=()
+          for file in target/product-oidc-worst-census-${{ matrix.id }}/*.log target/product-oidc-worst-census-${{ matrix.id }}/*.json; do
+            if [ -f "$file" ]; then args+=("$file"); fi
+          done
+          if [ "${#args[@]}" -eq 0 ]; then
+            echo "::error::no physically checked Product receipt or private log available"
+            exit 1
+          fi
+          python tools/security_leak_scan_v1.py \
+            "${args[@]}" \
+            --forbid-literal "Pinned020.pub" \
+            --forbid-literal "Pinned026.pub" \
+            --forbid-literal "Pinned043.pub" \
+            --forbid-literal "chaptera-local-only-secret" \
+            --forbid-literal "$RUNNER_TEMP/product-worst-census/pinned1050" \
+            --json-out target/product-oidc-worst-census-${{ matrix.id }}/privacy-scan.json
+      - name: Publish only source-neutral numeric receipts
+        if: ${{ always() && steps.worst_privacy.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-worst-census-${{ matrix.id }}-numeric
+          path: |
+            target/product-oidc-worst-census-${{ matrix.id }}/summary.json
+            target/product-oidc-worst-census-${{ matrix.id }}/owner.json
+            target/product-oidc-worst-census-${{ matrix.id }}/privacy-scan.json
+          if-no-files-found: warn
+          retention-days: 14
