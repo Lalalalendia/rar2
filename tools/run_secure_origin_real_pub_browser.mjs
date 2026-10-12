@@ -774,7 +774,25 @@ try {
       return;
     }
     interceptedAckCount += 1;
-    const upstream = await route.fetch();
+    // Chromium maps edge.test -> loopback, but Playwright's Node-side
+    // route.fetch does NOT inherit Chromium's host-resolver rules.
+    // Preserve the original Caddy virtual host while connecting via the
+    // published local HTTPS endpoint. Never print the original request or
+    // upstream transport exception: it contains auth cookies and CSRF.
+    const original = new URL(route.request().url());
+    const upstreamAddress = new URL(original);
+    upstreamAddress.hostname = "127.0.0.1";
+    let upstream;
+    try {
+      upstream = await route.fetch({
+        url: upstreamAddress.toString(),
+        headers: { ...route.request().headers(), host: original.host },
+        timeout: 45000,
+      });
+    } catch {
+      await route.abort("failed").catch(() => {});
+      throw new Error("ACK-loss proxy failed before service acceptance (redacted)");
+    }
     const result = await upstream.json().catch(() => null);
     if (upstream.status() !== 200 ||
         result?.protocol_version !== "chaptera.commit-accepted.v1" ||
