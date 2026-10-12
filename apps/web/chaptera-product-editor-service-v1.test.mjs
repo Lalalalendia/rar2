@@ -897,3 +897,55 @@ test("Accepted Redo with mismatched kind fails closed instead of displaying anot
     /history transition accepted identity mismatch/,
   );
 });
+
+test("commit success must ACK the exact document/source/base/operation and a new revision", async (t) => {
+  const mutations = [
+    ["different document", { document_id: "other-document" }],
+    ["missing document", { document_id: undefined }],
+    ["different source", { source_hash: "f".repeat(64) }],
+    ["different base", { base_revision_id: CHILD }],
+    ["different operation", { client_operation_id: "another-move" }],
+    ["missing operation", { client_operation_id: undefined }],
+    ["untyped revision", { revision_id: "unversioned" }],
+    ["unchanged revision", { revision_id: BASE }],
+    ["missing revision", { revision_id: undefined }],
+  ];
+  for (const [label, mismatch] of mutations) {
+    await t.test(label, async () => {
+      const { calls, fetchImpl } = recorder((url) => {
+        const path = new URL(url).pathname;
+        if (path === "/v1/session") return json(session());
+        if (path === "/v1/documents/" + DOC + "/commit") {
+          return json({ ...accepted(), ...mismatch });
+        }
+        throw new Error("unexpected path " + path);
+      });
+      const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+        documentId: DOC, fetchImpl,
+      });
+      await assert.rejects(
+        () => service.commit(commitRequest()),
+        /commit accepted identity mismatch/,
+      );
+      assert.equal(calls.filter((call) => call.path.endsWith("/commit")).length, 1);
+    });
+  }
+});
+
+test("replayed exact commit ACK remains accepted without another POST", async () => {
+  const { calls, fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/documents/" + DOC + "/commit") {
+      return json({ ...accepted(), replayed: true });
+    }
+    throw new Error("unexpected path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  const result = await service.commit(commitRequest());
+  assert.equal(result.replayed, true);
+  assert.equal(result.revision_id, CHILD);
+  assert.equal(calls.filter((call) => call.path.endsWith("/commit")).length, 1);
+});
