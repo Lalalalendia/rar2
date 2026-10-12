@@ -154,29 +154,51 @@ mod horizontal_stroke_envelope_tests {
 
     #[test]
     fn rejects_diagonal_reversed_empty_odd_and_overflowing_envelopes() {
-        let good = (7_560_000, 10_692_000, -2_721_250, -4_589_726, 4_008_599, -4_589_726);
-        assert!(horizontal_stroke_envelope_values(
-            good.0, good.1, good.2, good.3, good.4, good.5 + 1, 101_600,
-        )
-        .is_none());
-        assert!(horizontal_stroke_envelope_values(
-            good.0, good.1, good.4, good.3, good.2, good.5, 101_600,
-        )
-        .is_none());
-        for width in [0, -1, 101_601] {
-            assert!(horizontal_stroke_envelope_values(
-                good.0, good.1, good.2, good.3, good.4, good.5, width,
+        let good = (
+            7_560_000, 10_692_000, -2_721_250, -4_589_726, 4_008_599, -4_589_726,
+        );
+        assert!(
+            horizontal_stroke_envelope_values(
+                good.0,
+                good.1,
+                good.2,
+                good.3,
+                good.4,
+                good.5 + 1,
+                101_600,
             )
-            .is_none());
+            .is_none()
+        );
+        assert!(
+            horizontal_stroke_envelope_values(
+                good.0, good.1, good.4, good.3, good.2, good.5, 101_600,
+            )
+            .is_none()
+        );
+        for width in [0, -1, 101_601] {
+            assert!(
+                horizontal_stroke_envelope_values(
+                    good.0, good.1, good.2, good.3, good.4, good.5, width,
+                )
+                .is_none()
+            );
         }
-        assert!(horizontal_stroke_envelope_values(
-            good.0, good.1, i64::MAX, good.3, good.4, good.5, 101_600,
-        )
-        .is_none());
-        assert!(horizontal_stroke_envelope_values(
-            0, good.1, good.2, good.3, good.4, good.5, 101_600,
-        )
-        .is_none());
+        assert!(
+            horizontal_stroke_envelope_values(
+                good.0,
+                good.1,
+                i64::MAX,
+                good.3,
+                good.4,
+                good.5,
+                101_600,
+            )
+            .is_none()
+        );
+        assert!(
+            horizontal_stroke_envelope_values(0, good.1, good.2, good.3, good.4, good.5, 101_600,)
+                .is_none()
+        );
     }
 }
 
