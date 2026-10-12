@@ -243,7 +243,7 @@ export class ChapteraProductEditorServiceV1 {
       throw new TypeError("pending Story operation chains are not admitted by Product V1");
     }
     if (intent.command.replacement_text.length > 8192 ||
-        [...intent.command.replacement_text].some((ch) => /[\\u0000-\\u001f\\u007f]/u.test(ch))) {
+        [...intent.command.replacement_text].some((ch) => /\p{Cc}/u.test(ch))) {
       throw new TypeError("Product V1 admits only bounded plain Story replacements");
     }
     this.commitRequests += 1;
