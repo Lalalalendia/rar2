@@ -1,6 +1,56 @@
 import { BrowserObservabilityV1 } from "./observability-v1.mjs";
 import { ChapteraProductEditorServiceV1 } from "./chaptera-product-editor-service-v1.mjs";
 import { RichReaderEditorShellV1 } from "./rich-reader-editor-shell-v1.mjs";
+import { diffObservedTextToScalarReplacement } from "./text-protocol-v1.mjs";
+
+
+const HAS_CONTROL = /\p{Cc}/u;
+
+export function sourcePlainStoryCandidates(graph) {
+  if (!graph || typeof graph !== "object") return [];
+  const frames = new Set();
+  const tableOwned = new Set();
+  for (const node of Object.values(graph.nodes ?? {})) {
+    const frame = node?.payload?.story_frame?.story_id;
+    if (typeof frame === "string") frames.add(frame);
+    for (const owner of [node?.payload?.table_story, node?.payload?.table]) {
+      if (typeof owner?.story_id === "string") tableOwned.add(owner.story_id);
+    }
+  }
+  return Object.entries(graph.stories ?? {}).filter(([id, story]) =>
+    typeof id === "string" && frames.has(id) && !tableOwned.has(id) &&
+    typeof story?.text === "string" &&
+    ["runs", "paragraphs", "fields", "hyperlinks"].every((part) =>
+      !Array.isArray(story[part]) || story[part].length === 0
+    )
+  ).map(([story_id, story]) => ({story_id, text: story.text}))
+    .sort((a, b) => a.story_id.localeCompare(b.story_id));
+}
+
+export function oneShotStoryIntent({
+  documentId, sourceHash, baseRevisionId, storyId, canonicalText, observedText,
+  clientOperationId,
+}) {
+  const range = diffObservedTextToScalarReplacement(canonicalText, observedText);
+  if (canonicalText === observedText) throw new Error("Story has no text change to save");
+  if (range.replacement_text.length > 8192 || HAS_CONTROL.test(range.replacement_text)) {
+    throw new Error("first Story writer admits no new paragraphs/control characters");
+  }
+  return {
+    protocol_version: "chaptera.story-range-intent.v1",
+    document_id: documentId,
+    source_hash: sourceHash,
+    base_revision_id: baseRevisionId,
+    client_operation_id: clientOperationId,
+    command: {
+      kind: "replace_story_range",
+      story_id: storyId,
+      start_scalar: range.start_scalar,
+      end_scalar: range.end_scalar,
+      replacement_text: range.replacement_text,
+    },
+  };
+}
 
 const UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 // SourceIngress persists project documents as `document:` plus 24 lowercase SHA-256 hex chars.
@@ -154,7 +204,8 @@ export async function bootProductEditor({
       const view=productEditorStatusView(state,shell?.readerScene);
       statusText(status,view.status,view.kind);
       fidelity.textContent=view.fidelity;
-      const mutationLocked=state.history_in_flight===true||state.commit_in_flight===true||
+      const mutationLocked=state.external_mutation_locked===true||
+        state.history_in_flight===true||state.commit_in_flight===true||
         state.commit_uncertain===true||state.commit_recovery_in_flight===true||
         state.history_uncertain===true||state.history_recovery_in_flight===true;
       if(undoButton) undoButton.disabled=mutationLocked;
@@ -179,6 +230,176 @@ export async function bootProductEditor({
     button?.addEventListener("click",()=>{
       if(shell.historyInFlight||shell.historyUncertain||shell.historyRecoveryInFlight) return;
       void shell[command]().catch(()=>{});
+    });
+  }
+
+  // User-visible first Story lane: a single server-backed text edit, not an
+  // independent browser layout engine. It never modifies Reader SVG text.
+  const storyLoad=documentObject.querySelector("#story-load-action");
+  const storySelect=documentObject.querySelector("#story-select");
+  const storyInput=documentObject.querySelector("#story-input");
+  const storyApply=documentObject.querySelector("#story-apply-action");
+  const storyReload=documentObject.querySelector("#story-reload-action");
+  const storyStatus=documentObject.querySelector("#story-status");
+  if(storyLoad&&storySelect&&storyInput&&storyApply&&storyStatus&&storyReload){
+    let context=null;
+    let candidates=[];
+    let textBusy=false;
+    let textUnconfirmed=false;
+    let composing=false;
+
+    const textState=(message,kind="")=>{
+      storyStatus.textContent=message;
+      storyStatus.className=kind;
+    };
+    const selectStory=(storyId)=>{
+      const selected=candidates.find((candidate)=>candidate.story_id===storyId);
+      if(!selected||!context) return;
+      context={...context,story_id:selected.story_id,canonical_text:selected.text};
+      storyInput.value=selected.text;
+      storyInput.disabled=false;
+      storyApply.disabled=false;
+    };
+    const lockDocument=(locked)=>{
+      shell.setExternalMutationLocked(locked);
+      storyLoad.disabled=locked;
+      storySelect.disabled=locked||candidates.length===0;
+      storyInput.disabled=locked||!context?.story_id;
+      storyApply.disabled=locked||!context?.story_id;
+      if(undoButton) undoButton.disabled=locked;
+      if(redoButton) redoButton.disabled=locked;
+    };
+
+    storyInput.addEventListener("compositionstart",()=>{composing=true;});
+    storyInput.addEventListener("compositionend",()=>{composing=false;});
+    storySelect.addEventListener("change",()=>{
+      if(textBusy||textUnconfirmed) return;
+      selectStory(storySelect.value);
+    });
+
+    storyLoad.addEventListener("click",()=>{
+      if(textBusy||textUnconfirmed||shell.commitInFlight||shell.historyInFlight||
+          shell.commitUncertain||shell.historyUncertain||
+          shell.commitRecoveryInFlight||shell.historyRecoveryInFlight) return;
+      void (async()=>{
+        textBusy=true;
+        storyLoad.disabled=true;
+        textState("Loading canonical Story list…");
+        try{
+          const current=await service.currentDocument();
+          if(current.document_id!==documentId ||
+              current.source_hash!==shell.readerScene?.source_hash ||
+              current.revision_id!==shell.readerScene?.revision_id){
+            throw new Error("Server revision differs from current Reader Scene; reload");
+          }
+          candidates=sourcePlainStoryCandidates(current.authoring_graph);
+          context={
+            document_id:documentId,
+            source_hash:current.source_hash,
+            revision_id:current.revision_id,
+          };
+          storySelect.replaceChildren();
+          for(const candidate of candidates){
+            const option=documentObject.createElement("option");
+            option.value=candidate.story_id;
+            option.textContent=candidate.story_id;
+            storySelect.append(option);
+          }
+          if(candidates.length){
+            selectStory(candidates[0].story_id);
+            storySelect.disabled=false;
+            textState("Canonical Story loaded; one plain edit per revision.");
+          }else{
+            storyInput.value="";
+            storyInput.disabled=true;
+            storyApply.disabled=true;
+            textState("No supported plain Story with an ordinary frame in this PUB.");
+          }
+        }catch(error){
+          context=null;
+          candidates=[];
+          storyInput.disabled=true;
+          storyApply.disabled=true;
+          storySelect.disabled=true;
+          textState("Story load not confirmed: "+String(error?.message??error),"error");
+        }finally{
+          textBusy=false;
+          if(!textUnconfirmed) storyLoad.disabled=false;
+        }
+      })();
+    });
+
+    storyApply.addEventListener("click",()=>{
+      if(textBusy||textUnconfirmed||!context?.story_id||composing) return;
+      let intent;
+      try{
+        intent=oneShotStoryIntent({
+          documentId,
+          sourceHash:context.source_hash,
+          baseRevisionId:context.revision_id,
+          storyId:context.story_id,
+          canonicalText:context.canonical_text,
+          observedText:storyInput.value,
+          clientOperationId:"product-story-"+cryptoObject.randomUUID(),
+        });
+        lockDocument(true);
+      }catch(error){
+        textState(String(error?.message??error),"error");
+        return;
+      }
+      void (async()=>{
+        textBusy=true;
+        textState("Submitting text intent and checking exact server revision…");
+        statusText(status,"Saving Story text…","pending");
+        try{
+          const accepted=await service.commitStoryRange(intent);
+          if(accepted.protocol_version!=="chaptera.commit-accepted.v1"){
+            throw new Error("Story edit rejected: "+String(accepted.code??"unknown"));
+          }
+          const current=await service.currentDocument();
+          if(current.document_id!==documentId ||
+              current.source_hash!==intent.source_hash ||
+              current.revision_id!==accepted.revision_id){
+            throw new Error("Story ACK differs from exact durable current revision");
+          }
+          const scene=await service.readerSceneForRevision(accepted.revision_id);
+          const actual=current.authoring_graph?.stories?.[context.story_id]?.text;
+          const desired=storyInput.value;
+          if(actual!==desired){
+            throw new Error("Reopened Story text differs from submitted text");
+          }
+          await shell.loadScenes(scene,undefined,{preserveSelection:false});
+          candidates=sourcePlainStoryCandidates(current.authoring_graph);
+          const confirmed=candidates.find((item)=>item.story_id===context.story_id);
+          if(!confirmed) throw new Error("Reopened Story is no longer editable");
+          context={
+            document_id:documentId,source_hash:current.source_hash,
+            revision_id:current.revision_id,story_id:confirmed.story_id,
+            canonical_text:confirmed.text,
+          };
+          storyInput.value=confirmed.text;
+          textState("Exact server revision and reopened Story text confirmed.","ok");
+          lockDocument(false);
+        }catch(error){
+          // A POST or post-ACK Scene failure may have happened after a durable
+          // commit. Preserve the operation and disallow all new mutations.
+          textUnconfirmed=true;
+          storyReload.hidden=false;
+          storySelect.disabled=true;
+          storyInput.disabled=true;
+          storyApply.disabled=true;
+          storyLoad.disabled=true;
+          textState("Text outcome not confirmed — editor locked. Reload to reconcile. "+
+            String(error?.message??error),"error");
+          statusText(status,"Story save not confirmed — editing locked","error");
+        }finally{
+          textBusy=false;
+        }
+      })();
+    });
+    storyReload.addEventListener("click",()=>{
+      // The page's fresh authenticated open owns recovery; no duplicate POST.
+      locationObject.reload?.();
     });
   }
   return {kind:"ready",document_id:documentId,shell,service};
