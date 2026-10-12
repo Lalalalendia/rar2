@@ -27,7 +27,7 @@ pub const EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1: &str = "0.1";
 
 /// Source-neutral page-lifecycle schema fence. Keep the full version
 /// compatibility law out of the central EditOperation/session monolith.
-pub(super) fn reject_legacy_page_lifecycle_schemas_v031(
+pub(super) fn reject_legacy_page_lifecycle_schemas_v032(
     project: &super::EditorProject,
     legacy_compatible_schema: &str,
 ) -> Result<(), super::EditorProjectError> {
@@ -59,6 +59,7 @@ pub(super) fn reject_legacy_page_lifecycle_schemas_v031(
         && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_29
         && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_30
         && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_31
+        && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_32
     {
         if let Some(index) = project
             .operations
@@ -73,6 +74,7 @@ pub(super) fn reject_legacy_page_lifecycle_schemas_v031(
     if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_29
         && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_30
         && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_31
+        && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_32
     {
         if let Some(index) = project.operations.iter().position(|operation| {
             matches!(
@@ -89,6 +91,7 @@ pub(super) fn reject_legacy_page_lifecycle_schemas_v031(
     }
     if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_30
         && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_31
+        && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_32
     {
         if let Some(index) = project.operations.iter().position(|operation| {
             matches!(
@@ -103,7 +106,9 @@ pub(super) fn reject_legacy_page_lifecycle_schemas_v031(
             );
         }
     }
-    if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_31 {
+    if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_31
+        && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_32
+    {
         if let Some(index) = project.operations.iter().position(|operation| {
             matches!(
                 operation,
@@ -117,11 +122,32 @@ pub(super) fn reject_legacy_page_lifecycle_schemas_v031(
             );
         }
     }
+    if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_32 {
+        if let Some(index) = project.operations.iter().position(|operation| {
+            matches!(
+                operation,
+                EditOperation::DeleteAuthoredRectanglesPageV1 { .. }
+            )
+        }) {
+            return Err(
+                super::EditorProjectError::LegacyProjectCarriesDeleteAuthoredRectanglesPageOperation {
+                    index,
+                },
+            );
+        }
+    }
     Ok(())
 }
 
 pub(super) fn minimum_identity_project_schema_v1(operations: &[EditOperation]) -> &'static str {
     if operations.iter().any(|operation| {
+        matches!(
+            operation,
+            EditOperation::DeleteAuthoredRectanglesPageV1 { .. }
+        )
+    }) {
+        super::EDITOR_PROJECT_VERSION_V0_32
+    } else if operations.iter().any(|operation| {
         matches!(
             operation,
             EditOperation::DuplicateAuthoredRectanglesPageV1 { .. }
@@ -396,6 +422,7 @@ impl EditorSession {
                 | EditOperation::DuplicateBlankPageV1 { .. }
                 | EditOperation::InsertBlankPageAfterV1 { .. }
                 | EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+                | EditOperation::DeleteAuthoredRectanglesPageV1 { .. }
                 | EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
                 | EditOperation::DuplicateAuthoredRectanglesPageV1 { .. }
                 | EditOperation::SetTextFormatProperty { .. }
@@ -516,6 +543,7 @@ impl EditorSession {
                 | EditOperation::DuplicateBlankPageV1 { .. }
                 | EditOperation::InsertBlankPageAfterV1 { .. }
                 | EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+                | EditOperation::DeleteAuthoredRectanglesPageV1 { .. }
                 | EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
                 | EditOperation::DuplicateAuthoredRectanglesPageV1 { .. }
                 | EditOperation::SetTextFormatProperty { .. }
@@ -814,6 +842,7 @@ impl EditOperation {
             | Self::DuplicateBlankPageV1 { .. }
             | Self::InsertBlankPageAfterV1 { .. }
             | Self::DeleteAuthoredRectanglePageV1 { .. }
+            | Self::DeleteAuthoredRectanglesPageV1 { .. }
             | Self::DuplicateAuthoredRectanglePageV1 { .. }
             | Self::DuplicateAuthoredRectanglesPageV1 { .. }
             | Self::SetTextFormatProperty { .. }
@@ -1078,6 +1107,35 @@ impl PersistenceRequirements for EditOperation {
                     property_path: Some("node".into()),
                 },
             ],
+            Self::DeleteAuthoredRectanglesPageV1 { transition } => {
+                let mut requirements = vec![
+                    PersistenceRequirement {
+                        feature: "page.created_identity".into(),
+                        origin: Some(transition.page.identity.page_id.into_canonical()),
+                        property_path: Some("page.identity".into()),
+                    },
+                    PersistenceRequirement {
+                        feature: "document.page_membership".into(),
+                        origin: Some(transition.page.document_id.into_canonical()),
+                        property_path: Some("document.pages".into()),
+                    },
+                ];
+                for shape in &transition.shapes_before {
+                    requirements.extend([
+                        PersistenceRequirement {
+                            feature: "node.deleted_identity".into(),
+                            origin: Some(shape.node_id.into_canonical()),
+                            property_path: Some("node".into()),
+                        },
+                        PersistenceRequirement {
+                            feature: "node.authored_stack_order".into(),
+                            origin: Some(shape.node_id.into_canonical()),
+                            property_path: Some("page.authored_stack".into()),
+                        },
+                    ]);
+                }
+                requirements
+            }
             Self::DuplicateAuthoredRectanglesPageV1 { transition } => {
                 let mut requirements = vec![
                     PersistenceRequirement {
