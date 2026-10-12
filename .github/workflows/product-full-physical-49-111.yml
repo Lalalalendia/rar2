@@ -1,0 +1,215 @@
+name: Product 49/111 real authenticated four-shard capture
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - tools/product_full_physical_receipts_v1.py
+      - tools/test_product_full_physical_receipts_v1.py
+      - tools/product_full_cohort_shards_v1.py
+      - tools/run_product_oidc_worst_census_acceptance.py
+      - tools/run_secure_origin_product_worst_browser.mjs
+      - tools/reader_product_worst_visual_64.py
+      - apps/cloud-reader/product-worst-visual-browser.test.mjs
+      - .github/workflows/product-full-physical-49-111.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-49-111-physical-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  admit-roster:
+    name: Verify exact source-neutral cohort and negative contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.roster.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile and validate existing 49/39/111 physical contract
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/product_full_physical_receipts_v1.py tools/test_product_full_physical_receipts_v1.py tools/product_full_cohort_shards_v1.py tools/run_product_oidc_worst_census_acceptance.py tools/reader_product_worst_visual_64.py
+          python tools/test_product_full_cohort_shards_v1.py -v
+          python tools/test_product_full_physical_receipts_v1.py -v
+          node --check tools/run_secure_origin_product_worst_browser.mjs
+          node --check apps/cloud-reader/product-worst-visual-browser.test.mjs
+      - name: Emit fixed, complete and source-free four-shard selection
+        id: roster
+        run: |
+          set -euo pipefail
+          python tools/product_full_cohort_shards_v1.py --matrix > "$RUNNER_TEMP/physical-matrix.json"
+          echo "matrix=$(cat "$RUNNER_TEMP/physical-matrix.json")" >> "$GITHUB_OUTPUT"
+
+  physical-product:
+    name: Real OIDC Product Chromium, shard ${{ matrix.shard }}
+    needs: admit-roster
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.admit-roster.outputs.matrix) }}
+    env:
+      EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      SHARD_ID: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Native seccomp, exact inputs and browser prerequisites
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check "Pillow==11.3.0"
+          python - <<'PY'
+          import ctypes.util
+          assert ctypes.util.find_library("seccomp"), "kernel seccomp sandbox required"
+          PY
+          docker version
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Fetch SHA-pinned historical native PUB inputs inside private runner
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: ${{ runner.temp }}/product-full-corpus/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+      - name: Build existing canonical Product HTTP and isolated worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+      - name: Physically run every eligible case without fallback or exclusions
+        env:
+          SHARD_CASES: ${{ matrix.case_ids }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/product-physical-full/cases
+          for CASE_ID in $SHARD_CASES; do
+            python tools/product_full_cohort_shards_v1.py --case "$CASE_ID" > "$RUNNER_TEMP/current-product-case.json"
+            SOURCE_SHA="$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["source_sha256"])' "$RUNNER_TEMP/current-product-case.json")"
+            SOURCE_BYTES="$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["source_bytes"])' "$RUNNER_TEMP/current-product-case.json")"
+            FIXTURE="$RUNNER_TEMP/product-full-corpus/pinned1050/materialized/native/$SOURCE_SHA.pub"
+            test -f "$FIXTURE"
+            printf '%s  %s\n' "$SOURCE_SHA" "$FIXTURE" | sha256sum --check
+            test "$(stat -c %s "$FIXTURE")" = "$SOURCE_BYTES"
+            CHAPTERA_PRODUCT_MULTI_ID="$CASE_ID" python tools/run_product_oidc_worst_census_acceptance.py \
+              --binary target/debug/chaptera \
+              --fixture "$FIXTURE" \
+              --fixture-sha256 "$SOURCE_SHA" \
+              --head-sha "$EXACT_HEAD" \
+              --caddy-image caddy:2.10.2-alpine
+            case_dir="target/product-oidc-worst-census-$CASE_ID"
+            privacy_args=()
+            for file in "$case_dir"/*.log "$case_dir"/*.json; do
+              if [ -f "$file" ]; then privacy_args+=("$file"); fi
+            done
+            test "${#privacy_args[@]}" -ge 3
+            python tools/security_leak_scan_v1.py "${privacy_args[@]}" \
+              --forbid-literal "Pinned$CASE_ID.pub" \
+              --forbid-literal "chaptera-local-only-secret" \
+              --forbid-literal "$RUNNER_TEMP/product-full-corpus/pinned1050" \
+              --json-out "$case_dir/privacy-scan.json"
+            output="target/product-physical-full/cases/$CASE_ID/document.json"
+            python tools/product_full_physical_receipts_v1.py case \
+              --case "$CASE_ID" --head "$EXACT_HEAD" \
+              --owner "$case_dir/owner.json" \
+              --summary "$case_dir/summary.json" \
+              --comparison "$case_dir/publisher-comparison.json" \
+              --privacy "$case_dir/privacy-scan.json" \
+              --out "$output"
+          done
+          python tools/product_full_physical_receipts_v1.py shard \
+            --shard "$SHARD_ID" --head "$EXACT_HEAD" \
+            --case-dir target/product-physical-full/cases \
+            --out "target/product-physical-full/shard-$SHARD_ID.json"
+      - name: Ensure shard artifact contains only source-neutral allowlisted JSON
+        run: |
+          set -euo pipefail
+          test -f "target/product-physical-full/shard-$SHARD_ID.json"
+          python tools/security_leak_scan_v1.py "target/product-physical-full/shard-$SHARD_ID.json" \
+            --forbid-literal "chaptera-local-only-secret"
+      - name: Upload ONLY the derived shard JSON, never original PUB/Scene/PNG/cookies
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-49-111-shard-${{ matrix.shard }}
+          path: target/product-physical-full/shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+  score-all:
+    name: Strict 49 source / 39 document / 111 page Product score
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft }}
+    needs: [admit-roster, physical-product]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: product-49-111-shard-*
+          path: target/product-physical-full/fragments
+          merge-multiple: true
+      - name: Reject absent/duplicated/stale/failed physical shards and score
+        run: |
+          set -euo pipefail
+          python tools/product_full_physical_receipts_v1.py combine \
+            --head "$EXACT_HEAD" \
+            --shard-dir target/product-physical-full/fragments \
+            --physical-out target/product-physical-full/physical.json \
+            --score-out target/product-physical-full/ranking.json
+          python tools/reader_product_49_111_scoreboard_v1.py \
+            --physical-product target/product-physical-full/physical.json \
+            --frozen-lo tools/corpus/receipts/publisher-lo-t999-49-111-frozen-v1.json \
+            --publisher-fingerprint tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json \
+            --publisher-pairs tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv \
+            --expected-head "$EXACT_HEAD" \
+            --out target/product-physical-full/scorer-independent.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('target/product-physical-full')
+          a = json.loads((root / 'ranking.json').read_text())
+          b = json.loads((root / 'scorer-independent.json').read_text())
+          assert a == b, 'canonical full Product scoring changed between runs'
+          assert a['product_pages']['pages'] == 111
+          assert a['product_documents']['documents'] == 39
+          PY
+          python tools/security_leak_scan_v1.py \
+            target/product-physical-full/physical.json \
+            target/product-physical-full/ranking.json \
+            --forbid-literal "chaptera-local-only-secret"
+      - name: Publish source-neutral numeric scoreboard only after full physical proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-49-111-physical-numeric-score
+          path: |
+            target/product-physical-full/physical.json
+            target/product-physical-full/ranking.json
+          if-no-files-found: error
+          retention-days: 14
