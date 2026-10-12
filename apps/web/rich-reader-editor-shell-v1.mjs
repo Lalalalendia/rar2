@@ -1,6 +1,7 @@
 import { renderReaderScene } from "../cloud-reader/render-v1.mjs";
 import {
   MoveGestureV1,
+  assertSafeEmu,
   hitTestSnapshot,
   reconcileMoveCommit,
 } from "./interaction-v1.mjs";
@@ -45,6 +46,25 @@ export function historyShortcutCommand(event) {
 
 export function isUndoShortcutEvent(event) {
   return historyShortcutCommand(event) === "undo";
+}
+
+// One physical point is exactly 12,700 English Metric Units; no pixel/zoom
+// conversion, floating drift or duplicated authoring authority in the browser.
+export const PRODUCT_NUDGE_STEP_EMU = 12_700;
+
+export function nudgeShortcutDelta(event) {
+  if (!event || typeof event !== "object" || event.defaultPrevented ||
+      event.repeat || event.altKey || event.ctrlKey || event.metaKey ||
+      event.isComposing || event.keyCode === 229 ||
+      editableShortcutTarget(event.target)) return null;
+  const step = PRODUCT_NUDGE_STEP_EMU * (event.shiftKey ? 10 : 1);
+  switch (event.key) {
+    case "ArrowLeft": return { x_emu: -step, y_emu: 0 };
+    case "ArrowRight": return { x_emu: step, y_emu: 0 };
+    case "ArrowUp": return { x_emu: 0, y_emu: -step };
+    case "ArrowDown": return { x_emu: 0, y_emu: step };
+    default: return null;
+  }
 }
 
 export function resolveRichEditorPointerTarget(
@@ -240,6 +260,9 @@ export class RichReaderEditorShellV1 {
       }
 
       this.selectedNodeId = hit.node_id;
+      // Only explicit canvas focus owns arrows; toolbar, forms and text input
+      // retain their browser-native keyboard behavior.
+      this.host.focus?.({ preventScroll: true });
       this.gesture = new MoveGestureV1(
         this.interactionScene,
         hit.node_id,
@@ -318,15 +341,30 @@ export class RichReaderEditorShellV1 {
     if (this._keyboardBound) return;
     const keydown = (event) => {
       const command = historyShortcutCommand(event);
-      if (!command) return;
-      event.preventDefault?.();
-      if (this.historyInFlight || this.commitUncertain || this.commitRecoveryInFlight ||
-          this.historyUncertain || this.historyRecoveryInFlight) {
-        this._emitState(this.commitUncertain || this.historyUncertain
-          ? "history_blocked_unknown_save" : "history_blocked_during_save");
+      if (command) {
+        event.preventDefault?.();
+        if (this.historyInFlight || this.commitUncertain || this.commitRecoveryInFlight ||
+            this.historyUncertain || this.historyRecoveryInFlight) {
+          this._emitState(this.commitUncertain || this.historyUncertain
+            ? "history_blocked_unknown_save" : "history_blocked_during_save");
+          return;
+        }
+        void this[command]().catch(() => {});
         return;
       }
-      void this[command]().catch(() => {});
+
+      const delta = nudgeShortcutDelta(event);
+      if (!delta || !this.selectedNodeId ||
+          (event.target !== this.host && !this.host.contains?.(event.target))) return;
+      event.preventDefault?.();
+      if (this.gesture || this.historyInFlight || this.commitInFlight ||
+          this.commitUncertain || this.commitRecoveryInFlight ||
+          this.historyUncertain || this.historyRecoveryInFlight) {
+        this._emitState(this.commitUncertain || this.historyUncertain
+          ? "nudge_blocked_unknown_save" : "nudge_blocked_during_save");
+        return;
+      }
+      void this.nudgeSelectedNode(delta).catch(() => {});
     };
     this.keyboardTarget.addEventListener("keydown", keydown);
     this._keyboardHandler = keydown;
@@ -338,6 +376,43 @@ export class RichReaderEditorShellV1 {
     this.keyboardTarget.removeEventListener("keydown", this._keyboardHandler);
     this._keyboardHandler = null;
     this._keyboardBound = false;
+  }
+
+  async nudgeSelectedNode(delta) {
+    if (!delta || !Number.isSafeInteger(delta.x_emu) ||
+        !Number.isSafeInteger(delta.y_emu) ||
+        (delta.x_emu === 0 && delta.y_emu === 0)) {
+      throw new TypeError("nudge requires a nonzero exact EMU delta");
+    }
+    if (this.gesture || this.historyInFlight || this.commitInFlight ||
+        this.commitUncertain || this.commitRecoveryInFlight ||
+        this.historyUncertain || this.historyRecoveryInFlight) {
+      throw new Error("nudge unavailable while an edit or history authority is pending");
+    }
+    if (!this.interactionScene || !this.readerScene || !this.selectedNodeId) {
+      throw new Error("nudge requires a selected canonical node");
+    }
+    const node = nodeById(this.interactionScene, this.selectedNodeId);
+    if (!node || node.parent_node_id != null || node.editable === false) {
+      throw new Error("nudge requires an editable direct page-local node");
+    }
+    const x = assertSafeEmu(node.bounds.x + delta.x_emu, "nudge x");
+    const y = assertSafeEmu(node.bounds.y + delta.y_emu, "nudge y");
+    // The same transient MoveGesture and canonical MoveNode POST as real
+    // pointer drag. One keypress must generate exactly one durable operation.
+    this.gesture = new MoveGestureV1(this.interactionScene, node.node_id, {
+      x_emu: node.bounds.x,
+      y_emu: node.bounds.y,
+    });
+    this.gesturePageId = node.page_id;
+    try {
+      return await this._commitGesture({ x_emu: x, y_emu: y });
+    } catch (error) {
+      this.gesture = null;
+      this.gesturePageId = null;
+      this._renderOverlay();
+      throw error;
+    }
   }
 
   cancelGesture(reason = "gesture_cancelled") {
