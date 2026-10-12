@@ -47,8 +47,10 @@ FIXTURE_URL = (
 FIXTURE_SHA = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
 # Keep the packaged launcher pinned to the same canonical graph identity as
 # LAYOUT-RESOLVED-SCENE and the current same-head Viewer receipt.
-GRAPH_SHA = "f85927cde6e2569b9ea7a6a5f634e303d83b1956e0e498d6211cf44cd669ab07"
-GRAPH_BYTES = 299252
+# Exact source-backed Newsletter PAGE381 LINE 405: Windows clean-extracted
+# smoke produced these bytes after the bounded single-node admission.
+GRAPH_SHA = "12c594f1be824c0272cf28ebbc03f949a437a4d49db1b508fe2d73f66ff1c12f"
+GRAPH_BYTES = 301962
 
 
 def sha256(path: pathlib.Path) -> str:

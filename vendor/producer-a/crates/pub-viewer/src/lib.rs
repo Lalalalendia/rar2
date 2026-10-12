@@ -15,6 +15,7 @@ mod mature_emf_preview;
 mod mature_wmf_preview;
 mod tables;
 mod typography;
+mod viewer_shape_preset;
 
 pub use typography::{ViewerTypographyBooleanV1, ViewerTypographyRun, viewer_story_text_sha256};
 
@@ -45,6 +46,7 @@ use tables::viewer_tables_from_resolved;
 pub use tables::{ViewerTable, ViewerTableBorderSegment, ViewerTableCell};
 #[cfg(test)]
 use tables::{unique_table_column_boundary, unique_table_row_boundary};
+use viewer_shape_preset::viewer_preset_shape_from_canonical;
 
 use anyhow::{Context, Result, anyhow};
 #[cfg(feature = "cmo-slot-compose")]
@@ -632,6 +634,7 @@ pub enum ViewerPresetShape {
     Ellipse,
     Line,
     LineDashGel,
+    HorizontalLine,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -650,7 +653,7 @@ fn fence_semantic_table_container_fill(
     is_semantic_table: bool,
     mut paint: ViewerNodePaint,
 ) -> ViewerNodePaint {
-    if is_semantic_table {
+    if is_semantic_table || paint.preset_shape == Some(ViewerPresetShape::HorizontalLine) {
         paint.solid_fill_rgb = None;
     }
     paint
@@ -687,32 +690,6 @@ fn bridge_effective_value<T: Clone>(
                 offset: source.offset,
                 len: source.len,
             }),
-    }
-}
-
-fn viewer_preset_shape_from_canonical(
-    node: &Node<PubResolvedNodePayload>,
-) -> Option<ViewerPresetShape> {
-    let authoritative_projection = |path: &str| {
-        node.header.source_refs.iter().any(|source_ref| {
-            source_ref.path.as_deref() == Some(path)
-                && source_ref.authority == AuthorityClass::Authoritative
-                && source_ref.confidence == Some(ReadConfidence::Exact)
-                && matches!(source_ref.role, SourceRole::Projection)
-        })
-    };
-    if authoritative_projection("SpContainer/FOPT/line-dashing-dash-gel")
-        && authoritative_projection("SpContainer/FSP/default-line")
-    {
-        Some(ViewerPresetShape::LineDashGel)
-    } else if authoritative_projection("SpContainer/FSP/default-line") {
-        Some(ViewerPresetShape::Line)
-    } else if authoritative_projection("SpContainer/FSP/default-roundrect") {
-        Some(ViewerPresetShape::RoundRect)
-    } else if authoritative_projection("SpContainer/FSP/default-ellipse") {
-        Some(ViewerPresetShape::Ellipse)
-    } else {
-        None
     }
 }
 

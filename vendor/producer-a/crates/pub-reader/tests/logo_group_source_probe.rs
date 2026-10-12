@@ -241,14 +241,75 @@ fn exact_public_newsletter_logo_0x31_baseline() {
         source_order.node_ids.len()
     );
     assert_eq!(
-        page_nodes, 18,
-        "12 baseline nodes plus six bounded children"
+        page_nodes, 19,
+        "12 baseline nodes, six bounded LOGO children, and source LINE 405"
     );
     assert_eq!(
         source_order.node_ids.len(),
         page_nodes,
         "PAGE LOGO children need carrier-backed paint order"
     );
+
+    // This LINE is physically PAGE-owned, not a LOGO group descendant,
+    // and its source stroke must precede the later LOGO group carrier.
+    let line_id = derive_pub_node_id(&source_hash, 405).unwrap();
+    let line = build
+        .graph
+        .nodes
+        .get(&line_id)
+        .expect("exact source LINE 405 must materialize");
+    assert_eq!(line.header.parent_id, page_id.into_canonical());
+    assert_eq!(line.payload.officeart_shape_type, Some(0x0014));
+    assert_eq!(
+        (
+            line.header.bounds.x.get(),
+            line.header.bounds.y.get(),
+            line.header.bounds.width.get(),
+            line.header.bounds.height.get(),
+        ),
+        (1_058_750, 705_474, 6_729_849, 101_600),
+        "stroke envelope must preserve PAGE381 native centerline"
+    );
+    let line_paint = line
+        .payload
+        .effective_paint
+        .as_ref()
+        .expect("LINE 405 locally sourced stroke");
+    assert!(line_paint.fill.color_rgb.is_none(), "LINE has no fill");
+    assert_eq!(
+        line_paint.line.color_rgb.as_ref().map(|v| v.value),
+        Some([255, 0, 255])
+    );
+    assert_eq!(
+        line_paint.line.width_emu.as_ref().map(|v| v.value),
+        Some(101_600)
+    );
+    assert_eq!(
+        line_paint.line.visible.as_ref().map(|v| v.value),
+        Some(true)
+    );
+    for source in [
+        line_paint.line.color_rgb.as_ref().unwrap().source.as_ref(),
+        line_paint.line.width_emu.as_ref().unwrap().source.as_ref(),
+        line_paint.line.visible.as_ref().unwrap().source.as_ref(),
+    ] {
+        assert!(
+            source.is_some(),
+            "each LINE property needs local byte authority"
+        );
+    }
+    assert!(
+        line.header.source_refs.iter().any(|source| {
+            source.path.as_deref() == Some("SpContainer/ClientAnchor/source-horizontal-line-stroke")
+        }),
+        "horizontal stroke is a separately authorized source projection"
+    );
+    let source_line_rank = source_order
+        .node_ids
+        .iter()
+        .position(|id| *id == line_id)
+        .expect("direct PAGE LINE must be in exact physical paint order");
+    println!("NEWSLETTER_SOURCE_LINE_405_RANK={source_line_rank}");
 
     // The hidden LOGO rectangle 387 stays absent. Visible 408/410 have
     // source-backed effective fill and line suppression; do not guess paint
