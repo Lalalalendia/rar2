@@ -24,6 +24,19 @@
     <span class="history-note">Only one immediate MoveNode Redo is supported; other history actions are rejected without changing the document.</span>
     <span class="history-note">Select a direct object on the canvas: Arrow keys move 1 pt; Shift+Arrow moves 10 pt. Text inputs and other controls keep their own keys.</span>
     <span id="fidelity"></span>
+    <section class="story-text-panel" aria-labelledby="story-editor-heading">
+      <strong id="story-editor-heading">Text Story · bounded edit</strong>
+      <p>Plain Story only. Server verifies support; paragraphs and rich text are not enabled.</p>
+      <button id="story-load-action" type="button">Load text stories</button>
+      <label for="story-select">Story</label>
+      <select id="story-select" disabled aria-label="Editable Story"></select>
+      <label for="story-input">Text</label>
+      <textarea id="story-input" rows="8" spellcheck="false" disabled></textarea>
+      <button id="story-apply-action" type="button" disabled>Apply text edit</button>
+      <button id="story-reload-action" type="button" hidden>Reload editor to recover</button>
+      <span id="story-status" role="status" aria-live="polite">Load a canonical Story to begin.</span>
+      <span class="story-limitation">Undo/Redo for Story is not yet supported. A new revision is authoritative only after server reopen.</span>
+    </section>
   </aside>
   <section id="canvas-wrap" aria-label="Publication canvas">
     <div id="canvas" tabindex="0" role="group" aria-label="Publication canvas, select an object to nudge with arrow keys"></div>

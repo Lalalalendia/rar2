@@ -30,6 +30,7 @@ const SOURCE_INGRESS_CLIENT: &[u8] =
 const EDITOR_CSS: &[u8] = include_bytes!("../../web/product-editor.css");
 const EDITOR_ENTRY: &[u8] = include_bytes!("../../web/product-editor-entry-v1.mjs");
 const PRODUCT_SERVICE: &[u8] = include_bytes!("../../web/chaptera-product-editor-service-v1.mjs");
+const TEXT_PROTOCOL: &[u8] = include_bytes!("../../web/text-protocol-v1.mjs");
 const RICH_SHELL: &[u8] = include_bytes!("../../web/rich-reader-editor-shell-v1.mjs");
 const INTERACTION_SCENE: &[u8] = include_bytes!("../../web/reader-scene-editor-interaction-v1.mjs");
 const INTERACTION: &[u8] = include_bytes!("../../web/interaction-v1.mjs");
@@ -46,7 +47,7 @@ struct EmbeddedAsset {
     bytes: &'static [u8],
 }
 
-const ASSETS: [EmbeddedAsset; 22] = [
+const ASSETS: [EmbeddedAsset; 23] = [
     EmbeddedAsset {
         name: "product-editor.html",
         content_type: "text/html; charset=utf-8",
@@ -157,6 +158,11 @@ const ASSETS: [EmbeddedAsset; 22] = [
         content_type: "text/javascript; charset=utf-8",
         bytes: PROJECT_RENAME_CLIENT,
     },
+    EmbeddedAsset {
+        name: "text-protocol-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: TEXT_PROTOCOL,
+    },
 ];
 
 pub fn router<S>() -> Router<S>
@@ -192,6 +198,7 @@ where
         )
         .route("/editor/product-editor.css", get(editor_css))
         .route("/editor/product-editor-entry-v1.mjs", get(editor_entry))
+        .route("/editor/text-protocol-v1.mjs", get(text_protocol))
         .route(
             "/editor/chaptera-product-editor-service-v1.mjs",
             get(product_service),
@@ -268,6 +275,9 @@ async fn editor_css() -> Response {
 }
 async fn editor_entry() -> Response {
     asset_response(&ASSETS[13])
+}
+async fn text_protocol() -> Response {
+    asset_response(&ASSETS[22])
 }
 async fn product_service() -> Response {
     asset_response(&ASSETS[14])
@@ -374,6 +384,31 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(bytes.as_ref(), READER_ADAPTER);
+    }
+
+    #[tokio::test]
+    async fn product_text_protocol_is_an_embedded_csp_module() {
+        assert!(
+            std::str::from_utf8(PRODUCT_SERVICE)
+                .unwrap()
+                .contains("./text-protocol-v1.mjs")
+        );
+        let response = router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri("/editor/text-protocol-v1.mjs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/javascript; charset=utf-8"
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.as_ref(), TEXT_PROTOCOL);
     }
 
     #[tokio::test]

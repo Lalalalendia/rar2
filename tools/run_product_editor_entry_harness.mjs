@@ -63,6 +63,7 @@ const staticFiles = new Map([
   ["/editor/product-editor.css", ["apps/web/product-editor.css", ".css"]],
   ["/editor/product-editor-entry-v1.mjs", ["apps/web/product-editor-entry-v1.mjs", ".mjs"]],
   ["/editor/chaptera-product-editor-service-v1.mjs", ["apps/web/chaptera-product-editor-service-v1.mjs", ".mjs"]],
+  ["/editor/text-protocol-v1.mjs", ["apps/web/text-protocol-v1.mjs", ".mjs"]],
   ["/editor/observability-v1.mjs", ["apps/web/observability-v1.mjs", ".mjs"]],
   ["/editor/rich-reader-editor-shell-v1.mjs", ["apps/web/rich-reader-editor-shell-v1.mjs", ".mjs"]],
   ["/editor/reader-scene-editor-interaction-v1.mjs", ["apps/web/reader-scene-editor-interaction-v1.mjs", ".mjs"]],

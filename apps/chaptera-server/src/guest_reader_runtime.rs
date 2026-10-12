@@ -82,5 +82,12 @@ pub async fn build_guest_reader_router(
         }
     });
 
-    Ok(Some(guest_reader_http::router(guest_state)))
+    let mut router = guest_reader_http::router(guest_state.clone());
+    // Temporary Edit V0 is a no-S3 mode. Never expose its guest entrypoint
+    // when the configured blob provider is S3-backed.
+    if config.storage.provider == "filesystem" {
+        router = router.merge(guest_reader_http::temporary_editor_router(guest_state));
+    }
+
+    Ok(Some(router))
 }

@@ -21,7 +21,7 @@ use chaptera_scene_instance::{
     GeometrySyncPolicyV1, direct_page_local_instance_v1, geometry_sync_policy_v1,
 };
 use pub_editor::{
-    EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest, open_mature_0x2c_editor,
+    EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest, StoryId, open_mature_0x2c_editor,
 };
 use pub_reader::PubResolvedGraph;
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
@@ -36,7 +36,7 @@ use crate::{
     },
     product_replay_worker::{
         IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer, IsolatedReaderSceneIntentV1,
-        ProductReplayWorkerError,
+        IsolatedStoryRangeIntentV1, ProductReplayWorkerError,
     },
     reader_scene_v1::{ReaderSceneV1, from_viewer_geometry},
     revision_materializer::{
@@ -58,6 +58,7 @@ use crate::{
 };
 
 pub const COMMIT_REQUEST_V1: &str = "chaptera.commit-request.v1";
+pub const STORY_RANGE_INTENT_V1: &str = "chaptera.story-range-intent.v1";
 pub const COMMIT_ACCEPTED_V1: &str = "chaptera.commit-accepted.v1";
 pub const HISTORY_TRANSITION_INTENT_V1: &str = "chaptera.history-transition-intent.v1";
 pub const HISTORY_TRANSITION_ACCEPTED_V1: &str = "chaptera.history-transition-accepted.v1";
@@ -157,6 +158,10 @@ fn product_router_routes(state: ProductApiHttpState) -> Router {
         )
         .route("/v1/documents/{document_id}/commit", post(commit_move_node))
         .route(
+            "/v1/documents/{document_id}/story-commit",
+            post(commit_story_range),
+        )
+        .route(
             "/v1/documents/{document_id}/history",
             post(commit_history_transition),
         )
@@ -203,6 +208,31 @@ struct MoveNodeToV1 {
     node_id: String,
     x_emu: i64,
     y_emu: i64,
+}
+
+/// Public intent only. Browser cannot supply expected_before, format state,
+/// authoritative paragraph IDs or any source-derived persistent structure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoryRangeCommitRequestV1 {
+    protocol_version: String,
+    document_id: String,
+    source_hash: String,
+    base_revision_id: String,
+    client_operation_id: String,
+    #[serde(default)]
+    depends_on_client_operation_id: Option<String>,
+    command: StoryRangeCommandV1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoryRangeCommandV1 {
+    kind: String,
+    story_id: String,
+    start_scalar: u32,
+    end_scalar: u32,
+    replacement_text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -486,13 +516,17 @@ fn project_reader_scene_with_worker_samples(
         })?;
 
         let mut moved_node_ids = Vec::new();
+        let mut edited_story_ids = Vec::new();
         for operation in &project.operations {
             match operation {
                 EditOperation::MoveNode { node_id, .. } => moved_node_ids.push(*node_id),
+                EditOperation::ReplaceStoryRange { story_id, .. } => {
+                    edited_story_ids.push(*story_id);
+                }
                 _ => {
                     return Err(ProductApiError::conflict(
                         "reader_scene_revision_operation_unsupported",
-                        "rich Reader scene replay is currently admitted only for MoveNode revisions",
+                        "rich Reader scene replay admits only canonical MoveNode and plain StoryRange revisions",
                     ));
                 }
             }
@@ -534,6 +568,31 @@ fn project_reader_scene_with_worker_samples(
                     format!("current revision Viewer text refresh failed: {error}"),
                 )
             })?;
+
+        // The refresh uses canonical EditorSession text and the shared
+        // pub-layout flow, not browser DOM metrics. Confirm every changed Story
+        // survived that consumer before returning a successful revision Scene.
+        for edited_story_id in edited_story_ids {
+            let Some(authored_story) = session.graph().stories.get(&edited_story_id) else {
+                return Err(ProductApiError::internal(
+                    "reader_scene_story_missing",
+                    "current canonical graph lost a durable StoryRange target",
+                ));
+            };
+            let projected_text = bundle
+                .geometry
+                .document
+                .stories
+                .iter()
+                .find(|story| story.id == edited_story_id)
+                .map(|story| story.text.as_str());
+            if projected_text != Some(authored_story.text.as_str()) {
+                return Err(ProductApiError::conflict(
+                    "reader_scene_story_projection_unavailable",
+                    "current StoryRange revision cannot be represented by the admitted Viewer scene",
+                ));
+            }
+        }
 
         for moved_node_id in moved_node_ids {
             let Some(authored_node) = session.graph().nodes.get(&moved_node_id) else {
@@ -835,6 +894,250 @@ async fn commit_move_node(
     let committed = state
         .committer
         .commit_geometry_revision(
+            &source.tenant_id,
+            &principal.principal_id,
+            edge,
+            binding,
+            now,
+        )
+        .await
+        .map_err(ProductApiError::Authz)?;
+
+    accepted_from_receipt(&state, &source, committed, false).await
+}
+
+async fn commit_story_range(
+    State(state): State<ProductApiHttpState>,
+    Path(document_id): Path<String>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Json(request): Json<StoryRangeCommitRequestV1>,
+) -> Result<Json<CommitAcceptedResponse>, ProductApiError> {
+    validate_story_range_request(&request, &document_id)?;
+
+    let principal = state
+        .auth
+        .authenticate_mutation_request(&headers, &jar)
+        .await
+        .map_err(ProductApiError::Auth)?;
+    let source = state
+        .source
+        .resolve_by_document_id(&document_id)
+        .await
+        .map_err(ProductApiError::Source)?;
+    let request_hash = request_hash(&request)?;
+    let now = now_ms()?;
+
+    if let Some(existing) = state
+        .committer
+        .reconcile_text_revision(
+            &source.tenant_id,
+            &document_id,
+            &principal.principal_id,
+            &request.client_operation_id,
+            &request_hash,
+            now,
+        )
+        .await
+        .map_err(ProductApiError::Authz)?
+    {
+        let event = decode_editor_revision_event_v1(&existing.edge)
+            .map_err(ProductApiError::Materializer)?;
+        if !matches!(event.operation, EditOperation::ReplaceStoryRange { .. }) {
+            return Err(ProductApiError::conflict(
+                "idempotency_conflict",
+                "text operation id belongs to another canonical operation kind",
+            ));
+        }
+        return accepted_from_receipt(&state, &source, existing, true).await;
+    }
+
+    // Text authorization is checked before source identity comparison.
+    if request.source_hash != source.source_sha256 {
+        return Err(ProductApiError::bad_request(
+            "source_hash_mismatch",
+            "commit request source_hash differs from durable source authority",
+        ));
+    }
+
+    let head = current_head(&state.revisions, &source).await?;
+    if request.base_revision_id != head.revision_id {
+        return Err(ProductApiError::conflict(
+            "stale_revision",
+            "base_revision_id is no longer the current RevisionStream head",
+        ));
+    }
+
+    let materialized = state
+        .materializer
+        .materialize_state(&source.tenant_id, &document_id, &head.revision_id)
+        .await
+        .map_err(ProductApiError::Materializer)?;
+
+    let (operation, resulting_project) = if let Some(worker) = &state.isolated_replay {
+        worker
+            .replace_story_range(
+                &document_id,
+                &source.source_sha256,
+                &materialized.source_bytes,
+                &materialized.receipt.project,
+                &materialized.receipt.project_sha256,
+                &IsolatedStoryRangeIntentV1 {
+                    story_id: request.command.story_id.clone(),
+                    start_scalar: request.command.start_scalar,
+                    end_scalar: request.command.end_scalar,
+                    replacement_text: request.command.replacement_text.clone(),
+                },
+            )
+            .await
+            .map_err(|error| match error.code {
+                "product_story_range_invalid" | "product_story_range_rejected" => {
+                    ProductApiError::bad_request(error.code, error.message)
+                }
+                _ => ProductApiError::internal(error.code, error.message),
+            })?
+    } else {
+        // Test-only injected runtime; production always uses a confined worker.
+        let source_hash = Sha256Digest::from_str(&source.source_sha256).map_err(|_| {
+            ProductApiError::internal(
+                "source_hash_invalid",
+                "durable source authority contains an invalid SHA-256 identity",
+            )
+        })?;
+        let mut session = open_mature_0x2c_editor(&materialized.source_bytes, source_hash)
+            .map_err(|_| {
+                ProductApiError::internal(
+                    "editor_source_unsupported",
+                    "canonical EditorSession could not open a source-backed Story",
+                )
+            })?;
+        session
+            .apply_project(&materialized.receipt.project)
+            .map_err(|_| {
+                ProductApiError::internal(
+                    "editor_replay_failed",
+                    "canonical Story base revision cannot be replayed",
+                )
+            })?;
+        let story_id: StoryId =
+            serde_json::from_value(serde_json::Value::String(request.command.story_id.clone()))
+                .map_err(|_| ProductApiError::bad_request("story_id_invalid", "invalid StoryId"))?;
+        let story = session.graph().stories.get(&story_id).ok_or_else(|| {
+            ProductApiError::bad_request("story_id_invalid", "source StoryId does not exist")
+        })?;
+        let start = request.command.start_scalar as usize;
+        let end = request.command.end_scalar as usize;
+        if end > story.text.chars().count() {
+            return Err(ProductApiError::bad_request(
+                "story_range_invalid",
+                "Story range exceeds the canonical scalar text",
+            ));
+        }
+        let expected_before = story
+            .text
+            .chars()
+            .skip(start)
+            .take(end - start)
+            .collect::<String>();
+        let operation = session
+            .replace_story_range(
+                story_id,
+                request.command.start_scalar,
+                request.command.end_scalar,
+                expected_before,
+                request.command.replacement_text.clone(),
+            )
+            .map_err(|_| {
+                ProductApiError::bad_request(
+                    "story_range_rejected",
+                    "canonical EditorSession rejected unsupported Story mutation",
+                )
+            })?;
+        if !matches!(operation, EditOperation::ReplaceStoryRange { .. }) {
+            return Err(ProductApiError::internal(
+                "story_operation_invalid",
+                "canonical EditorSession returned a non-Story operation",
+            ));
+        }
+        let resulting_project =
+            crate::revision_materializer::cloud_revision_project(&session.project());
+        (operation, resulting_project)
+    };
+
+    let before_project_sha256 = materialized.receipt.project_sha256.clone();
+    let after_project_sha256 =
+        project_sha256(&resulting_project).map_err(ProductApiError::Materializer)?;
+
+    let identities = derive_commit_revision_identities(
+        &document_id,
+        &source.source_sha256,
+        &resulting_project.schema_version,
+        &resulting_project,
+        &head.revision_id,
+        &operation,
+    )
+    .map_err(ProductApiError::Baseline)?;
+
+    let parent_canonical: AuthoringRevisionIdV1 = materialized
+        .receipt
+        .canonical_authoring_revision_id
+        .parse()
+        .map_err(|_| {
+            ProductApiError::internal(
+                "canonical_parent_revision_invalid",
+                "materialized parent canonical revision identity is invalid",
+            )
+        })?;
+    let canonical_child =
+        derive_authoring_revision_id_v1(&resulting_project, Some(parent_canonical))
+            .map_err(|_| {
+                ProductApiError::internal(
+                    "canonical_child_revision_failed",
+                    "canonical child AuthoringRevisionId derivation failed",
+                )
+            })?
+            .to_string();
+
+    let event = EditorRevisionEventV1 {
+        schema_version: EDITOR_REVISION_EVENT_SCHEMA_V1.to_owned(),
+        source_sha256: source.source_sha256.clone(),
+        before_project_sha256,
+        after_project_sha256: after_project_sha256.clone(),
+        authoring_root_hash: None,
+        operation: operation.clone(),
+    };
+    let canonical_event =
+        encode_editor_revision_event_v1(&event).map_err(ProductApiError::Materializer)?;
+
+    let child_cursor = head.cursor.checked_add(1).ok_or_else(|| {
+        ProductApiError::internal("revision_cursor_overflow", "revision cursor overflow")
+    })?;
+
+    let edge = RevisionEdge {
+        document_id: document_id.clone(),
+        parent_revision: head.revision_id.clone(),
+        parent_cursor: head.cursor,
+        operation_id: request.client_operation_id.clone(),
+        request_hash,
+        canonical_event,
+        child_revision: identities.service_revision_id.clone(),
+        child_cursor,
+        resulting_state_hash: after_project_sha256,
+        authoring_root_hash: None,
+        semantic_schema_version: EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION,
+        committed_at_ms: now,
+    };
+    let binding = RevisionIdentityBinding {
+        document_id: document_id.clone(),
+        service_revision_id: identities.service_revision_id.clone(),
+        canonical_schema_version: AUTHORING_REVISION_SCHEMA_V1.to_owned(),
+        canonical_revision_id: canonical_child,
+        bound_at_ms: now,
+    };
+
+    let committed = state
+        .committer
+        .commit_text_revision(
             &source.tenant_id,
             &principal.principal_id,
             edge,
@@ -1253,6 +1556,54 @@ fn validate_request(
     Ok(())
 }
 
+/// This first positive Product class is one plain Story scalar replacement
+/// with no newlines/paragraph IDs, IME causal chain or rich anchored semantics.
+/// Core EditorSession eligibility is independently enforced inside isolation.
+fn validate_story_range_request(
+    request: &StoryRangeCommitRequestV1,
+    path_document_id: &str,
+) -> Result<(), ProductApiError> {
+    if request.protocol_version != STORY_RANGE_INTENT_V1 {
+        return Err(ProductApiError::bad_request(
+            "protocol_version_invalid",
+            "chaptera.story-range-intent.v1 is required",
+        ));
+    }
+    if request.document_id != path_document_id {
+        return Err(ProductApiError::bad_request(
+            "document_id_mismatch",
+            "path document_id differs from StoryRange document_id",
+        ));
+    }
+    require_ident(&request.document_id, "document_id")?;
+    require_ident(&request.client_operation_id, "client_operation_id")?;
+    require_hash(&request.source_hash, "source_hash")?;
+    require_revision_id(&request.base_revision_id)?;
+    if request.depends_on_client_operation_id.is_some() {
+        return Err(ProductApiError::bad_request(
+            "text_causal_chain_unsupported",
+            "wait for the prior text edit ACK before submitting another",
+        ));
+    }
+    if request.command.kind != "replace_story_range"
+        || request.command.end_scalar < request.command.start_scalar
+        || request.command.story_id.is_empty()
+        || request.command.story_id.len() > 128
+        || request.command.replacement_text.len() > 8192
+        || request
+            .command
+            .replacement_text
+            .chars()
+            .any(|ch| ch.is_control())
+    {
+        return Err(ProductApiError::bad_request(
+            "story_range_invalid",
+            "only one bounded plain canonical Story range edit is admitted",
+        ));
+    }
+    Ok(())
+}
+
 fn request_hash<T: Serialize>(request: &T) -> Result<String, ProductApiError> {
     let bytes = canonical_revision_json_v1(request).map_err(|_| {
         ProductApiError::internal(
@@ -1654,6 +2005,49 @@ mod tests {
     }
 
     #[test]
+    fn story_range_intent_denies_browser_authority_and_unsupported_multipart_changes() {
+        let base = json!({
+            "protocol_version": STORY_RANGE_INTENT_V1,
+            "document_id": "document-1",
+            "source_hash": "a".repeat(64),
+            "base_revision_id": format!("sha256:{}", "b".repeat(64)),
+            "client_operation_id": "operation-story-01",
+            "command": {
+                "kind": "replace_story_range",
+                "story_id": "00112233-4455-6677-8899-aabbccddeeff",
+                "start_scalar": 1,
+                "end_scalar": 2,
+                "replacement_text": "A"
+            }
+        });
+        let valid: StoryRangeCommitRequestV1 = serde_json::from_value(base.clone()).unwrap();
+        assert!(validate_story_range_request(&valid, "document-1").is_ok());
+
+        let mut browser_forged = base.clone();
+        browser_forged["command"]["expected_before"] = json!("forged");
+        assert!(serde_json::from_value::<StoryRangeCommitRequestV1>(browser_forged).is_err());
+
+        let mut browser_tenant = base.clone();
+        browser_tenant["tenant_id"] = json!("tenant:foreign");
+        assert!(serde_json::from_value::<StoryRangeCommitRequestV1>(browser_tenant).is_err());
+
+        let mut chained = base.clone();
+        chained["depends_on_client_operation_id"] = json!("operation-story-00");
+        let request: StoryRangeCommitRequestV1 = serde_json::from_value(chained).unwrap();
+        assert!(validate_story_range_request(&request, "document-1").is_err());
+
+        let mut paragraph = base.clone();
+        paragraph["command"]["replacement_text"] = json!("new\nparagraph");
+        let request: StoryRangeCommitRequestV1 = serde_json::from_value(paragraph).unwrap();
+        assert!(validate_story_range_request(&request, "document-1").is_err());
+
+        let mut invalid_range = base;
+        invalid_range["command"]["end_scalar"] = json!(0);
+        let request: StoryRangeCommitRequestV1 = serde_json::from_value(invalid_range).unwrap();
+        assert!(validate_story_range_request(&request, "document-1").is_err());
+    }
+
+    #[test]
     fn request_shape_rejects_tenant_and_authoritative_before_fields() {
         let value = json!({
             "protocol_version": COMMIT_REQUEST_V1,
@@ -1671,6 +2065,59 @@ mod tests {
             }
         });
         assert!(serde_json::from_value::<CommitRequestV1>(value).is_err());
+    }
+
+    #[test]
+    fn reader_scene_reprojects_exact_story_range_text_from_canonical_editor() {
+        let source_bytes = sample3_pub();
+        let source_sha256 = fixture_hash(&source_bytes);
+        let source_digest = Sha256Digest::from_str(&source_sha256).unwrap();
+        let mut session = open_mature_0x2c_editor(&source_bytes, source_digest).unwrap();
+
+        let (story_id, original) = session
+            .graph()
+            .stories
+            .iter()
+            .find(|(story_id, story)| {
+                !story.text.is_empty() && session.can_replace_story_text(**story_id).is_ok()
+            })
+            .map(|(story_id, story)| (*story_id, story.text.clone()))
+            .expect("Sample3 has an eligible source-backed plain Story");
+        let before = original.chars().next().unwrap().to_string();
+        let replacement = if before == "Q" { "R" } else { "Q" };
+        let expected = format!(
+            "{replacement}{}",
+            original.chars().skip(1).collect::<String>()
+        );
+        session
+            .replace_story_range(story_id, 0, 1, before, replacement)
+            .unwrap();
+        let project = crate::revision_materializer::cloud_revision_project(&session.project());
+        let accepted_revision_id = format!("sha256:{}", "c".repeat(64));
+        let baseline_revision_id = format!("sha256:{}", "b".repeat(64));
+        let scene = project_reader_scene_from_exact_source(
+            "document-sample3".to_owned(),
+            source_sha256.clone(),
+            accepted_revision_id.clone(),
+            &baseline_revision_id,
+            &source_bytes,
+            &project,
+        )
+        .expect("a canonical StoryRange must be visible in its Reader scene");
+        let story_key = serde_json::to_value(story_id)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let actual = scene
+            .stories
+            .iter()
+            .find(|story| story.story_id == story_key)
+            .expect("updated Story remains visible in Reader projection");
+        assert_eq!(actual.text, expected);
+        assert_eq!(scene.revision_id, accepted_revision_id);
+        assert_eq!(scene.source_hash, source_sha256);
+        assert_eq!(scene.scene_authority, "server_viewer_projection");
     }
 
     #[test]
