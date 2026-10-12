@@ -86,6 +86,13 @@ pub enum Command {
         move_x_emu: Option<i64>,
         #[arg(long, requires = "move_node_id", allow_hyphen_values = true)]
         move_y_emu: Option<i64>,
+        /// Private server-generated StoryRange input; never command-line text.
+        #[arg(
+            long,
+            requires = "project_json",
+            conflicts_with_all = ["move_node_id", "scene_revision_id"]
+        )]
+        story_intent_json: Option<PathBuf>,
         /// An authorized RevisionStream head, not an arbitrary client path.
         #[arg(
             long,
@@ -122,6 +129,50 @@ mod tests {
     use clap::Parser;
 
     use super::{Cli, Command, MigrateAction};
+
+    #[test]
+    fn text_story_mode_requires_private_project_and_exclusive_command() {
+        let base = [
+            "chaptera",
+            "product-isolated-replay",
+            "--document-id",
+            "document-test",
+            "--expected-sha256",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--expected-byte-len",
+            "42",
+        ];
+        let mut missing_project = base.to_vec();
+        missing_project.extend(["--story-intent-json", "/tmp/story.json"]);
+        assert!(Cli::try_parse_from(missing_project).is_err());
+
+        let mut valid = base.to_vec();
+        valid.extend([
+            "--project-json",
+            "/tmp/project.json",
+            "--expected-project-sha256",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--story-intent-json",
+            "/tmp/story.json",
+        ]);
+        assert!(matches!(
+            Cli::try_parse_from(valid.clone()).unwrap().command,
+            Command::ProductIsolatedReplay {
+                story_intent_json: Some(_),
+                ..
+            }
+        ));
+
+        valid.extend([
+            "--move-node-id",
+            "node-id",
+            "--move-x-emu",
+            "0",
+            "--move-y-emu",
+            "0",
+        ]);
+        assert!(Cli::try_parse_from(valid).is_err());
+    }
 
     #[test]
     fn reader_scene_mode_requires_exact_project_and_revision_identity() {

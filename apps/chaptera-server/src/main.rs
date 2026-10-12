@@ -77,6 +77,7 @@ fn main() -> ExitCode {
         move_node_id,
         move_x_emu,
         move_y_emu,
+        story_intent_json,
         scene_revision_id,
         scene_baseline_revision_id,
     } = &cli.command
@@ -105,6 +106,7 @@ fn main() -> ExitCode {
             expected_project_sha256.as_deref(),
             move_intent,
             scene_intent,
+            story_intent_json.as_deref(),
         ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
