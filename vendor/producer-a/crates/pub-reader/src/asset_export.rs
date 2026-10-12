@@ -231,20 +231,21 @@ pub fn pub_asset_manifest_json(manifest: &PubAssetExportManifest) -> Result<Stri
 pub fn write_pub_asset_export_bundle(
     bundle: &PubAssetExportBundle,
     output_dir: &Path,
+    mut commit: impl FnMut(&Path, &[u8]) -> Result<()>,
 ) -> Result<()> {
     fs::create_dir_all(output_dir)
         .with_context(|| format!("create asset output directory {}", output_dir.display()))?;
 
     for file in &bundle.files {
         let path = output_dir.join(&file.filename);
-        fs::write(&path, &file.bytes)
-            .with_context(|| format!("write extracted asset {}", path.display()))?;
+        commit(&path, &file.bytes)
+            .with_context(|| format!("commit extracted asset {}", path.display()))?;
     }
 
     let manifest = pub_asset_manifest_json(&bundle.manifest)?;
     let manifest_path = output_dir.join(PUB_ASSET_MANIFEST_FILENAME);
-    fs::write(&manifest_path, manifest.as_bytes())
-        .with_context(|| format!("write asset manifest {}", manifest_path.display()))?;
+    commit(&manifest_path, manifest.as_bytes())
+        .with_context(|| format!("commit asset manifest {}", manifest_path.display()))?;
 
     Ok(())
 }

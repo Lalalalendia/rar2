@@ -1,3 +1,6 @@
+mod derived_file_trust;
+#[cfg(all(test, target_os = "windows"))]
+mod derived_file_trust_windows_tests;
 mod destination;
 mod packet_admission;
 mod source_snapshot;
@@ -6,6 +9,9 @@ mod source_snapshot_windows_tests;
 
 pub use packet_admission::{HandoffPacketAdmissionError, HandoffPacketAdmissionV1};
 
+pub use derived_file_trust::{
+    DerivedFileTrustDisposition, DerivedFileTrustError, DerivedFileTrustReceipt,
+};
 pub use destination::{
     AdmittedDestination, DestinationCommitReceipt, DestinationWriteError, FileIdentity,
     identify_existing_path,
@@ -151,6 +157,29 @@ impl AdmittedSource {
 
     pub fn sha256(&self) -> &str {
         &self.sha256
+    }
+
+    pub fn commit_derived_output(
+        &self,
+        destination: &Path,
+        bytes: &[u8],
+    ) -> Result<DerivedFileTrustReceipt, DerivedFileTrustError> {
+        derived_file_trust::commit_derived_output(self, destination, bytes)
+    }
+
+    pub(crate) fn file_identity(&self) -> Result<FileIdentity, DestinationWriteError> {
+        destination::identify_open_file(&self.file)
+    }
+
+    pub(crate) fn verify_unchanged(&self) -> Result<(), String> {
+        let actual = self.rehash_opened_file()?;
+        if actual != self.sha256 {
+            return Err(format!(
+                "source_changed: admitted source hash changed from {} to {actual}",
+                self.sha256
+            ));
+        }
+        Ok(())
     }
 
     fn rehash_opened_file(&self) -> Result<String, String> {

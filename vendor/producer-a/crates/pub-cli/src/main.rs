@@ -1,12 +1,12 @@
 mod fixed_pdf;
 
 use anyhow::{Context, Result, bail};
+use chaptera_suite_handoff::AdmittedSource;
 use clap::{Parser, Subcommand, ValueEnum};
 use pub_editor::{EditorEditableTarget, open_mature_0x2c_editor};
 use pub_model::Sha256Digest;
 use sha2::{Digest, Sha256};
 use std::{
-    fs,
     io::Cursor,
     path::{Path, PathBuf},
 };
@@ -92,12 +92,12 @@ fn convert(input: &Path, target: TargetArg, output: &Path, emit_json: bool) -> R
         );
     }
 
-    let bytes = fs::read(input).with_context(|| format!("read {}", input.display()))?;
-    let source_hash = sha256_digest(&bytes);
+    let admitted = AdmittedSource::open(input).map_err(anyhow::Error::msg)?;
+    let bytes = admitted.bytes();
+    let source_hash = sha256_digest(bytes);
 
-    let source =
-        pub_reader::build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash)
-            .context("build mature Publisher source graph")?;
+    let source = pub_reader::build_mature_0x2c_source_graph(Cursor::new(bytes), source_hash)
+        .context("build mature Publisher source graph")?;
     let resolved =
         pub_reader::resolve_pub_source_graph(&source.graph).context("resolve Publisher graph")?;
     if !resolved.diagnostics.is_empty() {
@@ -107,8 +107,8 @@ fn convert(input: &Path, target: TargetArg, output: &Path, emit_json: bool) -> R
         );
     }
 
-    let session = open_mature_0x2c_editor(&bytes, source_hash)
-        .context("open current editable PUB session")?;
+    let session =
+        open_mature_0x2c_editor(bytes, source_hash).context("open current editable PUB session")?;
     let editor_target = target.editor_target();
     let label = source_label(input);
     let preview = session
@@ -133,16 +133,20 @@ fn convert(input: &Path, target: TargetArg, output: &Path, emit_json: bool) -> R
         bail!("preview/export LossReport mismatch");
     }
 
-    fs::write(output, &export.bytes).with_context(|| format!("write {}", output.display()))?;
+    admitted
+        .commit_derived_output(output, &export.bytes)
+        .with_context(|| format!("commit {}", output.display()))?;
 
     let json_sidecar = sidecar_path(output, ".loss.json");
     let text_sidecar = sidecar_path(output, ".loss.txt");
     let mut report_json = serde_json::to_vec_pretty(&export.report)?;
     report_json.push(b'\n');
-    fs::write(&json_sidecar, report_json)
-        .with_context(|| format!("write {}", json_sidecar.display()))?;
-    fs::write(&text_sidecar, &export.human_summary)
-        .with_context(|| format!("write {}", text_sidecar.display()))?;
+    admitted
+        .commit_derived_output(&json_sidecar, &report_json)
+        .with_context(|| format!("commit {}", json_sidecar.display()))?;
+    admitted
+        .commit_derived_output(&text_sidecar, export.human_summary.as_bytes())
+        .with_context(|| format!("commit {}", text_sidecar.display()))?;
 
     if emit_json {
         println!(
