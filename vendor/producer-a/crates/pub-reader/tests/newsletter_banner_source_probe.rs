@@ -44,7 +44,8 @@ fn exact_newsletter_top_band_source_attribution() {
                 .map(|reference| (seq as u32, reference))
         })
         .collect::<BTreeMap<_, _>>();
-    let scheme_refs = references.values()
+    let scheme_refs = references
+        .values()
         .filter(|r| matches!(r.raw_types.as_slice(), [raw] if raw.value == 0x5c))
         .collect::<Vec<_>>();
     let scheme = match scheme_refs.as_slice() {
@@ -54,23 +55,26 @@ fn exact_newsletter_top_band_source_attribution() {
                 StreamPath("/Contents".into()),
                 &contents,
                 reference.chunk_offsets[0].value,
-            ).expect("bounded source palette");
-            Some(pub_contents::parse_confirmed_mature_color_scheme(&contents, &chunk)
-                .expect("confirmed current color scheme"))
+            )
+            .expect("bounded source palette");
+            Some(
+                pub_contents::parse_confirmed_mature_color_scheme(&contents, &chunk)
+                    .expect("confirmed current color scheme"),
+            )
         }
         _ => panic!("ambiguous source color scheme"),
     };
-    let defaults = pub_escher::inspect_dgg_default_options(
-        StreamPath("/Escher/EscherStm".into()), &escher
-    ).expect("source DGG");
+    let defaults =
+        pub_escher::inspect_dgg_default_options(StreamPath("/Escher/EscherStm".into()), &escher)
+            .expect("source DGG");
     let dgg = match defaults.drawing_groups.as_slice() {
         [] => None,
         [one] => Some(one),
         _ => panic!("ambiguous source DGG"),
     };
 
-    let build = build_mature_0x2c_source_graph(Cursor::new(bytes), source_hash)
-        .expect("real SourceGraph");
+    let build =
+        build_mature_0x2c_source_graph(Cursor::new(bytes), source_hash).expect("real SourceGraph");
     let page_id = derive_pub_page_id(&source_hash, PAGE381).expect("page identity");
     assert!(build.graph.pages.contains_key(&page_id), "PAGE381 missing");
     let mut scanned = 0usize;
@@ -86,21 +90,33 @@ fn exact_newsletter_top_band_source_attribution() {
     // Every shape with a physical Contents seq is visited, including shapes
     // excluded from Reader materialization and shapes on OTHER/master pages.
     for (ordinal, shape) in inventory.shapes.iter().enumerate() {
-        let Some(data) = shape.client_data.as_ref() else { continue };
-        let seqs = data.fields.iter()
+        let Some(data) = shape.client_data.as_ref() else {
+            continue;
+        };
+        let seqs = data
+            .fields
+            .iter()
             .filter(|field| field.id == PUBLISHER_FIELD_SHAPE_ID)
             .map(|field| field.value)
             .collect::<Vec<_>>();
         let [seq] = seqs.as_slice() else { continue };
-        let Some(reference) = references.get(seq) else { continue };
+        let Some(reference) = references.get(seq) else {
+            continue;
+        };
         scanned += 1;
 
         let mut chain = vec![*seq];
         let mut cursor = *seq;
         for _ in 0..8 {
-            let Some(reference) = references.get(&cursor) else { break };
-            let [parent] = reference.parent_seq_nums.as_slice() else { break };
-            if chain.contains(&parent.value) { panic!("Contents owner cycle") }
+            let Some(reference) = references.get(&cursor) else {
+                break;
+            };
+            let [parent] = reference.parent_seq_nums.as_slice() else {
+                break;
+            };
+            if chain.contains(&parent.value) {
+                panic!("Contents owner cycle")
+            }
             cursor = parent.value;
             chain.push(cursor);
         }
@@ -109,28 +125,46 @@ fn exact_newsletter_top_band_source_attribution() {
         let raw_type = reference.raw_types.first().map(|raw| raw.value);
         let shape_type = shape.fsp.as_ref().map(|fsp| fsp.shape_type);
         let fsp_flags = shape.fsp.as_ref().map(|fsp| fsp.flags);
-        let colors = shape.fopts.iter()
+        let colors = shape
+            .fopts
+            .iter()
             .flat_map(|r| r.properties.iter())
-            .filter(|p| matches!(p.property_id(), 0x0180 | 0x0181 | 0x0182 | 0x0183 | 0x01bf | 0x01c0 | 0x01ff))
+            .filter(|p| {
+                matches!(
+                    p.property_id(),
+                    0x0180 | 0x0181 | 0x0182 | 0x0183 | 0x01bf | 0x01c0 | 0x01ff
+                )
+            })
             .map(|p| format!("{:04x}={:08x}", p.property_id(), p.op))
             .collect::<Vec<_>>();
-        let local_magenta = shape.fopts.iter()
+        let local_magenta = shape
+            .fopts
+            .iter()
             .flat_map(|r| r.properties.iter())
-            .any(|p| p.property_id() == 0x0181 && !p.f_bid() && !p.f_complex() && p.op == 0x00ff00ff);
+            .any(|p| {
+                p.property_id() == 0x0181 && !p.f_bid() && !p.f_complex() && p.op == 0x00ff00ff
+            });
         let effective = pub_reader::resolve_bounded_effective_officeart_paint(
-            shape, dgg, scheme.as_ref(), true
+            shape,
+            dgg,
+            scheme.as_ref(),
+            true,
         );
-        let resolved_rgb = effective.as_ref()
+        let resolved_rgb = effective
+            .as_ref()
             .and_then(|paint| paint.fill.color_rgb.as_ref())
             .map(|c| c.value);
         let effective_is_magenta = resolved_rgb == Some(MAGENTA_RGB);
-        let line_rgb = effective.as_ref()
+        let line_rgb = effective
+            .as_ref()
             .and_then(|paint| paint.line.color_rgb.as_ref())
             .map(|c| c.value);
-        let line_visible = effective.as_ref()
+        let line_visible = effective
+            .as_ref()
             .and_then(|paint| paint.line.visible.as_ref())
             .map(|c| (c.value, c.authority));
-        let line_width = effective.as_ref()
+        let line_width = effective
+            .as_ref()
             .and_then(|paint| paint.line.width_emu.as_ref())
             .map(|c| (c.value, c.authority));
         let line_is_magenta = line_rgb == Some(MAGENTA_RGB);
@@ -141,8 +175,12 @@ fn exact_newsletter_top_band_source_attribution() {
             assert_eq!(line_rgb, Some(MAGENTA_RGB), "palette slot2 = magenta");
             let anchor = shape.client_anchor.as_ref().expect("line F010 anchor");
             let signed = |field_id: u16| -> i64 {
-                let values = anchor.fields.iter().filter(|f| f.id == field_id)
-                    .map(|f| f.value).collect::<Vec<_>>();
+                let values = anchor
+                    .fields
+                    .iter()
+                    .filter(|f| f.id == field_id)
+                    .map(|f| f.value)
+                    .collect::<Vec<_>>();
                 let [value] = values.as_slice() else {
                     panic!("line must have a unique anchor coordinate {field_id:04x}");
                 };
@@ -170,17 +208,27 @@ fn exact_newsletter_top_band_source_attribution() {
         effective_magenta_line += usize::from(line_is_magenta);
         page_magenta_line += usize::from(owner_page381 && line_is_magenta);
         let node_id = derive_pub_node_id(&source_hash, *seq).unwrap();
-        let projected = build.graph.nodes.get(&node_id)
+        let projected = build
+            .graph
+            .nodes
+            .get(&node_id)
             .filter(|n| n.header.parent_id == page_id.into_canonical());
         projected_page_nodes += usize::from(projected.is_some());
 
         // Print page-owned shapes and any source magenta candidate anywhere.
         // Do not leak PUB bytes, Story text, or external PDF data.
         if owner_page381 || local_magenta || effective_is_magenta || line_is_magenta {
-            let ca = shape.client_anchor.as_ref().map(|anchor| anchor.fields.iter()
-                .filter(|f| matches!(f.id, 0x2001 | 0x2002 | 0x2003 | 0x2004))
-                .map(|f| format!("{:04x}={:08x}", f.id, f.value)).collect::<Vec<_>>());
-            let child = shape.child_anchor.as_ref()
+            let ca = shape.client_anchor.as_ref().map(|anchor| {
+                anchor
+                    .fields
+                    .iter()
+                    .filter(|f| matches!(f.id, 0x2001 | 0x2002 | 0x2003 | 0x2004))
+                    .map(|f| format!("{:04x}={:08x}", f.id, f.value))
+                    .collect::<Vec<_>>()
+            });
+            let child = shape
+                .child_anchor
+                .as_ref()
                 .map(|a| [a.x_left, a.y_top, a.x_right, a.y_bottom]);
             let bounds = projected.map(|n| format!("{:?}", n.header.bounds));
             println!(
