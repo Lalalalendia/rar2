@@ -963,6 +963,171 @@ try {
     fabricated_original_ack: false,
   };
 
+
+  // Undo/Redo ACK-unknown physical controls reuse the independent real PUB
+  // already mutated by the accepted MoveNode above. The server performs each
+  // durable history mutation, while Playwright suppresses ONLY the HTTP ACK.
+  // No synthetic history POST or injected editor state is allowed.
+  const lostHistoryAckEvidence = [];
+  for (const kind of ["undo", "redo"]) {
+    const beforeHistory = await currentDocumentReceipt(ackLossDoc);
+    const beforeHistoryNode = await readerNodeReceipt(ackLossDoc, ackLossTarget.node_id);
+    const historyPostsBefore = countRequests("POST", ackLossHistoryPath);
+    const movePostsBefore = countRequests("POST", ackLossCommitPath);
+    if (beforeHistory.status !== 200 ||
+        beforeHistory.revision_id !== beforeHistoryNode.revision_id) {
+      throw new Error(kind + " ACK-loss baseline was not a source-exact current revision");
+    }
+
+    let acceptedHistory = null;
+    let proxiedHistoryPosts = 0;
+    const dropDurableHistoryAck = async route => {
+      if (route.request().method() !== "POST" ||
+          decodeURIComponent(new URL(route.request().url()).pathname) !== ackLossHistoryPath) {
+        await route.continue();
+        return;
+      }
+      proxiedHistoryPosts += 1;
+      const request = route.request().postDataJSON();
+      if (request?.command?.kind !== kind ||
+          request.document_id !== ackLossDoc ||
+          request.source_hash !== hash ||
+          request.base_revision_id !== beforeHistory.revision_id ||
+          !request.client_operation_id) {
+        throw new Error(kind + " ACK-loss test did not send the expected canonical intent");
+      }
+      // Node-side route.fetch does not inherit Chromium's edge.test resolver.
+      // Preserve Caddy's virtual host and the authenticated original headers.
+      const original = new URL(route.request().url());
+      const upstreamAddress = new URL(original);
+      upstreamAddress.hostname = "127.0.0.1";
+      let upstream;
+      try {
+        upstream = await route.fetch({
+          url: upstreamAddress.toString(),
+          headers: { ...route.request().headers(), host: original.host },
+          timeout: 45000,
+        });
+      } catch {
+        await route.abort("failed").catch(() => {});
+        throw new Error(kind + " ACK-loss proxy failed before authority acceptance (redacted)");
+      }
+      const result = await upstream.json().catch(() => null);
+      if (upstream.status() !== 200 ||
+          result?.protocol_version !== "chaptera.history-transition-accepted.v1" ||
+          result.document_id !== ackLossDoc ||
+          result.source_hash !== hash ||
+          result.base_revision_id !== beforeHistory.revision_id ||
+          result.transition_kind !== kind ||
+          result.client_operation_id !== request.client_operation_id ||
+          !result.revision_id ||
+          result.revision_id === beforeHistory.revision_id) {
+        throw new Error(kind + " ACK-loss control did not observe one real durable 200");
+      }
+      acceptedHistory = {
+        revision_id: result.revision_id,
+        operation_id: result.client_operation_id,
+      };
+      // HTTP 200 was returned to the proxy, never to the browser.
+      await route.abort("failed");
+    };
+    await page.route("**/v1/documents/*/history", dropDurableHistoryAck);
+    await page.locator("#" + kind + "-action").click();
+    await page.waitForFunction(() => {
+      const status = document.querySelector("#status");
+      const recheck = document.querySelector("#reconcile-action");
+      return status?.textContent?.includes("Undo/Redo outcome unknown") &&
+        status.classList.contains("error") &&
+        document.querySelector("#undo-action")?.disabled === true &&
+        document.querySelector("#redo-action")?.disabled === true &&
+        recheck?.hidden === false && recheck?.disabled === false;
+    }, null, { timeout: 30000 });
+    await page.unroute("**/v1/documents/*/history", dropDurableHistoryAck);
+    if (!acceptedHistory || proxiedHistoryPosts !== 1 ||
+        countRequests("POST", ackLossHistoryPath) !== historyPostsBefore + 1) {
+      throw new Error(kind + " ACK-loss test produced missing/duplicate durable history");
+    }
+
+    await page.keyboard.press("Control+z");
+    await page.keyboard.press("Control+Shift+z");
+    await page.keyboard.press("Control+y");
+    const blockedTarget = await chooseRealMoveTarget(ackLossDoc);
+    if (blockedTarget) {
+      await page.mouse.move(blockedTarget.start.x, blockedTarget.start.y);
+      await page.mouse.down({ button: "left" });
+      await page.mouse.move(blockedTarget.end.x, blockedTarget.end.y, { steps: 4 });
+      await page.mouse.up({ button: "left" });
+    }
+    if (countRequests("POST", ackLossHistoryPath) !== historyPostsBefore + 1 ||
+        countRequests("POST", ackLossCommitPath) !== movePostsBefore) {
+      throw new Error(kind + " unknown outcome leaked another mutation POST");
+    }
+
+    // An unavailable /current cannot release the history-unknown fence.
+    let failedCurrentRechecks = 0;
+    const denyHistoryCurrent = async route => {
+      if (decodeURIComponent(new URL(route.request().url()).pathname) ===
+          "/v1/documents/" + ackLossDoc + "/current") {
+        failedCurrentRechecks += 1;
+        await route.abort("failed");
+      } else {
+        await route.continue();
+      }
+    };
+    await page.route("**/v1/documents/*/current", denyHistoryCurrent);
+    const attemptedRecheck = page.waitForRequest(request =>
+      request.method() === "GET" &&
+      decodeURIComponent(new URL(request.url()).pathname) ===
+        "/v1/documents/" + ackLossDoc + "/current",
+    { timeout: 30000 });
+    await page.locator("#reconcile-action").click();
+    await attemptedRecheck;
+    await page.waitForFunction(() =>
+      document.querySelector("#status")?.textContent?.includes("Undo/Redo outcome unknown") &&
+      document.querySelector("#reconcile-action")?.disabled === false &&
+      document.querySelector("#undo-action")?.disabled === true &&
+      document.querySelector("#redo-action")?.disabled === true,
+    null, { timeout: 30000 });
+    await page.unroute("**/v1/documents/*/current", denyHistoryCurrent);
+    if (!failedCurrentRechecks ||
+        countRequests("POST", ackLossHistoryPath) !== historyPostsBefore + 1) {
+      throw new Error(kind + " failed recheck was not fail-closed");
+    }
+
+    await page.locator("#reconcile-action").click();
+    await page.waitForFunction(() => {
+      const status = document.querySelector("#status");
+      return status?.textContent?.includes("Server history synchronized") &&
+        document.querySelector("#reconcile-action")?.hidden === true &&
+        document.querySelector("#undo-action")?.disabled === false &&
+        document.querySelector("#redo-action")?.disabled === false;
+    }, null, { timeout: 30000 });
+    const recoveredCurrent = await currentDocumentReceipt(ackLossDoc);
+    const recoveredNode = await readerNodeReceipt(ackLossDoc, ackLossTarget.node_id);
+    const expectedBounds = kind === "undo"
+      ? ackLossTarget.before_bounds : ackLossNode.bounds;
+    if (recoveredCurrent.status !== 200 ||
+        recoveredCurrent.revision_id !== acceptedHistory.revision_id ||
+        recoveredNode.revision_id !== acceptedHistory.revision_id ||
+        recoveredNode.bounds?.x !== expectedBounds.x ||
+        recoveredNode.bounds?.y !== expectedBounds.y ||
+        (recoveredNode.bounds?.x === beforeHistoryNode.bounds?.x &&
+         recoveredNode.bounds?.y === beforeHistoryNode.bounds?.y) ||
+        countRequests("POST", ackLossHistoryPath) !== historyPostsBefore + 1 ||
+        countRequests("POST", ackLossCommitPath) !== movePostsBefore) {
+      throw new Error(kind + " lost ACK did not recover the exact new history geometry");
+    }
+    lostHistoryAckEvidence.push({
+      kind,
+      genuine_server_accepted_200_before_browser_ack_loss: true,
+      exact_client_operation_preserved: true,
+      no_duplicate_history_or_move_posts: true,
+      failed_recheck_kept_mutations_locked: true,
+      exact_current_and_reader_reconciled: true,
+      original_ack_claim: false,
+    });
+  }
+
   if (process.env.CHAPTERA_SECURE_SCREENSHOT) {
     await page.screenshot({ path: process.env.CHAPTERA_SECURE_SCREENSHOT, fullPage: true });
   }
@@ -1014,6 +1179,8 @@ try {
     pending_move_history_fence_claim: true,
     lost_commit_ack_fence_claim: true,
     lost_commit_ack_fence: lostCommitAckEvidence,
+    lost_history_ack_fence_claim: true,
+    lost_history_ack_fence: lostHistoryAckEvidence,
     real_move_commit: true,
     move_commit: moveCommit,
     malformed_source_rejection_claim: true,
