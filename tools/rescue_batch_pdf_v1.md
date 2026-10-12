@@ -49,3 +49,44 @@ python3 -m unittest discover -s tools -p test_rescue_batch_pdf_v1.py -v
 ```
 
 The 16 synthetic test scenarios use a self-contained fake `pub convert` executable and source-free fixtures. They prove routing, ZIP safety, resume decisions, hashing, manifests, and failure isolation. **They are not a real-PUB fixed-output end-to-end test.** A separate exact-public-fixture acceptance against the actual compiled `pub` and its native fallback-font restrictions is required before declaring the entire Rescue feature done.
+
+## Hosted proof using the real compiled PUB CLI
+
+The separate `compiled-pub-cli-and-public-fixture` job builds the **existing**
+Rust `pub` converter, materializes its existing explicit fallback font, and
+fetches the same SHA-pinned public Apache POI SampleNewsletter fixture already
+used by `free-pub-pdf-cli-v1.yml`. The exact 291,840-byte source SHA-256 is
+`6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf`.
+No private PUB or licensed-but-non-distributable source is required.
+
+The separately runnable `tools/rescue_batch_pdf_real_cli_acceptance.py` then:
+
+1. Converts the public valid PUB beside a generated invalid PUB and requires
+   `converted`/`failed`, with no failure-induced loss of valid output.
+2. Reruns the folder and requires `reused`/`failed`, unchanged output hashes
+   and unchanged PDF modification time (no converter rewrite).
+3. Tampers with the successful loss text sidecar and reruns; requires
+   reconversion with all three digests restored deterministically.
+4. Builds a ZIP of the identical admitted source, then requires
+   `converted` followed by `reused` on an unchanged ZIP.
+5. Cross-checks the actual fixed-PDF loss JSON against the pinned source hash,
+   fallback-font hash, real `free-pub-pdf-v0.1` schema and explicit-fallback
+   disposition. A syntax-correct mock output is insufficient for hosted PASS.
+
+Example with a pre-staged, source-hash-verified public sample:
+
+```sh
+python3 tools/rescue_batch_pdf_real_cli_acceptance.py \
+  --source /private/pinned/SampleNewsletter.pub \
+  --source-sha256 6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf \
+  --font /private/fonts/chaptera-fallback.ttf \
+  --pub-cli vendor/producer-a/target/debug/pub \
+  --receipt /private/out/rescue-batch-real-cli-acceptance.json
+```
+
+CI uploads **only** `chaptera.rescue-batch-real-cli-acceptance.v1` with known
+public source identity, binary and PDF/sidecar SHA-256 and explicit invariants.
+Never upload the input `.pub`, output PDF, embedded document text, local paths,
+actual font bytes or full loss report. This receipt proves a bounded physical
+conversion/resumption journey, not Publisher-side visual parity or general
+lossless PUB support.
