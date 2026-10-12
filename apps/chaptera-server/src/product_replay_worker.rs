@@ -325,6 +325,29 @@ fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, ProductReplayWorkerE
     Ok(bytes)
 }
 
+/// Consume one validated StoryRange worker envelope without confusing the
+/// expected Story payload with unrelated mutation authority.
+fn take_exclusive_story_range_receipt(
+    mut receipt: ProductReplayWorkerReceiptV1,
+) -> Result<(IsolatedStoryRangeReceiptV1, Value), ProductReplayWorkerError> {
+    if receipt.baseline_project.is_some()
+        || receipt.move_node.is_some()
+        || receipt.reader_scene.is_some()
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_receipt_invalid",
+            "isolated StoryRange response contains unrelated authority",
+        ));
+    }
+    let mutation = receipt.story_range.take().ok_or_else(|| {
+        ProductReplayWorkerError::new(
+            "product_replay_receipt_invalid",
+            "isolated StoryRange worker returned no mutation",
+        )
+    })?;
+    Ok((mutation, receipt.authoring_graph))
+}
+
 /// Fail-closed receipt validator for a future host-side worker adapter.
 /// A document-specific grant must be verified by the host before calling it.
 pub fn validate_product_replay_receipt(
@@ -1639,22 +1662,7 @@ impl IsolatedProductReplayProducer {
             source_bytes.len() as u64,
             expected_base_sha256,
         )?;
-        if receipt.baseline_project.is_some()
-            || receipt.move_node.is_some()
-            || receipt.reader_scene.is_some()
-            || receipt.story_range.is_some()
-        {
-            return Err(ProductReplayWorkerError::new(
-                "product_replay_receipt_invalid",
-                "isolated StoryRange response contains unrelated authority",
-            ));
-        }
-        let mutation = receipt.story_range.ok_or_else(|| {
-            ProductReplayWorkerError::new(
-                "product_replay_receipt_invalid",
-                "isolated StoryRange worker returned no mutation",
-            )
-        })?;
+        let (mutation, authoring_graph) = take_exclusive_story_range_receipt(receipt)?;
         let story_id: StoryId = serde_json::from_value(Value::String(intent.story_id.clone()))
             .map_err(|_| {
                 ProductReplayWorkerError::new(
@@ -1695,7 +1703,7 @@ impl IsolatedProductReplayProducer {
                 "isolated Story project differs from the exact event append",
             ));
         }
-        let graph = require_typed_graph(receipt.authoring_graph)?;
+        let graph = require_typed_graph(authoring_graph)?;
         if !graph.stories.contains_key(&story_id) {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
@@ -2020,6 +2028,68 @@ mod tests {
             reader_scene: None,
             filesystem_confinement: true,
         }
+    }
+
+    #[test]
+    fn isolated_story_range_receipt_accepts_story_but_rejects_missing_or_mixed_authority() {
+        let source_sha256 = "a".repeat(64);
+        let project = EditorProject {
+            schema_version: "pub-editor-v0.11".to_owned(),
+            source_hash: Sha256Digest::from_str(&source_sha256).unwrap(),
+            identity: None,
+            assets: Vec::new(),
+            table_grids: Vec::new(),
+            operations: Vec::new(),
+        };
+        let story_id: StoryId = serde_json::from_value(Value::String(
+            "40000000-0000-4000-8000-000000000001".to_owned(),
+        ))
+        .unwrap();
+        let mut valid = receipt();
+        valid.story_range = Some(IsolatedStoryRangeReceiptV1 {
+            operation: EditOperation::ReplaceStoryRange {
+                story_id,
+                start_scalar: 0,
+                end_scalar: 1,
+                expected_before: "A".to_owned(),
+                replacement_text: "B".to_owned(),
+                before_story_state_id: format!("sha256:{}", "1".repeat(64)),
+                after_story_state_id: format!("sha256:{}", "2".repeat(64)),
+            },
+            resulting_project_sha256: project_sha256(&project).unwrap(),
+            resulting_project: project.clone(),
+        });
+        // The source, project and graph checks pass before host-only
+        // exclusive Story extraction. A synthetic graph is not E2E PUB proof.
+        validate_product_replay_receipt(
+            &valid,
+            "document-a",
+            &source_sha256,
+            512,
+            &"b".repeat(64),
+        )
+        .unwrap();
+        let (mutation, graph) = take_exclusive_story_range_receipt(valid.clone()).unwrap();
+        assert!(matches!(
+            mutation.operation,
+            EditOperation::ReplaceStoryRange { .. }
+        ));
+        assert_eq!(graph, valid.authoring_graph);
+
+        assert_eq!(
+            take_exclusive_story_range_receipt(receipt())
+                .unwrap_err()
+                .code,
+            "product_replay_receipt_invalid"
+        );
+        let mut mixed = valid;
+        mixed.baseline_project = Some(project);
+        assert_eq!(
+            take_exclusive_story_range_receipt(mixed)
+                .unwrap_err()
+                .code,
+            "product_replay_receipt_invalid"
+        );
     }
 
     #[tokio::test]
