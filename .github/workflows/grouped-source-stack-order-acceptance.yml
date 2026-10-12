@@ -53,6 +53,11 @@ jobs:
       - name: Compile exact source-stack regression
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --lib exact_public_source_stack_order_covers_materialized_grouped_nodes --no-run
 
+      - name: Measure Brochure admitted PAGE LOGO rectangle controls
+        env:
+          CHAPTERA_LOGO_BROCHURE_FIXTURE: ${{ runner.temp }}/group-stack-controls/SampleBrochure.pub
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --test logo_brochure_source_census -- --ignored --exact exact_public_brochure_admitted_logo_rectangle_census --nocapture
+
       - name: Brochure remains direct-only control
         env:
           CHAPTERA_SOURCE_STACK_FIXTURE: ${{ runner.temp }}/group-stack-controls/SampleBrochure.pub
