@@ -6,6 +6,7 @@ import {
   historyShortcutCommand,
   nudgeShortcutDelta,
   PRODUCT_NUDGE_STEP_EMU,
+  isUnchangedMoveGesture,
   RichReaderEditorShellV1,
   resolveRichEditorPointerTarget,
 } from "./rich-reader-editor-shell-v1.mjs";
@@ -564,4 +565,74 @@ test("lost ACK while nudging fences all next mutations with the exact request", 
   );
   assert.equal(posts, 1);
   assert.equal(shell.commitUncertain.request.base_revision_id, "sha256:" + "b".repeat(64));
+});
+
+
+test("physical click selects direct object without a blank revision or Undo entry", async () => {
+  const listeners = new Map();
+  let commits = 0;
+  let focuses = 0;
+  let pointerReleases = 0;
+  const page = {
+    getAttribute(name) { return name === "data-page-id" ? PAGE : null; },
+    getScreenCTM() { return { inverse() { return this; } }; },
+    createSVGPoint() { return { x: 0, y: 0, matrixTransform() {
+      return { x: this.x, y: this.y };
+    } }; },
+  };
+  const visualNode = { getAttribute(name) {
+    return name === "data-node-id" ? A : null;
+  } };
+  const host = {
+    addEventListener(name, fn) { listeners.set(name, fn); },
+    removeEventListener(name) { listeners.delete(name); },
+    focus() { focuses += 1; },
+    setPointerCapture() {}, releasePointerCapture() { pointerReleases += 1; },
+  };
+  const service = {
+    async commit() { commits += 1; throw Error("a click must not commit"); },
+    async undo() {}, async redo() {},
+    async currentRichEditorState() {}, async readerSceneForRevision() {},
+  };
+  const reasons = [];
+  const shell = new RichReaderEditorShellV1({
+    host, keyboardTarget: host, service, onState: receipt => reasons.push(receipt.reason),
+  });
+  shell.readerScene = {
+    protocol_version: "chaptera.reader-scene.v1", document_id: "doc",
+    source_hash: "a".repeat(64), revision_id: "sha256:" + "b".repeat(64),
+    pages: [], nodes: [],
+  };
+  shell.interactionScene = interaction();
+  shell._renderOverlay = () => {};
+  shell.bindPointerEvents();
+  const target = { closest(selector) {
+    return selector === "svg.page[data-page-id]" ? page :
+      selector === "[data-node-id]" ? visualNode : null;
+  } };
+  const pointer = (x, y) => ({
+    button: 0, pointerId: 7, clientX: x, clientY: y, target,
+  });
+  listeners.get("pointerdown")(pointer(50, 50));
+  assert.equal(isUnchangedMoveGesture(shell.interactionScene, shell.gesture), true);
+  assert.equal(shell.selectedNodeId, A);
+  await listeners.get("pointerup")(pointer(50, 50));
+  assert.equal(shell.stateReceipt().commit_request_count, 0);
+  assert.equal(commits, 0);
+  assert.equal(shell.selectedNodeId, A);
+  assert.equal(shell.gesture, null);
+  assert.equal(reasons.at(-1), "gesture_selection_only");
+
+  // A drag that returns to the original exact EMU coordinates is still selection.
+  listeners.get("pointerdown")(pointer(50, 50));
+  listeners.get("pointermove")(pointer(60, 60));
+  assert.equal(isUnchangedMoveGesture(shell.interactionScene, shell.gesture), false);
+  listeners.get("pointermove")(pointer(50, 50));
+  assert.equal(isUnchangedMoveGesture(shell.interactionScene, shell.gesture), true);
+  await listeners.get("pointerup")(pointer(50, 50));
+  assert.equal(commits, 0);
+  assert.equal(shell.selectedNodeId, A);
+  assert.equal(focuses, 2);
+  assert.equal(pointerReleases, 2);
+  shell.unbindPointerEvents();
 });
