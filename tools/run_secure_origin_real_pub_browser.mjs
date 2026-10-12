@@ -1128,6 +1128,147 @@ try {
     });
   }
 
+
+  // A direct page-local object selected by a physical pointer movement must
+  // remain keyboard-movable using the SAME authenticated Product MoveNode API.
+  // This is not DOM snapshot authoring or a fabricated server POST.
+  const keyboardTarget = await chooseRealMoveTarget(ackLossDoc);
+  const keyboardBase = await currentDocumentReceipt(ackLossDoc);
+  if (!keyboardTarget || keyboardTarget.revision_id !== keyboardBase.revision_id) {
+    throw new Error("real PUB has no admissible canonical keyboard MoveNode target");
+  }
+  const selectResponsePending = page.waitForResponse(response =>
+    response.request().method() === "POST" &&
+    decodeURIComponent(new URL(response.url()).pathname) === ackLossCommitPath,
+  { timeout: 30000 });
+  await page.mouse.move(keyboardTarget.start.x, keyboardTarget.start.y);
+  await page.mouse.down({ button: "left" });
+  await page.mouse.move(keyboardTarget.end.x, keyboardTarget.end.y, { steps: 4 });
+  await page.mouse.up({ button: "left" });
+  const selectedResponse = await selectResponsePending;
+  const selectedAck = await selectedResponse.json().catch(() => null);
+  if (selectedResponse.status() !== 200 ||
+      selectedAck?.protocol_version !== "chaptera.commit-accepted.v1" ||
+      selectedAck.document_id !== ackLossDoc ||
+      selectedAck.base_revision_id !== keyboardBase.revision_id ||
+      selectedAck.revision_id === keyboardBase.revision_id) {
+    throw new Error("real PUB pointer selection did not commit a canonical baseline");
+  }
+  await page.waitForFunction(revision =>
+    document.querySelector("#status")?.textContent?.includes(revision),
+  selectedAck.revision_id, { timeout: 30000 });
+  if (await page.evaluate(() => document.activeElement?.id) !== "canvas") {
+    throw new Error("physical canvas selection did not acquire keyboard focus");
+  }
+
+  let keyboardBefore = await readerNodeReceipt(ackLossDoc, keyboardTarget.node_id);
+  if (keyboardBefore.revision_id !== selectedAck.revision_id || !keyboardBefore.bounds) {
+    throw new Error("selected canonical node did not match current keyboard baseline");
+  }
+  const commitsBeforeKeyboard = countRequests("POST", ackLossCommitPath);
+  const firstKeyboardResponsePending = page.waitForResponse(response =>
+    response.request().method() === "POST" &&
+    decodeURIComponent(new URL(response.url()).pathname) === ackLossCommitPath,
+  { timeout: 30000 });
+  await page.keyboard.press("ArrowLeft");
+  const firstKeyboardResponse = await firstKeyboardResponsePending;
+  const firstKeyboardRequest = firstKeyboardResponse.request().postDataJSON();
+  const firstKeyboardAck = await firstKeyboardResponse.json().catch(() => null);
+  if (firstKeyboardResponse.status() !== 200 ||
+      firstKeyboardRequest?.command?.kind !== "move_node_to" ||
+      firstKeyboardRequest.command.node_id !== keyboardTarget.node_id ||
+      firstKeyboardRequest.command.x_emu !== keyboardBefore.bounds.x - 12700 ||
+      firstKeyboardRequest.command.y_emu !== keyboardBefore.bounds.y ||
+      firstKeyboardRequest.base_revision_id !== selectedAck.revision_id ||
+      firstKeyboardRequest.source_hash !== hash ||
+      firstKeyboardAck?.protocol_version !== "chaptera.commit-accepted.v1" ||
+      firstKeyboardAck.revision_id === selectedAck.revision_id) {
+    throw new Error("one ArrowLeft failed exact 1pt authenticated MoveNode binding");
+  }
+  await page.waitForFunction(revision =>
+    document.querySelector("#status")?.textContent?.includes(revision),
+  firstKeyboardAck.revision_id, { timeout: 30000 });
+  const afterFirstArrow = await readerNodeReceipt(ackLossDoc, keyboardTarget.node_id);
+  if (afterFirstArrow.revision_id !== firstKeyboardAck.revision_id ||
+      afterFirstArrow.bounds?.x !== keyboardBefore.bounds.x - 12700 ||
+      afterFirstArrow.bounds?.y !== keyboardBefore.bounds.y ||
+      countRequests("POST", ackLossCommitPath) !== commitsBeforeKeyboard + 1) {
+    throw new Error("arrow nudge did not durably project exact 12,700 EMU geometry");
+  }
+
+  const pageMetrics = await page.evaluate(async ({ docId, pageId }) => {
+    const result = await fetch("/v1/reader/documents/" + encodeURIComponent(docId) + "/scene", {
+      credentials: "same-origin", cache: "no-store",
+    });
+    if (!result.ok) throw new Error("cannot read canonical page bounds for nudge");
+    const scene = await result.json();
+    const page = scene.pages?.find(candidate => candidate.page_id === pageId);
+    return { width: page?.width_emu ?? null, height: page?.height_emu ?? null };
+  }, { docId: ackLossDoc, pageId: keyboardTarget.page_id });
+  const b = afterFirstArrow.bounds;
+  const SHIFT = 127000;
+  const candidateShifts = [
+    { key: "Shift+ArrowLeft", dx: -SHIFT, dy: 0, fits: b.x >= SHIFT },
+    { key: "Shift+ArrowRight", dx: SHIFT, dy: 0,
+      fits: Number.isSafeInteger(pageMetrics.width) && b.x + b.width + SHIFT <= pageMetrics.width },
+    { key: "Shift+ArrowUp", dx: 0, dy: -SHIFT, fits: b.y >= SHIFT },
+    { key: "Shift+ArrowDown", dx: 0, dy: SHIFT,
+      fits: Number.isSafeInteger(pageMetrics.height) && b.y + b.height + SHIFT <= pageMetrics.height },
+  ];
+  const shift = candidateShifts.find(option => option.fits);
+  if (!shift) throw new Error("real PUB selected page-local node has no safe 10pt nudge direction");
+
+  const shiftResponsePending = page.waitForResponse(response =>
+    response.request().method() === "POST" &&
+    decodeURIComponent(new URL(response.url()).pathname) === ackLossCommitPath,
+  { timeout: 30000 });
+  await page.keyboard.press(shift.key);
+  const shiftResponse = await shiftResponsePending;
+  const shiftRequest = shiftResponse.request().postDataJSON();
+  const shiftAck = await shiftResponse.json().catch(() => null);
+  if (shiftResponse.status() !== 200 ||
+      shiftRequest?.command?.kind !== "move_node_to" ||
+      shiftRequest.command.node_id !== keyboardTarget.node_id ||
+      shiftRequest.command.x_emu !== b.x + shift.dx ||
+      shiftRequest.command.y_emu !== b.y + shift.dy ||
+      shiftRequest.base_revision_id !== firstKeyboardAck.revision_id ||
+      shiftRequest.source_hash !== hash ||
+      shiftAck?.protocol_version !== "chaptera.commit-accepted.v1" ||
+      shiftAck.revision_id === firstKeyboardAck.revision_id) {
+    throw new Error("Shift+Arrow failed exact 10pt canonical MoveNode semantics");
+  }
+  await page.waitForFunction(revision =>
+    document.querySelector("#status")?.textContent?.includes(revision),
+  shiftAck.revision_id, { timeout: 30000 });
+  const afterShift = await readerNodeReceipt(ackLossDoc, keyboardTarget.node_id);
+  const afterShiftCurrent = await currentDocumentReceipt(ackLossDoc);
+  if (afterShift.revision_id !== shiftAck.revision_id ||
+      afterShiftCurrent.revision_id !== shiftAck.revision_id ||
+      afterShift.bounds?.x !== b.x + shift.dx ||
+      afterShift.bounds?.y !== b.y + shift.dy ||
+      countRequests("POST", ackLossCommitPath) !== commitsBeforeKeyboard + 2) {
+    throw new Error("Shift+Arrow revision/geometry drift or duplicate keyboard commit");
+  }
+
+  // The browser-native keyboard belongs to focused buttons and forms, not
+  // the global editor selection. Arrow keys on the Undo button do not write.
+  await page.locator("#undo-action").focus();
+  await page.keyboard.press("ArrowRight");
+  if (countRequests("POST", ackLossCommitPath) !== commitsBeforeKeyboard + 2) {
+    throw new Error("toolbar focus leaked an unwanted arrow MoveNode");
+  }
+  const keyboardNudgeEvidence = {
+    claim: true,
+    physical_pointer_selection_and_canvas_focus: true,
+    authenticated_real_pub: true,
+    1pt_exact_emu_move: true,
+    shift_10pt_exact_emu_move: true,
+    separate_operation_and_revision_per_keypress: true,
+    canonical_reader_geometry_reconciled: true,
+    toolbar_keyboard_isolation: true,
+    no_duplicate_keyboard_commit: true,
+  };
+
   if (process.env.CHAPTERA_SECURE_SCREENSHOT) {
     await page.screenshot({ path: process.env.CHAPTERA_SECURE_SCREENSHOT, fullPage: true });
   }
@@ -1181,6 +1322,8 @@ try {
     lost_commit_ack_fence: lostCommitAckEvidence,
     lost_history_ack_fence_claim: true,
     lost_history_ack_fence: lostHistoryAckEvidence,
+    keyboard_nudge_claim: true,
+    keyboard_nudge: keyboardNudgeEvidence,
     real_move_commit: true,
     move_commit: moveCommit,
     malformed_source_rejection_claim: true,
