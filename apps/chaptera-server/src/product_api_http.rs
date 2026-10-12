@@ -516,13 +516,17 @@ fn project_reader_scene_with_worker_samples(
         })?;
 
         let mut moved_node_ids = Vec::new();
+        let mut edited_story_ids = Vec::new();
         for operation in &project.operations {
             match operation {
                 EditOperation::MoveNode { node_id, .. } => moved_node_ids.push(*node_id),
+                EditOperation::ReplaceStoryRange { story_id, .. } => {
+                    edited_story_ids.push(*story_id);
+                }
                 _ => {
                     return Err(ProductApiError::conflict(
                         "reader_scene_revision_operation_unsupported",
-                        "rich Reader scene replay is currently admitted only for MoveNode revisions",
+                        "rich Reader scene replay admits only canonical MoveNode and plain StoryRange revisions",
                     ));
                 }
             }
@@ -564,6 +568,31 @@ fn project_reader_scene_with_worker_samples(
                     format!("current revision Viewer text refresh failed: {error}"),
                 )
             })?;
+
+        // The refresh uses canonical EditorSession text and the shared
+        // pub-layout flow, not browser DOM metrics. Confirm every changed Story
+        // survived that consumer before returning a successful revision Scene.
+        for edited_story_id in edited_story_ids {
+            let Some(authored_story) = session.graph().stories.get(&edited_story_id) else {
+                return Err(ProductApiError::internal(
+                    "reader_scene_story_missing",
+                    "current canonical graph lost a durable StoryRange target",
+                ));
+            };
+            let projected_text = bundle
+                .geometry
+                .document
+                .stories
+                .iter()
+                .find(|story| story.id == edited_story_id)
+                .map(|story| story.text.as_str());
+            if projected_text != Some(authored_story.text.as_str()) {
+                return Err(ProductApiError::conflict(
+                    "reader_scene_story_projection_unavailable",
+                    "current StoryRange revision cannot be represented by the admitted Viewer scene",
+                ));
+            }
+        }
 
         for moved_node_id in moved_node_ids {
             let Some(authored_node) = session.graph().nodes.get(&moved_node_id) else {
@@ -2036,6 +2065,59 @@ mod tests {
             }
         });
         assert!(serde_json::from_value::<CommitRequestV1>(value).is_err());
+    }
+
+    #[test]
+    fn reader_scene_reprojects_exact_story_range_text_from_canonical_editor() {
+        let source_bytes = sample3_pub();
+        let source_sha256 = fixture_hash(&source_bytes);
+        let source_digest = Sha256Digest::from_str(&source_sha256).unwrap();
+        let mut session = open_mature_0x2c_editor(&source_bytes, source_digest).unwrap();
+
+        let (story_id, original) = session
+            .graph()
+            .stories
+            .iter()
+            .find(|(story_id, story)| {
+                !story.text.is_empty() && session.can_replace_story_text(**story_id).is_ok()
+            })
+            .map(|(story_id, story)| (*story_id, story.text.clone()))
+            .expect("Sample3 has an eligible source-backed plain Story");
+        let before = original.chars().next().unwrap().to_string();
+        let replacement = if before == "Q" { "R" } else { "Q" };
+        let expected = format!(
+            "{replacement}{}",
+            original.chars().skip(1).collect::<String>()
+        );
+        session
+            .replace_story_range(story_id, 0, 1, before, replacement)
+            .unwrap();
+        let project = crate::revision_materializer::cloud_revision_project(&session.project());
+        let accepted_revision_id = format!("sha256:{}", "c".repeat(64));
+        let baseline_revision_id = format!("sha256:{}", "b".repeat(64));
+        let scene = project_reader_scene_from_exact_source(
+            "document-sample3".to_owned(),
+            source_sha256.clone(),
+            accepted_revision_id.clone(),
+            &baseline_revision_id,
+            &source_bytes,
+            &project,
+        )
+        .expect("a canonical StoryRange must be visible in its Reader scene");
+        let story_key = serde_json::to_value(story_id)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let actual = scene
+            .stories
+            .iter()
+            .find(|story| story.story_id == story_key)
+            .expect("updated Story remains visible in Reader projection");
+        assert_eq!(actual.text, expected);
+        assert_eq!(scene.revision_id, accepted_revision_id);
+        assert_eq!(scene.source_hash, source_sha256);
+        assert_eq!(scene.scene_authority, "server_viewer_projection");
     }
 
     #[test]
