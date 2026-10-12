@@ -62,11 +62,9 @@ impl ViewerApp {
             {
                 continue;
             }
-            let instance = direct_page_local_instance_v1(
-                &node_id.as_canonical().to_string(),
-                &page_key,
-            )
-            .map_err(|error| format!("Arrange direct-instance binding failed: {error}"))?;
+            let instance =
+                direct_page_local_instance_v1(&node_id.as_canonical().to_string(), &page_key)
+                    .map_err(|error| format!("Arrange direct-instance binding failed: {error}"))?;
             if instance.instance_id == selected {
                 return Ok(AuthoredArrangeTargetV1 { node_id, page_id });
             }
@@ -148,8 +146,14 @@ impl ViewerApp {
                     "Send Backward",
                     pub_editor::AuthoredStackReorderModeV1::StepBackward,
                 ),
-                ("Bring to Front", pub_editor::AuthoredStackReorderModeV1::ToFront),
-                ("Send to Back", pub_editor::AuthoredStackReorderModeV1::ToBack),
+                (
+                    "Bring to Front",
+                    pub_editor::AuthoredStackReorderModeV1::ToFront,
+                ),
+                (
+                    "Send to Back",
+                    pub_editor::AuthoredStackReorderModeV1::ToBack,
+                ),
             ] {
                 let admission = self.authored_arrange_admission_v1(mode);
                 let response = ui.add_enabled(admission.is_ok(), egui::Button::new(label));
@@ -163,5 +167,52 @@ impl ViewerApp {
             }
         });
         ui.small("One direct Chaptera-authored Rectangle per operation. Undo/Redo and Save Project preserve the new order.");
+    }
+}
+
+impl ViewerApp {
+    pub(super) fn show_object_edit_controls(&mut self, ui: &mut egui::Ui) {
+        if self.canvas_selection.primary().is_none() {
+            return;
+        }
+
+        ui.add_space(16.0);
+        ui.heading("Object");
+        ui.separator();
+        self.show_authored_arrange_controls_v1(ui);
+        ui.separator();
+
+        match self.selected_direct_replace_image_target() {
+            Ok(_) => {
+                ui.small(
+                    "Direct page-local image placement. PNG/JPEG replacement preserves source PUB bytes and is saved with the EditorProject.",
+                );
+                if ui.button("Replace image…").clicked() {
+                    #[cfg(target_os = "windows")]
+                    {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("Images", &["png", "jpg", "jpeg"])
+                            .pick_file()
+                        {
+                            if let Err(error) = self.replace_selected_image_from_path(&path) {
+                                self.edit_status = Some(error);
+                            }
+                        }
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        self.edit_status = Some(
+                            "The native replacement picker is part of Windows Editor V0."
+                                .to_owned(),
+                        );
+                    }
+                }
+            }
+            Err(reason) => {
+                let response = ui.add_enabled(false, egui::Button::new("Replace image…"));
+                response.on_disabled_hover_text(&reason);
+                ui.weak(reason);
+            }
+        }
     }
 }

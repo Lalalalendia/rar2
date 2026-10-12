@@ -109,8 +109,12 @@ fn gui_authored_arrange_v1_select_reorder_undo_redo_save_reopen() {
             (canvas.x1 - canvas.x0) as f32,
             (canvas.y1 - canvas.y0) as f32,
         );
-        let scale = fitted_scale(surface.size.width.get(), surface.size.height.get(), viewport)
-            .expect("fit page");
+        let scale = fitted_scale(
+            surface.size.width.get(),
+            surface.size.height.get(),
+            viewport,
+        )
+        .expect("fit page");
         let width = surface.size.width.get() as f32 * scale;
         let height = surface.size.height.get() as f32 * scale;
         egui::pos2(
@@ -166,19 +170,17 @@ fn gui_authored_arrange_v1_select_reorder_undo_redo_save_reopen() {
         ("Bring Forward", [ids[0], ids[2], ids[1]], ids[1]),
         ("Bring to Front", [ids[0], ids[1], ids[2]], ids[2]),
     ] {
-        let operations_before = harness
-            .state()
-            .editor
-            .as_ref()
-            .unwrap()
-            .operations()
-            .len();
+        let operations_before = harness.state().editor.as_ref().unwrap().operations().len();
         harness.get_by_label(command).click();
         harness.step();
         let expected = position.to_vec();
         let app = harness.state_mut();
         let editor = app.editor.as_ref().unwrap();
-        assert_eq!(editor.operations().len(), operations_before + 1, "{command}");
+        assert_eq!(
+            editor.operations().len(),
+            operations_before + 1,
+            "{command}"
+        );
         assert!(matches!(
             editor.operations().last(),
             Some(pub_editor::EditOperation::ReorderAuthoredStack { transition })
@@ -205,19 +207,11 @@ fn gui_authored_arrange_v1_select_reorder_undo_redo_save_reopen() {
         );
     }
     let expected = ids.clone();
-    let operation_count = harness
-        .state()
-        .editor
-        .as_ref()
-        .unwrap()
-        .operations()
-        .len();
+    let operation_count = harness.state().editor.as_ref().unwrap().operations().len();
     assert!(
         harness
             .state_mut()
-            .arrange_selected_authored_shape_v1(
-                pub_editor::AuthoredStackReorderModeV1::StepForward
-            )
+            .arrange_selected_authored_shape_v1(pub_editor::AuthoredStackReorderModeV1::StepForward)
             .is_err()
     );
     assert_eq!(
@@ -268,6 +262,10 @@ fn gui_authored_arrange_v1_select_reorder_undo_redo_save_reopen() {
         expected,
         "saved authored order must survive fresh project replay"
     );
-    assert_eq!(fs::read(&source).unwrap(), original, "never rewrite imported PUB bytes");
+    assert_eq!(
+        fs::read(&source).unwrap(),
+        original,
+        "never rewrite imported PUB bytes"
+    );
     let _ = fs::remove_dir_all(dir);
 }

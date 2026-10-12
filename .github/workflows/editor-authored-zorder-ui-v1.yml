@@ -1,6 +1,13 @@
 name: Editor Authored Zorder UI V1
 
 on:
+  push:
+    branches:
+      - 'editor-authored-zorder-ui-01-*'
+    paths:
+      - 'apps/chaptera-desktop/src/authored_arrange.rs'
+      - 'apps/chaptera-desktop/src/authored_arrange_gui_tests.rs'
+      - '.github/workflows/editor-authored-zorder-ui-v1.yml'
   pull_request:
     paths:
       - 'apps/chaptera-desktop/src/authored_arrange.rs'

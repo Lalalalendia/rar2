@@ -3445,51 +3445,6 @@ impl ViewerApp {
         Ok(())
     }
 
-    fn show_object_edit_controls(&mut self, ui: &mut egui::Ui) {
-        if self.canvas_selection.primary().is_none() {
-            return;
-        }
-
-        ui.add_space(16.0);
-        ui.heading("Object");
-        ui.separator();
-        self.show_authored_arrange_controls_v1(ui);
-        ui.separator();
-
-        match self.selected_direct_replace_image_target() {
-            Ok(_) => {
-                ui.small(
-                    "Direct page-local image placement. PNG/JPEG replacement preserves source PUB bytes and is saved with the EditorProject.",
-                );
-                if ui.button("Replace image…").clicked() {
-                    #[cfg(target_os = "windows")]
-                    {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Images", &["png", "jpg", "jpeg"])
-                            .pick_file()
-                        {
-                            if let Err(error) = self.replace_selected_image_from_path(&path) {
-                                self.edit_status = Some(error);
-                            }
-                        }
-                    }
-                    #[cfg(not(target_os = "windows"))]
-                    {
-                        self.edit_status = Some(
-                            "The native replacement picker is part of Windows Editor V0."
-                                .to_owned(),
-                        );
-                    }
-                }
-            }
-            Err(reason) => {
-                let response = ui.add_enabled(false, egui::Button::new("Replace image…"));
-                response.on_disabled_hover_text(&reason);
-                ui.weak(reason);
-            }
-        }
-    }
-
     fn commit_canvas_drag(&mut self, drag: MoveTransaction) {
         self.canvas_drag = None;
         self.canvas_resize = None;
