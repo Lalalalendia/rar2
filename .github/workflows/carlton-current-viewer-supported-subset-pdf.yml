@@ -92,6 +92,22 @@ jobs:
               )
           print(f"base_repair_sha256={base_digest}")
           print(f"ordered_repair_sha256={ordered_digest}")
+          subprocess.run(
+              [
+                  "cargo",
+                  "test",
+                  "--manifest-path",
+                  str(donor / "Cargo.toml"),
+                  "-p",
+                  "pub-cli",
+                  "--bin",
+                  "current-viewer-supported-request",
+                  "--",
+                  "--nocapture",
+              ],
+              cwd=donor,
+              check=True,
+          )
           PY
 
   carlton-real-pdf:
