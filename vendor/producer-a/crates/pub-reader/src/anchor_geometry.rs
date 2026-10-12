@@ -134,6 +134,53 @@ fn horizontal_stroke_envelope_values(
     ))
 }
 
+pub(super) fn signed_field(record: &PublisherFieldRecord, id: u16) -> Option<i64> {
+    let field = unique_escher_field(record, id)?;
+    Some(i64::from(i32::from_le_bytes(field.value.to_le_bytes())))
+}
+
+pub(super) fn unique_escher_field(
+    record: &PublisherFieldRecord,
+    id: u16,
+) -> Option<&PublisherField> {
+    let mut matches = record.fields.iter().filter(|field| field.id == id);
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(first)
+}
+
+pub(super) fn anchor_has_unique_geometry_fields(anchor: &PublisherFieldRecord) -> bool {
+    [
+        PUBLISHER_FIELD_XS,
+        PUBLISHER_FIELD_YS,
+        PUBLISHER_FIELD_XE,
+        PUBLISHER_FIELD_YE,
+    ]
+    .into_iter()
+    .all(|id| unique_escher_field(anchor, id).is_some())
+}
+
+pub(super) fn record_missing_anchor_fields(
+    anchor: Option<&PublisherFieldRecord>,
+    counts: &mut BTreeMap<String, usize>,
+) {
+    for (id, label) in [
+        (PUBLISHER_FIELD_XS, "xs"),
+        (PUBLISHER_FIELD_YS, "ys"),
+        (PUBLISHER_FIELD_XE, "xe"),
+        (PUBLISHER_FIELD_YE, "ye"),
+    ] {
+        if anchor
+            .and_then(|record| unique_escher_field(record, id))
+            .is_none()
+        {
+            *counts.entry(label.to_owned()).or_insert(0) += 1;
+        }
+    }
+}
+
 #[cfg(test)]
 mod horizontal_stroke_envelope_tests {
     use super::*;
@@ -199,52 +246,5 @@ mod horizontal_stroke_envelope_tests {
             horizontal_stroke_envelope_values(0, good.1, good.2, good.3, good.4, good.5, 101_600,)
                 .is_none()
         );
-    }
-}
-
-pub(super) fn signed_field(record: &PublisherFieldRecord, id: u16) -> Option<i64> {
-    let field = unique_escher_field(record, id)?;
-    Some(i64::from(i32::from_le_bytes(field.value.to_le_bytes())))
-}
-
-pub(super) fn unique_escher_field(
-    record: &PublisherFieldRecord,
-    id: u16,
-) -> Option<&PublisherField> {
-    let mut matches = record.fields.iter().filter(|field| field.id == id);
-    let first = matches.next()?;
-    if matches.next().is_some() {
-        return None;
-    }
-    Some(first)
-}
-
-pub(super) fn anchor_has_unique_geometry_fields(anchor: &PublisherFieldRecord) -> bool {
-    [
-        PUBLISHER_FIELD_XS,
-        PUBLISHER_FIELD_YS,
-        PUBLISHER_FIELD_XE,
-        PUBLISHER_FIELD_YE,
-    ]
-    .into_iter()
-    .all(|id| unique_escher_field(anchor, id).is_some())
-}
-
-pub(super) fn record_missing_anchor_fields(
-    anchor: Option<&PublisherFieldRecord>,
-    counts: &mut BTreeMap<String, usize>,
-) {
-    for (id, label) in [
-        (PUBLISHER_FIELD_XS, "xs"),
-        (PUBLISHER_FIELD_YS, "ys"),
-        (PUBLISHER_FIELD_XE, "xe"),
-        (PUBLISHER_FIELD_YE, "ye"),
-    ] {
-        if anchor
-            .and_then(|record| unique_escher_field(record, id))
-            .is_none()
-        {
-            *counts.entry(label.to_owned()).or_insert(0) += 1;
-        }
     }
 }
