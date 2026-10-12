@@ -18,6 +18,7 @@ const CREATE_ENTRY: &[u8] = include_bytes!("../../web/cloud-project-new-v1.mjs")
 const HOME_HTML: &[u8] = include_bytes!("../../web/cloud-project-home.html");
 const HOME_CSS: &[u8] = include_bytes!("../../web/cloud-project-home.css");
 const HOME_ENTRY: &[u8] = include_bytes!("../../web/cloud-project-home-v1.mjs");
+const PROJECT_RENAME_CLIENT: &[u8] = include_bytes!("../../web/cloud-project-rename-v1.mjs");
 const PROJECT_HOME_CONTROLLER: &[u8] = include_bytes!("../../web/project-home-v1.mjs");
 const PROJECT_CATALOG_CLIENT: &[u8] =
     include_bytes!("../../web/chaptera-cloud-project-catalog-v1.mjs");
@@ -45,7 +46,7 @@ struct EmbeddedAsset {
     bytes: &'static [u8],
 }
 
-const ASSETS: [EmbeddedAsset; 21] = [
+const ASSETS: [EmbeddedAsset; 22] = [
     EmbeddedAsset {
         name: "product-editor.html",
         content_type: "text/html; charset=utf-8",
@@ -151,6 +152,11 @@ const ASSETS: [EmbeddedAsset; 21] = [
         content_type: "text/javascript; charset=utf-8",
         bytes: READER_RENDER,
     },
+    EmbeddedAsset {
+        name: "cloud-project-rename-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: PROJECT_RENAME_CLIENT,
+    },
 ];
 
 pub fn router<S>() -> Router<S>
@@ -164,6 +170,10 @@ where
         .route("/editor/new", get(new_project))
         .route("/editor/cloud-project-home.css", get(project_home_css))
         .route("/editor/cloud-project-home-v1.mjs", get(project_home_entry))
+        .route(
+            "/editor/cloud-project-rename-v1.mjs",
+            get(project_rename_client),
+        )
         .route("/editor/project-home-v1.mjs", get(project_home_controller))
         .route(
             "/editor/chaptera-cloud-project-catalog-v1.mjs",
@@ -228,6 +238,9 @@ async fn project_home_css() -> Response {
 }
 async fn project_home_entry() -> Response {
     asset_response(&ASSETS[6])
+}
+async fn project_rename_client() -> Response {
+    asset_response(&ASSETS[21])
 }
 async fn project_home_controller() -> Response {
     asset_response(&ASSETS[7])
@@ -423,6 +436,32 @@ mod tests {
         let html = std::str::from_utf8(CREATE_HTML).unwrap();
         assert!(html.contains("/editor/cloud-project-new-v1.mjs"));
         assert!(!html.contains("x-chaptera-principal-id"));
+    }
+
+    #[tokio::test]
+    async fn project_rename_module_is_embedded_as_same_origin_csp_resource() {
+        let response = router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri("/editor/cloud-project-rename-v1.mjs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/javascript; charset=utf-8"
+        );
+        assert!(
+            response.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("connect-src 'self'")
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.as_ref(), PROJECT_RENAME_CLIENT);
     }
 
     #[tokio::test]
