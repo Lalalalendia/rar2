@@ -685,6 +685,18 @@ export function presetShapePaintGeometry(node) {
   const height = safeInteger(bounds.height, "node.bounds.height");
   if (width <= 0 || height <= 0) return null;
 
+  // A source-authorized horizontal OfficeArt stroke is represented by a
+  // positive-height stroke envelope; the physical axis remains at its center.
+  // It is not a filled rectangle or a diagonal from corner to corner.
+  if (node.paint?.preset_shape === "horizontal_line") {
+    return Object.freeze({
+      tag: "line",
+      attrs: Object.freeze({
+        x1: x, y1: y + height / 2, x2: x + width, y2: y + height / 2
+      })
+    });
+  }
+
   if (node.paint?.preset_shape === "line" || node.paint?.preset_shape === "line_dash_gel") {
     return Object.freeze({
       tag: "line",

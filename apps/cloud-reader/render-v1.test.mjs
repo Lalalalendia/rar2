@@ -713,3 +713,40 @@ test("default RoundRectangle preset uses bounded short-side radius", () => {
     { tag: "rect", attrs: { x: 1, y: 2, width: 30, height: 40 } }
   );
 });
+
+test("source-backed horizontal OfficeArt stroke uses its central axis, never a rectangle", () => {
+  const shape = {
+    bounds: { x: 1058750, y: 705474, width: 6729849, height: 101600 },
+    paint: {
+      preset_shape: "horizontal_line",
+      line: { rgb: [255, 0, 255], width_emu: 101600 }
+    }
+  };
+  assert.deepEqual(presetShapePaintGeometry(shape), {
+    tag: "line",
+    attrs: { x1: 1058750, y1: 756274, x2: 7788599, y2: 756274 }
+  });
+  assert.deepEqual(presetShapePaintGeometry({
+    ...shape,
+    bounds: { ...shape.bounds, height: 101601 }
+  }), {
+    tag: "line",
+    attrs: { x1: 1058750, y1: 756274.5, x2: 7788599, y2: 756274.5 }
+  });
+  assert.equal(presetShapePaintGeometry({
+    ...shape,
+    bounds: { ...shape.bounds, height: 0 }
+  }), null);
+});
+
+test("existing OfficeArt line and dash-gel diagonals are not flattened", () => {
+  for (const preset_shape of ["line", "line_dash_gel"]) {
+    assert.deepEqual(presetShapePaintGeometry({
+      bounds: { x: 100, y: 200, width: 300, height: 400 },
+      paint: { preset_shape }
+    }), {
+      tag: "line",
+      attrs: { x1: 100, y1: 200, x2: 400, y2: 600 }
+    });
+  }
+});
