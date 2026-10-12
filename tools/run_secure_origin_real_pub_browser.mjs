@@ -1129,40 +1129,33 @@ try {
   }
 
 
-  // A direct page-local object selected by a physical pointer movement must
-  // remain keyboard-movable using the SAME authenticated Product MoveNode API.
-  // This is not DOM snapshot authoring or a fabricated server POST.
+  // Selection by a physical click is transient view state: it cannot create
+  // a revision or consume the Undo slot. Arrow key nudge performs the actual
+  // single authenticated MoveNode against the same canonical source.
   const keyboardTarget = await chooseRealMoveTarget(ackLossDoc);
   const keyboardBase = await currentDocumentReceipt(ackLossDoc);
   if (!keyboardTarget || keyboardTarget.revision_id !== keyboardBase.revision_id) {
     throw new Error("real PUB has no admissible canonical keyboard MoveNode target");
   }
-  const selectResponsePending = page.waitForResponse(response =>
-    response.request().method() === "POST" &&
-    decodeURIComponent(new URL(response.url()).pathname) === ackLossCommitPath,
-  { timeout: 30000 });
+  const selectCommitsBefore = countRequests("POST", ackLossCommitPath);
   await page.mouse.move(keyboardTarget.start.x, keyboardTarget.start.y);
   await page.mouse.down({ button: "left" });
-  await page.mouse.move(keyboardTarget.end.x, keyboardTarget.end.y, { steps: 4 });
   await page.mouse.up({ button: "left" });
-  const selectedResponse = await selectResponsePending;
-  const selectedAck = await selectedResponse.json().catch(() => null);
-  if (selectedResponse.status() !== 200 ||
-      selectedAck?.protocol_version !== "chaptera.commit-accepted.v1" ||
-      selectedAck.document_id !== ackLossDoc ||
-      selectedAck.base_revision_id !== keyboardBase.revision_id ||
-      selectedAck.revision_id === keyboardBase.revision_id) {
-    throw new Error("real PUB pointer selection did not commit a canonical baseline");
+  await page.waitForFunction(() =>
+    document.querySelector("#status")?.textContent?.includes("selected"),
+  null, { timeout: 30000 });
+  const afterPointerSelection = await currentDocumentReceipt(ackLossDoc);
+  if (afterPointerSelection.status !== 200 ||
+      afterPointerSelection.revision_id !== keyboardBase.revision_id ||
+      countRequests("POST", ackLossCommitPath) !== selectCommitsBefore) {
+    throw new Error("physical canvas selection must not write a blank revision");
   }
-  await page.waitForFunction(revision =>
-    document.querySelector("#status")?.textContent?.includes(revision),
-  selectedAck.revision_id, { timeout: 30000 });
   if (await page.evaluate(() => document.activeElement?.id) !== "canvas") {
     throw new Error("physical canvas selection did not acquire keyboard focus");
   }
 
   let keyboardBefore = await readerNodeReceipt(ackLossDoc, keyboardTarget.node_id);
-  if (keyboardBefore.revision_id !== selectedAck.revision_id || !keyboardBefore.bounds) {
+  if (keyboardBefore.revision_id !== keyboardBase.revision_id || !keyboardBefore.bounds) {
     throw new Error("selected canonical node did not match current keyboard baseline");
   }
   const commitsBeforeKeyboard = countRequests("POST", ackLossCommitPath);
@@ -1179,10 +1172,10 @@ try {
       firstKeyboardRequest.command.node_id !== keyboardTarget.node_id ||
       firstKeyboardRequest.command.x_emu !== keyboardBefore.bounds.x - 12700 ||
       firstKeyboardRequest.command.y_emu !== keyboardBefore.bounds.y ||
-      firstKeyboardRequest.base_revision_id !== selectedAck.revision_id ||
+      firstKeyboardRequest.base_revision_id !== keyboardBase.revision_id ||
       firstKeyboardRequest.source_hash !== hash ||
       firstKeyboardAck?.protocol_version !== "chaptera.commit-accepted.v1" ||
-      firstKeyboardAck.revision_id === selectedAck.revision_id) {
+      firstKeyboardAck.revision_id === keyboardBase.revision_id) {
     throw new Error("one ArrowLeft failed exact 1pt authenticated MoveNode binding");
   }
   await page.waitForFunction(revision =>
@@ -1260,6 +1253,7 @@ try {
   const keyboardNudgeEvidence = {
     claim: true,
     physical_pointer_selection_and_canvas_focus: true,
+    selection_writes_no_revision: true,
     authenticated_real_pub: true,
     1pt_exact_emu_move: true,
     shift_10pt_exact_emu_move: true,
