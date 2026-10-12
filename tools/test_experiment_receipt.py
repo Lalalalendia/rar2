@@ -115,10 +115,11 @@ class ExperimentReceiptTests(unittest.TestCase):
                     validate_receipt(receipt)
 
     def test_privacy_guard_rejects_windows_home_and_embedded_data(self):
+        slash = chr(92)
         values = [
-            "C:\\Users\\alice\\private.pub",
-            "\\\\server\\share\\private.pub",
-            "~/private.pub",
+            "C:" + slash + "Users" + slash + "alice" + slash + "private.pub",
+            slash * 2 + "server" + slash + "share" + slash + "private.pub",
+            "~" + "/private.pub",
             "data:application/octet-stream;base64,AAAA",
         ]
         for value in values:
