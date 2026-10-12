@@ -1,5 +1,8 @@
 mod destination;
 mod packet_admission;
+mod source_snapshot;
+#[cfg(all(test, target_os = "windows"))]
+mod source_snapshot_windows_tests;
 
 pub use packet_admission::{HandoffPacketAdmissionError, HandoffPacketAdmissionV1};
 
@@ -88,11 +91,15 @@ pub struct AdmittedSource {
 
 impl AdmittedSource {
     pub fn open(path: &Path) -> Result<Self, String> {
+        Self::open_with_read_observer(path, |_| {})
+    }
+
+    fn open_with_read_observer(path: &Path, observer: impl FnMut(usize)) -> Result<Self, String> {
         require_pub_path(path)?;
         let display_path = path.to_path_buf();
         let locator_path = fs::canonicalize(path)
             .map_err(|error| source_path_error("canonicalize", path, error))?;
-        let mut file = File::open(&locator_path)
+        let mut file = source_snapshot::open_snapshot_file(&locator_path)
             .map_err(|error| source_path_error("open", &locator_path, error))?;
         let policy = chaptera_untrusted_pub_scan::PubScanPolicyV1::default()
             .validate()
@@ -108,11 +115,9 @@ impl AdmittedSource {
             ));
         }
 
-        let mut bytes = Vec::new();
-        file.by_ref()
-            .take(policy.max_file_bytes.saturating_add(1))
-            .read_to_end(&mut bytes)
-            .map_err(|error| format!("read {}: {error}", locator_path.display()))?;
+        let bytes =
+            source_snapshot::read_bounded_snapshot(&mut file, policy.max_file_bytes, observer)
+                .map_err(|error| format!("read {}: {error}", locator_path.display()))?;
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > policy.max_file_bytes {
             return Err(format!(
                 "source_rejected_by_policy: input_size_limit: streamed bytes exceed {}",
@@ -120,6 +125,9 @@ impl AdmittedSource {
             ));
         }
         let sha256 = sha256_bytes(&bytes);
+        // Relax the short snapshot lock by reopening the same object, never the path.
+        let file = source_snapshot::retain_admitted_handle(file)
+            .map_err(|error| format!("source_unstable: retain admitted source handle: {error}"))?;
         Ok(Self {
             display_path,
             locator_path,
@@ -199,6 +207,10 @@ fn lower_sha256(value: &str) -> bool {
 }
 
 fn source_path_error(operation: &str, path: &Path, error: std::io::Error) -> String {
+    #[cfg(target_os = "windows")]
+    if matches!(error.raw_os_error(), Some(32 | 33 | 1224)) {
+        return format!("source_busy: {operation} {}: {error}", path.display());
+    }
     #[cfg(target_os = "windows")]
     if error.raw_os_error() == Some(206) {
         return format!(

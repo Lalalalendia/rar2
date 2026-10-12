@@ -24,6 +24,21 @@ V1 does not route Migration yet.
 
 The receiving process never trusts the path alone. It re-hashes the file and rejects the handoff if bytes changed after sender admission.
 
+On Windows, source admission opens with `FILE_SHARE_READ` only for the bounded
+read and SHA-256 calculation. An incompatible existing writer/deleter returns
+`source_busy`; later write/truncate/rename attempts are excluded during that
+window. After hashing, `ReOpenFile` retains the same opened filesystem object
+with ordinary read/write/delete sharing, then releases the short restrictive
+handle. It never reopens the source path to reconstruct identity. Failure to
+retain that object returns `source_unstable`, without a path-based fallback.
+The application does not lock a source for its entire session: later edits are
+permitted and existing exact-handle rehash checks still detect changes.
+
+The existing Windows path-identity gate pauses a real source read and runs a
+separate process attempting write, truncate and rename. It also proves typed
+busy/retry admission and post-window rename/write without source-path rebinding.
+Only source-free, exact-candidate receipts leave that synthetic test boundary.
+
 Before decoding or opening the source, `HandoffPacketAdmissionV1` rejects packet
 metadata over 256 KiB, then reads at most that cap plus one sentinel byte. The
 streamed length is authoritative when metadata is stale or the file grows.
