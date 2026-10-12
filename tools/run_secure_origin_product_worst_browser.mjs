@@ -17,7 +17,26 @@ const known = {
   "026": { sha: "5c1054b0bd7bd3ae64ab6884e51943e2c5161cdf2dd13803c8d338f652c06cf0", bytes: 4218368, pages: 1 },
   "043": { sha: "e635d3b0320073b6d08402945a90e14e13d0294c02262d854b106b9f0088904b", bytes: 980480, pages: 2 },
 };
-const fixture = known[fixtureId];
+const planPath = process.env.CHAPTERA_PRODUCT_CASE_PLAN;
+const pinnedPlan = planPath ? JSON.parse(await readFile(planPath, "utf8")) : null;
+if (pinnedPlan && (pinnedPlan.id !== fixtureId ||
+    !/^[0-9a-f]{64}$/.test(pinnedPlan.source_sha256 ?? "") ||
+    !/^[0-9a-f]{64}$/.test(pinnedPlan.publisher_pdf_sha256 ?? "") ||
+    !Number.isSafeInteger(pinnedPlan.source_bytes) ||
+    !(pinnedPlan.source_bytes > 0 && pinnedPlan.source_bytes < 100000000) ||
+    !Number.isSafeInteger(pinnedPlan.pages) ||
+    !(pinnedPlan.pages > 0 && pinnedPlan.pages <= 100))) {
+  throw new Error("physical Product case plan violates pinned source identity");
+}
+const fixture = pinnedPlan
+  ? { sha: pinnedPlan.source_sha256, bytes: pinnedPlan.source_bytes, pages: pinnedPlan.pages }
+  : known[fixtureId];
+if (pinnedPlan && known[fixtureId] &&
+    (fixture.sha !== known[fixtureId].sha ||
+     fixture.bytes !== known[fixtureId].bytes ||
+     fixture.pages !== known[fixtureId].pages)) {
+  throw new Error("physical Product case plan conflicts with established Publisher pilot");
+}
 const storageState = process.env.CHAPTERA_BROWSER_STORAGE_STATE;
 const privatePath = process.env.CHAPTERA_PREVIEW_022_PRIVATE;
 const scenePath = process.env.CHAPTERA_PREVIEW_022_SCENE_OUT;
@@ -248,6 +267,7 @@ try {
     schema: "chaptera.product-oidc-worst-census-browser.v1",
     fixture: fixtureId,
     repository_commit_sha: process.env.CHAPTERA_HEAD_SHA ?? "unverified",
+    revision_identity_sha256: createHash("sha256").update(current.revision_id, "utf8").digest("hex"),
     real_oidc_pkce_session_reused: true,
     tls_product_source_ingress: true,
     exact_source_and_revision: true,
