@@ -60,7 +60,7 @@ def derive_pub_source_id(source_sha256: str, source_object_key: str, semantic_ro
     components = ("pub-rs", source_object_key, semantic_role)
     if any(not item for item in components):
         raise ValueError("source-derived identity requires nonempty canonical components")
-    framed = bytearray(b"\\x01")
+    framed = bytearray([1])
     framed.extend(bytes.fromhex(source_sha256))
     for item in components:
         encoded = item.encode("utf-8")
