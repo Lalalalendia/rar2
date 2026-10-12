@@ -737,6 +737,10 @@ fn valid_revision_id(value: &str) -> bool {
 /// Invoke only through the existing no-network, resource-limited worker harness.
 /// All filesystem inputs and the output descriptor are opened *before* the
 /// post-read seccomp default-deny is installed.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "isolated execution trust inputs stay explicit for the worker contract"
+)]
 pub fn run_product_replay_worker(
     document_id: &str,
     expected_source_sha256: &str,
@@ -1699,6 +1703,10 @@ impl IsolatedProductReplayProducer {
 
     /// Executes only the existing per-file isolation harness. The host may
     /// serialize verified bytes but must not interpret the source PUB.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each independent source and mutation authority input is verified"
+    )]
     async fn invoke_job(
         &self,
         document_id: &str,
