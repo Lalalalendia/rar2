@@ -2307,9 +2307,15 @@ mod tests {
         assert_eq!(stored.updated_at_ms, 5_000);
         let reread = store.get(&temporary.session_id).await.unwrap().unwrap();
         assert_eq!(reread.expires_at_ms, 3_605_000);
-        let before_deadline = store.mark_expired(&temporary.session_id, 3_604_999).await.unwrap();
+        let before_deadline = store
+            .mark_expired(&temporary.session_id, 3_604_999)
+            .await
+            .unwrap();
         assert!(!before_deadline);
-        let at_deadline = store.mark_expired(&temporary.session_id, 3_605_000).await.unwrap();
+        let at_deadline = store
+            .mark_expired(&temporary.session_id, 3_605_000)
+            .await
+            .unwrap();
         assert!(at_deadline);
 
         store.close().await;
@@ -2330,7 +2336,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(stored.expires_at_ms, 61_000);
-        let expired = store.mark_expired(&reader.session_id, 61_000).await.unwrap();
+        let expired = store
+            .mark_expired(&reader.session_id, 61_000)
+            .await
+            .unwrap();
         assert!(expired);
 
         store.close().await;

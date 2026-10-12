@@ -414,7 +414,24 @@ fn header_bytes(headers: &HeaderMap) -> usize {
 }
 
 fn is_stream_upload(path: &str) -> bool {
-    path.starts_with("/v1/uploads/") && path.ends_with("/content")
+    if path.starts_with("/v1/uploads/") && path.ends_with("/content") {
+        return true;
+    }
+    // Guest Reader's streamed upload also serves the filesystem-only
+    // Temporary Edit mode. Constrain it to a server-issued session id so
+    // arbitrary APIs cannot claim the larger upload body limit.
+    let Some(session) = path
+        .strip_prefix("/v1/reader/guest-sessions/")
+        .and_then(|rest| rest.strip_suffix("/content"))
+    else {
+        return false;
+    };
+    let Some((kind, opaque)) = session.split_once(':') else {
+        return false;
+    };
+    matches!(kind, "guest" | "tempedit")
+        && opaque.len() == 32
+        && opaque.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn reject(status: StatusCode, code: &'static str, request_id: &str) -> Response {
@@ -522,6 +539,10 @@ mod tests {
             .route("/v1/write", post(|| async { StatusCode::NO_CONTENT }))
             .route(
                 "/v1/uploads/test/content",
+                post(|| async { StatusCode::NO_CONTENT }),
+            )
+            .route(
+                "/v1/reader/guest-sessions/{session_id}/content",
                 post(|| async { StatusCode::NO_CONTENT }),
             )
             .route(
@@ -705,6 +726,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn guest_upload_body_class_is_limited_to_server_issued_session_shape() {
+        let valid = "0123456789abcdef0123456789abcdef";
+        for prefix in ["guest", "tempedit"] {
+            let path = format!("/v1/reader/guest-sessions/{prefix}:{valid}/content");
+            assert!(is_stream_upload(&path));
+        }
+        assert!(!is_stream_upload("/v1/reader/guest-sessions/not-a-session/content"));
+        assert!(!is_stream_upload("/v1/reader/guest-sessions/tempedit:invalid/content"));
+        assert!(!is_stream_upload("/v1/reader/guest-sessions/tempedit:invalid/scene"));
+        assert!(!is_stream_upload("/v1/editor/temporary-sessions"));
+    }
+
     #[tokio::test]
     async fn header_method_upload_class_and_timeout_limits_fail_closed() {
         let mut oversized_header = proxied(Method::GET, "/v1/read");
@@ -748,6 +782,25 @@ mod tests {
             .insert("content-length", HeaderValue::from_static("9437184"));
         assert_eq!(
             app().oneshot(upload).await.unwrap().status(),
+            StatusCode::NO_CONTENT
+        );
+
+        let mut guest_upload = proxied(
+            Method::POST,
+            "/v1/reader/guest-sessions/tempedit:0123456789abcdef0123456789abcdef/content",
+        );
+        guest_upload.headers_mut().insert(
+            "origin",
+            HeaderValue::from_static("https://cloud.example.invalid"),
+        );
+        guest_upload
+            .headers_mut()
+            .insert(CSRF_HEADER, HeaderValue::from_static("csrf-token"));
+        guest_upload
+            .headers_mut()
+            .insert("content-length", HeaderValue::from_static("9437184"));
+        assert_eq!(
+            app().oneshot(guest_upload).await.unwrap().status(),
             StatusCode::NO_CONTENT
         );
 
