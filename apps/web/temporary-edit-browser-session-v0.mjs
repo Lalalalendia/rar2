@@ -229,10 +229,21 @@ export class TemporaryEditBrowserSessionV0 {
     if (!session) return { kind: "missing" };
     this.#busy = true;
     try {
-      // GET is read-only. Neither this request nor a browser reload extends TTL.
-      const reply = await this.#request(pathFor(session.session_id, "scene"), {
-        token: session.access_token, signal,
-      });
+      // GET does not renew TTL. If upload was already accepted but the
+      // scanner/open handshake was interrupted, retry only that exact open.
+      // POST /open is the existing non-renewing Guest Reader transition.
+      let reply;
+      try {
+        reply = await this.#request(pathFor(session.session_id, "scene"), {
+          token: session.access_token, signal,
+        });
+      } catch (error) {
+        if (error?.status !== 409 || error?.code !== "guest_scene_not_ready") throw error;
+        reply = await this.#request(pathFor(session.session_id, "open"), {
+          method: "POST", body: "{}", contentType: "application/json",
+          token: session.access_token, signal,
+        });
+      }
       checkBinding(reply, session.session_id);
       const view = snapshot(reply);
       if (session.source_sha256 && view.source_sha256 !== session.source_sha256) {
