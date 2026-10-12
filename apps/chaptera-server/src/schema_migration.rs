@@ -844,11 +844,7 @@ mod tests {
     // Exercise the existing canonical RevisionStream, not a temporary in-memory
     // duplicate. Test bytes are synthetic: this is a SQLite lifetime proof,
     // not Publisher or live browser acceptance.
-    async fn seed_tempedit(
-        conn: &mut SqliteConnection,
-        session_id: &str,
-        now: i64,
-    ) {
+    async fn seed_tempedit(conn: &mut SqliteConnection, session_id: &str, now: i64) {
         let suffix = &session_id["tempedit:".len()..];
         let upload_id = format!("guest-upload:{suffix}");
         let reservation_id = format!("guest-reservation:{suffix}");
@@ -887,8 +883,8 @@ mod tests {
         crate::sqlite_store::RevisionIdentityBinding,
     ) {
         use crate::sqlite_store::{
-            AUTHORING_REVISION_SCHEMA_V1, RevisionEdge,
-            RevisionIdentityBinding, encode_canonical_event,
+            AUTHORING_REVISION_SCHEMA_V1, RevisionEdge, RevisionIdentityBinding,
+            encode_canonical_event,
         };
         let edge = RevisionEdge {
             document_id: document_id.to_owned(),
@@ -927,9 +923,7 @@ mod tests {
             .migrate_up()
             .await
             .unwrap();
-        let mut conn = connect(&path, Duration::from_secs(2), false)
-            .await
-            .unwrap();
+        let mut conn = connect(&path, Duration::from_secs(2), false).await.unwrap();
         let now = now_ms().unwrap();
         let session_id = "tempedit:0123456789abcdef0123456789abcdef";
         seed_tempedit(&mut conn, session_id, now).await;
@@ -939,19 +933,17 @@ mod tests {
         let (first_edge, first_identity) =
             tempedit_edge(session_id, "genesis", "revision-1", "edit-1", 0, now);
         let first = store
-            .append_edge_with_revision_identity(
-                first_edge.clone(),
-                first_identity.clone(),
-            )
+            .append_edge_with_revision_identity(first_edge.clone(), first_identity.clone())
             .await
             .unwrap();
         assert!(matches!(first, AppendOutcome::Committed(_)));
-        let expiry: i64 =
-            sqlx::query_scalar("SELECT expires_at_ms FROM reader_guest_sessions WHERE session_id=?")
-                .bind(session_id.as_bytes())
-                .fetch_one(&mut conn)
-                .await
-                .unwrap();
+        let expiry: i64 = sqlx::query_scalar(
+            "SELECT expires_at_ms FROM reader_guest_sessions WHERE session_id=?",
+        )
+        .bind(session_id.as_bytes())
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
         assert_eq!(expiry, now + 3_600_000);
 
         let replay = store
@@ -959,27 +951,35 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(replay, AppendOutcome::AlreadyCommitted(_)));
-        let after_replay: i64 =
-            sqlx::query_scalar("SELECT expires_at_ms FROM reader_guest_sessions WHERE session_id=?")
-                .bind(session_id.as_bytes())
-                .fetch_one(&mut conn)
-                .await
-                .unwrap();
+        let after_replay: i64 = sqlx::query_scalar(
+            "SELECT expires_at_ms FROM reader_guest_sessions WHERE session_id=?",
+        )
+        .bind(session_id.as_bytes())
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
         assert_eq!(after_replay, expiry);
 
-        let (undo_edge, undo_identity) =
-            tempedit_edge(session_id, "revision-1", "revision-2", "undo-1", 1, now + 10);
+        let (undo_edge, undo_identity) = tempedit_edge(
+            session_id,
+            "revision-1",
+            "revision-2",
+            "undo-1",
+            1,
+            now + 10,
+        );
         let undo = store
             .append_edge_with_revision_identity(undo_edge, undo_identity)
             .await
             .unwrap();
         assert!(matches!(undo, AppendOutcome::Committed(_)));
-        let after_undo: i64 =
-            sqlx::query_scalar("SELECT expires_at_ms FROM reader_guest_sessions WHERE session_id=?")
-                .bind(session_id.as_bytes())
-                .fetch_one(&mut conn)
-                .await
-                .unwrap();
+        let after_undo: i64 = sqlx::query_scalar(
+            "SELECT expires_at_ms FROM reader_guest_sessions WHERE session_id=?",
+        )
+        .bind(session_id.as_bytes())
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
         assert_eq!(after_undo, now + 10 + 3_600_000);
 
         store.close().await;
@@ -997,17 +997,14 @@ mod tests {
             .migrate_up()
             .await
             .unwrap();
-        let mut conn = connect(&path, Duration::from_secs(2), false)
-            .await
-            .unwrap();
+        let mut conn = connect(&path, Duration::from_secs(2), false).await.unwrap();
         let now = now_ms().unwrap();
         let session_id = "tempedit:fedcba9876543210fedcba9876543210";
         seed_tempedit(&mut conn, session_id, now).await;
         let store = SqliteRevisionStore::open(&path, 1, Duration::from_secs(2))
             .await
             .unwrap();
-        let (edge, binding) =
-            tempedit_edge(session_id, "genesis", "revision-1", "edit-1", 0, now);
+        let (edge, binding) = tempedit_edge(session_id, "genesis", "revision-1", "edit-1", 0, now);
         let accepted = store
             .append_edge_with_revision_identity(edge, binding)
             .await
@@ -1024,14 +1021,12 @@ mod tests {
 
         // The session has passed its deadline: a late, otherwise correctly
         // encoded canonical revision cannot rescue or extend it.
-        sqlx::query(
-            "UPDATE reader_guest_sessions SET expires_at_ms=? WHERE session_id=?",
-        )
-        .bind(now - 1)
-        .bind(session_id.as_bytes())
-        .execute(&mut conn)
-        .await
-        .unwrap();
+        sqlx::query("UPDATE reader_guest_sessions SET expires_at_ms=? WHERE session_id=?")
+            .bind(now - 1)
+            .bind(session_id.as_bytes())
+            .execute(&mut conn)
+            .await
+            .unwrap();
         let (late_edge, late_binding) =
             tempedit_edge(session_id, "revision-1", "revision-2", "edit-2", 1, now);
         let late = store
@@ -1039,12 +1034,13 @@ mod tests {
             .await;
         assert!(late.is_err());
 
-        let expiry: i64 =
-            sqlx::query_scalar("SELECT expires_at_ms FROM reader_guest_sessions WHERE session_id=?")
-                .bind(session_id.as_bytes())
-                .fetch_one(&mut conn)
-                .await
-                .unwrap();
+        let expiry: i64 = sqlx::query_scalar(
+            "SELECT expires_at_ms FROM reader_guest_sessions WHERE session_id=?",
+        )
+        .bind(session_id.as_bytes())
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
         assert_eq!(expiry, now - 1);
 
         sqlx::query(
@@ -1067,14 +1063,13 @@ mod tests {
                 .fetch_one(&mut conn)
                 .await
                 .unwrap();
-        let private_ids: i64 =
-            sqlx::query_scalar(
-                "SELECT COUNT(*) FROM revision_identity_bindings WHERE document_id=?",
-            )
-            .bind(session_id.as_bytes())
-            .fetch_one(&mut conn)
-            .await
-            .unwrap();
+        let private_ids: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM revision_identity_bindings WHERE document_id=?",
+        )
+        .bind(session_id.as_bytes())
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
         let product_edges: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM revision_edges WHERE document_id=?")
                 .bind(b"document:permanent".as_slice())
@@ -1098,9 +1093,7 @@ mod tests {
             .migrate_up()
             .await
             .unwrap();
-        let mut conn = connect(&path, Duration::from_secs(2), false)
-            .await
-            .unwrap();
+        let mut conn = connect(&path, Duration::from_secs(2), false).await.unwrap();
         let now = now_ms().unwrap();
         let session_id = "tempedit:abcdefabcdefabcdefabcdefabcdefab";
         seed_tempedit(&mut conn, session_id, now).await;
@@ -1112,8 +1105,7 @@ mod tests {
         let store = SqliteRevisionStore::open(&path, 1, Duration::from_secs(2))
             .await
             .unwrap();
-        let (edge, binding) =
-            tempedit_edge(session_id, "genesis", "revision-1", "edit-1", 0, now);
+        let (edge, binding) = tempedit_edge(session_id, "genesis", "revision-1", "edit-1", 0, now);
         assert!(
             store
                 .append_edge_with_revision_identity(edge, binding)
@@ -1123,8 +1115,7 @@ mod tests {
 
         // A guessed tempedit: document ID with no session is equally invalid.
         let guessed = "tempedit:00000000000000000000000000000000";
-        let (edge, binding) =
-            tempedit_edge(guessed, "genesis", "revision-1", "edit-1", 0, now);
+        let (edge, binding) = tempedit_edge(guessed, "genesis", "revision-1", "edit-1", 0, now);
         assert!(
             store
                 .append_edge_with_revision_identity(edge, binding)
@@ -1135,5 +1126,4 @@ mod tests {
         drop(conn);
         cleanup(&path);
     }
-
 }
