@@ -1,11 +1,16 @@
 pub mod safe_preview_encode;
 
-use jpeg_decoder::{CodingProcess, Decoder as JpegDecoder, PixelFormat};
+use jpeg_decoder::{CodingProcess, Decoder as JpegDecoder, Error as JpegError, PixelFormat};
 use png::{BitDepth, ColorType, Decoder as PngDecoder, Transformations};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io::Cursor;
+
+// Enforce the no-pthread decoder profile in release and test builds alike.
+const _: () = {
+    assert!(jpeg_decoder::SINGLE_THREAD_ONLY);
+};
 
 pub const DECODE_CONTRACT_VERSION_V1: &str = "chaptera.image-decode-contract.v1";
 pub const REFERENCE_DECODER_ID_V1: &str =
@@ -435,6 +440,25 @@ fn parse_exif_orientation(tiff: &[u8]) -> Result<Option<u16>, DecodeErrorV1> {
     Ok(None)
 }
 
+/// Only fixed error variants cross the source-data logging boundary.
+/// Never copy parser-provided descriptions, byte offsets, or marker contents.
+fn fixed_jpeg_failure_detail(stage: &'static str, error: &JpegError) -> String {
+    let kind = match error {
+        JpegError::Format(_) => "format",
+        JpegError::Unsupported(_) => "unsupported",
+        JpegError::Io(error) => match error.kind() {
+            std::io::ErrorKind::UnexpectedEof => "io_eof",
+            std::io::ErrorKind::InvalidData => "io_invalid_data",
+            std::io::ErrorKind::OutOfMemory => "io_memory",
+            std::io::ErrorKind::Interrupted => "io_interrupted",
+            std::io::ErrorKind::PermissionDenied => "io_permission",
+            _ => "io_other",
+        },
+        JpegError::Internal(_) => "internal",
+    };
+    format!("{stage}_{kind}")
+}
+
 fn jpeg_coding(process: CodingProcess) -> &'static str {
     match process {
         CodingProcess::DctSequential => "jpeg_dct_sequential",
@@ -458,9 +482,12 @@ fn decode_jpeg(
     }
     let mut decoder = JpegDecoder::new(Cursor::new(bytes));
     decoder.set_max_decoding_buffer_size(limits.max_decoded_bytes);
-    decoder
-        .read_info()
-        .map_err(|e| fail("jpeg_decode_error", e.to_string()))?;
+    decoder.read_info().map_err(|e| {
+        fail(
+            "jpeg_decode_error",
+            fixed_jpeg_failure_detail("jpeg_header", &e),
+        )
+    })?;
     let info = decoder
         .info()
         .ok_or_else(|| fail("jpeg_decode_error", "JPEG decoder returned no image info"))?;
@@ -492,9 +519,12 @@ fn decode_jpeg(
         ));
     }
 
-    let samples = decoder
-        .decode()
-        .map_err(|e| fail("jpeg_decode_error", e.to_string()))?;
+    let samples = decoder.decode().map_err(|e| {
+        fail(
+            "jpeg_decode_error",
+            fixed_jpeg_failure_detail("jpeg_pixels", &e),
+        )
+    })?;
     validate_limits(bytes.len(), width, height, samples.len(), limits)?;
     let exif_orientation = match decoder.exif_data() {
         Some(tiff) => parse_exif_orientation(tiff)?,
@@ -603,6 +633,36 @@ pub fn receipt_v1(decoded: &DecodedImageV1) -> DecodeReceiptV1 {
 mod tests {
     use super::*;
     use jpeg_encoder::{ColorType as JpegColorType, Encoder as JpegEncoder};
+
+    #[test]
+    fn jpeg_io_kind_is_source_neutral_and_stable() {
+        let eof = JpegError::Io(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+        assert_eq!(
+            fixed_jpeg_failure_detail("jpeg_pixels", &eof),
+            "jpeg_pixels_io_eof"
+        );
+        let invalid = JpegError::Io(std::io::Error::from(std::io::ErrorKind::InvalidData));
+        assert_eq!(
+            fixed_jpeg_failure_detail("jpeg_pixels", &invalid),
+            "jpeg_pixels_io_invalid_data"
+        );
+    }
+
+    #[test]
+    fn jpeg_invalid_header_reports_fixed_stage_without_changing_failure_code() {
+        let raw = b"not-a-jpeg";
+        let err = decode_image_v1(
+            raw,
+            "image/jpeg",
+            &sha256_hex(raw),
+            "color-disposition:test",
+            &DecodePolicyV1::reference(),
+            &DecodeLimitsV1::default(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "jpeg_decode_error");
+        assert_eq!(err.detail, "jpeg_header_format");
+    }
     use png::{BitDepth, ColorType, Encoder as PngEncoder};
 
     fn hash(data: &[u8]) -> String {

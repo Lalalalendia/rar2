@@ -10,5 +10,5 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 png = "=0.18.1"
-jpeg-decoder = { version = "=0.3.2", default-features = false, features = ["platform_independent"] }
+jpeg-decoder = { path = "../../vendor/third-party/jpeg-decoder-0.3.2", version = "=0.3.2", default-features = false, features = ["platform_independent", "single_thread_only"] }
 jpeg-encoder = "=0.7.1"

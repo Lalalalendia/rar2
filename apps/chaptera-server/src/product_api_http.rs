@@ -48,6 +48,7 @@ use crate::{
         decode_editor_revision_event_v1, encode_editor_history_event_v1,
         encode_editor_revision_event_v1, project_sha256, undo_event_operation,
     },
+    safe_preview_scene::{WorkerSafePreviewSamplesV1, collect_worker_preview_samples},
     source_authority::{SourceAuthorityError, SqliteDocumentSourceAuthority},
     source_baseline::{
         SourceBaselineError, SourceBaselineProducerConfig, derive_authoring_state_identity,
@@ -436,6 +437,26 @@ fn project_reader_scene_from_exact_source(
     source_bytes: &[u8],
     project: &EditorProject,
 ) -> Result<ReaderSceneV1, ProductApiError> {
+    project_reader_scene_with_worker_samples(
+        document_id,
+        source_sha256,
+        revision_id,
+        baseline_revision_id,
+        source_bytes,
+        project,
+        None,
+    )
+}
+
+fn project_reader_scene_with_worker_samples(
+    document_id: String,
+    source_sha256: String,
+    revision_id: String,
+    baseline_revision_id: &str,
+    source_bytes: &[u8],
+    project: &EditorProject,
+    preview_samples: Option<&mut Vec<WorkerSafePreviewSamplesV1>>,
+) -> Result<ReaderSceneV1, ProductApiError> {
     let mut bundle =
         open_pub_bundle(source_bytes, viewer_geometry_environment_v0_1()).map_err(|_| {
             ProductApiError::unprocessable(
@@ -549,6 +570,30 @@ fn project_reader_scene_from_exact_source(
         )
     })?;
 
+    // Only the syscall-confined worker may decode immutable PUB image bytes.
+    // The server receives decoded samples, not original PNG/JPEG containers.
+    if let Some(preview_samples) = preview_samples {
+        let image_sources = bundle.geometry.images.iter().filter_map(|image| {
+            let resource_id = serde_json::to_value(image.resource_id)
+                .ok()?
+                .as_str()?
+                .to_owned();
+            Some((resource_id, image.mime.as_str(), image.bytes.as_slice()))
+        });
+        let decorative_sources = bundle
+            .geometry
+            .decorative_border_resources
+            .iter()
+            .filter_map(|image| {
+                let resource_id = serde_json::to_value(image.resource_id)
+                    .ok()?
+                    .as_str()?
+                    .to_owned();
+                Some((resource_id, image.mime.as_str(), image.bytes.as_slice()))
+            });
+        *preview_samples = collect_worker_preview_samples(image_sources.chain(decorative_sources));
+    }
+
     Ok(scene)
 }
 
@@ -562,17 +607,20 @@ pub(crate) fn render_reader_scene_in_isolated_worker(
     baseline_revision_id: &str,
     source_bytes: &[u8],
     project: &EditorProject,
-) -> Result<serde_json::Value, &'static str> {
-    let scene = project_reader_scene_from_exact_source(
+) -> Result<(serde_json::Value, Vec<WorkerSafePreviewSamplesV1>), &'static str> {
+    let mut preview_samples = Vec::new();
+    let scene = project_reader_scene_with_worker_samples(
         document_id.to_owned(),
         source_sha256.to_owned(),
         revision_id.to_owned(),
         baseline_revision_id,
         source_bytes,
         project,
+        Some(&mut preview_samples),
     )
     .map_err(|_| "reader_scene_projection_failed")?;
-    serde_json::to_value(scene).map_err(|_| "reader_scene_projection_failed")
+    let value = serde_json::to_value(scene).map_err(|_| "reader_scene_projection_failed")?;
+    Ok((value, preview_samples))
 }
 
 async fn commit_move_node(

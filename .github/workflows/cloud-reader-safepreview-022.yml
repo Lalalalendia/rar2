@@ -1,0 +1,707 @@
+name: Cloud Reader SafePreview exact Publisher 022
+
+on:
+  pull_request:
+    paths:
+      - "apps/chaptera-server/src/safe_preview_scene.rs"
+      - "apps/cloud-reader/real-browser.test.mjs"
+      - "tools/run_cloud_reader_live_acceptance.py"
+      - ".github/workflows/cloud-reader-safepreview-022.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: reader-safepreview-022-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hosted-pub-to-publisher-golden:
+    name: Real HTTPS host preview against Publisher PDF 022
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Retrieve exact pinned 1050-PUB materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Pin original 022 and publisher reference fingerprints
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, pathlib, shutil
+          expected = "7079ad60fd8109796b84286d294cb490051a1517d8e52ac61e7c416dbd04428c"
+          source = pathlib.Path("out/pinned1050/materialized/native") / (expected + ".pub")
+          assert source.is_file(), "pinned 022 PUB is missing"
+          assert source.stat().st_size == 5012480, source.stat().st_size
+          assert hashlib.sha256(source.read_bytes()).hexdigest() == expected
+          ref = pathlib.Path("tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json")
+          assert hashlib.sha256(ref.read_bytes()).hexdigest() == "c522ebdc72d0b62ef68be3747494c2f5178ff69a70b83f14b3fd6a9bf8128404"
+          pair = next(p for p in json.loads(ref.read_text())["pairs"] if p["oracle_id"] == "batch01-022")
+          assert pair["pub_sha256"] == expected and len(pair["pages"]) == 1
+          root = pathlib.Path("/tmp/chaptera-safe-preview-022")
+          root.mkdir(mode=0o700, exist_ok=True)
+          output = root / "022_7079ad60fd810979.pub"
+          shutil.copyfile(source, output)
+          fixture = {"name":"022_7079ad60fd810979", "sha256":expected, "bytes":5012480, "pages":1, "require_render":True, "source_path":str(output)}
+          (root / "manifest.json").write_text(json.dumps({"schema":"chaptera.cloud-reader-real-fixtures.v1", "fixtures":[fixture]}))
+          print("exact_pub_hash_ok=1 publisher_reference_hash_ok=1")
+          PY
+
+      - name: Prepare TLS, local test S3 and browser dependencies
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/run_cloud_reader_live_acceptance.py tools/migration_pdf_worker_isolation.py
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
+          python - <<'PY'
+          import ctypes.util
+          assert ctypes.util.find_library("seccomp"), "libseccomp must be present"
+          PY
+          sudo sh -c 'printf "%s\n" "127.0.0.1 s3.chaptera.test chaptera-quarantine.s3.chaptera.test chaptera-private.s3.chaptera.test" >> /etc/hosts'
+          curl --fail --location --retry 3 "https://github.com/caddyserver/caddy/releases/download/v2.10.2/caddy_2.10.2_linux_amd64.tar.gz" --output "/tmp/chaptera-safe-preview-022/caddy.tar.gz"
+          echo "5c218bc34c9197369263da7e9317a83acdbd80ef45d94dca5eff76e727c67cdd  /tmp/chaptera-safe-preview-022/caddy.tar.gz" | sha256sum --check
+          tar --no-same-owner -xzf "/tmp/chaptera-safe-preview-022/caddy.tar.gz" -C "/tmp/chaptera-safe-preview-022" caddy
+          npm install --no-save playwright@1.55.0
+          npx playwright install chromium
+
+      - name: Build server plus real isolated PUB workers
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Pin and probe 001/023 source-safe Reader controls
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import shutil
+          import subprocess
+
+          root = pathlib.Path("/tmp/chaptera-safe-preview-022")
+          source_dir = pathlib.Path("out/pinned1050/materialized/native")
+          oracle = json.loads(pathlib.Path(
+              "tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json"
+          ).read_text())
+          controls = (
+              ("batch01-001", "0ca858ed4806e81da2964d75d54d25a2ac0c6126074e9f82ea33b87701de4ade", 72704),
+              ("batch01-023", "6bbfbf7b4c9b240026399fcc114ee0eb78fbc954c8f258f5baf3a388d3f188c8", 4573696),
+          )
+          worker = pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / "target/debug/chaptera"
+          results = []
+          faults = []
+
+          for name, digest, byte_len in controls:
+              src = source_dir / (digest + ".pub")
+              if not src.is_file() or src.stat().st_size != byte_len:
+                  raise AssertionError(name + ": exact fixture absent or wrong length")
+              if hashlib.sha256(src.read_bytes()).hexdigest() != digest:
+                  raise AssertionError(name + ": fixture digest mismatch")
+              pair = next((p for p in oracle["pairs"] if p["oracle_id"] == name), None)
+              if pair is None or pair["pub_sha256"] != digest or len(pair["pages"]) != 1:
+                  raise AssertionError(name + ": pinned Publisher oracle mismatch")
+              directory = root / ("source-safe-" + name)
+              args = [
+                  "python", "tools/migration_pdf_worker_isolation.py", "run",
+                  "--output-dir", str(directory),
+                  "--input", str(src),
+                  "--timeout", "120",
+                  "--address-space-mb", "768",
+                  "--cpu-seconds", "90",
+                  "--open-files", "64",
+                  "--output-file-mb", "32",
+                  "--clear-environment", "--",
+                  str(worker), "guest-reader-scene",
+                  "--session-id", "guest:" + ("0" * 24) + name[-3:].zfill(8),
+                  "--expected-sha256", digest,
+                  "--expected-byte-len", str(byte_len),
+              ]
+              try:
+                  process = subprocess.run(args, capture_output=True, timeout=130, check=False)
+                  result_path = directory / "result.json"
+                  result = json.loads(result_path.read_text()) if result_path.is_file() else {}
+                  scene = result.get("scene") or {}
+                  resources = scene.get("resources") or []
+                  audit = result.get("preview_audit") or {}
+                  sidecar = result.get("preview_sidecar") or {}
+                  sample_count = audit.get("encoded_candidates", 0)
+                  # This is PRE-SANITIZER worker JSON, not an HTTP response.
+                  # PUB001 is a pinned viewer-derived PNG (source_exact=false);
+                  # PUB023 has seven source-exact images denied by the viewer.
+                  # The host MUST strip both classes, then re-admit only its
+                  # own re-encoded pixel derivatives; this is separately
+                  # exercised by real Rust/browser boundary tests.
+                  worker_inline = [
+                      resource.get("inline_data_url")
+                      for resource in resources
+                      if resource.get("inline_data_url") is not None
+                  ]
+                  expected_inline = 1 if name == "batch01-001" else 0
+                  pre_sanitizer_expected = (
+                      len(worker_inline) == expected_inline
+                      and all(
+                          isinstance(url, str)
+                          and url.startswith("data:image/png;base64,")
+                          and len(url) <= 4 * 1024 * 1024 * 2
+                          for url in worker_inline
+                      )
+                      and (name != "batch01-001" or all(
+                          resource.get("mime") == "image/png" for resource in resources
+                      ))
+                  )
+                  limits_ok = (
+                      isinstance(audit.get("input_resources"), int)
+                      and 0 <= sample_count <= audit.get("decoded_resources", -1)
+                      <= audit.get("eligible_mime_resources", -1)
+                      <= audit.get("input_resources", -1)
+                      and sidecar.get("chunk_count", 0) <= 8
+                      and sidecar.get("byte_len", 0) <= 64 * 1024 * 1024
+                  )
+                  safe = (
+                      process.returncode == 0
+                      and result.get("filesystem_confinement") is True
+                      and result.get("source_sha256") == digest
+                      and result.get("source_byte_len") == byte_len
+                      and result.get("classification") in ("supported", "partial")
+                      and isinstance(scene, dict)
+                      and isinstance(resources, list)
+                      and pre_sanitizer_expected
+                      and limits_ok
+                  )
+                  results.append({
+                      "fixture": name,
+                      "pinned_oracle": True,
+                      "sandbox_seccomp": result.get("filesystem_confinement") is True,
+                      "worker_accepted": process.returncode == 0,
+                      "classified": result.get("classification") in ("supported", "partial"),
+                      "resource_count": len(resources),
+                      "pre_sanitizer_inline_count": len(worker_inline),
+                      "pre_sanitizer_inline_expected": expected_inline,
+                      "worker_inlines_not_browser_authorized": True,
+                      "input_resources": audit.get("input_resources", 0),
+                      "decoded_resources": audit.get("decoded_resources", 0),
+                      "encoded_candidates": sample_count,
+                      "candidate_bytes": audit.get("candidate_encoded_bytes", 0),
+                      "sidecar_bytes": sidecar.get("byte_len", 0),
+                      "receipt_bounds_ok": limits_ok,
+                      "passed": safe,
+                  })
+                  if not safe:
+                      faults.append(name + ": isolated Reader control not admitted")
+              finally:
+                  # Original PUB, pixels and worker sidecars must never be retained
+                  # in CI artifacts or copied into source-safe summary JSON.
+                  shutil.rmtree(directory, ignore_errors=True)
+
+          summary = {"schema": "chaptera.reader-safe-preview-worker-controls-001-023.v1", "fixtures": results}
+          output = pathlib.Path("target/safe-preview-022-visual/controls.json")
+          output.parent.mkdir(parents=True, exist_ok=True)
+          output.write_text(json.dumps(summary, sort_keys=True, indent=2) + "\n")
+          print(json.dumps(summary, sort_keys=True))
+          if faults:
+              raise AssertionError("; ".join(faults))
+          PY
+
+      - name: Diagnose exact 022 preview candidate provenance (source-free)
+        run: |
+          set -euo pipefail
+          root="/tmp/chaptera-safe-preview-022"
+          python tools/migration_pdf_worker_isolation.py run \
+            --output-dir "$root/direct-worker-diagnostic" \
+            --input "$root/022_7079ad60fd810979.pub" \
+            --timeout 120 \
+            --address-space-mb 768 \
+            --cpu-seconds 90 \
+            --open-files 64 \
+            --output-file-mb 32 \
+            --clear-environment \
+            -- "$GITHUB_WORKSPACE/target/debug/chaptera" guest-reader-scene \
+            --session-id guest:00000000000000000000000000000002 \
+            --expected-sha256 7079ad60fd8109796b84286d294cb490051a1517d8e52ac61e7c416dbd04428c \
+            --expected-byte-len 5012480
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          receipt = json.loads(Path("/tmp/chaptera-safe-preview-022/direct-worker-diagnostic/result.json").read_text())
+          scene = receipt.get("scene") or {}
+          nodes = scene.get("nodes") or []
+          resources = scene.get("resources") or []
+          manifest = receipt.get("preview_sidecar") or {}
+          print(json.dumps({
+              "stage":"confined_worker_before_host",
+              "classification":receipt.get("classification"),
+              "resource_mimes":[r.get("mime") for r in resources],
+              "resource_availabilities":[r.get("availability") for r in resources],
+              "direct_node_bindings":[sum(n.get("resource_id")==r.get("resource_id") for n in nodes) for r in resources],
+              "preview_sidecar_available":bool(manifest),
+              "preview_sidecar_bytes":manifest.get("byte_len",0),
+              "preview_sidecar_chunks":manifest.get("chunk_count",0),
+              "preview_worker_audit":receipt.get("preview_audit")
+          },sort_keys=True))
+          PY
+
+      - name: Diagnose memory-bound JPEG 022 in confined worker (no source bytes in receipt)
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import pathlib
+          import shutil
+          import subprocess
+          import os
+
+          root = pathlib.Path("/tmp/chaptera-safe-preview-022")
+          fixture = root / "022_7079ad60fd810979.pub"
+          program = pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / "target/debug/chaptera"
+          controls = []
+          baseline = json.loads((root / "direct-worker-diagnostic/result.json").read_text())
+          audit = baseline.get("preview_audit") or {}
+          controls.append({
+              "address_space_mb": 768,
+              "worker_pass": True,
+              "input_encoded_bytes": audit.get("input_encoded_byte_count", 0),
+              "decoded_count": audit.get("decoded_resources", 0),
+              "encoded_count": audit.get("encoded_candidates", 0),
+              "reject_codes": audit.get("reject_codes") or {},
+          })
+          for size_mb in (1536, 3072):
+              destination = root / ("isolated-memory-" + str(size_mb))
+              invocation = [
+                  "python", "tools/migration_pdf_worker_isolation.py", "run",
+                  "--output-dir", str(destination), "--input", str(fixture),
+                  "--timeout", "120", "--address-space-mb", str(size_mb),
+                  "--cpu-seconds", "90", "--open-files", "64", "--output-file-mb", "32",
+                  "--clear-environment", "--",
+                  str(program), "guest-reader-scene",
+                  "--session-id", "guest:00000000000000000000000000000002",
+                  "--expected-sha256", "7079ad60fd8109796b84286d294cb490051a1517d8e52ac61e7c416dbd04428c",
+                  "--expected-byte-len", "5012480",
+              ]
+              result = subprocess.run(invocation, capture_output=True, timeout=130, check=False)
+              receipt_path = destination / "result.json"
+              receipt = json.loads(receipt_path.read_text()) if receipt_path.is_file() else {}
+              audit = receipt.get("preview_audit") or {}
+              controls.append({
+                  "address_space_mb": size_mb,
+                  "worker_pass": result.returncode == 0,
+                  "input_encoded_bytes": audit.get("input_encoded_byte_count", 0),
+              "decoded_count": audit.get("decoded_resources", 0),
+                  "encoded_count": audit.get("encoded_candidates", 0),
+                  "reject_codes": audit.get("reject_codes") or {},
+              })
+              # Do not retain candidate pixels or document sources in CI artifacts.
+              shutil.rmtree(destination, ignore_errors=True)
+          print(json.dumps({"schema": "chaptera.jpeg022.isolated-rlimit-diagnostic.v1", "controls": controls}, sort_keys=True))
+          PY
+
+      - name: Capture *host-accepted* 022 scene through real HTTPS guest API
+        env:
+          EXACT_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python tools/run_cloud_reader_live_acceptance.py \
+            --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera" \
+            --structural-worker "$GITHUB_WORKSPACE/target/debug/chaptera" \
+            --caddy "/tmp/chaptera-safe-preview-022/caddy" \
+            --fixture "/tmp/chaptera-safe-preview-022/022_7079ad60fd810979.pub" \
+            --fixture-sha256 "7079ad60fd8109796b84286d294cb490051a1517d8e52ac61e7c416dbd04428c" \
+            --repository-commit "$EXACT_COMMIT_SHA" \
+            --out "$GITHUB_WORKSPACE/target/safe-preview-022-live" \
+            --accepted-scene-out "/tmp/chaptera-safe-preview-022/live-accepted.json"
+
+      - name: Diagnose host-admitted 022 scene without source bytes
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          receipt = json.loads(Path("/tmp/chaptera-safe-preview-022/live-accepted.json").read_text())
+          scene = receipt["scene"]
+          nodes = scene.get("nodes") or []
+          resources = scene.get("resources") or []
+          print(json.dumps({
+              "stage":"real_https_host_admitted",
+              "classification":receipt["classification"],
+              "resource_mimes":[r.get("mime") for r in resources],
+              "resource_availabilities":[r.get("availability") for r in resources],
+              "direct_node_bindings":[sum(n.get("resource_id")==r.get("resource_id") for n in nodes) for r in resources],
+              "fidelity_reasons":scene.get("fidelity",{}).get("reasons",[])
+          },sort_keys=True))
+          PY
+
+      - name: Render accepted Server Scene in real Chromium
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          READER_REAL_MANIFEST: /tmp/chaptera-safe-preview-022/manifest.json
+          READER_ACCEPTED_SCENE_JSON: /tmp/chaptera-safe-preview-022/live-accepted.json
+          READER_REAL_OUTPUT: /tmp/chaptera-safe-preview-022/browser
+          READER_REFERENCE_RASTER_DPI: "144"
+        run: |
+          set -euo pipefail
+          node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Prove same-commit descriptor-only visual control in real Chromium
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          READER_REAL_MANIFEST: /tmp/chaptera-safe-preview-022/manifest.json
+          READER_ACCEPTED_SCENE_JSON: /tmp/chaptera-safe-preview-022/live-descriptor-control.json
+          READER_REAL_OUTPUT: /tmp/chaptera-safe-preview-022/browser-descriptor-control
+          READER_REFERENCE_RASTER_DPI: "144"
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64
+          import copy
+          import json
+          from pathlib import Path
+          root = Path("/tmp/chaptera-safe-preview-022")
+          actual = json.loads((root / "live-accepted.json").read_text())
+          assert actual["protocol_version"] == "chaptera.live-accepted-guest-scene.v1"
+          assert actual["source_sha256"] == "7079ad60fd8109796b84286d294cb490051a1517d8e52ac61e7c416dbd04428c"
+          originals = actual["scene"]["resources"]
+          assert len(originals) == 1 and originals[0]["mime"] == "image/jpeg"
+          url = originals[0]["inline_data_url"]
+          assert originals[0]["availability"] == "inline_data_url"
+          assert isinstance(url, str) and url.startswith("data:image/jpeg;base64,")
+          derived_bytes = base64.b64decode(url.partition(",")[2], validate=True)
+          # Original source-exact JPEG022 resource has 4,869,956 bytes.
+          # Compare byte length without logging or retaining either image.
+          assert 0 < len(derived_bytes) <= 5 * 1024 * 1024
+          assert len(derived_bytes) != 4869956, "host returned original source JPEG container"
+          control = copy.deepcopy(actual)
+          for resource in control["scene"]["resources"]:
+              resource.pop("inline_data_url", None)
+              resource["availability"] = "descriptor_only"
+          # This is a CLIENT-SIDE post-host intervention, NOT another host
+          # response. Everything else (same scene/page/nodes/text) is pinned.
+          dst = root / "live-descriptor-control.json"
+          assert not dst.exists()
+          dst.write_text(json.dumps(control, separators=(",", ":"), sort_keys=True))
+          dst.chmod(0o600)
+          print("same_commit_descriptor_only_intervention=1 host_image_reencoded=1")
+          PY
+          node apps/cloud-reader/real-browser.test.mjs
+          rm -f /tmp/chaptera-safe-preview-022/live-descriptor-control.json
+
+      - name: Compare actual HTTPS-host Reader pixels with Publisher gold
+        run: |
+          set -euo pipefail
+          mkdir -p target/safe-preview-022-visual
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from tools.cloud_reader_visual_fingerprint_v1 import image_grid, reference_grid, compare_grid
+          root = Path("/tmp/chaptera-safe-preview-022")
+          browser = json.loads((root / "browser/receipt.json").read_text())
+          assert browser["protocol"] == "chaptera.cloud-reader-real-scene-browser.v1"
+          row, = browser["results"]
+          assert row["scene_source"] == "accepted_https_guest_service"
+          assert row["rendered"] and row["pages"] == 1
+          assert row["source_sha256"] == "7079ad60fd8109796b84286d294cb490051a1517d8e52ac61e7c416dbd04428c"
+          ref = json.loads(Path("tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json").read_text())
+          oracle, = [x for x in ref["pairs"] if x["oracle_id"] == "batch01-022"]
+          diff = compare_grid(image_grid(root / "browser" / row["screenshots"][0]["filename"]), reference_grid(oracle["pages"][0]))
+          control_browser = json.loads((root / "browser-descriptor-control/receipt.json").read_text())
+          assert control_browser["protocol"] == browser["protocol"]
+          assert control_browser["browser"] == browser["browser"]
+          assert control_browser["repository_commit_sha"] == browser["repository_commit_sha"]
+          control_row, = control_browser["results"]
+          assert control_row["source_sha256"] == row["source_sha256"]
+          assert control_row["pages"] == row["pages"] == 1
+          assert control_row["scene_source"] == row["scene_source"] == "accepted_https_guest_service"
+          assert control_row["rendered"] and row["rendered"]
+          assert control_row["descriptor_only_resource_count"] == 1
+          assert row["descriptor_only_resource_count"] == 0
+          assert len(control_row["screenshots"]) == len(row["screenshots"]) == 1
+          baseline = compare_grid(
+              image_grid(root / "browser-descriptor-control" / control_row["screenshots"][0]["filename"]),
+              reference_grid(oracle["pages"][0]),
+          )
+          assert diff["changed_cell_count"] < baseline["changed_cell_count"], (
+              "fresh host-derived JPEG must improve Publisher fidelity over "
+              "same-head post-host descriptor-only visual control"
+          )
+          result = {
+            "schema":"chaptera.reader-safe-preview-hosted-022-v1",
+            "scene_source":"live_https_guest_server_host_admitted",
+            "fixture":"batch01-022",
+            "source_sha256":row["source_sha256"],
+            "publisher_fingerprint_sha256":oracle["pages"][0]["grid_sha256"],
+            "changed_cell_count":diff["changed_cell_count"],
+            "changed_cell_fraction":diff["changed_cell_fraction"],
+            "historical_pre_preview_changed_cells":3817,
+            "historical_baseline_is_different_commit":True,
+            "historical_cross_commit_delta_cells":3817-diff["changed_cell_count"],
+            "same_head_control_kind":"post_host_client_descriptor_only_intervention",
+            "same_head_descriptor_control_changed_cells":baseline["changed_cell_count"],
+            "same_head_improvement_cells":baseline["changed_cell_count"]-diff["changed_cell_count"],
+            "same_head_exact_source_and_browser":True,
+            "descriptor_only_resource_count":row["descriptor_only_resource_count"],
+            "source_container_emitted":False,
+            "source_story_text_emitted":False,
+          }
+          Path("target/safe-preview-022-visual/summary.json").write_text(json.dumps(result, indent=2, sort_keys=True)+"\n")
+          print(json.dumps(result, sort_keys=True))
+          assert diff["changed_cell_count"] < 3817, "hosted SafePreview did not recover any raster fidelity against baseline"
+          PY
+
+      - name: Prove 001 and 023 image admission through real HTTPS host and Chromium
+        env:
+          EXACT_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import shutil
+          import subprocess
+          import sys
+          from tools.cloud_reader_visual_fingerprint_v1 import image_grid, reference_grid, compare_grid
+
+          root = pathlib.Path("/tmp/chaptera-safe-preview-022")
+          corpus = pathlib.Path("out/pinned1050/materialized/native")
+          oracle = json.loads(pathlib.Path(
+              "tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json"
+          ).read_text())
+          head = os.environ["EXACT_COMMIT_SHA"]
+          assert len(head) == 40 and all(c in "0123456789abcdef" for c in head)
+          worker = str(pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / "target/debug/chaptera")
+          caddy = str(root / "caddy")
+          cases = (
+              ("batch01-001", "0ca858ed4806e81da2964d75d54d25a2ac0c6126074e9f82ea33b87701de4ade", 72704, 1),
+              ("batch01-023", "6bbfbf7b4c9b240026399fcc114ee0eb78fbc954c8f258f5baf3a388d3f188c8", 4573696, 7),
+          )
+          results = []
+          for name, digest, length, expected_images in cases:
+              path = corpus / (digest + ".pub")
+              assert path.is_file() and path.stat().st_size == length, "pinned fixture missing"
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, "source SHA drift"
+              pair, = [p for p in oracle["pairs"] if p["oracle_id"] == name]
+              assert pair["pub_sha256"] == digest and len(pair["pages"]) == 1
+              work = root / ("host-" + name)
+              work.mkdir(mode=0o700, exist_ok=False)
+              fixture = work / (name + ".pub")
+              scene_path = work / "host-accepted.json"
+              output = work / "acceptance"
+              browser_dir = work / "browser"
+              manifest_path = work / "manifest.json"
+              shutil.copyfile(path, fixture)
+              manifest_path.write_text(json.dumps({
+                  "schema": "chaptera.cloud-reader-real-fixtures.v1",
+                  "fixtures": [{
+                      "name": name,
+                      "sha256": digest,
+                      "bytes": length,
+                      "pages": 1,
+                      "require_render": True,
+                      "source_path": str(fixture),
+                  }],
+              }))
+              try:
+                  subprocess.run([
+                      sys.executable, "tools/run_cloud_reader_live_acceptance.py",
+                      "--chaptera", worker,
+                      "--structural-worker", worker,
+                      "--caddy", caddy,
+                      "--fixture", str(fixture),
+                      "--fixture-sha256", digest,
+                      "--repository-commit", head,
+                      "--out", str(output),
+                      "--accepted-scene-out", str(scene_path),
+                  ], check=True, timeout=210)
+                  live = json.loads(scene_path.read_text())
+                  assert live["protocol_version"] == "chaptera.live-accepted-guest-scene.v1"
+                  assert live["source_sha256"] == digest and live["source_byte_len"] == length
+                  assert live["isolated_guest_scene_count"] == 1
+                  scene = live["scene"]
+                  assert scene["source_hash"] == digest
+                  images = [
+                      r for r in scene["resources"]
+                      if r.get("mime") in ("image/png", "image/jpeg")
+                  ]
+                  assert len(images) == expected_images, "source image resource count drift"
+                  image_ids = [image.get("resource_id") for image in images]
+                  assert all(isinstance(v, str) and v for v in image_ids)
+                  assert len(set(image_ids)) == expected_images, "duplicate image resource identity"
+                  total_images = 0
+                  for image in images:
+                      rid = image["resource_id"]
+                      def node_uses_image(node):
+                          if node.get("resource_id") == rid:
+                              return True
+                          border = node.get("decorative_border") or {}
+                          placements = border.get("placements") or []
+                          return any(p.get("resource_id") == rid for p in placements)
+                      assert any(node_uses_image(node) for node in scene["nodes"]), (
+                          "host-derived resource lacks source Scene node use"
+                      )
+                      assert image.get("availability") == "inline_data_url"
+                      url = image.get("inline_data_url")
+                      assert isinstance(url, str)
+                      prefix = "data:" + image["mime"] + ";base64,"
+                      assert url.startswith(prefix), "host image URL MIME mismatch"
+                      encoded = base64.b64decode(url[len(prefix):], validate=True)
+                      assert 0 < len(encoded) <= (
+                          4 * 1024 * 1024 if image["mime"] == "image/png" else 5 * 1024 * 1024
+                      ), "host image exceeds per-resource cap"
+                      if image["mime"] == "image/png":
+                          assert encoded.startswith(bytes.fromhex("89504e470d0a1a0a")), "invalid PNG bytes"
+                      else:
+                          assert encoded.startswith(bytes.fromhex("ffd8ff")), "invalid JPEG bytes"
+                      total_images += len(encoded)
+                  assert len(json.dumps(scene).encode()) <= 16 * 1024 * 1024, "Scene exceeds budget"
+                  env = dict(os.environ)
+                  env.update({
+                      "REPOSITORY_COMMIT_SHA": head,
+                      "READER_REAL_MANIFEST": str(manifest_path),
+                      "READER_ACCEPTED_SCENE_JSON": str(scene_path),
+                      "READER_REAL_OUTPUT": str(browser_dir),
+                      "READER_REFERENCE_RASTER_DPI": "144",
+                      "READER_REQUIRED_PAINTED_HOST_IMAGES": str(expected_images),
+                  })
+                  subprocess.run(
+                      ["node", "apps/cloud-reader/real-browser.test.mjs"],
+                      env=env, check=True, timeout=120,
+                  )
+                  browser = json.loads((browser_dir / "receipt.json").read_text())
+                  assert browser["protocol"] == "chaptera.cloud-reader-real-scene-browser.v1"
+                  assert browser["repository_commit_sha"] == head
+                  result, = browser["results"]
+                  assert result["scene_source"] == "accepted_https_guest_service"
+                  assert result["rendered"] is True and result["pages"] == 1
+                  assert result["source_sha256"] == digest
+                  paint = result["host_image_paint_proof"]
+                  assert paint["admitted_image_resources"] == expected_images
+                  assert paint["painted_image_resources"] == expected_images
+                  assert paint["painted_svg_elements"] >= expected_images
+                  assert paint["all_decoded_and_positive_geometry"] is True
+                  # Only embedded images are the SafePreview scope. Font and
+                  # other non-image resources may legitimately remain descriptors.
+                  descriptors = sum(
+                      resource.get("availability") != "inline_data_url"
+                      for resource in scene["resources"]
+                  )
+                  assert result["descriptor_only_resource_count"] == descriptors
+                  assert descriptors == len(scene["resources"]) - expected_images
+                  shot, = result["screenshots"]
+                  coarse = compare_grid(
+                      image_grid(browser_dir / shot["filename"]),
+                      reference_grid(pair["pages"][0]),
+                  )
+                  # Synthetic POST-HOST image-off control; this is not a second
+                  # HTTP response. The original host scene/node/font/page
+                  # identity and exact repo head remain identical.
+                  control = json.loads(scene_path.read_text())
+                  for resource in control["scene"]["resources"]:
+                      if resource.get("mime") in ("image/png", "image/jpeg"):
+                          resource.pop("inline_data_url", None)
+                          resource["availability"] = "descriptor_only"
+                  control_scene_path = work / "client-image-off.json"
+                  control_scene_path.write_text(
+                      json.dumps(control, separators=(",", ":"), sort_keys=True)
+                  )
+                  control_scene_path.chmod(0o600)
+                  control_browser_dir = work / "browser-image-off"
+                  control_env = dict(env)
+                  control_env.pop("READER_REQUIRED_PAINTED_HOST_IMAGES", None)
+                  control_env["READER_ACCEPTED_SCENE_JSON"] = str(control_scene_path)
+                  control_env["READER_REAL_OUTPUT"] = str(control_browser_dir)
+                  subprocess.run(
+                      ["node", "apps/cloud-reader/real-browser.test.mjs"],
+                      env=control_env, check=True, timeout=120,
+                  )
+                  comparison = json.loads((control_browser_dir / "receipt.json").read_text())
+                  assert comparison["protocol"] == browser["protocol"]
+                  assert comparison["browser"] == browser["browser"], "A/B used different Chromium"
+                  assert comparison["repository_commit_sha"] == browser["repository_commit_sha"] == head
+                  control_result, = comparison["results"]
+                  assert control_result["source_sha256"] == result["source_sha256"] == digest
+                  assert control_result["pages"] == result["pages"] == 1
+                  assert control_result["page_geometry"] == result["page_geometry"]
+                  assert control_result["scene_source"] == result["scene_source"] == "accepted_https_guest_service"
+                  assert control_result["descriptor_only_resource_count"] == (
+                      result["descriptor_only_resource_count"] + expected_images
+                  ), "image-off control must remove exactly the host-owned image previews"
+                  control_shot, = control_result["screenshots"]
+                  baseline = compare_grid(
+                      image_grid(control_browser_dir / control_shot["filename"]),
+                      reference_grid(pair["pages"][0]),
+                  )
+                  improvement = (
+                      baseline["changed_cell_count"] - coarse["changed_cell_count"]
+                  )
+                  assert improvement >= 0, (
+                      name + ": host-derived images regress the exact Publisher coarse oracle"
+                  )
+                  results.append({
+                      "fixture": name,
+                      "source_sha256": digest,
+                      "host_derived_image_count": len(images),
+                      "browser_painted_image_resources": paint["painted_image_resources"],
+                      "browser_painted_svg_elements": paint["painted_svg_elements"],
+                      "host_derived_encoded_total_bytes": total_images,
+                      "descriptor_only_resource_count": result["descriptor_only_resource_count"],
+                      "chromium_rendered": True,
+                      "publisher_changed_cell_count": coarse["changed_cell_count"],
+                      "publisher_changed_cell_fraction": coarse["changed_cell_fraction"],
+                      "same_head_client_image_off_changed_cells": baseline["changed_cell_count"],
+                      "same_head_image_improvement_cells": improvement,
+                      "same_head_control_kind": "post_host_client_image_off_intervention",
+                      "no_publisher_coarse_regression": True,
+                      "source_container_emitted": False,
+                      "customer_pixels_or_scene_retained": False,
+                  })
+              finally:
+                  # Original public PUBs, accepted scenes and screenshots are
+                  # ephemeral test inputs, not GitHub Actions artifacts.
+                  shutil.rmtree(work, ignore_errors=True)
+          summary = {
+              "schema": "chaptera.reader-safe-preview-host-001-023.v1",
+              "repository_commit_sha": head,
+              "fixtures": results,
+              "all_host_and_chromium_accepted": len(results) == len(cases),
+          }
+          out = pathlib.Path("target/safe-preview-022-visual/host-001-023.json")
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(summary, sort_keys=True))
+          assert summary["all_host_and_chromium_accepted"]
+          PY
+
+      - name: Retain only source-free visual and HTTPS receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaptera-safe-preview-022-verified-receipts
+          path: |
+            target/safe-preview-022-visual/summary.json
+            target/safe-preview-022-visual/controls.json
+            target/safe-preview-022-visual/host-001-023.json
+            target/safe-preview-022-live/receipt.json
+          if-no-files-found: warn
+          retention-days: 30

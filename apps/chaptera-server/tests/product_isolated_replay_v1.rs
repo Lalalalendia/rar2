@@ -75,7 +75,8 @@ async fn pinned_sample3_exact_project_replays_in_real_seccomp_worker() {
         worker_address_space_mb: 2048,
         worker_cpu_seconds: 40,
         worker_open_files: 64,
-        worker_output_file_mb: 64,
+        // Exercise the same per-file output size limit as the production config.
+        worker_output_file_mb: 32,
         temp_root: std::env::temp_dir(),
     })
     .unwrap();
@@ -153,6 +154,32 @@ async fn pinned_sample3_exact_project_replays_in_real_seccomp_worker() {
     );
     assert!(baseline_scene.get("project").is_none());
     assert!(baseline_scene.get("authoring_graph").is_none());
+
+    // A real seccomp-to-host-to-browser Reader scene must not leak original
+    // worker-controlled image URLs. Any admitted image is a bounded, host-
+    // reencoded PNG/JPEG and retains explicit partial color-fidelity status.
+    if let Some(resources) = baseline_scene["resources"].as_array() {
+        for resource in resources {
+            if let Some(url) = resource["inline_data_url"].as_str() {
+                assert_eq!(resource["availability"], "inline_data_url");
+                let mime = resource["mime"].as_str().unwrap();
+                assert!(
+                    (mime == "image/png" && url.starts_with("data:image/png;base64,"))
+                        || (mime == "image/jpeg" && url.starts_with("data:image/jpeg;base64,"))
+                );
+                assert_eq!(baseline_scene["fidelity"]["state"], "partial");
+                assert!(
+                    baseline_scene["fidelity"]["reasons"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|reason| reason == "safe_preview_color_untransformed")
+                );
+            } else {
+                assert_eq!(resource["availability"], "descriptor_only");
+            }
+        }
+    }
 
     // A real canonical moved-object revision must replay identically inside
     // the sandbox, not just the unedited import baseline.

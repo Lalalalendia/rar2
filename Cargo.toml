@@ -25,6 +25,7 @@ members = [
 ]
 exclude = [
   "vendor/producer-a",
+  "vendor/third-party/jpeg-decoder-0.3.2",
   "crates/chaptera-suite-handoff",
   "crates/chaptera-viewer-render-plan",
   "crates/chaptera-canvas-creation-interaction",
