@@ -313,6 +313,63 @@ def main() -> int:
                 if worker.poll() is not None or server.poll() is not None:
                     raise RuntimeError("isolated Product server or worker died during image acceptance")
 
+                # Actual independently issued OIDC identity from the same
+                # local test provider: no forged browser cookie or grant.
+                first_subject, first_email = provider.subject, provider.email
+                provider.subject = "product-" + CASE_ID + "-foreign-oidc-subject"
+                provider.email = "product-" + CASE_ID + "-foreign@chaptera.invalid"
+                try:
+                    run_stage(
+                        "cross-principal",
+                        ["node", str(ROOT / "tools" /
+                                     "run_product_oidc_multiimage_cross_browser.mjs")],
+                        browser_env,
+                    )
+                finally:
+                    provider.subject, provider.email = first_subject, first_email
+                cross = json.loads((TARGET / "cross.json").read_text(encoding="utf-8"))
+                if (cross.get("schema") != "chaptera.product-oidc-multiimage-cross-principal.v1"
+                        or cross.get("fixture") != CASE_ID
+                        or cross.get("foreign_scene_http_status") != 403
+                        or cross.get("missing_scene_http_status") != 403
+                        or cross.get("absent_document_denial_indistinguishable") is not True
+                        or cross.get("source_revision_page_image_disclosure") is not False):
+                    raise RuntimeError("physical foreign-principal Product denial not admitted")
+
+                # Durable SQLite/BlobStore are preserved but both actual
+                # server and isolated worker processes must die and restart.
+                base.terminate(worker)
+                worker = None
+                base.terminate(server)
+                server = None
+                for name in ("worker", "server"):
+                    handles[name].close()
+                    del handles[name]
+                server = launch(
+                    "server-restart", [str(binary), "--config", str(config), "serve"],
+                )
+                base.wait_live(server)
+                worker = launch(
+                    "worker-restart", [str(binary), "--config", str(config), "worker"],
+                )
+                run_stage(
+                    "owner-restart",
+                    ["node", str(ROOT / "tools" /
+                                 "run_product_oidc_multiimage_restart_browser.mjs")],
+                    browser_env,
+                )
+                restart = json.loads((TARGET / "restart.json").read_text(encoding="utf-8"))
+                if (restart.get("schema") != "chaptera.product-oidc-multiimage-restart.v1"
+                        or restart.get("fixture") != CASE_ID
+                        or restart.get("original_oidc_owner_session_preserved") is not True
+                        or restart.get("server_and_isolated_worker_restarted") is not True
+                        or restart.get("source_revision_page_and_resource_ids_stable") is not True
+                        or restart.get("safely_reencoded_image_count") != EXPECTED_IMAGES
+                        or restart.get("chromium_images_decoded_and_painted") != EXPECTED_IMAGES):
+                    raise RuntimeError("physical restarted Product image admission not proven")
+                if worker.poll() is not None or server.poll() is not None:
+                    raise RuntimeError("restarted Product server or worker terminated")
+
                 summary = {
                     "schema": "chaptera.product-oidc-multiimage-physical.v1",
                     "repository_head_sha": args.head_sha,
@@ -323,6 +380,10 @@ def main() -> int:
                     "host_image_count": owner_report["host_image_count"],
                     "browser_painted_resources": owner_report["browser_painted_resources"],
                     "anonymous_scene_status": 401,
+                    "real_second_oidc_principal_denied": True,
+                    "cross_principal_denial_indistinguishable": True,
+                    "original_oidc_session_survives_server_worker_restart": True,
+                    "restart_images_decoded_and_painted": EXPECTED_IMAGES,
                     "partial_fidelity_disclosed": True,
                     "publisher_exact_oracle_claim": False,
                     "publisher_64x64_visual_ab_measured": True,

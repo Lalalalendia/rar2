@@ -242,6 +242,10 @@ try {
     revision_id: current.revision_id,
     source_sha256: expectedSha,
     resource_id: resource.resource_id,
+    resources: admitted.map(item => ({
+      resource_id: item.resource_id,
+      mime: item.mime,
+    })),
   }), "utf8");
   const receipt = {
     schema: "chaptera.product-oidc-multiimage-browser.v1",

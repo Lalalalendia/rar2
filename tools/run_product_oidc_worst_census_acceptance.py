@@ -282,6 +282,48 @@ def main() -> int:
                     raise RuntimeError("Product worst fixture OIDC/HTTPS/Chromium receipt not admitted")
                 if worker.poll() is not None or server.poll() is not None:
                     raise RuntimeError("isolated Product service stopped during worst-document census")
+                # Same physical OIDC Product Scene, rendered at canonical 144 DPI
+                # in Chromium with and without ONLY host-derived image bytes.
+                # Private Scene, source and both PNG arms are never uploaded.
+                visual_dir = work / ("publisher-visual-" + CASE_ID)
+                visual_env = browser_env.copy()
+                visual_env.update({
+                    "CHAPTERA_PREVIEW_PROBE_SCENE_OUT": str(owner_scene),
+                    "CHAPTERA_PREVIEW_BROWSER_OUTPUT": str(visual_dir),
+                    "REPOSITORY_COMMIT_SHA": args.head_sha,
+                })
+                run_stage(
+                    "product-worst-visual-browser",
+                    ["node", str(ROOT / "apps" / "cloud-reader" /
+                                 "product-worst-visual-browser.test.mjs")],
+                    visual_env,
+                )
+                report_path = work / "publisher-comparison.json"
+                run_stage(
+                    "product-worst-visual-score",
+                    [sys.executable, str(ROOT / "tools" / "reader_product_worst_visual_64.py"),
+                     "--case", CASE_ID,
+                     "--fingerprint", str(ROOT / "tools" / "corpus" / "receipts" /
+                       "publisher-visual-golden-batch-01-fingerprint-v1.json"),
+                     "--pairs", str(ROOT / "tools" / "corpus" / "receipts" /
+                       "publisher-visual-golden-batch-01-pairs.csv"),
+                     "--frozen", str(ROOT / "tools" / "corpus" / "receipts" /
+                       "publisher-lo-t999-49-111-frozen-v1.json"),
+                     "--browser-dir", str(visual_dir),
+                     "--out", str(report_path),
+                     "--head", args.head_sha],
+                    visual_env,
+                )
+                comparison = json.loads(report_path.read_text(encoding="utf-8"))
+                if (comparison.get("schema") != "chaptera.product-worst-publisher-ab-score.v1"
+                        or comparison.get("fixture") != CASE_ID
+                        or comparison.get("repository_commit_sha") != args.head_sha
+                        or comparison.get("ranked_pages") != EXPECTED_PAGES):
+                    raise RuntimeError("real Product Publisher visual receipt identity invalid")
+                (TARGET / "publisher-comparison.json").write_text(
+                    json.dumps(comparison, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
                 summary = {
                     "schema": "chaptera.product-oidc-worst-census-physical.v1",
                     "repository_head_sha": args.head_sha,
@@ -301,7 +343,11 @@ def main() -> int:
                     "fidelity_state": owner_report["fidelity_state"],
                     "fidelity_reason_count": owner_report["fidelity_reason_count"],
                     "anonymous_scene_status": 401,
-                    "real_publisher_visual_a_b": False,
+                    "real_publisher_visual_a_b": True,
+                    "publisher_comparison_page_count": comparison["ranked_pages"],
+                    "publisher_product_page_wins": comparison["product_page_wins"],
+                    "publisher_lo_page_wins": comparison["libreoffice_page_wins"],
+                    "publisher_near_ties": comparison["near_ties"],
                     "publisher_exact_oracle_claim": False,
                     "full_product_49_111_score": False,
                     "external_s3_claim": False,

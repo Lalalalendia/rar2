@@ -11,6 +11,7 @@ main{min-height:0;display:grid;grid-template-columns:220px 1fr}
 #canvas-wrap{overflow:auto;padding:28px;background:#dfe2e7}
 #canvas{width:max-content;min-width:100%;display:flex;flex-direction:column;align-items:center;gap:28px;touch-action:none}
 #canvas svg.page{box-shadow:0 2px 12px rgb(0 0 0 / 14%)}
+#canvas:focus-visible{outline:2px solid #3669dd;outline-offset:4px}
 .status.error{color:#a61b1b}
 .status.ok{color:#176b3a}
 .status.pending{color:#805200}

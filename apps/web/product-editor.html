@@ -22,6 +22,7 @@
       <button id="reconcile-action" type="button" hidden title="Recheck the exact server revision after an uncertain save or Undo/Redo">Recheck revision</button>
     </div>
     <span class="history-note">Only one immediate MoveNode Redo is supported; other history actions are rejected without changing the document.</span>
+    <span class="history-note">Select a direct object on the canvas: Arrow keys move 1 pt; Shift+Arrow moves 10 pt. Text inputs and other controls keep their own keys.</span>
     <span id="fidelity"></span>
     <section class="story-text-panel" aria-labelledby="story-editor-heading">
       <strong id="story-editor-heading">Text Story · bounded edit</strong>
@@ -38,7 +39,7 @@
     </section>
   </aside>
   <section id="canvas-wrap" aria-label="Publication canvas">
-    <div id="canvas"></div>
+    <div id="canvas" tabindex="0" role="group" aria-label="Publication canvas, select an object to nudge with arrow keys"></div>
   </section>
 </main>
 <script type="module" src="/editor/product-editor-entry-v1.mjs"></script>
