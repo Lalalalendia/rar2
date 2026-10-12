@@ -98,6 +98,14 @@ export function resolveRichEditorPointerTarget(
   return hit;
 }
 
+export function isUnchangedMoveGesture(interactionScene, gesture) {
+  if (!interactionScene || !gesture) return false;
+  const base = nodeById(interactionScene, gesture.nodeId)?.bounds;
+  const preview = gesture.previewBounds();
+  return Boolean(base && preview &&
+    base.x === preview.x && base.y === preview.y);
+}
+
 export function richEditorPagePoint(pageSvg, clientX, clientY) {
   if (
     !pageSvg ||
@@ -301,6 +309,13 @@ export class RichReaderEditorShellV1 {
       }
       const point = richEditorPagePoint(pageSvg, event.clientX, event.clientY);
       try {
+        // Selection is ephemeral. A click (or a drag back to its origin) must
+        // not create an empty durable revision or consume an Undo slot.
+        this.gesture.update(point);
+        if (isUnchangedMoveGesture(this.interactionScene, this.gesture)) {
+          this.cancelGesture("gesture_selection_only");
+          return;
+        }
         await this._commitGesture(point);
       } catch (error) {
         this.gesture = null;
