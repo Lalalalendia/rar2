@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use chaptera_suite_handoff::AdmittedSource;
 use pub_export::{ConversionProfile, EnvironmentFence, TargetProfile};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedText, BoundedShapingRuntime,
@@ -101,8 +102,8 @@ pub fn convert_pdf(
     output: &Path,
     fallback_font: &Path,
 ) -> Result<PdfConversionResult> {
-    let pub_bytes =
-        fs::read(input).with_context(|| format!("read PUB source {}", input.display()))?;
+    let admitted = AdmittedSource::open(input).map_err(anyhow::Error::msg)?;
+    let pub_bytes = admitted.bytes();
     let font_bytes = fs::read(fallback_font)
         .with_context(|| format!("read explicit fallback font {}", fallback_font.display()))?;
     let (artifact, report, summary) = build_pdf_artifact(
@@ -119,17 +120,21 @@ pub fn convert_pdf(
         fs::create_dir_all(parent)
             .with_context(|| format!("create output directory {}", parent.display()))?;
     }
-    fs::write(output, artifact).with_context(|| format!("write PDF {}", output.display()))?;
+    admitted
+        .commit_derived_output(output, &artifact)
+        .with_context(|| format!("commit PDF {}", output.display()))?;
 
     let report_json_path = sidecar_path(output, ".loss.json");
     let report_text_path = sidecar_path(output, ".loss.txt");
-    fs::write(
-        &report_json_path,
-        serde_json::to_vec_pretty(&report).context("serialize PDF loss report")?,
-    )
-    .with_context(|| format!("write PDF loss report {}", report_json_path.display()))?;
-    fs::write(&report_text_path, summary)
-        .with_context(|| format!("write PDF loss summary {}", report_text_path.display()))?;
+    admitted
+        .commit_derived_output(
+            &report_json_path,
+            &serde_json::to_vec_pretty(&report).context("serialize PDF loss report")?,
+        )
+        .with_context(|| format!("commit PDF loss report {}", report_json_path.display()))?;
+    admitted
+        .commit_derived_output(&report_text_path, summary.as_bytes())
+        .with_context(|| format!("commit PDF loss summary {}", report_text_path.display()))?;
 
     Ok(PdfConversionResult {
         report,
