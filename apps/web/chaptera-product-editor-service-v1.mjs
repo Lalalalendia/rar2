@@ -256,9 +256,24 @@ export class ChapteraProductEditorServiceV1 {
     );
 
     if (result.response.ok) {
-      return clone(
-        ensureProtocol(result.value, "chaptera.commit-accepted.v1", "commit accepted"),
+      const accepted = ensureProtocol(
+        result.value, "chaptera.commit-accepted.v1", "commit accepted",
       );
+      // A 2xx is not authority to release the mutation fence unless it
+      // acknowledges this exact document, source, base and operation.
+      // Treat an inconsistent ACK as uncertain, never as a saved change.
+      if (
+        accepted.document_id !== this.documentId ||
+        accepted.source_hash !== request.source_hash ||
+        accepted.base_revision_id !== request.base_revision_id ||
+        accepted.client_operation_id !== request.client_operation_id ||
+        typeof accepted.revision_id !== "string" ||
+        !/^sha256:[0-9a-f]{64}$/.test(accepted.revision_id) ||
+        accepted.revision_id === request.base_revision_id
+      ) {
+        throw new Error("commit accepted identity mismatch");
+      }
+      return clone(accepted);
     }
 
     const code = responseErrorCode(result.value);
