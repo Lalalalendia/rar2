@@ -376,3 +376,24 @@ test("lost Undo/Redo ACK preserves operation identity and blocks edits until can
     });
   }
 });
+
+test("external Story mutation fence locks MoveNode/history until exact reconciliation", async () => {
+  const host = {addEventListener() {}, removeEventListener() {}, replaceChildren() {}};
+  const keyboard = {addEventListener() {}, removeEventListener() {}};
+  const service = {
+    commit() { throw new Error("must not POST MoveNode"); },
+    undo() { throw new Error("must not POST history"); },
+    currentRichEditorState() { throw new Error("not requested"); },
+    readerSceneForRevision() { throw new Error("not requested"); },
+  };
+  const shell = new RichReaderEditorShellV1({host,service,keyboardTarget:keyboard});
+  assert.equal(shell.stateReceipt().external_mutation_locked, false);
+  shell.setExternalMutationLocked(true);
+  assert.equal(shell.stateReceipt().external_mutation_locked, true);
+  await assert.rejects(() => shell.undo(), /Story mutation is pending/);
+  await assert.rejects(() => shell._commitGesture({x_emu: 0,y_emu: 0}), /save authority is pending/);
+  shell.setExternalMutationLocked(false);
+  assert.equal(shell.stateReceipt().external_mutation_locked, false);
+  shell.commitInFlight = true;
+  assert.throws(() => shell.setExternalMutationLocked(true), /another pending mutation/);
+});
