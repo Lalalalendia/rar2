@@ -163,7 +163,14 @@ mod tests {
             }
         ));
 
-        valid.extend(["--move-node-id", "node-id", "--move-x-emu", "0", "--move-y-emu", "0"]);
+        valid.extend([
+            "--move-node-id",
+            "node-id",
+            "--move-x-emu",
+            "0",
+            "--move-y-emu",
+            "0",
+        ]);
         assert!(Cli::try_parse_from(valid).is_err());
     }
 
