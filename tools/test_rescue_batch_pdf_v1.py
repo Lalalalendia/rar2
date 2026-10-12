@@ -223,7 +223,7 @@ class BatchPdfTest(unittest.TestCase):
         self.assertEqual(a, output_name("a/news.pub", sha256(b"same")))
 
     def test_safe_relative_rejects_windows_and_posix_escape(self):
-        for unsafe in ("../a.pub", "/a.pub", "C:/a.pub", "foo\\bar.pub", "./a.pub", "a//b.pub", ""):
+        for unsafe in ("../a.pub", "/a.pub", "C:" + "/a.pub", "foo\\bar.pub", "./a.pub", "a//b.pub", ""):
             with self.subTest(path=unsafe), self.assertRaises(InputRejected):
                 safe_relative(unsafe)
 
