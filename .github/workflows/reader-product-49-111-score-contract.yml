@@ -1,0 +1,34 @@
+name: Product 49/111 authenticated visual scoreboard contract
+
+on:
+  pull_request:
+    paths:
+      - tools/reader_product_49_111_scoreboard_v1.py
+      - tools/test_reader_product_49_111_scoreboard_v1.py
+      - .github/workflows/reader-product-49-111-score-contract.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-49-111-score-contract-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  source-free-contract:
+    name: Fail closed on DIRECT fallback and incomplete Product evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python scorer source-safe synthetic controls
+        run: |
+          python -m py_compile tools/reader_product_49_111_scoreboard_v1.py tools/test_reader_product_49_111_scoreboard_v1.py
+          python tools/test_reader_product_49_111_scoreboard_v1.py
+          python tools/reader_product_49_111_scoreboard_v1.py --help
