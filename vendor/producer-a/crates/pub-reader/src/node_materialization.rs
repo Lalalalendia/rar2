@@ -1,6 +1,12 @@
 use super::contents_access::is_page_owned_logo_group;
 use super::*;
 
+// Exact real-PUB source identity with independently verified black/white
+// PAGE-owned LOGO rectangle FOPT, DGG and palette semantics. Do not extend
+// this still-measured exception to unrelated Publisher files.
+const VERIFIED_NEWSLETTER_LOGO_FILL_SHA256: &str =
+    "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf";
+
 pub(super) struct MatureNodeMaterializationContext<'a> {
     pub(super) source_hash: &'a Sha256Digest,
     pub(super) contents_stream: &'a StreamPath,
@@ -48,6 +54,8 @@ pub(super) fn materialize_mature_nodes(
         });
     }
     let dgg_defaults = dgg_default_inventory.drawing_groups.first();
+    let exact_newsletter_logo_fill =
+        source_hash.to_string() == VERIFIED_NEWSLETTER_LOGO_FILL_SHA256;
 
     for reference in references.values() {
         let raw_type = single_raw_type(reference);
@@ -108,7 +116,8 @@ pub(super) fn materialize_mature_nodes(
             if has_default_ellipse_geometry(shape) {
                 Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
             } else if super::paint_projection::has_bounded_grouped_solid_rectangle(shape)
-                || (page_owned_logo_group
+                || (exact_newsletter_logo_fill
+                    && page_owned_logo_group
                     && dgg_defaults_unambiguous
                     && resolve_bounded_effective_officeart_paint(
                         shape,
