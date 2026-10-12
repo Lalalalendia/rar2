@@ -99,13 +99,31 @@ pub(super) fn materialize_mature_nodes(
         };
         let image_slot = exact_image_slot(shape, seq_num, diagnostics);
         let exact_grouped_image_identity = raw_type == Some(RAW_TYPE_SHAPE) && image_slot.is_some();
+        let page_logo_effective_rectangle = raw_type == Some(RAW_TYPE_SHAPE)
+            && direct_page.is_none()
+            && exact_story_identity.is_none()
+            && image_slot.is_none()
+            && is_page_owned_logo_group(parent_seq, references, page_seq_to_id)
+            && dgg_defaults_unambiguous
+            && super::paint_projection::has_bounded_page_logo_effective_rectangle(
+                shape,
+                resolve_bounded_effective_officeart_paint(
+                    shape,
+                    dgg_defaults,
+                    color_scheme.map(|value| &value.scheme),
+                    admits_normative_2d_paint_defaults(shape),
+                )
+                .as_ref(),
+            );
         let exact_grouped_primitive_shape_type = if raw_type == Some(RAW_TYPE_SHAPE)
             && exact_story_identity.is_none()
             && image_slot.is_none()
         {
             if has_default_ellipse_geometry(shape) {
                 Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
-            } else if super::paint_projection::has_bounded_grouped_solid_rectangle(shape) {
+            } else if super::paint_projection::has_bounded_grouped_solid_rectangle(shape)
+                || page_logo_effective_rectangle
+            {
                 Some(super::paint_projection::OFFICEART_SHAPE_TYPE_RECTANGLE)
             } else {
                 None
