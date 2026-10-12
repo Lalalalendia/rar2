@@ -587,6 +587,7 @@ test("physical click selects direct object without a blank revision or Undo entr
     addEventListener(name, fn) { listeners.set(name, fn); },
     removeEventListener(name) { listeners.delete(name); },
     focus() { focuses += 1; },
+    querySelectorAll() { return [page]; },
     setPointerCapture() {}, releasePointerCapture() { pointerReleases += 1; },
   };
   const service = {
