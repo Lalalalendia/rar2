@@ -238,8 +238,8 @@ fn exact_public_newsletter_logo_0x31_baseline() {
         source_order.node_ids.len()
     );
     assert_eq!(
-        page_nodes, 16,
-        "12 baseline nodes plus four bounded children"
+        page_nodes, 18,
+        "12 baseline nodes plus six strictly source-backed LOGO children"
     );
     assert_eq!(
         source_order.node_ids.len(),
@@ -247,11 +247,20 @@ fn exact_public_newsletter_logo_0x31_baseline() {
         "PAGE LOGO children need carrier-backed paint order"
     );
 
-    // Only four class-eligible descendants. Generic rectangles 387/408/410
-    // remain unadmitted without their own local paint authority.
+    // The hidden primitive stays omitted: only two fully visible, source-
+    // resolved PAGE LOGO rectangles join the four already-proven nodes.
+    assert!(
+        !build
+            .graph
+            .nodes
+            .contains_key(&derive_pub_node_id(&source_hash, 387).unwrap()),
+        "explicit hidden fill must never produce a PAGE LOGO node"
+    );
     let candidates = [
         (389u32, "image"),
         (391, "story"),
+        (408, "white-dgg-rectangle"),
+        (410, "black-palette-rectangle"),
         (411, "ellipse"),
         (412, "story"),
     ];
@@ -264,6 +273,27 @@ fn exact_public_newsletter_logo_0x31_baseline() {
             .get(&node_id)
             .expect("bounded PAGE LOGO child must materialize");
         assert_eq!(node.header.parent_id, page_id.into_canonical());
+        if seq == 408 || seq == 410 {
+            let paint = node
+                .payload
+                .effective_paint
+                .as_ref()
+                .expect("PAGE LOGO rectangle needs effective source paint");
+            assert_eq!(
+                paint.fill.visible.as_ref().map(|value| value.value),
+                Some(true)
+            );
+            let rgb = paint
+                .fill
+                .color_rgb
+                .as_ref()
+                .expect("PAGE LOGO rectangle needs resolved palette/DGG RGB");
+            assert_eq!(
+                rgb.value,
+                if seq == 408 { [255, 255, 255] } else { [0, 0, 0] },
+                "rectangle RGB must match exact Publisher color authority"
+            );
+        }
         if seq == 389 {
             assert_eq!(
                 node.payload.image_slot,
