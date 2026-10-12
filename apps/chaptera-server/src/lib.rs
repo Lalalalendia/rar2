@@ -45,6 +45,7 @@ pub mod revision_materializer;
 pub mod runtime_error;
 pub mod runtime_readiness;
 pub mod s3_blob_provider;
+mod safe_preview_scene;
 pub mod schema_migration;
 pub mod serve;
 pub mod shutdown;

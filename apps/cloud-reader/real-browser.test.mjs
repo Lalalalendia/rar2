@@ -85,6 +85,25 @@ const manifestPath = process.env.READER_REAL_MANIFEST ? resolve(process.env.READ
 const fixtures = manifestPath
   ? JSON.parse(await readFile(manifestPath, "utf8")).fixtures
   : defaultFixtures;
+// Explicit proof mode: an ephemeral Scene obtained from the real HTTPS guest
+// server and its host-owned decoder boundary, NEVER a raw worker result.
+// The existing corpus path remains unchanged without this env variable.
+const acceptedScenePath = process.env.READER_ACCEPTED_SCENE_JSON
+  ? resolve(process.env.READER_ACCEPTED_SCENE_JSON)
+  : null;
+if (acceptedScenePath) {
+  assert.equal(fixtures.length, 1, "live accepted-scene proof must contain exactly one source");
+}
+// Optional physical 001/023 gate: require every host-admitted preview to paint
+// as a decoded, nonzero-sized SVG image in Chromium, not merely in the Scene.
+const requiredHostImageCount = process.env.READER_REQUIRED_PAINTED_HOST_IMAGES
+  ? Number(process.env.READER_REQUIRED_PAINTED_HOST_IMAGES)
+  : null;
+if (requiredHostImageCount !== null) {
+  assert.ok(acceptedScenePath, "host image paint proof requires a real host-accepted Scene");
+  assert.ok(Number.isSafeInteger(requiredHostImageCount) && requiredHostImageCount > 0 && requiredHostImageCount <= 96,
+    "host image paint count must be bounded and positive");
+}
 assert.ok(Array.isArray(fixtures) && fixtures.length > 0, "real fixture manifest must contain fixtures");
 for (const fixture of fixtures) {
   assert.match(fixture.name, /^[A-Za-z0-9._-]+$/, "fixture name must be path-safe");
@@ -210,51 +229,76 @@ try {
     assert.equal(bytes.length, fixture.bytes);
     assert.equal(sha256(bytes), fixture.sha256);
     await writeFile(source, bytes);
-    const workerOutput = join(temporary, fixture.name + "-worker");
+    let receiptBytes;
+    let receipt;
     let isolation;
-    try {
-      const { stdout } = await run("python3", [join(repo, "tools/migration_pdf_worker_isolation.py"), "run",
-        "--output-dir", workerOutput, "--input", source, "--timeout", String(workerTimeoutSeconds),
-        "--address-space-mb", String(workerAddressSpaceMb),
-        "--cpu-seconds", String(workerCpuSeconds), "--open-files", "64", "--output-file-mb", "32", "--clear-environment", "--",
-        worker, "guest-reader-scene", "--session-id", "guest:" + String(index + 1).padStart(32, "0"),
-        "--expected-sha256", fixture.sha256, "--expected-byte-len", String(fixture.bytes)],
-        { cwd: repo, timeout: (workerTimeoutSeconds + 10) * 1000, maxBuffer: 1024 * 1024 });
-      isolation = JSON.parse(stdout);
-      assert.equal(isolation.status, "success");
-      assert.equal(isolation.network_policy, "seccomp_default_deny");
-    } catch (error) {
-      if (!continueWorkerFailures || fixture.require_render === true) throw error;
-      let failure = null;
+    if (acceptedScenePath) {
+      const accepted = JSON.parse(await readFile(acceptedScenePath, "utf8"));
+      assert.equal(accepted.protocol_version, "chaptera.live-accepted-guest-scene.v1");
+      assert.equal(accepted.source_sha256, fixture.sha256);
+      assert.equal(accepted.source_byte_len, fixture.bytes);
+      assert.equal(accepted.isolated_guest_scene_count, 1, "HTTPS service must prove one isolated worker");
+      assert.match(accepted.session_id, /^guest:[a-zA-Z0-9_-]{16,}$/);
+      assert.ok(["supported", "partial"].includes(accepted.classification));
+      assert.equal(accepted.scene?.document_id, accepted.session_id);
+      assert.equal(accepted.scene?.source_hash, fixture.sha256);
+      assert.equal(accepted.scene?.scene_authority, "server_viewer_projection");
+      receipt = {
+        filesystem_confinement: true,
+        source_sha256: accepted.source_sha256,
+        source_byte_len: accepted.source_byte_len,
+        session_id: accepted.session_id,
+        classification: accepted.classification,
+        scene: accepted.scene
+      };
+      receiptBytes = Buffer.from(JSON.stringify(receipt), "utf8");
+      isolation = { network_policy: "seccomp_default_deny" };
+    } else {
+      const workerOutput = join(temporary, fixture.name + "-worker");
       try {
-        failure = JSON.parse(String(error.stdout ?? ""));
-      } catch {}
-      results.push({
-        fixture: fixture.name,
-        source_sha256: fixture.sha256,
-        source_byte_len: fixture.bytes,
-        classification: "unsupported",
-        terminal_code: "reader_worker_isolation_failed",
-        rendered: false,
-        worker_failure: failure ? {
-          status: failure.status ?? null,
-          exit_code: failure.exit_code ?? null,
-          timed_out: failure.timed_out ?? null,
-        } : null,
-        filesystem_confinement: null,
-        network_policy: failure?.network_policy ?? "seccomp_default_deny",
-        screenshots: []
-      });
-      console.log(JSON.stringify({
-        fixture: fixture.name,
-        classification: "unsupported",
-        terminal_code: "reader_worker_isolation_failed",
-        worker_exit_code: failure?.exit_code ?? null
-      }));
-      continue;
+        const { stdout } = await run("python3", [join(repo, "tools/migration_pdf_worker_isolation.py"), "run",
+          "--output-dir", workerOutput, "--input", source, "--timeout", String(workerTimeoutSeconds),
+          "--address-space-mb", String(workerAddressSpaceMb),
+          "--cpu-seconds", String(workerCpuSeconds), "--open-files", "64", "--output-file-mb", "32", "--clear-environment", "--",
+          worker, "guest-reader-scene", "--session-id", "guest:" + String(index + 1).padStart(32, "0"),
+          "--expected-sha256", fixture.sha256, "--expected-byte-len", String(fixture.bytes)],
+          { cwd: repo, timeout: (workerTimeoutSeconds + 10) * 1000, maxBuffer: 1024 * 1024 });
+        isolation = JSON.parse(stdout);
+        assert.equal(isolation.status, "success");
+        assert.equal(isolation.network_policy, "seccomp_default_deny");
+      } catch (error) {
+        if (!continueWorkerFailures || fixture.require_render === true) throw error;
+        let failure = null;
+        try {
+          failure = JSON.parse(String(error.stdout ?? ""));
+        } catch {}
+        results.push({
+          fixture: fixture.name,
+          source_sha256: fixture.sha256,
+          source_byte_len: fixture.bytes,
+          classification: "unsupported",
+          terminal_code: "reader_worker_isolation_failed",
+          rendered: false,
+          worker_failure: failure ? {
+            status: failure.status ?? null,
+            exit_code: failure.exit_code ?? null,
+            timed_out: failure.timed_out ?? null,
+          } : null,
+          filesystem_confinement: null,
+          network_policy: failure?.network_policy ?? "seccomp_default_deny",
+          screenshots: []
+        });
+        console.log(JSON.stringify({
+          fixture: fixture.name,
+          classification: "unsupported",
+          terminal_code: "reader_worker_isolation_failed",
+          worker_exit_code: failure?.exit_code ?? null
+        }));
+        continue;
+      }
+      receiptBytes = await readFile(join(workerOutput, "result.json"));
+      receipt = JSON.parse(receiptBytes);
     }
-    const receiptBytes = await readFile(join(workerOutput, "result.json"));
-    const receipt = JSON.parse(receiptBytes);
     assert.equal(receipt.filesystem_confinement, true);
     assert.equal(receipt.source_sha256, fixture.sha256);
     assert.equal(receipt.source_byte_len, fixture.bytes);
@@ -267,7 +311,7 @@ try {
         classification: receipt.classification,
         terminal_code: receipt.terminal_code ?? null,
         rendered: false,
-        worker_receipt_sha256: sha256(receiptBytes),
+        worker_receipt_sha256: acceptedScenePath ? null : sha256(receiptBytes), scene_source: acceptedScenePath ? "accepted_https_guest_service" : "isolated_worker_direct",
         filesystem_confinement: true,
         network_policy: isolation.network_policy,
         screenshots: []
@@ -287,6 +331,48 @@ try {
     await page.waitForFunction(() => document.querySelectorAll("#pages svg.page").length > 0);
     await page.evaluate(() => document.fonts.ready);
     assert.equal(await page.locator("#pages svg.page").count(), fixturePages);
+    let hostImagePaintProof = null;
+    if (requiredHostImageCount !== null) {
+      const admitted = (scene.resources ?? [])
+        .filter((resource) => ["image/png", "image/jpeg"].includes(resource.mime)
+          && resource.availability === "inline_data_url")
+        .map((resource) => resource.resource_id);
+      assert.equal(admitted.length, requiredHostImageCount,
+        "host image paint evidence must start with the exact admitted resource set");
+      assert.equal(new Set(admitted).size, requiredHostImageCount,
+        "host image paint evidence requires unique admitted resource identities");
+      const paintedIds = await page.locator("#pages svg image[data-resource-id]").evaluateAll(async (elements) => {
+        const ids = [];
+        for (const element of elements) {
+          const id = element.getAttribute("data-resource-id");
+          const href = element.getAttribute("href");
+          const bounds = element.getBoundingClientRect();
+          if (!id || !/^data:image\/(?:png|jpeg);base64,/.test(href ?? "")) {
+            throw new Error("Chromium image paint used an untrusted or unidentified source");
+          }
+          const bitmap = new Image();
+          bitmap.src = href;
+          await bitmap.decode();
+          if (bitmap.naturalWidth <= 0 || bitmap.naturalHeight <= 0
+            || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)
+            || bounds.width <= 0 || bounds.height <= 0) {
+            throw new Error("Host image resource did not decode with positive SVG paint dimensions");
+          }
+          ids.push(id);
+        }
+        return ids;
+      });
+      assert.ok(paintedIds.length >= requiredHostImageCount,
+        "Chromium must paint all host-accepted images, not just accept resource descriptors");
+      assert.deepEqual([...new Set(paintedIds)].sort(), [...admitted].sort(),
+        "all and only host-authorized image resource IDs must paint in Chromium");
+      hostImagePaintProof = {
+        admitted_image_resources: admitted.length,
+        painted_image_resources: new Set(paintedIds).size,
+        painted_svg_elements: paintedIds.length,
+        all_decoded_and_positive_geometry: true
+      };
+    }
     const expectedNodeOrderByPage = [...scene.pages]
       .sort((left, right) => left.order - right.order)
       .map((pageModel) => ({
@@ -574,6 +660,7 @@ try {
       node_kind_counts: nodeKindCounts, text_layout_disposition_counts: textLayoutDispositionCounts,
       text_layout_fallback_counts: scene.text_layout_fallback_counts ?? {},
       browser_preview_census: browserPreviewCensus,
+      ...(hostImagePaintProof ? { host_image_paint_proof: hostImagePaintProof } : {}),
       descriptor_only_resource_count: descriptorOnlyResourceCount, browser_preserved_scene_node_order: true,
       reference_raster_dpi: referenceRasterDpi || null, page_geometry: orderedPageGeometry,
       stories: scene.stories.length, shared_lines: painted.length, nonempty_shared_lines: nonempty.length,
@@ -581,7 +668,7 @@ try {
       shared_line_height_px: nonempty.length > 0
         ? { min: Math.min(...nonempty.map((line) => line.height)), max: Math.max(...nonempty.map((line) => line.height)) }
         : null,
-      worker_receipt_sha256: sha256(receiptBytes), scene_sha256: sceneSha256, filesystem_confinement: true, network_policy: isolation.network_policy, screenshots });
+      worker_receipt_sha256: acceptedScenePath ? null : sha256(receiptBytes), scene_source: acceptedScenePath ? "accepted_https_guest_service" : "isolated_worker_direct", scene_sha256: sceneSha256, filesystem_confinement: true, network_policy: isolation.network_policy, screenshots });
     console.log(JSON.stringify({ fixture: fixture.name, classification: receipt.classification, pages: fixturePages, readable_shared_lines: nonempty.length }));
   }
   assert.deepEqual(errors, []);
@@ -594,7 +681,9 @@ try {
   }
   await writeFile(join(output, "receipt.json"), JSON.stringify({ protocol: "chaptera.cloud-reader-real-scene-browser.v1",
     repository_commit_sha: process.env.REPOSITORY_COMMIT_SHA ?? "local-uncommitted", browser: await browser.version(),
-    scope: "pinned public PUB -> existing isolated Scene worker -> controlled HTTP -> browser; no live scanning/storage/TTL or Publisher-reference parity claim",
+    scope: acceptedScenePath
+      ? "pinned PUB -> real HTTPS guest service (OIDC/quarantine/isolated-worker/host-admitted preview) -> ephemeral Scene snapshot -> controlled HTTP -> browser; Publisher comparison separate"
+      : "pinned public PUB -> existing isolated Scene worker -> controlled HTTP -> browser; no live scanning/storage/TTL or Publisher-reference parity claim",
     source_pub_bytes_emitted: false, results, errors, foreign }, null, 2) + "\n");
 } finally {
   if (browser) await browser.close();

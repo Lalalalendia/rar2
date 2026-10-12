@@ -30,6 +30,7 @@ use crate::{
         EditorReplayEngine, PubEditorReplayEngine, append_event_operation,
         cloud_replay_requires_local_identity, cloud_revision_project, project_sha256,
     },
+    safe_preview_scene::{WorkerSafePreviewSamplesV1, admit_host_reencoded_previews},
     source_baseline::SourceBaselineProducerConfig,
 };
 
@@ -64,11 +65,152 @@ pub struct IsolatedReaderSceneReceiptV1 {
     pub baseline_revision_id: String,
     pub scene_sha256: String,
     pub scene: Value,
+    /// Out-of-band, bounded sample bytes. A compromised worker never chooses
+    /// paths; the host reads fixed private sidecar slots and checks digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_sidecar: Option<IsolatedReaderPreviewSidecarV1>,
+    /// Populated by the authorized host from the sidecar after validation.
+    /// Never serialize untrusted pixels inside the principal receipt JSON.
+    #[serde(skip)]
+    pub preview_samples: Vec<WorkerSafePreviewSamplesV1>,
 }
 
 const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PROJECT_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
+// An 8 MiB part stays well below the 32 MiB default per-file RLIMIT_FSIZE.
+// Preview samples never inflate result.json; all fixed sidecar slots are
+// opened before the isolated worker installs filesystem default-deny.
+const PREVIEW_PART_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const PREVIEW_PART_COUNT: usize = 8;
+const PREVIEW_SIDECAR_MAX_BYTES: usize = PREVIEW_PART_BYTES * PREVIEW_PART_COUNT;
+const PREVIEW_SIDECAR_V1: &str = "chaptera.reader-preview-samples-sidecar.v1";
+
+pub(crate) fn preview_part_name(index: usize) -> String {
+    format!("reader-preview-{index}.bin")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolatedReaderPreviewSidecarV1 {
+    pub protocol_version: String,
+    pub sha256: String,
+    pub byte_len: usize,
+    pub chunk_count: usize,
+}
+
+pub(crate) fn write_isolated_preview_sidecar(
+    outputs: &mut [fs::File],
+    previews: &[WorkerSafePreviewSamplesV1],
+) -> Result<Option<IsolatedReaderPreviewSidecarV1>, ProductReplayWorkerError> {
+    if previews.is_empty() {
+        return Ok(None);
+    }
+    let bytes = serde_json::to_vec(previews).map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_reader_preview_sidecar_invalid",
+            "isolated preview sample serialization failed",
+        )
+    })?;
+    if bytes.len() > PREVIEW_SIDECAR_MAX_BYTES {
+        // The source image remains descriptor-only; never fail the document.
+        return Ok(None);
+    }
+    let chunks = bytes.len().div_ceil(PREVIEW_PART_BYTES);
+    if chunks > outputs.len() {
+        return Ok(None);
+    }
+    for (file, part) in outputs.iter_mut().zip(bytes.chunks(PREVIEW_PART_BYTES)) {
+        file.write_all(part).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_reader_preview_sidecar_invalid",
+                "isolated preview sidecar write failed",
+            )
+        })?;
+    }
+    Ok(Some(IsolatedReaderPreviewSidecarV1 {
+        protocol_version: PREVIEW_SIDECAR_V1.to_owned(),
+        sha256: sha256_hex(&bytes),
+        byte_len: bytes.len(),
+        chunk_count: chunks,
+    }))
+}
+
+async fn read_isolated_preview_sidecar(
+    receipt: &mut ProductReplayWorkerReceiptV1,
+    result_dir: &Path,
+) -> Result<(), ProductReplayWorkerError> {
+    let Some(scene) = receipt.reader_scene.as_mut() else {
+        return Ok(());
+    };
+    let Some(info) = scene.preview_sidecar.as_ref() else {
+        return Ok(());
+    };
+    scene.preview_samples = read_preview_sidecar_parts(info, result_dir).await?;
+    Ok(())
+}
+
+/// Host-only: reject unchecked paths, symlinks, oversized data, and SHA drift.
+pub(crate) async fn read_preview_sidecar_parts(
+    info: &IsolatedReaderPreviewSidecarV1,
+    result_dir: &Path,
+) -> Result<Vec<WorkerSafePreviewSamplesV1>, ProductReplayWorkerError> {
+    if info.protocol_version != PREVIEW_SIDECAR_V1
+        || info.byte_len == 0
+        || info.byte_len > PREVIEW_SIDECAR_MAX_BYTES
+        || info.chunk_count == 0
+        || info.chunk_count > PREVIEW_PART_COUNT
+        || info.chunk_count != info.byte_len.div_ceil(PREVIEW_PART_BYTES)
+        || require_sha256(&info.sha256).is_err()
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_reader_preview_sidecar_invalid",
+            "isolated preview sidecar manifest is invalid",
+        ));
+    }
+    let mut combined = Vec::with_capacity(info.byte_len);
+    for i in 0..info.chunk_count {
+        let path = result_dir.join(preview_part_name(i));
+        let metadata = async_fs::symlink_metadata(&path).await.map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_reader_preview_sidecar_invalid",
+                "isolated preview sidecar is unavailable",
+            )
+        })?;
+        let expected_len = (info.byte_len - combined.len()).min(PREVIEW_PART_BYTES);
+        if !metadata.is_file() || metadata.len() != expected_len as u64 {
+            return Err(ProductReplayWorkerError::new(
+                "product_reader_preview_sidecar_invalid",
+                "isolated preview sidecar has an unexpected type or size",
+            ));
+        }
+        let part = async_fs::read(&path).await.map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_reader_preview_sidecar_invalid",
+                "isolated preview sidecar could not be read",
+            )
+        })?;
+        if part.len() != expected_len {
+            return Err(ProductReplayWorkerError::new(
+                "product_reader_preview_sidecar_invalid",
+                "isolated preview sidecar length changed",
+            ));
+        }
+        combined.extend_from_slice(&part);
+    }
+    if combined.len() != info.byte_len || sha256_hex(&combined) != info.sha256 {
+        return Err(ProductReplayWorkerError::new(
+            "product_reader_preview_sidecar_invalid",
+            "isolated preview sidecar checksum mismatch",
+        ));
+    }
+    serde_json::from_slice(&combined).map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_reader_preview_sidecar_invalid",
+            "isolated preview sidecar JSON is invalid",
+        )
+    })
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductReplayWorkerError {
@@ -261,7 +403,7 @@ pub fn validate_product_replay_receipt(
 /// Treat worker JSON as an untrusted wire envelope. In particular, never
 /// forward a newly invented top-level key that could carry editor projects,
 /// original PUB bytes, provider credentials or internal diagnostics.
-fn approved_reader_scene_shape(scene: &Value) -> bool {
+pub(crate) fn approved_reader_scene_shape(scene: &Value) -> bool {
     let Some(object) = scene.as_object() else {
         return false;
     };
@@ -453,7 +595,7 @@ fn trusted_fallback_font_value() -> Result<Value, ProductReplayWorkerError> {
 ///   never copied from worker JSON.
 ///
 /// Text/diagnostic strings remain data-only and are rendered with textContent.
-fn sanitize_reader_scene_browser_decoders(
+pub(crate) fn sanitize_reader_scene_browser_decoders(
     scene: &mut Value,
 ) -> Result<(), ProductReplayWorkerError> {
     let object = scene.as_object_mut().ok_or_else(|| {
@@ -628,6 +770,23 @@ pub fn run_product_replay_worker(
                 "worker result could not be created",
             )
         })?;
+
+    let mut preview_outputs = Vec::new();
+    if reader_scene_intent.is_some() {
+        for i in 0..PREVIEW_PART_COUNT {
+            let file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(output_root.join(preview_part_name(i)))
+                .map_err(|_| {
+                    ProductReplayWorkerError::new(
+                        "product_reader_preview_sidecar_invalid",
+                        "isolated preview sidecar slot could not be opened",
+                    )
+                })?;
+            preview_outputs.push(file);
+        }
+    }
 
     let source_bytes = read_bounded(Path::new(&input_path), expected_source_byte_len)?;
     if source_bytes.len() as u64 != expected_source_byte_len
@@ -805,20 +964,21 @@ pub fn run_product_replay_worker(
         // This is the only execution point for the source-neutral Viewer.
         // It runs AFTER seccomp filesystem deny and under the no-network
         // process limits; the host never calls open_pub_bundle.
-        let scene = crate::product_api_http::render_reader_scene_in_isolated_worker(
-            document_id,
-            expected_source_sha256,
-            &intent.revision_id,
-            &intent.baseline_revision_id,
-            &source_bytes,
-            &project,
-        )
-        .map_err(|_| {
-            ProductReplayWorkerError::new(
-                "product_reader_scene_rejected",
-                "isolated Viewer failed to project the exact authorized revision",
+        let (scene, preview_samples) =
+            crate::product_api_http::render_reader_scene_in_isolated_worker(
+                document_id,
+                expected_source_sha256,
+                &intent.revision_id,
+                &intent.baseline_revision_id,
+                &source_bytes,
+                &project,
             )
-        })?;
+            .map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_reader_scene_rejected",
+                    "isolated Viewer failed to project the exact authorized revision",
+                )
+            })?;
         let bytes = serde_json::to_vec(&scene).map_err(|_| {
             ProductReplayWorkerError::new(
                 "product_reader_scene_invalid",
@@ -831,11 +991,14 @@ pub fn run_product_replay_worker(
                 "isolated Reader scene exceeds the bounded response envelope",
             ));
         }
+        let sidecar = write_isolated_preview_sidecar(&mut preview_outputs, &preview_samples)?;
         Some(IsolatedReaderSceneReceiptV1 {
             revision_id: intent.revision_id,
             baseline_revision_id: intent.baseline_revision_id,
             scene_sha256: sha256_hex(&bytes),
             scene,
+            preview_sidecar: sidecar,
+            preview_samples: Vec::new(),
         })
     } else {
         None
@@ -1115,6 +1278,9 @@ impl IsolatedProductReplayProducer {
             ));
         }
         sanitize_reader_scene_browser_decoders(&mut scene.scene)?;
+        admit_host_reencoded_previews(&mut scene.scene, &scene.preview_samples).map_err(
+            |code| ProductReplayWorkerError::new("product_reader_safe_preview_invalid", code),
+        )?;
         Ok(scene.scene)
     }
 
@@ -1389,12 +1555,15 @@ impl IsolatedProductReplayProducer {
                 "isolated worker receipt grew beyond size limits",
             ));
         }
-        serde_json::from_slice(&payload).map_err(|_| {
-            ProductReplayWorkerError::new(
-                "product_replay_receipt_invalid",
-                "isolated worker receipt is malformed",
-            )
-        })
+        let mut receipt: ProductReplayWorkerReceiptV1 =
+            serde_json::from_slice(&payload).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "isolated worker receipt is malformed",
+                )
+            })?;
+        read_isolated_preview_sidecar(&mut receipt, &result_dir).await?;
+        Ok(receipt)
     }
 }
 
@@ -1499,6 +1668,118 @@ mod tests {
             reader_scene: None,
             filesystem_confinement: true,
         }
+    }
+
+    #[tokio::test]
+    async fn isolated_preview_sidecar_roundtrips_and_rejects_tampering() {
+        let mut encoded_png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut encoded_png, 2, 2);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer
+                .write_image_data(&[
+                    255, 0, 0, 255, 0, 0, 255, 128, 0, 0, 255, 255, 50, 50, 50, 255,
+                ])
+                .unwrap();
+        }
+        let previews = crate::safe_preview_scene::collect_worker_preview_samples(std::iter::once(
+            ("image-a".to_owned(), "image/png", encoded_png.as_slice()),
+        ));
+        assert_eq!(previews.len(), 1);
+
+        let root = PrivateReplayTemp::create(&std::env::temp_dir()).unwrap();
+        let mut files = Vec::new();
+        for i in 0..PREVIEW_PART_COUNT {
+            files.push(
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(root.path.join(preview_part_name(i)))
+                    .unwrap(),
+            );
+        }
+        let manifest = write_isolated_preview_sidecar(&mut files, &previews)
+            .unwrap()
+            .unwrap();
+        assert_eq!(manifest.chunk_count, 1);
+        let mut receipt = receipt();
+        receipt.reader_scene = Some(IsolatedReaderSceneReceiptV1 {
+            revision_id: "revision-a".to_owned(),
+            baseline_revision_id: "revision-a".to_owned(),
+            scene_sha256: "c".repeat(64),
+            scene: json!({}),
+            preview_sidecar: Some(manifest),
+            preview_samples: Vec::new(),
+        });
+        // The private receipt never inlines decoded pixels.
+        let serialized = serde_json::to_value(&receipt).unwrap();
+        assert!(serialized["reader_scene"].get("preview_samples").is_none());
+        read_isolated_preview_sidecar(&mut receipt, &root.path)
+            .await
+            .unwrap();
+        assert_eq!(
+            receipt.reader_scene.as_ref().unwrap().preview_samples[0].samples_base64,
+            previews[0].samples_base64
+        );
+
+        let part_path = root.path.join(preview_part_name(0));
+        let mut tampered = fs::read(&part_path).unwrap();
+        tampered[0] ^= 1;
+        fs::write(part_path, tampered).unwrap();
+        assert_eq!(
+            read_isolated_preview_sidecar(&mut receipt, &root.path)
+                .await
+                .unwrap_err()
+                .code,
+            "product_reader_preview_sidecar_invalid"
+        );
+    }
+
+    #[test]
+    fn preview_sidecar_splits_at_eight_mebibytes_without_unbounded_json() {
+        let mut encoded_png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut encoded_png, 1, 1);
+            encoder.set_color(png::ColorType::Rgb);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[11, 22, 33]).unwrap();
+        }
+        let mut previews = crate::safe_preview_scene::collect_worker_preview_samples(
+            std::iter::once(("image-a".to_owned(), "image/png", encoded_png.as_slice())),
+        );
+        assert_eq!(previews.len(), 1);
+        // The sidecar writer exercises transport, not pixel admission.
+        previews[0].samples_base64 = "A".repeat(PREVIEW_PART_BYTES + 1);
+        let root = PrivateReplayTemp::create(&std::env::temp_dir()).unwrap();
+        let mut files = Vec::new();
+        for i in 0..PREVIEW_PART_COUNT {
+            files.push(
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(root.path.join(preview_part_name(i)))
+                    .unwrap(),
+            );
+        }
+        let sidecar = write_isolated_preview_sidecar(&mut files, &previews)
+            .unwrap()
+            .unwrap();
+        assert_eq!(sidecar.chunk_count, 2);
+        assert_eq!(
+            fs::metadata(root.path.join(preview_part_name(0)))
+                .unwrap()
+                .len(),
+            PREVIEW_PART_BYTES as u64
+        );
+        assert!(
+            fs::metadata(root.path.join(preview_part_name(1)))
+                .unwrap()
+                .len()
+                < PREVIEW_PART_BYTES as u64
+        );
     }
 
     #[test]
@@ -1651,6 +1932,8 @@ mod tests {
             baseline_revision_id: "revision-a".into(),
             scene_sha256: sha256_hex(&serde_json::to_vec(&scene).unwrap()),
             scene,
+            preview_sidecar: None,
+            preview_samples: Vec::new(),
         });
         assert!(
             validate_product_replay_receipt(

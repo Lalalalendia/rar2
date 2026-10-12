@@ -718,6 +718,11 @@ def main() -> int:
     parser.add_argument("--fixture-sha256", required=True)
     parser.add_argument("--repository-commit", required=True)
     parser.add_argument("--out", type=pathlib.Path, required=True)
+    parser.add_argument(
+        "--accepted-scene-out",
+        type=pathlib.Path,
+        help="Ephemeral CI-only accepted server scene. Do NOT upload this file as an artifact.",
+    )
     args = parser.parse_args()
 
     chaptera = args.chaptera.resolve()
@@ -949,6 +954,8 @@ def main() -> int:
             raise AssertionError("scene endpoint did not return Reader Scene V1")
         if scene.get("compatibility_report") != compatibility:
             raise AssertionError("scene endpoint compatibility report differs from open response")
+        if scene.get("scene") != opened.get("scene"):
+            raise AssertionError("guest scene endpoint drifted from authorized open response")
 
         isolation_kinds = (
             isolation_trace.read_text(encoding="utf-8").splitlines()
@@ -959,6 +966,30 @@ def main() -> int:
             raise AssertionError("real isolated structural scanner was not exercised exactly once")
         if isolation_kinds.count("guest_scene") != 1:
             raise AssertionError("real isolated guest Scene worker was not exercised exactly once")
+
+        if args.accepted_scene_out is not None:
+            # Never place the complete source-backed scene (including text)
+            # into retained CI artifacts. This stays inside runner temp only.
+            path = args.accepted_scene_out.resolve()
+            if path.is_relative_to(out):
+                raise AssertionError("accepted scene must not be placed in retained receipt directory")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    {
+                        "protocol_version": "chaptera.live-accepted-guest-scene.v1",
+                        "source_sha256": fixture_sha256,
+                        "source_byte_len": fixture_bytes,
+                        "session_id": session_id,
+                        "classification": opened["classification"],
+                        "scene": scene["scene"],
+                        "isolated_guest_scene_count": isolation_kinds.count("guest_scene"),
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            path.chmod(0o600)
 
         before_storage = s3_state.snapshot()
         if before_storage["object_count"] != 1:

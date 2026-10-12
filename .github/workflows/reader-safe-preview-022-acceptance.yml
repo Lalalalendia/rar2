@@ -1,0 +1,169 @@
+name: Reader SafePreview isolated Product 022 Publisher acceptance
+
+on:
+  pull_request:
+    paths:
+      - "apps/chaptera-server/src/safe_preview_scene.rs"
+      - "apps/chaptera-server/tests/reader_safe_preview_real_v1.rs"
+      - "apps/cloud-reader/product-safe-preview-022-browser.test.mjs"
+      - "tools/reader_safe_preview_visual_022.py"
+      - ".github/workflows/reader-safe-preview-022-acceptance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: reader-safe-preview-022-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pinned-product-022:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact candidate head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download original SHA-pinned 1050-PUB corpus receipt
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify corpus identity and materialize exact 022 only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import csv
+          import hashlib
+          import os
+          from pathlib import Path
+
+          source_root = Path("out/pinned1050/materialized/native")
+          paths = sorted(source_root.glob("*.pub"))
+          digest = hashlib.sha256(
+              "".join(path.stem.lower() + "\n" for path in paths).encode("ascii")
+          ).hexdigest()
+          assert len(paths) == 1050, len(paths)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          pairs = list(csv.DictReader(Path("tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv").open()))
+          match = [p for p in pairs if p["oracle_id"] == "batch01-022"]
+          assert len(pairs) == 55 and len(match) == 1
+          pair = match[0]
+          source = source_root / (pair["pub_sha256"] + ".pub")
+          assert source.is_file(), "SHA-pinned 022 not present in corpus"
+          assert len(source.read_bytes()) == int(pair["pub_bytes"]) == 5012480
+          assert hashlib.sha256(source.read_bytes()).hexdigest() == pair["pub_sha256"]
+          target = Path(os.environ["RUNNER_TEMP"]) / "reader-preview-022"
+          target.mkdir(parents=True, exist_ok=True)
+          (target / "022.pub").write_bytes(source.read_bytes())
+          print("exact 022 fixture identity verified; 1050 historical corpus identity verified")
+          PY
+
+      - name: Verify original server source formatting and pinned source security
+        run: |
+          cargo fmt -p chaptera-server -- --check
+          python3 - <<'PY'
+          import ctypes.util
+          assert ctypes.util.find_library("seccomp"), "real Linux seccomp is required"
+          PY
+
+      - name: Build real Chaptera server and isolated worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Run real 022 isolated Product worker -> host image admission (not authenticated HTTP)
+        env:
+          CHAPTERA_PREVIEW_PROBE_PUB: ${{ runner.temp }}/reader-preview-022/022.pub
+          CHAPTERA_PREVIEW_PROBE_SCENE_OUT: ${{ runner.temp }}/reader-preview-022/product-scene.json
+          CHAPTERA_PREVIEW_PROBE_SUMMARY_OUT: target/reader-safe-preview-022/worker-summary.json
+        run: |
+          set -euo pipefail
+          # The Rust test insists on absolute report paths for private outputs.
+          export CHAPTERA_PREVIEW_PROBE_SUMMARY_OUT="$GITHUB_WORKSPACE/target/reader-safe-preview-022/worker-summary.json"
+          cargo test -p chaptera-server --test reader_safe_preview_real_v1 -- --ignored --nocapture
+
+      - name: Install pinned Chromium and Publisher coarse comparator
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
+          python -m py_compile tools/reader_safe_preview_visual_022.py
+
+      - name: Measure actual 022 image paint and same-head source-neutral ablation
+        env:
+          CHAPTERA_PREVIEW_PROBE_SCENE_OUT: ${{ runner.temp }}/reader-preview-022/product-scene.json
+          CHAPTERA_PREVIEW_BROWSER_OUTPUT: ${{ runner.temp }}/reader-preview-022/browser
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REPOSITORY_COMMIT_SHA"
+          node apps/cloud-reader/product-safe-preview-022-browser.test.mjs
+          python tools/reader_safe_preview_visual_022.py \
+            tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json \
+            "$CHAPTERA_PREVIEW_BROWSER_OUTPUT" \
+            target/reader-safe-preview-022/comparison.json \
+            "$REPOSITORY_COMMIT_SHA"
+          # Source-neutral negative: a synthetically wrong commit must fail
+          # before generating any Publisher improvement receipt.
+          if python tools/reader_safe_preview_visual_022.py \
+            tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json \
+            "$CHAPTERA_PREVIEW_BROWSER_OUTPUT" \
+            target/reader-safe-preview-022/mismatched-head.json \
+            0000000000000000000000000000000000000000; then
+            echo "Product visual comparator accepted wrong repository SHA" >&2
+            exit 1
+          fi
+          test ! -f target/reader-safe-preview-022/mismatched-head.json
+
+      - name: Report only source-neutral evidence; never upload PUB, Scene, pictures or screenshots
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          summary = Path("target/reader-safe-preview-022/comparison.json")
+          if summary.exists():
+              r = json.loads(summary.read_text())
+              print("real Product 022 Publisher oracle cells (before -> after):",
+                    r["changed_cell_before"], "->", r["changed_cell_after"])
+              Path("target/reader-safe-preview-022/summary.txt").write_text(
+                  "022 Publisher compared changed cells: "
+                  + str(r["changed_cell_before"]) + " -> " + str(r["changed_cell_after"]) + "\n")
+          else:
+              print("no Publisher comparison yet; inspect failed step logs")
+          PY
+
+      - name: Upload source-neutral measurement receipts only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-reader-022-safe-preview-source-neutral-${{ github.run_id }}
+          path: |
+            target/reader-safe-preview-022/worker-summary.json
+            target/reader-safe-preview-022/comparison.json
+            target/reader-safe-preview-022/summary.txt
+          if-no-files-found: warn
+          retention-days: 30
