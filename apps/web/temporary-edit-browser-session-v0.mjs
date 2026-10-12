@@ -106,8 +106,9 @@ export class TemporaryEditBrowserSessionV0 {
   #save(record) {
     if (!validRecord(record)) throw fail("temporary_storage_record_invalid");
     this.#record = record;
+    if (!this.storage) return false;
     try {
-      this.storage?.setItem(TEMPORARY_EDIT_STORAGE_KEY, JSON.stringify(record));
+      this.storage.setItem(TEMPORARY_EDIT_STORAGE_KEY, JSON.stringify(record));
       return true;
     } catch {
       // A tab without sessionStorage can still view, but cannot resume after reload.
