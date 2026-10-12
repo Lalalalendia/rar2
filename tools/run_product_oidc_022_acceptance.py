@@ -169,6 +169,7 @@ def main() -> int:
                 visual_env.update({
                     "CHAPTERA_PREVIEW_PROBE_SCENE_OUT": str(owner_scene),
                     "CHAPTERA_PREVIEW_BROWSER_OUTPUT": str(visual_dir),
+                    "REPOSITORY_COMMIT_SHA": args.head_sha,
                 })
                 run_stage(
                     "product-visual",
@@ -186,6 +187,7 @@ def main() -> int:
                             "publisher-visual-golden-batch-01-fingerprint-v1.json"),
                         str(visual_dir),
                         str(raw_compare),
+                        args.head_sha,
                     ],
                     visual_env,
                 )

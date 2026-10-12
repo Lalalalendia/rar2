@@ -38,10 +38,17 @@ const context = await browser.newContext({
 const page = await context.newPage();
 const errors = [];
 const foreign = [];
+// Genuine PKCE browser login necessarily visits the test OIDC provider.
+// The no-external-resource fence begins only after the authenticated owner
+// is ready to select a PUB; it still covers ingress, Product and image paint.
+let monitorExternalRequests = false;
 page.on("pageerror", err => errors.push(String(err)));
 page.on("request", request => {
   const url = request.url();
-  if (!url.startsWith(origin + "/") && !url.startsWith("data:")) foreign.push(url);
+  if (monitorExternalRequests &&
+      !url.startsWith(origin + "/") && !url.startsWith("data:")) {
+    foreign.push(url);
+  }
 });
 try {
   // This cookie was obtained by the real authorization-code/PKCE browser
@@ -68,17 +75,10 @@ try {
     () => document.querySelector("#status")?.textContent?.includes("Готов к загрузке"),
     null, { timeout: 30000 },
   );
-  const sessionStatus = await page.evaluate(async () => {
-    const response = await fetch("/v1/session", {
-      credentials: "same-origin", cache: "no-store",
-    });
-    const json = await response.json().catch(() => null);
-    return { status: response.status, principal: Boolean(json?.principal_id) };
-  });
-  if (sessionStatus.status !== 200 || !sessionStatus.principal) {
-    throw new Error("Product 022 requires a genuine authenticated OIDC principal");
-  }
-
+  // The UI's already completed real OIDC session/workspace preparation.
+  // A second GET /v1/session would rotate its CSRF secret and invalidate
+  // the browser's upload-token, causing a correct fail-closed HTTP 403.
+  monitorExternalRequests = true;
   await page.locator("#pub-file").setInputFiles({
     name: "Pinned022.pub",
     mimeType: "application/x-mspublisher",
