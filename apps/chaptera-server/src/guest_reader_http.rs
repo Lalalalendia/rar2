@@ -111,10 +111,7 @@ async fn issue_contribution_capability(
     let session = state
         .authorized_session(&session_id, &headers, now_ms)
         .await?;
-    if session.state != GuestSessionState::Opened
-        || session.classification.as_deref() != Some("unsupported")
-        || session.quarantine_deleted_at_ms.is_some()
-    {
+    if !contribution_eligible(&session) {
         return Err(GuestReaderError::unprocessable(
             "guest_contribution_ineligible",
         ));
@@ -188,10 +185,7 @@ async fn contribute_session(
     let session = state
         .authorized_session(&session_id, &headers, now_ms)
         .await?;
-    if session.state != GuestSessionState::Opened
-        || session.classification.as_deref() != Some("unsupported")
-        || session.quarantine_deleted_at_ms.is_some()
-    {
+    if !contribution_eligible(&session) {
         return Err(GuestReaderError::unprocessable(
             "guest_contribution_ineligible",
         ));
@@ -227,6 +221,13 @@ async fn retain_contribution(
     submission: &ResearchSubmission,
     now_ms: i64,
 ) -> Result<IntakeReceiptV1, GuestReaderError> {
+    // The private temporary editing mode must never cross into research
+    // retention, even if a valid contribution token existed for a reader.
+    if !contribution_eligible(session) {
+        return Err(GuestReaderError::unprocessable(
+            "guest_contribution_ineligible",
+        ));
+    }
     if submission.session_id != session.session_id || submission.expires_at_ms <= now_ms {
         return Err(GuestReaderError::conflict(
             "guest_contribution_capability_invalid",
@@ -1939,6 +1940,13 @@ fn content_length(headers: &HeaderMap) -> Result<u64, GuestReaderError> {
         .ok_or_else(|| GuestReaderError::bad_request("content_length_invalid"))
 }
 
+fn contribution_eligible(session: &GuestReaderSession) -> bool {
+    !is_temporary_edit_session(&session.session_id)
+        && session.state == GuestSessionState::Opened
+        && session.classification.as_deref() == Some("unsupported")
+        && session.quarantine_deleted_at_ms.is_none()
+}
+
 fn is_temporary_edit_session(session_id: &str) -> bool {
     let Some(suffix) = session_id.strip_prefix("tempedit:") else {
         return false;
@@ -2327,6 +2335,22 @@ mod tests {
 
         store.close().await;
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn temporary_edit_mode_cannot_enter_persistent_research_retention() {
+        let mut temporary = session(1_000);
+        temporary.session_id = "tempedit:0123456789abcdef0123456789abcdef".to_owned();
+        temporary.state = GuestSessionState::Opened;
+        temporary.classification = Some("unsupported".to_owned());
+        assert!(!contribution_eligible(&temporary));
+
+        let mut ordinary = session(1_000);
+        ordinary.state = GuestSessionState::Opened;
+        ordinary.classification = Some("unsupported".to_owned());
+        assert!(contribution_eligible(&ordinary));
+        ordinary.quarantine_deleted_at_ms = Some(2_000);
+        assert!(!contribution_eligible(&ordinary));
     }
 
     #[test]
