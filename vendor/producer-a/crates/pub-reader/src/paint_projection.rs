@@ -120,6 +120,53 @@ pub(super) fn has_bounded_grouped_solid_rectangle(
     })
 }
 
+/// PAGE-owned LOGO can use source-backed DGG/palette fill colors instead of
+/// only shape-local direct RGB. Keep this separate from ordinary 0x30 GROUP:
+/// never promote default-visible, hidden, semi-transparent or ungrounded fill.
+pub(super) fn has_bounded_page_logo_effective_rectangle(
+    shape: &pub_escher::SpContainerObservation,
+    effective: Option<&PubEffectiveShapePaintSource>,
+) -> bool {
+    if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(OFFICEART_SHAPE_TYPE_RECTANGLE) {
+        return false;
+    }
+    // Only the simple solid-filling grammar is admitted; opacity, fill
+    // patterns, background colors and other special fills need their own proof.
+    if shape
+        .fopts
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .any(|property| {
+            let id = property.property_id();
+            (0x0180..=0x01bf).contains(&id)
+                && !matches!(
+                    id,
+                    OFFICE_ART_FILL_TYPE | OFFICE_ART_FILL_COLOR | OFFICE_ART_FILL_BOOLEANS
+                )
+        })
+    {
+        return false;
+    }
+    let Some(paint) = effective else {
+        return false;
+    };
+    paint.fill.solid.as_ref().is_some_and(|value| value.value)
+        && paint.fill.visible.as_ref().is_some_and(|value| {
+            value.value && value.authority == PubEffectivePaintAuthority::ShapeLocal
+        })
+        && paint.fill.color_rgb.as_ref().is_some_and(|value| {
+            matches!(
+                value.authority,
+                PubEffectivePaintAuthority::ShapeLocal
+                    | PubEffectivePaintAuthority::DrawingGroupPrimary
+                    | PubEffectivePaintAuthority::DrawingGroupTertiary
+            )
+        })
+        && paint.line.visible.as_ref().is_some_and(|value| {
+            !value.value && value.authority == PubEffectivePaintAuthority::ShapeLocal
+        })
+}
+
 pub(super) fn has_default_line_geometry(shape: &pub_escher::SpContainerObservation) -> bool {
     shape.fsp.as_ref().map(|fsp| fsp.shape_type) == Some(OFFICEART_SHAPE_TYPE_LINE)
 }
