@@ -236,6 +236,18 @@ export class ChapteraProductEditorServiceV1 {
   // expected_before or durable text state; the isolated server derives both.
   async commitStoryRange(request) {
     const intent = validateStoryRangeIntentV1(request);
+    const outerKeys = new Set([
+      "protocol_version", "document_id", "source_hash", "base_revision_id",
+      "client_operation_id", "depends_on_client_operation_id", "command",
+    ]);
+    const commandKeys = new Set([
+      "kind", "story_id", "start_scalar", "end_scalar", "replacement_text",
+    ]);
+    if (Object.keys(intent).some((key) => !outerKeys.has(key)) ||
+        Object.keys(intent.command).length !== commandKeys.size ||
+        Object.keys(intent.command).some((key) => !commandKeys.has(key))) {
+      throw new TypeError("unknown Story intent fields are not admitted");
+    }
     if (intent.document_id !== this.documentId) {
       throw new TypeError("Story commit document differs from bound service document");
     }
