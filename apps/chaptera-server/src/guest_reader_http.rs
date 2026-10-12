@@ -1110,13 +1110,21 @@ impl GuestReaderHttpState {
         session: GuestReaderSession,
         now_ms: i64,
     ) -> Result<(), GuestReaderError> {
+        // Claim expiration in SQLite before touching the physical source. A
+        // future accepted editor commit can extend expires_at_ms, so an
+        // expired_pending() snapshot is not deletion authority by itself.
+        if !self
+            .sessions
+            .mark_expired(&session.session_id, now_ms)
+            .await?
+        {
+            return Ok(());
+        }
+
         let started = Instant::now();
         let trace = self.observability.session_context(&session.session_id);
         let _ = self.release_admission(&session, now_ms).await;
         self.delete_quarantine(&session, now_ms).await?;
-        self.sessions
-            .mark_expired(&session.session_id, now_ms)
-            .await?;
         self.sessions.delete_expired(&session.session_id).await?;
         self.observability.record(
             "reader.cleanup",
@@ -1649,8 +1657,8 @@ impl SqliteGuestReaderSessionStore {
         Ok(())
     }
 
-    async fn mark_expired(&self, session_id: &str, now_ms: i64) -> Result<(), GuestReaderError> {
-        sqlx::query(
+    async fn mark_expired(&self, session_id: &str, now_ms: i64) -> Result<bool, GuestReaderError> {
+        let result = sqlx::query(
             r#"
             UPDATE reader_guest_sessions
             SET state='expired', terminal_code=COALESCE(terminal_code, 'guest_session_expired'),
@@ -1664,7 +1672,9 @@ impl SqliteGuestReaderSessionStore {
         .execute(&self.pool)
         .await
         .map_err(sqlite_error)?;
-        Ok(())
+        // The row might have been renewed since the sweep took its snapshot.
+        // Only a still-expired row can authorize source-byte deletion.
+        Ok(result.rows_affected() == 1)
     }
 
     async fn delete_expired(&self, session_id: &str) -> Result<(), GuestReaderError> {
@@ -1680,7 +1690,8 @@ impl SqliteGuestReaderSessionStore {
         .execute(&self.pool)
         .await
         .map_err(sqlite_error)?;
-        if result.rows_affected() != 1 {
+        // A concurrent recovery pass may have already deleted the row.
+        if result.rows_affected() != 1 && self.get(session_id).await?.is_some() {
             return Err(GuestReaderError::conflict("guest_expiry_delete_conflict"));
         }
         Ok(())
@@ -1700,7 +1711,6 @@ impl SqliteGuestReaderSessionStore {
                    quarantine_deleted_at_ms
             FROM reader_guest_sessions
             WHERE expires_at_ms<=?
-              AND (state!='expired' OR quarantine_deleted_at_ms IS NULL)
             ORDER BY expires_at_ms ASC
             LIMIT ?
             "#,
@@ -2410,5 +2420,82 @@ mod tests {
         let b = token_hash(b"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
         assert!(constant_time_eq(&a, &a));
         assert!(!constant_time_eq(&a, &b));
+    }
+
+    #[tokio::test]
+    async fn stale_expiry_snapshot_cannot_delete_a_renewed_session() {
+        let path = migrated_path("stale-expiry-claim").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let pending = session(1_000);
+        store.insert(&pending).await.unwrap();
+
+        // The reaper has read a row that was due for expiration.
+        assert_eq!(store.expired_pending(61_000, 16).await.unwrap().len(), 1);
+        // Simulate a later, authoritative expiry extension before its delete
+        // claim (the mutation/operation identity fence belongs to the caller).
+        sqlx::query(
+            "UPDATE reader_guest_sessions SET expires_at_ms=? WHERE session_id=?",
+        )
+        .bind(3_661_000_i64)
+        .bind(pending.session_id.as_bytes())
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+        assert!(!store.mark_expired(&pending.session_id, 61_000).await.unwrap());
+        let live = store.get(&pending.session_id).await.unwrap().unwrap();
+        assert_eq!(live.state, GuestSessionState::Issued);
+        assert_eq!(live.expires_at_ms, 3_661_000);
+
+        // Its genuine new deadline can still be claimed, never earlier.
+        assert!(store
+            .mark_expired(&pending.session_id, 3_661_000)
+            .await
+            .unwrap());
+        assert_eq!(
+            store.get(&pending.session_id).await.unwrap().unwrap().state,
+            GuestSessionState::Expired
+        );
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn expired_metadata_is_swept_after_quarantine_delete_crash() {
+        let path = migrated_path("expired-metadata-resume").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let pending = session(1_000);
+        store.insert(&pending).await.unwrap();
+        sqlx::query("UPDATE reader_guest_sessions SET scene_json=? WHERE session_id=?")
+            .bind(br#"{\"private\":true}"#.as_slice())
+            .bind(pending.session_id.as_bytes())
+            .execute(&store.pool)
+            .await
+            .unwrap();
+
+        assert!(!store.mark_expired(&pending.session_id, 60_999).await.unwrap());
+        assert!(store.mark_expired(&pending.session_id, 61_000).await.unwrap());
+        store
+            .mark_quarantine_deleted(&pending.session_id, 61_001)
+            .await
+            .unwrap();
+        // A prior worker crashed after deleting the bytes but before
+        // deleting the DB row containing the source-derived Scene.
+        let pending_cleanup = store.expired_pending(61_001, 16).await.unwrap();
+        assert_eq!(pending_cleanup.len(), 1);
+        assert_eq!(pending_cleanup[0].state, GuestSessionState::Expired);
+        assert_eq!(pending_cleanup[0].quarantine_deleted_at_ms, Some(61_001));
+
+        store.delete_expired(&pending.session_id).await.unwrap();
+        // Finalization is idempotent when a second sweeper observed the same
+        // expired snapshot before the first one finished.
+        store.delete_expired(&pending.session_id).await.unwrap();
+        assert!(store.get(&pending.session_id).await.unwrap().is_none());
+        store.close().await;
+        let _ = fs::remove_file(path);
     }
 }
