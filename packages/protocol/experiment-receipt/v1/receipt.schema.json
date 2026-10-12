@@ -1,0 +1,233 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chaptera.example/protocol/experiment-receipt/v1/receipt.schema.json",
+  "title": "Chaptera source-free experiment receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "receipt_version",
+    "task_id",
+    "run_id",
+    "producer",
+    "system",
+    "build",
+    "environment",
+    "source_identity",
+    "output_identity",
+    "operation",
+    "semantic_observations",
+    "changed_artifact_summary",
+    "evidence_refs",
+    "lifecycle_disposition",
+    "evidence_scope",
+    "authority_ceiling",
+    "non_claims",
+    "privacy"
+  ],
+  "properties": {
+    "receipt_version": {
+      "const": "chaptera.experiment-receipt.v1"
+    },
+    "task_id": { "$ref": "#/$defs/identifier" },
+    "run_id": { "$ref": "#/$defs/identifier" },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "version": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "system": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "version": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "revision"],
+      "properties": {
+        "repository": { "$ref": "#/$defs/nonEmptyString" },
+        "revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "architecture", "runtime", "fingerprint_sha256"],
+      "properties": {
+        "os": { "$ref": "#/$defs/nonEmptyString" },
+        "architecture": { "$ref": "#/$defs/nonEmptyString" },
+        "runtime": { "$ref": "#/$defs/nonEmptyString" },
+        "fingerprint_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "source_identity": { "$ref": "#/$defs/artifactIdentity" },
+    "output_identity": { "$ref": "#/$defs/identityEvidence" },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "parameters"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/identifier" },
+        "parameters": { "type": "object" }
+      }
+    },
+    "semantic_observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["before", "after", "reopen"],
+      "properties": {
+        "before": { "$ref": "#/$defs/evidenceValue" },
+        "after": { "$ref": "#/$defs/evidenceValue" },
+        "reopen": { "$ref": "#/$defs/evidenceValue" }
+      }
+    },
+    "changed_artifact_summary": { "$ref": "#/$defs/evidenceValue" },
+    "evidence_refs": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "version", "sha256"],
+        "properties": {
+          "type": { "$ref": "#/$defs/identifier" },
+          "version": { "$ref": "#/$defs/identifier" },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "relative_artifact_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[0-9A-Za-z._/-]+$"
+          }
+        }
+      }
+    },
+    "lifecycle_disposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": {
+          "enum": ["completed", "partial", "failed", "aborted"]
+        },
+        "reason": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "evidence_scope": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/identifier" }
+    },
+    "authority_ceiling": {
+      "enum": [
+        "synthetic_contract",
+        "hosted_observation",
+        "native_observation",
+        "product_acceptance"
+      ]
+    },
+    "non_claims": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/nonEmptyString" }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_free", "private_content_serialized"],
+      "properties": {
+        "source_free": { "const": true },
+        "private_content_serialized": { "const": false }
+      }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[0-9A-Za-z._:/+-]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "artifactIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "size_bytes"],
+      "properties": {
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "logical_fixture_id": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "identityEvidence": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": { "const": "known" },
+            "value": { "$ref": "#/$defs/artifactIdentity" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reason"],
+          "properties": {
+            "status": { "enum": ["unknown", "unavailable"] },
+            "reason": { "$ref": "#/$defs/nonEmptyString" }
+          }
+        }
+      ]
+    },
+    "evidenceValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": { "const": "known" },
+            "value": {}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reason"],
+          "properties": {
+            "status": { "enum": ["unknown", "unavailable"] },
+            "reason": { "$ref": "#/$defs/nonEmptyString" }
+          }
+        }
+      ]
+    }
+  }
+}
